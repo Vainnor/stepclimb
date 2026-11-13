@@ -125,7 +125,8 @@ these rows are in `04` to `07`.
 - **B21.** `GET /api/v1/me` returns the signed-in user to any authenticated principal that is a
   user: a browser session or an app token, or an API key that has an owner user (answering for
   the owner, with the key's effective grants). A service-account key with no owner answers 403
-  `auth.not_a_user`. Anonymous answers 401.
+  `auth.not_a_user`. Anonymous answers 401. In M0 only the browser-session case is built so
+  far; B24 says when the others land and why `auth.not_a_user` is not answered.
 - **B22.** The M0 shape:
 
   ```json
@@ -153,10 +154,11 @@ these rows are in `04` to `07`.
   `provider_label` (from the provider's config), `subject` and `created_at`; never `attributes`
   (they can hold personal data the provider sent, and the user's own copy belongs to M4's export).
 - **B24.** Coordinator decision (2026-11-13), for issue 5. API keys arrive with
-  `08-sessions-and-csrf.md` issue 6, and until then the server accepts no bearer credential, so
-  `GET /api/v1/me` answers browser sessions only and a bearer request is anonymous (401). The
-  owned-key half of B21 and T17 lands with that issue, which adds the key principal to the
-  route and its test. The ownerless half cannot arise in M0: `08` Q9 (a) makes every service
+  `08-sessions-and-csrf.md` issue 6 and app access tokens with its issue 8, and until then the
+  server accepts no bearer credential, so `GET /api/v1/me` answers browser sessions only and a
+  bearer request is anonymous (401). The owned-key half of B21 and T17 lands with `08` issue 6,
+  which adds the key principal to the route and its test; the app-token case lands with `08`
+  issue 8 (access-token authentication), which does the same for app tokens. The ownerless half cannot arise in M0: `08` Q9 (a) makes every service
   account have an owner, so no M0 principal is not a user. The server therefore neither produces
   nor documents 403 `auth.not_a_user` until a principal without a user exists. `user` carries
   B22's nine members only (no `external_id` or timestamps), and `email` is always present, `null`
@@ -169,7 +171,7 @@ Common errors as in `02-organizations-and-accounts.md` -> API (400, 401, 415, 50
 
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
-| `GET /api/v1/me` | | 200 `Me` | 403 `auth.not_a_user` | authenticated user |
+| `GET /api/v1/me` | | 200 `Me` | 403 `auth.not_a_user` (not answered in M0, B24) | authenticated user |
 | `GET /api/v1/me/identities` | | 200 `MyIdentity[]` | 403 `auth.not_a_user` | authenticated user |
 | `DELETE /api/v1/me/identities/{identity_id}` | | 204 | 404 `identity.not_found`, 409 `identity.last_sign_in_method`, 409 `identity.externally_managed` | authenticated user (own identities only) |
 | `GET /api/v1/users` | `?status&source&q&cursor&limit` | 200 `Page<User>` | 400 `pagination.invalid_cursor` | `perm::UserView` (organization) |
@@ -314,9 +316,11 @@ synthetic.
 - **T16** (B19). Removing a user's only identity when they have no local credential answers 409
   `identity.last_sign_in_method`; with a second identity it succeeds. A user removing their own
   identity that came from a non-`local` user record answers 409 `identity.externally_managed`.
-- **T17** (B21, B22). `GET /api/v1/me`: anonymous 401; a session user gets the shape in B22
+- **T17** (B21, B22, B24). `GET /api/v1/me`: anonymous 401; a session user gets the shape in B22
   (validated against the OpenAPI schema); an ownerless service-account key gets 403
-  `auth.not_a_user`; an owned key gets the owner with the key's narrowed grants.
+  `auth.not_a_user`; an owned key gets the owner with the key's narrowed grants. Per B24, issue
+  5 builds the anonymous and session cases, `08` issue 6 the owned-key case and `08` issue 8 an
+  app token's; the ownerless case waits for a principal without a user, which M0 does not have.
 - **T18** (B23). `/me/identities` never contains `attributes`.
 - **T19** (every `/api/v1/users` route). Four cases: anonymous 401; a user with
   `AccountManage` on the root but no user permission gets 403; a user holding `UserView` at account
@@ -412,12 +416,14 @@ overrule one, which then updates this spec.
    B18, B19, B23, T15, T16, T18, T20 (identities part). Depends on: issues 2 and 3;
    `04-local-accounts.md` for the local-credential check (until then the check treats "no local
    credential" as true, which only makes the guard stricter).
-5. **`GET /api/v1/me`.** Deliver the route with `user` and `organization`, the owner-key and
-   ownerless-key cases, and the response schema with `grants` and `features` declared. `grants`
-   is filled by `09-permissions-and-roles.md` issue 6 and `features` by
-   `10-entitlements-framework.md` issue 3; until then this issue returns both as empty arrays and
-   the schema says so. Covers B21, B22, B24, T6, T17 (the key cases as B24 says). Depends on: issue 1; the `08-sessions-and-csrf.md`
-   issue that provides the authenticated principal.
+5. **`GET /api/v1/me`.** Deliver the route with `user` and `organization` for a browser
+   session, and the response schema with `grants` and `features` declared. The owner-key,
+   app-token and ownerless-key cases are not this issue's (B24): `08-sessions-and-csrf.md`
+   issues 6 and 8 add the first two, and M0 has no ownerless key. `grants` is filled by
+   `09-permissions-and-roles.md` issue 6 and `features` by `10-entitlements-framework.md` issue
+   3; until then this issue returns both as empty arrays and the schema says so. Covers B21 (the
+   session case), B22, B24, T6, T17 (the anonymous and session cases). Depends on: issue 1; the
+   `08-sessions-and-csrf.md` issue that provides the authenticated principal.
 6. **The `email_matching` setting.** Deliver the `OrgSettings` key (default `false`), the refusal
    to enable it until Q2 is decided, and T14 proving no M0 path links by email. After Q2, a
    follow-up issue in `07-admission.md` implements the decided matching. Covers B17, T14.

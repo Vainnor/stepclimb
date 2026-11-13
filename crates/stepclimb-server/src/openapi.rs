@@ -4,9 +4,9 @@
 //! It is committed as `openapi/stepclimb.json`; `just openapi-diff` regenerates it and the
 //! TypeScript client (`packages/api-client`) and fails when either differs from what is
 //! committed. Today it lists the operations probes, which the web app's skeleton route calls
-//! through the generated client, sign-out, `GET /api/v1/me`, the permission catalog and roles routes under
-//! `/api/v1/admin`, and the shared error schemas and responses below. The other M0 specs add
-//! their endpoints under `/api/v1`.
+//! through the generated client, sign-out, `GET /api/v1/me`, the permission catalog and roles
+//! routes under `/api/v1/admin`, and the shared error schemas and responses below. The other M0
+//! specs add their endpoints under `/api/v1`.
 //!
 //! Every `/api/v1` operation lists its errors in `#[utoipa::path]` (spec 02 B6). The errors
 //! common to every operation reference the responses here, such as

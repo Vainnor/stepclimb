@@ -51,6 +51,9 @@ pub enum Status {
 }
 
 impl Status {
+    /// Every status, in the order the check constraint lists them.
+    pub const ALL: [Self; 2] = [Self::Active, Self::Suspended];
+
     /// The stored spelling.
     #[must_use]
     pub fn as_str(self) -> &'static str {
@@ -63,7 +66,7 @@ impl Status {
     /// The status a stored spelling names, or `None` for any other string.
     #[must_use]
     pub fn parse(stored: &str) -> Option<Self> {
-        [Self::Active, Self::Suspended]
+        Self::ALL
             .into_iter()
             .find(|status| status.as_str() == stored)
     }
@@ -681,7 +684,7 @@ mod tests {
 
     #[test]
     fn every_status_round_trips_through_its_stored_spelling() {
-        for status in [Status::Active, Status::Suspended] {
+        for status in Status::ALL {
             assert_eq!(Status::parse(status.as_str()), Some(status));
         }
         assert_eq!(Status::parse("deleted"), None);

@@ -265,6 +265,48 @@ async fn a_known_path_with_another_method_is_a_405_problem() {
     }
 }
 
+/// Spec 08 B43: answers, errors and refusals under `/api/v1` are never stored by a cache.
+#[tokio::test]
+async fn every_api_v1_response_is_no_store_and_nothing_else_is_changed() {
+    let api = [
+        (Method::GET, "/api/v1/nothing-here", StatusCode::NOT_FOUND),
+        (Method::POST, "/api/v1/me", StatusCode::METHOD_NOT_ALLOWED),
+        (Method::GET, "/api/v1/me", StatusCode::UNAUTHORIZED),
+    ];
+    for (method, path, expected) in api {
+        let (status, headers, _) = send(app_without_database(), method.clone(), path).await;
+        assert_eq!(status, expected, "{method} {path}");
+        assert_eq!(
+            headers
+                .get(header::CACHE_CONTROL)
+                .map(|v| v.to_str().unwrap()),
+            Some("no-store"),
+            "{method} {path}"
+        );
+    }
+    let cross_site = app_without_database()
+        .oneshot(
+            Request::post("/api/v1/admin/roles")
+                .header("sec-fetch-site", "cross-site")
+                .body(Body::empty())
+                .expect("a valid request"),
+        )
+        .await
+        .expect("the router never fails");
+    assert_eq!(cross_site.status(), StatusCode::FORBIDDEN);
+    assert_eq!(cross_site.headers()[header::CACHE_CONTROL], "no-store");
+    for path in ["/healthz", "/api/openapi.json", "/api/v1x"] {
+        let (_, headers, _) = send(app_without_database(), Method::GET, path).await;
+        assert_ne!(
+            headers
+                .get(header::CACHE_CONTROL)
+                .map(|v| v.to_str().unwrap()),
+            Some("no-store"),
+            "{path}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_client_route_takes_any_method_and_stays_the_spa() {
     let (status, headers, body) = send(app_without_database(), Method::POST, "/c/s1").await;

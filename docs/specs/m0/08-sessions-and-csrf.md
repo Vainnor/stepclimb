@@ -138,6 +138,13 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   `http://localhost:5173`, so `just dev` works; nothing lists it by default. A configuration
   error about either setting names the setting and the problem but never repeats the value,
   which can carry a password (coordinator decision, 13 Nov 2026).
+- **B43.** Coordinator decision (2026-11-13): every response to a request under `/api/v1`
+  carries `Cache-Control: no-store`, answers, errors and refusals alike (the CSRF refusal, an
+  unknown path, a wrong method included), because a GET under `/api/v1` can answer personal data
+  (`GET /api/v1/me`) that neither a shared cache nor the browser's may keep. One layer around the
+  whole router sets it by the request's path, so a new route cannot leave it out. The probes, the
+  API document (`/api/openapi.json`, `/docs`) and the SPA keep their own caching. Delivered with
+  `03-users-and-identities.md` issue 5.
 
 ### Sign-in flow state
 
@@ -444,6 +451,9 @@ Database tests use `#[sqlx::test]`; time-dependent tests use the controllable cl
   `openapi/stepclimb.json`.
 - **T37.** (B39) With an `https` public URL, a GET, a refused POST and an unknown `/api/` path
   each answer with `Strict-Transport-Security: max-age=31536000`; with an `http` one, none does.
+- **T38.** (B43) `GET /api/v1/me` answers `Cache-Control: no-store` signed in, anonymous and
+  suspended; so do an unknown `/api/v1` path, a wrong method and a CSRF refusal under `/api/v1`;
+  `/healthz`, `/api/openapi.json` and `/api/v1x` do not.
 
 ## Out of scope
 
@@ -606,7 +616,9 @@ overrule one, which then updates this spec.
    exchange with PKCE, JWT access tokens, rotation, reuse detection, revocation, access-token
    authentication in the extractor, `RateLimited<Token>` on both endpoints and the router walk of
    B41 for `/oauth/`. Covers B32 to B37, B41; T3 (full sign-in, API-key request and token
-   exchange), T30 to T34. Depends on: I5, I7, Q11 to Q13.
+   exchange), T30 to T34. Depends on: I5, I7, Q11 to Q13. Its access-token authentication also
+   makes `GET /api/v1/me` answer an app token for its user and adds that case of
+   `03-users-and-identities.md` T17 (03 B24).
 9. **I9. `/.well-known/stepclimb`.** The discovery document's auth fields. Covers B38; T35, T36.
    Depends on: I8, `03-users-and-identities.md` (`identity_providers`), `04-local-accounts.md`
    I1 (local method switches).

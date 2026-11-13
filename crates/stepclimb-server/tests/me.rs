@@ -27,7 +27,13 @@ use stepclimb_core::{
 use stepclimb_server::{AppState, openapi, router, session, web_origin::WebOrigin};
 use tower::ServiceExt;
 
+mod common;
+
 const ME: &str = "/api/v1/me";
+
+fn document() -> Value {
+    serde_json::to_value(openapi::document()).expect("the document as JSON")
+}
 
 /// 2025-11-13T02:13:20Z.
 fn now() -> SystemTime {
@@ -52,12 +58,19 @@ struct Fixture {
 #[derive(Debug)]
 struct Answer {
     status: StatusCode,
+    headers: HeaderMap,
     body: Value,
 }
 
 impl Answer {
     fn code(&self) -> &str {
         self.body["code"].as_str().unwrap_or("")
+    }
+
+    fn cache_control(&self) -> Option<&str> {
+        self.headers
+            .get(header::CACHE_CONTROL)
+            .map(|v| v.to_str().expect("ASCII"))
     }
 }
 
@@ -136,6 +149,7 @@ impl Fixture {
             .await
             .expect("the router never fails");
         let status = response.status();
+        let headers = response.headers().clone();
         let bytes = response
             .into_body()
             .collect()
@@ -143,7 +157,11 @@ impl Fixture {
             .expect("the body is readable")
             .to_bytes();
         let body = serde_json::from_slice(&bytes).expect("a JSON body");
-        Answer { status, body }
+        Answer {
+            status,
+            headers,
+            body,
+        }
     }
 
     async fn me_with_cookie(&self, cookie: &str) -> Answer {
@@ -181,11 +199,27 @@ async fn t17_a_session_user_gets_the_b22_shape(pool: PgPool) {
             "features": [],
         })
     );
-    let document = serde_json::to_value(openapi::document()).expect("the document as JSON");
-    let schema = schema_ref(&document, "#/components/schemas/Me");
-    let mut errors = Vec::new();
-    conforms(&document, schema, &answer.body, "", &mut errors);
+    let errors = common::schema_errors(&document(), "Me", &answer.body);
     assert!(errors.is_empty(), "{errors:#?}");
+}
+
+/// Spec 08 B43: the user's personal data is never kept by a shared or browser cache, and
+/// neither is a refusal.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_answer_and_its_refusals_are_no_store(pool: PgPool) {
+    let fixture = Fixture::new(pool).await;
+    let sam = fixture.sam().await;
+    let cookie = fixture.sign_in(sam).await;
+    let answer = fixture.me_with_cookie(&cookie).await;
+    assert_eq!(answer.status, StatusCode::OK);
+    assert_eq!(answer.cache_control(), Some("no-store"));
+    let anonymous = fixture.get_me(&[]).await;
+    assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(anonymous.cache_control(), Some("no-store"));
+    fixture.set_status(sam, Status::Suspended).await;
+    let suspended = fixture.me_with_cookie(&cookie).await;
+    assert_eq!(suspended.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(suspended.cache_control(), Some("no-store"));
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
@@ -209,10 +243,7 @@ async fn a_user_without_an_email_gets_null(pool: PgPool) {
     assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
     assert_eq!(answer.body["user"]["email"], Value::Null);
     assert_eq!(answer.body["user"]["source"], "local");
-    let document = serde_json::to_value(openapi::document()).expect("the document as JSON");
-    let mut errors = Vec::new();
-    let schema = schema_ref(&document, "#/components/schemas/Me");
-    conforms(&document, schema, &answer.body, "", &mut errors);
+    let errors = common::schema_errors(&document(), "Me", &answer.body);
     assert!(errors.is_empty(), "{errors:#?}");
 }
 
@@ -294,140 +325,4 @@ async fn each_session_answers_its_own_user(pool: PgPool) {
     assert_eq!(for_sam.body["user"]["id"], sam.to_string());
     assert_eq!(for_robin.body["user"]["id"], robin.to_string());
     assert_eq!(for_robin.body["user"]["display_name"], "Robin Example");
-}
-
-// A check of a value against the subset of JSON Schema utoipa writes for these types: `$ref`,
-// `type` (one name or a list), `enum`, `properties` with `required`, `items` and `format: uuid`.
-// A member the schema does not declare is an error too, so the answer cannot carry more than the
-// document says.
-
-fn schema_ref<'a>(document: &'a Value, reference: &str) -> &'a Value {
-    let pointer = reference.strip_prefix('#').expect("a local reference");
-    document
-        .pointer(pointer)
-        .unwrap_or_else(|| panic!("{reference} is not in the document"))
-}
-
-fn type_matches(name: &str, value: &Value) -> bool {
-    match name {
-        "object" => value.is_object(),
-        "array" => value.is_array(),
-        "string" => value.is_string(),
-        "integer" => value.is_i64() || value.is_u64(),
-        "number" => value.is_number(),
-        "boolean" => value.is_boolean(),
-        "null" => value.is_null(),
-        _ => false,
-    }
-}
-
-fn conforms(document: &Value, schema: &Value, value: &Value, at: &str, errors: &mut Vec<String>) {
-    if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
-        return conforms(document, schema_ref(document, reference), value, at, errors);
-    }
-    if let Some(types) = schema.get("type") {
-        let names: Vec<&str> = match types {
-            Value::String(name) => vec![name.as_str()],
-            Value::Array(names) => names.iter().filter_map(Value::as_str).collect(),
-            _ => Vec::new(),
-        };
-        if !names.iter().any(|name| type_matches(name, value)) {
-            errors.push(format!("{at}: {value} is not of type {types}"));
-            return;
-        }
-    }
-    if let Some(allowed) = schema.get("enum").and_then(Value::as_array)
-        && !allowed.contains(value)
-    {
-        errors.push(format!("{at}: {value} is not one of {allowed:?}"));
-    }
-    if schema.get("format").and_then(Value::as_str) == Some("uuid")
-        && let Some(text) = value.as_str()
-        && Uuid::try_parse(text).is_err()
-    {
-        errors.push(format!("{at}: {text} is not a UUID"));
-    }
-    if let (Some(object), Some(properties)) = (
-        value.as_object(),
-        schema.get("properties").and_then(Value::as_object),
-    ) {
-        let required = schema.get("required").and_then(Value::as_array);
-        for name in required.into_iter().flatten().filter_map(Value::as_str) {
-            if !object.contains_key(name) {
-                errors.push(format!("{at}/{name}: required but missing"));
-            }
-        }
-        for (name, member) in object {
-            match properties.get(name) {
-                Some(property) => {
-                    conforms(document, property, member, &format!("{at}/{name}"), errors);
-                }
-                None => errors.push(format!("{at}/{name}: not declared in the schema")),
-            }
-        }
-    }
-    if let (Some(items), Some(schema_items)) = (value.as_array(), schema.get("items")) {
-        for (index, item) in items.iter().enumerate() {
-            conforms(
-                document,
-                schema_items,
-                item,
-                &format!("{at}/{index}"),
-                errors,
-            );
-        }
-    }
-}
-
-/// The validator above must be able to fail: a missing member, an undeclared one, a wrong type
-/// and a value outside an enum are each reported against the real `Me` schema.
-#[test]
-fn the_schema_check_refuses_answers_the_document_does_not_describe() {
-    let document = serde_json::to_value(openapi::document()).expect("the document as JSON");
-    let schema = schema_ref(&document, "#/components/schemas/Me");
-    let good = json!({
-        "user": {
-            "id": "0190a000-0000-7000-8000-000000000000", "display_name": "Sam Ortiz",
-            "given_name": "Sam", "family_name": "Ortiz", "email": null, "locale": "en",
-            "tz": "UTC", "status": "active", "source": "local",
-        },
-        "organization": {
-            "id": "0190a000-0000-7000-8000-000000000001", "slug": "example", "name": "Example Org",
-        },
-        "grants": [{
-            "scope": { "type": "account", "id": "0190a000-0000-7000-8000-000000000002" },
-            "permissions": ["account.view"],
-        }],
-        "features": ["custom_roles"],
-    });
-    let mut errors = Vec::new();
-    conforms(&document, schema, &good, "", &mut errors);
-    assert!(errors.is_empty(), "{errors:#?}");
-
-    let broken = [
-        ("/user/tz", Value::Null),
-        ("/user/status", json!("deleted")),
-        ("/grants/0/scope/type", json!("planet")),
-        ("/organization/id", json!("not-a-uuid")),
-        ("/features", json!("custom_roles")),
-    ];
-    for (pointer, replacement) in broken {
-        let mut value = good.clone();
-        *value.pointer_mut(pointer).expect("a member") = replacement;
-        let mut errors = Vec::new();
-        conforms(&document, schema, &value, "", &mut errors);
-        assert!(!errors.is_empty(), "{pointer} was accepted");
-    }
-    let mut extra = good.clone();
-    extra["user"]["external_id"] = json!("E1");
-    let mut missing = good.clone();
-    missing["user"]
-        .as_object_mut()
-        .expect("an object")
-        .remove("email");
-    for value in [extra, missing] {
-        let mut errors = Vec::new();
-        conforms(&document, schema, &value, "", &mut errors);
-        assert!(!errors.is_empty(), "{value} was accepted");
-    }
 }

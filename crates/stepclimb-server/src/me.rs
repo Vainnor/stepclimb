@@ -192,7 +192,7 @@ mod tests {
             let json = serde_json::to_value(UserSource::from(source)).unwrap();
             assert_eq!(json, source.as_str());
         }
-        for status in [users::Status::Active, users::Status::Suspended] {
+        for status in users::Status::ALL {
             let json = serde_json::to_value(UserStatus::from(status)).unwrap();
             assert_eq!(json, status.as_str());
         }
