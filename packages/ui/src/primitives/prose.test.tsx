@@ -85,6 +85,46 @@ describe("Prose", () => {
     for (const attr of ["tabindex", "role", "aria-label"]) expect(wide).not.toHaveAttribute(attr);
   });
 
+  it("keeps a name the content gave a code block or table, through overflow and fitting again", () => {
+    const { container } = render(
+      <Prose>
+        <pre>wide</pre>
+        <table aria-label="Frequencies">
+          <tbody>
+            <tr>
+              <td>wide</td>
+            </tr>
+          </tbody>
+        </table>
+      </Prose>,
+    );
+    const root = container.firstElementChild as HTMLElement;
+    const pre = root.querySelector("pre") as HTMLElement;
+    const table = root.querySelector("table") as HTMLElement;
+    // Set as sanitized lesson HTML would carry it; JSX refuses a name on a pre's generic role.
+    pre.setAttribute("aria-label", "Readback");
+    setWidths(pre, 900, 375);
+    setWidths(table, 900, 375);
+    markScrollers(root, "Code block");
+    expect(pre).toHaveAttribute("aria-label", "Readback");
+    expect(pre).toHaveAttribute("role", "group");
+    expect(pre).toHaveAttribute("tabindex", "0");
+    expect(pre).toHaveAttribute("data-sc-scroller", "tabindex role");
+    expect(table).toHaveAttribute("aria-label", "Frequencies");
+    expect(table).toHaveAttribute("data-sc-scroller", "tabindex");
+
+    setWidths(pre, 375, 375);
+    setWidths(table, 375, 375);
+    markScrollers(root, "Code block");
+    expect(pre).toHaveAttribute("aria-label", "Readback");
+    expect(table).toHaveAttribute("aria-label", "Frequencies");
+    for (const el of [pre, table]) {
+      for (const attr of ["tabindex", "role", "data-sc-scroller"]) {
+        expect(el).not.toHaveAttribute(attr);
+      }
+    }
+  });
+
   describe("after a web font loads", () => {
     const original = Object.getOwnPropertyDescriptor(document, "fonts");
     afterEach(() => {
@@ -117,7 +157,7 @@ describe("Prose", () => {
       return pre;
     }
 
-    it("re-checks the code blocks when the fonts finish loading", async () => {
+    it("re-checks the code blocks when the fonts finish loading", () => {
       const { fonts } = fakeFonts();
       const pre = widePreAfterRender();
       act(() => {

@@ -26,26 +26,37 @@ export interface ProseProps {
 
 /** The elements base.css lets scroll sideways on their own. */
 const SCROLLERS = "table, pre";
-/** Set on a scroller Prose made a tab stop, so only what Prose added is taken back. */
+/**
+ * Set on a scroller Prose made a tab stop, listing the attributes Prose added
+ * (`data-sc-scroller="tabindex role aria-label"`), so exactly those are taken back.
+ */
 const MARK = "data-sc-scroller";
+
+/** What a scroller needs to be a named tab stop: a code block also gets a group role and name. */
+function scrollerAttributes(el: HTMLElement, codeLabel: string): [string, string][] {
+  const attributes: [string, string][] = [["tabindex", "0"]];
+  if (el.tagName === "PRE") attributes.push(["role", "group"], ["aria-label", codeLabel]);
+  return attributes;
+}
 
 /**
  * Makes every table or code block that is wider than the column a tab stop, so a keyboard user
  * can scroll it (WCAG 2.1.1; axe's scrollable-region-focusable), and takes the tab stop back when
  * it fits again. A code block also gets `codeLabel` as its name, as a group, so the tab stop is
- * announced as something; a table is announced by its own role and caption.
+ * announced as something; a table is announced by its own role and caption. An attribute the
+ * content already set is left as it is, and never taken back.
  */
 export function markScrollers(root: HTMLElement, codeLabel: string): void {
   for (const el of root.querySelectorAll<HTMLElement>(SCROLLERS)) {
+    const marked = el.getAttribute(MARK);
     if (el.scrollWidth > el.clientWidth) {
-      el.setAttribute(MARK, "");
-      el.tabIndex = 0;
-      if (el.tagName === "PRE") {
-        el.setAttribute("role", "group");
-        el.setAttribute("aria-label", codeLabel);
-      }
-    } else if (el.hasAttribute(MARK)) {
-      for (const attr of [MARK, "tabindex", "role", "aria-label"]) el.removeAttribute(attr);
+      if (marked !== null) continue;
+      const added = scrollerAttributes(el, codeLabel).filter(([name]) => !el.hasAttribute(name));
+      for (const [name, value] of added) el.setAttribute(name, value);
+      el.setAttribute(MARK, added.map(([name]) => name).join(" "));
+    } else if (marked !== null) {
+      for (const name of marked.split(" ").filter(Boolean)) el.removeAttribute(name);
+      el.removeAttribute(MARK);
     }
   }
 }
