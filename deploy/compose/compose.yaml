@@ -19,7 +19,7 @@ services:
       POSTGRES_PASSWORD: stepclimb-local
       POSTGRES_DB: stepclimb
     ports:
-      - "127.0.0.1:${STEPCLIMB_PG_PORT:-55432}:5432"
+      - "127.0.0.1:${SC_DEV_PG_PORT:-55432}:5432"
     volumes:
       - postgres:/var/lib/postgresql/data
     healthcheck:
@@ -35,8 +35,8 @@ services:
       MINIO_ROOT_USER: stepclimb
       MINIO_ROOT_PASSWORD: stepclimb-local
     ports:
-      - "127.0.0.1:${STEPCLIMB_MINIO_PORT:-59000}:9000"
-      - "127.0.0.1:${STEPCLIMB_MINIO_CONSOLE_PORT:-59001}:9001"
+      - "127.0.0.1:${SC_DEV_MINIO_PORT:-59000}:9000"
+      - "127.0.0.1:${SC_DEV_MINIO_CONSOLE_PORT:-59001}:9001"
     volumes:
       - minio:/data
 
@@ -56,7 +56,7 @@ services:
     secrets:
       - encryption_keys
     ports:
-      - "127.0.0.1:${STEPCLIMB_PORT:-58080}:8080"
+      - "127.0.0.1:${SC_DEV_PORT:-58080}:8080"
     depends_on:
       postgres:
         condition: service_healthy
