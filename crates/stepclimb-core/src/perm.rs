@@ -67,7 +67,8 @@ mod sealed {
     pub trait Sealed {}
 }
 
-/// Defines each permission struct, seals it, implements [`Permission`] and lists it in [`ALL`].
+/// Defines each permission struct, seals it, implements [`Permission`] and
+/// [`crate::requirement::Requirement`], and lists it in [`ALL`].
 /// The `+` repetition makes an empty grantable list a compile error.
 macro_rules! catalog {
     ($(
@@ -84,6 +85,10 @@ macro_rules! catalog {
             impl Permission for $name {
                 const KEY: &'static str = $key;
                 const GRANTABLE: &'static [ScopeType] = &[$(ScopeType::$scope),+];
+            }
+
+            impl crate::requirement::Requirement for $name {
+                type Kind = crate::requirement::PermissionKind;
             }
         )+
 

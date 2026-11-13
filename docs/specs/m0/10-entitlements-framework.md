@@ -93,6 +93,18 @@ only bites on managed hosting (M6); self-hosted gets everything, which fits the 
   reported before the target is resolved, so the answer never depends on whether an id exists.
   Unauthenticated routes that need a feature check it with `Entitlements::require::<F>()` on the
   organization from `RequestOrg` (`02-organizations-and-accounts.md` B11).
+  The requirement trait is `stepclimb_core::requirement::Requirement`, which both catalog macros
+  implement; its `Kind` (`PermissionKind` or `FeatureKind`) picks the check, because Rust cannot
+  implement one trait for every `Permission` and every `Feature` at once. A test crate's own
+  feature implements it with `Kind = FeatureKind`. A handler lists `Require<feature::X>` before
+  `Require<perm::Y, T>`, since axum runs extractors in argument order; a feature `Require` that
+  runs after a permission `Require` of the same request answers 500 `internal.error`, so a
+  handler written in the wrong order fails on every allowed request instead of answering 404
+  for a missing id while the feature is off. A feature `Require` authenticates through the same
+  per-request evaluation as a permission `Require`, so the principal and grants are loaded once
+  for both. `Entitlements::require::<F>()` is only for routes with no principal: on the
+  entitlements a handler gets from the `Entitlements` extractor it answers 500, since a check in
+  the handler body would run after the permission check (coordinator decision, 13 Nov 2026).
 - **B10.** `Entitlements::check_room(limit, adding)` answers whether `adding` more units fit.
   When the plan's value is `null` it returns `Ok` without counting, so the unlimited plan never
   runs a count query. Otherwise it counts through the repository function the limit names (for
@@ -101,6 +113,25 @@ only bites on managed hosting (M6); self-hosted gets everything, which fits the 
   writes 403 `entitlement.limit_reached`, with the limit key and the plan's value in the problem's
   `limit` and `max` members). User creation by an admin (`03`), just-in-time creation at sign-in
   (`07-admission.md`) and, in M4, the sync API call it before inserting.
+  **Concurrency (coordinator decision, 13 Nov 2026).** `check_room` takes the creating
+  transaction: `check_room(&mut tx, limit, adding)`, called before the insert in the same
+  transaction. When the limit has a value it first locks the organization's `org_plans` row
+  (`SELECT ... FOR UPDATE`), then counts, so two creations in one organization take turns: the
+  second waits for the first to commit and its count sees the first one's rows. Without the lock
+  two creations at `max - 1` would both pass. The lock is per organization, so other
+  organizations never wait. The lock makes the count current only at `READ COMMITTED`: at
+  `REPEATABLE READ` or `SERIALIZABLE` the snapshot predates the end of the lock wait, so the
+  locking statement also reads `transaction_isolation` and any other level answers 500, as
+  `02-organizations-and-accounts.md`'s tree lock does. Any failure (no `org_plans` row, a plan
+  that does not parse, a failed query, another isolation level) answers 500 and inserts nothing;
+  it never counts as room. The value compared is the
+  one the request loaded (B8). The handler reads the request's entitlements with the
+  `Entitlements` extractor, which shares the per-request load with `Require<Feature>`. Nothing in
+  the types ties the caller's insert to the checked transaction, so each caller (spec 03's
+  `POST /api/v1/users`, spec 07's just-in-time creation, M4's sync API) repeats the race test on
+  its own route: two creations at `users - 1`, one user created, the other refused. A room token
+  that `users::create` would take was considered and left out: it would change every existing
+  caller of `users::create` and still could not prove the same transaction.
 - **B11.** Downgrades never delete data; over-limit features become read-only. That is M6's
   behavior; M0 refuses only new units over a limit and never removes or hides existing ones.
 - **B12.** `GET /api/v1/organization/entitlements` returns the organization's plan key and
@@ -187,14 +218,19 @@ at it by SQL, since M0 has no API for it.
 - **T4** (B7). A test plan with `features = {}` disables every feature; with `limits = {}` refuses
   the first user; an unknown key in either is ignored.
 - **T5** (B8). Two `Require<Feature>` extractors on one test route run one entitlements query
-  (counted with a query counter on the pool); a plan change by SQL between two requests shows on
+  (counted in sqlx's statement log, captured during the request); a plan change by SQL between two requests shows on
   the second.
 - **T6** (B9). On a test route taking `Require<feature::X>` and `Require<perm::Y, AccountTarget>`:
   anonymous 401; feature off and an id that does not exist both give the Q2 answer (not 404);
   feature on and permission missing give 403 `permission.denied`.
 - **T7** (B10). With the unlimited plan, creating a user runs no count query; with a test plan of
   `users = 2` and two users, `POST /api/v1/users` answers `entitlement.limit_reached` with
-  `limit = "users"` and `max = 2`, and inserts nothing.
+  `limit = "users"` and `max = 2`, and inserts nothing. Two creations at `users - 1` in one
+  organization, the first holding its transaction open, end with one user created and the
+  second refused; issue 2 runs this race at the repository level (`org_plans::check_room`),
+  with a check at `REPEATABLE READ` and `SERIALIZABLE` refused. Issue 2 runs these on a test route that creates a user as `POST /api/v1/users`
+  will, since that route arrives with `03-users-and-identities.md`; that spec's route tests
+  repeat the refusal on the real route.
 - **T8** (B12). `GET /api/v1/organization/entitlements`: four cases (401; 403 for a user without
   `organization.manage`; 404 not applicable for `OrgTarget`; 200 for an Organization admin, with
   every catalog feature `true` and `users: null`); cross-organization: an admin of org B sees org

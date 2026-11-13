@@ -10,7 +10,8 @@
 //! conventions in [`error`] (problem details), [`extract`] (extractors that reject with them)
 //! and [`pagination`] (cursor pages), authenticate them with [`session`] (the browser session
 //! cookie and the `Authenticated` extractor) within the organization [`request_org`] resolves,
-//! and protect them with [`require`] (`Require<P, T>`, the permission check). A sign-in that
+//! and protect them with [`require`] (`Require<P, T>`, the permission check, and `Require<F>`,
+//! the feature check of [`entitlements`], which also holds the limit check). A sign-in that
 //! spans several requests keeps its state in a [`flow`]. Every unsafe request passes [`csrf`]
 //! first. Sign-in and token routes declare a [`rate_limit`] budget, counted per client address
 //! as [`client_ip`] finds it.
@@ -21,6 +22,7 @@ pub mod client_ip;
 pub mod config;
 mod cookie;
 pub mod csrf;
+pub mod entitlements;
 pub mod error;
 pub mod extract;
 pub mod flow;

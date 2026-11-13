@@ -7,15 +7,28 @@
 //! [`ensure_selfhost`] for every organization so one created before the plans migration gets
 //! it too. M0 never changes a row: `ends_at` and `stripe_sub` are M6's and nothing here reads
 //! or writes them (B6).
+//!
+//! [`check_room`] is the limit check (B10): the creating transaction calls it before it inserts,
+//! and it locks the organization's row so concurrent creations take turns.
+//!
+//! The lock makes the count current only at `READ COMMITTED`, PostgreSQL's default, where each
+//! statement after the lock sees what the previous holder committed. At `REPEATABLE READ` or
+//! `SERIALIZABLE` the transaction's snapshot is taken before the lock wait ends, so the count
+//! would miss the previous holder's rows and both creations could pass. A database or role
+//! default, or a caller's own transaction, can raise the level, so the statement that takes the
+//! lock also reads `transaction_isolation`, and any other level is refused with
+//! [`Error::IsolationLevel`] before anything is counted.
 
 use std::time::SystemTime;
 
-use sqlx::{Acquire, PgExecutor, Postgres};
+use sqlx::{Acquire, PgExecutor, Postgres, Transaction};
 
 use crate::{
     OrgScope,
     db::{TimeOutOfRange, epoch_micros},
+    feature::Limit,
     plans::{self, PlanEntitlements, UNLIMITED},
+    users,
 };
 
 /// How an organization got its plan. The stored spellings are [`PlanSource::as_str`]; the
@@ -81,6 +94,13 @@ pub enum Error {
     StoredSource(String),
     #[error(transparent)]
     Plan(#[from] plans::Error),
+    /// The transaction runs at an isolation level other than `READ COMMITTED`, where the limit
+    /// check's lock does not make its count current (see the module documentation).
+    #[error("the limit check runs only at READ COMMITTED isolation, not {found}")]
+    IsolationLevel { found: String },
+    /// Counting what a limit counts failed.
+    #[error("counting the units of the limit failed")]
+    Count(#[source] users::Error),
     /// A time that cannot be stored.
     #[error(transparent)]
     Time(#[from] TimeOutOfRange),
@@ -142,6 +162,72 @@ pub async fn ensure_selfhost<'c>(
     Ok(inserted == 1)
 }
 
+/// Whether the units a creation adds fit the plan's limit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Room {
+    /// They fit, or the limit has no value.
+    Fits,
+    /// They would take the organization over `max`, the plan's value for the limit.
+    Full {
+        /// The plan's value for the limit.
+        max: u64,
+    },
+}
+
+/// Whether `adding` more units of `limit` fit `plan`, the scope's organization's plan as the
+/// request loaded it (B10). Called inside the transaction that inserts the units, before the
+/// insert.
+///
+/// A limit with no value (`null`, and every limit of `unlimited`) fits without a query. Otherwise
+/// it locks the organization's `org_plans` row for the rest of `tx`, then counts with the
+/// repository function the limit names. The lock makes concurrent creations in one
+/// organization take turns: the second waits until the first commits or rolls back, and at
+/// `READ COMMITTED` its count, a later statement, sees the first one's rows. Without it two
+/// creations at `max - 1` would both count `max - 1` and both insert. A transaction at any other
+/// isolation level is [`Error::IsolationLevel`], and an organization with no `org_plans` row is
+/// [`Error::NotFound`]; neither is ever room. Nothing ties the caller's insert to `tx`: the
+/// caller inserts in the same transaction and commits after it.
+pub async fn check_room(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: OrgScope,
+    plan: &PlanEntitlements,
+    limit: Limit,
+    adding: u64,
+) -> Result<Room, Error> {
+    let Some(max) = plan.limit(limit) else {
+        return Ok(Room::Fits);
+    };
+    let isolation = sqlx::query_scalar!(
+        r#"SELECT current_setting('transaction_isolation') AS "isolation!"
+           FROM org_plans WHERE org_id = $1 FOR UPDATE"#,
+        scope.org_id(),
+    )
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(Error::NotFound)?;
+    if isolation != "read committed" {
+        return Err(Error::IsolationLevel { found: isolation });
+    }
+    let used = match limit {
+        Limit::Users => users::count_for_limit(&mut **tx, scope)
+            .await
+            .map_err(Error::Count)?,
+    };
+    Ok(room(used, adding, max))
+}
+
+/// [`Room::Fits`] when `used + adding` is at most `max`. A negative count, which `count(*)`
+/// never returns, and a sum past `u64::MAX` do not fit.
+fn room(used: i64, adding: u64, max: u64) -> Room {
+    match u64::try_from(used)
+        .ok()
+        .and_then(|used| used.checked_add(adding))
+    {
+        Some(total) if total <= max => Room::Fits,
+        _ => Room::Full { max },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,6 +239,19 @@ mod tests {
         }
         assert_eq!(PlanSource::parse("Selfhost"), None);
         assert_eq!(PlanSource::parse(""), None);
+    }
+
+    #[test]
+    fn room_fits_up_to_max_and_no_further() {
+        assert_eq!(room(0, 1, 2), Room::Fits);
+        assert_eq!(room(1, 1, 2), Room::Fits);
+        assert_eq!(room(2, 1, 2), Room::Full { max: 2 });
+        assert_eq!(room(0, 3, 2), Room::Full { max: 2 });
+        assert_eq!(room(0, 1, 0), Room::Full { max: 0 });
+        assert_eq!(room(5, 0, 2), Room::Full { max: 2 });
+        assert_eq!(room(2, 0, 2), Room::Fits);
+        assert_eq!(room(1, u64::MAX, u64::MAX), Room::Full { max: u64::MAX });
+        assert_eq!(room(-1, 0, 2), Room::Full { max: 2 });
     }
 
     #[test]

@@ -3,7 +3,8 @@
 //!
 //! Every error a handler or extractor returns is an [`ApiError`], which answers
 //! `application/problem+json` with the members `type`, `title`, `status`, `detail` and a stable
-//! `code` (`area.reason`, spec 02 Q4), plus `errors` on a 422. `type` is `about:blank` and
+//! `code` (`area.reason`, spec 02 Q4), plus `errors` on a 422 and `limit` and `max` on
+//! `entitlement.limit_reached` (spec 10 B10). `type` is `about:blank` and
 //! `title` is the HTTP status phrase until the docs site can host a page per code (Q4).
 //!
 //! `detail` is always a fixed sentence written here or by the handler, never the text of an
@@ -85,6 +86,13 @@ pub struct Problem {
     /// On a 422, each rule the body broke.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<FieldError>,
+    /// On `entitlement.limit_reached`, the key of the limit the request would pass, such as
+    /// `users`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<String>,
+    /// On `entitlement.limit_reached`, the plan's value for that limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<u64>,
 }
 
 /// An error a handler or extractor answers with.
@@ -94,6 +102,7 @@ pub struct ApiError {
     code: &'static str,
     detail: &'static str,
     errors: Vec<FieldError>,
+    limit: Option<(&'static str, u64)>,
 }
 
 impl ApiError {
@@ -105,6 +114,16 @@ impl ApiError {
             code,
             detail,
             errors: Vec::new(),
+            limit: None,
+        }
+    }
+
+    /// This error with the `limit` and `max` members: the key of the limit the request would
+    /// pass and the plan's value for it.
+    pub fn with_limit(self, limit: &'static str, max: u64) -> Self {
+        Self {
+            limit: Some((limit, max)),
+            ..self
         }
     }
 
@@ -182,6 +201,8 @@ impl ApiError {
             detail: self.detail.to_owned(),
             code: self.code.to_owned(),
             errors: self.errors.clone(),
+            limit: self.limit.map(|(limit, _)| limit.to_owned()),
+            max: self.limit.map(|(_, max)| max),
         }
     }
 
@@ -292,6 +313,20 @@ mod tests {
                 "detail": "Bad.",
                 "code": "request.malformed",
             })
+        );
+    }
+
+    #[test]
+    fn a_limit_error_carries_the_limit_and_its_max() {
+        let error = ApiError::new(StatusCode::FORBIDDEN, "entitlement.limit_reached", "Full.")
+            .with_limit("users", 2);
+        let json = serde_json::to_value(error.problem()).unwrap();
+        assert_eq!(json["limit"], "users");
+        assert_eq!(json["max"], 2);
+        let plain = serde_json::to_value(ApiError::malformed("Bad.").problem()).unwrap();
+        assert!(
+            plain.get("limit").is_none() && plain.get("max").is_none(),
+            "{plain}"
         );
     }
 

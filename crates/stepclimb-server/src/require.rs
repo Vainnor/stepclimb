@@ -1,13 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! `Require<P, T>`: the permission check every protected handler takes
-//! (docs/specs/m0/09-permissions-and-roles.md B16 to B18).
+//! `Require<R, T>`: the permission check every protected handler takes
+//! (docs/specs/m0/09-permissions-and-roles.md B16 to B18), and the feature check of a route a
+//! plan can switch off (docs/specs/m0/10-entitlements-framework.md B9).
 //!
-//! The extractor runs before the handler body, in B17's order:
+//! `R` is a permission of `stepclimb_core::perm` or a feature of `stepclimb_core::feature`: both
+//! catalogs implement `stepclimb_core::requirement::Requirement`, whose `Kind` picks the check
+//! ([`Check`]). A handler takes `Require<feature::X>` before `Require<perm::Y, T>`, and the
+//! extractors run before the handler body, in B17's order:
 //!
 //! 1. no authenticated principal: the session extractor's 401 (`auth.unauthenticated`, or its
 //!    more specific `auth.*` code);
-//! 2. the entitlement check of a route that also takes `Require<Feature>` (spec 10), which is
-//!    a separate extractor;
+//! 2. each `Require<F>` with `F: Feature`: 403 `entitlement.feature_unavailable` when the
+//!    request's plan does not include `F` ([`crate::entitlements`]). It runs before any target is
+//!    resolved, so the answer never depends on whether an id exists. A `Require<F>` that runs
+//!    after a permission `Require` of the same request answers 500: the handler lists them in
+//!    the wrong order, which every allowed request then shows;
 //! 3. the target `T` is resolved inside the principal's organization; one that does not exist
 //!    there answers 404 with the target's code;
 //! 4. a target the principal holds no effective permission over answers the same 404;
@@ -26,13 +33,15 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use stepclimb_core::{
+    feature::Feature,
     grants::{self, Denied, Grants, RequireError},
     id::Uuid,
     perm::Permission,
+    requirement::{FeatureKind, PermissionKind, Requirement},
 };
 
 use crate::{
-    AppState,
+    AppState, entitlements,
     error::ApiError,
     request_org,
     session::{self, Authenticated},
@@ -49,19 +58,22 @@ pub mod code {
 /// The path parameter [`AccountTarget`] and [`AccountParentTarget`] read.
 pub const ACCOUNT_ID_PARAM: &str = "account_id";
 
-/// A request whose principal holds `P` at the target `T` resolves to (B17).
+/// A request whose principal holds the permission `R` at the target `T` resolves to (B17), or
+/// whose organization's plan includes the feature `R` (spec 10 B9).
 ///
-/// `T` defaults to [`OrgTarget`]. The handler reads who is asking from [`Self::principal`], the
-/// grants (for filtering a list or checking a body target) from [`Self::grants`], and the
-/// resolved target from [`Self::target`].
-pub struct Require<P, T = OrgTarget> {
+/// `T` defaults to [`OrgTarget`], the only target a feature takes. The handler reads who is
+/// asking from [`Self::principal`], the grants (for filtering a list or checking a body target)
+/// from [`Self::grants`], and the resolved target from [`Self::target`]. A feature's `Require`
+/// resolves no target: its `target` is [`OrgTarget`] without a permission check, and its grants
+/// are the request's, loaded once for every `Require`.
+pub struct Require<R, T = OrgTarget> {
     principal: Authenticated,
     grants: Arc<Grants>,
     target: T,
-    permission: PhantomData<fn() -> P>,
+    requirement: PhantomData<fn() -> R>,
 }
 
-impl<P, T> Require<P, T> {
+impl<R, T> Require<R, T> {
     /// The authenticated principal; its scope is the organization every repository call of the
     /// request acts in.
     pub fn principal(&self) -> Authenticated {
@@ -256,7 +268,8 @@ pub enum Rejection {
     /// No authenticated principal (step 1), answered as the session extractor answers it,
     /// clearing the cookie where it does.
     Unauthenticated(session::Rejection),
-    /// Steps 3 to 5, or a failure loading the grants.
+    /// A feature the plan lacks (step 2), steps 3 to 5, or a failure loading the grants or the
+    /// entitlements.
     Refused(ApiError),
 }
 
@@ -282,10 +295,66 @@ struct Evaluated {
     grants: Arc<Grants>,
 }
 
-impl<P, T> FromRequestParts<AppState> for Require<P, T>
+/// Kept in the request's extensions once a permission `Require` has started, so a feature
+/// `Require` after it can tell it runs out of order.
+#[derive(Clone, Copy)]
+struct PermissionStarted;
+
+/// The check a [`Require<R, T>`] runs, implemented on `R`'s [`Requirement::Kind`]: for
+/// [`PermissionKind`] with any [`Target`], for [`FeatureKind`] with [`OrgTarget`] only. Public
+/// because it bounds the extractor; nothing outside this module implements it.
+pub trait Check<R, T>: Sized {
+    /// The [`Require`], or the response that refuses the request.
+    fn check(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> impl Future<Output = Result<Require<R, T>, Rejection>> + Send;
+}
+
+impl<P, T> Check<P, T> for PermissionKind
 where
     P: Permission,
     T: Target,
+{
+    async fn check(parts: &mut Parts, state: &AppState) -> Result<Require<P, T>, Rejection> {
+        let Evaluated { principal, grants } = evaluate(parts, state).await?;
+        parts.extensions.insert(PermissionStarted);
+        let target = T::resolve::<P>(parts, state, &grants).await?;
+        Ok(Require {
+            principal,
+            grants,
+            target,
+            requirement: PhantomData,
+        })
+    }
+}
+
+impl<F: Feature> Check<F, OrgTarget> for FeatureKind {
+    async fn check(parts: &mut Parts, state: &AppState) -> Result<Require<F>, Rejection> {
+        let Evaluated { principal, grants } = evaluate(parts, state).await?;
+        if parts.extensions.get::<PermissionStarted>().is_some() {
+            return Err(ApiError::internal(&FeatureAfterPermission(F::KEY)).into());
+        }
+        entitlements::of_request(parts, state).await?.check::<F>()?;
+        Ok(Require {
+            principal,
+            grants,
+            target: OrgTarget,
+            requirement: PhantomData,
+        })
+    }
+}
+
+/// A handler lists `Require<feature::X>` after a permission `Require`: a bug in the handler.
+#[derive(Debug, thiserror::Error)]
+#[error("Require<{0}> runs after a permission Require; list feature checks first")]
+struct FeatureAfterPermission(&'static str);
+
+impl<R, T> FromRequestParts<AppState> for Require<R, T>
+where
+    R: Requirement,
+    R::Kind: Check<R, T>,
+    T: Send,
 {
     type Rejection = Rejection;
 
@@ -293,15 +362,18 @@ where
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let Evaluated { principal, grants } = evaluate(parts, state).await?;
-        let target = T::resolve::<P>(parts, state, &grants).await?;
-        Ok(Self {
-            principal,
-            grants,
-            target,
-            permission: PhantomData,
-        })
+        R::Kind::check(parts, state).await
     }
+}
+
+/// The request's authenticated principal, as [`Require`] finds it: loading the request's grants
+/// with it on first use, so a later `Require` reuses both. No principal answers the session
+/// extractor's 401.
+pub(crate) async fn principal(
+    parts: &mut Parts,
+    state: &AppState,
+) -> Result<Authenticated, Rejection> {
+    Ok(evaluate(parts, state).await?.principal)
 }
 
 /// The request's principal and grants: from the extensions when an earlier `Require` of the

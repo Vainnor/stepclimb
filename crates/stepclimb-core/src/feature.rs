@@ -45,7 +45,8 @@ mod sealed {
 #[cfg(feature = "test-support")]
 pub use sealed::Sealed as TestSeal;
 
-/// Defines each feature struct, implements [`Feature`] and lists its key in [`ALL`].
+/// Defines each feature struct, implements [`Feature`] and
+/// [`crate::requirement::Requirement`], and lists its key in [`ALL`].
 macro_rules! catalog {
     ($(
         $(#[$attr:meta])*
@@ -60,6 +61,10 @@ macro_rules! catalog {
 
             impl Feature for $name {
                 const KEY: &'static str = $key;
+            }
+
+            impl crate::requirement::Requirement for $name {
+                type Kind = crate::requirement::FeatureKind;
             }
         )+
 
