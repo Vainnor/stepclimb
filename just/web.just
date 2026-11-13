@@ -7,9 +7,13 @@ web-build: web-install
     pnpm --filter @stepclimb/tokens build
     pnpm --filter web build
 
-# Biome: format and lint check of every TS, TSX, JSON and CSS file
+# Biome: format and lint check of every TS, TSX, JSON and CSS file, with Stepclimb UI's icon and
+# className rules; then the UI pattern lint (raw colors, palette, physical directions, emoji) and
+# its fixture tests
 web-lint: web-install
     pnpm biome check --error-on-warnings .
+    node --test bin/check-ui-lint.test.mjs
+    node bin/check-ui-lint.mjs
 
 # Biome: apply formatting and safe fixes
 web-fmt: web-install

@@ -1,0 +1,25 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// `className` is for layout only (docs/specs/m0/13-base-ui-components.md B4, B20; Q3): a color,
+// background, border-color, font-size or font-weight utility passed in `className` to a Stepclimb
+// UI component warns. A component counts as Stepclimb UI when its name is imported from
+// `@stepclimb/ui`, or from a relative path inside packages/ui. `just web-lint` fails on warnings;
+// a justified case carries `// biome-ignore lint/plugin/classname-styling: <why>`.
+language js
+
+JsxAttribute(name=$name, initializer=$value) as $attribute where {
+  $name <: `className`,
+  $attribute <: within or {
+    JsxOpeningElement(name=$element),
+    JsxSelfClosingElement(name=$element)
+  },
+  $attribute <: within JsModule(items=$items),
+  $items <: contains `import { $specifiers } from $source` where {
+    $source <: or {
+      `"@stepclimb/ui"`,
+      r"^.\.\.?/.*" where { $filename <: r".*packages/ui/.*" }
+    },
+    $specifiers <: contains $element
+  },
+  $value <: contains r"(?s).*(?:^|[\s\"'`:!])(?:(?:text|bg|border(?:-[xytbse])?|ring|outline|fill|stroke|decoration|divide|placeholder|caret|accent)-(?:canvas|overlay|raised|sunken|brand|danger|fg|info|line|on-brand|ring|state|success|warning|inherit|current|transparent|black|white)(?:[\s\"'`/-]|$)|bg-\S|text-[\[(]|font-[\[(]|text-(?:xs|sm|base|lg|[2-9]?xl|caption|read)(?:[\s\"'`/]|$)|font-(?:thin|extralight|light|normal|medium|semibold|bold|extrabold|black|body|control|heading)(?:[\s\"'`]|$)).*",
+  register_diagnostic(span=$attribute, message="className on a Stepclimb UI component is for layout only: change its color, background, border color, font size or weight through the component's variants.", severity="warn")
+}

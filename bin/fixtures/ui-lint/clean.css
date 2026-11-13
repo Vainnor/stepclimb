@@ -1,0 +1,9 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* Tokens only: #fff in a comment does not count. */
+#root:focus-visible {
+  outline: 2px solid var(--sc-ring);
+  color-scheme: light;
+  margin-inline-start: var(--sc-space-2);
+  inset-inline-start: 0;
+  text-align: start;
+}
