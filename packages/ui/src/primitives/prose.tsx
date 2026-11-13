@@ -6,6 +6,7 @@
 // and carries no classes.
 import { type ReactNode, useEffect, useRef } from "react";
 import { tv } from "../lib/tv";
+import { useStepclimbStrings } from "../strings/strings";
 
 /**
  * The measure is in `em` of the reading size, not `ch`: `ch` is the width of "0", wider than the
@@ -25,29 +26,61 @@ export interface ProseProps {
 
 /** The elements base.css lets scroll sideways on their own. */
 const SCROLLERS = "table, pre";
+/** Set on a scroller Prose made a tab stop, so only what Prose added is taken back. */
+const MARK = "data-sc-scroller";
 
 /**
  * Makes every table or code block that is wider than the column a tab stop, so a keyboard user
  * can scroll it (WCAG 2.1.1; axe's scrollable-region-focusable), and takes the tab stop back when
- * it fits again.
+ * it fits again. A code block also gets `codeLabel` as its name, as a group, so the tab stop is
+ * announced as something; a table is announced by its own role and caption.
  */
-export function markScrollers(root: HTMLElement): void {
+export function markScrollers(root: HTMLElement, codeLabel: string): void {
   for (const el of root.querySelectorAll<HTMLElement>(SCROLLERS)) {
-    if (el.scrollWidth > el.clientWidth) el.tabIndex = 0;
-    else el.removeAttribute("tabindex");
+    if (el.scrollWidth > el.clientWidth) {
+      el.setAttribute(MARK, "");
+      el.tabIndex = 0;
+      if (el.tagName === "PRE") {
+        el.setAttribute("role", "group");
+        el.setAttribute("aria-label", codeLabel);
+      }
+    } else if (el.hasAttribute(MARK)) {
+      for (const attr of [MARK, "tabindex", "role", "aria-label"]) el.removeAttribute(attr);
+    }
   }
+}
+
+/**
+ * Calls `onChange` whenever the column's width changes or a web font finishes loading: a font
+ * swap widens a code block's text without resizing anything a ResizeObserver sees.
+ */
+function watchLayout(root: HTMLElement, onChange: () => void): () => void {
+  const observer = new ResizeObserver(onChange);
+  observer.observe(root);
+  const fonts = "fonts" in document ? document.fonts : undefined;
+  let active = true;
+  fonts?.addEventListener("loadingdone", onChange);
+  void fonts?.ready.then(() => {
+    if (active) onChange();
+  });
+  return () => {
+    active = false;
+    observer.disconnect();
+    fonts?.removeEventListener("loadingdone", onChange);
+  };
 }
 
 export function Prose({ children, className }: ProseProps) {
   const ref = useRef<HTMLDivElement>(null);
-  // Runs after every render, since the content may change; a resize can make a table overflow.
+  const { t } = useStepclimbStrings();
+  const codeLabel = t("prose.codeBlock");
+  // Runs after every render, since the content may change.
   useEffect(() => {
     const root = ref.current;
     if (!root) return;
-    markScrollers(root);
-    const observer = new ResizeObserver(() => markScrollers(root));
-    observer.observe(root);
-    return () => observer.disconnect();
+    const mark = () => markScrollers(root, codeLabel);
+    mark();
+    return watchLayout(root, mark);
   });
   return (
     <div ref={ref} data-slot="prose" className={prose({ className })}>

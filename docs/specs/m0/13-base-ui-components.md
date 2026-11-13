@@ -105,7 +105,7 @@ names the React Aria Components export each is built on.
 | | Kbd | `Keyboard` | Mono, for shortcuts |
 | | VisuallyHidden | `VisuallyHidden` | |
 | | Separator | `Separator` | Uses `line` or `line-soft` |
-| | Prose | none | Styles server-sanitized HTML: the reading face, a 62 to 68 character measure (sized in `em` at the reading size: `ch` is the width of "0", so `66ch` holds about 75 characters), reading size and line height (12 Q4), tables that scroll on their own, mono only for code |
+| | Prose | none | Styles server-sanitized HTML: the reading face, a 62 to 68 character measure (sized in `em` at the reading size: `ch` is the width of "0", so `66ch` holds about 75 characters), reading size and line height (12 Q4), tables and code blocks that scroll on their own and, while wider than the column, are tab stops (a code block named "Code block"; re-checked on resize and when web fonts load), mono only for code |
 | Actions | Button | `Button` | Adds the loading state (`isPending`), with the label kept for screen readers |
 | | IconButton | `Button` | Requires an accessible label; shows it as a Tooltip |
 | | ButtonGroup | `Group` | |

@@ -37,6 +37,7 @@ export const uiMessages: Catalog = {
     "pagination.next": "Next",
     "pagination.previous": "Previous",
     "progressBar.value": "{value, number, percent}",
+    "prose.codeBlock": "Code block",
     "searchField.clear": "Clear search",
     "select.placeholder": "Choose one",
     "sheet.close": "Close",
