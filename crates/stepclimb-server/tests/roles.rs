@@ -7,11 +7,13 @@
 //! under the root. `session::start` stands in for the sign-in specs. Needs `DATABASE_URL`
 //! (`just up`).
 
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{
-    Router,
+    Extension, Router,
     body::Body,
+    extract::ConnectInfo,
     http::{HeaderMap, Method, Request, StatusCode, header},
 };
 use http_body_util::BodyExt;
@@ -20,6 +22,7 @@ use sqlx::PgPool;
 use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{
     OrgScope, Source, accounts,
+    audit::Actor,
     clock::ManualClock,
     id::{Uuid, new_id},
     organizations, perm,
@@ -29,6 +32,9 @@ use stepclimb_core::{
 };
 use stepclimb_server::{AppState, router, session, web_origin::WebOrigin};
 use tower::ServiceExt;
+
+/// The client address every test request comes from (TEST-NET-1); audit entries record it.
+const CLIENT: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)), 50_000);
 
 /// 2025-11-13T02:13:20Z.
 fn now() -> SystemTime {
@@ -100,7 +106,7 @@ impl Fixture {
             .fetch_one(&pool)
             .await
             .expect("the root");
-        let tower = accounts::create(&pool, scope(org), root, "Tower", now())
+        let tower = accounts::create(&pool, scope(org), root, "Tower", now(), Actor::Instance)
             .await
             .expect("create Tower")
             .id;
@@ -113,7 +119,8 @@ impl Fixture {
             public_url: WebOrigin::parse("https://lms.example.org").expect("a valid origin"),
             allowed_origins: Vec::new(),
             rate_limits: Default::default(),
-        });
+        })
+        .layer(Extension(ConnectInfo(CLIENT)));
         Self {
             pool,
             clock,
@@ -152,7 +159,7 @@ impl Fixture {
             name: format!("Role {key}"),
             permissions: permissions.iter().map(|&p| p.to_owned()).collect(),
         };
-        roles::create_custom(&self.pool, scope(self.org), &role, now())
+        roles::create_custom(&self.pool, scope(self.org), &role, now(), Actor::Instance)
             .await
             .expect("create role")
             .id
@@ -178,10 +185,16 @@ impl Fixture {
             source: Source::Local,
             external_id: None,
         };
-        role_assignments::create(&self.pool, scope(self.org), &assignment, now())
-            .await
-            .expect("create assignment")
-            .id
+        role_assignments::create(
+            &self.pool,
+            scope(self.org),
+            &assignment,
+            now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("create assignment")
+        .id
     }
 
     /// A signed-in user holding a new custom role with exactly `permissions` at `at`.
@@ -729,9 +742,15 @@ async fn t8_a_role_with_an_assignment_is_in_use_until_it_goes(pool: PgPool) {
     let answer = f.send(Method::DELETE, &role_uri(role), &admin, None).await;
     assert_eq!(answer.status, StatusCode::CONFLICT, "{answer:?}");
     assert_eq!(answer.code(), "role.in_use");
-    role_assignments::delete(&f.pool, scope(f.org), assignment)
-        .await
-        .expect("remove the assignment");
+    role_assignments::delete(
+        &f.pool,
+        scope(f.org),
+        assignment,
+        UNIX_EPOCH,
+        Actor::Instance,
+    )
+    .await
+    .expect("remove the assignment");
     let answer = f.send(Method::DELETE, &role_uri(role), &admin, None).await;
     assert_eq!(answer.status, StatusCode::NO_CONTENT, "{answer:?}");
     assert_eq!(answer.body, Value::Null);

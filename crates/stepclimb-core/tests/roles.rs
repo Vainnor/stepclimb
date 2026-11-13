@@ -11,6 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use sqlx::PgPool;
 use stepclimb_core::{
     OrgScope, Source,
+    audit::Actor,
     id::{Uuid, new_id},
     organizations,
     role_assignments::{self, NewAssignment, Scope},
@@ -61,6 +62,7 @@ async fn create(pool: &PgPool, org: Uuid, key: &str, permissions: &[&str]) -> Ro
         scope(org),
         &new_role(key, permissions),
         request_time(),
+        Actor::Instance,
     )
     .await
     .expect("create role")
@@ -197,6 +199,7 @@ async fn a_builtin_row_this_binary_does_not_define_grants_nothing_and_is_kept(po
         scope(a),
         &new_role("from_a_newer_release", &[]),
         request_time(),
+        Actor::Instance,
     )
     .await;
     assert_eq!(kind(&custom), "KeyTaken", "a built-in row's key is taken");
@@ -216,6 +219,7 @@ async fn create_custom_stores_the_role_in_the_scopes_organization(pool: PgPool) 
             permissions: keys(&["role.view", "account.view"]),
         },
         request_time(),
+        Actor::Instance,
     )
     .await
     .unwrap();
@@ -267,7 +271,8 @@ async fn create_custom_refuses_bad_and_taken_keys_unknown_permissions_and_blank_
         (too_long, "NameTooLong"),
     ];
     for (role, expected) in cases {
-        let result = roles::create_custom(&pool, scope(a), &role, request_time()).await;
+        let result =
+            roles::create_custom(&pool, scope(a), &role, request_time(), Actor::Instance).await;
         assert_eq!(kind(&result), expected, "{role:?}");
     }
     let unknown = roles::create_custom(
@@ -275,6 +280,7 @@ async fn create_custom_refuses_bad_and_taken_keys_unknown_permissions_and_blank_
         scope(a),
         &new_role("x", &["account.view", "nonexistent.perm"]),
         request_time(),
+        Actor::Instance,
     )
     .await;
     assert!(matches!(
@@ -335,6 +341,7 @@ async fn update_custom_changes_the_named_fields_of_the_scopes_role_only(pool: Pg
             permissions: None,
         },
         later_time(),
+        Actor::Instance,
     )
     .await
     .unwrap();
@@ -347,6 +354,7 @@ async fn update_custom_changes_the_named_fields_of_the_scopes_role_only(pool: Pg
             permissions: Some(vec![]),
         },
         later_time(),
+        Actor::Instance,
     )
     .await
     .unwrap();
@@ -379,12 +387,42 @@ async fn builtin_roles_and_other_organizations_roles_cannot_be_changed_or_delete
     };
 
     let results = [
-        kind(&roles::update_custom(&pool, scope(a), admin, &patch, later_time()).await),
-        kind(&roles::delete_custom(&pool, scope(a), admin).await),
-        kind(&roles::update_custom(&pool, scope(a), other.id, &patch, later_time()).await),
-        kind(&roles::delete_custom(&pool, scope(a), other.id).await),
-        kind(&roles::delete_custom(&pool, scope(a), new_id()).await),
-        kind(&roles::update_custom(&pool, scope(b), other.id, &invalid, later_time()).await),
+        kind(
+            &roles::update_custom(
+                &pool,
+                scope(a),
+                admin,
+                &patch,
+                later_time(),
+                Actor::Instance,
+            )
+            .await,
+        ),
+        kind(&roles::delete_custom(&pool, scope(a), admin, UNIX_EPOCH, Actor::Instance).await),
+        kind(
+            &roles::update_custom(
+                &pool,
+                scope(a),
+                other.id,
+                &patch,
+                later_time(),
+                Actor::Instance,
+            )
+            .await,
+        ),
+        kind(&roles::delete_custom(&pool, scope(a), other.id, UNIX_EPOCH, Actor::Instance).await),
+        kind(&roles::delete_custom(&pool, scope(a), new_id(), UNIX_EPOCH, Actor::Instance).await),
+        kind(
+            &roles::update_custom(
+                &pool,
+                scope(b),
+                other.id,
+                &invalid,
+                later_time(),
+                Actor::Instance,
+            )
+            .await,
+        ),
     ];
 
     assert_eq!(
@@ -433,15 +471,16 @@ async fn a_custom_role_with_an_assignment_is_in_use_until_the_assignment_goes(po
             external_id: None,
         },
         request_time(),
+        Actor::Instance,
     )
     .await
     .unwrap();
 
-    let in_use = roles::delete_custom(&pool, scope(a), role.id).await;
-    role_assignments::delete(&pool, scope(a), assignment.id)
+    let in_use = roles::delete_custom(&pool, scope(a), role.id, UNIX_EPOCH, Actor::Instance).await;
+    role_assignments::delete(&pool, scope(a), assignment.id, UNIX_EPOCH, Actor::Instance)
         .await
         .unwrap();
-    let deleted = roles::delete_custom(&pool, scope(a), role.id).await;
+    let deleted = roles::delete_custom(&pool, scope(a), role.id, UNIX_EPOCH, Actor::Instance).await;
 
     assert_eq!(kind(&in_use), "InUse");
     assert_eq!(kind(&deleted), "Ok(())");

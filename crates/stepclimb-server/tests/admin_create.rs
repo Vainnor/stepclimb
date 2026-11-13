@@ -7,7 +7,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use sqlx::PgPool;
 use stepclimb_core::{
-    OrgScope, organizations, perm,
+    OrgScope,
+    audit::{self, Actor},
+    organizations, perm,
     role_assignments::{self, GrantScope},
     roles, users,
 };
@@ -49,6 +51,7 @@ async fn assert_nothing_created(pool: &PgPool) {
         "org_plans",
         "users",
         "role_assignments",
+        "audit_events",
     ] {
         assert_eq!(count(pool, table).await, 0, "{table}");
     }
@@ -192,4 +195,41 @@ async fn a_concurrent_create_waits_for_the_first_and_is_refused(pool: PgPool) {
     );
     assert_eq!(count(&pool, "organizations").await, 1);
     assert_eq!(count(&pool, "users").await, 0);
+}
+
+/// The command writes two audit entries by the instance: the organization (with its root
+/// account and plan) and the first user's Organization admin assignment.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_command_audits_the_organization_and_the_first_admin_grant(pool: PgPool) {
+    roles::sync_builtin(&pool, now()).await.unwrap();
+    let created = create_organization_with_admin(&pool, &input("example"), now())
+        .await
+        .unwrap();
+
+    let entries = audit::list(&pool, scope(created.organization.id), 10)
+        .await
+        .unwrap();
+    let got: Vec<_> = entries
+        .iter()
+        .map(|e| (e.actor, e.action.as_str(), e.target_id))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (
+                Actor::Instance,
+                "organization.create",
+                created.organization.id
+            ),
+            (
+                Actor::Instance,
+                "role_assignment.grant",
+                created.assignment_id
+            ),
+        ]
+    );
+    assert_eq!(
+        entries[1].data["after"]["user_id"],
+        created.user.id.to_string()
+    );
 }

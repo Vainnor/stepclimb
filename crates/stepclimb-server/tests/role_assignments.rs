@@ -7,11 +7,13 @@
 //! hold ids of another organization, so requests name org A with the `test-support` header.
 //! `session::start` stands in for the sign-in specs. Needs `DATABASE_URL` (`just up`).
 
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{
-    Router,
+    Extension, Router,
     body::Body,
+    extract::ConnectInfo,
     http::{HeaderMap, Method, Request, StatusCode, header},
 };
 use http_body_util::BodyExt;
@@ -20,6 +22,7 @@ use sqlx::PgPool;
 use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{
     OrgScope, Source, accounts,
+    audit::Actor,
     clock::ManualClock,
     id::{Uuid, new_id},
     organizations,
@@ -31,6 +34,9 @@ use stepclimb_server::{
     AppState, request_org::TEST_ORG_HEADER, router, session, web_origin::WebOrigin,
 };
 use tower::ServiceExt;
+
+/// The client address every test request comes from (TEST-NET-1); audit entries record it.
+const CLIENT: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)), 50_000);
 
 const ASSIGNMENTS: &str = "/api/v1/admin/role-assignments";
 
@@ -130,7 +136,7 @@ async fn org(pool: &PgPool, slug: &str) -> Org {
         .await
         .expect("the root");
     let account = |parent, name| async move {
-        accounts::create(pool, scope(id), parent, name, now())
+        accounts::create(pool, scope(id), parent, name, now(), Actor::Instance)
             .await
             .expect("create account")
             .id
@@ -160,7 +166,8 @@ impl Fixture {
             public_url: WebOrigin::parse("https://lms.example.org").expect("a valid origin"),
             allowed_origins: Vec::new(),
             rate_limits: Default::default(),
-        });
+        })
+        .layer(Extension(ConnectInfo(CLIENT)));
         Self { pool, app, a, b }
     }
 
@@ -197,7 +204,7 @@ impl Fixture {
             name: "Test role".into(),
             permissions: permissions.iter().map(|&p| p.to_owned()).collect(),
         };
-        roles::create_custom(&self.pool, scope(org), &role, now())
+        roles::create_custom(&self.pool, scope(org), &role, now(), Actor::Instance)
             .await
             .expect("create role")
             .id
@@ -227,10 +234,16 @@ impl Fixture {
             source: Source::Local,
             external_id: None,
         };
-        role_assignments::create(&self.pool, scope(self.a.id), &assignment, now())
-            .await
-            .expect("create assignment")
-            .id
+        role_assignments::create(
+            &self.pool,
+            scope(self.a.id),
+            &assignment,
+            now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("create assignment")
+        .id
     }
 
     /// A signed-in user of org A holding the built-in role `key` at `at`.
@@ -422,7 +435,7 @@ async fn t10_manager_and_observer_cannot_be_assigned(pool: PgPool) {
         name: "Observer custom".into(),
         permissions: Vec::new(),
     };
-    let custom = roles::create_custom(&f.pool, scope(f.a.id), &custom, now())
+    let custom = roles::create_custom(&f.pool, scope(f.a.id), &custom, now(), Actor::Instance)
         .await
         .unwrap()
         .id;
@@ -796,9 +809,16 @@ async fn a_role_strengthened_during_a_grant_is_checked_as_strengthened(pool: PgP
         name: None,
         permissions: Some(vec!["account.view".into(), "service_account.manage".into()]),
     };
-    roles::update_custom(&mut *changing, scope(f.a.id), role, &patch, now())
-        .await
-        .unwrap();
+    roles::update_custom(
+        &mut *changing,
+        scope(f.a.id),
+        role,
+        &patch,
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
     changing.commit().await.unwrap();
 
     let status = granting.await.expect("the grant ran");
@@ -866,9 +886,16 @@ where
     Fut: std::future::Future<Output = Answer> + Send + 'static,
 {
     let mut moving = f.pool.begin().await.expect("begin the move");
-    accounts::move_to(&mut *moving, scope(f.a.id), f.a.ground, f.a.enroute, now())
-        .await
-        .expect("move Ground");
+    accounts::move_to(
+        &mut *moving,
+        scope(f.a.id),
+        f.a.ground,
+        f.a.enroute,
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .expect("move Ground");
     let waiting = tokio::spawn(request());
     until_a_call_waits_on_a_lock(&f.pool).await;
     moving.commit().await.expect("commit the move");

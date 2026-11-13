@@ -12,6 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use sqlx::PgPool;
 use stepclimb_core::{
     OrgScope, Source, accounts,
+    audit::Actor,
     grants::{Denied, Grants, RequireError, ScopeId, Target},
     id::{Uuid, new_id},
     organizations,
@@ -64,10 +65,17 @@ async fn facility(pool: &PgPool, slug: &str) -> Facility {
             .await
             .expect("the root account");
     let account = |parent, name| async move {
-        accounts::create(pool, scope(org), parent, name, request_time())
-            .await
-            .expect("create account")
-            .id
+        accounts::create(
+            pool,
+            scope(org),
+            parent,
+            name,
+            request_time(),
+            Actor::Instance,
+        )
+        .await
+        .expect("create account")
+        .id
     };
     let tower = account(root, "Tower").await;
     let ground = account(tower, "Ground").await;
@@ -110,7 +118,7 @@ async fn custom_role(pool: &PgPool, f: &Facility, key: &str, permissions: &[&str
         name: key.into(),
         permissions: permissions.iter().map(|&p| p.to_owned()).collect(),
     };
-    roles::create_custom(pool, f.scope(), &role, request_time())
+    roles::create_custom(pool, f.scope(), &role, request_time(), Actor::Instance)
         .await
         .expect("create role")
         .id
@@ -124,10 +132,16 @@ async fn assign(pool: &PgPool, f: &Facility, role_id: Uuid, at: Scope) -> Uuid {
         source: Source::Local,
         external_id: None,
     };
-    role_assignments::create(pool, f.scope(), &assignment, request_time())
-        .await
-        .expect("create assignment")
-        .id
+    role_assignments::create(
+        pool,
+        f.scope(),
+        &assignment,
+        request_time(),
+        Actor::Instance,
+    )
+    .await
+    .expect("create assignment")
+    .id
 }
 
 async fn load(pool: &PgPool, f: &Facility) -> Grants {
@@ -204,9 +218,16 @@ async fn a_changed_custom_role_takes_effect_on_the_next_load(pool: PgPool) {
         name: None,
         permissions: Some(vec!["role.view".into()]),
     };
-    roles::update_custom(&pool, a.scope(), role, &patch, request_time())
-        .await
-        .expect("update role");
+    roles::update_custom(
+        &pool,
+        a.scope(),
+        role,
+        &patch,
+        request_time(),
+        Actor::Instance,
+    )
+    .await
+    .expect("update role");
     assert_eq!(
         load(&pool, &a).await.check::<AccountView>(&tower),
         Err(Denied::Forbidden)
@@ -372,7 +393,7 @@ async fn an_api_key_is_limited_to_its_scopes_and_its_owner_current_grants(pool: 
             .await
             .is_ok()
     );
-    role_assignments::delete(&pool, a.scope(), assignment)
+    role_assignments::delete(&pool, a.scope(), assignment, UNIX_EPOCH, Actor::Instance)
         .await
         .unwrap();
     let mut after = load(&pool, &a).await;

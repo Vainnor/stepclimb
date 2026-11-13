@@ -383,7 +383,7 @@ organizations created by B26 in the same test database.
 - Account settings keys, and courses inside accounts: M1 (`docs/specs/m1.md`).
 - `/.well-known/stepclimb` (server discovery for the apps): not specified here.
 - Organization export, import and per-organization restore: M4.
-- Audit entries for organization and account changes: pending `09-permissions-and-roles.md` Q5.
+- Audit entries for organization and account changes: `09-permissions-and-roles.md` B22 to B24.
 
 ## Open questions
 

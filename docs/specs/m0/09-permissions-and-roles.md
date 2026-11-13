@@ -256,6 +256,47 @@ organizations' ids.
   that need authentication but no permission (`GET /api/v1/me`) are entries with target kind
   `AuthOnly`, which generate the 401 and 2xx cases only.
 
+### Audit entries
+
+Coordinator decisions (2026-11-13), for #136, which delivers Q5 (A) and the table `08` Q14
+also writes to:
+
+- **B22.** Every change below writes exactly one row in `audit_events`, in the transaction that
+  makes the change, so an entry exists exactly when its change committed and a refused or failed
+  change leaves none. The repository function that makes the change writes the entry itself and
+  takes the actor as an argument, so no caller can make the change without one. Actions are
+  `target_type.verb`; `target_id` is the changed row's id:
+
+  | Action | Target | Written by | `data` |
+  | --- | --- | --- | --- |
+  | `role.create` | `role` | `roles::create_custom` | `after`: key, name, permissions |
+  | `role.update` | `role` | `roles::update_custom` | `before` and `after` of each member the patch names |
+  | `role.delete` | `role` | `roles::delete_custom` | `before`: key, name, permissions |
+  | `role_assignment.grant` | `role_assignment` | `role_assignments::create` | `after`: user, role, scope type and id, source |
+  | `role_assignment.remove` | `role_assignment` | `role_assignments::delete` | `before`: the same |
+  | `account.create` | `account` | `accounts::create` | `after`: parent, name |
+  | `account.rename` | `account` | `accounts::rename` | `before` and `after`: name |
+  | `account.move` | `account` | `accounts::move_to` | `before` and `after`: parent |
+  | `account.delete` | `account` | `accounts::delete` | `before`: parent, name |
+  | `organization.create` | `organization` | `organizations::create` | `after`: slug, name |
+  | `organization.rename` | `organization` | `organizations::rename` | `before` and `after`: name |
+  | `organization.update_settings` | `organization` | `organizations::update_settings` | `before` and `after`: the effective value of each key the patch names |
+  | `user.set_status` | `user` | `users::set_status` | `before` and `after`: status |
+
+  A request that changes nothing writes nothing: a patch naming no member, and a move to the
+  current parent. `data` never holds a secret; a setting that holds one is left out of
+  `organization.update_settings` when it is added.
+- **B23.** The actor is a user, recorded with the client address the server derived for the
+  request (the address the rate limits count by, `08` B22: the TCP peer, or behind a trusted
+  proxy the right-most `X-Forwarded-For` entry that is not one), or the instance itself, with
+  neither id nor address. A route that changes something without the TCP peer's address answers
+  500 and changes nothing. `stepclimb admin create` writes `organization.create` and the first
+  admin's `role_assignment.grant` as the instance; creating the user is not audited (Q5 lists
+  status changes only). `08`'s service accounts and app tokens add their own actor type and the
+  API key id when they land.
+- **B24.** `stepclimb_core::audit::list` reads the scope's entries in write order. No route
+  reads them in M0; Q5 asks for the entries, not a viewer.
+
 ## API
 
 Common errors as in `02-organizations-and-accounts.md` -> API.
@@ -350,6 +391,35 @@ never moves between organizations or kinds after it is assigned (coordinator dec
 points at different tables by `scope_type`; the repository checks it (B12 step 3) and account
 deletion refuses an account that rows still point at (B15). The courses spec (M1) adds its own deletion rule.
 
+Migration `migrations/<timestamp>_audit_events.sql` (B22 to B24):
+
+```sql
+CREATE TABLE audit_events (
+    id           uuid        PRIMARY KEY,
+    org_id       uuid        NOT NULL REFERENCES organizations (id),
+    actor_type   text        NOT NULL CHECK (actor_type IN ('user', 'instance')),
+    actor_id     uuid,
+    action       text        NOT NULL,
+    target_type  text        NOT NULL,
+    target_id    uuid        NOT NULL,
+    data         jsonb       NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(data) = 'object'),
+    at           timestamptz NOT NULL,
+    ip           inet,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    updated_at   timestamptz NOT NULL DEFAULT now(),
+    CHECK ((actor_type = 'user') = (actor_id IS NOT NULL AND ip IS NOT NULL)),
+    CHECK (actor_type <> 'instance' OR (actor_id IS NULL AND ip IS NULL))
+);
+CREATE INDEX audit_events_by_time ON audit_events (org_id, at, id);
+CREATE INDEX audit_events_by_target ON audit_events (org_id, target_type, target_id);
+```
+
+The data model's `audit_events(id, org_id, actor, action, target_type, target_id, data, at, ip)`
+has one `actor` column; here it is `actor_type` and `actor_id`, since the instance has no id and
+`08`'s service accounts are a third kind (coordinator decision, 13 Nov 2026). `created_at` and
+`updated_at` are `02` B5's; an entry is never updated. `actor_id` and `target_id` have no foreign
+key, so an entry outlives the row it names.
+
 Repository modules (every function takes `OrgScope`, except the built-in sync, commented):
 `stepclimb_core::roles` (`list`, `get`, `create_custom`, `update_custom`, `delete_custom`,
 `sync_builtin`), `stepclimb_core::role_assignments` (`list`, `create`, `delete`,
@@ -420,6 +490,15 @@ entitlement feature (a `Require<Feature>` on the role-writing routes) is
 - **T19** (Data). A role assignment row with an org B custom role in org A is refused by
   `role_assignments_role_in_org`; an `organization` scope whose `scope_id` is not the row's
   `org_id` is refused by the check.
+- **T20** (Data, B22, B23). Each change in B22's table, through its repository function and
+  through its route, writes exactly one entry with the actor (the signed-in user and the client
+  address; behind a trusted proxy, the forwarded address), the action and the target, and the
+  `data` B22 lists; `stepclimb admin create` writes its two as the instance. A refused change
+  (403, 409, 422, the last-admin rule), a request that changes nothing and a caller's rolled-back
+  transaction write none; a change without the peer address answers 500 and writes none.
+- **T21** (Data, B24). Org A's scope never reads org B's entries; the table refuses a user actor
+  without an id or address and an instance actor with either. The permission suite's snapshot
+  covers `audit_events` (it has `org_id`).
 
 ## Out of scope
 
@@ -431,8 +510,7 @@ entitlement feature (a `Require<Feature>` on the role-writing routes) is
 - Entitlement checks: `10-entitlements-framework.md`.
 - The role and assignment admin screens: a later UI spec on `11-app-shell.md` and
   `13-base-ui-components.md`.
-- Audit entries for role and assignment changes: Q5's entries are delivered by #136 (the issue
-  that adds `audit_events`), which also adds the entries to the roles routes.
+- A route or screen that reads audit entries: not in M0 (B24).
 
 ## Open questions
 

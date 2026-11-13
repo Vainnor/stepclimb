@@ -12,6 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use sqlx::{PgPool, Postgres};
 use stepclimb_core::{
     OrgScope, Source, accounts,
+    audit::Actor,
     id::{Uuid, new_id},
     organizations,
     role_assignments::{self, Error, GrantScope, ListFilter, NewAssignment, RoleAssignment, Scope},
@@ -62,10 +63,17 @@ async fn user(pool: &PgPool, org: Uuid, name: &str) -> Uuid {
 }
 
 async fn account(pool: &PgPool, org: Uuid, parent: Uuid, name: &str) -> Uuid {
-    accounts::create(pool, scope(org), parent, name, request_time())
-        .await
-        .expect("create account")
-        .id
+    accounts::create(
+        pool,
+        scope(org),
+        parent,
+        name,
+        request_time(),
+        Actor::Instance,
+    )
+    .await
+    .expect("create account")
+    .id
 }
 
 /// A facility in a fresh organization. Syncs the built-in roles, which is idempotent.
@@ -96,6 +104,7 @@ async fn facility(pool: &PgPool, slug: &str) -> Facility {
             permissions: vec!["account.view".into()],
         },
         request_time(),
+        Actor::Instance,
     )
     .await
     .expect("create role")
@@ -131,9 +140,15 @@ fn new(user_id: Uuid, role_id: Uuid, scope: Scope) -> NewAssignment {
 }
 
 async fn assign(pool: &PgPool, org: Uuid, assignment: NewAssignment) -> RoleAssignment {
-    role_assignments::create(pool, scope(org), &assignment, request_time())
-        .await
-        .expect("create assignment")
+    role_assignments::create(
+        pool,
+        scope(org),
+        &assignment,
+        request_time(),
+        Actor::Instance,
+    )
+    .await
+    .expect("create assignment")
 }
 
 /// Every `role_assignments` row as text, in id order.
@@ -170,6 +185,7 @@ async fn create_stores_the_assignment_and_reads_back_in_its_scope_only(pool: PgP
             ..new(a.user, a.mentor, Scope::Account(a.tower))
         },
         request_time(),
+        Actor::Instance,
     )
     .await
     .unwrap();
@@ -234,8 +250,14 @@ async fn create_refuses_what_is_outside_the_scope_and_inserts_nothing(pool: PgPo
         (with_nul, "ContainsNul"),
     ];
     for (assignment, expected) in cases {
-        let result =
-            role_assignments::create(&pool, scope(a.org), &assignment, request_time()).await;
+        let result = role_assignments::create(
+            &pool,
+            scope(a.org),
+            &assignment,
+            request_time(),
+            Actor::Instance,
+        )
+        .await;
         assert_eq!(kind(&result), expected, "{assignment:?}");
     }
 
@@ -360,11 +382,13 @@ async fn delete_removes_an_assignment_of_the_scope_only(pool: PgPool) {
     let mine = assign(&pool, a.org, new(a.user, a.mentor, Scope::Organization)).await;
     let theirs = assign(&pool, b.org, new(b.user, b.mentor, Scope::Organization)).await;
 
-    let across = role_assignments::delete(&pool, scope(a.org), theirs.id).await;
-    role_assignments::delete(&pool, scope(a.org), mine.id)
+    let across =
+        role_assignments::delete(&pool, scope(a.org), theirs.id, UNIX_EPOCH, Actor::Instance).await;
+    role_assignments::delete(&pool, scope(a.org), mine.id, UNIX_EPOCH, Actor::Instance)
         .await
         .unwrap();
-    let again = role_assignments::delete(&pool, scope(a.org), mine.id).await;
+    let again =
+        role_assignments::delete(&pool, scope(a.org), mine.id, UNIX_EPOCH, Actor::Instance).await;
 
     assert_eq!(kind(&across), "NotFound");
     assert_eq!(kind(&again), "NotFound");
@@ -442,6 +466,7 @@ async fn active_org_admins_count_organization_scope_admins_who_are_active(pool: 
         suspended,
         Status::Suspended,
         request_time(),
+        Actor::Instance,
     )
     .await
     .unwrap();
@@ -465,19 +490,34 @@ async fn delete_keeps_the_last_active_org_admin(pool: PgPool) {
         suspended,
         Status::Suspended,
         request_time(),
+        Actor::Instance,
     )
     .await
     .unwrap();
 
-    let last = role_assignments::delete(&pool, scope(a.org), only.id).await;
+    let last =
+        role_assignments::delete(&pool, scope(a.org), only.id, UNIX_EPOCH, Actor::Instance).await;
     // Neither counts: one is held by a suspended user, the other is at an account.
-    role_assignments::delete(&pool, scope(a.org), of_suspended.id)
-        .await
-        .unwrap();
-    role_assignments::delete(&pool, scope(a.org), at_tower.id)
-        .await
-        .unwrap();
-    let still_last = role_assignments::delete(&pool, scope(a.org), only.id).await;
+    role_assignments::delete(
+        &pool,
+        scope(a.org),
+        of_suspended.id,
+        UNIX_EPOCH,
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+    role_assignments::delete(
+        &pool,
+        scope(a.org),
+        at_tower.id,
+        UNIX_EPOCH,
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+    let still_last =
+        role_assignments::delete(&pool, scope(a.org), only.id, UNIX_EPOCH, Actor::Instance).await;
 
     assert_eq!(kind(&last), "LastOrgAdmin");
     assert_eq!(kind(&still_last), "LastOrgAdmin");
@@ -495,10 +535,11 @@ async fn delete_of_one_of_two_admins_succeeds_and_other_organizations_do_not_cou
     assign(&pool, a.org, new(second, admin, Scope::Organization)).await;
     let only_b = assign(&pool, b.org, new(b.user, admin, Scope::Organization)).await;
 
-    role_assignments::delete(&pool, scope(a.org), first.id)
+    role_assignments::delete(&pool, scope(a.org), first.id, UNIX_EPOCH, Actor::Instance)
         .await
         .unwrap();
-    let last_b = role_assignments::delete(&pool, scope(b.org), only_b.id).await;
+    let last_b =
+        role_assignments::delete(&pool, scope(b.org), only_b.id, UNIX_EPOCH, Actor::Instance).await;
 
     assert_eq!(
         role_assignments::count_active_org_admins(&pool, scope(a.org))
@@ -519,12 +560,21 @@ async fn concurrent_removals_of_the_last_two_admins_keep_one(pool: PgPool) {
     let first = assign(&pool, a.org, new(a.user, admin, Scope::Organization)).await;
     let other = assign(&pool, a.org, new(second, admin, Scope::Organization)).await;
     let mut removing = begin(&pool).await;
-    role_assignments::delete(&mut *removing, scope(a.org), first.id)
-        .await
-        .unwrap();
+    role_assignments::delete(
+        &mut *removing,
+        scope(a.org),
+        first.id,
+        UNIX_EPOCH,
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
     let racing = tokio::spawn({
         let pool = pool.clone();
-        async move { role_assignments::delete(&pool, scope(a.org), other.id).await }
+        async move {
+            role_assignments::delete(&pool, scope(a.org), other.id, UNIX_EPOCH, Actor::Instance)
+                .await
+        }
     });
     until_a_call_waits_on_a_lock(&pool).await;
     removing.commit().await.unwrap();
@@ -555,7 +605,14 @@ async fn delete_refuses_an_isolation_level_above_read_committed(pool: PgPool) {
             .await
             .unwrap();
 
-        let deleted = role_assignments::delete(&mut *conn, scope(a.org), assignment.id).await;
+        let deleted = role_assignments::delete(
+            &mut *conn,
+            scope(a.org),
+            assignment.id,
+            UNIX_EPOCH,
+            Actor::Instance,
+        )
+        .await;
 
         assert!(
             matches!(&deleted, Err(Error::IsolationLevel { found }) if found == level),
@@ -645,7 +702,7 @@ async fn an_account_with_assignments_is_kept_until_they_are_removed(pool: PgPool
     let before = table(&pool).await;
 
     // Spec 02 B21, spec 09 B15: assignments at the account refuse its deletion.
-    let refused = accounts::delete(&pool, scope(a.org), a.ramp).await;
+    let refused = accounts::delete(&pool, scope(a.org), a.ramp, UNIX_EPOCH, Actor::Instance).await;
     assert!(
         matches!(refused, Err(accounts::Error::HasAssignments)),
         "{refused:?}"
@@ -658,13 +715,13 @@ async fn an_account_with_assignments_is_kept_until_they_are_removed(pool: PgPool
             .is_some()
     );
 
-    role_assignments::delete(&pool, scope(a.org), at_ramp.id)
+    role_assignments::delete(&pool, scope(a.org), at_ramp.id, UNIX_EPOCH, Actor::Instance)
         .await
         .unwrap();
-    accounts::delete(&pool, scope(a.org), a.ramp)
+    accounts::delete(&pool, scope(a.org), a.ramp, UNIX_EPOCH, Actor::Instance)
         .await
         .expect("no assignment is scoped to Ramp now");
-    accounts::delete(&pool, scope(b.org), b.ground)
+    accounts::delete(&pool, scope(b.org), b.ground, UNIX_EPOCH, Actor::Instance)
         .await
         .expect_err("org B's Ground still has Ramp below it");
 }
@@ -680,7 +737,8 @@ async fn a_refused_account_delete_keeps_its_assignments(pool: PgPool) {
     .await;
     let before = table(&pool).await;
 
-    let refused = accounts::delete(&pool, scope(a.org), a.ground).await;
+    let refused =
+        accounts::delete(&pool, scope(a.org), a.ground, UNIX_EPOCH, Actor::Instance).await;
 
     assert!(matches!(refused, Err(accounts::Error::HasChildren)));
     assert_eq!(table(&pool).await, before);
@@ -713,13 +771,28 @@ async fn until_a_call_waits_on_a_lock(pool: &PgPool) {
 async fn a_create_waiting_on_a_delete_of_its_account_is_refused(pool: PgPool) {
     let a = facility(&pool, "org-a").await;
     let mut deleting = begin(&pool).await;
-    accounts::delete(&mut *deleting, scope(a.org), a.ramp)
-        .await
-        .unwrap();
+    accounts::delete(
+        &mut *deleting,
+        scope(a.org),
+        a.ramp,
+        UNIX_EPOCH,
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
     let creating = tokio::spawn({
         let pool = pool.clone();
         let assignment = new(a.user, a.mentor, Scope::Account(a.ramp));
-        async move { role_assignments::create(&pool, scope(a.org), &assignment, request_time()).await }
+        async move {
+            role_assignments::create(
+                &pool,
+                scope(a.org),
+                &assignment,
+                request_time(),
+                Actor::Instance,
+            )
+            .await
+        }
     });
     until_a_call_waits_on_a_lock(&pool).await;
     deleting.commit().await.unwrap();
@@ -735,12 +808,18 @@ async fn a_delete_waiting_on_a_create_at_its_account_is_refused(pool: PgPool) {
     let a = facility(&pool, "org-a").await;
     let mut creating = begin(&pool).await;
     let assignment = new(a.user, a.mentor, Scope::Account(a.ramp));
-    role_assignments::create(&mut *creating, scope(a.org), &assignment, request_time())
-        .await
-        .unwrap();
+    role_assignments::create(
+        &mut *creating,
+        scope(a.org),
+        &assignment,
+        request_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
     let deleting = tokio::spawn({
         let pool = pool.clone();
-        async move { accounts::delete(&pool, scope(a.org), a.ramp).await }
+        async move { accounts::delete(&pool, scope(a.org), a.ramp, UNIX_EPOCH, Actor::Instance).await }
     });
     until_a_call_waits_on_a_lock(&pool).await;
     creating.commit().await.unwrap();
@@ -840,8 +919,16 @@ async fn suspending_keeps_the_last_active_org_admin(pool: PgPool) {
     assign(&pool, a.org, new(a.user, admin, Scope::Organization)).await;
     assign(&pool, a.org, new(second, admin, Scope::Organization)).await;
     assign(&pool, a.org, new(at_tower, admin, Scope::Account(a.tower))).await;
-    let suspend =
-        |id| users::set_status(&pool, scope(a.org), id, Status::Suspended, request_time());
+    let suspend = |id| {
+        users::set_status(
+            &pool,
+            scope(a.org),
+            id,
+            Status::Suspended,
+            request_time(),
+            Actor::Instance,
+        )
+    };
 
     let one_of_two = suspend(second).await;
     let last = suspend(a.user).await;
@@ -849,8 +936,15 @@ async fn suspending_keeps_the_last_active_org_admin(pool: PgPool) {
     // changes nothing about the count.
     let account_only = suspend(at_tower).await;
     let again = suspend(second).await;
-    let restored =
-        users::set_status(&pool, scope(a.org), second, Status::Active, request_time()).await;
+    let restored = users::set_status(
+        &pool,
+        scope(a.org),
+        second,
+        Status::Active,
+        request_time(),
+        Actor::Instance,
+    )
+    .await;
 
     assert_eq!(user_kind(&one_of_two), "Ok");
     assert_eq!(user_kind(&last), "LastOrgAdmin");
@@ -875,9 +969,15 @@ async fn a_suspension_racing_a_removal_of_the_last_two_admins_is_refused(pool: P
     let first = assign(&pool, a.org, new(a.user, admin, Scope::Organization)).await;
     assign(&pool, a.org, new(second, admin, Scope::Organization)).await;
     let mut removing = begin(&pool).await;
-    role_assignments::delete(&mut *removing, scope(a.org), first.id)
-        .await
-        .unwrap();
+    role_assignments::delete(
+        &mut *removing,
+        scope(a.org),
+        first.id,
+        UNIX_EPOCH,
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
     let suspending = tokio::spawn({
         let pool = pool.clone();
         async move {
@@ -887,6 +987,7 @@ async fn a_suspension_racing_a_removal_of_the_last_two_admins_is_refused(pool: P
                 second,
                 Status::Suspended,
                 request_time(),
+                Actor::Instance,
             )
             .await
         }
@@ -920,6 +1021,7 @@ async fn suspending_refuses_an_isolation_level_above_read_committed(pool: PgPool
         a.user,
         Status::Suspended,
         request_time(),
+        Actor::Instance,
     )
     .await;
 

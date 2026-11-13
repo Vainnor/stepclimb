@@ -9,11 +9,13 @@
 
 use std::time::SystemTime;
 
+use serde_json::{Map, Value, json};
 use sqlx::{Acquire, PgConnection, PgExecutor, Postgres};
 use uuid::Uuid;
 
 use crate::{
     OrgScope, accounts,
+    audit::{self, Action, Actor},
     db::{TimeOutOfRange, epoch_micros},
     id::new_id,
     name, org_plans, plans,
@@ -112,7 +114,8 @@ impl From<sqlx::Error> for Error {
 /// 10 B5), in one transaction (a savepoint when `db` is already one). It inserts the
 /// `unlimited` plan first when it does not exist yet, so it works before `stepclimb serve` has
 /// ever started; it never rewrites an existing one, which is startup's job. `created_at` and
-/// `updated_at` of the new rows are `now`.
+/// `updated_at` of the new rows are `now`. It writes the `organization.create` audit entry, by
+/// the instance, the only actor that creates organizations.
 ///
 /// Only instance contexts call this: the `stepclimb admin` CLI in M0, the operator console in
 /// M6 (B9, B26). It takes no `OrgScope` because the organization it acts in does not exist
@@ -147,6 +150,10 @@ pub async fn create<'c>(
     accounts::create_root(&mut tx, scope, name, now_micros).await?;
     plans::insert_unlimited_if_missing(&mut tx, now_micros).await?;
     org_plans::ensure_selfhost(&mut *tx, scope, now).await?;
+    let data = json!({ "after": { "slug": organization.slug, "name": organization.name } });
+    let (instance, create) = (Actor::Instance, Action::OrganizationCreate);
+    let id = organization.id;
+    audit::record(&mut tx, scope, instance, create, id, &data, now_micros).await?;
     tx.commit().await?;
     Ok(organization)
 }
@@ -172,17 +179,29 @@ pub async fn get(db: impl PgExecutor<'_>, scope: OrgScope) -> Result<Organizatio
     .ok_or(Error::NotFound)
 }
 
-/// Rename the scope's organization to `name`, trimmed, and set `updated_at` to `now`, the
-/// request's clock reading. The slug never changes (spec 02 Q3).
-pub async fn rename(
-    db: impl PgExecutor<'_>,
+/// Rename the scope's organization to `name`, trimmed, set `updated_at` to `now`, the request's
+/// clock reading, and write the `organization.rename` audit entry by `actor` with the name
+/// before and after. The slug never changes (spec 02 Q3).
+///
+/// Runs in one transaction (a savepoint when `db` is already one).
+pub async fn rename<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
     scope: OrgScope,
     name: &str,
     now: SystemTime,
+    actor: Actor,
 ) -> Result<Organization, Error> {
     let name = valid_name(name)?;
     let now = epoch_micros(now)?;
-    sqlx::query_as!(
+    let mut tx = db.begin().await?;
+    let before = sqlx::query_scalar!(
+        "SELECT name FROM organizations WHERE id = $1 FOR NO KEY UPDATE",
+        scope.org_id(),
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(Error::NotFound)?;
+    let organization = sqlx::query_as!(
         Organization,
         "UPDATE organizations
          SET name = $2, updated_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond'
@@ -192,9 +211,14 @@ pub async fn rename(
         name,
         now,
     )
-    .fetch_optional(db)
+    .fetch_optional(&mut *tx)
     .await?
-    .ok_or(Error::NotFound)
+    .ok_or(Error::NotFound)?;
+    let data = json!({ "before": { "name": before }, "after": { "name": organization.name } });
+    let rename = Action::OrganizationRename;
+    audit::record(&mut tx, scope, actor, rename, scope.org_id(), &data, now).await?;
+    tx.commit().await?;
+    Ok(organization)
 }
 
 /// The scope's organization settings, every key with its effective value.
@@ -215,20 +239,33 @@ pub async fn settings(db: impl PgExecutor<'_>, scope: OrgScope) -> Result<OrgSet
 /// and stored keys the patch does not name (including ones this release does not know) stay.
 /// Returns the settings after the merge.
 ///
-/// The `UPDATE` and the parse of its result run in one transaction, a savepoint when `db` is
-/// already one: if the merged object does not parse, the call returns
+/// It writes the `organization.update_settings` audit entry by `actor` with the effective
+/// value of each key the patch names, before and after.
+///
+/// The reads, the `UPDATE`, the parse of its result and the entry run in one transaction, a
+/// savepoint when `db` is already one: if the merged object does not parse, the call returns
 /// [`Error::StoredSettings`] and nothing it wrote is kept.
 pub async fn update_settings<'c>(
     db: impl Acquire<'c, Database = Postgres>,
     scope: OrgScope,
     patch: &OrgSettingsPatch,
     now: SystemTime,
+    actor: Actor,
 ) -> Result<OrgSettings, Error> {
     // Invariant: the patch is a struct of plain, string-keyed fields, which serde_json always
     // serializes; it fails only on a map with non-string keys or a failing `Serialize` impl.
-    let patch = serde_json::to_string(patch).expect("a settings patch serializes to JSON");
+    let patch = serde_json::to_value(patch).expect("a settings patch serializes to JSON");
     let now = epoch_micros(now)?;
     let mut tx = db.begin().await?;
+    let before = sqlx::query_scalar!(
+        r#"SELECT settings::text AS "settings!" FROM organizations WHERE id = $1
+           FOR NO KEY UPDATE"#,
+        scope.org_id(),
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(Error::NotFound)?;
+    let before = parse_settings(&before)?;
     let stored = sqlx::query_scalar!(
         r#"UPDATE organizations
            SET settings = settings || $2::text::jsonb,
@@ -236,7 +273,7 @@ pub async fn update_settings<'c>(
            WHERE id = $1
            RETURNING settings::text AS "settings!""#,
         scope.org_id(),
-        patch,
+        patch.to_string(),
         now,
     )
     .fetch_optional(&mut *tx)
@@ -244,8 +281,25 @@ pub async fn update_settings<'c>(
     .ok_or(Error::NotFound)?;
     // An early return drops `tx`, which rolls the update back.
     let settings = parse_settings(&stored)?;
+    let data = settings_data(&patch, &before, &settings);
+    let update = Action::OrganizationUpdateSettings;
+    audit::record(&mut tx, scope, actor, update, scope.org_id(), &data, now).await?;
     tx.commit().await?;
     Ok(settings)
+}
+
+/// The `organization.update_settings` entry's data: the effective value of each key `patch`
+/// names, before and after. A setting that holds a secret must be left out here when one is
+/// added: entries never hold secrets.
+fn settings_data(patch: &Value, before: &OrgSettings, after: &OrgSettings) -> Value {
+    // Invariant: `OrgSettings` is a struct of plain, string-keyed fields (see above).
+    let pick = |settings: &OrgSettings| {
+        let all = serde_json::to_value(settings).expect("settings serialize to JSON");
+        let keys = patch.as_object().into_iter().flat_map(Map::keys);
+        keys.map(|key| (key.clone(), all.get(key).cloned().unwrap_or(Value::Null)))
+            .collect::<Map<_, _>>()
+    };
+    json!({ "before": pick(before), "after": pick(after) })
 }
 
 /// How many organizations the instance has.

@@ -19,11 +19,13 @@
 
 use std::time::SystemTime;
 
+use serde_json::{Map, Value, json};
 use sqlx::{Acquire, PgConnection, PgExecutor, Postgres};
 use uuid::Uuid;
 
 use crate::{
     OrgScope,
+    audit::{self, Action, Actor},
     db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
     id::new_id,
     name,
@@ -459,17 +461,21 @@ pub async fn list(
 }
 
 /// Create a custom role in the scope's organization, with `created_at` and `updated_at` set to
-/// `now` (B8).
-pub async fn create_custom(
-    db: impl PgExecutor<'_>,
+/// `now` (B8), and its `role.create` audit entry by `actor`.
+///
+/// Runs in one transaction (a savepoint when `db` is already one).
+pub async fn create_custom<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
     scope: OrgScope,
     role: &NewRole,
     now: SystemTime,
+    actor: Actor,
 ) -> Result<Role, Error> {
     valid_key(&role.key)?;
     let name = valid_name(&role.name)?;
     valid_permissions(&role.permissions)?;
     let now = epoch_micros(now)?;
+    let mut tx = db.begin().await?;
     // The NOT EXISTS refuses a key a built-in row has, also one only a newer binary defines.
     let row = sqlx::query_as!(
         Row,
@@ -488,14 +494,30 @@ pub async fn create_custom(
         &role.permissions,
         now,
     )
-    .fetch_optional(db)
+    .fetch_optional(&mut *tx)
     .await?
     .ok_or(Error::KeyTaken)?;
+    let data = json!({ "after": {
+        "key": row.key, "name": row.name, "permissions": row.permissions,
+    }});
+    audit::record(
+        &mut tx,
+        scope,
+        actor,
+        Action::RoleCreate,
+        row.id,
+        &data,
+        now,
+    )
+    .await?;
+    tx.commit().await?;
     Role::try_from(row)
 }
 
-/// Change the `name` or `permissions` of the custom role `id` of the scope's organization and
-/// set `updated_at` to `now` (B9). A built-in role is refused with [`Error::BuiltinImmutable`].
+/// Change the `name` or `permissions` of the custom role `id` of the scope's organization, set
+/// `updated_at` to `now` (B9), and write the `role.update` audit entry by `actor` with the
+/// patched members before and after. A built-in role is refused with
+/// [`Error::BuiltinImmutable`].
 ///
 /// Runs in one transaction (a savepoint when `db` is already one).
 pub async fn update_custom<'c>(
@@ -504,6 +526,7 @@ pub async fn update_custom<'c>(
     id: Uuid,
     patch: &RolePatch,
     now: SystemTime,
+    actor: Actor,
 ) -> Result<Role, Error> {
     let name = patch.name.as_deref().map(valid_name).transpose()?;
     if let Some(permissions) = &patch.permissions {
@@ -511,7 +534,7 @@ pub async fn update_custom<'c>(
     }
     let now = epoch_micros(now)?;
     let mut tx = db.begin().await?;
-    refuse_builtin(&mut *tx, scope, id).await?;
+    let before = lock_custom(&mut tx, scope, id).await?;
     let row = sqlx::query_as!(
         Row,
         r#"UPDATE roles
@@ -530,11 +553,28 @@ pub async fn update_custom<'c>(
     .fetch_optional(&mut *tx)
     .await?
     .ok_or(Error::NotFound)?;
+    let data = update_data(patch, &before, &row);
+    audit::record(&mut tx, scope, actor, Action::RoleUpdate, id, &data, now).await?;
     tx.commit().await?;
     Role::try_from(row)
 }
 
-/// Delete the custom role `id` of the scope's organization. A built-in role is refused with
+/// The `role.update` entry's data: each member `patch` names, before and after.
+fn update_data(patch: &RolePatch, before: &Role, after: &Row) -> Value {
+    let (mut old, mut new) = (Map::new(), Map::new());
+    if patch.name.is_some() {
+        old.insert("name".into(), json!(before.name));
+        new.insert("name".into(), json!(after.name));
+    }
+    if patch.permissions.is_some() {
+        old.insert("permissions".into(), json!(before.permissions));
+        new.insert("permissions".into(), json!(after.permissions));
+    }
+    json!({ "before": old, "after": new })
+}
+
+/// Delete the custom role `id` of the scope's organization and write its `role.delete` audit
+/// entry by `actor` at `now`, with the role as it was. A built-in role is refused with
 /// [`Error::BuiltinImmutable`], a role with any assignment with [`Error::InUse`] (B7, B10).
 ///
 /// Runs in one transaction (a savepoint when `db` is already one).
@@ -542,19 +582,24 @@ pub async fn delete_custom<'c>(
     db: impl Acquire<'c, Database = Postgres>,
     scope: OrgScope,
     id: Uuid,
+    now: SystemTime,
+    actor: Actor,
 ) -> Result<(), Error> {
+    let now = epoch_micros(now)?;
     let mut tx = db.begin().await?;
     refuse_builtin(&mut *tx, scope, id).await?;
     let deleted = sqlx::query!(
-        "DELETE FROM roles WHERE org_id = $1 AND id = $2",
+        "DELETE FROM roles WHERE org_id = $1 AND id = $2 RETURNING key, name, permissions",
         scope.org_id(),
         id,
     )
-    .execute(&mut *tx)
-    .await?;
-    if deleted.rows_affected() == 0 {
-        return Err(Error::NotFound);
-    }
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(Error::NotFound)?;
+    let data = json!({ "before": {
+        "key": deleted.key, "name": deleted.name, "permissions": deleted.permissions,
+    }});
+    audit::record(&mut tx, scope, actor, Action::RoleDelete, id, &data, now).await?;
     tx.commit().await?;
     Ok(())
 }

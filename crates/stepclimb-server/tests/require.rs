@@ -23,6 +23,7 @@ use sqlx::PgPool;
 use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{
     OrgScope, Source, accounts,
+    audit::Actor,
     clock::ManualClock,
     grants::{Grants, ScopeId},
     id::{Uuid, new_id},
@@ -141,7 +142,7 @@ impl Fixture {
         let account = |parent, name| {
             let pool = pool.clone();
             async move {
-                accounts::create(&pool, scope(org), parent, name, now())
+                accounts::create(&pool, scope(org), parent, name, now(), Actor::Instance)
                     .await
                     .expect("create account")
                     .id
@@ -221,7 +222,7 @@ impl Fixture {
             name: "Test role".into(),
             permissions: permissions.iter().map(|&p| p.to_owned()).collect(),
         };
-        roles::create_custom(&self.pool, scope(self.org), &role, now())
+        roles::create_custom(&self.pool, scope(self.org), &role, now(), Actor::Instance)
             .await
             .expect("create role")
             .id
@@ -246,10 +247,16 @@ impl Fixture {
             source: Source::Local,
             external_id: None,
         };
-        role_assignments::create(&self.pool, scope(self.org), &assignment, now())
-            .await
-            .expect("create assignment")
-            .id
+        role_assignments::create(
+            &self.pool,
+            scope(self.org),
+            &assignment,
+            now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("create assignment")
+        .id
     }
 
     /// A signed-in user holding a custom role with `permissions` at `at`.
@@ -393,9 +400,16 @@ async fn the_session_extractor_keeps_its_specific_code(pool: PgPool) {
     // A second active admin, so suspending the first does not remove the last one (B14).
     let (_, other) = f.user().await;
     f.assign(other, f.builtin("org_admin").await, At::Org).await;
-    users::set_status(&f.pool, scope(f.org), user, users::Status::Suspended, now())
-        .await
-        .expect("suspend");
+    users::set_status(
+        &f.pool,
+        scope(f.org),
+        user,
+        users::Status::Suspended,
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .expect("suspend");
     f.call(Method::GET, "/org", Some(&cookie))
         .await
         .assert_refused(StatusCode::UNAUTHORIZED, "auth.suspended");
@@ -595,16 +609,22 @@ async fn t7_a_role_change_applies_to_the_next_request(pool: PgPool) {
         name: None,
         permissions: Some(vec!["account.view".into()]),
     };
-    roles::update_custom(&f.pool, scope(f.org), role, &patch, now())
+    roles::update_custom(&f.pool, scope(f.org), role, &patch, now(), Actor::Instance)
         .await
         .expect("update role");
     f.call(Method::PATCH, &tower, Some(&cookie))
         .await
         .assert_refused(StatusCode::FORBIDDEN, "permission.denied");
 
-    role_assignments::delete(&f.pool, scope(f.org), assignment)
-        .await
-        .expect("delete assignment");
+    role_assignments::delete(
+        &f.pool,
+        scope(f.org),
+        assignment,
+        UNIX_EPOCH,
+        Actor::Instance,
+    )
+    .await
+    .expect("delete assignment");
     f.call(Method::GET, &tower, Some(&cookie))
         .await
         .assert_refused(StatusCode::NOT_FOUND, "account.not_found");

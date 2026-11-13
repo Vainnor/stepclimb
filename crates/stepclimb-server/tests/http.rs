@@ -135,6 +135,7 @@ async fn startup_migrations_create_the_schema_on_an_empty_database(pool: PgPool)
         tables,
         [
             "accounts",
+            "audit_events",
             "auth_flows",
             "identities",
             "identity_providers",

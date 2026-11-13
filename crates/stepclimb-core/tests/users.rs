@@ -11,6 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use sqlx::{PgConnection, PgPool, Postgres, pool::PoolConnection};
 use stepclimb_core::{
     OrgScope, Source,
+    audit::Actor,
     id::{Uuid, new_id},
     users::{self, Error, ListFilter, NewUser, Status, User, UserPatch},
 };
@@ -425,8 +426,15 @@ async fn writes_with_another_organizations_scope_are_not_found_and_change_nothin
     };
 
     let update = users::update(&pool, scope(a), user_b.id, &patch, later_time()).await;
-    let suspend =
-        users::set_status(&pool, scope(a), user_b.id, Status::Suspended, later_time()).await;
+    let suspend = users::set_status(
+        &pool,
+        scope(a),
+        user_b.id,
+        Status::Suspended,
+        later_time(),
+        Actor::Instance,
+    )
+    .await;
 
     assert!(matches!(update, Err(Error::NotFound)), "{update:?}");
     assert!(matches!(suspend, Err(Error::NotFound)), "{suspend:?}");
@@ -438,17 +446,31 @@ async fn set_status_suspends_and_restores_a_user(pool: PgPool) {
     let a = insert_org(&pool, "org-a").await;
     let user = create(&pool, a, new_user("Sam")).await;
 
-    let suspended = users::set_status(&pool, scope(a), user.id, Status::Suspended, later_time())
-        .await
-        .unwrap();
+    let suspended = users::set_status(
+        &pool,
+        scope(a),
+        user.id,
+        Status::Suspended,
+        later_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
     assert_eq!(suspended.status, Status::Suspended);
     assert_eq!(suspended.updated_at, later_time());
     let read = users::get(&pool, scope(a), user.id).await.unwrap().unwrap();
     assert_eq!(read.status, Status::Suspended);
 
-    let restored = users::set_status(&pool, scope(a), user.id, Status::Active, later_time())
-        .await
-        .unwrap();
+    let restored = users::set_status(
+        &pool,
+        scope(a),
+        user.id,
+        Status::Active,
+        later_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
     assert_eq!(restored.status, Status::Active);
 }
 
@@ -470,9 +492,16 @@ async fn count_for_limit_counts_every_user_of_the_scope_only(pool: PgPool) {
     let first = create(&pool, a, new_user("First")).await;
     create(&pool, a, new_user("Second")).await;
     create(&pool, b, new_user("Other org")).await;
-    users::set_status(&pool, scope(a), first.id, Status::Suspended, later_time())
-        .await
-        .unwrap();
+    users::set_status(
+        &pool,
+        scope(a),
+        first.id,
+        Status::Suspended,
+        later_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(
         users::count_for_limit(&pool, scope(a)).await.unwrap(),
@@ -759,9 +788,16 @@ async fn list_filters_by_status_source_and_a_prefix(pool: PgPool) {
     )
     .await;
     let blair = create(&pool, a, with("Blair", None, Source::Idp)).await;
-    users::set_status(&pool, scope(a), blair.id, Status::Suspended, later_time())
-        .await
-        .unwrap();
+    users::set_status(
+        &pool,
+        scope(a),
+        blair.id,
+        Status::Suspended,
+        later_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
     let list = |filter: ListFilter| {
         let pool = pool.clone();
         async move {

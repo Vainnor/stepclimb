@@ -26,14 +26,15 @@
 
 use std::{
     future::Future,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     pin::Pin,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
-    Router,
+    Extension, Router,
     body::Body,
-    extract::State,
+    extract::{ConnectInfo, State},
     http::{HeaderMap, Method, Request, StatusCode, header},
     routing::{get, patch, post},
 };
@@ -44,6 +45,7 @@ use sqlx::PgPool;
 use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{
     OrgScope, Source, accounts,
+    audit::Actor,
     clock::ManualClock,
     grants::ScopeId,
     id::{Uuid, new_id},
@@ -68,6 +70,9 @@ use stepclimb_server::{
     web_origin::WebOrigin,
 };
 use tower::ServiceExt;
+
+/// The client address every test request comes from (TEST-NET-1); audit entries record it.
+const CLIENT: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)), 50_000);
 
 // The table.
 
@@ -497,7 +502,7 @@ fn the_walk_refuses_stale_duplicate_and_unnamed_entries() {
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn public_operations_answer_without_a_credential(pool: PgPool) {
     let world = World::new(pool).await;
-    let app = router(world.state());
+    let app = router(world.state()).layer(Extension(ConnectInfo(CLIENT)));
     let org = world.org().await;
     let operations = operations(&document()).expect("named operations");
     for id in PUBLIC {
@@ -515,7 +520,7 @@ async fn public_operations_answer_without_a_credential(pool: PgPool) {
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn b20_every_table_entry_passes_its_cases(pool: PgPool) {
     let world = World::new(pool).await;
-    let app = router(world.state());
+    let app = router(world.state()).layer(Extension(ConnectInfo(CLIENT)));
     let operations = operations(&document()).expect("named operations");
     let mut failures = Vec::new();
     for entry in TABLE {
@@ -949,10 +954,17 @@ struct Org {
 
 impl Org {
     async fn account(&self, parent: Uuid, name: &str) -> Uuid {
-        accounts::create(&self.pool, scope(self.id), parent, name, now())
-            .await
-            .expect("create account")
-            .id
+        accounts::create(
+            &self.pool,
+            scope(self.id),
+            parent,
+            name,
+            now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("create account")
+        .id
     }
 
     /// A new account beside `account`, under its parent; under the root itself when `account`
@@ -982,7 +994,7 @@ impl Org {
             name: format!("Role of {slug}"),
             permissions: vec![RoleView::KEY.to_owned()],
         };
-        let role = roles::create_custom(&self.pool, scope(self.id), &role, now())
+        let role = roles::create_custom(&self.pool, scope(self.id), &role, now(), Actor::Instance)
             .await
             .expect("create role")
             .id;
@@ -1027,10 +1039,16 @@ impl Org {
             source: Source::Local,
             external_id: None,
         };
-        role_assignments::create(&self.pool, scope(self.id), &assignment, now())
-            .await
-            .expect("create assignment")
-            .id
+        role_assignments::create(
+            &self.pool,
+            scope(self.id),
+            &assignment,
+            now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("create assignment")
+        .id
     }
 
     /// A signed-in user holding a new custom role with exactly `permissions` at `at`.
@@ -1041,7 +1059,7 @@ impl Org {
             name: "Suite role".into(),
             permissions: permissions.iter().map(|&p| p.to_owned()).collect(),
         };
-        let role = roles::create_custom(&self.pool, scope(self.id), &role, now())
+        let role = roles::create_custom(&self.pool, scope(self.id), &role, now(), Actor::Instance)
             .await
             .expect("create role")
             .id;
@@ -1056,7 +1074,7 @@ impl Org {
             name: "Target role".into(),
             permissions: Vec::new(),
         };
-        roles::create_custom(&self.pool, scope(self.id), &role, now())
+        roles::create_custom(&self.pool, scope(self.id), &role, now(), Actor::Instance)
             .await
             .expect("create role")
             .id
@@ -1085,9 +1103,16 @@ async fn rename_account(
     State(state): State<AppState>,
 ) -> Result<StatusCode, ApiError> {
     let scope = require.principal().scope();
-    accounts::rename(&state.db, scope, require.target().id, "Renamed", now())
-        .await
-        .map_err(|error| ApiError::internal(&error))?;
+    accounts::rename(
+        &state.db,
+        scope,
+        require.target().id,
+        "Renamed",
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .map_err(|error| ApiError::internal(&error))?;
     Ok(StatusCode::OK)
 }
 
@@ -1096,9 +1121,15 @@ async fn delete_account(
     State(state): State<AppState>,
 ) -> Result<StatusCode, ApiError> {
     let scope = require.principal().scope();
-    accounts::delete(&state.db, scope, require.target().id)
-        .await
-        .map_err(|error| ApiError::internal(&error))?;
+    accounts::delete(
+        &state.db,
+        scope,
+        require.target().id,
+        UNIX_EPOCH,
+        Actor::Instance,
+    )
+    .await
+    .map_err(|error| ApiError::internal(&error))?;
     Ok(StatusCode::NO_CONTENT)
 }
 

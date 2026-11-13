@@ -7,11 +7,13 @@
 //! two organizations. `session::start` stands in for the sign-in specs. Needs `DATABASE_URL`
 //! (`just up`).
 
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{
-    Router,
+    Extension, Router,
     body::Body,
+    extract::ConnectInfo,
     http::{HeaderMap, Method, Request, StatusCode, header},
 };
 use http_body_util::BodyExt;
@@ -20,6 +22,7 @@ use sqlx::PgPool;
 use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{
     OrgScope, Source, accounts,
+    audit::Actor,
     clock::ManualClock,
     id::{Uuid, new_id},
     organizations,
@@ -31,6 +34,9 @@ use stepclimb_server::{
     AppState, request_org::TEST_ORG_HEADER, router, session, web_origin::WebOrigin,
 };
 use tower::ServiceExt;
+
+/// The client address every test request comes from (TEST-NET-1); audit entries record it.
+const CLIENT: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)), 50_000);
 
 mod common;
 
@@ -148,7 +154,7 @@ impl Fixture {
         };
         let a = tree(&pool, "org-a").await;
         Self {
-            app: router(state),
+            app: router(state).layer(Extension(ConnectInfo(CLIENT))),
             pool,
             clock,
             a,
@@ -160,7 +166,7 @@ impl Fixture {
     }
 
     async fn account(&self, org: Uuid, parent: Uuid, name: &str) -> Uuid {
-        accounts::create(&self.pool, scope(org), parent, name, now())
+        accounts::create(&self.pool, scope(org), parent, name, now(), Actor::Instance)
             .await
             .expect("create account")
             .id
@@ -203,7 +209,7 @@ impl Fixture {
             source: Source::Local,
             external_id: None,
         };
-        role_assignments::create(&self.pool, scope(org), &assignment, now())
+        role_assignments::create(&self.pool, scope(org), &assignment, now(), Actor::Instance)
             .await
             .expect("create assignment");
     }
@@ -234,7 +240,7 @@ impl Fixture {
             name: "Test role".into(),
             permissions: keys.iter().map(|&k| k.to_owned()).collect(),
         };
-        let role = roles::create_custom(&self.pool, scope(org), &role, now())
+        let role = roles::create_custom(&self.pool, scope(org), &role, now(), Actor::Instance)
             .await
             .expect("create role")
             .id;
@@ -347,7 +353,7 @@ async fn tree(pool: &PgPool, slug: &str) -> Tree {
         .await
         .expect("the root");
     let create = |parent, name: &'static str| async move {
-        accounts::create(pool, scope(org), parent, name, now())
+        accounts::create(pool, scope(org), parent, name, now(), Actor::Instance)
             .await
             .expect("create account")
             .id
@@ -472,7 +478,7 @@ async fn a_visible_destination_without_account_manage_is_not_found(pool: PgPool)
         name: "Viewer".into(),
         permissions: vec!["account.view".into()],
     };
-    let viewer = roles::create_custom(&f.pool, scope(t.org), &viewer, now())
+    let viewer = roles::create_custom(&f.pool, scope(t.org), &viewer, now(), Actor::Instance)
         .await
         .unwrap()
         .id;
@@ -966,7 +972,7 @@ async fn a_move_that_would_widen_the_callers_permissions_is_refused(pool: PgPool
         name: "Account manager".into(),
         permissions: vec!["account.manage".into()],
     };
-    let manage = roles::create_custom(&f.pool, scope(t.org), &manage, now())
+    let manage = roles::create_custom(&f.pool, scope(t.org), &manage, now(), Actor::Instance)
         .await
         .unwrap()
         .id;
@@ -1127,7 +1133,7 @@ async fn racing_a_move(f: &Fixture, moved: Uuid, to: Uuid, request: Request<Body
     accounts::lock_tree(&mut tx, scope(org))
         .await
         .expect("take the tree lock");
-    accounts::move_to(&mut *tx, scope(org), moved, to, now())
+    accounts::move_to(&mut *tx, scope(org), moved, to, now(), Actor::Instance)
         .await
         .expect("the competing move");
     let app = f.app.clone();

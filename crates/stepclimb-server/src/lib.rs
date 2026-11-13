@@ -20,11 +20,13 @@
 //! holds the limit check). A sign-in that
 //! spans several requests keeps its state in a [`flow`]. Every unsafe request passes [`csrf`]
 //! first. Sign-in and token routes declare a [`rate_limit`] budget, counted per client address
-//! as [`client_ip`] finds it.
+//! as [`client_ip`] finds it; a route that changes roles, assignments, accounts or the
+//! organization records that address in the change's audit entry ([`audit`]).
 
 pub mod accounts;
 pub mod admin;
 pub mod app;
+pub mod audit;
 pub mod auth;
 pub mod client_ip;
 pub mod config;
