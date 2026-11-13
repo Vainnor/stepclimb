@@ -157,7 +157,8 @@ pub enum Error {
     /// A stored value this release does not know.
     #[error("the stored {column} {value:?} is not one this release knows")]
     UnknownStoredValue { column: &'static str, value: String },
-    /// An account-scoped assignment whose account has no row: B15 keeps this from happening.
+    /// An account-scoped assignment whose account has no row in the scope's organization: B15
+    /// and [`create`] keep this from happening, and the read fails closed if it does.
     #[error("role assignment {assignment_id} points at a missing account")]
     MissingAccount { assignment_id: Uuid },
     /// A time that cannot be stored or read.

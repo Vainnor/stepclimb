@@ -596,3 +596,58 @@ async fn a_delete_waiting_on_a_create_at_its_account_deletes_the_new_assignment(
         "no assignment points at the deleted account"
     );
 }
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn grants_fail_closed_on_an_account_scope_in_another_organization(pool: PgPool) {
+    let a = facility(&pool, "org-a").await;
+    let b = facility(&pool, "org-b").await;
+    let id = new_id();
+    // The repository's `create` refuses this; SQL stands in for a row that got past it.
+    sqlx::query(
+        "INSERT INTO role_assignments (id, org_id, user_id, role_id, scope_type, scope_id)
+         VALUES ($1, $2, $3, $4, 'account', $5)",
+    )
+    .bind(id)
+    .bind(a.org)
+    .bind(a.user)
+    .bind(a.mentor)
+    .bind(b.tower)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let grants = role_assignments::for_user_with_paths(&pool, scope(a.org), a.user).await;
+
+    assert!(
+        matches!(grants, Err(Error::MissingAccount { assignment_id }) if assignment_id == id),
+        "{grants:?}"
+    );
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn grants_ignore_another_organizations_role_even_without_the_trigger(pool: PgPool) {
+    let a = facility(&pool, "org-a").await;
+    let b = facility(&pool, "org-b").await;
+    // The trigger refuses this row; disabling it stands in for one stored some other way.
+    sqlx::query("ALTER TABLE role_assignments DISABLE TRIGGER role_assignments_role_in_org")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO role_assignments (id, org_id, user_id, role_id, scope_type, scope_id)
+         VALUES ($1, $2, $3, $4, 'organization', $2)",
+    )
+    .bind(new_id())
+    .bind(a.org)
+    .bind(a.user)
+    .bind(b.mentor)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let grants = role_assignments::for_user_with_paths(&pool, scope(a.org), a.user)
+        .await
+        .unwrap();
+
+    assert!(grants.is_empty(), "{grants:?}");
+}

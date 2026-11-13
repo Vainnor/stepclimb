@@ -254,12 +254,17 @@ async fn create_custom_refuses_bad_and_taken_keys_unknown_permissions_and_blank_
         name: " ".into(),
         ..new_role("blank", &[])
     };
+    let too_long = NewRole {
+        name: "a".repeat(roles::MAX_NAME_CHARS + 1),
+        ..new_role("long", &[])
+    };
     let cases = [
         (new_role("org_admin", &[]), "KeyTaken"),
         (new_role("tower_mentor", &[]), "KeyTaken"),
         (new_role("Tower", &[]), "KeyInvalid"),
         (new_role("x", &["nonexistent.perm"]), "UnknownPermission"),
         (blank, "NameEmpty"),
+        (too_long, "NameTooLong"),
     ];
     for (role, expected) in cases {
         let result = roles::create_custom(&pool, scope(a), &role, request_time()).await;
@@ -493,4 +498,91 @@ async fn the_table_ties_builtin_to_a_null_organization_and_keeps_keys_unique(poo
         ("23505".into(), Some("roles_org_key".into()))
     );
     assert_eq!(refusal(blank_name).0, "23514");
+}
+
+/// Inserts a custom role of `org` with `key` by SQL, as no repository call can for a built-in key.
+async fn insert_custom(pool: &PgPool, org: Uuid, key: &str) {
+    sqlx::query(
+        "INSERT INTO roles (id, org_id, key, name, builtin) VALUES ($1, $2, $3, 'R', false)",
+    )
+    .bind(new_id())
+    .bind(org)
+    .bind(key)
+    .execute(pool)
+    .await
+    .expect("insert custom role");
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn sync_refuses_a_new_builtin_key_a_custom_role_holds_and_writes_nothing(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    insert_custom(&pool, a, "grader").await;
+    let before = table(&pool).await;
+
+    let synced = roles::sync_builtin(&pool, request_time()).await;
+
+    match synced {
+        Err(Error::BuiltinKeyConflict { org_id, key }) => {
+            assert_eq!(org_id, a);
+            assert_eq!(key, "grader");
+        }
+        other => panic!("expected BuiltinKeyConflict, got {other:?}"),
+    }
+    assert_eq!(table(&pool).await, before, "no built-in row was written");
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn sync_checks_only_keys_it_is_about_to_insert(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    roles::sync_builtin(&pool, request_time()).await.unwrap();
+    insert_custom(&pool, a, "grader").await;
+
+    let synced = roles::sync_builtin(&pool, later_time()).await;
+
+    assert_eq!(kind(&synced), "Ok(())", "the built-in row already exists");
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_table_refuses_changing_a_roles_organization_key_or_kind(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    let b = org(&pool, "org-b").await;
+    roles::sync_builtin(&pool, request_time()).await.unwrap();
+    let mentor = create(&pool, a, "mentor", &[]).await.id;
+    let admin = builtin_id(&pool, "org_admin").await;
+    let update = |sql: &'static str, id: Uuid| {
+        let pool = pool.clone();
+        async move { sqlx::query(sql).bind(id).bind(b).execute(&pool).await }
+    };
+
+    let refused = [
+        update("UPDATE roles SET org_id = $2 WHERE id = $1", mentor).await,
+        update(
+            "UPDATE roles SET key = 'other' WHERE id = $1 AND $2 IS NOT NULL",
+            mentor,
+        )
+        .await,
+        update(
+            "UPDATE roles SET key = 'other' WHERE id = $1 AND $2 IS NOT NULL",
+            admin,
+        )
+        .await,
+        update(
+            "UPDATE roles SET builtin = true, org_id = NULL WHERE id = $1 AND $2 IS NOT NULL",
+            mentor,
+        )
+        .await,
+    ];
+    let renamed = update(
+        "UPDATE roles SET name = 'Renamed', permissions = '{}' WHERE id = $1 AND $2 IS NOT NULL",
+        mentor,
+    )
+    .await;
+
+    for result in refused {
+        assert_eq!(
+            refusal(result),
+            ("23514".into(), Some("roles_identity_immutable".into()))
+        );
+    }
+    assert!(renamed.is_ok(), "name and permissions may change");
 }

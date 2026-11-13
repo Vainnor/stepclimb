@@ -81,12 +81,18 @@ organizations' ids.
   At startup (before serving, under `OrgScope::instance` rules in `02` B9) the server upserts each
   built-in row by key, writing `name` and `permissions` so SQL readers see the current lists.
   Taking the lists from code means two binaries of different versions during a rolling deploy each
-  apply their own lists, and neither rewrites the other's behavior.
+  apply their own lists, and neither rewrites the other's behavior. A built-in row the running
+  binary does not define (a newer release's role) grants nothing on that binary and is left as
+  it is. When a built-in row the sync is about to insert has the key of a custom role in any
+  organization, the sync writes nothing and the server refuses to start, naming the organization
+  and the key (coordinator decision, 13 Nov 2026).
 - **B7.** Built-in roles cannot be changed or deleted through the API (409
   `role.builtin_immutable`). An organization that wants a variant creates a custom role.
 - **B8.** A custom role is created with `key`, `name` and `permissions` by a holder of
   `perm::RoleManage` (organization scope). Its key is unique in the organization and is not a
-  built-in key (409 `role.key_taken`); the key format is pending Q7. Every permission must be in
+  built-in key (409 `role.key_taken`); the key format is pending Q7. Its name is trimmed, not
+  empty and at most 200 characters, the rule `02-organizations-and-accounts.md` Q6 sets for
+  organization and account names (coordinator decision, 13 Nov 2026). Every permission must be in
   `perm::ALL` (422, `errors[].code = "role.unknown_permission"`, field `/permissions/<i>`). The
   creator must hold every permission they put in the role at organization scope (403
   `permission.escalation`), so `RoleManage` alone does not let anyone mint a stronger role.
@@ -130,7 +136,11 @@ organizations' ids.
 - **B16.** For each request with a principal, the evaluator loads the user's assignments in the
   principal's organization with one query (assignments joined to roles, and to accounts for their
   paths), and turns them into **grants**: per scope, the set of effective permissions (B3, B6, B9).
-  No result is cached across requests, so a removed role stops working on the next request. For
+  No result is cached across requests, so a removed role stops working on the next request. The
+  query also filters the joined role to built-in or the principal's organization, and an
+  account-scope assignment whose account is not in the organization fails the load rather than
+  granting anything, so a row that got past the table's checks cannot grant across organizations
+  (coordinator decision, 13 Nov 2026). For
   an API key, the grants are then intersected with the key's scopes as `08-sessions-and-csrf.md`
   defines them, evaluated with the owner's current assignments on every request. A service account
   with no owner user has the rights `08-sessions-and-csrf.md` defines for it.
@@ -253,7 +263,10 @@ built-in roles are instance-wide definitions, not organization data, and the che
 `builtin` to the null. `role_assignments` carries `org_id` (the data model lists
 `role_assignments(user_id, role_id, scope_type, scope_id, source)`; the Tenancy section's "every
 row carries an `org_id`" adds it). A constraint trigger `role_assignments_role_in_org` refuses a
-row whose role has an `org_id` other than the row's. `scope_id` has no foreign key because it
+row whose role has an `org_id` other than the row's. A `BEFORE UPDATE` trigger
+`roles_identity_immutable` refuses changing a role's `org_id`, `key` or `builtin`, so a role
+never moves between organizations or kinds after it is assigned (coordinator decision, 13 Nov
+2026). `scope_id` has no foreign key because it
 points at different tables by `scope_type`; the repository checks it (B12 step 3) and account
 deletion removes the rows (B15). The courses spec (M1) adds its own deletion rule.
 

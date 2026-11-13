@@ -14,17 +14,19 @@
 //!
 //! Who may define a role with which permissions (B8's escalation rule) is the routes' to
 //! decide; this module checks the role itself: the key format, a key no other role of the
-//! organization or built-in role has, a non-blank name, and permissions in [`perm::ALL`].
+//! organization or built-in role has, a non-blank name of at most [`MAX_NAME_CHARS`]
+//! characters, and permissions in [`perm::ALL`].
 
 use std::time::SystemTime;
 
-use sqlx::{Acquire, PgExecutor, Postgres};
+use sqlx::{Acquire, PgConnection, PgExecutor, Postgres};
 use uuid::Uuid;
 
 use crate::{
     OrgScope,
     db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
     id::new_id,
+    name,
     perm::{self, Permission},
 };
 
@@ -155,6 +157,10 @@ pub(crate) fn effective_permissions(key: &str, builtin: bool, stored: Vec<String
         .unwrap_or_default()
 }
 
+/// The longest role name, in characters (Unicode scalar values): the organization and account
+/// name rule (coordinator decision, 13 Nov 2026).
+pub const MAX_NAME_CHARS: usize = name::MAX_CHARS;
+
 /// The longest role key, in characters (spec 09 Q7).
 pub const MAX_KEY_CHARS: usize = 63;
 
@@ -184,7 +190,7 @@ pub struct Role {
 pub struct NewRole {
     /// `^[a-z][a-z0-9_]{0,62}$`, and not a built-in key (Q7, B8).
     pub key: String,
-    /// Trimmed before it is stored; blank is refused.
+    /// Trimmed before it is stored; blank or longer than [`MAX_NAME_CHARS`] is refused.
     pub name: String,
     /// Every entry must be a key in [`perm::ALL`]. Stored in the given order.
     pub permissions: Vec<String>,
@@ -218,12 +224,20 @@ pub enum Error {
     /// The name is empty once trimmed.
     #[error("a role name cannot be empty")]
     NameEmpty,
+    /// The name is longer than [`MAX_NAME_CHARS`] once trimmed.
+    #[error("a role name is longer than {MAX_NAME_CHARS} characters")]
+    NameTooLong,
     /// A string the caller passed holds NUL, which PostgreSQL `text` cannot store.
     #[error("{field} cannot contain the NUL character")]
     ContainsNul { field: &'static str },
     /// The permission at `index` is not a key in [`perm::ALL`].
     #[error("permission {index} is not in the catalog")]
     UnknownPermission { index: usize },
+    /// A built-in role [`sync_builtin`] would add has the key of a custom role of `org_id`.
+    #[error(
+        "the built-in role key {key:?} is already a custom role's key in organization {org_id}"
+    )]
+    BuiltinKeyConflict { org_id: Uuid, key: String },
     /// Built-in roles cannot be changed or deleted (B7).
     #[error("a built-in role cannot be changed or deleted")]
     BuiltinImmutable,
@@ -282,7 +296,12 @@ impl TryFrom<Row> for Role {
 /// does not define are left as they are. Runs in one transaction (a savepoint when `db` is
 /// already one).
 ///
-/// The startup task of `stepclimb serve` calls this before serving.
+/// Before inserting a built-in row that does not exist yet, it refuses with
+/// [`Error::BuiltinKeyConflict`], writing nothing, when a custom role of any organization has
+/// that key (the role a later release adds collides with one an organization defined).
+///
+/// The startup task of `stepclimb serve` calls this before serving, and the server does not
+/// start while it fails.
 pub async fn sync_builtin<'c>(
     db: impl Acquire<'c, Database = Postgres>,
     now: SystemTime,
@@ -290,6 +309,7 @@ pub async fn sync_builtin<'c>(
     let now = epoch_micros(now)?;
     let mut tx = db.begin().await?;
     for role in BUILTIN {
+        refuse_custom_holder(&mut tx, role.key).await?;
         let permissions: Vec<String> = role.permissions().into_iter().map(str::to_owned).collect();
         // Instance-wide on purpose, so it takes no `OrgScope`: built-in roles belong to no
         // organization (`org_id` null), and the conflict target is the built-in key index.
@@ -314,6 +334,30 @@ pub async fn sync_builtin<'c>(
     }
     tx.commit().await?;
     Ok(())
+}
+
+/// [`Error::BuiltinKeyConflict`] when no built-in row has `key` yet and a custom role does.
+async fn refuse_custom_holder(conn: &mut PgConnection, key: &str) -> Result<(), Error> {
+    // Instance-wide on purpose, so it takes no `OrgScope`: a new built-in key must be free in
+    // every organization. It returns the first such organization's id for the error, never a
+    // row's contents.
+    let holder = sqlx::query_scalar!(
+        r#"SELECT org_id AS "org_id!" FROM roles
+           WHERE org_id IS NOT NULL AND key = $1
+             AND NOT EXISTS (SELECT 1 FROM roles WHERE org_id IS NULL AND key = $1)
+           ORDER BY org_id
+           LIMIT 1"#,
+        key,
+    )
+    .fetch_optional(conn)
+    .await?;
+    match holder {
+        Some(org_id) => Err(Error::BuiltinKeyConflict {
+            org_id,
+            key: key.to_owned(),
+        }),
+        None => Ok(()),
+    }
 }
 
 /// The role `id` when it is built-in or a custom role of the scope's organization, else `None`.
@@ -506,11 +550,11 @@ fn valid_key(key: &str) -> Result<(), Error> {
 }
 
 fn valid_name(name: &str) -> Result<&str, Error> {
-    let name = no_nul("name", name)?.trim();
-    if name.is_empty() {
-        return Err(Error::NameEmpty);
-    }
-    Ok(name)
+    name::valid(name).map_err(|invalid| match invalid {
+        name::Invalid::Empty => Error::NameEmpty,
+        name::Invalid::TooLong => Error::NameTooLong,
+        name::Invalid::ContainsNul => Error::ContainsNul { field: "name" },
+    })
 }
 
 fn valid_permissions(permissions: &[String]) -> Result<(), Error> {
@@ -724,6 +768,10 @@ mod tests {
             valid_name("T\0"),
             Err(Error::ContainsNul { field: "name" })
         ));
+        let at_limit = "é".repeat(MAX_NAME_CHARS);
+        assert_eq!(valid_name(&format!(" {at_limit} ")).unwrap(), at_limit);
+        let over = "a".repeat(MAX_NAME_CHARS + 1);
+        assert!(matches!(valid_name(&over), Err(Error::NameTooLong)));
     }
 
     #[test]

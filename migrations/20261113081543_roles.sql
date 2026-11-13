@@ -17,6 +17,25 @@ CREATE TABLE roles (
 CREATE UNIQUE INDEX roles_builtin_key ON roles (key) WHERE org_id IS NULL;
 CREATE UNIQUE INDEX roles_org_key ON roles (org_id, key) WHERE org_id IS NOT NULL;
 
+-- A role never changes organization, key or kind: the assignment trigger below relies on a
+-- role's `org_id` staying put, and an assignment keeps meaning the role it was made for.
+CREATE FUNCTION roles_identity_immutable() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF (NEW.org_id, NEW.key, NEW.builtin) IS DISTINCT FROM (OLD.org_id, OLD.key, OLD.builtin) THEN
+        RAISE EXCEPTION 'the organization, key and builtin flag of role % cannot change', OLD.id
+            USING ERRCODE = 'check_violation',
+                  CONSTRAINT = 'roles_identity_immutable',
+                  TABLE = 'roles';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER roles_identity_immutable
+    BEFORE UPDATE ON roles
+    FOR EACH ROW EXECUTE FUNCTION roles_identity_immutable();
+
 -- `scope_id` has no foreign key: it points at the organization, an account or (from M1) a
 -- course, by `scope_type`. The repository checks that an account scope exists, and deleting an
 -- account deletes the assignments scoped to it (B15). The default action of the role foreign
@@ -42,8 +61,9 @@ CREATE INDEX role_assignments_by_scope ON role_assignments (org_id, scope_type, 
 
 -- A custom role can be assigned only in its own organization; a built-in role in any. A foreign
 -- key cannot say this because a built-in role's `org_id` is null. A role's `org_id` never
--- changes, so checking the assignment row on insert and on a change of its role or organization
--- is enough. The error names the trigger as its constraint, so the repository can map it.
+-- changes (`roles_identity_immutable`), so checking the assignment row on insert and on a
+-- change of its role or organization is enough. The error names the trigger as its constraint,
+-- so the repository can map it.
 CREATE FUNCTION role_assignments_role_in_org() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN

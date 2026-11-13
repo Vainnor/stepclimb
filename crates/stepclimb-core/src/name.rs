@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The one rule for organization and account names (spec 02 B13, B16, Q6): trimmed, not empty,
-//! at most [`MAX_CHARS`] characters, no NUL.
+//! The one rule for organization, account and role names (spec 02 B13, B16, Q6; spec 09 B8):
+//! trimmed, not empty, at most [`MAX_CHARS`] characters, no NUL.
 
-/// The longest organization or account name, in characters (Unicode scalar values; spec 02 Q6).
+/// The longest organization, account or role name, in characters (Unicode scalar values; spec
+/// 02 Q6).
 pub const MAX_CHARS: usize = 200;
 
 /// Why a name was refused. Each repository maps it to its own error type.

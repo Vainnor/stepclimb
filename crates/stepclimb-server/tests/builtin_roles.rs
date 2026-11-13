@@ -55,3 +55,35 @@ async fn startup_writes_the_builtin_roles_and_a_restart_rewrites_an_edited_row(p
     assert_eq!(first, code_rows());
     assert_eq!(builtin_rows(&pool).await, code_rows());
 }
+
+#[sqlx::test(migrations = false)]
+async fn startup_fails_when_a_new_builtin_key_is_a_custom_roles_key(pool: PgPool) {
+    let clock = ManualClock::new(UNIX_EPOCH + Duration::from_secs(1_763_000_000));
+    startup::migrate(&pool).await.expect("migrate");
+    let org = stepclimb_core::id::new_id();
+    sqlx::query("INSERT INTO organizations (id, slug, name) VALUES ($1, 'org-a', 'Org A')")
+        .bind(org)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO roles (id, org_id, key, name, builtin) VALUES ($1, $2, 'student', 'S', false)",
+    )
+    .bind(stepclimb_core::id::new_id())
+    .bind(org)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let started = startup::prepare(&pool, &clock.clock()).await;
+
+    let error = started.expect_err("startup refuses");
+    assert!(
+        matches!(error, startup::StartupError::SyncRoles(_)),
+        "{error:?}"
+    );
+    let message = error.to_string();
+    assert!(message.contains("\"student\""), "{message}");
+    assert!(message.contains(&org.to_string()), "{message}");
+    assert!(builtin_rows(&pool).await.is_empty());
+}
