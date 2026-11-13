@@ -1,16 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! `stepclimb serve` (connect, migrate, sync the built-in roles, start the sign-in flow cleanup,
-//! listen) and `stepclimb migrate` (connect, migrate, exit).
+//! `stepclimb serve` (connect, migrate, sync the built-in roles and the `unlimited` plan, give
+//! every organization a plan, start the sign-in flow cleanup, listen) and `stepclimb migrate`
+//! (connect, migrate, exit).
 
 use std::future::Future;
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use axum::Router;
 
 use sqlx::{PgPool, migrate::Migrator, postgres::PgPoolOptions};
 use stepclimb_auth::encryption::KeyRing;
-use stepclimb_core::{clock::Clock, db::MIGRATOR, roles};
+use stepclimb_core::{
+    OrgScope,
+    clock::Clock,
+    db::MIGRATOR,
+    id::Uuid,
+    org_plans, organizations,
+    plans::{self, UnknownKeys},
+    roles,
+};
 use tokio::net::TcpListener;
 
 use crate::{AppState, Config, flow, rate_limit::RateLimiter, router};
@@ -27,6 +36,15 @@ pub enum StartupError {
     Migrate(#[source] sqlx::migrate::MigrateError),
     #[error("could not write the built-in roles: {0}")]
     SyncRoles(#[source] roles::Error),
+    #[error("could not write the unlimited plan: {0}")]
+    SyncPlans(#[source] plans::Error),
+    #[error("could not list the organizations: {0}")]
+    ListOrganizations(#[source] organizations::Error),
+    #[error("could not give organization {org_id} its plan: {source}")]
+    OrgPlan {
+        org_id: Uuid,
+        source: org_plans::Error,
+    },
     #[error("could not listen on {addr}: {source}")]
     Bind {
         addr: std::net::SocketAddr,
@@ -60,16 +78,72 @@ pub async fn run_migrations(migrator: &Migrator, pool: &PgPool) -> Result<(), St
     migrator.run(pool).await.map_err(StartupError::Migrate)
 }
 
-/// Bring the database to what this binary serves: apply the pending migrations, then write the
-/// built-in role rows from code (spec 09 B6). `now` stamps the rows the sync changes.
+/// Bring the database to what this binary serves: apply the pending migrations, write the
+/// built-in role rows (spec 09 B6) and the `unlimited` plan (spec 10 B4) from code, log the plan
+/// keys this binary does not know (spec 10 B7), and give every organization without a plan the
+/// `unlimited` one (spec 10 B5). `now` stamps the rows it writes.
 pub async fn prepare(pool: &PgPool, clock: &Clock) -> Result<(), StartupError> {
     migrate(pool).await?;
     tracing::info!("database migrations are up to date");
-    roles::sync_builtin(pool, clock.now())
+    let now = clock.now();
+    roles::sync_builtin(pool, now)
         .await
         .map_err(StartupError::SyncRoles)?;
     tracing::info!("built-in roles are up to date");
+    plans::sync_unlimited(pool, now)
+        .await
+        .map_err(StartupError::SyncPlans)?;
+    tracing::info!("the unlimited plan is up to date");
+    let unknown = plans::unknown_keys(pool)
+        .await
+        .map_err(StartupError::SyncPlans)?;
+    warn_about_unknown_plan_keys(&unknown);
+    ensure_org_plans(pool, now).await
+}
+
+/// Give every organization without an `org_plans` row the `unlimited` plan (spec 10 B5). A
+/// failure for one organization stops startup: serving it without a plan would fail every
+/// entitlement check.
+async fn ensure_org_plans(pool: &PgPool, now: SystemTime) -> Result<(), StartupError> {
+    let ids = organizations::ids(pool)
+        .await
+        .map_err(StartupError::ListOrganizations)?;
+    let mut given = 0_usize;
+    for org_id in ids {
+        let inserted = org_plans::ensure_selfhost(pool, startup_scope(org_id), now)
+            .await
+            .map_err(|source| StartupError::OrgPlan { org_id, source })?;
+        given += usize::from(inserted);
+    }
+    if given > 0 {
+        tracing::info!(
+            organizations = given,
+            "gave organizations the unlimited plan"
+        );
+    }
     Ok(())
+}
+
+#[expect(
+    clippy::disallowed_methods,
+    reason = "spec 02 B9 allows the instance scope in a startup task; spec 10 B5 gives each organization its plan before serving"
+)]
+fn startup_scope(org_id: Uuid) -> OrgScope {
+    OrgScope::instance(org_id)
+}
+
+/// Log a warning for each plan row holding a feature or limit key this binary does not know,
+/// which reading the plan ignores (spec 10 B7).
+pub fn warn_about_unknown_plan_keys(unknown: &[UnknownKeys]) {
+    for row in unknown {
+        tracing::warn!(
+            plan = %row.plan,
+            features = ?row.features,
+            limits = ?row.limits,
+            "plan {:?} holds keys this release does not know; they are ignored",
+            row.plan
+        );
+    }
 }
 
 /// Log a warning for each key in `keys` whose bytes are the published development key, so a
@@ -272,6 +346,24 @@ mod tests {
         );
         assert!(!output.contains("zq"), "{output}");
         assert!(!output.contains("AAEC"), "{output}");
+    }
+
+    #[test]
+    fn unknown_plan_keys_are_warned_about_by_plan() {
+        let unknown = [UnknownKeys {
+            plan: "test_plan".to_owned(),
+            features: vec!["retired_feature".to_owned()],
+            limits: vec!["retired_limit".to_owned()],
+        }];
+        let output = captured(|| warn_about_unknown_plan_keys(&unknown));
+        assert!(output.contains("WARN"), "{output}");
+        assert!(
+            output.contains(r#"plan "test_plan" holds keys this release does not know"#),
+            "{output}"
+        );
+        assert!(output.contains("retired_feature"), "{output}");
+        assert!(output.contains("retired_limit"), "{output}");
+        assert_eq!(captured(|| warn_about_unknown_plan_keys(&[])), "");
     }
 
     #[test]
