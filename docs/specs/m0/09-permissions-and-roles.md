@@ -126,22 +126,18 @@ organizations' ids.
      `account` an account of the organization (else 404 `account.not_found`); `course` answers 422
      `role_assignment.scope_unavailable` until the M1 courses spec enables it;
   4. the caller holds `RoleAssign` at that scope, mapped to 404 or 403 as in B17;
-  5. the caller holds, at that scope, every permission of the role that is grantable there (403
-     `permission.escalation`); an account admin cannot hand out Organization admin at its account;
+  5. the caller holds, at that scope, every catalog permission of the role, including those not
+     grantable at the scope's type, each as B3 evaluates it (403 `permission.escalation`); a key
+     the catalog does not define grants nothing and is not checked. An account admin cannot hand
+     out Organization admin at its account (decided by the owner, 13 Nov 2026);
   6. the same `(user, role, scope)` does not already exist (409 `role_assignment.exists`).
 
-  Coordinator decision (2026-11-13), for issue 6. Step 5 checks every catalog permission of the
-  role, including those not grantable at the scope's type, each held at the scope as B3
-  evaluates it; a key the catalog does not define grants nothing and is not checked. Checking
-  only the grantable ones would let an account admin of Tower assign Organization admin at Tower
-  (its account-grantable permissions are exactly Account admin's), against step 5's own example
-  and T9; the stricter reading fails closed. B13's refusal runs between steps 2 and 3. A 422
+  Coordinator decision (2026-11-13), for issue 6. B13's refusal runs between steps 2 and 3. A 422
   here follows `02` B1 and B2: `request.invalid` with `errors[].code =
   "role_assignment.scope_unavailable"` at `/scope/type` (a course) or `/role_id` (Manager,
   Observer). An `organization` scope naming another id answers 404 `org.not_found`, as
   `Grants::require_at` does. The 201's `Location` is the assignment's
-  `DELETE /api/v1/admin/role-assignments/{assignment_id}` path. The reading of step 5 awaits the
-  owner's answer; the route builds the stricter one until then.
+  `DELETE /api/v1/admin/role-assignments/{assignment_id}` path.
 
   Coordinator decision (2026-11-13), from the security review of issue 6. A built-in role row
   this binary does not define (a newer release's, during a rolling deploy, B6) grants nothing
@@ -470,7 +466,8 @@ overrule one, which then updates this spec.
   to grant, define or remove a role you must hold its permissions at that scope; B, `RoleAssign`
   alone suffices, relying on who is given `RoleAssign`. Recommendation: A; without it an account
   admin can make anyone Organization admin of their subtree with more rights than their own.
-  **Decided:** the recommendation (owner, 13 Nov 2026).
+  **Decided:** the recommendation (owner, 13 Nov 2026). The check covers every catalog
+  permission of the role, not only those grantable at the scope (owner, 13 Nov 2026; B12 step 5).
 - **Q5. Audit entries in M0.** `audit_events` is in the data model and the plan audits grants and
   grade changes, but M0's milestone does not list auditing. Options: A, add `audit_events` in M0
   and write one entry per role, assignment, account, user status and organization settings change;
