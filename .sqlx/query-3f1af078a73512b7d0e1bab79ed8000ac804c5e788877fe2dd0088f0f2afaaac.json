@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT a.parent_id, a.path::text AS \"path!\", nlevel(a.path) - 1 AS \"depth!\",\n                  (SELECT max(nlevel(d.path)) - 1 FROM accounts d\n                   WHERE d.org_id = $1 AND d.path <@ a.path) AS \"deepest!\"\n           FROM accounts a WHERE a.org_id = $1 AND a.id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "parent_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "parent_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "path!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "depth!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "deepest!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "3f1af078a73512b7d0e1bab79ed8000ac804c5e788877fe2dd0088f0f2afaaac"
+}
