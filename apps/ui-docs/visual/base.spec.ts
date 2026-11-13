@@ -2,7 +2,7 @@
 // packages/ui's base.css in a real browser (docs/specs/m0/13-base-ui-components.md B9, B13 to
 // B17; T4 to T6): touch targets, reduced motion, the OS color scheme, forced colors, overscroll and
 // unselectable controls, over the stories of the static Storybook build.
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 import { markStoryRoots, openStory, STORY_ROOT, type Story, stories } from "./storybook";
 
 const all = stories();
@@ -52,6 +52,18 @@ async function smallTargets(page: Page): Promise<string[]> {
   );
 }
 
+/**
+ * Whether something else is drawn over the middle of `target`: a modal's underlay over the page
+ * behind it, or a tooltip over its neighbor. No one can hover what is covered.
+ */
+async function isCovered(target: Locator): Promise<boolean> {
+  return target.evaluate((el) => {
+    const rect = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    return hit === null || !(hit === el || el.contains(hit));
+  });
+}
+
 test.describe("on a phone (375 px, coarse pointer) @phone", () => {
   for (const s of all) {
     test(`T4: ${s.title} / ${s.name} has targets of at least 44 px`, async ({ page }) => {
@@ -80,10 +92,12 @@ test.describe("at 1280 px @desktop", () => {
         page,
       }) => {
         await openStory(page, s, "light");
-        const targets = page.locator(`#storybook-root :is(${INTERACTIVE})`);
+        await markStoryRoots(page);
+        // The story's controls and those of an overlay it opened.
+        const targets = page.locator(`:is(${STORY_ROOT}) :is(${INTERACTIVE})`);
         for (let i = 0; i < Math.min(await targets.count(), 4); i++) {
           const target = targets.nth(i);
-          if (!(await target.isVisible())) continue;
+          if (!(await target.isVisible()) || (await isCovered(target))) continue;
           await target.hover();
           await target.focus();
           const running = await page.evaluate(

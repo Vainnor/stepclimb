@@ -93,6 +93,22 @@ export function ThemeProvider({ theme, density, brand, className, children }: Th
   );
 }
 
+/**
+ * The nearest ThemeProvider's attributes, for an overlay to repeat on its own root: React Aria
+ * portals popovers, tooltips and modals to the end of `body`, outside the provider's element, where
+ * the token CSS would otherwise draw them in the page's theme, brand and density. Empty without a
+ * provider.
+ */
+export function useAppearanceAttributes(): Record<string, string | undefined> {
+  const appearance = use(AppearanceContext);
+  if (!appearance) return {};
+  return {
+    "data-sc-theme": appearance.theme,
+    "data-sc-density": appearance.density,
+    "data-sc-brand": appearance.brand,
+  };
+}
+
 /** The appearance of the nearest ThemeProvider. */
 export function useAppearance(): Appearance {
   const appearance = use(AppearanceContext);

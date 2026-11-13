@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ThemeProvider, useAppearance } from "./theme-provider";
+import { ThemeProvider, useAppearance, useAppearanceAttributes } from "./theme-provider";
 
 /** Stand-ins for the OS settings: `matchMedia` for dark and more contrast, with `change` events. */
 function emulateSystem(settings: { dark: boolean; contrast?: boolean }) {
@@ -170,5 +170,34 @@ describe("ThemeProvider", () => {
   it("refuses useAppearance() outside a provider", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     expect(() => render(<ShowAppearance />)).toThrow(/needs a <ThemeProvider>/);
+  });
+});
+
+function Overlay() {
+  return <div data-testid="overlay" {...useAppearanceAttributes()} />;
+}
+
+describe("useAppearanceAttributes", () => {
+  it("repeats the nearest provider's theme, density and brand for a portaled overlay", () => {
+    emulateSystem({ dark: false });
+    render(
+      <ThemeProvider theme="dark" density="compact" brand="vzdc">
+        <ThemeProvider theme="high-contrast">
+          <Overlay />
+        </ThemeProvider>
+      </ThemeProvider>,
+    );
+    const el = screen.getByTestId("overlay");
+    expect(el).toHaveAttribute("data-sc-theme", "high-contrast");
+    expect(el).toHaveAttribute("data-sc-density", "compact");
+    expect(el).toHaveAttribute("data-sc-brand", "vzdc");
+  });
+
+  it("adds nothing without a provider", () => {
+    render(<Overlay />);
+    const el = screen.getByTestId("overlay");
+    expect(el).not.toHaveAttribute("data-sc-theme");
+    expect(el).not.toHaveAttribute("data-sc-density");
+    expect(el).not.toHaveAttribute("data-sc-brand");
   });
 });

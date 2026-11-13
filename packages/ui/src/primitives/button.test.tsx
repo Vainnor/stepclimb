@@ -2,6 +2,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { renderWithStrings, unmarkedText } from "../test/strings";
 import { Button, button } from "./button";
 
 describe("Button", () => {
@@ -70,5 +71,49 @@ describe("Button", () => {
   it("lets className add layout without dropping the recipe", () => {
     expect(button({ className: "ms-auto" })).toContain("ms-auto");
     expect(button({ className: "ms-auto" })).toContain("bg-raised");
+  });
+
+  describe("pending", () => {
+    it("keeps its label as the accessible name and shows a named spinner", () => {
+      renderWithStrings(<Button isPending>Submit quiz</Button>);
+      const el = screen.getByRole("button", { name: /^Submit quiz/ });
+      expect(el).toHaveAttribute("data-pending", "true");
+      expect(el).toHaveAttribute("aria-disabled", "true");
+      expect(el.querySelector('[data-slot="button-label"]')).toHaveTextContent("Submit quiz");
+      expect(el.querySelector('[data-slot="button-label"]')).toHaveClass("opacity-0");
+      const spinner = screen.getByRole("progressbar", { name: "In progress" });
+      expect(spinner).toHaveAttribute("data-slot", "button-pending");
+      expect(el).toContainElement(spinner);
+    });
+
+    it("stays focusable and does not press", async () => {
+      const user = userEvent.setup();
+      const onPress = vi.fn();
+      renderWithStrings(
+        <Button isPending onPress={onPress}>
+          Save
+        </Button>,
+      );
+      await user.tab();
+      const el = screen.getByRole("button", { name: /^Save/ });
+      expect(el).toHaveFocus();
+      await user.keyboard("{Enter}");
+      await user.click(el);
+      expect(onPress).not.toHaveBeenCalled();
+    });
+
+    it("draws no spinner and no label wrapper when not pending", () => {
+      renderWithStrings(<Button>Save</Button>);
+      expect(screen.queryByRole("progressbar")).toBeNull();
+      expect(screen.getByRole("button").querySelector('[data-slot="button-label"]')).toBeNull();
+    });
+
+    it("names the spinner from the strings catalog (T2)", () => {
+      const { container } = renderWithStrings(<Button isPending>«caller»</Button>, {
+        marked: true,
+      });
+      expect(screen.getByRole("progressbar")).toHaveAccessibleName("«button.pending»");
+      expect(unmarkedText(container)).toEqual([]);
+    });
   });
 });
