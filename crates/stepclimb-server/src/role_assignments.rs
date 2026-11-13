@@ -9,10 +9,13 @@
 //! take away Organization admin at its account.
 //!
 //! `POST` checks in B12's order: the user (404 `user.not_found`), the role (404
-//! `role.not_found`), Manager and Observer (422, B13), the scope (404, or 422 for a course), the
+//! `role.not_found`; 409 `role.unknown_builtin` for a built-in role this release does not
+//! define), Manager and Observer (422, B13), the scope (404, or 422 for a course), the
 //! caller's `role.assign` there (404 when the scope is hidden from the caller, else 403), the
-//! escalation rule (403), and a repeat (409). `DELETE` reads the assignment (404), applies the
-//! same permission and escalation checks at its scope (a hidden scope answers 404
+//! escalation rule (403), and a repeat (409). The role is read `FOR KEY SHARE` in the
+//! transaction that inserts, so a concurrent change of the role waits until the insert commits.
+//! `DELETE` reads the assignment (404), applies the same permission, unknown-role and
+//! escalation checks at its scope in the transaction that deletes (a hidden scope answers 404
 //! `role_assignment.not_found`), refuses an assignment an outside source owns (409), and leaves
 //! the last-admin rule (409) to `stepclimb_core::role_assignments::delete`, which serializes
 //! removals per organization.
@@ -71,6 +74,8 @@ pub mod code {
     /// The assignment is the last organization-scope Organization admin of an active user
     /// (409).
     pub const ROLE_ASSIGNMENT_LAST_ORG_ADMIN: &str = "role_assignment.last_org_admin";
+    /// The role is a built-in role this server's release does not define (409).
+    pub const ROLE_UNKNOWN_BUILTIN: &str = "role.unknown_builtin";
     /// In a 422's `errors`: assignments of this role, or at this scope type, are not available
     /// yet.
     pub const ROLE_ASSIGNMENT_SCOPE_UNAVAILABLE: &str = "role_assignment.scope_unavailable";
@@ -78,12 +83,12 @@ pub mod code {
 
 problem_responses! {
     AssignmentListNotFound => "`account.not_found`: the scope filter names no account of the organization, or one you cannot see. `org.not_found`: the scope filter names another organization, or the request's organization cannot be determined.",
-    AssignmentCreateForbidden => "`permission.denied`: the caller does not hold `role.assign` at the scope. `permission.escalation`: the role has a permission that takes effect at the scope and that the caller does not hold there. `auth.csrf_refused`: the request did not come from this site.",
+    AssignmentCreateForbidden => "`permission.denied`: the caller does not hold `role.assign` at the scope. `permission.escalation`: the role has a catalog permission the caller does not hold at the scope, counting permissions that take no effect there. `auth.csrf_refused`: the request did not come from this site.",
     AssignmentCreateNotFound => "`user.not_found`: no user of the organization has this id. `role.not_found`: no built-in role and no custom role of the organization has this id. `account.not_found`: the scope names no account of the organization, or one you cannot see. `org.not_found`: the scope names another organization, or the request's organization cannot be determined.",
-    AssignmentCreateConflict => "`role_assignment.exists`: the user already holds the role at the scope.",
-    AssignmentDeleteForbidden => "`permission.denied`: the caller does not hold `role.assign` at the assignment's scope. `permission.escalation`: the role has a permission that takes effect at the scope and that the caller does not hold there. `auth.csrf_refused`: the request did not come from this site.",
+    AssignmentCreateConflict => "`role_assignment.exists`: the user already holds the role at the scope. `role.unknown_builtin`: the role is a built-in role of another Stepclimb release.",
+    AssignmentDeleteForbidden => "`permission.denied`: the caller does not hold `role.assign` at the assignment's scope. `permission.escalation`: the role has a catalog permission the caller does not hold at the scope, counting permissions that take no effect there. `auth.csrf_refused`: the request did not come from this site.",
     AssignmentDeleteNotFound => "`role_assignment.not_found`: no assignment of the organization has this id, or its scope is hidden from you. `org.not_found`: the request's organization cannot be determined.",
-    AssignmentDeleteConflict => "`role_assignment.externally_managed`: an identity provider, the sync API, SCIM or a connector owns the assignment. `role_assignment.last_org_admin`: it is the organization's last organization-scope Organization admin assignment held by an active user.",
+    AssignmentDeleteConflict => "`role.unknown_builtin`: the assignment's role is a built-in role of another Stepclimb release. `role_assignment.externally_managed`: an identity provider, the sync API, SCIM or a connector owns the assignment. `role_assignment.last_org_admin`: it is the organization's last organization-scope Organization admin assignment held by an active user.",
 }
 
 /// A role granted to a user at a scope.
@@ -296,10 +301,14 @@ pub async fn create_role_assignment(
         .await
         .map_err(|error| ApiError::internal(&error))?
         .ok_or_else(user_not_found)?;
-    let role = roles::get(&state.db, scope, body.role_id)
+    let mut tx = state.db.begin().await.map_err(|e| ApiError::internal(&e))?;
+    // Locked until the commit, so the permissions the escalation check reads are the ones the
+    // role has when the assignment is inserted.
+    let role = roles::get_for_key_share(&mut tx, scope, body.role_id)
         .await
         .map_err(|error| ApiError::internal(&error))?
         .ok_or_else(role_not_found)?;
+    refuse_unknown_builtin(&role)?;
     if role.builtin && NOT_ASSIGNABLE_YET.contains(&role.key.as_str()) {
         return Err(scope_unavailable(&["role_id"]));
     }
@@ -316,9 +325,10 @@ pub async fn create_role_assignment(
         source: Source::Local,
         external_id: None,
     };
-    let created = repo::create(&state.db, scope, &new, state.clock.now())
+    let created = repo::create(&mut *tx, scope, &new, state.clock.now())
         .await
         .map_err(assignment_error)?;
+    tx.commit().await.map_err(|e| ApiError::internal(&e))?;
     let location = format!("{ROLE_ASSIGNMENTS_PATH}/{}", created.id);
     let created = RoleAssignment::from_repo(scope.org_id(), created)?;
     Ok((
@@ -365,10 +375,12 @@ pub async fn delete_role_assignment(
             crate::require::code::ACCOUNT_NOT_FOUND => assignment_not_found(),
             _ => error,
         })?;
-    let role = roles::get(&state.db, scope, assignment.role_id)
+    let mut tx = state.db.begin().await.map_err(|e| ApiError::internal(&e))?;
+    let role = roles::get_for_key_share(&mut tx, scope, assignment.role_id)
         .await
         .map_err(|error| ApiError::internal(&error))?
         .ok_or_else(|| ApiError::internal(&RoleMissing))?;
+    refuse_unknown_builtin(&role)?;
     refuse_escalation(grants, &role.permissions, &target)?;
     if assignment.source != Source::Local {
         return Err(ApiError::new(
@@ -377,9 +389,10 @@ pub async fn delete_role_assignment(
             "An outside system owns this assignment. Change it there.",
         ));
     }
-    repo::delete(&state.db, scope, assignment_id)
+    repo::delete(&mut *tx, scope, assignment_id)
         .await
         .map_err(assignment_error)?;
+    tx.commit().await.map_err(|e| ApiError::internal(&e))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -450,6 +463,20 @@ fn refuse_escalation(
         StatusCode::FORBIDDEN,
         crate::roles::code::PERMISSION_ESCALATION,
         "You can only grant or remove a role whose permissions you hold at its scope.",
+    ))
+}
+
+/// 409 `role.unknown_builtin` for a built-in role this server does not define, such as a newer
+/// release's during a rolling deploy: it grants nothing here, so the escalation check could not
+/// see what it grants on the release that defines it, and the request fails closed.
+fn refuse_unknown_builtin(role: &roles::Role) -> Result<(), ApiError> {
+    if !role.builtin || roles::builtin(&role.key).is_some() {
+        return Ok(());
+    }
+    Err(ApiError::new(
+        StatusCode::CONFLICT,
+        code::ROLE_UNKNOWN_BUILTIN,
+        "This built-in role comes from another Stepclimb release. Try again once every server runs it.",
     ))
 }
 

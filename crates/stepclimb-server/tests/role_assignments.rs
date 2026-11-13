@@ -314,7 +314,7 @@ impl Fixture {
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn t9_each_check_answers_in_order(pool: PgPool) {
     let f = Fixture::new(pool).await;
-    let (tower_admin, _) = f.holder_of("account_admin", At::Account(f.a.tower)).await;
+    let (tower_admin, tower_admin_id) = f.holder_of("account_admin", At::Account(f.a.tower)).await;
     let (_, pat) = f.user().await;
     let (_, b_user) = f.user_in(f.b.id).await;
     let account_admin = f.builtin("account_admin").await;
@@ -360,6 +360,14 @@ async fn t9_each_check_answers_in_order(pool: PgPool) {
     assert_eq!(created.status, StatusCode::CREATED, "{created:?}");
     assert_eq!(repeated.status, StatusCode::CONFLICT, "{repeated:?}");
     assert_eq!(repeated.code(), "role_assignment.exists");
+    // Step 3's org B account, and every other refusal, wrote nothing in either organization.
+    let rows: Vec<(Uuid, Uuid)> =
+        sqlx::query_as("SELECT org_id, scope_id FROM role_assignments WHERE user_id <> $1")
+            .bind(tower_admin_id)
+            .fetch_all(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(rows, [(f.a.id, f.a.ground)]);
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
@@ -695,4 +703,155 @@ async fn a_scope_filter_is_checked_like_a_target(pool: PgPool) {
     assert_eq!(org.code(), "permission.denied");
     assert_eq!(half.status, StatusCode::BAD_REQUEST, "{half:?}");
     assert_eq!(half.code(), "request.malformed");
+}
+
+/// Waits until a session of this test's database waits on a row or transaction lock.
+async fn until_a_call_waits_on_a_lock(pool: &PgPool) {
+    for _ in 0..500 {
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("read pg_stat_activity");
+        if waiting > 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("no session waited on a lock within 5 s");
+}
+
+// Built-in roles this release does not define.
+
+/// A built-in row a newer release wrote, which this binary does not define.
+async fn future_builtin(f: &Fixture) -> Uuid {
+    let id = new_id();
+    sqlx::query(
+        "INSERT INTO roles (id, org_id, key, name, builtin, permissions)
+         VALUES ($1, NULL, 'future_role', 'Future role', true, '{organization.manage}')",
+    )
+    .bind(id)
+    .execute(&f.pool)
+    .await
+    .expect("insert a future built-in row");
+    id
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_unknown_builtin_role_cannot_be_granted_or_removed(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (tower_admin, _) = f.holder_of("account_admin", At::Account(f.a.tower)).await;
+    let (_, pat) = f.user().await;
+    let future = future_builtin(&f).await;
+    let existing = f.assign(pat, future, At::Account(f.a.ground)).await;
+
+    let granted = f
+        .create(
+            &tower_admin,
+            pat,
+            future,
+            At::Account(f.a.tower).json(f.a.id),
+        )
+        .await;
+    let removed = f.delete(&tower_admin, existing).await;
+
+    for answer in [&granted, &removed] {
+        assert_eq!(answer.status, StatusCode::CONFLICT, "{answer:?}");
+        assert_eq!(answer.code(), "role.unknown_builtin");
+    }
+    assert!(f.exists(existing).await);
+}
+
+// The role's permissions cannot change between the escalation check and the insert.
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_role_strengthened_during_a_grant_is_checked_as_strengthened(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (tower_admin, _) = f.holder_of("account_admin", At::Account(f.a.tower)).await;
+    let (_, pat) = f.user().await;
+    let role = f.custom_role(&["account.view"]).await;
+    let mut changing = f.pool.begin().await.unwrap();
+    roles::lock_custom(&mut changing, scope(f.a.id), role)
+        .await
+        .unwrap();
+    let granting = tokio::spawn({
+        let app = f.app.clone();
+        let body = json!({
+            "user_id": pat, "role_id": role,
+            "scope": { "type": "account", "id": f.a.tower },
+        });
+        let request = Request::post(ASSIGNMENTS)
+            .header(TEST_ORG_HEADER, f.a.id.to_string())
+            .header(header::COOKIE, tower_admin)
+            .header("sec-fetch-site", "same-origin")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        async move { app.oneshot(request).await.unwrap().status() }
+    });
+    until_a_call_waits_on_a_lock(&f.pool).await;
+    let patch = roles::RolePatch {
+        name: None,
+        permissions: Some(vec!["account.view".into(), "service_account.manage".into()]),
+    };
+    roles::update_custom(&mut *changing, scope(f.a.id), role, &patch, now())
+        .await
+        .unwrap();
+    changing.commit().await.unwrap();
+
+    let status = granting.await.expect("the grant ran");
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM role_assignments WHERE role_id = $1")
+        .bind(role)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0);
+}
+
+// Course-scope assignments, which only SQL can write in M0.
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_course_scope_assignment_is_reached_only_from_the_organization(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (tower_admin, _) = f.holder_of("account_admin", At::Account(f.a.tower)).await;
+    let (admin, _) = f.holder_of("org_admin", At::Org).await;
+    let (_, pat) = f.user().await;
+    let role = f.custom_role(&[]).await;
+    let course = new_id();
+    sqlx::query(
+        "INSERT INTO role_assignments (id, org_id, user_id, role_id, scope_type, scope_id)
+         VALUES ($1, $2, $3, $4, 'course', $5)",
+    )
+    .bind(course)
+    .bind(f.a.id)
+    .bind(pat)
+    .bind(role)
+    .bind(course)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+
+    let listed = f.list(&tower_admin, "").await;
+    let by_tower_admin = f.delete(&tower_admin, course).await;
+    let admin_list = f.list(&admin, &format!("?user_id={pat}")).await;
+    let by_admin = f.delete(&admin, course).await;
+
+    assert!(!listed.ids().contains(&course), "{listed:?}");
+    assert_eq!(
+        by_tower_admin.status,
+        StatusCode::FORBIDDEN,
+        "{by_tower_admin:?}"
+    );
+    assert_eq!(by_tower_admin.code(), "permission.denied");
+    assert_eq!(admin_list.ids(), [course]);
+    assert_eq!(
+        admin_list.body["items"][0]["scope"],
+        json!({ "type": "course", "id": course })
+    );
+    assert_eq!(by_admin.status, StatusCode::NO_CONTENT, "{by_admin:?}");
+    assert!(!f.exists(course).await);
 }

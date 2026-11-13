@@ -15,8 +15,9 @@
 //! it waits for a create in progress and then sees the new assignment.
 //!
 //! [`delete`] keeps the organization's last organization-scope Organization admin held by an
-//! active user (B14). Removals in one organization take turns: each locks the organization's
-//! row before it reads anything, so two removals of the last two admins cannot both count two.
+//! active user (B14), and so does `users::set_status` when it suspends a user. Removals and
+//! suspensions in one organization take turns: each locks the organization's row before it reads
+//! anything, so two of them cannot both count two admins and both go ahead.
 //! The lock makes the count current only at `READ COMMITTED`, PostgreSQL's default, where each
 //! statement after the lock sees what the previous holder committed; at `REPEATABLE READ` or
 //! `SERIALIZABLE` the snapshot predates the lock wait, so [`delete`] refuses any other level with
@@ -408,8 +409,9 @@ pub async fn delete<'c>(
 }
 
 /// Lock the scope's organization row (`FOR NO KEY UPDATE`, which foreign key checks on
-/// `organizations` do not wait for) until the transaction ends, so removals in the organization
-/// take turns, and refuse a transaction whose isolation level is not `READ COMMITTED`.
+/// `organizations` do not wait for) until the transaction ends, so removals of assignments and
+/// suspensions of users in the organization take turns, and refuse a transaction whose isolation
+/// level is not `READ COMMITTED`.
 async fn lock_removals(conn: &mut PgConnection, scope: OrgScope) -> Result<(), Error> {
     let isolation = sqlx::query_scalar!(
         r#"SELECT current_setting('transaction_isolation') AS "isolation!"
@@ -422,6 +424,36 @@ async fn lock_removals(conn: &mut PgConnection, scope: OrgScope) -> Result<(), E
     .ok_or(Error::NotFound)?;
     if isolation != "read committed" {
         return Err(Error::IsolationLevel { found: isolation });
+    }
+    Ok(())
+}
+
+/// For `users::set_status` before it suspends `user_id`, in its transaction: take the removal
+/// lock ([`lock_removals`]), then [`Error::LastOrgAdmin`] when the user is active and holds the
+/// organization's only organization-scope Organization admin assignment of an active user.
+pub(crate) async fn refuse_suspending_last_org_admin(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    user_id: Uuid,
+) -> Result<(), Error> {
+    lock_removals(&mut *conn, scope).await?;
+    let counted = sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+               SELECT 1
+               FROM role_assignments ra
+               JOIN roles r ON r.id = ra.role_id
+               JOIN users u ON u.org_id = ra.org_id AND u.id = ra.user_id
+               WHERE ra.org_id = $1 AND ra.user_id = $2 AND ra.scope_type = 'organization'
+                 AND r.org_id IS NULL AND r.key = 'org_admin' AND u.status = $3
+           ) AS "counted!""#,
+        scope.org_id(),
+        user_id,
+        Status::Active.as_str(),
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    if counted && count_active_org_admins(&mut *conn, scope).await? <= 1 {
+        return Err(Error::LastOrgAdmin);
     }
     Ok(())
 }

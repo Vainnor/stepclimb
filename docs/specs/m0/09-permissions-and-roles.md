@@ -140,7 +140,16 @@ organizations' ids.
   "role_assignment.scope_unavailable"` at `/scope/type` (a course) or `/role_id` (Manager,
   Observer). An `organization` scope naming another id answers 404 `org.not_found`, as
   `Grants::require_at` does. The 201's `Location` is the assignment's
-  `DELETE /api/v1/admin/role-assignments/{assignment_id}` path.
+  `DELETE /api/v1/admin/role-assignments/{assignment_id}` path. The reading of step 5 awaits the
+  owner's answer; the route builds the stricter one until then.
+
+  Coordinator decision (2026-11-13), from the security review of issue 6. A built-in role row
+  this binary does not define (a newer release's, during a rolling deploy, B6) grants nothing
+  here, so the escalation check cannot see what it grants on the release that defines it. Both
+  `POST` (after step 2) and `DELETE` (before the escalation check) refuse it fail-closed with
+  409 `role.unknown_builtin`. The route reads the role `FOR KEY SHARE` in the transaction that
+  inserts or deletes, so a concurrent `PATCH` of the role (which locks it `FOR UPDATE`, B9) waits,
+  and the permissions the escalation check read are the role's when the change commits.
 - **B13.** Manager and Observer cannot be assigned in M0 (422 `role_assignment.scope_unavailable`):
   their scopes (reports, named students) do not exist yet, and assigning them at organization or
   account scope would mean something the plan does not say.
@@ -151,14 +160,16 @@ organizations' ids.
   lost admin is `stepclimb admin create` (`02-organizations-and-accounts.md` B27).
 
   Coordinator decision (2026-11-13), for issue 6. The checks run in this order: the assignment
-  exists in the organization (404 `role_assignment.not_found`), steps 4 and 5 at its scope (a
-  scope hidden from the caller answers the same 404), `source` (409), the last-admin rule (409).
+  exists in the organization (404 `role_assignment.not_found`), step 4 at its scope (a scope
+  hidden from the caller answers the same 404), `role.unknown_builtin` (409), step 5, `source`
+  (409), the last-admin rule (409).
   The last-admin rule is race-safe: `role_assignments::delete` locks the organization's row
   (`FOR NO KEY UPDATE`) before it reads the assignment, so removals in one organization take
   turns and each counts what the previous one committed, and it refuses a transaction above
-  `READ COMMITTED` as `accounts` does. Suspending a user also lowers the count; the users route
-  that suspends (`03`) must take the same lock. A course-scope assignment, which M0
-  cannot create, is reached only by organization-scope grants.
+  `READ COMMITTED` as `accounts` does. Suspending a user also lowers the count, so
+  `users::set_status` takes the same lock and refuses to suspend the last active admin with the
+  same code (`03-users-and-identities.md` B7). A course-scope assignment, which M0 cannot create,
+  is reached only by organization-scope grants.
 - **B15.** An account that assignments are scoped to cannot be deleted (409
   `account.has_assignments`, `02-organizations-and-accounts.md` B21); they are removed first
   through the assignment routes, which apply B14 and the externally-managed rules. This replaces
@@ -255,8 +266,8 @@ Common errors as in `02-organizations-and-accounts.md` -> API.
 | `PATCH /api/v1/admin/roles/{role_id}` | `{ name?, permissions? }` | 200 `Role` | 403 `permission.escalation`, 404 `role.not_found`, 409 `role.builtin_immutable`, 422 `request.invalid` | `perm::RoleManage` (organization) |
 | `DELETE /api/v1/admin/roles/{role_id}` | | 204 | 404 `role.not_found`, 409 `role.builtin_immutable`, 409 `role.in_use` | `perm::RoleManage` (organization) |
 | `GET /api/v1/admin/role-assignments` | `?user_id&scope_type&scope_id&cursor&limit` | 200 `Page<RoleAssignment>` | 400 `pagination.invalid_cursor`, 404 `account.not_found` (scope filter) | `perm::RoleView` (any scope; filtered to visible scopes) |
-| `POST /api/v1/admin/role-assignments` | `{ user_id, role_id, scope: { type, id } }` | 201 `RoleAssignment`, `Location` | 403 `permission.escalation`, 404 `user.not_found`/`role.not_found`/`account.not_found`, 409 `role_assignment.exists`, 422 `role_assignment.scope_unavailable` | `perm::RoleAssign` (the scope in the body, B12) |
-| `DELETE /api/v1/admin/role-assignments/{assignment_id}` | | 204 | 403 `permission.escalation`, 404 `role_assignment.not_found`, 409 `role_assignment.externally_managed`, 409 `role_assignment.last_org_admin` | `perm::RoleAssign` (the assignment's scope) |
+| `POST /api/v1/admin/role-assignments` | `{ user_id, role_id, scope: { type, id } }` | 201 `RoleAssignment`, `Location` | 403 `permission.escalation`, 404 `user.not_found`/`role.not_found`/`account.not_found`, 409 `role_assignment.exists`, 409 `role.unknown_builtin`, 422 `role_assignment.scope_unavailable` | `perm::RoleAssign` (the scope in the body, B12) |
+| `DELETE /api/v1/admin/role-assignments/{assignment_id}` | | 204 | 403 `permission.escalation`, 404 `role_assignment.not_found`, 409 `role.unknown_builtin`, 409 `role_assignment.externally_managed`, 409 `role_assignment.last_org_admin` | `perm::RoleAssign` (the assignment's scope) |
 
 The roles routes check, in order: `Require` (401, 403 `permission.denied`); the role exists and is
 custom (404 `role.not_found`, 409 `role.builtin_immutable`); the escalation rule (403

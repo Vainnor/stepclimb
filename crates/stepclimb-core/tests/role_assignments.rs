@@ -818,3 +818,113 @@ async fn grants_ignore_another_organizations_role_even_without_the_trigger(pool:
 
     assert!(grants.is_empty(), "{grants:?}");
 }
+
+/// The users error variant's name, for the suspension tests.
+fn user_kind<T: std::fmt::Debug>(result: &Result<T, users::Error>) -> String {
+    match result {
+        Ok(_) => "Ok".to_owned(),
+        Err(error) => format!("{error:?}")
+            .split([' ', '(', '{'])
+            .next()
+            .unwrap_or_default()
+            .to_owned(),
+    }
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn suspending_keeps_the_last_active_org_admin(pool: PgPool) {
+    let a = facility(&pool, "org-a").await;
+    let admin = builtin_id(&pool, "org_admin").await;
+    let second = user(&pool, a.org, "Kim Example").await;
+    let at_tower = user(&pool, a.org, "Sam Example").await;
+    assign(&pool, a.org, new(a.user, admin, Scope::Organization)).await;
+    assign(&pool, a.org, new(second, admin, Scope::Organization)).await;
+    assign(&pool, a.org, new(at_tower, admin, Scope::Account(a.tower))).await;
+    let suspend =
+        |id| users::set_status(&pool, scope(a.org), id, Status::Suspended, request_time());
+
+    let one_of_two = suspend(second).await;
+    let last = suspend(a.user).await;
+    // An admin at an account only is not counted, and suspending an already suspended user
+    // changes nothing about the count.
+    let account_only = suspend(at_tower).await;
+    let again = suspend(second).await;
+    let restored =
+        users::set_status(&pool, scope(a.org), second, Status::Active, request_time()).await;
+
+    assert_eq!(user_kind(&one_of_two), "Ok");
+    assert_eq!(user_kind(&last), "LastOrgAdmin");
+    assert_eq!(user_kind(&account_only), "Ok");
+    assert_eq!(user_kind(&again), "Ok");
+    assert_eq!(user_kind(&restored), "Ok");
+    assert_eq!(
+        role_assignments::count_active_org_admins(&pool, scope(a.org))
+            .await
+            .unwrap(),
+        2
+    );
+}
+
+/// A removal of one admin's assignment and a suspension of the other at once: the second waits
+/// for the first's lock, then counts one admin and is refused.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_suspension_racing_a_removal_of_the_last_two_admins_is_refused(pool: PgPool) {
+    let a = facility(&pool, "org-a").await;
+    let admin = builtin_id(&pool, "org_admin").await;
+    let second = user(&pool, a.org, "Kim Example").await;
+    let first = assign(&pool, a.org, new(a.user, admin, Scope::Organization)).await;
+    assign(&pool, a.org, new(second, admin, Scope::Organization)).await;
+    let mut removing = begin(&pool).await;
+    role_assignments::delete(&mut *removing, scope(a.org), first.id)
+        .await
+        .unwrap();
+    let suspending = tokio::spawn({
+        let pool = pool.clone();
+        async move {
+            users::set_status(
+                &pool,
+                scope(a.org),
+                second,
+                Status::Suspended,
+                request_time(),
+            )
+            .await
+        }
+    });
+    until_a_call_waits_on_a_lock(&pool).await;
+    removing.commit().await.unwrap();
+
+    let suspended = suspending.await.expect("the suspension ran");
+
+    assert_eq!(user_kind(&suspended), "LastOrgAdmin");
+    assert_eq!(
+        role_assignments::count_active_org_admins(&pool, scope(a.org))
+            .await
+            .unwrap(),
+        1
+    );
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn suspending_refuses_an_isolation_level_above_read_committed(pool: PgPool) {
+    let a = facility(&pool, "org-a").await;
+    let mut conn = pool.acquire().await.unwrap();
+    sqlx::raw_sql("SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+
+    let suspended = users::set_status(
+        &mut *conn,
+        scope(a.org),
+        a.user,
+        Status::Suspended,
+        request_time(),
+    )
+    .await;
+
+    assert!(
+        matches!(&suspended, Err(users::Error::IsolationLevel { found }) if found == "repeatable read"),
+        "{suspended:?}"
+    );
+}

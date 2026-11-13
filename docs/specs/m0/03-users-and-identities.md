@@ -57,6 +57,14 @@ these rows are in `04` to `07`.
   on its next request: the request authenticator in `08-sessions-and-csrf.md` reads the user's
   status on each request, so suspension needs no session sweep. Unsuspending restores sign-in;
   sessions that expired meanwhile stay expired.
+
+  Coordinator decision (2026-11-13), from `09-permissions-and-roles.md` issue 6. Suspending the
+  organization's last active user holding an organization-scope Organization admin assignment is
+  refused (409 `role_assignment.last_org_admin`, the code of `09` B14), whoever asks, so the rule
+  holds for the sync API too. `users::set_status` takes the organization-row lock that assignment
+  removals take before it counts, so a suspension and a removal cannot both pass, and refuses an
+  isolation level above `READ COMMITTED`. The `PATCH /api/v1/users/{user_id}` route maps it to
+  that 409.
 - **B8.** `manager_id` (reporting lines) is created as a nullable self-reference within the
   organization. M0 never writes it and the API does not expose it; the sync API with managers
   (M4) and the Manager role define it.
@@ -177,7 +185,7 @@ Common errors as in `02-organizations-and-accounts.md` -> API (400, 401, 415, 50
 | `GET /api/v1/users` | `?status&source&q&cursor&limit` | 200 `Page<User>` | 400 `pagination.invalid_cursor` | `perm::UserView` (organization) |
 | `GET /api/v1/users/{user_id}` | | 200 `User` | 404 `user.not_found` | `perm::UserView` (organization) |
 | `POST /api/v1/users` | `{ display_name, given_name?, family_name?, email?, locale?, tz?, external_id?, identities?: [{ provider_key, subject }] }` | 201 `User`, `Location` | 409 `identity.taken`, 409 `user.external_id_taken`, 422 `request.invalid`, limit error from `10` | `perm::UserManage` (organization) |
-| `PATCH /api/v1/users/{user_id}` | `{ display_name?, given_name?, family_name?, email?, locale?, tz?, status? }` | 200 `User` | 404 `user.not_found`, 409 `user.externally_managed`, 409 `user.cannot_suspend_self`, 422 `request.invalid` | `perm::UserManage` (organization) |
+| `PATCH /api/v1/users/{user_id}` | `{ display_name?, given_name?, family_name?, email?, locale?, tz?, status? }` | 200 `User` | 404 `user.not_found`, 409 `user.externally_managed`, 409 `user.cannot_suspend_self`, 409 `role_assignment.last_org_admin`, 422 `request.invalid` | `perm::UserManage` (organization) |
 | `GET /api/v1/users/{user_id}/identities` | | 200 `Identity[]` | 404 `user.not_found` | `perm::UserView` (organization) |
 | `POST /api/v1/users/{user_id}/identities` | `{ provider_key, subject }` | 201 `Identity` | 404 `user.not_found`, 409 `identity.taken`, 422 `request.invalid` | `perm::UserManage` (organization) |
 | `DELETE /api/v1/users/{user_id}/identities/{identity_id}` | | 204 | 404 `user.not_found`, 404 `identity.not_found`, 409 `identity.last_sign_in_method` | `perm::UserManage` (organization) |
