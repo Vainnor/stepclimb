@@ -15,8 +15,9 @@
 //! [`identity_providers`] and [`identities`] repositories, which link a user to an identity
 //! provider by the provider's subject; and the entitlement catalogs ([`feature`]) with the
 //! [`plans`] and [`org_plans`] repositories, which give every organization the `unlimited`
-//! plan. The other repositories arrive with the M0 specs in
-//! `docs/specs/m0/`.
+//! plan, and how a request's plan bounds what it adds ([`org_plans::check_room`]); and
+//! [`requirement`], which lets the server's `Require` check a permission or a feature. The other
+//! repositories arrive with the M0 specs in `docs/specs/m0/`.
 
 pub mod accounts;
 pub mod auth_flows;
@@ -32,6 +33,7 @@ pub mod org_plans;
 pub mod organizations;
 pub mod perm;
 pub mod plans;
+pub mod requirement;
 pub mod role_assignments;
 pub mod roles;
 mod scope;

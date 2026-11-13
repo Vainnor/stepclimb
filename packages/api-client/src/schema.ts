@@ -188,6 +188,16 @@ export interface components {
             /** @description On a 422, each rule the body broke. */
             errors?: components["schemas"]["FieldError"][];
             /**
+             * @description On `entitlement.limit_reached`, the key of the limit the request would pass, such as
+             *     `users`.
+             */
+            limit?: string | null;
+            /**
+             * Format: int64
+             * @description On `entitlement.limit_reached`, the plan's value for that limit.
+             */
+            max?: number | null;
+            /**
              * Format: int32
              * @description The HTTP status code, repeated.
              */

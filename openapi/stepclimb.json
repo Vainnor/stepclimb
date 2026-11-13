@@ -618,6 +618,22 @@
             },
             "description": "On a 422, each rule the body broke."
           },
+          "limit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On `entitlement.limit_reached`, the key of the limit the request would pass, such as\n`users`."
+          },
+          "max": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "On `entitlement.limit_reached`, the plan's value for that limit.",
+            "minimum": 0
+          },
           "status": {
             "type": "integer",
             "format": "int32",
