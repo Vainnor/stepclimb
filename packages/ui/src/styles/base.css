@@ -18,6 +18,11 @@
       color-scheme: dark;
     }
   }
+  /* A light or high-contrast subtree inside a dark page draws light form controls and scrollbars. */
+  [data-sc-theme="light"],
+  [data-sc-theme="high-contrast"] {
+    color-scheme: light;
+  }
   ::selection {
     background: var(--sc-brand-soft);
     color: var(--sc-fg-strong);

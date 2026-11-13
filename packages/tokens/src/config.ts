@@ -26,35 +26,32 @@ const media = (selectors: string[]) => (contents: string) =>
  */
 const osDark = ':not([data-sc-theme="light"]):not([data-sc-theme="high-contrast"])';
 
-/** Theme permutations after the first carry only what changes between themes. */
+/**
+ * Theme permutations carry only what changes between themes. Everything else (space, type,
+ * control heights) is declared once on `:root`, so a theme attribute on an inner element never
+ * resets the density of the view around it.
+ */
 const themed = ["color.*", "font.ui"];
 
 /** One brand's light, dark (by attribute, then by OS setting) and high-contrast permutations. */
-function brandPermutations(brand: string, attr: string, first: boolean) {
-  const light = first
-    ? [":root", '[data-sc-theme="light"]']
-    : [attr, `${attr}[data-sc-theme="light"]`];
-  const scope = first ? "" : attr;
+function brandPermutations(brand: string, attr: string) {
+  const light = attr ? [attr, `${attr}[data-sc-theme="light"]`] : ['[data-sc-theme="light"]'];
   return [
+    { input: { theme: `${brand}-light` }, include: themed, prepare: wrap(light) },
     {
-      input: { theme: `${brand}-light` },
-      ...(first ? {} : { include: themed }),
-      prepare: wrap(light),
+      input: { theme: `${brand}-dark` },
+      include: themed,
+      prepare: wrap([`${attr}[data-sc-theme="dark"]`]),
     },
     {
       input: { theme: `${brand}-dark` },
       include: themed,
-      prepare: wrap([`${scope}[data-sc-theme="dark"]`]),
-    },
-    {
-      input: { theme: `${brand}-dark` },
-      include: themed,
-      prepare: media([`:root${scope}${osDark}`]),
+      prepare: media([`:root${attr}${osDark}`]),
     },
     {
       input: { theme: `${brand}-high-contrast` },
       include: themed,
-      prepare: wrap([`${scope}[data-sc-theme="high-contrast"]`]),
+      prepare: wrap([`${attr}[data-sc-theme="high-contrast"]`]),
     },
   ];
 }
@@ -111,8 +108,10 @@ export function tokensConfig(resolver: string): Config {
         filename: "css/variables.css",
         variableName: (token) => variableName(token.id),
         permutations: [
-          ...brandPermutations("default", "", true),
-          ...brandPermutations("vzdc", '[data-sc-brand="vzdc"]', false),
+          // Every token once, in the default light theme.
+          { input: { theme: "default-light" }, prepare: wrap([":root"]) },
+          ...brandPermutations("default", ""),
+          ...brandPermutations("vzdc", '[data-sc-brand="vzdc"]'),
           // Density is independent of the theme, so a compact view can sit inside any theme.
           {
             input: { theme: "default-light", density: "compact" },

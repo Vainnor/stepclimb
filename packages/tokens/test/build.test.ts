@@ -10,8 +10,9 @@ const read = (file: string) =>
 describe("variables.css", () => {
   const css = read("variables.css");
 
-  it("has the default light theme on :root", () => {
-    expect(css).toMatch(/:root,\n\[data-sc-theme="light"\] \{/);
+  it("has the default light theme on :root and by attribute", () => {
+    expect(css).toMatch(/^:root \{/m);
+    expect(css).toMatch(/^\[data-sc-theme="light"\] \{/m);
     expect(css).toContain("--sc-bg-canvas: oklch(98.5% 0.004 195);");
   });
 

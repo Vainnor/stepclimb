@@ -3,8 +3,8 @@
 // is built in memory with the package's own Terrazzo config, and the theme, density and alias
 // behavior is read through a model of the cascade (support/cascade.ts).
 import { beforeAll, describe, expect, it } from "vitest";
-import { type Built, buildTokens, editedCopy } from "./support/build";
-import { computed, type Element, parseRules, type Rule } from "./support/cascade";
+import { type Built, buildEdited, buildTokens } from "./support/build";
+import { computed, type Element, type Env, parseRules, type Rule } from "./support/cascade";
 
 /** The plan's Tokens table, group by group. */
 const planTokens = {
@@ -49,8 +49,8 @@ const contexts: Record<string, { el: Element; dark: boolean }> = {
 
 let built: Built;
 let rules: Rule[];
-const at = (el: Element, dark = false, under: Element[] = []) =>
-  computed(rules, [...under, el], { dark });
+const at = (el: Element, dark = false, under: Element[] = [], gamut: Env["gamut"] = "srgb") =>
+  computed(rules, [...under, el], { dark, gamut });
 const inContext = (name: string) => {
   const c = contexts[name];
   if (!c) throw new Error(`no context ${name}`);
@@ -76,7 +76,8 @@ describe("the plan's token set (T1)", () => {
     const themeBlocks = rules.filter(
       (r) => !r.media.some((m) => m.startsWith("(color-gamut")) && r.decls.has("--sc-brand"),
     );
-    expect(themeBlocks).toHaveLength(8);
+    // :root, then light, dark, OS dark and high contrast for each of the two brands.
+    expect(themeBlocks).toHaveLength(9);
     for (const block of themeBlocks) {
       for (const token of allTokens) expect(block.decls.has(`--sc-${token}`), token).toBe(true);
     }
@@ -119,10 +120,13 @@ describe("learning-state aliases (B2, T2)", () => {
   });
 
   it("retarget in every theme, and change nothing else, from one edit", async () => {
-    const dir = editedCopy("learning.json", (json) =>
-      json.replace('"{color.warning}"', '"{color.info}"'),
+    const edited = parseRules(
+      (
+        await buildEdited("learning.json", (json) =>
+          json.replace('"{color.warning}"', '"{color.info}"'),
+        )
+      ).variables,
     );
-    const edited = parseRules((await buildTokens(dir)).variables);
     for (const [name, { el, dark }] of Object.entries(contexts)) {
       const before = computed(rules, [el], { dark });
       const after = computed(edited, [el], { dark });
@@ -160,6 +164,22 @@ describe("density (B4, T3)", () => {
     expect(outside.get("--sc-control-h")).toBe("2.5rem");
     expect(colors(view)).toEqual(colors(outside));
   });
+
+  it("survives a light theme set inside a compact view", () => {
+    const view = { attrs: compact };
+    const inner = at({ attrs: { "data-sc-theme": "light" } }, false, [
+      root({ "data-sc-theme": "dark" }),
+      view,
+    ]);
+    expect(inner.get("--sc-control-h")).toBe("2rem");
+    expect(inner.get("--sc-control-h-sm")).toBe("1.625rem");
+    expect(colors(inner)).toEqual(colors(inContext("default light")));
+  });
+
+  it.each(["dark", "high-contrast"])("survives a %s theme set inside a compact view", (theme) => {
+    const inner = at({ attrs: { "data-sc-theme": theme } }, false, [root(), { attrs: compact }]);
+    expect(inner.get("--sc-control-h")).toBe("2rem");
+  });
 });
 
 describe("theme selection (B5, B8, T4)", () => {
@@ -171,30 +191,47 @@ describe("theme selection (B5, B8, T4)", () => {
     expect(brand.get("--sc-font-ui")).toMatch(/^"Roboto"/);
   });
 
-  it.each([
-    ["default", {}],
-    ["vzdc", vzdc],
-  ])("lets %s light win over the OS dark setting", (_, brand) => {
-    const chosen = at(root({ ...brand, "data-sc-theme": "light" }), true);
-    expect(chosen).toEqual(at(root(brand), false));
+  it("gives vZDC high contrast its own values, not vZDC light's", () => {
+    const light = colors(inContext("vzdc light"));
+    const contrast = colors(inContext("vzdc high contrast"));
+    expect(contrast.line).not.toBe(light.line);
+    expect(contrast["fg-soft"]).not.toBe(light["fg-soft"]);
   });
 
-  it.each([
-    ["default", {}],
-    ["vzdc", vzdc],
-  ])("lets %s high contrast win over the OS dark setting", (_, brand) => {
+  // Wide-gamut displays also read the `@media (color-gamut: ...)` overrides.
+  const cases = (["srgb", "p3", "rec2020"] as const).flatMap((gamut) => [
+    ["default", gamut, {}] as const,
+    ["vzdc", gamut, vzdc] as const,
+  ]);
+
+  it.each(cases)("lets %s light win over the OS dark setting on %s", (_, gamut, brand) => {
+    const chosen = at(root({ ...brand, "data-sc-theme": "light" }), true, [], gamut);
+    expect(chosen).toEqual(at(root(brand), false, [], gamut));
+  });
+
+  it.each(cases)("lets %s high contrast win over the OS dark setting on %s", (_, gamut, brand) => {
     const el = root({ ...brand, "data-sc-theme": "high-contrast" });
-    expect(at(el, true)).toEqual(at(el, false));
+    expect(at(el, true, [], gamut)).toEqual(at(el, false, [], gamut));
+    expect(at(el, true, [], gamut)).not.toEqual(at(root(brand), false, [], gamut));
   });
 
-  it("follows the OS dark setting only when no theme is chosen", () => {
-    expect(inContext("default dark (OS)")).toEqual(inContext("default dark (attribute)"));
-    expect(inContext("vzdc dark (OS)")).toEqual(inContext("vzdc dark (attribute)"));
+  it.each(cases)(
+    "follows the OS dark setting only when no theme is chosen, %s on %s",
+    (_, gamut, brand) => {
+      const os = at(root(brand), true, [], gamut);
+      expect(os).toEqual(at(root({ ...brand, "data-sc-theme": "dark" }), false, [], gamut));
+      expect(os).not.toEqual(at(root(brand), false, [], gamut));
+    },
+  );
+
+  it("reads different wide-gamut values on a P3 display", () => {
+    expect(at(root(), false, [], "p3").get("--sc-brand")).not.toBe(at(root()).get("--sc-brand"));
   });
 
   it("writes the themes in resolution order: light, dark, OS dark, then each further theme", () => {
     const order = [
-      ':root,\n[data-sc-theme="light"] {',
+      ":root {",
+      '[data-sc-theme="light"] {',
       '[data-sc-theme="dark"] {',
       "@media (prefers-color-scheme: dark) {\n  :root:not(",
       '[data-sc-theme="high-contrast"] {',

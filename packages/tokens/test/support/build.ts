@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Runs the package's Terrazzo build in memory against any resolver, so a test can build a
 // modified copy of the token JSON with exactly the settings `tz build` uses.
-import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -34,14 +34,21 @@ export async function buildTokens(dir: URL = tokensDir): Promise<Built> {
   return { variables: file("css/variables.css"), tailwind: file("css/tailwind-theme.css") };
 }
 
-/** A temporary copy of the token JSON with one file rewritten by `edit`. */
-export function editedCopy(file: string, edit: (json: string) => string): URL {
+/**
+ * Builds a temporary copy of the token JSON with one file rewritten by `edit`, and removes the
+ * copy afterwards.
+ */
+export async function buildEdited(file: string, edit: (json: string) => string): Promise<Built> {
   const dir = mkdtempSync(join(tmpdir(), "sc-tokens-"));
-  cpSync(tokensDir, dir, { recursive: true });
-  const path = join(dir, file);
-  const before = readFileSync(path, "utf8");
-  const after = edit(before);
-  if (after === before) throw new Error(`the edit did not change ${file}`);
-  writeFileSync(path, after);
-  return pathToFileURL(`${dir}/`);
+  try {
+    cpSync(tokensDir, dir, { recursive: true });
+    const path = join(dir, file);
+    const before = readFileSync(path, "utf8");
+    const after = edit(before);
+    if (after === before) throw new Error(`the edit did not change ${file}`);
+    writeFileSync(path, after);
+    return await buildTokens(pathToFileURL(`${dir}/`));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
