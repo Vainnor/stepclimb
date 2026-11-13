@@ -712,3 +712,114 @@ fn non_secret_values_list_every_non_secret_setting_and_no_secret() {
         assert!(!printed.contains(hidden), "{}: {printed}", setting.var);
     }
 }
+
+/// Everything `work` logs at any level, as text.
+fn logged(work: impl FnOnce()) -> String {
+    let buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+    let writer = buffer.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(move || Writer(writer.clone()))
+        .finish();
+    tracing::subscriber::with_default(subscriber, work);
+    String::from_utf8(buffer.lock().unwrap().clone()).unwrap()
+}
+
+struct Writer(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Writer {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_database_url_parameter_sqlx_ignores_is_refused_by_name_only() {
+    let output = logged(|| {
+        let error = Config::load(
+            &with_required(&[(
+                "STEPCLIMB_DATABASE_URL",
+                "postgres://u@h/db?sslmode=require&sslpassword=zqsecret",
+            )]),
+            None,
+        )
+        .unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.starts_with(
+                r#"STEPCLIMB_DATABASE_URL: the URL has the parameter "sslpassword", which the server does not read"#
+            ),
+            "{message}"
+        );
+        assert!(!message.contains("zqsecret"), "{message}");
+    });
+    assert!(!output.contains("zqsecret"), "{output}");
+}
+
+#[test]
+fn an_unparsable_database_url_is_refused_without_repeating_it() {
+    for url in [
+        "postgres://u:zq@h:notaport/db",
+        "postgres://u@h/db?sslmode=zq",
+        "postgresql://u@h/db?port=zq",
+    ] {
+        let error =
+            Config::load(&with_required(&[("STEPCLIMB_DATABASE_URL", url)]), None).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message
+                .starts_with("STEPCLIMB_DATABASE_URL: is not a valid PostgreSQL URL; for example"),
+            "{url}: {message}"
+        );
+        assert!(!message.contains("zq"), "{url}: {message}");
+    }
+}
+
+/// Every parameter the loader accepts is one sqlx reads without its "unrecognized" warning, so a
+/// sqlx upgrade that drops one fails here.
+#[test]
+fn database_url_parameters_sqlx_accepts() {
+    let url = "postgres://u@h/db?sslmode=require&ssl-mode=prefer&sslrootcert=/r&ssl-root-cert=/r\
+               &ssl-ca=/r&sslcert=/c&ssl-cert=/c&sslkey=/k&ssl-key=/k&statement-cache-capacity=10\
+               &host=h&hostaddr=127.0.0.1&port=5432&dbname=d&user=u&password=p\
+               &application_name=a&options=-c%20a%3Db&options[search_path]=s";
+    let named: Vec<String> = url::Url::parse(url)
+        .unwrap()
+        .query_pairs()
+        .map(|(name, _)| name.into_owned())
+        .filter(|name| !name.starts_with("options["))
+        .collect();
+    assert_eq!(
+        named, DATABASE_URL_PARAMETERS,
+        "the URL above names every parameter"
+    );
+    let output = logged(|| {
+        Config::load(&with_required(&[("STEPCLIMB_DATABASE_URL", url)]), None).unwrap();
+        url.parse::<PgConnectOptions>().unwrap();
+    });
+    assert!(!output.contains("unrecognized"), "{output}");
+    let unknown = logged(|| {
+        "postgres://u@h/db?sslpassword=x"
+            .parse::<PgConnectOptions>()
+            .unwrap();
+    });
+    assert!(
+        unknown.contains("unrecognized"),
+        "sqlx no longer warns: {unknown}"
+    );
+}
+
+#[test]
+fn redacting_a_url_with_an_unknown_parameter_logs_nothing() {
+    let mut printed = String::new();
+    let output = logged(|| {
+        printed = redacted_database_url("postgres://u@h/db?sslpassword=zqsecret");
+    });
+    assert_eq!(output, "");
+    assert_eq!(printed, "<not a parseable PostgreSQL URL>");
+}

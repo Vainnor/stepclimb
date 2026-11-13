@@ -428,3 +428,41 @@ async fn migrate_exits_1_when_a_migration_fails(pool: PgPool) {
         "stderr: {stderr}"
     );
 }
+
+/// Every subcommand refuses a database URL sqlx would not read as written, before logging starts
+/// or anything connects, without printing the value.
+#[test]
+fn every_subcommand_refuses_a_database_url_sqlx_would_not_read_as_written() {
+    let cases = [
+        (
+            "postgres://u@127.0.0.1:1/db?sslpassword=zqsecret",
+            r#"the URL has the parameter "sslpassword""#,
+        ),
+        (
+            "postgres://u:zqsecret@127.0.0.1:notaport/db",
+            "is not a valid PostgreSQL URL",
+        ),
+    ];
+    for subcommand in ["check-config", "migrate", "serve"] {
+        for (url, problem) in cases {
+            let output = stepclimb()
+                .arg(subcommand)
+                .env("STEPCLIMB_DATABASE_URL", url)
+                .env("STEPCLIMB_ENCRYPTION_KEYS", KEYS)
+                .output()
+                .expect("the binary runs");
+            let (stdout, stderr) = (stdout_of(&output), stderr_of(&output));
+            assert_eq!(
+                output.status.code(),
+                Some(2),
+                "{subcommand} {url}: {stderr}"
+            );
+            assert!(
+                stderr.contains(&format!("STEPCLIMB_DATABASE_URL: {problem}")),
+                "{subcommand}: {stderr}"
+            );
+            assert!(!stdout.contains("zqsecret"), "{subcommand}: {stdout}");
+            assert!(!stderr.contains("zqsecret"), "{subcommand}: {stderr}");
+        }
+    }
+}

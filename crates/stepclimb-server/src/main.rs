@@ -3,8 +3,9 @@
 //! export-course | import-course | check-config | backup-verify`; `serve`, `migrate` and
 //! `check-config` exist so far.
 //!
-//! Exit codes: 0 on success, 2 when the configuration is refused (before anything connects), 1
-//! when the database, the migrations or the HTTP server fail.
+//! Exit codes: 0 on success; 2 when the command line or the configuration is refused, before
+//! anything connects; 1 when the database, the migrations or the HTTP server fail, or when
+//! `check-config` cannot write its report.
 
 use std::future::Future;
 use std::io::Write as _;
@@ -37,7 +38,7 @@ enum Command {
     /// Apply database migrations, then exit.
     Migrate,
     /// Validate the configuration without connecting to anything, print its non-secret values,
-    /// and exit 0, or 2 when it is refused.
+    /// and exit 0; 2 when it is refused, 1 when the report cannot be written.
     CheckConfig,
 }
 
@@ -74,6 +75,7 @@ fn check_config(config: &Config) -> ExitCode {
     for (key, value) in config.non_secret_values() {
         report.push_str(&format!("{key}: {value}\n"));
     }
+    // `write_all` rather than `println!`, which panics on a closed stdout instead of failing.
     match std::io::stdout().write_all(report.as_bytes()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

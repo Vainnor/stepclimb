@@ -114,7 +114,7 @@ impl fmt::Debug for Config {
 /// sqlx's own parser. The password and every query parameter (which can carry `password=`) are
 /// left out.
 fn redacted_database_url(url: &str) -> String {
-    match url.parse::<PgConnectOptions>() {
+    match parse_database_url(url) {
         Ok(options) => format!(
             "postgres://{}@{}:{}/{} (password and parameters hidden)",
             options.get_username(),
@@ -124,6 +124,51 @@ fn redacted_database_url(url: &str) -> String {
         ),
         Err(_) => "<not a parseable PostgreSQL URL>".to_owned(),
     }
+}
+
+/// The query parameters sqlx 0.9 reads from a PostgreSQL URL (`PgConnectOptions::parse_from_url`),
+/// plus `options[<name>]`. sqlx logs any other parameter with its value and ignores it, so the
+/// loader refuses it instead; `database_url_parameters_sqlx_accepts` keeps this list honest.
+const DATABASE_URL_PARAMETERS: &[&str] = &[
+    "sslmode",
+    "ssl-mode",
+    "sslrootcert",
+    "ssl-root-cert",
+    "ssl-ca",
+    "sslcert",
+    "ssl-cert",
+    "sslkey",
+    "ssl-key",
+    "statement-cache-capacity",
+    "host",
+    "hostaddr",
+    "port",
+    "dbname",
+    "user",
+    "password",
+    "application_name",
+    "options",
+];
+
+/// Why a database URL was refused. Neither variant carries any part of the URL but a parameter
+/// name.
+#[derive(Debug, PartialEq, Eq)]
+enum DatabaseUrlProblem {
+    Unparsable,
+    UnknownParameter(String),
+}
+
+/// Parse `url` as sqlx will, after checking that sqlx will not log any of its parameters.
+fn parse_database_url(url: &str) -> Result<PgConnectOptions, DatabaseUrlProblem> {
+    let parsed = url::Url::parse(url).map_err(|_| DatabaseUrlProblem::Unparsable)?;
+    for (name, _) in parsed.query_pairs() {
+        let known = DATABASE_URL_PARAMETERS.contains(&&*name)
+            || (name.starts_with("options[") && name.ends_with(']'));
+        if !known {
+            return Err(DatabaseUrlProblem::UnknownParameter(name.into_owned()));
+        }
+    }
+    url.parse().map_err(|_| DatabaseUrlProblem::Unparsable)
 }
 
 /// Where a value was set: a variable, or a key in the configuration file and its line.
@@ -292,17 +337,22 @@ fn log_filter(value: String, origin: Origin) -> Result<String, ConfigError> {
 }
 
 fn check_database_url(url: &str, origin: Origin) -> Result<(), ConfigError> {
-    if url.starts_with("postgres://") || url.starts_with("postgresql://") {
-        Ok(())
+    let problem = if !(url.starts_with("postgres://") || url.starts_with("postgresql://")) {
+        "the URL must start with postgres:// or postgresql://".to_owned()
     } else {
-        Err(ConfigError::Invalid {
-            origin,
-            problem: format!(
-                "the URL must start with postgres:// or postgresql://; for example {}",
-                DATABASE_URL.example
+        match parse_database_url(url) {
+            Ok(_) => return Ok(()),
+            Err(DatabaseUrlProblem::Unparsable) => "is not a valid PostgreSQL URL".to_owned(),
+            Err(DatabaseUrlProblem::UnknownParameter(name)) => format!(
+                "the URL has the parameter {name:?}, which the server does not read (it reads {})",
+                DATABASE_URL_PARAMETERS.join(", ")
             ),
-        })
-    }
+        }
+    };
+    Err(ConfigError::Invalid {
+        origin,
+        problem: format!("{problem}; for example {}", DATABASE_URL.example),
+    })
 }
 
 /// The variables and the file, resolved setting by setting: a variable wins over the file, and
