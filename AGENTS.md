@@ -190,11 +190,18 @@ no `flock` wrapper. `bin/ci_gate.py` holds one of `SC_CI_SLOTS` (default 3) slot
 the rest wait their turn, and one run per worktree. Each run gets its own PostgreSQL and Compose
 projects (`stepclimb-ci-<id>`, `stepclimb-prodcheck-<id>`, image `stepclimb:ci-<id>`, `<id>` from
 the worktree path) on ports Docker picks, so checkouts with different migrations never share a
-database, and it removes them when it ends, failed or not. It never uses or stops the shared
-`just up` stack. A gate under the old `flock /tmp/stepclimb-ci.lock` wrapper still works: that
-wrapper runs alone, and the gates it wraps skip the lock it holds. `just app-build` builds the Tauri shell for the
-local OS; macOS and Windows builds, and jobs of about an hour or more, run on a machine or VM the
-owner provides when a change needs them, and the PR names the OSes it ran on.
+database. It removes them when it ends, whether it passed, failed or was stopped by SIGTERM,
+SIGHUP or SIGINT, and at its start removes what a killed run left and any such project whose
+worktree no longer exists. It never uses or stops the shared `just up` stack.
+A gate under the old `flock /tmp/stepclimb-ci.lock` wrapper still works: the wrapper waits for
+running gates and runs alone, and the gate inside it skips the lock its wrapper holds. Every
+gate takes the old lock first, then the worktree's, then a slot, so no two can wait on each
+other. The stamp records the commit the run started on, and nothing if HEAD moved during the
+run.
+
+`just app-build` builds the Tauri shell for the local OS; macOS and Windows builds, and jobs of
+about an hour or more, run on a machine or VM the owner provides when a change needs them, and the
+PR names the OSes it ran on.
 
 ## Testing and verification
 

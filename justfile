@@ -17,9 +17,13 @@ default:
 # Every merge check. Must pass on the committed HEAD before a merge. Safe to run from several
 # worktrees at once: bin/ci_gate.py gives the run its own database and e2e stack, removes them
 # after, and lets at most SC_CI_SLOTS (default 3) gates run on the machine.
+# The stamp names the commit checked out when the run started, and only if it still is.
 ci:
-    python3 -X utf8 -B bin/ci_gate.py run -- {{ just_executable() }} _ci-checks
-    bash bin/ci-stamp.sh
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tested="$(git rev-parse HEAD)"
+    python3 -X utf8 -B bin/ci_gate.py run -- "{{ just_executable() }}" _ci-checks
+    bash bin/ci-stamp.sh "$tested"
 
 _ci-checks: secrets-scan fmt-check lint layering lint-escapes spdx-check gate-check test-rust deny sqlx-check openapi-diff web-lint typecheck test-web ui-visual e2e compose-check compose-ops-check agents-check
     @echo "just ci: all gates passed"

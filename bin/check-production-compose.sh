@@ -8,8 +8,10 @@
 #   T9   `up` with generated secrets turns healthy, /readyz answers 200 on the published port,
 #        the server is published on 127.0.0.1 only (the default), and PostgreSQL publishes no
 #        port and sits only on internal networks.
-# SC_PROD_CHECK_PROJECT, SC_PROD_CHECK_PORT and SC_PROD_CHECK_NETWORK (the proxy network's first
-# three octets) override the project name, the port and the subnet.
+# SC_PROD_CHECK_PROJECT overrides the project name, SC_PROD_CHECK_PORT the published port (by
+# default Docker picks a free one, read back with `docker compose port`), SC_PROD_CHECK_NETWORK
+# the proxy network's first three octets, and SC_IMAGE the server image tag; `just ci` sets the
+# project, the subnet and the image per worktree (bin/ci_gate.py).
 # It runs as its own Compose project on its own port, so it never touches the development stack
 # (project `stepclimb`, :55432, :58080), and removes its containers, volumes and secrets on exit.
 # Needs the server image to build (deploy/Dockerfile); `just e2e` before it leaves it cached.
@@ -18,7 +20,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 project=${SC_PROD_CHECK_PROJECT:-stepclimb-prodcheck}
-port=${SC_PROD_CHECK_PORT:-58180}
+port=${SC_PROD_CHECK_PORT:-0}  # 0: Docker picks a free port
 production=deploy/compose/compose.production.yaml
 work=$(mktemp -d "${TMPDIR:-/tmp}/stepclimb-prodcheck.XXXXXX")
 export SC_HTTP_PORT=$port SC_SECRETS_DIR="$work/secrets" SC_PUBLIC_URL="http://127.0.0.1:$port" \
@@ -74,7 +76,8 @@ PY
 compose up --detach --build --wait --wait-timeout 180 \
     || { compose logs >&2; fail "the stack did not turn healthy"; }
 
-status=$(python3 -I - "http://127.0.0.1:$port/readyz" <<'PY'
+address=$(compose port stepclimb 8080)
+status=$(python3 -I - "http://$address/readyz" <<'PY'
 import sys, urllib.request, urllib.error
 try:
     print(urllib.request.urlopen(sys.argv[1], timeout=5).status)
@@ -82,7 +85,7 @@ except urllib.error.HTTPError as error:
     print(error.code)
 PY
 )
-[[ $status == 200 ]] || fail "/readyz on :$port answered $status"
+[[ $status == 200 ]] || fail "/readyz on $address answered $status"
 
 server=$(compose ps --quiet stepclimb)
 hosts=$(docker inspect --format '{{range $port, $bindings := .HostConfig.PortBindings}}{{range $bindings}}{{.HostIp}} {{end}}{{end}}' "$server")
@@ -95,5 +98,5 @@ for network in $(docker inspect --format '{{range $name, $_ := .NetworkSettings.
     [[ $(docker network inspect --format '{{.Internal}}' "$network") == true ]] \
         || fail "postgres is on $network, which is not internal"
 done
-echo "production compose: healthy, /readyz 200 on 127.0.0.1:$port (published there only), postgres on internal networks only"
+echo "production compose: healthy, /readyz 200 on $address (published on 127.0.0.1 only), postgres on internal networks only"
 echo "production compose: ok"

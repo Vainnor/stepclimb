@@ -35,7 +35,8 @@ release recipe. What a release ships beyond a tagged GitHub Release is pending Q
   shell with the same tools; nothing in the build reads it.
 - **B2. The merge gate.** `just ci` runs, in this order: `secrets-scan` (gitleaks over the tree,
   `.gitleaks.toml`), `fmt-check`, `lint` (clippy `-D warnings`), `layering`
-  (`bin/check-layering.sh`), `spdx-check` (`bin/check-spdx.sh`), `gate-check` (the tests of
+  (`bin/check-layering.sh`), `lint-escapes` (`bin/check-lint-escapes.py`), `spdx-check`
+  (`bin/check-spdx.sh`), `gate-check` (the tests of
   `bin/ci_gate.py`), `test-rust` (web build, `cargo nextest run --workspace`, doctests), `deny`
   (`cargo deny check`, `deny.toml`), `sqlx-check`, `openapi-diff` (the committed
   `openapi/stepclimb.json` and `packages/api-client/src/schema.ts` against what the code
@@ -44,8 +45,9 @@ release recipe. What a release ships beyond a tagged GitHub Release is pending Q
   `compose-check` (the production Compose example) and `agents-check`. `bin/ci_gate.py` runs
   them with the run's own PostgreSQL and Compose projects, named from the worktree path and
   removed when the run ends, and lets at most `SC_CI_SLOTS` (default 3) runs share the machine,
-  so several worktrees can gate at once. Its last step, `bin/ci-stamp.sh`, records the HEAD commit as passed only when
-  the working tree is clean; `.claude/hooks/pr-gate.sh` reads that stamp before `gh pr create`.
+  so several worktrees can gate at once. `just ci`'s last step, `bin/ci-stamp.sh`, records the
+  commit checked out when the run started as passed, only if HEAD is still that commit and the
+  working tree is clean; `.claude/hooks/pr-gate.sh` reads that stamp before `gh pr create`.
 - **B3. Gates by layer.** The plan's gates (How it's built) map to recipes: formatting (`fmt-check`,
   `web-lint`), lints (`lint`, `web-lint`), unit, property and integration tests (`test-rust`,
   `test-web`), the four-case permission and cross-organization tests (in `test-rust`, permission

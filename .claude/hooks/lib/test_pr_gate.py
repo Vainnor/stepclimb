@@ -37,9 +37,13 @@ class PrGate(unittest.TestCase):
         self.git("add", name)
         self.git("commit", "-q", "-m", name)
 
-    def stamp(self):
-        return subprocess.run(["bash", STAMP_SCRIPT], cwd=self.repo, capture_output=True,
+    def stamp(self, *args):
+        return subprocess.run(["bash", STAMP_SCRIPT, *args], cwd=self.repo, capture_output=True,
                               text=True, env=self.env, check=True).stdout
+
+    def head(self):
+        return subprocess.run(["git", "-C", self.repo, "rev-parse", "HEAD"], capture_output=True,
+                              text=True, env=self.env, check=True).stdout.strip()
 
     def hook(self, command):
         payload = {"cwd": self.repo, "tool_name": "Bash", "tool_input": {"command": command}}
@@ -74,6 +78,19 @@ class PrGate(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("working tree has changes", err)
 
+    def test_records_the_commit_the_run_started_on(self):
+        tested = self.head()
+        self.assertIn("recorded", self.stamp(tested))
+        code, err = self.hook("gh pr create")
+        self.assertEqual(code, 0, err)
+
+    def test_a_commit_during_the_run_records_no_pass(self):
+        tested = self.head()
+        self.commit("b")
+        self.assertIn("not recorded", self.stamp(tested))
+        code, _ = self.hook("gh pr create")
+        self.assertEqual(code, 2)
+
     def test_a_dirty_tree_records_no_pass(self):
         with open(os.path.join(self.repo, "new"), "w") as f:
             f.write("x")
@@ -95,7 +112,8 @@ class PrGate(unittest.TestCase):
     def test_the_ci_recipe_ends_with_the_stamp(self):
         with open(os.path.join(ROOT, "justfile"), encoding="utf-8") as f:
             recipe = f.read().split("\nci:", 1)[1].split("\n\n", 1)[0]
-        self.assertTrue(recipe.rstrip().endswith("bash bin/ci-stamp.sh"), recipe)
+        self.assertIn('tested="$(git rev-parse HEAD)"', recipe)
+        self.assertTrue(recipe.rstrip().endswith('bash bin/ci-stamp.sh "$tested"'), recipe)
 
     def test_claude_and_codex_run_the_gate_on_bash(self):
         with open(os.path.join(ROOT, ".claude", "settings.json"), encoding="utf-8") as f:
