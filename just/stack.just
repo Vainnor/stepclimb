@@ -1,10 +1,11 @@
 compose := "docker compose -f deploy/compose/compose.yaml"
 
-# Start PostgreSQL and MinIO for local development
+# Start PostgreSQL and MinIO for local development: one stack for every worktree, started under a
+# lock and never recreated while it runs
 up:
-    {{ compose }} up -d --wait postgres minio
+    python3 -X utf8 -B bin/ci_gate.py dev-up
 
-# Stop the Compose services (data volumes are kept)
+# Stop the Compose services (data volumes are kept). Other worktrees may be using them.
 down:
     {{ compose }} --profile stack down
 
@@ -12,12 +13,25 @@ down:
 up-stack:
     {{ compose }} --profile stack up -d --wait --build
 
-# Playwright smoke test against the Compose stack (rebuilds the server image)
-e2e: up-stack
-    pnpm --filter web e2e
+# Playwright smoke test against this run's own stack (bin/ci_gate.py), built from this checkout
+e2e:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -z "${SC_CI_PROJECT:-}" ]]; then
+      exec python3 -X utf8 -B bin/ci_gate.py run -- "{{ just_executable() }}" e2e
+    fi
+    gate=(python3 -X utf8 -B bin/ci_gate.py compose --)
+    "${gate[@]}" up --detach --wait --build stepclimb
+    SC_E2E_URL="http://$("${gate[@]}" port stepclimb 8080)" pnpm --filter web e2e
 
-# Boot the production Compose example with generated secrets on :58180 and check it, then remove it
+# Boot the production Compose example with generated secrets and check it, then remove it; inside
+# a gate run its project, port and image are the run's own
 compose-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -z "${SC_CI_PROJECT:-}" ]]; then
+      exec python3 -X utf8 -B bin/ci_gate.py run -- "{{ just_executable() }}" compose-check
+    fi
     bash bin/check-production-compose.sh
 
 # Boot the production example with Caddy (internal CA) and check TLS, forwarded headers, nightly dumps and a restore, then remove it

@@ -2,9 +2,10 @@
 # Stepclimb on Docker Compose: the server, PostgreSQL 16 and MinIO (plan, Technical -> Hosting:
 # "stepclimb and postgres, with optional Caddy and MinIO").
 #
-# Local development runs only the dependencies: `just up` (postgres and minio). The full stack,
-# with the server built from deploy/Dockerfile, is `just up-stack`; the Playwright smoke test
-# runs against it (`just e2e`). The credentials below are for a local machine only.
+# Local development runs only the dependencies: `just up` (postgres and minio), one stack shared by
+# every worktree. The full stack, with the server built from deploy/Dockerfile, is `just
+# up-stack`. `just ci` and `just e2e` use neither: each run starts its own project from this file
+# and ci.yaml (bin/ci_gate.py). The credentials below are for a local machine only.
 #
 # Images are pinned by digest. MinIO's own image is no longer on Docker Hub, so this uses
 # Chainguard's build, which publishes only `latest`: the digest is the pin
@@ -45,7 +46,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/Dockerfile
-    image: stepclimb:local
+    image: ${SC_IMAGE:-stepclimb:local}
     environment:
       STEPCLIMB_DATABASE_URL: postgres://stepclimb:stepclimb-local@postgres:5432/stepclimb
       STEPCLIMB_BIND: 0.0.0.0:8080
