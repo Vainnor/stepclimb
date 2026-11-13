@@ -12,7 +12,7 @@ check:
 
 # Clippy with warnings as errors
 lint:
-    cargo clippy --workspace --all-targets --locked -- -D warnings
+    cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
 # Rust tests: nextest for unit and integration tests, cargo test for doctests. The server's SPA
 # tests read the web build, and the database tests need `just up`.
@@ -23,6 +23,12 @@ test-rust: web-build
 # Fail if a crate reaches one it must not (bin/check-layering.sh, .claude/rules/architecture.md)
 layering:
     bash bin/check-layering.sh
+
+# Fail on the ways around the OrgScope `disallowed-methods` gate clippy does not refuse (inner
+# allows, wide expects, lint settings in Cargo files); the self-test runs the script's fixtures first
+lint-escapes:
+    python3 -X utf8 -B bin/check-lint-escapes.py --self-test
+    python3 -X utf8 -B bin/check-lint-escapes.py
 
 # Dependency advisories, licenses, bans and sources
 deny:

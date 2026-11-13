@@ -38,7 +38,7 @@ The plan's layout (`docs/plan/technical.md` -> Architecture and stack).
 | Path | Kind | What it is |
 | --- | --- | --- |
 | `crates/stepclimb-server` | lib + bin | The axum app, handlers, config and the `stepclimb` binary. Today: config, startup and migrations, probes, OpenAPI and Scalar, the embedded SPA. |
-| `crates/stepclimb-core` | lib | Domain types, repositories (SQL), the permission catalog. Today: the embedded migrations (`db::MIGRATOR`), the permission catalog (`perm`), the built-in role lists (`roles::BUILTIN`) and the controllable clock (`clock::Clock`). |
+| `crates/stepclimb-core` | lib | Domain types, repositories (SQL), the permission catalog. Today: the embedded migrations (`db::MIGRATOR`), UUID v7 keys (`id`), the permission catalog (`perm`), the built-in role lists (`roles::BUILTIN`), the controllable clock (`clock::Clock`), `OrgScope` and the `organizations` repository with `OrgSettings`. |
 | `crates/stepclimb-auth` | lib | Providers, sessions, API keys, the OAuth 2.1 server for Stepclimb's own apps. Today: tokens, API keys and their hashes (`token`), the AES-256-GCM key ring (`encryption`). |
 | `crates/stepclimb-assess` | lib | Question types, selection, grading; pure, also wasm32. Placeholder (M2). |
 | `crates/stepclimb-activities` | lib | Activity engine: trait, sessions, event log, mastery rules. Placeholder (M3). |
@@ -137,7 +137,7 @@ The Nix dev shell (`flake.nix`) provides every tool below.
 ## Commands (via `just`)
 
 ```bash
-just ci            # the merge gate, run locally: secrets, fmt, clippy, layering, spdx, tests, deny, sqlx, openapi, biome, tsc, vitest, playwright, agents
+just ci            # the merge gate, run locally: secrets, fmt, clippy, layering, lint escapes, spdx, tests, deny, sqlx, openapi, biome, tsc, vitest, playwright, agents
 just app-build     # the Tauri shell for this OS, unbundled and unsigned, after cargo-deny on its workspace
 just up / down     # PostgreSQL 16 and MinIO in Compose (deploy/compose/compose.yaml)
 just serve         # the server on :8080 against the Compose database, web build embedded
@@ -145,9 +145,10 @@ just dev           # Vite on :5173, proxying the API to `just serve`
 just storybook     # Storybook on :6006
 just check         # cargo check --workspace --all-targets --locked
 just fmt / fmt-check   # cargo fmt
-just lint          # cargo clippy --workspace --all-targets --locked -- -D warnings
+just lint          # cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 just test-rust     # web build, then cargo nextest run --workspace and doctests
 just layering      # bin/check-layering.sh
+just lint-escapes  # bin/check-lint-escapes.py: no way around the OrgScope lint gate (inner allows, wide expects, lint config)
 just spdx-check    # bin/check-spdx.sh: SPDX headers on every source file
 just deny          # cargo deny check
 just migrate       # apply migrations to the local database

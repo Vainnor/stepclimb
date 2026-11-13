@@ -4,13 +4,19 @@
 //! Today it holds [`db::MIGRATOR`], the migrations in the repository's `migrations/` folder
 //! compiled into the binary, which `stepclimb serve` runs at startup; [`id::new_id`], the UUID
 //! v7 generator for every row key; the permission catalog ([`perm`]); the built-in role lists
-//! ([`roles::BUILTIN`]); and [`clock::Clock`], the controllable clock every time rule reads. The
-//! domain types and the repositories (every one taking an `OrgScope`) are **not built yet**; they
-//! arrive with the M0 specs in `docs/specs/m0/` (organizations and accounts, users and
-//! identities, roles).
+//! ([`roles::BUILTIN`]); [`clock::Clock`], the controllable clock every time rule reads;
+//! [`OrgScope`], the organization every repository function acts in; and the [`organizations`]
+//! repository with its typed [`OrgSettings`]. The other repositories arrive with the M0 specs in
+//! `docs/specs/m0/` (accounts, users and identities, roles).
 
 pub mod clock;
 pub mod db;
 pub mod id;
+pub mod organizations;
 pub mod perm;
 pub mod roles;
+mod scope;
+mod settings;
+
+pub use scope::{OrgScope, ScopeOrigin};
+pub use settings::{OrgSettings, OrgSettingsPatch};
