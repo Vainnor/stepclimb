@@ -123,7 +123,7 @@
             "$ref": "#/components/responses/Unauthenticated"
           },
           "403": {
-            "$ref": "#/components/responses/ManageForbidden"
+            "$ref": "#/components/responses/CreateForbidden"
           },
           "404": {
             "$ref": "#/components/responses/ParentNotFound"
@@ -363,7 +363,7 @@
             "$ref": "#/components/responses/Unauthenticated"
           },
           "403": {
-            "$ref": "#/components/responses/ManageForbidden"
+            "$ref": "#/components/responses/MoveForbidden"
           },
           "404": {
             "$ref": "#/components/responses/MoveNotFound"
@@ -1699,6 +1699,16 @@
           }
         }
       },
+      "CreateForbidden": {
+        "description": "`permission.denied`: you hold `account.manage` nowhere, or you can see the parent without holding it there. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "CsrfRefused": {
         "description": "`auth.csrf_refused`: an unsafe request without a bearer credential did not come from this site: `Sec-Fetch-Site` is not `same-origin`, `Origin` is sent but is not an allowed origin, or neither header is sent.",
         "content": {
@@ -1750,7 +1760,7 @@
         }
       },
       "ManageForbidden": {
-        "description": "`permission.denied`: you can see the account but do not hold `account.manage` at a scope containing it (for a create, the parent; for a move or delete, the account's parent). `auth.csrf_refused`: the request did not come from this site.",
+        "description": "`permission.denied`: you can see the account but do not hold `account.manage` at a scope containing it (for a delete, the account's parent). `auth.csrf_refused`: the request did not come from this site.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -1771,6 +1781,16 @@
       },
       "MoveConflict": {
         "description": "`account.root_immutable`: the root account cannot be moved. `account.move_into_descendant`: the destination is the account itself or one of its descendants. `account.too_deep`: an account of the moved subtree would end more than 16 levels below the root.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "MoveForbidden": {
+        "description": "`permission.denied`: you can see the account's parent but do not hold `account.manage` there. `permission.escalation`: the destination would give you, over the moved account, a permission you do not hold over it now. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
           "application/problem+json": {
             "schema": {

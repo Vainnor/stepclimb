@@ -905,7 +905,7 @@ async fn a_move_deeper_than_the_limit_is_refused(pool: PgPool) {
 // T14: delete.
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn t14_delete_refuses_children_and_removes_a_leaf_with_its_assignments(pool: PgPool) {
+async fn t14_delete_refuses_children_and_assignments_and_removes_a_leaf(pool: PgPool) {
     let f = Fixture::new(pool).await;
     let t = f.a;
     let admin = f.org_admin(t.org).await;
@@ -913,10 +913,26 @@ async fn t14_delete_refuses_children_and_removes_a_leaf_with_its_assignments(poo
     let role = f.builtin_role("account_admin").await;
     f.assign(t.org, user, role, Scope::Account(t.ground)).await;
     f.assign(t.org, user, role, Scope::Account(t.enroute)).await;
+    let before = f.rows(t.org).await;
 
     f.delete(t.org, &admin, t.tower)
         .await
         .expect(StatusCode::CONFLICT, "account.has_children");
+    f.delete(t.org, &admin, t.ground)
+        .await
+        .expect(StatusCode::CONFLICT, "account.has_assignments");
+    assert_eq!(
+        f.rows(t.org).await,
+        before,
+        "a refused delete changes nothing"
+    );
+
+    sqlx::query("DELETE FROM role_assignments WHERE org_id = $1 AND scope_id = $2")
+        .bind(t.org)
+        .bind(t.ground)
+        .execute(&f.pool)
+        .await
+        .unwrap();
     let deleted = f.delete(t.org, &admin, t.ground).await;
     assert_eq!(deleted.status, StatusCode::NO_CONTENT, "{deleted:?}");
     assert_eq!(deleted.body, Value::Null);
@@ -930,11 +946,52 @@ async fn t14_delete_refuses_children_and_removes_a_leaf_with_its_assignments(poo
     .fetch_all(&f.pool)
     .await
     .unwrap();
-    assert_eq!(scopes, [t.enroute]);
+    assert_eq!(scopes, [t.enroute], "assignments elsewhere are kept");
     f.get(&one(t.ground), t.org, &admin)
         .await
         .expect(StatusCode::NOT_FOUND, "account.not_found");
     assert!(!f.read(t.org, t.tower).await.unwrap().has_children);
+}
+
+// B23: a move cannot widen the caller's own permissions.
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_move_that_would_widen_the_callers_permissions_is_refused(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    // account.manage at organization scope, and Account admin (with role.assign) at Enroute.
+    let (cookie, user) = f.user(t.org).await;
+    let manage = NewRole {
+        key: "org_account_manager".into(),
+        name: "Account manager".into(),
+        permissions: vec!["account.manage".into()],
+    };
+    let manage = roles::create_custom(&f.pool, scope(t.org), &manage, now())
+        .await
+        .unwrap()
+        .id;
+    f.assign(t.org, user, manage, Scope::Organization).await;
+    let admin = f.builtin_role("account_admin").await;
+    f.assign(t.org, user, admin, Scope::Account(t.enroute))
+        .await;
+    let before = f.rows(t.org).await;
+
+    // Under Enroute, Tower would fall under the caller's Account admin grant.
+    f.move_to(t.org, &cookie, t.tower, t.enroute)
+        .await
+        .expect(StatusCode::FORBIDDEN, "permission.escalation");
+    assert_eq!(f.rows(t.org).await, before);
+
+    // A destination that adds nothing over Tower is allowed: the root holds only the
+    // organization grant, which already contains Tower.
+    let side = f.account(t.org, t.root, "Side").await;
+    let moved = f.move_to(t.org, &cookie, t.ground, side).await;
+    assert_eq!(moved.ok(StatusCode::OK)["parent_id"], side.to_string());
+    // Out of Enroute, the caller loses rights over the account: no escalation.
+    let inside = f.account(t.org, t.enroute, "Inside").await;
+    f.move_to(t.org, &cookie, inside, t.root)
+        .await
+        .ok(StatusCode::OK);
 }
 
 // T18: the four cases, by hand.
@@ -1041,47 +1098,29 @@ async fn t19_org_bs_ids_are_not_found_for_an_admin_of_org_a(pool: PgPool) {
 
 // The checks under the tree lock.
 
-/// The tree lock's keys as `pg_locks` shows them: a copy of the repository's private class and
-/// key fold, as in `stepclimb-core`'s `tests/accounts.rs`. If they drift, the wait below times
-/// out and the test fails.
-fn tree_lock_keys(org: Uuid) -> (i64, i64) {
-    let class: i32 = 0x6163_6374;
-    let (words, _) = org.as_bytes().as_chunks::<4>();
-    let key = words
-        .iter()
-        .map(|word| i32::from_be_bytes(*word))
-        .fold(0, |key, word| key ^ word);
-    (
-        i64::from(class.cast_unsigned()),
-        i64::from(key.cast_unsigned()),
-    )
-}
-
-async fn until_a_call_waits_on_the_tree_lock(pool: &PgPool, org: Uuid) {
-    let (class, key) = tree_lock_keys(org);
+/// Waits until a session of this test's database waits on a lock (the tree lock or a row
+/// lock), so the test knows the request has read past its `Require` check and is blocked.
+async fn until_a_call_waits_on_a_lock(pool: &PgPool) {
     for _ in 0..500 {
         let waiting: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM pg_locks
-             WHERE locktype = 'advisory' AND NOT granted
-               AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
-               AND classid = $1::bigint::oid AND objid = $2::bigint::oid AND objsubid = 2",
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event_type = 'Lock'",
         )
-        .bind(class)
-        .bind(key)
         .fetch_one(pool)
         .await
-        .expect("read pg_locks");
+        .expect("read pg_stat_activity");
         if waiting > 0 {
             return;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    panic!("no session waited on the tree lock within 5 s");
+    panic!("no session waited on a lock within 5 s");
 }
 
 /// Sends `request` while another transaction holds the tree lock and has moved `moved` under
 /// `to` without committing, so the request's `Require` check reads the tree before the move and
-/// its write waits for the lock; the move commits once the request waits. The request's answer.
+/// its handler waits for the tree lock or the moved rows; the move commits once the request
+/// waits. The request's answer.
 async fn racing_a_move(f: &Fixture, moved: Uuid, to: Uuid, request: Request<Body>) -> Answer {
     let org = f.a.org;
     let mut tx = f.pool.begin().await.expect("begin");
@@ -1093,7 +1132,7 @@ async fn racing_a_move(f: &Fixture, moved: Uuid, to: Uuid, request: Request<Body
         .expect("the competing move");
     let app = f.app.clone();
     let pending = tokio::spawn(async move { answer(&app, request).await });
-    until_a_call_waits_on_the_tree_lock(&f.pool, org).await;
+    until_a_call_waits_on_a_lock(&f.pool).await;
     tx.commit().await.expect("commit the competing move");
     pending.await.expect("the request ran")
 }
@@ -1166,4 +1205,19 @@ async fn a_create_under_a_parent_carried_out_of_reach_meanwhile_is_not_found(poo
         .await
         .expect(StatusCode::NOT_FOUND, "account.not_found");
     assert_eq!(f.rows(t.org).await.len(), before, "no account was created");
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_rename_of_an_account_carried_out_of_reach_meanwhile_is_not_found(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    let admin = f
+        .holder(t.org, "account_admin", &[Scope::Account(t.tower)])
+        .await;
+    let body = json!({ "name": "Renamed" }).to_string();
+    let request = f.request(Method::PATCH, &one(t.ground), t.org, &admin, Some(&body));
+    racing_a_move(&f, t.ground, t.enroute, request)
+        .await
+        .expect(StatusCode::NOT_FOUND, "account.not_found");
+    assert_eq!(f.read(t.org, t.ground).await.unwrap().name, "Ground");
 }

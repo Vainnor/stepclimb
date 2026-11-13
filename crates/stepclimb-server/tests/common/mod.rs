@@ -3,9 +3,9 @@
 //!
 //! [`schema_errors`] checks an answer against a schema of the OpenAPI document (spec 03 T17 and
 //! the specs' later "validated against the OpenAPI schema" cases). It reads the subset of JSON
-//! Schema utoipa writes: `$ref`, `type` (one name or a list), `enum`, `format` (`uuid`, `date-time` as the API writes it, `int32`, `int64`),
-//! `properties` with `required`, and `items`, plus the annotations `description`, `title` and
-//! `example`, which constrain nothing. Any other keyword, or another `format`, is reported as an
+//! Schema utoipa writes: `$ref`, `type` (one name or a list), `enum`, `format` (`uuid`,
+//! `date-time` as the API writes it, `int32`, `int64`), `properties` with `required`, and
+//! `items`, plus the annotations `description`, `title` and `example`, which constrain nothing. Any other keyword, or another `format`, is reported as an
 //! error rather than skipped, so a schema the checker cannot read never passes by default. A
 //! member the schema does not declare is an error too, so an answer cannot carry more than the
 //! document says.

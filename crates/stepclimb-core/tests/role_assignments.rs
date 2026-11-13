@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The role assignments repository and the `role_assignments` table against a fresh database per
 //! test (docs/specs/m0/09-permissions-and-roles.md B11, B15, B16; T4's evaluator read, T19;
-//! docs/specs/m0/02-organizations-and-accounts.md B21, T14). Needs `DATABASE_URL` (`just up`).
+//! docs/specs/m0/02-organizations-and-accounts.md B21). Needs `DATABASE_URL` (`just up`).
 //!
 //! Each test builds two organizations, A and B, each with Tower, Ground (Tower's child), Ramp
 //! (Ground's child) and Enroute under the root, a user and a custom role, and checks that org
@@ -483,31 +483,38 @@ async fn the_table_refuses_another_organizations_role_and_organization(pool: PgP
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn deleting_an_account_deletes_the_assignments_scoped_to_it_only(pool: PgPool) {
+async fn an_account_with_assignments_is_kept_until_they_are_removed(pool: PgPool) {
     let a = facility(&pool, "org-a").await;
     let b = facility(&pool, "org-b").await;
     let at_ramp = assign(&pool, a.org, new(a.user, a.mentor, Scope::Account(a.ramp))).await;
-    let at_ground = assign(
-        &pool,
-        a.org,
-        new(a.user, a.mentor, Scope::Account(a.ground)),
-    )
-    .await;
-    let at_org = assign(&pool, a.org, new(a.user, a.mentor, Scope::Organization)).await;
-    let in_b = assign(&pool, b.org, new(b.user, b.mentor, Scope::Account(b.ramp))).await;
+    assign(&pool, a.org, new(a.user, a.mentor, Scope::Organization)).await;
+    // Another organization's assignment at its own Ramp does not hold org A's Ramp.
+    assign(&pool, b.org, new(b.user, b.mentor, Scope::Account(b.ramp))).await;
+    let before = table(&pool).await;
 
-    // Spec 02 T14: deleting a leaf removes it and the assignments scoped to it.
-    accounts::delete(&pool, scope(a.org), a.ramp).await.unwrap();
+    // Spec 02 B21, spec 09 B15: assignments at the account refuse its deletion.
+    let refused = accounts::delete(&pool, scope(a.org), a.ramp).await;
+    assert!(
+        matches!(refused, Err(accounts::Error::HasAssignments)),
+        "{refused:?}"
+    );
+    assert_eq!(table(&pool).await, before);
+    assert!(
+        accounts::get(&pool, scope(a.org), a.ramp)
+            .await
+            .unwrap()
+            .is_some()
+    );
 
-    let left: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM role_assignments ORDER BY id")
-        .fetch_all(&pool)
+    role_assignments::delete(&pool, scope(a.org), at_ramp.id)
         .await
         .unwrap();
-    assert_eq!(left, [at_ground.id, at_org.id, in_b.id]);
-    assert!(
-        !left.contains(&at_ramp.id),
-        "the assignment at Ramp went with it"
-    );
+    accounts::delete(&pool, scope(a.org), a.ramp)
+        .await
+        .expect("no assignment is scoped to Ramp now");
+    accounts::delete(&pool, scope(b.org), b.ground)
+        .await
+        .expect_err("org B's Ground still has Ramp below it");
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
@@ -572,7 +579,7 @@ async fn a_create_waiting_on_a_delete_of_its_account_is_refused(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn a_delete_waiting_on_a_create_at_its_account_deletes_the_new_assignment(pool: PgPool) {
+async fn a_delete_waiting_on_a_create_at_its_account_is_refused(pool: PgPool) {
     let a = facility(&pool, "org-a").await;
     let mut creating = begin(&pool).await;
     let assignment = new(a.user, a.mentor, Scope::Account(a.ramp));
@@ -586,14 +593,22 @@ async fn a_delete_waiting_on_a_create_at_its_account_deletes_the_new_assignment(
     until_a_call_waits_on_a_lock(&pool).await;
     creating.commit().await.unwrap();
 
-    deleting
-        .await
-        .expect("the delete ran")
-        .expect("the delete succeeds");
+    let deleted = deleting.await.expect("the delete ran");
 
     assert!(
-        table(&pool).await.is_empty(),
-        "no assignment points at the deleted account"
+        matches!(deleted, Err(accounts::Error::HasAssignments)),
+        "{deleted:?}"
+    );
+    assert!(
+        accounts::get(&pool, scope(a.org), a.ramp)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        table(&pool).await.len(),
+        1,
+        "the new assignment points at a kept account"
     );
 }
 

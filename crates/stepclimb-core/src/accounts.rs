@@ -92,6 +92,9 @@ pub enum Error {
     /// The account still has child accounts (B21).
     #[error("an account with child accounts cannot be deleted")]
     HasChildren,
+    /// Role assignments are still scoped to the account (B21, spec 09 B15).
+    #[error("an account that role assignments are scoped to cannot be deleted")]
+    HasAssignments,
     /// The create or move would put an account deeper than [`MAX_DEPTH`].
     #[error("accounts cannot be nested deeper than {MAX_DEPTH} levels below the root")]
     TooDeep,
@@ -175,6 +178,25 @@ pub async fn ancestors_path(
         id,
     )
     .fetch_optional(db)
+    .await?;
+    path.map(|path| parse_path(&path).ok_or(Error::CorruptPath { id }))
+        .transpose()
+}
+
+/// [`ancestors_path`] for a caller about to change the account `id` in its transaction: reads
+/// the row `FOR UPDATE`, so the path cannot change until the transaction ends. A move in
+/// progress over the account is waited for, and the path it committed is the one returned.
+pub async fn lock_path(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    id: Uuid,
+) -> Result<Option<Vec<Uuid>>, Error> {
+    let path = sqlx::query_scalar!(
+        r#"SELECT path::text AS "path!" FROM accounts WHERE org_id = $1 AND id = $2 FOR UPDATE"#,
+        scope.org_id(),
+        id,
+    )
+    .fetch_optional(conn)
     .await?;
     path.map(|path| parse_path(&path).ok_or(Error::CorruptPath { id }))
         .transpose()
@@ -529,12 +551,14 @@ async fn rewrite_subtree(
 }
 
 /// Delete the account `id` of the scope's organization (B21). Refuses the root
-/// ([`Error::RootImmutable`]) and an account with child accounts ([`Error::HasChildren`]).
+/// ([`Error::RootImmutable`]), an account with child accounts ([`Error::HasChildren`]) and an
+/// account that role assignments are scoped to ([`Error::HasAssignments`], spec 09 B15).
 ///
-/// Runs in one transaction (a savepoint when `db` is already one) under the tree lock. In the
-/// same transaction it deletes the role assignments scoped to the account (B21, spec 09 B15),
-/// after the account row: the row delete waits for a `role_assignments::create` holding the
-/// account `FOR KEY SHARE`, so an assignment that create commits is deleted too.
+/// Runs in one transaction (a savepoint when `db` is already one) under the tree lock. It locks
+/// the account row `FOR UPDATE` before looking for assignments: that waits for a
+/// `role_assignments::create` holding the account `FOR KEY SHARE`, so an assignment that create
+/// commits is seen and refuses the delete, and a create that starts later waits for the delete
+/// and then finds the account gone.
 pub async fn delete<'c>(
     db: impl Acquire<'c, Database = Postgres>,
     scope: OrgScope,
@@ -549,6 +573,12 @@ pub async fn delete<'c>(
     if account.has_children {
         return Err(Error::HasChildren);
     }
+    lock_path(&mut tx, scope, id)
+        .await?
+        .ok_or(Error::NotFound)?;
+    if role_assignments::any_at_account(&mut tx, scope, id).await? {
+        return Err(Error::HasAssignments);
+    }
     sqlx::query!(
         "DELETE FROM accounts WHERE org_id = $1 AND id = $2",
         scope.org_id(),
@@ -556,7 +586,6 @@ pub async fn delete<'c>(
     )
     .execute(&mut *tx)
     .await?;
-    role_assignments::delete_for_account(&mut tx, scope, id).await?;
     tx.commit().await?;
     Ok(())
 }

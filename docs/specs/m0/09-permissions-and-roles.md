@@ -137,8 +137,10 @@ organizations' ids.
   `role_assignment.externally_managed`). Removing the last organization-scope Organization admin
   assignment held by an `active` user answers 409 `role_assignment.last_org_admin`; recovery from a
   lost admin is `stepclimb admin create` (`02-organizations-and-accounts.md` B27).
-- **B15.** Deleting an account deletes the assignments scoped to it
-  (`02-organizations-and-accounts.md` B21). Assignments are not deleted when a user is suspended;
+- **B15.** An account that assignments are scoped to cannot be deleted (409
+  `account.has_assignments`, `02-organizations-and-accounts.md` B21); they are removed first
+  through the assignment routes, which apply B14 and the externally-managed rules. Coordinator
+  decision (2026-11-13): this replaces deleting them with the account. Assignments are not deleted when a user is suspended;
   a suspended user's requests fail authentication before any permission check.
 
 ### Evaluating permissions
@@ -302,7 +304,7 @@ row whose role has an `org_id` other than the row's. A `BEFORE UPDATE` trigger
 never moves between organizations or kinds after it is assigned (coordinator decision, 13 Nov
 2026). `scope_id` has no foreign key because it
 points at different tables by `scope_type`; the repository checks it (B12 step 3) and account
-deletion removes the rows (B15). The courses spec (M1) adds its own deletion rule.
+deletion refuses an account that rows still point at (B15). The courses spec (M1) adds its own deletion rule.
 
 Repository modules (every function takes `OrgScope`, except the built-in sync, commented):
 `stepclimb_core::roles` (`list`, `get`, `create_custom`, `update_custom`, `delete_custom`,

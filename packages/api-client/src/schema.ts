@@ -553,6 +553,15 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `permission.denied`: you hold `account.manage` nowhere, or you can see the parent without holding it there. `auth.csrf_refused`: the request did not come from this site. */
+        CreateForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `auth.csrf_refused`: an unsafe request without a bearer credential did not come from this site: `Sec-Fetch-Site` is not `same-origin`, `Origin` is sent but is not an allowed origin, or neither header is sent. */
         CsrfRefused: {
             headers: {
@@ -598,7 +607,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `permission.denied`: you can see the account but do not hold `account.manage` at a scope containing it (for a create, the parent; for a move or delete, the account's parent). `auth.csrf_refused`: the request did not come from this site. */
+        /** @description `permission.denied`: you can see the account but do not hold `account.manage` at a scope containing it (for a delete, the account's parent). `auth.csrf_refused`: the request did not come from this site. */
         ManageForbidden: {
             headers: {
                 [name: string]: unknown;
@@ -618,6 +627,15 @@ export interface components {
         };
         /** @description `account.root_immutable`: the root account cannot be moved. `account.move_into_descendant`: the destination is the account itself or one of its descendants. `account.too_deep`: an account of the moved subtree would end more than 16 levels below the root. */
         MoveConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: you can see the account's parent but do not hold `account.manage` there. `permission.escalation`: the destination would give you, over the moved account, a permission you do not hold over it now. `auth.csrf_refused`: the request did not come from this site. */
+        MoveForbidden: {
             headers: {
                 [name: string]: unknown;
             };
@@ -841,7 +859,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
-            403: components["responses"]["ManageForbidden"];
+            403: components["responses"]["CreateForbidden"];
             404: components["responses"]["ParentNotFound"];
             409: components["responses"]["CreateConflict"];
             413: components["responses"]["PayloadTooLarge"];
@@ -971,7 +989,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
-            403: components["responses"]["ManageForbidden"];
+            403: components["responses"]["MoveForbidden"];
             404: components["responses"]["MoveNotFound"];
             409: components["responses"]["MoveConflict"];
             413: components["responses"]["PayloadTooLarge"];

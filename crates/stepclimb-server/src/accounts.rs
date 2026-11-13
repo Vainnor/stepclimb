@@ -8,14 +8,18 @@
 //! needs it over the account; moving and deleting need it over the account's parent, so a holder
 //! at A reaches only A's strict descendants, and a move also needs it over the destination. A
 //! destination outside every subtree where the caller holds `account.manage` answers 404, as an
-//! id the caller cannot see does.
+//! id the caller cannot see does. A move may not give the caller a permission over the moved
+//! account it lacks there now (403 `permission.escalation`): every grant on the destination's
+//! path contains the account after the move. Deleting refuses an account that role assignments
+//! are scoped to; the role-assignment routes remove them.
 //!
 //! The `Require` extractor checks the path's account before the handler runs. Create, move and
 //! delete then check again, inside the transaction that holds the organization's tree lock
 //! (`stepclimb_core::accounts::lock_tree`), on the paths read under that lock, and write in the
 //! same transaction: a concurrent move that commits between the extractor's check and the write
 //! cannot carry the account, its parent or the destination out of the caller's reach unseen.
-//! Renames take no lock (B22) and are checked by the extractor only.
+//! Renames take no tree lock (B22): they read the account row `FOR UPDATE`, which waits for a
+//! move in progress over it, check its path again and rename in the same transaction.
 
 use axum::{
     Json,
@@ -30,7 +34,7 @@ use stepclimb_core::{
     accounts::{self, Reach},
     grants::{Denied, Grants, ScopeId, Target},
     id::Uuid,
-    perm::{AccountManage, AccountView},
+    perm::{self, AccountManage, AccountView},
 };
 use utoipa::{IntoParams, ToSchema};
 
@@ -42,7 +46,7 @@ use crate::{
     organization::present,
     pagination::{Page, PageParams},
     require::{AccountParentTarget, AccountTarget, AnyScope, Require, check_at_parent},
-    roles::code::{NAME_EMPTY, NAME_TOO_LONG, TEXT_CONTAINS_NUL},
+    roles::code::{NAME_EMPTY, NAME_TOO_LONG, PERMISSION_ESCALATION, TEXT_CONTAINS_NUL},
     timestamp,
 };
 
@@ -57,6 +61,8 @@ pub mod code {
     pub const ACCOUNT_MOVE_INTO_DESCENDANT: &str = "account.move_into_descendant";
     /// The account still has child accounts (409).
     pub const ACCOUNT_HAS_CHILDREN: &str = "account.has_children";
+    /// Role assignments are still scoped to the account (409).
+    pub const ACCOUNT_HAS_ASSIGNMENTS: &str = "account.has_assignments";
     /// The create or move would put an account more than 16 levels below the root (409).
     pub const ACCOUNT_TOO_DEEP: &str = "account.too_deep";
 }
@@ -66,10 +72,12 @@ problem_responses! {
     ParentNotFound => "`account.not_found`: no account with `parent_id` exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined.",
     MoveNotFound => "`account.not_found`: the account does not exist or you cannot see its parent, or the destination `parent_id` does not exist or is outside every subtree where you hold `account.manage`. `org.not_found`: the request's organization cannot be determined.",
     DeleteNotFound => "`account.not_found`: the account does not exist or you cannot see its parent. `org.not_found`: the request's organization cannot be determined.",
-    ManageForbidden => "`permission.denied`: you can see the account but do not hold `account.manage` at a scope containing it (for a create, the parent; for a move or delete, the account's parent). `auth.csrf_refused`: the request did not come from this site.",
+    CreateForbidden => "`permission.denied`: you hold `account.manage` nowhere, or you can see the parent without holding it there. `auth.csrf_refused`: the request did not come from this site.",
+    ManageForbidden => "`permission.denied`: you can see the account but do not hold `account.manage` at a scope containing it (for a delete, the account's parent). `auth.csrf_refused`: the request did not come from this site.",
+    MoveForbidden => "`permission.denied`: you can see the account's parent but do not hold `account.manage` there. `permission.escalation`: the destination would give you, over the moved account, a permission you do not hold over it now. `auth.csrf_refused`: the request did not come from this site.",
     CreateConflict => "`account.too_deep`: the new account would be more than 16 levels below the root.",
     MoveConflict => "`account.root_immutable`: the root account cannot be moved. `account.move_into_descendant`: the destination is the account itself or one of its descendants. `account.too_deep`: an account of the moved subtree would end more than 16 levels below the root.",
-    DeleteConflict => "`account.root_immutable`: the root account cannot be deleted. `account.has_children`: the account has child accounts; move or delete them first.",
+    DeleteConflict => "`account.root_immutable`: the root account cannot be deleted. `account.has_children`: the account has child accounts; move or delete them first. `account.has_assignments`: role assignments are scoped to the account; remove them first.",
 }
 
 /// An account of the caller's organization.
@@ -265,7 +273,7 @@ pub async fn get_account(
         ),
         (status = 400, response = crate::openapi::BadRequest),
         (status = 401, response = crate::openapi::Unauthenticated),
-        (status = 403, response = ManageForbidden),
+        (status = 403, response = CreateForbidden),
         (status = 404, response = ParentNotFound),
         (status = 409, response = CreateConflict),
         (status = 413, response = crate::openapi::PayloadTooLarge),
@@ -329,13 +337,24 @@ pub async fn update_account(
     ApiJson(body): ApiJson<AccountPatch>,
 ) -> Result<Json<Account>, ApiError> {
     let (scope, id) = (require.principal().scope(), require.target().id);
+    let mut tx = begin(&state).await?;
+    // The extractor's check again, on the path as the locked row holds it: a move committed
+    // since cannot have carried the account out of the caller's reach unseen.
+    let path = accounts::lock_path(&mut tx, scope, id)
+        .await
+        .map_err(account_error)?
+        .ok_or(Denied::AccountNotFound)?;
+    require
+        .grants()
+        .check::<AccountManage>(&Target::Account(path))?;
     let account = match body.name {
-        Some(name) => accounts::rename(&state.db, scope, id, &name, state.clock.now()).await,
-        None => accounts::get(&state.db, scope, id)
+        Some(name) => accounts::rename(&mut *tx, scope, id, &name, state.clock.now()).await,
+        None => accounts::get(&mut *tx, scope, id)
             .await
             .and_then(|found| found.ok_or(accounts::Error::NotFound)),
     }
     .map_err(account_error)?;
+    commit(tx).await?;
     Ok(Json(Account::from_repo(account)?))
 }
 
@@ -352,7 +371,7 @@ pub async fn update_account(
         (status = 200, description = "The account after the move", body = Account),
         (status = 400, response = crate::openapi::BadRequest),
         (status = 401, response = crate::openapi::Unauthenticated),
-        (status = 403, response = ManageForbidden),
+        (status = 403, response = MoveForbidden),
         (status = 404, response = MoveNotFound),
         (status = 409, response = MoveConflict),
         (status = 413, response = crate::openapi::PayloadTooLarge),
@@ -368,8 +387,9 @@ pub async fn move_account(
 ) -> Result<Json<Account>, ApiError> {
     let (scope, id) = (require.principal().scope(), require.target().id);
     let mut tx = locked_tree(&state, scope).await?;
-    check_movable(&mut tx, require.grants(), id).await?;
-    check_destination(&mut tx, require.grants(), body.parent_id).await?;
+    let from = check_movable(&mut tx, require.grants(), id).await?;
+    let to = check_destination(&mut tx, require.grants(), body.parent_id).await?;
+    refuse_escalation(require.grants(), id, &from, &to)?;
     let now = state.clock.now();
     let moved = accounts::move_to(&mut *tx, scope, id, body.parent_id, now)
         .await
@@ -411,16 +431,20 @@ pub async fn delete_account(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn begin(state: &AppState) -> Result<Transaction<'static, Postgres>, ApiError> {
+    state
+        .db
+        .begin()
+        .await
+        .map_err(|error| ApiError::internal(&error))
+}
+
 /// A transaction holding the scope's tree lock, for checks that must still hold at the write.
 async fn locked_tree(
     state: &AppState,
     scope: OrgScope,
 ) -> Result<Transaction<'static, Postgres>, ApiError> {
-    let mut tx = state
-        .db
-        .begin()
-        .await
-        .map_err(|error| ApiError::internal(&error))?;
+    let mut tx = begin(state).await?;
     accounts::lock_tree(&mut tx, scope)
         .await
         .map_err(account_error)?;
@@ -436,34 +460,65 @@ async fn commit(tx: Transaction<'static, Postgres>) -> Result<(), ApiError> {
 /// The extractor's `AccountParentTarget` check again, on the account's path as the locked
 /// transaction reads it: 404 when the account is gone or its parent is out of the caller's
 /// reach, 403 when the parent is visible without `account.manage`, and 409 for the root, which
-/// only a holder at organization scope gets this far with.
-async fn check_movable(conn: &mut PgConnection, grants: &Grants, id: Uuid) -> Result<(), ApiError> {
+/// only a holder at organization scope gets this far with. Returns the account's path.
+async fn check_movable(
+    conn: &mut PgConnection,
+    grants: &Grants,
+    id: Uuid,
+) -> Result<Vec<Uuid>, ApiError> {
     let path = accounts::ancestors_path(&mut *conn, grants.scope(), id)
         .await
         .map_err(account_error)?
         .ok_or(Denied::AccountNotFound)?;
-    match check_at_parent::<AccountManage>(grants, path)? {
-        Some(_) => Ok(()),
+    match check_at_parent::<AccountManage>(grants, path.clone())? {
+        Some(_) => Ok(path),
         None => Err(account_error(accounts::Error::RootImmutable)),
     }
 }
 
 /// The destination of a move, as the locked transaction reads it: 404 unless it exists and the
-/// caller holds `account.manage` at a scope containing it (B23).
+/// caller holds `account.manage` at a scope containing it (B23). Returns its path.
 async fn check_destination(
     conn: &mut PgConnection,
     grants: &Grants,
     parent_id: Uuid,
-) -> Result<(), ApiError> {
+) -> Result<Vec<Uuid>, ApiError> {
     let path = accounts::ancestors_path(&mut *conn, grants.scope(), parent_id)
         .await
         .map_err(account_error)?
         .ok_or(Denied::AccountNotFound)?;
-    if grants.holds::<AccountManage>(&Target::Account(path)) {
-        Ok(())
+    if grants.holds::<AccountManage>(&Target::Account(path.clone())) {
+        Ok(path)
     } else {
         Err(Denied::AccountNotFound.into())
     }
+}
+
+/// 403 `permission.escalation` when moving the account `id` (path `from`) under the account at
+/// `to` would give the caller a permission over it they do not hold over it now (B23): after
+/// the move, every grant on the destination's path contains the account and its subtree. A
+/// destination inside the account's own subtree is left to the repository's 409.
+fn refuse_escalation(
+    grants: &Grants,
+    id: Uuid,
+    from: &[Uuid],
+    to: &[Uuid],
+) -> Result<(), ApiError> {
+    if to.contains(&id) {
+        return Ok(());
+    }
+    let (now, after) = (Target::Account(from.to_vec()), Target::Account(to.to_vec()));
+    let gained = perm::ALL
+        .iter()
+        .any(|p| grants.holds_key(p.key(), &after) && !grants.holds_key(p.key(), &now));
+    if !gained {
+        return Ok(());
+    }
+    Err(ApiError::new(
+        StatusCode::FORBIDDEN,
+        PERMISSION_ESCALATION,
+        "The destination would give you permissions over this account that you do not hold over it now.",
+    ))
 }
 
 /// The answer for an accounts repository error.
@@ -487,6 +542,10 @@ fn account_error(error: accounts::Error) -> ApiError {
         E::HasChildren => conflict(
             code::ACCOUNT_HAS_CHILDREN,
             "The account has child accounts. Move or delete them first.",
+        ),
+        E::HasAssignments => conflict(
+            code::ACCOUNT_HAS_ASSIGNMENTS,
+            "Role assignments are scoped to the account. Remove them first.",
         ),
         E::TooDeep => conflict(
             code::ACCOUNT_TOO_DEEP,
@@ -569,6 +628,12 @@ mod tests {
                 None,
             ),
             (accounts::Error::TooDeep, 409, "account.too_deep", None),
+            (
+                accounts::Error::HasAssignments,
+                409,
+                "account.has_assignments",
+                None,
+            ),
             (
                 accounts::Error::NameEmpty,
                 422,

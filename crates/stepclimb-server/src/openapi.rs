@@ -5,8 +5,8 @@
 //! TypeScript client (`packages/api-client`) and fails when either differs from what is
 //! committed. Today it lists the operations probes, which the web app's skeleton route calls
 //! through the generated client, sign-out, `GET /api/v1/me`, the caller's organization and its
-//! settings, the account tree, the permission catalog and roles routes under `/api/v1/admin`, and the shared error
-//! schemas and responses below. The other M0 specs add their endpoints under `/api/v1`.
+//! settings, the account tree, the permission catalog and roles routes under `/api/v1/admin`,
+//! and the shared error schemas and responses below. The other M0 specs add their endpoints under `/api/v1`.
 //!
 //! Every `/api/v1` operation lists its errors in `#[utoipa::path]` (spec 02 B6). The errors
 //! common to every operation reference the responses here, such as
@@ -109,7 +109,9 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             accounts::ParentNotFound,
             accounts::MoveNotFound,
             accounts::DeleteNotFound,
+            accounts::CreateForbidden,
             accounts::ManageForbidden,
+            accounts::MoveForbidden,
             accounts::CreateConflict,
             accounts::MoveConflict,
             accounts::DeleteConflict,

@@ -6,13 +6,13 @@
 //! table keeps the user in the row's organization (a composite foreign key), the role built-in
 //! or the organization's own (the `role_assignments_role_in_org` trigger), and an organization
 //! scope pointing at the row's organization (a check). `scope_id` has no foreign key, so
-//! [`create`] checks that an account scope exists, and `accounts::delete` deletes the
-//! assignments of the account it deletes (B15) through [`delete_for_account`].
+//! [`create`] checks that an account scope exists, and `accounts::delete` refuses an account
+//! that assignments are still scoped to (B15), which it learns through [`any_at_account`].
 //!
 //! Account deletion and [`create`] at an account cannot cross: [`create`] reads the account
 //! `FOR KEY SHARE`, which waits for a delete of that account in progress and then finds it gone,
-//! and `accounts::delete` deletes the account row before its assignments, so it waits for a
-//! create in progress and then deletes the new assignment too.
+//! and `accounts::delete` locks the account row `FOR UPDATE` before looking for assignments, so
+//! it waits for a create in progress and then sees the new assignment.
 //!
 //! Who may assign which role where (B12 steps 4 and 5, B13, B14) is the routes' to decide, as is
 //! refusing changes to an assignment an outside source owns; the sync API (M4) writes those
@@ -352,22 +352,22 @@ pub async fn delete(db: impl PgExecutor<'_>, scope: OrgScope, id: Uuid) -> Resul
     Ok(())
 }
 
-/// Delete every assignment scoped to the account `account_id` of the scope's organization, for
-/// `accounts::delete` in its transaction (B15, spec 02 B21).
-pub(crate) async fn delete_for_account(
+/// Whether any assignment is scoped to the account `account_id` of the scope's organization,
+/// for `accounts::delete` in its transaction (B15, spec 02 B21).
+pub(crate) async fn any_at_account(
     conn: &mut PgConnection,
     scope: OrgScope,
     account_id: Uuid,
-) -> Result<(), sqlx::Error> {
-    sqlx::query!(
-        "DELETE FROM role_assignments
-         WHERE org_id = $1 AND scope_type = 'account' AND scope_id = $2",
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+               SELECT 1 FROM role_assignments
+               WHERE org_id = $1 AND scope_type = 'account' AND scope_id = $2) AS "any!""#,
         scope.org_id(),
         account_id,
     )
-    .execute(conn)
-    .await?;
-    Ok(())
+    .fetch_one(conn)
+    .await
 }
 
 /// Every assignment of the user `user_id` in the scope's organization with its role's key and
