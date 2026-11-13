@@ -451,6 +451,11 @@ async fn t6_a_body_that_breaks_a_rule_answers_422_at_the_member(pool: PgPool) {
             "role.unknown_permission",
         ),
         (
+            json!({ "key": "r", "name": "R", "permissions": ["user.view", "role.view", "user.view"] }),
+            "/permissions/2",
+            "role.duplicate_permission",
+        ),
+        (
             json!({ "key": "Tower-Mentor", "name": "R", "permissions": [] }),
             "/key",
             "role.key_invalid",
@@ -607,6 +612,31 @@ async fn patch_changes_the_named_members_and_sets_updated_at(pool: PgPool) {
             "role.unknown_permission".to_owned()
         )]
     );
+    // A repeated key, however long the list: refused at the first repeat, nothing stored.
+    let mut repeated = vec!["user.view"; 100_000];
+    repeated[0] = "account.view";
+    let answer = f
+        .send(
+            Method::PATCH,
+            &role_uri(role),
+            &admin,
+            Some(json!({ "permissions": repeated })),
+        )
+        .await;
+    assert_eq!(answer.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        answer.errors(),
+        [(
+            "/permissions/2".to_owned(),
+            "role.duplicate_permission".to_owned()
+        )]
+    );
+    let stored: Vec<String> = sqlx::query_scalar("SELECT permissions FROM roles WHERE id = $1")
+        .bind(role)
+        .fetch_one(&f.pool)
+        .await
+        .expect("the role");
+    assert_eq!(stored, ["user.view"]);
 }
 
 /// B9 with the escalation rule: a change may not add or drop a permission the caller does not

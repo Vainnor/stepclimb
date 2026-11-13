@@ -93,7 +93,10 @@ organizations' ids.
   built-in key (409 `role.key_taken`); the key format is pending Q7. Its name is trimmed, not
   empty and at most 200 characters, the rule `02-organizations-and-accounts.md` Q6 sets for
   organization and account names (coordinator decision, 13 Nov 2026). Every permission must be in
-  `perm::ALL` (422, `errors[].code = "role.unknown_permission"`, field `/permissions/<i>`). The
+  `perm::ALL` (422, `errors[].code = "role.unknown_permission"`, field `/permissions/<i>`) and
+  appear at most once (422, `errors[].code = "role.duplicate_permission"`, field
+  `/permissions/<i>` of the repeat), which bounds a list at the catalog's length (coordinator
+  decision, 13 Nov 2026). The
   creator must hold every permission they put in the role at organization scope (403
   `permission.escalation`), so `RoleManage` alone does not let anyone mint a stronger role.
 - **B9.** Changing a custom role's `name` or `permissions` follows B8's checks and takes effect
@@ -101,7 +104,10 @@ organizations' ids.
   covers every permission the role gains and every permission it loses; a permission the new list
   keeps is not checked, and a change of `name` alone checks none. The route locks the role's row
   for the check and the write, so the list it checks is the list it replaces (coordinator
-  decision, 13 Nov 2026). A stored permission key that a later release removed
+  decision, 13 Nov 2026). A consequence: a `role.manage` holder who holds a permission K at
+  organization scope can add K to a custom role that is already assigned, which gives K to every
+  current holder at their assignment's scope (accounts included), without holding
+  `role.assign`. A stored permission key that a later release removed
   from the catalog is ignored when evaluating and logged once per startup at `warn`.
 - **B10.** A custom role with any assignment cannot be deleted (409 `role.in_use`); the caller
   removes the assignments first.
@@ -233,7 +239,8 @@ custom (404 `role.not_found`, 409 `role.builtin_immutable`); the escalation rule
 `permission.escalation`, which skips a key outside the catalog); then the role's own rules (422
 `request.invalid`, 409 `role.key_taken`, 409 `role.in_use`). A body member the schema does not
 name answers 400 `request.malformed`. A 422 lists the first rule the body breaks, with the field
-codes `role.key_invalid` (`/key`), `role.unknown_permission` (`/permissions/<i>`), `name.empty`
+codes `role.key_invalid` (`/key`), `role.unknown_permission` and `role.duplicate_permission`
+(`/permissions/<i>`), `name.empty`
 and `name.too_long` (`/name`), and `text.contains_nul` (the member holding NUL). `created_at` and
 `updated_at` are RFC 3339 in UTC with six fractional digits (`2025-11-13T02:13:20.000000Z`)
 (coordinator decision, 13 Nov 2026).
@@ -378,11 +385,8 @@ entitlement feature (a `Require<Feature>` on the role-writing routes) is
 - Entitlement checks: `10-entitlements-framework.md`.
 - The role and assignment admin screens: a later UI spec on `11-app-shell.md` and
   `13-base-ui-components.md`.
-- Audit entries for role and assignment changes: Q5 is answered (add `audit_events` in M0), but
-  no issue of this spec or another M0 spec delivers the table, and its schema and writers reach
-  past this spec (accounts, user status, organization settings, spec 08's service accounts). The
-  roles routes (I5) write none; an issue of its own adds the table and the entries for every
-  change Q5 names (coordinator decision, 13 Nov 2026).
+- Audit entries for role and assignment changes: Q5's entries are delivered by #136 (the issue
+  that adds `audit_events`), which also adds the entries to the roles routes.
 
 ## Open questions
 

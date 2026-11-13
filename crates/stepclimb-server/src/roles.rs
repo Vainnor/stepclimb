@@ -12,6 +12,8 @@
 //! repository (`stepclimb_core::roles`) checks the role itself: key format, unique key, name,
 //! catalog keys, built-in roles immutable, no delete while assigned.
 
+use std::collections::BTreeSet;
+
 use axum::{
     Json,
     extract::State,
@@ -57,6 +59,8 @@ pub mod code {
     pub const ROLE_KEY_INVALID: &str = "role.key_invalid";
     /// In a 422's `errors`: the permission is not in the catalog.
     pub const ROLE_UNKNOWN_PERMISSION: &str = "role.unknown_permission";
+    /// In a 422's `errors`: the permission repeats an earlier entry of the list.
+    pub const ROLE_DUPLICATE_PERMISSION: &str = "role.duplicate_permission";
     /// In a 422's `errors`: the name is empty once trimmed.
     pub const NAME_EMPTY: &str = "name.empty";
     /// In a 422's `errors`: the name is longer than 200 characters once trimmed.
@@ -145,8 +149,8 @@ pub struct NewRole {
     pub key: String,
     /// Trimmed; 1 to 200 characters.
     pub name: String,
-    /// Catalog keys (`GET /api/v1/admin/permissions`), each held by the caller at organization
-    /// scope.
+    /// Catalog keys (`GET /api/v1/admin/permissions`), each at most once and each held by the
+    /// caller at organization scope.
     pub permissions: Vec<String>,
 }
 
@@ -157,8 +161,8 @@ pub struct RolePatch {
     /// Trimmed; 1 to 200 characters.
     #[serde(default)]
     pub name: Option<String>,
-    /// The role's whole new list. The caller must hold at organization scope every key it adds
-    /// and every key it drops.
+    /// The role's whole new list, each catalog key at most once. The caller must hold at
+    /// organization scope every key it adds and every key it drops.
     #[serde(default)]
     pub permissions: Option<Vec<String>>,
 }
@@ -424,12 +428,15 @@ fn refuse_escalation(grants: &Grants, keys: &[String]) -> Result<(), ApiError> {
     ))
 }
 
-/// The keys a role gains or loses when its list `from` becomes `to`. A key in both is neither:
-/// keeping a permission the caller lacks grants no one anything new.
+/// The keys a role gains or loses when its list `from` becomes `to`, sorted. A key in both is
+/// neither: keeping a permission the caller lacks grants no one anything new. `to` is the
+/// request's list and is not validated yet, so the sets keep this O(n log n) however long it is.
 fn changed_keys(from: &[String], to: &[String]) -> Vec<String> {
-    let gained = to.iter().filter(|key| !from.contains(key));
-    let lost = from.iter().filter(|key| !to.contains(key));
-    gained.chain(lost).cloned().collect()
+    let from: BTreeSet<&String> = from.iter().collect();
+    let to: BTreeSet<&String> = to.iter().collect();
+    from.symmetric_difference(&to)
+        .map(|key| (*key).clone())
+        .collect()
 }
 
 fn role_not_found() -> ApiError {
@@ -468,6 +475,10 @@ fn role_error(error: roles::Error) -> ApiError {
         E::UnknownPermission { index } => invalid(
             &["permissions", &index.to_string()],
             code::ROLE_UNKNOWN_PERMISSION,
+        ),
+        E::DuplicatePermission { index } => invalid(
+            &["permissions", &index.to_string()],
+            code::ROLE_DUPLICATE_PERMISSION,
         ),
         other @ (E::BuiltinKeyConflict { .. } | E::Time(_) | E::Database(_)) => {
             ApiError::internal(&other)
@@ -539,8 +550,14 @@ mod tests {
             keys(&["role.view", "user.view"])
         );
         assert!(changed_keys(&from, &keys(&["user.manage", "user.view"])).is_empty());
-        assert_eq!(changed_keys(&from, &[]), from);
-        assert_eq!(changed_keys(&[], &from), from);
+        let sorted = keys(&["user.manage", "user.view"]);
+        assert_eq!(changed_keys(&from, &[]), sorted);
+        assert_eq!(changed_keys(&[], &from), sorted);
+        // A repeated key in the request changes nothing by being repeated.
+        assert_eq!(
+            changed_keys(&from, &keys(&["user.view", "user.view", "user.manage"])),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
@@ -584,6 +601,12 @@ mod tests {
                 422,
                 "request.invalid",
                 Some(("/permissions/3", "role.unknown_permission")),
+            ),
+            (
+                roles::Error::DuplicatePermission { index: 2 },
+                422,
+                "request.invalid",
+                Some(("/permissions/2", "role.duplicate_permission")),
             ),
         ];
         for (error, status, code, field) in cases {

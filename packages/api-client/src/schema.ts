@@ -141,8 +141,8 @@ export interface components {
             /** @description Trimmed; 1 to 200 characters. */
             name: string;
             /**
-             * @description Catalog keys (`GET /api/v1/admin/permissions`), each held by the caller at organization
-             *     scope.
+             * @description Catalog keys (`GET /api/v1/admin/permissions`), each at most once and each held by the
+             *     caller at organization scope.
              */
             permissions: string[];
         };
@@ -223,8 +223,8 @@ export interface components {
             /** @description Trimmed; 1 to 200 characters. */
             name?: string | null;
             /**
-             * @description The role's whole new list. The caller must hold at organization scope every key it adds
-             *     and every key it drops.
+             * @description The role's whole new list, each catalog key at most once. The caller must hold at
+             *     organization scope every key it adds and every key it drops.
              */
             permissions?: string[] | null;
         };

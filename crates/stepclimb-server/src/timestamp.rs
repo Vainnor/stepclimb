@@ -7,8 +7,8 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// A time before 1970 or after 9999, which RFC 3339's four-digit year cannot write and which no
-/// row the repositories read holds.
+/// A time before 1970, which this formatter does not handle and no row holds, or after 9999,
+/// which a four-digit year cannot write.
 #[derive(Debug, thiserror::Error)]
 #[error("the time cannot be written as an RFC 3339 timestamp")]
 pub struct Unrepresentable;
@@ -93,7 +93,7 @@ mod tests {
 
     #[test]
     fn every_day_follows_the_previous_one() {
-        // Each day of 1970 to 2400 is the day after the one before it, so no month length or
+        // Each day of 1970 to 2399 is the day after the one before it, so no month length or
         // leap rule is skipped.
         let mut previous = civil_from_days(0);
         assert_eq!(previous, (1970, 1, 1));
