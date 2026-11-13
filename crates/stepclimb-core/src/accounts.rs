@@ -99,6 +99,9 @@ pub enum Error {
     /// lock does not protect the tree (see the module documentation).
     #[error("the account tree can be changed only at READ COMMITTED isolation, not {found}")]
     IsolationLevel { found: String },
+    /// A stored path holds a label that is not an account id, which no function here writes.
+    #[error("account {id} has a stored path that is not a list of account ids")]
+    CorruptPath { id: Uuid },
     /// A time that cannot be stored or read.
     #[error(transparent)]
     Time(#[from] TimeOutOfRange),
@@ -156,6 +159,32 @@ pub async fn get(
     .await?
     .map(Account::try_from)
     .transpose()
+}
+
+/// The ids on the path of the account `id` of the scope's organization, the root first and the
+/// account itself last, or `None` when the organization has no such account. The permission
+/// evaluator reads it to decide which grants contain the account (spec 09 B17, B18).
+pub async fn ancestors_path(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    id: Uuid,
+) -> Result<Option<Vec<Uuid>>, Error> {
+    let path = sqlx::query_scalar!(
+        r#"SELECT path::text AS "path!" FROM accounts WHERE org_id = $1 AND id = $2"#,
+        scope.org_id(),
+        id,
+    )
+    .fetch_optional(db)
+    .await?;
+    path.map(|path| parse_path(&path).ok_or(Error::CorruptPath { id }))
+        .transpose()
+}
+
+/// The account ids of a stored path, or `None` when a label is not an id.
+pub(crate) fn parse_path(path: &str) -> Option<Vec<Uuid>> {
+    path.split('.')
+        .map(|label| Uuid::try_parse(label).ok())
+        .collect()
 }
 
 /// The children of the account `parent_id` in the scope's organization, sorted by name then id,
@@ -539,6 +568,16 @@ mod tests {
                 .chars()
                 .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
         );
+    }
+
+    #[test]
+    fn a_path_parses_to_its_ids_in_order() {
+        let (root, tower) = (new_id(), new_id());
+        let path = format!("{}.{}", label(root), label(tower));
+        assert_eq!(parse_path(&path), Some(vec![root, tower]));
+        assert_eq!(parse_path(&label(root)), Some(vec![root]));
+        assert_eq!(parse_path("not_an_id"), None);
+        assert_eq!(parse_path(&format!("{}.x", label(root))), None);
     }
 
     #[test]

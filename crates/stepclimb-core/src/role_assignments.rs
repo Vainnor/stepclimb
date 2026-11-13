@@ -24,7 +24,7 @@ use sqlx::{Acquire, PgConnection, PgExecutor, Postgres};
 use uuid::Uuid;
 
 use crate::{
-    OrgScope, Source,
+    OrgScope, Source, accounts,
     db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
     id::new_id,
     roles,
@@ -401,9 +401,11 @@ pub async fn for_user_with_paths(
                 Scope::Course(id) => GrantScope::Course(id),
                 Scope::Account(id) => GrantScope::Account {
                     id,
-                    path: parse_path(row.path.as_deref()).ok_or(Error::MissingAccount {
-                        assignment_id: row.id,
-                    })?,
+                    path: row.path.as_deref().and_then(accounts::parse_path).ok_or(
+                        Error::MissingAccount {
+                            assignment_id: row.id,
+                        },
+                    )?,
                 },
             };
             Ok(UserGrant {
@@ -414,15 +416,6 @@ pub async fn for_user_with_paths(
                 scope,
             })
         })
-        .collect()
-}
-
-/// The account ids of an `ltree` path of 32-hex-digit labels, or `None` when there is no path
-/// or a label is not an id.
-fn parse_path(path: Option<&str>) -> Option<Vec<Uuid>> {
-    path?
-        .split('.')
-        .map(|label| Uuid::try_parse(label).ok())
         .collect()
 }
 
@@ -473,14 +466,5 @@ mod tests {
                 ..
             })
         ));
-    }
-
-    #[test]
-    fn a_path_parses_to_its_ids_in_order() {
-        let (root, tower) = (new_id(), new_id());
-        let path = format!("{}.{}", root.simple(), tower.simple());
-        assert_eq!(parse_path(Some(&path)), Some(vec![root, tower]));
-        assert_eq!(parse_path(None), None);
-        assert_eq!(parse_path(Some("not_an_id")), None);
     }
 }

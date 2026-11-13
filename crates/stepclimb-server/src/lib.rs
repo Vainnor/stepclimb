@@ -6,10 +6,11 @@
 //! (`POST /auth/sign-out`, [`auth`]), the OpenAPI document (`/api/openapi.json`) and its Scalar
 //! UI (`/docs`), and the built web SPA for every other path. No `/api/v1` endpoint exists yet;
 //! the M0 specs in `docs/specs/m0/` add them on the conventions in [`error`] (problem details),
-//! [`extract`] (extractors that reject with them) and [`pagination`] (cursor pages), and
+//! [`extract`] (extractors that reject with them) and [`pagination`] (cursor pages),
 //! authenticate them with [`session`] (the browser session cookie and the `Authenticated`
-//! extractor) within the organization [`request_org`] resolves. Every unsafe request passes
-//! [`csrf`] first.
+//! extractor) within the organization [`request_org`] resolves, and protect them with
+//! [`require`] (`Require<P, T>`, the permission check). Every unsafe request passes [`csrf`]
+//! first.
 
 pub mod app;
 pub mod auth;
@@ -22,6 +23,7 @@ pub mod healthcheck;
 pub mod openapi;
 pub mod pagination;
 pub mod request_org;
+pub mod require;
 pub mod session;
 pub mod spa;
 pub mod startup;
