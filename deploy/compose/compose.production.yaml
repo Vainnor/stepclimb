@@ -31,7 +31,9 @@
 #
 # The server is published on 127.0.0.1:8080 (SC_HTTP_ADDRESS and SC_HTTP_PORT change it), for a
 # reverse proxy on the same host to terminate TLS. PostgreSQL and MinIO are reachable only on the
-# internal `backend` network, which has no route out of the host.
+# internal `backend` network, which has no route out of the host. Such a proxy reaches the server
+# from the proxy network's gateway, .1, which the server does not trust, so its sign-in and token
+# rate limits (spec 08) count every client as one; trusting .1 needs a Compose override file.
 #
 # The tls profile adds Caddy (./Caddyfile), which serves SC_DOMAIN over HTTPS with an automatic
 # certificate on ports 80 and 443 of every address (SC_PROXY_ADDRESS, SC_PROXY_HTTP_PORT and
@@ -43,8 +45,9 @@
 #
 # Caddy and the server share the `proxy` network, a /24 whose first three octets are
 # SC_PROXY_NETWORK (default 10.201.73). Caddy always has address .2 on it, so the server's
-# trusted-proxy setting (STEPCLIMB_TRUSTED_PROXIES, spec 08) names that one address. Other containers get addresses
-# from .128 up, and clients on this host reach the server's published port from the gateway, .1.
+# trusted-proxy setting (STEPCLIMB_TRUSTED_PROXIES, spec 08) names that one address. Other
+# containers get addresses from .128 up, and clients on this host reach the server's published
+# port from the gateway, .1.
 # Change SC_PROXY_NETWORK if 10.201.73.0/24 is in use on this host.
 #
 # Caddy sees each client's real address only where Docker passes it through: rootful Docker does
