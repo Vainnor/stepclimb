@@ -13,10 +13,10 @@
 
 The repository skeleton, its toolchains, the `just ci` merge gate (run locally; there is no hosted
 CI, ADR 0021),
-Dependabot and the git hooks already exist; this spec records what they do (checked against the
+The git hooks already exist; this spec records what they do (checked against the
 files on 12 Nov 2026) so later changes have a baseline. It then specifies what M0 still needs
 for "Repo, CI, releases": the GitHub repository itself, the governance files the plan names, the
-`pnpm audit` gate, Dependabot for the Compose images, one version number with a check, and a
+`pnpm audit` gate, the monthly dependency update, one version number with a check, and a
 release recipe. What a release ships beyond a tagged GitHub Release is pending Q1.
 
 ## Behavior
@@ -59,12 +59,10 @@ release recipe. What a release ships beyond a tagged GitHub Release is pending Q
   `cargo deny` over the app's own workspace. It is not part of `just ci`; a change to `apps/app`
   runs it. macOS and Windows builds run on a machine or VM the owner provides, when a change
   needs them.
-- **B6. Dependabot** (`.github/dependabot.yml`). Weekly Cargo updates for `/` and
-  `/apps/app/src-tauri`, weekly npm updates for `/`, monthly GitHub Actions and Docker
-  (`/deploy`) updates (nothing runs on Dependabot's PRs on GitHub; they are checked locally with
-  `just ci` like any other); every entry targets `next`, holds versions for 14 days (`cooldown`) and
-  groups minor and patch updates for Cargo and npm. Commit prefixes are `chore(deps)` and
-  `ci(deps)`.
+- **B6. Dependency updates by hand.** There is no Dependabot (owner, 13 Nov 2026): dependencies
+  are updated once a month and before each release, as in Mainline (`AGENTS.md`, Git workflow),
+  in a lockfile-only PR checked with `just ci`, `just deny` and `just app-build`. Versions stay
+  at least 14 days old (pnpm's `minimumReleaseAge`; the crates.io release date for crates).
 - **B7. Git hooks** (`.githooks/`, installed once per clone by `just install-hooks`):
   `pre-commit` scans staged changes for secrets, checks Rust formatting when a `.rs` file is
   staged and runs Biome on staged TypeScript, JavaScript, JSON and CSS; `commit-msg` refuses AI
@@ -105,12 +103,10 @@ release recipe. What a release ships beyond a tagged GitHub Release is pending Q
   too) at the severity threshold pending Q7, and fails on a finding at or above it. It needs the
   npm registry, so it runs in `just ci` only when the registry answers (pending Q7 for whether a local run without the network fails or
   skips with a message).
-- **B13. Dependabot for the Compose images.** `deploy/compose/compose.yaml` pins `postgres` and
-  `minio` by digest, and the `docker` entry for `/deploy` reads only `deploy/Dockerfile`. A
-  `docker-compose` entry for `/deploy/compose` (monthly, `next`, 14-day cooldown) keeps those
-  digests current; the issue first checks that Dependabot's `docker-compose` ecosystem reads
-  digest pins, and records the result in the PR. The MinIO image choice itself is ADR 0019
-  (Proposed).
+- **B13. Monthly update recipe.** `just update-deps` runs `cargo update` in both Cargo
+  workspaces and `pnpm update` within the pinned ranges, refreshes the digests of the base and
+  Compose images to the newest at least 14 days old, and prints what changed, so the monthly PR
+  is one command. The MinIO image choice itself is ADR 0019.
 - **B14. One version.** Semantic versioning (Hosting and operations -> Releases). One version
   number covers the server, the web app and the Tauri app: `[workspace.package] version` in
   `Cargo.toml` is the source, and `apps/app/src-tauri/tauri.conf.json` and
@@ -160,9 +156,8 @@ None.
   (or ADR 0018 records that GitHub does not enforce it on this plan).
 - **T4** (B12). Adding a package version with a known advisory at or above the threshold in a
   scratch branch makes `web-audit` fail naming the advisory; removing it passes.
-- **T5** (B13). After the `docker-compose` entry lands, Dependabot's update log for
-  `/deploy/compose` lists the `postgres` image (checked in the repository's Insights after its
-  first run, recorded in the issue).
+- **T5** (B13). On a branch, `just update-deps` followed by `just ci` leaves a lockfile and
+  digest diff only (no change to any manifest's pinned versions) and the gate green.
 - **T6** (B14). Changing only `tauri.conf.json`'s version makes `just version-check` fail naming
   both values; `just release-version 0.1.0` makes every file agree and `just ci` pass.
 - **T7** (B15). In a scratch repository, `just release v0.0.1-test.1` on a tagged commit whose
@@ -186,6 +181,10 @@ None.
 
 ## Open questions
 
+The owner accepted every recommendation below on 13 Nov 2026. Where a behavior or an issue
+says "pending Q<n>" or "Q<n> answered", build the recommended option; the owner can still
+overrule one, which then updates this spec.
+
 - **Q1. What an M0 release publishes, and when the plan's image and binary requirements apply.**
   The plan lists images "multi-arch on GHCR, signed with cosign, SBOM attached, distroless and
   non-root", a static musl binary for amd64 and arm64 with a systemd unit, and "signed releases"
@@ -197,10 +196,12 @@ None.
   an SBOM, leaving musl binaries and the systemd unit to 1.0; C, all of the plan's artifacts from
   M0. Recommendation: B, because the pilot needs a pulled image before 1.0, and signing and the
   SBOM are cheaper to add before anyone depends on unsigned images.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q2. Version numbers before 1.0.** Options: A, `0.<milestone>.<patch>` (M0 ends at `0.1.0`, M1
   at `0.2.0`, and so on to `1.0.0`); B, a minor release whenever `next` is promoted, regardless of
   milestone; C, no releases before 1.0 except pre-release tags (`1.0.0-alpha.N`). Recommendation:
   A, so a version names the milestone it finished.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q3. How a release PR is merged.** The branch model squashes every PR and promotes `next` to
   `main` with a release PR. A squash merge into `main` makes a commit `next` does not have, so the
   next release PR conflicts or carries history twice. Options: A, release PRs (only) use a merge
@@ -209,11 +210,13 @@ None.
   documented `git-guard` exception); C, squash, then merge `main` back into `next` after each
   release. Recommendation: A, with the repository setting that allows merge commits limited to PRs
   into `main` if GitHub offers it, else stated in `CONTRIBUTING.md`.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q4. The release-notes tool.** Options: A, `git-cliff` (reads Conventional Commits, a single
   binary, in nixpkgs), configured in `cliff.toml`; B, `release-please`, which opens its own release
   PRs and expects to own the version bump; C, a short script in `bin/` over `git log`.
   Recommendation: A, run by the `release-version` recipe and by `just release`, after
   `dependency-researcher` checks it.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q5. DCO enforcement and the trailer rule.** Decided by the owner on 13 Nov 2026 (left to the
   agent's choice): option B, opening a PR certifies the DCO, with a box in the PR template and no
   trailer or check. Option A (a `Signed-off-by` trailer for outside contributors) was the earlier
@@ -224,6 +227,7 @@ None.
 - **Q7. The `pnpm audit` threshold and offline behavior.** Options: A, fail on `high` and
   `critical`, and skip with a printed warning when the registry cannot be reached; B, fail on any severity; C, fail on `moderate` and above. Recommendation: A,
   with a reviewed allowlist file for advisories that do not apply.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 
 ## Issues
 
@@ -237,8 +241,8 @@ None.
    Covers B11, T8. Depends on: issue 1.
 3. **`pnpm audit` gate** (threshold pending Q7). Deliver the `web-audit` recipe, its place in
    `just ci`, and the allowlist file if Q7 adopts one. Covers B12, T2, T4. Depends on: none.
-4. **Dependabot for the Compose images.** Deliver the `docker-compose` entry after confirming it
-   reads digest pins. Covers B13, T5. Depends on: issue 1 (Dependabot runs only on GitHub).
+4. **Monthly update recipe.** Deliver `just update-deps` and the monthly steps in
+   `CONTRIBUTING.md`. Covers B13, T5. Depends on: none.
 5. **One version and its check.** Deliver `bin/check-versions.sh` (with an SPDX header), the
    `version-check` recipe in `just ci`, and `release-version <x.y.z>`. Covers B14, T2, T6.
    Depends on: none. The starting number waits for Q2.

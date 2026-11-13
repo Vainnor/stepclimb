@@ -32,8 +32,8 @@ There is no hosted CI and no GitHub Actions workflow. In this repository "CI" me
 
 - No Actions minutes are spent. Nothing on GitHub checks a PR, so a reviewer who wants proof runs
   `just ci` on the PR's head in a worktree; the ticket-reviewer goal does this.
-- Dependabot keeps opening update PRs (the plan's supply-chain list); each is checked out and run
-  through `just ci` locally before merging.
+- There is no Dependabot either (owner, 13 Nov 2026): dependencies are updated by hand monthly in
+  a lockfile-only PR checked with `just ci` (ADR 0018).
 - Releases are cut by a local `just release` recipe instead of a tag-triggered workflow
   (`docs/specs/m0/01-repo-and-ci.md`).
 - The plan's "Tauri builds in CI for every platform" and the macOS and iOS simulator smoke tests

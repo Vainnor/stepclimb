@@ -19,8 +19,9 @@ setup choices on 12 Nov 2026.
   check, SPDX headers, nextest plus doctests, cargo-deny, the sqlx offline check, the OpenAPI diff,
   Biome, tsc, Vitest, the Playwright smoke test against Compose, and `just agents-check`. It runs
   locally; ADR 0021 replaces the hosted CI this ADR first described.
-- Dependabot opens weekly update PRs, held to versions at least 14 days old, as the plan's
-  supply-chain list says; pnpm refuses anything younger (`minimumReleaseAge`).
+- Dependencies are updated by hand once a month and before each release, as in Mainline, held to
+  versions at least 14 days old (pnpm refuses anything younger, `minimumReleaseAge`). The plan's
+  supply-chain list names Dependabot; the owner chose manual updates instead on 13 Nov 2026.
 - `main` holds releases, `next` is the integration branch, squash merges only, PR only.
 - Framework pins follow the plan's versions where it names one: axum 0.8, sqlx 0.9, utoipa 5
   (utoipa 6.0.0 exists; moving to it is a new ADR).

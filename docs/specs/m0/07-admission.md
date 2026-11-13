@@ -247,12 +247,17 @@ test on `127.0.0.1`, never the network. Time-dependent tests use the controllabl
 
 ## Open questions
 
+The owner accepted every recommendation below on 13 Nov 2026. Where a behavior or an issue
+says "pending Q<n>" or "Q<n> answered", build the recommended option; the owner can still
+overrule one, which then updates this spec.
+
 - **Q1. Admission rule syntax.** The plan says "declarative rules on the mapped attributes" and
   nothing more. (a) A JSON list of conditions `{attribute, op, value}` with `op` in `equals`,
   `in`, `not_in`, `exists`, `matches` (anchored regex), all of which must hold; (b) (a) plus
   `any` and `all` groups for OR logic; (c) an expression language such as CEL. Recommendation:
   (b); it covers "rating in [S1, S2] and subdivision = USA" without a parser and validates on
   save.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q2. Where rules live and which endpoint writes the switches.**
   `02-organizations-and-accounts.md` B14 makes sign-up and sync-only `OrgSettings` keys, written
   through `PATCH /api/v1/organization/settings` with `perm::OrgManage`, while
@@ -263,11 +268,13 @@ test on `127.0.0.1`, never the network. Time-dependent tests use the controllabl
   `OrgSettings` key; (b) only organization-wide; (c) a new `admission_rules` table. Recommendation:
   switches (b), so one permission covers who may sign in; rules (a), since attribute names differ
   between providers. The webhook goes in the proposed `admission_webhooks` table either way.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q3. Which sign-ins steps 2 and 4 apply to.** The plan lists the steps in order but does not
   say whether a known identity skips rules and the webhook. (a) Every sign-in runs steps 2 and
   4, so a member whose rating or roster status changes is refused next time; (b) only new
   people; (c) a per-organization choice. Recommendation: (a); it fails closed, and the webhook's
   `groups` and `attributes` stay current.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q4. Matching a first sign-in to a provisioned user.** Sync-only mode admits "users already
   provisioned", but a synced user may have no identity until their first sign-in. M0 already
   has (b) below for admins (`03-users-and-identities.md` B18). (a) A per-provider setting
@@ -275,6 +282,7 @@ test on `127.0.0.1`, never the network. Time-dependent tests use the controllabl
   the CID); (b) only pre-provisioned identities, created by admins now and by the sync API in
   M4; (c) email matching only. Recommendation: (b) in M0, and decide (a) with the M4 sync API
   spec, since the VATUSA connector could send `(provider, subject)` itself.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q5. Linking a second identity on purpose.** What email matching does is
   `03-users-and-identities.md` Q2; `03-users-and-identities.md` B20 leaves the signed-in linking
   flow to the sign-in specs. (a) A signed-in user starts `/auth/{provider}/start?link=1` from
@@ -282,17 +290,20 @@ test on `127.0.0.1`, never the network. Time-dependent tests use the controllabl
   admission steps 1 to 5 (refused with `identity.taken` when the identity belongs to someone
   else); (b) only admins link (03 B18); (c) both. Recommendation: (c), with the self-service
   part built in M1 with the profile page.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q6. Profile updates on sign-in.** Should a sign-in overwrite `users.given_name`,
   `family_name`, `email` and `display_name` from the provider? (a) Always; (b) only when the
   user's `source` is that provider (a user owned by sync keeps the sync's values, matching the
   plan's "records owned by an external source are read-only"); (c) never after creation.
   Recommendation: (b).
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q7. Webhook signing and limits.** The plan says "signed" without a scheme. (a) Standard
   Webhooks (`webhook-id`, `webhook-timestamp`, `webhook-signature` headers, HMAC-SHA256 over
   `id.timestamp.body`, a `whsec_` secret), as the plan uses for outgoing events, so receivers
   use one library for both; (b) a single `X-Stepclimb-Signature` HMAC header; (c) mutual TLS.
   Also: should the reply be signed (TLS alone authenticates it today), and the reply size limit
   (64 KiB proposed). Recommendation: (a), an unsigned reply over HTTPS, 64 KiB.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q8. Groups from claims and the webhook in M0.** The plan's `groups` and `group_members`
   tables have no M0 spec, and the provisioning sources list ("local, identity provider, sync
   API, SCIM or a connector") has no value for the webhook. (a) This spec adds both tables with
@@ -302,6 +313,7 @@ test on `127.0.0.1`, never the network. Time-dependent tests use the controllabl
   group keys. Membership removal: a group the claims or webhook no longer return is removed
   from the user (only memberships with that same source), or kept. Recommendation: (a), with
   removal of same-source memberships on each sign-in.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 
 ## Issues
 

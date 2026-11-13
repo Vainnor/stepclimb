@@ -317,6 +317,10 @@ organizations created by B26 in the same test database.
 
 ## Open questions
 
+The owner accepted every recommendation below on 13 Nov 2026. Where a behavior or an issue
+says "pending Q<n>" or "Q<n> answered", build the recommended option; the owner can still
+overrule one, which then updates this spec.
+
 - **Q1. How the first organization and its first admin are created.** The plan lists
   `stepclimb admin create` in the CLI and says no more.
   - A: `stepclimb admin create --org-slug <s> --org-name <n> --email <e> --name <n>` creates the
@@ -330,6 +334,7 @@ organizations created by B26 in the same test database.
     `03-users-and-identities.md` Q5) create the organization and admin when the database is empty.
   - Recommendation: A. It needs shell access to the host, which is the trust boundary a fresh
     install already has, and it is the command the plan names.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q2. Which organization an unauthenticated request belongs to on a multi-organization
   instance.** This is the same question as `08-sessions-and-csrf.md` Q1 (which also covers where
   an organization's public origin comes from) and is decided once, there. Options as this spec
@@ -339,27 +344,32 @@ organizations created by B26 in the same test database.
   sign-in routes. Recommendation: A, with the hostname kept in `organizations.settings` until M6
   adds custom domains. A credential from another organization than the request's is treated as
   anonymous (`08-sessions-and-csrf.md` B6).
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q3. Organization slug format, reserved slugs and whether a slug can change.** The column
   exists (`text NOT NULL UNIQUE`) with no rule. Options: A, `^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$`
   (DNS-label-safe, so it can become a subdomain), with a reserved list (`www`, `api`, `admin`,
   `auth`, `oauth`, `docs`, `app`, `static`, `assets`, `status`, `mail`, `stepclimb`); B, any
   non-empty string, lowercased; C, A without a reserved list. Recommendation: A, and slugs fixed
   after creation in M0 (a rename tool can come with M6 custom domains).
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q4. The problem `code` naming scheme and the problem `type` URI.** This spec writes
   `area.reason` in lowercase snake case (`account.not_found`, `request.invalid`). Options for
   `type`: A, `about:blank` everywhere (RFC 9457 then expects `title` to be the HTTP status
   phrase); B, a URL per code under the docs site (`https://<docs>/problems/<code>`), which needs
   the docs domain; C, a relative URI `/problems/<code>` served by the binary. Recommendation:
   `area.reason` codes, and A until the docs site exists in M4, then B.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q5.** (Folded into `03-users-and-identities.md` Q5: the `STEPCLIMB_*` names beyond
   `STEPCLIMB_BIND`, `STEPCLIMB_DATABASE_URL(_FILE)` and `STEPCLIMB_LOG`, and the
   `stepclimb.toml` layout. This spec needs none.)
 - **Q6. Input limits.** The plan sets none. Needed: the maximum length of an organization and an
   account name (recommendation: 200 characters), the maximum tree depth (recommendation: 16),
   and the page size (recommendation: default 50, maximum 200, the same for every list).
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q7. The UUID v7 library.** Options: A, the `uuid` crate with its `v7` and `serde` features,
   plus sqlx's `uuid` feature; B, a hand-written v7 generator over `rand`. Recommendation: A, run
   through `dependency-researcher` before pinning.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 
 ## Issues
 

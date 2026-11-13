@@ -339,6 +339,10 @@ entitlement feature (a `Require<Feature>` on the role-writing routes) is
 
 ## Open questions
 
+The owner accepted every recommendation below on 13 Nov 2026. Where a behavior or an issue
+says "pending Q<n>" or "Q<n> answered", build the recommended option; the owner can still
+overrule one, which then updates this spec.
+
 - **Q1. The permission key format.** Keys are stored in `roles.permissions` and shown in the API,
   so they are hard to change after M0. Options: A, `area.action` in lowercase snake case
   (`account.manage`), matching the problem codes; B, `area:action` (`account:manage`), the shape
@@ -346,6 +350,7 @@ entitlement feature (a `Require<Feature>` on the role-writing routes) is
   `08-sessions-and-csrf.md` uses catalog keys as API key scopes, so whichever format is chosen is
   also the scope format (the plan's `reports:read` would be `reports.read` under A).
   Recommendation: A, matching the problem codes. This spec writes A and changes with the answer.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q2. What "users within an account subtree" means for Account admin.** `users` has no account
   column. Options: A, user permissions stay organization-only and Account admin has none (it can
   still assign roles to a user whose id it is given); B, a user is "in" an account when they hold
@@ -353,27 +358,33 @@ entitlement feature (a `Require<Feature>` on the role-writing routes) is
   scope apply to those users; C, add a home account to users (a column the data model lacks).
   Recommendation: B for `UserView` (an account admin can find the people in their subtree) and A
   for `UserManage` (editing or suspending a person affects the whole organization).
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q3. Account admin and custom roles.** The plan gives Account admin "roles". This spec reads
   that as viewing roles and assigning them inside the subtree, with defining custom roles
   (`role.manage`) left to organization scope, since a custom role is an organization-wide
   definition. Options: A, as written; B, let account admins define custom roles too (they would be
   visible organization-wide). Recommendation: A.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q4. The escalation rule (B8, B12, B14).** The plan does not state one. Options: A, as written:
   to grant, define or remove a role you must hold its permissions at that scope; B, `RoleAssign`
   alone suffices, relying on who is given `RoleAssign`. Recommendation: A; without it an account
   admin can make anyone Organization admin of their subtree with more rights than their own.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q5. Audit entries in M0.** `audit_events` is in the data model and the plan audits grants and
   grade changes, but M0's milestone does not list auditing. Options: A, add `audit_events` in M0
   and write one entry per role, assignment, account, user status and organization settings change;
   B, wait for the milestone that names audit (M2 for grades, M6 for grants). Recommendation: A,
   since permission changes are the first thing a reviewer of an incident asks for.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q6. Columns this spec adds beyond the data model.** `roles.name` (the data model has only
   `key`; alternative: the key is the label, and built-in labels come from ICU messages);
   `role_assignments.id` (alternative: address an assignment by its natural key in a `DELETE
   /api/v1/admin/role-assignments?user_id&role_id&scope_type&scope_id`); `created_at` and
   `updated_at` on both, per the data model's own "everywhere". Recommendation: keep all four.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q7. The custom role key format.** Options: A, `^[a-z][a-z0-9_]{0,62}$`; B, any non-empty
   string up to 64 characters. Recommendation: A, matching the built-in keys.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 
 ## Issues
 

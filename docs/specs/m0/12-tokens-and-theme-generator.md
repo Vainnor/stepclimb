@@ -248,43 +248,54 @@ Server (crate `tests/`, `#[sqlx::test]`):
 
 ## Open questions
 
+The owner accepted every recommendation below on 13 Nov 2026. Where a behavior or an issue
+says "pending Q<n>" or "Q<n> answered", build the recommended option; the owner can still
+overrule one, which then updates this spec.
+
 - **Q1. Token source path.** The plan's layout has `packages/tokens/src/tokens/*.json`; the
   repository has `packages/tokens/tokens/*.json`, and `.claude/rules/ui.md` names the latter.
   Options: (a) move to `src/tokens/` to match the plan and update the rule, README and config;
   (b) keep `tokens/` and record the departure in an ADR. Recommendation: (a): the plan wins, and
   the move is one small commit before `src/generate.ts` lands beside it.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q2. Values for `info`, `info-soft` and `info-fg`.** The plan lists `info` among the status
   tokens and gives no values. Options: (a) a blue hue (around 250) at the lightness and chroma of
   the other statuses in each appearance; (b) `info` aliases the brand tokens; (c) a neutral
   (grey) info. Recommendation: (a): info must stay distinct from the brand, which marks the next
   action, and from the vZDC red; it must pass B20 in every theme.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q3. Learning-state alias targets.** The plan says each state has one shape, icon and color
   and color is never the only signal, but not which color. Options, recommended first:
   locked -> `fg-soft`, available -> `fg-sub`, progress -> `brand`, complete -> `success`,
   overdue -> `danger`, review -> `warning`; or the same with available -> `brand` and progress ->
   `info`. Recommendation: the first set: the brand marks the thing in progress, matching the
   rail fill (`docs/plan/ui.md` -> ProgressRail).
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q4. Values the plan names without giving.** `bg-overlay` (the modal scrim, which the plan
   allows to blur), `fg-disabled`, the floating-layer shadow, the reading size within 17 to 18 px
   and line height within 1.65 to 1.7, and the high-contrast neutrals. Recommendation: the
   generator derives `bg-overlay` and `fg-disabled` from the neutral scale; the owner picks the
   reading size and line height (18 px at 1.7 is inside both ranges) and approves the shadow on a
   Storybook screenshot.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q5. What selects high contrast.** Options: (a) only `data-sc-theme="high-contrast"`, chosen
   by the user; (b) also `@media (prefers-contrast: more)` when no theme is set; (c) also
   `forced-colors: active`, where the browser's system colors take over and the theme only keeps
   borders visible. Recommendation: (a) plus (b), and a `forced-colors` check in the base styles
   (13) rather than a theme.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q6. Logos and favicon in M0.** The vZDC week-2 checkpoint is "see the branded app";
   uploads arrive with files in M1. Options: (a) M0 stores small logo images (SVG or PNG with a
   size cap, SVG sanitized) inside the branding record; (b) M0 shows the organization's name as
   text, logos come with M1 files; (c) logos as URLs to an external host. Recommendation: (b),
   with the brand color and font already giving the checkpoint a branded app; (a) adds an upload
   path that M1 replaces.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q7. The optional accent color.** It is a branding input with no token in the plan's table.
   Options: (a) add `accent`, `accent-soft` and `accent-fg` tokens and say where components use
   them; (b) store the input and use it nowhere until a component needs it; (c) drop it until a
   milestone names a use. Recommendation: (c) for M0, so no token exists without a consumer.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q8. Corner style and fonts.** Neither the corner-style values nor the UI-font choices are
   listed. Options for corners: (a) a fixed set such as square, default, round that scales `xs`,
   `sm` and `md` (pill unchanged); (b) a free radius. For fonts: (a) a fixed list of bundled
@@ -292,6 +303,7 @@ Server (crate `tests/`, `#[sqlx::test]`):
   instance; (b) any Google Fonts family; (c) an uploaded font file. Recommendation: corners (a),
   fonts (a): no third-party font requests under the strict CSP, and every font in the list is
   checked once for legibility.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q9. The 12-step scale.** The plan fixes 12 steps in OKLCH but not their lightness and chroma
   curves, nor which step `brand` takes when several clear 4.5:1. Options: (a) fixed lightness
   stops per appearance, with chroma scaled from the input's and clamped to sRGB, and `brand` the
@@ -299,14 +311,17 @@ Server (crate `tests/`, `#[sqlx::test]`):
   the plan's values (`oklch(0.50 0.09 195)` light, `oklch(0.76 0.10 190)` dark,
   `oklch(0.38 0.12 195)` high contrast). Recommendation: (b), then (a)'s rule for choosing the
   step: the default brand then comes out of the generator unchanged.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q10. The high-contrast target.** WCAG 2.2 AA (the plan's floor) needs 4.5:1 and 3:1. Options:
   (a) 7:1 text and 4.5:1 UI (WCAG AAA text); (b) AA, with stronger lines and no tints.
   Recommendation: (a), which is what a separate high-contrast theme is for.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q11. Generated or hand-written default themes.** Options: (a) the build generates the default
   and vZDC themes from their brand colors and the hand-written JSON is deleted; (b) the
   hand-written JSON stays and a test checks the generator's output is within a small color
   difference of it. Recommendation: (a) once Q9 makes the default reproduce the plan's values;
   one path for every brand.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q12. How the TypeScript generator runs on the Rust server.** The plan says "TS" and "on the
   server", and the server is one Rust binary using under 100 MB idle. Options: (a) port the
   generator to Rust in `stepclimb-core` (or the server), with the TS version kept for build time
@@ -317,15 +332,18 @@ Server (crate `tests/`, `#[sqlx::test]`):
   browser, departing from the plan's "TS". Recommendation: (a): no new runtime in the single
   binary, and two implementations of a small, pure function are cheap to keep equal with shared
   vectors. (d) needs an ADR as a departure from the plan.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q13. Custom CSS.** Options: (a) not in M0; (b) M0 stores an admin's CSS, appends it to
   `/theme.css` under `.sc-custom`, and labels it unsupported. Recommendation: (a): it needs
   sanitizing against the strict CSP and is not in the M0 row.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q14. When the branding screen ships.** The API is in the plan's Administration endpoints and
   the generator is M0; the screen needs a ColorField (Forms, M0 to M1) and BrandPreview
   (Authoring, M1 to M2). Options: (a) M0 ships the API only, configured by an admin through the
   API or `stepclimb.toml`, and the screen in M1; (b) a minimal screen in M0 (color field, font
   and appearance selects, the report as a table, no preview component). Recommendation: (b),
   so vZDC staff can brand the test server at the week-2 checkpoint without the API.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 
 ## Issues
 

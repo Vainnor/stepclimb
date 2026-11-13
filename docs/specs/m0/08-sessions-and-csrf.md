@@ -361,6 +361,10 @@ Database tests use `#[sqlx::test]`; time-dependent tests use the controllable cl
 
 ## Open questions
 
+The owner accepted every recommendation below on 13 Nov 2026. Where a behavior or an issue
+says "pending Q<n>" or "Q<n> answered", build the recommended option; the owner can still
+overrule one, which then updates this spec.
+
 - **Q1. Organization of an unauthenticated request, and the organization's public origin.** The
   plan gives each managed organization "a subdomain or its own custom domain" but no rule for
   resolving one, and no setting for a self-hosted instance's public URL. Sign-in redirect URIs,
@@ -371,12 +375,14 @@ Database tests use `#[sqlx::test]`; time-dependent tests use the controllable cl
   (for example `STEPCLIMB_PUBLIC_URL`), and (a) when multi-organization mode is built.
   Recommendation: (c) now and (a) later; the code takes the organization from one resolver so
   (a) replaces only that function.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q2. Token format parameters.** The plan fixes `sc_<random>_<crc32>` and "stored hashed" but
   not lengths, alphabet or hash. (a) 32 random bytes (256 bits) for every token, base62 for API
   keys and base64url elsewhere, CRC-32 as 6 base62 characters, hashed with SHA-256; (b) the
   same with 16 bytes; (c) HMAC-SHA-256 with a server key instead of plain SHA-256, so a
   database leak alone cannot test guesses. Recommendation: (a); tokens with 256 bits of entropy
   need no slow hash, and (c) adds a key to rotate.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q3. Encryption and signing keys: source and rotation.** The plan says "encrypted
   (AES-256-GCM)" and secrets have `*_FILE` variants, but names no key. (a) Keys from
   `STEPCLIMB_*` variables or their `_FILE` variants, required at startup (missing key stops
@@ -384,19 +390,23 @@ Database tests use `#[sqlx::test]`; time-dependent tests use the controllable cl
   (b) a key generated on first start and stored in the database (a database dump then carries
   its own key); (c) an external KMS. Recommendation: (a), with a `stepclimb` CLI subcommand later
   to re-encrypt under the newest key.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q4. How often `last_seen_at` is written.** Every request writes a row. (a) Every request;
   (b) at most once per 60 seconds per session, so idle expiry is accurate to a minute; (c) at
   most once per 5 minutes. Recommendation: (b).
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q5. Cookie lifetime in the browser.** (a) A persistent cookie whose `Expires` is the
   session's `expires_at`, so a browser restart keeps the session; (b) a browser-session cookie
   with no `Expires`; (c) persistent only when the user ticks "keep me signed in".
   Recommendation: (a); the server still enforces both limits.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q6. CSRF fallback and the Origin allowlist.** When neither `Sec-Fetch-Site` nor `Origin` is
   present, (a) refuse; (b) allow (treat as a non-browser client); (c) allow only when no session
   cookie is present. For the allowlist: (a) the organization's own origin only; (b) its own
   origin plus a configured list (`STEPCLIMB_ALLOWED_ORIGINS`); (c) a per-organization setting.
   Recommendation: refuse, and own origin plus a configured list. Every browser that runs the
   web app sends at least one of the two headers on POST.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q7. Rate limits.** The plan asks for limits on sign-in and token endpoints but gives no
   numbers or store. Numbers: (a) per client IP 20 sign-in requests per minute and 60 token
   requests per minute, per account 10 failed password or TOTP checks per 15 minutes, as a
@@ -405,11 +415,13 @@ Database tests use `#[sqlx::test]`; time-dependent tests use the controllable cl
   replicas) or a Postgres table (one more write per attempt). Client IP: the socket address
   only, or `X-Forwarded-For` from a configured list of trusted proxies. Recommendation: (c)
   in-process, with trusted proxies configured, since the Compose stack puts Caddy in front.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q8. Sign-in flow state.** The data model has no table for it. (a) The `auth_flows` table in
   Data with a `__Host-sc_flow` cookie (`SameSite=Lax` so it survives the provider's redirect
   back), 10-minute lifetime; (b) an encrypted, self-contained cookie with no table; (c) reuse
   `sessions` with a pending kind. Recommendation: (a); it is single-use by construction, and a
   cookie (b) cannot be invalidated once used.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q9. Service accounts and API keys.** The plan's row has one `secret_hash`, an optional owner
   and `scopes`. Owner: (a) required in M0, so "scopes intersected with the owner's current
   permissions" always has an owner; (b) optional, with an ownerless account's rights equal to
@@ -419,6 +431,7 @@ Database tests use `#[sqlx::test]`; time-dependent tests use the controllable cl
   `reports:read` mapped to permissions in the catalog. Also a `name` column, `kind` values, and
   `expires_at`/`last_used_at` columns, none in the plan. Recommendation: (a), one key per row,
   scopes as catalog permission keys, add `name` and `last_used_at`, no expiry in M0.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q10. OAuth clients, the authorization endpoint and codes.** The plan lists only `POST
   /oauth/token|revoke`, but PKCE in the system browser needs an authorization endpoint and a
   place to keep codes. Clients: (a) a fixed list in code (the Stepclimb app, its deep-link
@@ -427,26 +440,31 @@ Database tests use `#[sqlx::test]`; time-dependent tests use the controllable cl
   "allow this app" page. Codes: the `oauth_authorization_codes` table in Data (60-second
   lifetime) or encrypted self-contained codes. Recommendation: (a), `GET /oauth/authorize`, a
   confirmation page naming the app and device, the table with a 60-second lifetime.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q11. Refresh token lifetime and concurrency.** The plan gives none. (a) 30 days from the
   last rotation, no family cap; (b) 30 days sliding with a 90-day family cap; (c) 90 days
   sliding. Concurrent use of one token by the same app: revoke the family (strict reuse
   detection) or allow a 10-second grace for the token that was just rotated. Recommendation:
   (b) and strict, since the app can serialize its refreshes.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q12. Access token format and revocation.** The plan builds the server on `jsonwebtoken`, so
   access tokens are JWTs. Signing: (a) HS256 with a server key from Q3 (only this server
   verifies them); (b) ES256 with a published key (lets other services verify); Revocation: (a)
   a token lives until its 15-minute expiry after its family is revoked; (b) each request also
   checks that the family still exists (one indexed lookup). Recommendation: HS256 and the family
   check, so sign-out on a device takes effect at once.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q13. Error format on `/oauth/*`.** OAuth clients expect RFC 6749 section 5.2 JSON (`error`,
   `error_description`); the plan says API errors are `problem+json`. (a) RFC 6749 format on
   `/oauth/*` only; (b) `problem+json` with the OAuth error as `code`; (c) both fields in one
   body. Recommendation: (a); the Tauri app's OAuth library reads the standard shape.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q14. Audit entries.** The plan's `audit_events` table records actor and action, but no M0
   spec owns it. Should M0 write audit entries for sign-in, sign-out, refused sign-ins,
   service-account creation and deletion, and refresh-token reuse? (a) Yes, and this spec's
   issues add the table if no earlier one has; (b) logs only in M0, audit entries in M4;
   Recommendation: (a) for service accounts and reuse detection, (b) for routine sign-ins.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 
 ## Issues
 

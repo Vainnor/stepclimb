@@ -301,17 +301,23 @@ receives another's theme.
 
 ## Open questions
 
+The owner accepted every recommendation below on 13 Nov 2026. Where a behavior or an issue
+says "pending Q<n>" or "Q<n> answered", build the recommended option; the owner can still
+overrule one, which then updates this spec.
+
 - **Q1. Layout between 768 and 1023 px.** The plan gives SideNav at 1024 px and up and
   BottomTabs under 768 px. Options: (a) BottomTabs up to 1023 px; (b) a collapsed SideNav (icons
   only, labels in tooltips) from 768 px; (c) the full SideNav from 768 px. Recommendation: (b),
   because tablets in landscape keep a side rail and the icons already exist; it needs a
   collapsed SideNav variant in 13.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q2. Navigation entries in M0.** The plan's layouts show Dashboard, Courses, Calendar and
   Grades (side) and Home, Courses, Notifications, Profile (tabs), none of which exist in M0.
   Options: (a) show only destinations that exist (Home and the user's account page, plus the
   admin screens 02 to 10 add, gated by permission); (b) show the plan's full set with empty
   states. Recommendation: (a); an entry to an empty page is half-built scaffolding (`AGENTS.md`
   non-negotiable 4). Each milestone adds its entry with its feature.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q3. What the OrgSwitcher does once multi-organization mode resolves organizations.** Users
   belong to one organization (`users.org_id`); a person can have accounts in several, each with
   its own session. Options: (a) it lists the organizations the browser holds sessions for and
@@ -319,6 +325,7 @@ receives another's theme.
   sign-up; (c) it stays unrendered until M6's operator console. Recommendation: (a), once 02 Q2
   settles host or path addressing; it needs no listing API, since the browser knows its own
   sessions only through each origin.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q4. How `/theme.css` is fingerprinted.** `index.html` is a static embedded file today.
   Options: (a) the server rewrites `index.html` on the way out to link
   `/theme.css?v=<hash of the theme>` and serves `theme.css` immutable; (b) a stable `/theme.css`
@@ -327,6 +334,7 @@ receives another's theme.
   plan's "cached and fingerprinted" with no revalidation round trip; the Tauri app (M5) reads the
   same hash from a `theme` field this spec adds to `/.well-known/stepclimb` (08 B38 leaves
   branding fields to the spec that owns them).
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q5. Whether the bundle keeps the default color variables.** Today the bundle imports
   `variables.css`; a later bundle stylesheet would override `/theme.css`, which loads first, at
   equal specificity. Options: (a) the web bundle carries no color variables and `/theme.css`
@@ -334,6 +342,7 @@ receives another's theme.
   in a lower cascade layer, so unlayered `/theme.css` wins whatever the order; (c) `/theme.css`
   uses a more specific selector. Recommendation: (a): one source per page and nothing to
   out-rank. It is coordinated with 12's server output.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q6. Where the user's appearance choice lives, and how it applies before first paint.** The
   strict CSP the plan asks for rules out an inline bootstrap script. Options: (a) a user profile
   field returned by `/me`, rendered by the server into `<html data-sc-theme>` (needs the
@@ -341,6 +350,7 @@ receives another's theme.
   (c) `localStorage`, applied by an external blocking script before the bundle.
   Recommendation: (a), so the choice follows the user across devices and the Tauri app, with (b)
   for the signed-out screens.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q7. Where terminology overrides live and how they reach the client.** Options: (a) a
   `terminology` key in `organizations.settings` owned by this spec (02 B14: each settings key is
   owned by the spec that uses it), edited through `PATCH /api/v1/organization/settings`, and
@@ -348,20 +358,24 @@ receives another's theme.
   separate public `/api/v1/strings` endpoint returning the merged catalog. Recommendation: (a); the
   overrides are a few terms, not a catalog. Also open: which terms are overridable in M0 (the plan's
   example is Course; Module and Item are the obvious others).
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q8. The organization's back link.** The plan's layout shows "← vZDC" and the vZDC deployment
   lists a "Back to vZDC" link, but the branding inputs do not list it. Options: (a) a branding
   field (label and URL) in 12; (b) an organization setting in 02. Recommendation: (a), since it
   sits with the logo.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q9. The Tauri bundle identifier.** `apps/app/src-tauri/tauri.conf.json` has
   `dev.stepclimb.shell` as a placeholder. The identifier is permanent once an app ships to the
   App Store (M5). Options: (a) a reverse-DNS name under a domain the maintainer owns; (b) keep
   the placeholder until the Apple developer account exists before M5. Recommendation: (b), with
   the identifier settled in an ADR before the first TestFlight build.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q10. The ICU message library.** The plan decides ICU messages, not the library. Options:
   (a) FormatJS (`intl-messageformat`, optionally `react-intl`); (b) `@messageformat/core`;
   (c) a thin wrapper over `Intl.PluralRules` and `Intl.NumberFormat` with a small ICU subset.
   Recommendation: (a) `intl-messageformat` alone behind `useStepclimbStrings()`, the most used ICU
   implementation; run `dependency-researcher` on size and release dates before pinning.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q11. Scalar's script and the strict CSP.** The plan wants a strict CSP (`docs/plan/
   technical.md` -> Security and privacy); the Scalar page at `/docs` loads its script from a CDN
   by default. Options: (a) self-host the Scalar asset in the binary and serve `/docs` under the
@@ -370,6 +384,7 @@ receives another's theme.
   works on an offline network. Which spec sets the CSP header for the SPA is also open (08 or
   this one); this spec only requires that the SPA needs no inline script or style beyond what
   React Aria injects.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 
 ## Issues
 

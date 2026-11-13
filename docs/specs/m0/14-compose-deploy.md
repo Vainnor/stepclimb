@@ -227,11 +227,16 @@ using its internal CA, which proves the proxy path.
 
 ## Open questions
 
+The owner accepted every recommendation below on 13 Nov 2026. Where a behavior or an issue
+says "pending Q<n>" or "Q<n> answered", build the recommended option; the owner can still
+overrule one, which then updates this spec.
+
 - **Q1. Caddy in the production file or an override.** Options: (a) one production file with
   Caddy behind a Compose profile (`--profile tls`); (b) a base file plus `compose.caddy.yaml`
   merged with `-f`; (c) Caddy in the default services, with a documented way to remove it for
   self-hosters who have their own proxy. Recommendation: (a): one file to read, and the profile
   name says what it adds. The same mechanism applies to MinIO.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q2. Variable names and the `stepclimb.toml` layout.** Today's names are flat
   (`STEPCLIMB_BIND`, `STEPCLIMB_DATABASE_URL`, `STEPCLIMB_LOG`). Options: (a) TOML sections
   (`[server] bind`, `[database] url`) mapped to variables with `__` between section
@@ -245,6 +250,7 @@ using its internal CA, which proves the proxy path.
   otherwise starts the server without it. The same question is raised as
   03-users-and-identities Q5 and by 08-sessions-and-csrf's public-URL question
   (`STEPCLIMB_PUBLIC_URL`); one answer, recorded in one ADR, covers all three.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q3. Health checks in a distroless container.** The final image has no shell, `curl` or
   `wget`. Options: (a) a `stepclimb` subcommand that requests `/readyz` on the local port and
   exits 0 or 1, used as the Compose healthcheck (an addition to the plan's CLI list, so an ADR);
@@ -252,6 +258,7 @@ using its internal CA, which proves the proxy path.
   check covers readiness; (c) a debug base image with a shell, which drops distroless.
   Recommendation: (a): Compose `depends_on: service_healthy` then works for the proxy, and the
   subcommand is a few lines.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q4. Nightly dumps: milestone and mechanism.** The plan makes nightly dumps the self-hoster
   default without a milestone. Options for when: (a) M0, with the production example; (b) M4,
   with point-in-time backups. Options for how: (a) a small `postgres` image service in the
@@ -260,6 +267,7 @@ using its internal CA, which proves the proxy path.
   `stepclimb` subcommand (the plan's CLI lists `backup-verify`, not a dump command).
   Recommendation: M0, as a sidecar service (a) that keeps 7 days, because the vZDC pilot's data
   lives on the test server from M0, and `backup-verify` comes with M4's restore drill.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q5. Which spec publishes the image.** The M0 row has "releases" (01-repo-and-ci) and
   "Compose deploy" (this spec). Options: (a) 01's release workflow builds multi-arch, signs with
   cosign, attaches the SBOM and pushes to GHCR, and this spec owns the Dockerfile's contents and a
@@ -268,6 +276,7 @@ using its internal CA, which proves the proxy path.
   artifacts. The arm64 build of the Rust stage under emulation is slow; a cross-compiling stage
   or a native arm64 machine the owner provides is the owner's call (ADR 0021: long jobs go to a
   VM the owner provides).
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q6. The MinIO image (ADR 0019, Accepted).** Decided by the owner on 13 Nov 2026: option (a),
   Chainguard's image pinned by digest; revisited in the M1 media spec. Options are ADR 0019's: (a)
   Chainguard's image pinned by digest; (b) MinIO built from source into our own image; (c) another
@@ -280,6 +289,7 @@ using its internal CA, which proves the proxy path.
   exits 0 or 2) and `migrate` (applies migrations and exits), which the production guide and the
   1.0 Helm migration Job use; (b) only `serve` until 1.0. Recommendation: (a); `admin create` is
   02's or 04's (the first admin), and the export, import and verify commands are M4.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 
 ## Issues
 

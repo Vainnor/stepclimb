@@ -278,6 +278,10 @@ None. Components hide nothing on permission; the app decides what to render (11-
 
 ## Open questions
 
+The owner accepted every recommendation below on 13 Nov 2026. Where a behavior or an issue
+says "pending Q<n>" or "Q<n> answered", build the recommended option; the owner can still
+overrule one, which then updates this spec.
+
 - **Q1. The M0 part of Forms and Data.** The plan marks both rows "M0–M1" without splitting them.
   Options: (a) M0 builds what the M0 screens use: Field, TextField, TextArea, NumberField,
   SearchField, Select, ComboBox, Checkbox(Group), RadioGroup, Switch, and DataTable, DataList,
@@ -286,6 +290,7 @@ None. Components hide nothing on permission; the app decides what to render (11-
   of both rows in M0. Recommendation: (a), adding ColorField to M0 if 12 Q14 puts a branding
   screen in M0. StatusChip needs the learning-state tokens (12 I1) and is used first by M1's
   module rows.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q2. How the lint checks are enforced.** Options: (a) Biome 2 GritQL plugins for raw colors,
   emoji and `className` utilities, with Biome's `noRestrictedImports` for icon packages;
   (b) `noRestrictedImports` for icons plus a small script in `bin/` (like
@@ -296,12 +301,14 @@ None. Components hide nothing on permission; the app decides what to render (11-
   on a Stepclimb UI component). Also open: whether the same check enforces logical properties
   (`ml-`, `pl-`, `left-`), which `.claude/rules/ui.md` requires but the plan lists no lint for.
   Recommendation: yes, as an error.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q3. A warning in a gate that fails on warnings.** The plan says `className` color changes
   "warn"; `just web-lint` passes `--error-on-warnings`. Options: (a) the check reports at
   warning level and the gate fails on it like any warning, with a suppression comment for a
   justified case; (b) the check runs outside the gate and only reports; (c) it is an error.
   Recommendation: (a): a warning that never stops a merge is ignored, and the suppression comment
   keeps the plan's "warn" meaning that exceptions exist.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q4. Screenshot matrix and baselines.** The plan's table says every story is a visual test "in
   all three themes at 1280 and 375 px"; the definition of done also lists brands and densities.
   Options: (a) every story in 3 themes at 2 widths (6 screenshots), plus each component's matrix
@@ -310,35 +317,41 @@ None. Components hide nothing on permission; the app decides what to render (11-
   pinned Docker image so fonts match across machines; (b) Git LFS; (c) not committed, compared
   against the target branch's build in CI. Recommendation: matrix (a), baselines (a);
   Playwright's own image keeps the comparison stable between a laptop and CI.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q5. The two extreme brands.** Options: (a) a very light, saturated yellow (around `#FFE600`)
   and a very dark navy (around `#0A1A3F`); (b) a saturated magenta and a grey with almost no
   chroma. Recommendation: (a): they push the brand step choice to both ends of the lightness
   range, which is where contrast fails first.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q6. Requiring a changeset.** Options: (a) CI fails a PR that changes `packages/ui` or
   `packages/tokens` without a changeset (`changeset status`); (b) changesets are added by hand at
   release time. Recommendation: (a), so the changelog is written when the change is fresh.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q7. Toast on an unstable React Aria export.** In 1.22.1 the toast parts are `UNSTABLE_`
   exports. Options: (a) build Toast on them, wrapped so only `toast.tsx` imports them, and record
   the pin in an ADR; (b) build our own region with an ARIA live region and React Aria's focus
   utilities; (c) defer Toast until the export is stable. Recommendation: (a): React Aria's
   version handles focus and landmark navigation, and the wrapper contains a later API change to
   one file.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q8. The hand-checked rows.** The keyboard walkthrough, VoiceOver names and the iOS Safari and
   Tauri iOS web-view check cannot be automated, and the Tauri iOS build first exists in the M1
   iPhone test. Options: (a) the maintainer records each hand check in the component's status,
   and every component stays experimental on the iOS row until the M1 iPhone test; (b) an iOS
   simulator Safari run stands in for the device in M0. Recommendation: (a): the plan's iPhone test
   is the place a real device enters, and the status says what is missing.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q9. Pagination with cursors.** The plan's list endpoints use cursor pagination, which has no
   page numbers. Options: (a) Previous and Next only, with a count where the API gives one;
   (b) a "Load more" pattern; (c) numbered pages for client-side lists and Previous and Next for
   server lists. Recommendation: (a) for M0, with (c)'s numbered variant added when a client-side
   list needs it.
-
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q10. Menus and Selects on phones.** The plan says touch-first and puts the ProgressRail in a
   bottom sheet on mobile, but says nothing about menus. Options: (a) Menu, Select and ComboBox
   open as a bottom Sheet under 768 px; (b) they stay popovers at every width.
   Recommendation: (a), at the same breakpoint as BottomTabs (11-app-shell B3).
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 
 ## Issues
 

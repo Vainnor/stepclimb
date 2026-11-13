@@ -262,6 +262,10 @@ Every sign-in test runs against the mock IdP (B1) on `127.0.0.1`. Database tests
 
 ## Open questions
 
+The owner accepted every recommendation below on 13 Nov 2026. Where a behavior or an issue
+says "pending Q<n>" or "Q<n> answered", build the recommended option; the owner can still
+overrule one, which then updates this spec.
+
 - **Q1. Where the mock IdP lives.** (a) A new workspace crate (for example
   `stepclimb-mock-idp`, a library for in-process tests plus a small binary for the Compose
   stack), which needs an ADR and a layering rule; (b) a test-support module inside
@@ -269,6 +273,7 @@ Every sign-in test runs against the mock IdP (B1) on `127.0.0.1`. Database tests
   mock OIDC server image; (c) an existing third-party server (such as Keycloak) for both, which
   is slow to start and cannot inject the faults of B2. Recommendation: (a); one implementation
   serves both test layers, and it never ships in the release binary.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q2. TOML providers and database providers** (also `03-users-and-identities.md` Q5). (a) The TOML
   file is the source for the providers it declares: at startup the server upserts them by `key`,
   marks them `source: "config"`, the admin API shows them read-only (409 `provider.config_owned` on
@@ -278,12 +283,14 @@ Every sign-in test runs against the mock IdP (B1) on `127.0.0.1`. Database tests
   "<slug>"` field, required when more than one organization exists; (b) TOML providers only in
   single-organization mode. Recommendation: (a) and (a), which matches the plan's "records owned by
   an external source are read-only in the UI".
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q3. PKCE for generic OAuth 2.** OAuth 2.1 requires PKCE, and RFC 6749 says an authorization
   server ignores parameters it does not recognize, but the plan names PKCE only for OIDC. (a)
   Always send S256 PKCE; (b) a per-provider `pkce` flag, default on; (c) never for `oauth2`.
   Whether VATSIM Connect accepts or requires PKCE must be checked against VATSIM's
   documentation before the preset's value is set. Recommendation: (b), with the preset's value
   set from that check.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q4. Where the VATSIM preset lives and what can be overridden.** The plan calls VATSIM
   Connect both "a preset" and a connector. (a) A TOML data file in `stepclimb-connectors`
   exposed as a constant, compiled into the server behind a `vatsim` cargo feature (the server
@@ -294,6 +301,7 @@ Every sign-in test runs against the mock IdP (B1) on `127.0.0.1`. Database tests
   and the client credentials. Whether to ship a second preset for VATSIM's development
   environment, once its URLs are checked against VATSIM's documentation, is part of this
   question. Recommendation: (a) and (a).
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q5. Provider keys and deleting providers in use.** Keys appear in URLs. (a) Lowercase
   letters, digits and hyphens, 1 to 32 characters, starting with a letter or digit, immutable
   after creation (changing it breaks the redirect URI registered at the provider); (b) any
@@ -301,6 +309,7 @@ Every sign-in test runs against the mock IdP (B1) on `127.0.0.1`. Database tests
   `provider.in_use` and point the admin to disabling; (b) delete the identities with it, so its
   users lose that sign-in method; (c) delete and keep orphaned identities. Recommendation: (a)
   and (a).
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 
 ## Issues
 

@@ -216,20 +216,27 @@ four-case permission test does not apply to them; T2 is their cross-organization
 
 ## Open questions
 
+The owner accepted every recommendation below on 13 Nov 2026. Where a behavior or an issue
+says "pending Q<n>" or "Q<n> answered", build the recommended option; the owner can still
+overrule one, which then updates this spec.
+
 - **Q1. Entitlement gating of sign-in methods.** The plan does not say whether a sign-in method
   kind is a feature; the M0 feature catalog is `10-entitlements-framework.md` Q1, whose option A
   names `oidc_providers` (this spec) and `oauth2_providers` (06). For this spec: (a) check
   `Require<Feature>` for `oidc_providers` on provider creation and change only, so a downgrade
   never locks existing members out of sign-in; (b) also at `/auth/{key}/start`; (c) no check.
   Recommendation: (a) if 10 Q1 picks A, (c) otherwise. Every feature is on for self-hosted.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q2. Where provider client secrets come from.** (a) Entered through the admin API and stored
   in `identity_providers.config` encrypted with AES-256-GCM (`08-sessions-and-csrf.md` B3),
   write-only in the API; (b) a reference to a `_FILE` path or `STEPCLIMB_*` variable, never in
   the database; (c) both: (b) for providers defined in `stepclimb.toml`, (a) for providers
   created through the admin API. Recommendation: (c).
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q3. Userinfo.** (a) ID token claims only; (b) always call userinfo when discovery lists a
   `userinfo_endpoint`; (c) a per-provider `userinfo` flag, on by default when the endpoint
   exists. Some providers put groups or email only in userinfo. Recommendation: (c).
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q4. Outbound URL policy and timeouts.** Admins enter URLs the server then fetches (issuer,
   discovery endpoints, the admission webhook), which in multi-organization or managed mode lets
   one organization's admin make the server request internal addresses. (a) `https` only, and
@@ -240,22 +247,27 @@ four-case permission test does not apply to them; T2 is their cross-organization
   `STEPCLIMB_ALLOW_INSECURE_PROVIDERS`) is set, which the test setup sets. Timeouts: 5
   seconds per provider request (the webhook keeps its 3 seconds). Recommendation: (a) with the
   insecure switch and 5 seconds.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q5. Caching and clock skew.** The plan does not say how often discovery and JWKS are
   fetched. (a) In memory per provider for 1 hour, a JWKS refetch on an unknown `kid` at most
   once per minute, 60 seconds of clock skew; (b) fetch on every sign-in, no cache; (c) honor
   HTTP cache headers. Recommendation: (a); a cache per process keeps the server stateless.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q6. Client authentication at the token endpoint.** (a) `client_secret_basic` unless the
   discovery document lists only `client_secret_post`; (b) a per-provider setting; (c) always
   `client_secret_post`. Recommendation: (a), with (b) as an override if a provider misbehaves.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q7. Multi-tenant issuers.** A shared Entra endpoint publishes an issuer containing a tenant
   placeholder, so the exact match of B4 and B10 fails. (a) Support only tenant-specific
   issuers in M0 (one Entra tenant per provider row); (b) accept a configured issuer template
   and check the ID token's `tid` against an allowlist of tenants; (c) skip the issuer check for
   such providers. Recommendation: (a); (c) would let any tenant's users present tokens.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q8. Accepted ID token algorithms.** (a) The asymmetric algorithms the `openidconnect` crate
   supports that the discovery document lists (RS256 at least, as OIDC Core requires providers
   to support), refusing HS256; (b) also HS256 keyed by the client secret, as OIDC Core allows;
   (c) a per-provider list. Recommendation: (a).
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 
 ## Issues
 

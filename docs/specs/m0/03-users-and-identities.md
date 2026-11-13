@@ -324,6 +324,10 @@ synthetic.
 
 ## Open questions
 
+The owner accepted every recommendation below on 13 Nov 2026. Where a behavior or an issue
+says "pending Q<n>" or "Q<n> answered", build the recommended option; the owner can still
+overrule one, which then updates this spec.
+
 - **Q1. Is `users.email` unique within an organization, and case-insensitively?** Local sign-in
   by email (`04-local-accounts.md`) needs a unique lookup; identity-provider users may share an
   address (a family account, a provider that sends none). Options: A, unique on `lower(email)`
@@ -331,6 +335,7 @@ synthetic.
   unique, with local sign-in refusing an ambiguous address. Recommendation: A, with the rule
   stated in the admin UI, because it keeps one person per address and makes B17's matching (if
   ever on) unambiguous.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q2. What `email_matching` does when an organization turns it on.** Options: A, link an unknown
   identity to the single active user with the same address only when the provider marks the
   address verified (OIDC `email_verified`, or a JSON Pointer to a verified flag in an OAuth 2
@@ -338,17 +343,20 @@ synthetic.
   the per-provider trust flag; C, no automatic link, but offer the signed-in user a "link to your
   existing account" step that proves control of the old account first. Recommendation: A, with
   C as a later addition. Either way: two matching users means no link.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q3. Can an admin change the `status` of a user owned by an external source?** Suspending a
   synced user locally can fight the next `mode=full` sync run (M4) that would leave them active.
   Options: A, allow it, and have sync never unsuspend a user suspended by an admin (needs a
   "suspended by" marker the data model lacks); B, refuse it, so suspension happens at the source;
   C, allow it and let sync overwrite it. Recommendation: A, because an admin must be able to stop
   a compromised account at once; the marker can be a column added in M4.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q4. The default `tz` and how `tz` is validated.** Options for the default: A, `UTC`; B, an
   organization default timezone setting (an `OrgSettings` key, itself defaulting to `UTC`); C,
   the browser's zone sent at first sign-in. For validation, an IANA time zone database is needed:
   `jiff` (bundles or reads the system tzdb) or `chrono-tz`. Recommendation: B with `UTC` as its
   default, and `jiff` after `dependency-researcher`, since M1 due dates also need zone math.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q5. Configuration names and file layout.** Only `STEPCLIMB_BIND`, `STEPCLIMB_DATABASE_URL`,
   `STEPCLIMB_DATABASE_URL_FILE` and `STEPCLIMB_LOG` exist (`crates/stepclimb-server/src/config.rs`,
   `main.rs`). M0 needs at least the public base URL (for redirect URIs), the secret-encryption key
@@ -360,6 +368,7 @@ synthetic.
   TOML path joined by `__` (`STEPCLIMB_SERVER__BASE_URL`); B, flat names (`STEPCLIMB_BASE_URL`).
   Recommendation: providers A (it supports the plan's TOML and the plan's admin API); names B,
   matching the existing variables; one ADR records the full list and the `stepclimb.toml` layout.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 
 ## Issues
 

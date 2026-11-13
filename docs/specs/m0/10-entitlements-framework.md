@@ -196,6 +196,10 @@ at it by SQL, since M0 has no API for it.
 
 ## Open questions
 
+The owner accepted every recommendation below on 13 Nov 2026. Where a behavior or an issue
+says "pending Q<n>" or "Q<n> answered", build the recommended option; the owner can still
+overrule one, which then updates this spec.
+
 - **Q1. Which features the M0 catalog holds, and which routes check them.** The plan says the
   framework exists from M0 "so gating never has to be added later", and defers which plan gets
   which feature to M6. What can be gated has to be named now for the routes to carry the check.
@@ -207,12 +211,14 @@ at it by SQL, since M0 has no API for it.
   machinery, with a feature compiled in for tests alone, and each later milestone adds the
   features it introduces. Recommendation: A. It keeps the check on the routes from the start, and
   every listed feature is on for self-hosted and for every M6 tier until the owner sets tiers.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q2. The status and code for a disabled feature and for a reached limit.** Options: A, 403
   with `entitlement.feature_unavailable` and `entitlement.limit_reached`; B, 402 Payment
   Required, which says "upgrade" but is reserved for future use in RFC 9110; C, 404 for a
   disabled feature (as if the route did not exist) and 409 for a limit. Recommendation: A. The
   feature's existence is not secret (it is in `/me` and the docs), and a distinct `code` lets the
   web app show an upgrade prompt in M6.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 
 ## Issues
 

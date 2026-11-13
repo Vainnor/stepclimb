@@ -5,7 +5,7 @@ from a spec, one issue at a time; each issue is one reviewable PR. Rules:
 `.claude/rules/research-and-decisions.md` -> Specs. Template: `0000-template.md`.
 
 A spec decides nothing the plan leaves open: such points are under its **Open questions** for the
-owner. Code that departs from its spec updates the spec in the same PR.
+owner. For the M0 specs the owner accepted every recommended answer on 13 Nov 2026. Code that departs from its spec updates the spec in the same PR.
 
 ## M0 Foundations (full specs)
 

@@ -295,12 +295,17 @@ authenticator.
 
 ## Open questions
 
+The owner accepted every recommendation below on 13 Nov 2026. Where a behavior or an issue
+says "pending Q<n>" or "Q<n> answered", build the recommended option; the owner can still
+overrule one, which then updates this spec.
+
 - **Q1. Which local methods land in M0.** The M0 milestone names passkeys; the sign-in table
   dates local accounts (all four methods) at 1.0; magic links need email, which is M1. (a)
   Passkeys and enrollment links in M0, password and TOTP in M0 after them, magic link in M1;
   (b) passkeys only in M0, the rest by 1.0; (c) all four in M0, with the magic link unusable
   until M1 email. Recommendation: (a); password and TOTP need no email and give the pilot a
   fallback.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q2. Method switches: storage, endpoint and defaults.** `02-organizations-and-accounts.md`
   B14 names the switches as `OrgSettings` keys owned by this spec (written through `PATCH
   /api/v1/organization/settings` with `perm::OrgManage`), while `09-permissions-and-roles.md`
@@ -311,13 +316,16 @@ authenticator.
   says "optional magic link", which suggests off; it says nothing for the others.
   Recommendation: (b), so one permission covers every sign-in method, with passkey, password
   and TOTP on and magic link off.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q3. Where password hashes, TOTP secrets and one-time tokens are stored.** The data model has
   no column for them. (a) The proposed `local_logins` and `local_tokens` tables in Data; (b)
   columns on `users` (adds secrets to the most-read table); (c) one table per secret kind.
   Also the proposed `passkeys.credential_id` and `last_used_at` columns. Recommendation: (a),
   with both `passkeys` columns.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q4. The local identity's subject.** (a) The user's `id` as text, stable when the email
   changes; (b) the normalized email, which ties the identity to an address. Recommendation: (a).
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q5. Email uniqueness and case.** Sign-in by email needs one account per address per
   organization; `users.email` is optional and its uniqueness is `03-users-and-identities.md`
   Q1. (a) `UNIQUE (org_id, email_normalized)` in `local_logins`, with the address
@@ -325,17 +333,20 @@ authenticator.
   an SSO user and a local user from sharing an address; (c) lowercase only the domain part.
   Recommendation: (a); the local part is case-insensitive at nearly every mail provider, and
   (b) is 03's call.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q6. Enrollment before email.** The plan lists admin invites and self sign-up as ways in, but
   email is M1. (a) M0 enrollment links shown to the admin to hand over, lifetime 7 days, and
   local self sign-up waits for M1 email verification; (b) links with a 24-hour lifetime; (c) M0
   allows local self sign-up without email verification when sign-up is on. Recommendation:
   (a); (c) lets anyone claim any address.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q7. Bootstrapping the first admin.** A new instance has no one who can create an enrollment
   link. (a) `stepclimb admin create --email <address>` (the plan's CLI) creates the user,
   grants Organization admin and prints an enrollment link to stdout; (b) the first person to
   sign in becomes admin; (c) an admin email in configuration whose first sign-in is granted
   admin. Recommendation: (a); (b) races on a public server. Which spec owns the `admin create`
   command (it also needs `09-permissions-and-roles.md` for the grant) is part of this question.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q8. Password policy and hashing.** Policy: (a) 12 to 256 characters, no composition rules,
   following NIST SP 800-63B's direction of length over composition; (b) 8 minimum; (c) (a) plus
   a check against a bundled list of common passwords. argon2id parameters: the OWASP Password
@@ -343,17 +354,20 @@ authenticator.
   4 hashes at once (76 MiB peak at the minimum). On password change: end the user's other
   sessions or keep them. Recommendation: (c) with a list of the 10,000 most common passwords,
   the OWASP minimum, a cap of 4, and end other sessions.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q9. Email-first passkey sign-in and account enumeration.** The plan says "email plus passkey
   first". (a) Email first; for an unknown address, return request options with no credentials
   so the response looks like a known user with no passkey; (b) also offer username-less
   sign-in (discoverable credentials, browser autofill), with the WebAuthn user handle set to
   the user's `id`; (c) email first and answer 404 for unknown addresses. Recommendation: (a)
   in M0 and (b) later; (c) tells anyone who has an account.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q10. Recovery and the last method.** The plan does not say how someone who loses their only
   passkey gets back in. (a) An admin creates a new enrollment link (B6) and, when email exists,
   a magic link or emailed recovery link; (b) TOTP recovery codes also allow passkey
   re-enrollment; (c) self-service recovery by email only. Deleting one's last passkey or
   password: refuse with 409 `local.last_method`, or allow. Recommendation: (a), and refuse.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q11. TOTP.** (a) A second factor after the password, optional per user, with an
   organization setting to require it; (b) always required with a password; (c) an alternative
   to the password. Parameters: SHA-1, 6 digits, 30 seconds (what most authenticator apps
@@ -362,14 +376,17 @@ authenticator.
   crate: the plan names none, so the issue runs `dependency-researcher` (a candidate is
   `totp-rs`, unverified). Recommendation: (a), those parameters, 10 recovery codes, and
   disabling with a current code or a recovery code.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q12. WebAuthn policy.** User verification: required (the authenticator checks a PIN or
   biometric, so a passkey alone is two factors) or preferred. Attestation: none (no device
   vetting) or direct. A sign counter that goes backwards (a possible cloned authenticator):
   refuse and flag the passkey, or allow (synced passkeys often report 0). Recommendation:
   required, none, and refuse only when both stored and presented counters are non-zero.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 - **Q13. Magic links.** Lifetime: (a) 15 minutes; (b) 1 hour; (c) 10 minutes. Requests per
   address: at most one live link (a new request replaces it) or several. Build it in M0 with a
   test-only mail sink, or in M1 with email. Recommendation: (a), one live link, built in M1.
+  **Decided:** the recommendation (owner, 13 Nov 2026).
 
 ## Issues
 
