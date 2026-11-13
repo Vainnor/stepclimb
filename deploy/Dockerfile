@@ -30,9 +30,16 @@ COPY crates crates
 COPY migrations migrations
 COPY openapi openapi
 COPY --from=web /src/web/dist web/dist
+# The target cache is shared by every build on the machine, whichever checkout it comes from, and
+# cargo treats a workspace crate as fresh when its inputs are older than its last build. COPY keeps
+# the checkout's mtimes, so the inputs are touched to now first: every workspace crate, and what it
+# reads at compile time (migrations, .sqlx, web/dist), is compiled from these sources, while
+# third-party crates stay cached. The touch runs in this RUN so that a cached layer cannot carry an
+# older time.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
-    cargo build --release --locked -p stepclimb-server --bin stepclimb \
+    find Cargo.toml Cargo.lock .sqlx crates migrations web/dist -exec touch {} + \
+    && cargo build --release --locked -p stepclimb-server --bin stepclimb \
     && cp target/release/stepclimb /stepclimb
 
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
