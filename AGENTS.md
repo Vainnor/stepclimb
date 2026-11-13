@@ -148,7 +148,7 @@ just fmt / fmt-check   # cargo fmt
 just lint          # cargo clippy --workspace --all-targets --locked -- -D warnings
 just test-rust     # web build, then cargo nextest run --workspace and doctests
 just layering      # bin/check-layering.sh
-just lint-escapes  # bin/check-lint-escapes.py: no inner allows or wide expects around the OrgScope gate, one clippy.toml
+just lint-escapes  # bin/check-lint-escapes.py: no way around the OrgScope lint gate (inner allows, wide expects, lint config)
 just spdx-check    # bin/check-spdx.sh: SPDX headers on every source file
 just deny          # cargo deny check
 just migrate       # apply migrations to the local database

@@ -14,17 +14,32 @@
 //!    unauthenticated routes.
 //!
 //! `clippy.toml` lists both constructors under `disallowed-methods`, so `just lint` fails on a
-//! call that nothing silences. What is enforced mechanically:
+//! call that nothing silences. Threat model: the mechanical checks stop accidental and casual
+//! bypass; deliberate obfuscation is for the maintainer's line-by-line review.
+//!
+//! Enforced mechanically:
 //!
 //! - clippy refuses an outer `#[allow]` and any `allow` or `expect` without a reason;
-//! - `just lint-escapes` (`bin/check-lint-escapes.py`) refuses any inner `#![allow]`, any lint
-//!   attribute naming `disallowed_methods` other than an outer `#[expect]` on a `fn` (so not on
-//!   a file, a `mod` or an `impl`), any lint attribute on `clippy::all`, `clippy::style` or
-//!   `warnings`, and any `clippy.toml` besides the root one.
+//! - `just lint-escapes` (`bin/check-lint-escapes.py`, whose docstring has the full rule list)
+//!   refuses, in every `.rs` file of the repository: an inner `#![allow]`; a lint attribute
+//!   naming `disallowed_methods` other than an outer `#[expect]` on a `fn` (so not on a file, a
+//!   `mod` or an `impl`); one silencing `clippy::all`, `clippy::style`, `warnings`,
+//!   `renamed_and_removed_lints` or `unknown_lints`; a lint attribute built from a macro
+//!   variable. In configuration it refuses a second `clippy.toml`, a lint level below `deny`
+//!   for those names in any `Cargo.toml`, a member whose `[lints]` is not `workspace = true`,
+//!   and `rustflags`, wrappers, a `clippy` alias or `RUSTFLAGS`/`CLIPPY_CONF_DIR`-style
+//!   variables in a `.cargo/config`.
 //!
-//! What review still has to catch: a reasoned `#[expect]` on a wrapper `fn` that calls a
-//! constructor and is then called freely launders every call behind it. The `expect` belongs on
-//! a function that is itself an allowed call site; reviewers refuse a wrapper.
+//! Review-only:
+//!
+//! - a reasoned outer `#[expect]` on a wrapper `fn` that calls a constructor and is then called
+//!   freely;
+//! - `#[path = "..."]` or `include!` of a file outside the scanned tree, and code a build script
+//!   generates;
+//! - a lint attribute assembled by one macro and forwarded through another's `#[$x:meta]`, or
+//!   produced by a procedural macro;
+//! - lint flags or `CLIPPY_CONF_DIR` set in the shell environment, on the command line or in a
+//!   Cargo configuration outside the repository.
 //!
 //! An id from the client (a path parameter, a body field, a cursor, a header) never builds or
 //! changes a scope: there is no constructor from a bare id that a handler can reach without the

@@ -25,7 +25,7 @@ layering:
     bash bin/check-layering.sh
 
 # Fail on the ways around the OrgScope `disallowed-methods` gate clippy does not refuse (inner
-# allows, wide expects, a second clippy.toml); the self-test runs the script's fixtures first
+# allows, wide expects, lint settings in Cargo files); the self-test runs the script's fixtures first
 lint-escapes:
     python3 -X utf8 -B bin/check-lint-escapes.py --self-test
     python3 -X utf8 -B bin/check-lint-escapes.py
