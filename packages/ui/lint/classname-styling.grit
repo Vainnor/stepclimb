@@ -20,6 +20,6 @@ JsxAttribute(name=$name, initializer=$value) as $attribute where {
     },
     $specifiers <: contains $element
   },
-  $value <: contains r"(?s).*(?:^|[\s\"'`:!])(?:(?:text|bg|border(?:-[xytbse])?|ring|outline|fill|stroke|decoration|divide|placeholder|caret|accent)-(?:canvas|overlay|raised|sunken|brand|danger|fg|info|line|on-brand|ring|state|success|warning|inherit|current|transparent|black|white)(?:[\s\"'`/-]|$)|bg-\S|text-[\[(]|font-[\[(]|text-(?:xs|sm|base|lg|[2-9]?xl|caption|read)(?:[\s\"'`/]|$)|font-(?:thin|extralight|light|normal|medium|semibold|bold|extrabold|black|body|control|heading)(?:[\s\"'`]|$)).*",
+  $value <: contains r"(?s).*(?:^|[\s\"'`:!])(?:(?:text|bg|border(?:-[xytbse])?|ring-offset|ring|outline|fill|stroke|decoration|divide|placeholder|caret|accent)-(?:canvas|overlay|raised|sunken|brand|danger|fg|info|line|on-brand|ring|state|success|warning|inherit|current|transparent|black|white)(?:[\s\"'`/-]|$)|bg-\S|text-[\[(]|font-[\[(]|text-(?:xs|sm|base|lg|[2-9]?xl|caption|read)(?:[\s\"'`/]|$)|font-(?:thin|extralight|light|normal|medium|semibold|bold|extrabold|black|body|control|heading)(?:[\s\"'`]|$)).*",
   register_diagnostic(span=$attribute, message="className on a Stepclimb UI component is for layout only: change its color, background, border color, font size or weight through the component's variants.", severity="warn")
 }

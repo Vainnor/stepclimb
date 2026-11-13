@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { checkSource } from "./check-ui-lint.mjs";
+import { checkSource, tailwindPalette } from "./check-ui-lint.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const fixture = (name) => readFileSync(join(root, "bin/fixtures/ui-lint", name), "utf8");
@@ -44,10 +44,49 @@ describe("raw colors (B18, T7)", () => {
   it("fails a named color in a CSS value, not a token or a keyword", () => {
     assert.deepEqual(scan("named-color.css", "web/src/a.css"), ["3 raw-color"]);
   });
+  it("fails a raw color in a custom property, also in @theme", () => {
+    assert.deepEqual(
+      checkSource("web/src/a.css", fixture("custom-property.css")).map((f) => [f.line, f.text]),
+      [
+        [3, "#ff0000"],
+        [4, "white"],
+        [8, "oklch("],
+      ],
+    );
+  });
+  it("fails a color word only where it styles: in a style or className value", () => {
+    assert.deepEqual(scan("color-words.tsx", "web/src/a.tsx"), ["4 raw-color"]);
+  });
+  it("fails a named color in a Tailwind arbitrary property", () => {
+    const found = checkSource("web/src/a.tsx", fixture("arbitrary-property.tsx"));
+    assert.deepEqual(
+      found.map((f) => [f.rule, f.text]),
+      [
+        ["raw-color", "[color:red]"],
+        ["logical-properties", "[margin-left:4px]"],
+      ],
+    );
+  });
   it("names the file, the line, the rule and the fix", () => {
     const [f] = checkSource("packages/ui/src/a.tsx", fixture("hex-string.tsx"));
     assert.equal(f.file, "packages/ui/src/a.tsx");
     assert.match(f.message, /`#fff` is a raw color; use a token utility such as `bg-brand`/);
+  });
+});
+
+describe("the removed palette", () => {
+  it("is read from the pinned tailwindcss/theme.css, newer families included", () => {
+    const { shaded, single } = tailwindPalette();
+    for (const name of ["blue", "slate", "mauve", "olive", "mist", "taupe"]) {
+      assert.ok(shaded.includes(name), name);
+    }
+    assert.deepEqual(single, ["black", "white"]);
+  });
+  it("fails a class from any of its families", () => {
+    assert.deepEqual(
+      checkSource("web/src/a.tsx", fixture("palette-new.tsx")).map((f) => f.text),
+      ["text-mauve-500", "bg-taupe-950/50", "border-olive-100", "ring-mist-300", "text-white"],
+    );
   });
 });
 
@@ -56,6 +95,18 @@ describe("logical properties (Q2)", () => {
     assert.deepEqual(
       checkSource("web/src/a.tsx", fixture("physical.tsx")).map((f) => f.text),
       ["ml-2", "pr-4", "left-0", "text-right", "rounded-l-md"],
+    );
+  });
+  it("fails physical directions in a React style object", () => {
+    assert.deepEqual(
+      checkSource("web/src/a.tsx", fixture("style-object.tsx")).map((f) => [f.line, f.text]),
+      [
+        [5, "marginLeft: 4"],
+        [6, "left: 0"],
+        [7, "paddingRight: 2"],
+        [8, 'textAlign: "left"'],
+        [9, "borderTopLeftRadius: 2"],
+      ],
     );
   });
   it("fails physical-direction CSS", () => {
@@ -93,6 +144,8 @@ describe("Biome checks (B19, B20, T8, T9)", () => {
     "packages/ui/src/icon-lucide.tsx": "icon-lucide.tsx",
     "web/src/icon-phosphor.tsx": "icon-phosphor.tsx",
     "web/src/classname-color.tsx": "classname-color.tsx",
+    "web/src/classname-ring-offset.tsx": "classname-ring-offset.tsx",
+    "web/src/namespace-import.tsx": "namespace-import.tsx",
     "web/src/classname-layout.tsx": "classname-layout.tsx",
     "web/src/classname-suppressed.tsx": "classname-suppressed.tsx",
     "packages/ui/src/patterns/classname-relative.tsx": "classname-relative.tsx",
@@ -140,6 +193,12 @@ describe("Biome checks (B19, B20, T8, T9)", () => {
   it("warns on a color utility in a Stepclimb UI component's className", () => {
     assert.deepEqual(byFile["web/src/classname-color.tsx"], ["4 warning plugin"]);
   });
+  it("warns on ring-offset colors", () => {
+    assert.deepEqual(byFile["web/src/classname-ring-offset.tsx"], ["4 warning plugin"]);
+  });
+  it("refuses a namespace import of @stepclimb/ui, which the className rule cannot follow", () => {
+    assert.deepEqual(byFile["web/src/namespace-import.tsx"], ["2 error plugin"]);
+  });
   it("passes a layout utility, and colors on a plain element", () => {
     assert.equal(byFile["web/src/classname-layout.tsx"], undefined);
   });
@@ -157,5 +216,37 @@ describe("Biome checks (B19, B20, T8, T9)", () => {
     assert.equal(layout.status, 0, layout.stdout + layout.stderr);
     const run = biome(["--error-on-warnings", "web/src/classname-color.tsx"]);
     assert.notEqual(run.status, 0, run.stdout + run.stderr);
+  });
+});
+
+/**
+ * The className plugin names the token color families in its pattern (GritQL has no way to read
+ * the token build). Every Tailwind color the tokens define must start with one of them, and every
+ * family must still exist, so a token rename cannot leave the plugin blind.
+ */
+describe("the className plugin's color families (B20)", () => {
+  const keywords = ["inherit", "current", "transparent", "black", "white"];
+  const grit = readFileSync(join(root, "packages/ui/lint/classname-styling.grit"), "utf8");
+  const listed = /\|caret\|accent\)-\(\?:([a-z|-]+)\)/.exec(grit);
+  const families = (listed?.[1] ?? "").split("|").filter((f) => !keywords.includes(f));
+  const theme = readFileSync(join(root, "packages/tokens/build/css/tailwind-theme.css"), "utf8");
+  const colors = [...theme.matchAll(/--color-([a-z0-9-]+):/g)].map((m) => m[1]);
+  const covers = (family, color) => color === family || color.startsWith(`${family}-`);
+
+  it("reads both lists", () => {
+    assert.ok(families.length > 0, "no families found in the plugin");
+    assert.ok(colors.length > 0, "no colors in the token build");
+  });
+  it("covers every token color", () => {
+    assert.deepEqual(
+      colors.filter((c) => !families.some((f) => covers(f, c))),
+      [],
+    );
+  });
+  it("names no family the tokens lack", () => {
+    assert.deepEqual(
+      families.filter((f) => !colors.some((c) => covers(f, c))),
+      [],
+    );
   });
 });

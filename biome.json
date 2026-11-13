@@ -20,7 +20,10 @@
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
   "javascript": { "formatter": { "quoteStyle": "double", "semicolons": "always" } },
   "css": { "parser": { "tailwindDirectives": true } },
-  "plugins": ["./packages/ui/lint/classname-styling.grit"],
+  "plugins": [
+    "./packages/ui/lint/classname-styling.grit",
+    "./packages/ui/lint/named-ui-imports.grit"
+  ],
   "linter": {
     "enabled": true,
     "rules": {
