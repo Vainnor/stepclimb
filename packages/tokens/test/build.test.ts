@@ -27,8 +27,8 @@ describe("variables.css", () => {
     expect(css).toContain('[data-sc-brand="vzdc"][data-sc-theme="light"] {');
     expect(css).toContain('[data-sc-brand="vzdc"][data-sc-theme="dark"] {');
     expect(css).toContain('--sc-font-ui: "Roboto"');
-    // vZDC's brand in light mode is the deep red the plan gives as #500E0E.
-    expect(css).toContain("--sc-brand: oklch(31% 0.1 25);");
+    // vZDC's light brand: the step the generator takes for the plan's #500E0E.
+    expect(css).toContain("--sc-brand: oklch(31% 0.0808 25.87);");
   });
 
   it("names every variable with the sc- prefix", () => {

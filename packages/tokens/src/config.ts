@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The Terrazzo configuration: build/css/variables.css (every theme as CSS variables),
 // build/css/tailwind-theme.css (Tailwind 4's theme mapped onto those variables) and the docs
-// tables in build/docs/ (src/docs.ts). It takes the resolver path so a test can build a
-// modified copy of the token JSON with the same settings.
+// tables in build/docs/ (src/docs.ts). The themes are generated (src/themes.ts), checked against
+// the contrast report, and put into a copy of the resolver that Terrazzo reads. It takes the
+// resolver path and, optionally, the themes, so a test can build a modified copy of the token
+// JSON or a modified theme with the same settings.
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import type { Config, Plugin } from "@terrazzo/parser";
 import css from "@terrazzo/plugin-css";
 import { docsTables } from "./docs";
+import { type Theme, themeToDtcg } from "./generate";
 import { tailwindKey, variableName } from "./names";
+import { brandThemes, checkThemes } from "./themes";
 
 /**
  * Theme selectors. The page's `data-sc-theme` wins over the OS setting (plan, UI tab -> What we
@@ -15,14 +20,21 @@ import { tailwindKey, variableName } from "./names";
  */
 const wrap = (selectors: string[]) => (contents: string) =>
   `${selectors.join(",\n")} {\n${contents}\n}`;
-const media = (selectors: string[]) => (contents: string) =>
-  `@media (prefers-color-scheme: dark) {\n  ${selectors.join(",\n  ")} {\n${contents}\n  }\n}`;
+const media = (query: string, selectors: string[]) => (contents: string) =>
+  `@media ${query} {\n  ${selectors.join(",\n  ")} {\n${contents}\n  }\n}`;
 
 /**
  * The OS dark setting applies only when the page chose neither light nor high contrast; without
  * the second `:not`, this selector's higher specificity would beat `[data-sc-theme="high-contrast"]`.
  */
 const osDark = ':not([data-sc-theme="light"]):not([data-sc-theme="high-contrast"])';
+
+/**
+ * The OS contrast setting selects high contrast when the page chose neither light nor dark (spec
+ * 12, Q5). It comes after the OS dark rule with the same specificity, so with both OS settings on
+ * high contrast wins, as ThemeProvider decides.
+ */
+const osContrast = ':not([data-sc-theme="light"]):not([data-sc-theme="dark"])';
 
 /**
  * Theme permutations carry only what changes between themes. Everything else (space, type,
@@ -32,7 +44,8 @@ const osDark = ':not([data-sc-theme="light"]):not([data-sc-theme="high-contrast"
 const themed = ["color.*", "font.ui"];
 
 /**
- * One brand's light, dark (by attribute, then by OS setting) and high-contrast permutations.
+ * One brand's light, dark (by attribute, then by OS setting) and high-contrast (by attribute, then
+ * by OS setting) permutations.
  * A brand's selectors compound `data-sc-brand` with `data-sc-theme`, so both attributes must be
  * on the same element; a `data-sc-theme` alone on an inner element selects the default brand.
  */
@@ -48,12 +61,17 @@ function brandPermutations(brand: string, attr: string) {
     {
       input: { theme: `${brand}-dark` },
       include: themed,
-      prepare: media([`:root${attr}${osDark}`]),
+      prepare: media("(prefers-color-scheme: dark)", [`:root${attr}${osDark}`]),
     },
     {
       input: { theme: `${brand}-high-contrast` },
       include: themed,
       prepare: wrap([`${attr}[data-sc-theme="high-contrast"]`]),
+    },
+    {
+      input: { theme: `${brand}-high-contrast` },
+      include: themed,
+      prepare: media("(prefers-contrast: more)", [`:root${attr}${osContrast}`]),
     },
   ];
 }
@@ -87,9 +105,71 @@ function tailwindTheme(): Plugin {
   };
 }
 
-export function tokensConfig(resolver: string): Config {
+/** Every relative `$ref` in `node` made absolute against `base`; `#` pointers stay as they are. */
+function absoluteRefs(node: unknown, base: URL): unknown {
+  if (Array.isArray(node)) return node.map((n) => absoluteRefs(n, base));
+  if (node === null || typeof node !== "object") return node;
+  return Object.fromEntries(
+    Object.entries(node).map(([key, value]) =>
+      key === "$ref" && typeof value === "string" && !value.startsWith("#")
+        ? [key, new URL(value, base).href]
+        : [key, absoluteRefs(value, base)],
+    ),
+  );
+}
+
+interface ResolverDoc {
+  modifiers?: { theme?: { contexts?: Record<string, unknown[]> } };
+}
+
+/**
+ * The resolver with each theme context filled with its generated theme, inline. The source
+ * resolver's theme contexts must name exactly the generated themes.
+ */
+function generatedResolver(resolver: URL, themes: Map<string, Theme>): object {
+  const doc = absoluteRefs(JSON.parse(readFileSync(resolver, "utf8")), resolver) as ResolverDoc;
+  const contexts = doc.modifiers?.theme?.contexts;
+  if (!contexts) throw new Error(`${resolver.pathname}: no theme modifier`);
+  const declared = Object.keys(contexts).sort().join(", ");
+  const generated = [...themes.keys()].sort().join(", ");
+  if (declared !== generated) {
+    throw new Error(
+      `${resolver.pathname}: the theme contexts (${declared}) are not the generated themes (${generated})`,
+    );
+  }
+  for (const [name, theme] of themes) contexts[name] = [themeToDtcg(theme)];
+  return doc;
+}
+
+/** Writes the file whole or not at all, so a concurrent reader never sees half of it. */
+function writeAtomically(file: URL, contents: string): void {
+  const partial = new URL(`${file.href}.${process.pid}.partial`);
+  writeFileSync(partial, contents);
+  renameSync(partial, file);
+}
+
+export interface TokensOptions {
+  /** The shipped themes by context name; the generated default and vZDC themes when absent. */
+  themes?: Map<string, Theme>;
+  /** Where the generated resolver is written; `build/tokens/` when absent. */
+  generatedDir?: URL;
+}
+
+/**
+ * The build's configuration. Throws `ThemeContrastError`, failing the build, when a theme has a
+ * failing contrast pair (spec 12, B22).
+ */
+export function tokensConfig(resolver: string, options: TokensOptions = {}): Config {
+  const cwd = pathToFileURL(`${process.cwd()}/`);
+  const source = new URL(resolver, cwd);
+  const themes = options.themes ?? brandThemes();
+  checkThemes(themes);
+  const dir = options.generatedDir ?? new URL("build/tokens/", cwd);
+  mkdirSync(dir, { recursive: true });
+  const generated = new URL("resolver.json", dir);
+  writeAtomically(generated, `${JSON.stringify(generatedResolver(source, themes), null, 2)}\n`);
   return {
-    tokens: [resolver],
+    tokens: [generated.href],
     outDir: "./build/",
     plugins: [
       css({
@@ -109,9 +189,7 @@ export function tokensConfig(resolver: string): Config {
         ],
       }),
       tailwindTheme(),
-      docsTables(
-        new URL("descriptions.json", new URL(resolver, pathToFileURL(`${process.cwd()}/`))),
-      ),
+      docsTables(new URL("descriptions.json", source)),
     ],
   };
 }

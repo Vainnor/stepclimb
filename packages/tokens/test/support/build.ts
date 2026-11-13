@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Runs the package's Terrazzo build in memory against any resolver, so a test can build a
-// modified copy of the token JSON with exactly the settings `tz build` uses.
+// Runs the package's Terrazzo build in memory against any resolver and any set of themes, so a
+// test can build a modified copy of the token JSON, or a modified theme, with exactly the
+// settings `tz build` uses. The generated resolver goes to a temporary directory of its own.
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import { pathToFileURL } from "node:url";
 import { loadTokens } from "@terrazzo/cli";
 import { build, defineConfig, Logger, parse } from "@terrazzo/parser";
 import { tokensConfig } from "../../src/config";
+import type { Theme } from "../../src/generate";
 
 export interface Built {
   variables: string;
@@ -20,9 +22,26 @@ export interface Built {
 
 export const tokensDir = new URL("../../src/tokens/", import.meta.url);
 
-export async function buildTokens(dir: URL = tokensDir): Promise<Built> {
+export async function buildTokens(
+  dir: URL = tokensDir,
+  themes?: Map<string, Theme>,
+): Promise<Built> {
+  const generatedDir = mkdtempSync(join(tmpdir(), "sc-tokens-resolver-"));
+  try {
+    return await runBuild(dir, themes, pathToFileURL(`${generatedDir}/`));
+  } finally {
+    rmSync(generatedDir, { recursive: true, force: true });
+  }
+}
+
+async function runBuild(
+  dir: URL,
+  themes: Map<string, Theme> | undefined,
+  generatedDir: URL,
+): Promise<Built> {
   const logger = new Logger({ level: "error" });
-  const config = defineConfig(tokensConfig(new URL("resolver.json", dir).href), {
+  const options = { generatedDir, ...(themes ? { themes } : {}) };
+  const config = defineConfig(tokensConfig(new URL("resolver.json", dir).href, options), {
     cwd: new URL("../../", import.meta.url),
     logger,
   });

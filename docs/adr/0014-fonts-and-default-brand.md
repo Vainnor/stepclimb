@@ -20,5 +20,5 @@ high-contrast themes.
 
 ## Consequences
 
-The fonts are OFL and installed from `@fontsource`. The values are in
-`packages/tokens/src/tokens/themes/`.
+The fonts are OFL and installed from `@fontsource`. The theme generator produces the values
+from the brand inputs in `packages/tokens/src/themes.ts`.

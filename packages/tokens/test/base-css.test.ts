@@ -13,8 +13,8 @@ import { computed, type Element, parseRules, type Rule } from "./support/cascade
 const baseCss = readFileSync(new URL("../../ui/src/styles/base.css", import.meta.url), "utf8");
 
 let rules: Rule[];
-const scheme = (chain: Element[], dark: boolean) =>
-  computed(rules, chain, { dark }).get("color-scheme");
+const scheme = (chain: Element[], dark: boolean, contrast = false) =>
+  computed(rules, chain, { dark, contrast }).get("color-scheme");
 const root = (theme?: string): Element => ({
   root: true,
   attrs: theme ? { "data-sc-theme": theme } : {},
@@ -50,6 +50,20 @@ describe("base.css color-scheme", () => {
     expect(scheme([root(page), inner(sub)], false)).toBe(expected);
     expect(scheme([root(page), inner(sub)], true)).toBe(expected);
   });
+
+  it.each([
+    [undefined, false, "light"],
+    [undefined, true, "light"],
+    ["dark", true, "dark"],
+    ["dark", false, "dark"],
+    ["light", true, "light"],
+    ["high-contrast", true, "light"],
+  ])(
+    "with OS contrast on, is right for the page theme %s with OS dark %s",
+    (theme, dark, expected) => {
+      expect(scheme([root(theme)], dark, true)).toBe(expected);
+    },
+  );
 
   it("follows the OS dark setting into a subtree with no theme", () => {
     expect(scheme([root(), { attrs: {} }], true)).toBe("dark");

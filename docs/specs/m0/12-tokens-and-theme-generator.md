@@ -77,13 +77,15 @@ it at `packages/tokens/tokens/`. See Open question Q1.
   grading queue) can be compact inside a comfortable page. Comfortable is the default with no
   attribute. Density never changes `--sc-control-touch`.
 - **B5.** A high-contrast theme exists for every brand and applies on
-  `[data-sc-theme="high-contrast"]` (the plan's generated CSS). Whether `prefers-contrast: more`
-  or `forced-colors` also selects it is Open question Q5.
+  `[data-sc-theme="high-contrast"]` (the plan's generated CSS). `@media (prefers-contrast: more)`
+  also selects it on `:root` when the page sets neither `light` nor `dark`, and wins over
+  `prefers-color-scheme: dark` there, as ThemeProvider decides (Q5). `forced-colors` is handled
+  in the base styles (13), not by a theme.
 - **B6.** The plan's other named-but-unvalued tokens are added once Q4 gives values: the reading
   size and line height (17 to 18 px at 1.65 to 1.7), the floating-layer shadow (one soft shadow;
   panels use a 1 px line and no shadow), and the overlay scrim.
-- **B7.** Token changes are made in the JSON and rebuilt; nothing edits `build/`
-  (`.claude/rules/ui.md`).
+- **B7.** Token changes are made in the JSON (colors: the generator's inputs and stops, B23) and
+  rebuilt; nothing edits `build/` (`.claude/rules/ui.md`).
 
 ### Build outputs
 
@@ -121,7 +123,11 @@ it at `packages/tokens/tokens/`. See Open question Q1.
   text on `brand-soft` and on `bg-canvas`, `ring` the step that clears 3:1 against `bg-canvas`
   and `bg-raised`.
 - **B16.** Dark and high-contrast themes are derived from the same input, not authored
-  (`docs/plan/ui.md` -> Organization theming). The high-contrast target is Open question Q10.
+  (`docs/plan/ui.md` -> Organization theming). Each appearance has its own brand and neutral
+  stops, fitted so the default brand reproduces its themes (Q9). In dark, `on-brand` is the
+  scale's dark end and `brand` the passing step nearest lightness 0.76; in high contrast the
+  neutrals are grey, `brand` the passing step nearest 0.38 and `brand-fg` one step past it. The
+  high-contrast target is Q10's: 7:1 text, 4.5:1 UI.
 - **B17.** Status colors (`success`, `warning`, `danger`, `info`) do not follow the brand. The
   hand-written vZDC themes already carry the default's status values unchanged; the generator
   keeps that, with one set per appearance including high contrast.
@@ -152,7 +158,12 @@ it at `packages/tokens/tokens/`. See Open question Q1.
   | each `state-*` on `bg-canvas` and `bg-raised` | 3:1 | Learning-state icons and shapes |
 
   `fg-disabled` is not checked: WCAG exempts disabled controls. The high-contrast theme's pairs
-  use Q10's minimums.
+  use Q10's minimums. A learning state is measured as the token it aliases (Q3).
+
+  The report also carries warnings, which never fail a theme. One exists: `brand-near-danger`,
+  when `brand`'s hue is under 30 degrees from `danger`'s and `brand`'s chroma is at least 0.04,
+  since a learner may then take an in-progress state for an overdue one (coordinator decision,
+  13 Nov 2026).
 - **B21.** A palette with any failing pair cannot be saved (`docs/plan/ui.md` -> Organization
   theming, Guardrails). The server runs the report on the generated theme before saving and
   refuses with the report attached. The browser preview runs the same function, so the screen
@@ -163,8 +174,12 @@ it at `packages/tokens/tokens/`. See Open question Q1.
 ### Build time and server
 
 - **B23.** At build time the generator produces the default brand's themes (and the vZDC
-  example's, which Storybook uses). Whether its output replaces the hand-written default and
-  vZDC JSON or is checked against them is Open question Q11.
+  example's, which Storybook uses). Its output replaces the hand-written theme JSON (Q11):
+  `src/themes.ts` names each brand's inputs, and the Terrazzo config generates every theme, runs
+  the report (B22), and writes a copy of `resolver.json` with each theme context filled inline
+  to `build/tokens/resolver.json`, which Terrazzo reads. The source resolver's theme contexts are
+  empty. Generated colors are inside sRGB (B13), so `variables.css` has no `color-gamut`
+  overrides.
 - **B24.** When an organization admin saves branding, the server validates the inputs, generates
   the theme, runs the report (B21), stores the inputs and the rendered CSS with its hash, and
   serves that CSS at `/theme.css` (11-app-shell B20) from then on. How the TypeScript generator
@@ -348,6 +363,41 @@ overrule one, which then updates this spec.
   and appearance selects, the report as a table, no preview component). Recommendation: (b),
   so vZDC staff can brand the test server at the week-2 checkpoint without the API.
   **Decided:** the recommendation (owner, 13 Nov 2026).
+
+### Coordinator decisions (2026-11-13)
+
+Taken on the owner's delegation while building I3 to I5 (PR for #75, #76, #77); the owner can
+overrule any of them.
+
+- **Coordinator decision (2026-11-13): WCAG AA over the plan's example values.** The plan's
+  principle, WCAG 2.2 AA in every theme, wins where its example values fail B20. Each value moves
+  by the smallest lightness change that passes on 8-bit sRGB for every brand hue (the neutrals
+  carry the brand's hue), keeping hue and chroma: light `warning` 0.72 to 0.663 (so
+  `state-review` clears 3:1 on `bg-canvas` and `bg-raised`), light `line-strong` 0.78 to 0.655
+  (3:1 on both), light `fg-soft` 0.55 to 0.533 (4.5:1 on `bg-sunken`, which also lifts the
+  placeholder text of Select, ComboBox and TextField), and dark `line-strong` 0.42 to 0.507 (3:1
+  on both, the same rule applied to the dark theme). `docs/plan/` is unchanged; the owner may
+  update the plan's table.
+- **Coordinator decision (2026-11-13): OS contrast setting.** `prefers-contrast: more` selects
+  high contrast (B5). `shadow.float` stays as it is in every theme; dark relies on the 1 px line.
+- **Coordinator decision (2026-11-13): Q8's open values.** Corner style `square` sets every
+  radius to 0 except `pill`; `round` doubles `xs`, `sm` and `md` (`pill` unchanged). A sans
+  reading font is the organization's UI font. The M0 UI fonts are Atkinson Hyperlegible Next and
+  Roboto only. The generator does not take corner style or reading font yet; they arrive with the
+  branding inputs of I7 and I8.
+- **Coordinator decision (2026-11-13): vZDC's brand and danger.** vZDC's brand red sits about 1
+  degree of hue from `danger`, so in-progress and overdue look alike apart from their shapes and
+  icons. Accepted for M0; the report's `brand-near-danger` warning (B20) flags it.
+- **Coordinator decision (2026-11-13): dark and high-contrast brand steps (Q9).** Light keeps
+  Q9's rule (the passing step nearest the input's lightness). Dark and high contrast aim at the
+  plan's lightness for the appearance, 0.76 and 0.38, since there the canvas and the minimums
+  fix how light the brand must be. The generated dark brand keeps the input's hue (195 for the
+  default brand) where the plan writes 190, a difference of 0.009 in OKLab.
+- **Coordinator decision (2026-11-13): no wide-gamut overrides.** The hand-written themes gave
+  P3 and Rec. 2020 displays the plan's unmapped colors through `@media (color-gamut: ...)`. The
+  generator writes sRGB colors only (B13), so those overrides are gone. A wide-gamut display now
+  shows the sRGB value; the largest difference in the default brand is `brand-hover`'s in light,
+  0.014 in OKLab.
 
 ## Issues
 

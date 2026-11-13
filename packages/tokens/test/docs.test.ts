@@ -248,16 +248,16 @@ describe("the docs build", () => {
     ).rejects.toThrow("docs tables: descriptions.json describes color.nope, which is not a token");
   });
 
-  it("fails when a theme file describes a color differently from descriptions.json", async () => {
+  it("fails when a color's JSON describes it differently from descriptions.json", async () => {
     await expect(
       buildEdited(
-        "themes/default-light.json",
+        "learning.json",
         editJson((json) => {
-          at(json, "color", "bg-overlay").$description = "Something else";
+          at(json, "color", "state-locked").$description = "Something else";
         }),
       ),
     ).rejects.toThrow(
-      "docs tables: color.bg-overlay is described differently in its JSON and in descriptions.json",
+      "docs tables: color.state-locked is described differently in its JSON and in descriptions.json",
     );
   });
 

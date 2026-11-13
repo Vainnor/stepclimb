@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The theme generator (src/generate.ts) against spec 12: B11 to B15, B18 and B19; T5, T6 and T8,
-// and the decided Q9 (the default brand reproduces its light values). Contrast is measured with
-// colorjs.io, not with the generator's own function.
-import { readFileSync } from "node:fs";
+// The theme generator (src/generate.ts) against spec 12: B11 to B17, B18 and B19; T5 to T8, and
+// the decided Q9 and Q11 (the default brand reproduces its themes in every appearance). Contrast
+// is measured with colorjs.io, not with the generator's own function.
 import Color from "colorjs.io";
 import { describe, expect, it } from "vitest";
 import { type Oklch, parseColor } from "../src/color";
 import {
+  type Appearance,
+  appearances,
   type BrandInputs,
   brandTokens,
   colorTokens,
@@ -19,24 +20,20 @@ import {
   type UiFont,
 } from "../src/generate";
 import { variableName } from "../src/names";
-import { buildEdited, tokensDir } from "./support/build";
+import { contrastReport } from "../src/report";
+import { brandThemes } from "../src/themes";
+import { buildTokens, tokensDir } from "./support/build";
+import { defaultThemes } from "./support/default-themes";
 import { mulberry32 } from "./support/random";
 
 /** The seed of the brand-color sweep; a failure prints the input, and this replays it. */
 const SEED = 0x7e5c12;
 
-interface DtcgColor {
-  $value: { colorSpace: string; components: [number, number, number]; alpha?: number };
-}
-const themeFile = (name: string) =>
-  JSON.parse(readFileSync(new URL(`themes/${name}.json`, tokensDir), "utf8")) as {
-    color: Record<string, DtcgColor>;
-    font: { ui: { $value: string[] } };
-  };
-const fromDtcg = ({ $value: { components, alpha } }: DtcgColor): Oklch => ({
-  l: components[0],
-  c: components[1],
-  h: components[2],
+type Value = (typeof defaultThemes)["light"]["brand"];
+const fromValue = ([l, c, h, alpha]: Value): Oklch => ({
+  l,
+  c,
+  h,
   ...(alpha === undefined ? {} : { alpha }),
 });
 const ref = (c: Oklch) => new Color("oklch", [c.l, c.c, c.h]);
@@ -64,9 +61,9 @@ const VZDC_RULE = `[data-sc-brand="vzdc"] {
   --sc-fg-strong: oklch(22% 0.014 25.87);
   --sc-fg-default: oklch(31% 0.013 25.87);
   --sc-fg-sub: oklch(46% 0.012 25.87);
-  --sc-fg-soft: oklch(55% 0.01 25.87);
+  --sc-fg-soft: oklch(53.3% 0.01 25.87);
   --sc-fg-disabled: oklch(70% 0.008 25.87);
-  --sc-line-strong: oklch(78% 0.012 25.87);
+  --sc-line-strong: oklch(65.5% 0.012 25.87);
   --sc-line: oklch(88.5% 0.009 25.87);
   --sc-line-soft: oklch(93% 0.006 25.87);
   --sc-brand: oklch(31% 0.0808 25.87);
@@ -78,7 +75,7 @@ const VZDC_RULE = `[data-sc-brand="vzdc"] {
   --sc-success: oklch(55% 0.12 150);
   --sc-success-soft: oklch(95% 0.03 150);
   --sc-success-fg: oklch(42% 0.1 150);
-  --sc-warning: oklch(72% 0.14 75);
+  --sc-warning: oklch(66.3% 0.1398 74.97);
   --sc-warning-soft: oklch(96% 0.04 85);
   --sc-warning-fg: oklch(47% 0.1 65);
   --sc-danger: oklch(55% 0.18 27);
@@ -110,56 +107,137 @@ function sweep(): string[] {
   return [...named, defaultBrand.primary, vzdcBrand.primary, ...swept];
 }
 
+/** The learning states' targets (spec 12, Q3), restated for the test. */
+const stateTargets: Record<string, string> = {
+  "state-locked": "fg-soft",
+  "state-available": "fg-sub",
+  "state-progress": "brand",
+  "state-complete": "success",
+  "state-overdue": "danger",
+  "state-review": "warning",
+};
+const resolve = (t: Theme, token: string): Oklch =>
+  t.colors[(stateTargets[token] ?? token) as keyof Theme["colors"]];
+
 const allColors = (t: Theme) => colorTokens.map((token) => [token, t.colors[token]] as const);
 
 describe("generate", () => {
-  it("reproduces the default brand's light theme (Q9)", () => {
-    const { light } = generate(defaultBrand);
-    const file = themeFile("default-light");
-    expect(Object.keys(light.colors).sort()).toEqual(Object.keys(file.color).sort());
-    for (const [token, color] of allColors(light)) {
-      const expected = file.color[token];
-      if (!expected) throw new Error(`default-light.json has no ${token}`);
-      // The plan's value as colorjs.io maps it into sRGB, the way Terrazzo writes variables.css.
-      const mapped = ref(fromDtcg(expected)).toGamut({ space: "srgb", method: "css" });
+  it.each(appearances)("reproduces the default brand's %s theme (Q9, Q11)", (appearance) => {
+    const theme = generate(defaultBrand)[appearance];
+    const expected = defaultThemes[appearance];
+    expect(theme.appearance).toBe(appearance);
+    expect(Object.keys(theme.colors).sort()).toEqual(Object.keys(expected).sort());
+    for (const [token, color] of allColors(theme)) {
+      const value = fromValue(expected[token]);
+      // The value as colorjs.io maps it into sRGB (CSS Color 4).
+      const mapped = ref(value).toGamut({ space: "srgb", method: "css" });
       expect(ref(color).deltaE(mapped, "OK"), token).toBeLessThan(2e-4);
-      expect(color.alpha, token).toBe(expected.$value.alpha);
+      expect(color.alpha, token).toBe(value.alpha);
     }
-    expect(light.font.ui).toEqual(file.font.ui.$value);
+    expect(theme.font.ui).toEqual([
+      "Atkinson Hyperlegible Next",
+      "Segoe UI",
+      "system-ui",
+      "sans-serif",
+    ]);
   });
 
   it("is deterministic: the same inputs give byte-identical CSS and JSON (T5)", () => {
     for (const inputs of [defaultBrand, vzdcBrand, { primary: "#f8f000" }]) {
-      const a = generate(inputs).light;
-      const b = generate({ ...inputs }).light;
-      expect(themeToCss(a, ":root")).toBe(themeToCss(b, ":root"));
-      expect(JSON.stringify(themeToDtcg(a))).toBe(JSON.stringify(themeToDtcg(b)));
+      for (const appearance of appearances) {
+        const a = generate(inputs)[appearance];
+        const b = generate({ ...inputs })[appearance];
+        expect(themeToCss(a, ":root")).toBe(themeToCss(b, ":root"));
+        expect(JSON.stringify(themeToDtcg(a))).toBe(JSON.stringify(themeToDtcg(b)));
+      }
     }
   });
 
   it("emits only colors inside sRGB, for every brand in the sweep (T6, B13)", () => {
     for (const primary of sweep()) {
-      for (const [token, color] of allColors(generate({ primary }).light)) {
-        expect(ref(color).inGamut("srgb"), `${primary} ${token} ${cssColor(color)}`).toBe(true);
+      const themes = generate({ primary });
+      for (const appearance of appearances) {
+        for (const [token, color] of allColors(themes[appearance])) {
+          const at = `${primary} ${appearance} ${token} ${cssColor(color)}`;
+          expect(ref(color).inGamut("srgb"), at).toBe(true);
+        }
       }
     }
   });
 
-  it("picks brand tokens that clear their contrast, for every brand in the sweep (B14, B15)", () => {
+  /** The contrast minimums per appearance (spec 12, B20 and Q10), restated for the test. */
+  const minimum: Record<Appearance, { text: number; ui: number }> = {
+    light: { text: 4.5, ui: 3 },
+    dark: { text: 4.5, ui: 3 },
+    "high-contrast": { text: 7, ui: 4.5 },
+  };
+
+  it.each(appearances)(
+    "picks %s brand tokens that clear their contrast, for every brand in the sweep (B14, B15)",
+    (appearance) => {
+      const { text, ui } = minimum[appearance];
+      // on-brand is the light end in light and high contrast, the dark end in dark (B14).
+      const lightEnd = appearance !== "dark";
+      for (const primary of sweep()) {
+        const c = generate({ primary })[appearance].colors;
+        const at = `${primary} ${appearance}: `;
+        expect(contrast(c["on-brand"], c.brand), `${at}on-brand on brand`).toBeGreaterThanOrEqual(
+          text,
+        );
+        expect(c["on-brand"].l > c.brand.l, `${at}on-brand's end`).toBe(lightEnd);
+        expect(c["brand-hover"].l < c.brand.l, `${at}hover is past brand`).toBe(lightEnd);
+        expect(contrast(c["brand-fg"], c["brand-soft"]), `${at}brand-fg`).toBeGreaterThanOrEqual(
+          text,
+        );
+        expect(contrast(c["brand-fg"], c["bg-canvas"]), `${at}brand-fg`).toBeGreaterThanOrEqual(
+          text,
+        );
+        expect(contrast(c.ring, c["bg-canvas"]), `${at}ring`).toBeGreaterThanOrEqual(ui);
+        expect(contrast(c.ring, c["bg-raised"]), `${at}ring`).toBeGreaterThanOrEqual(ui);
+        expect(
+          Math.abs(c["brand-soft"].l - c["bg-canvas"].l) < Math.abs(c.brand.l - c["bg-canvas"].l),
+          `${at}brand-soft is a tint near the canvas`,
+        ).toBe(true);
+      }
+    },
+  );
+
+  it("passes its contrast report in every appearance, for every brand in the sweep (T7)", () => {
     for (const primary of sweep()) {
-      const c = generate({ primary }).light.colors;
-      const at = `${primary}: `;
-      expect(contrast(c["on-brand"], c.brand), `${at}on-brand on brand`).toBeGreaterThanOrEqual(
-        4.5,
-      );
-      expect(c["on-brand"].l, `${at}on-brand is the light end`).toBeGreaterThan(c["brand-soft"].l);
-      expect(c["brand-hover"].l, `${at}hover is past brand`).toBeLessThan(c.brand.l);
-      expect(contrast(c["brand-fg"], c["brand-soft"]), `${at}brand-fg`).toBeGreaterThanOrEqual(4.5);
-      expect(contrast(c["brand-fg"], c["bg-canvas"]), `${at}brand-fg`).toBeGreaterThanOrEqual(4.5);
-      expect(contrast(c.ring, c["bg-canvas"]), `${at}ring`).toBeGreaterThanOrEqual(3);
-      expect(contrast(c.ring, c["bg-raised"]), `${at}ring`).toBeGreaterThanOrEqual(3);
-      expect(c["brand-soft"].l, `${at}brand-soft is a tint`).toBeGreaterThan(c.brand.l);
+      const themes = generate({ primary });
+      for (const appearance of appearances) {
+        const report = contrastReport(themes[appearance]);
+        const failing = report.pairs.filter((p) => !p.pass);
+        expect(failing, `${primary} ${appearance}`).toEqual([]);
+        // colorjs.io measures every pair as passing too, at the report's ratio within 0.05%,
+        // so the report does not grade itself.
+        for (const p of report.pairs) {
+          const at = `${primary} ${appearance} ${p.foreground} on ${p.background}`;
+          const measured = contrast(
+            resolve(themes[appearance], p.foreground),
+            resolve(themes[appearance], p.background),
+          );
+          expect(measured, at).toBeGreaterThanOrEqual(p.minimum);
+          expect(Math.abs(p.ratio - measured) / measured, at).toBeLessThan(5e-4);
+          expect(p.minimum).toBe(
+            minimum[appearance][/^fg-|-fg$|^on-brand$/.test(p.foreground) ? "text" : "ui"],
+          );
+        }
+      }
     }
+  });
+
+  it("derives dark and high contrast from the input's hue, not from a fixed palette (B16)", () => {
+    const vzdc = generate(vzdcBrand);
+    const teal = generate(defaultBrand);
+    for (const appearance of ["dark", "high-contrast"] as const) {
+      // Gamut mapping moves a hue by at most a degree here.
+      expect(Math.abs(vzdc[appearance].colors.brand.h - 25.87), appearance).toBeLessThan(1);
+      expect(Math.abs(teal[appearance].colors.brand.h - 195), appearance).toBeLessThan(1);
+    }
+    expect(vzdc.dark.colors["bg-canvas"].h).toBeCloseTo(25.87, 1);
+    // High contrast's neutrals are grey for every brand.
+    expect(vzdc["high-contrast"].colors["bg-sunken"]).toEqual({ l: 0.96, c: 0, h: 0 });
   });
 
   it("clears 4.5:1 on the displayed 8-bit colors where the exact ones barely pass", () => {
@@ -196,27 +274,32 @@ describe("generate", () => {
   });
 
   it("keeps the default status colors and outputs no structure tokens (T8, B17, B18)", () => {
-    const file = themeFile("default-light");
+    const statuses = ["success", "warning", "danger", "info"].flatMap(
+      (st) => [st, `${st}-soft`, `${st}-fg`] as const,
+    ) as (keyof Theme["colors"])[];
+    const defaults = generate(defaultBrand);
     for (const primary of [vzdcBrand.primary, "#f8f000", "#0a1030"]) {
-      const theme = generate({ primary }).light;
-      for (const s of ["success", "warning", "danger", "info"]) {
-        for (const token of [s, `${s}-soft`, `${s}-fg`] as const) {
-          const expected = file.color[token];
-          if (!expected) throw new Error(`default-light.json has no ${token}`);
-          const mapped = ref(fromDtcg(expected)).toGamut({ space: "srgb", method: "css" });
-          const color = theme.colors[token as keyof Theme["colors"]];
-          expect(ref(color).deltaE(mapped, "OK"), token).toBeLessThan(2e-4);
+      const themes = generate({ primary });
+      for (const appearance of appearances) {
+        const theme = themes[appearance];
+        for (const token of statuses) {
+          expect(theme.colors[token], `${appearance} ${token}`).toEqual(
+            defaults[appearance].colors[token],
+          );
         }
+        const dtcg = themeToDtcg(theme) as Record<string, Record<string, unknown>>;
+        expect(Object.keys(dtcg).sort()).toEqual(["color", "font"]);
+        expect(Object.keys(dtcg.font ?? {})).toEqual(["ui"]);
+        expect(themeToCss(theme, ":root")).not.toMatch(/--sc-(space|text|weight|control|radius)/);
       }
-      const dtcg = themeToDtcg(theme) as Record<string, Record<string, unknown>>;
-      expect(Object.keys(dtcg).sort()).toEqual(["color", "font"]);
-      expect(Object.keys(dtcg.font ?? {})).toEqual(["ui"]);
-      expect(themeToCss(theme, ":root")).not.toMatch(/--sc-(space|text|weight|control|radius)/);
     }
   });
 
-  it("uses the chosen UI font and refuses others", () => {
-    expect(generate(vzdcBrand).light.font.ui).toEqual(themeFile("vzdc-light").font.ui.$value);
+  it("uses the chosen UI font in every appearance and refuses others", () => {
+    const roboto = ["Roboto", "Segoe UI", "system-ui", "sans-serif"];
+    for (const appearance of appearances) {
+      expect(generate(vzdcBrand)[appearance].font.ui).toEqual(roboto);
+    }
     for (const uiFont of ["Comic Sans", "toString", "roboto"]) {
       expect(() => generate({ primary: "#500E0E", uiFont: uiFont as UiFont }), uiFont).toThrow(
         expect.objectContaining({ name: "BrandInputError", field: "uiFont" }),
@@ -352,10 +435,11 @@ describe("serialization (B19)", () => {
   });
 
   it("writes DTCG JSON the token build accepts, giving the same values in variables.css", async () => {
-    const theme = generate(vzdcBrand).light;
-    const built = await buildEdited("themes/vzdc-light.json", () =>
-      JSON.stringify(themeToDtcg(theme), null, 2),
-    );
+    // A brand the shipped themes do not use, put in vZDC's light context.
+    const theme = generate({ primary: "#f8f000", uiFont: "Roboto" }).light;
+    const themes = brandThemes();
+    themes.set("vzdc-light", theme);
+    const built = await buildTokens(tokensDir, themes);
     const block = built.variables.split('[data-sc-brand="vzdc"][data-sc-theme="light"] {')[1] ?? "";
     for (const [token, color] of allColors(theme)) {
       const name = variableName(`color.${token}`);
