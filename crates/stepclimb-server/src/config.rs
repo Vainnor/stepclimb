@@ -7,15 +7,18 @@
 //! and the encryption keys; the TOML file comes with the Compose deploy spec
 //! (`docs/specs/m0/14-compose-deploy.md`).
 
+use std::fmt;
 use std::net::SocketAddr;
 
+use sqlx::postgres::PgConnectOptions;
 use stepclimb_auth::encryption::{KeyRing, KeyRingError};
 
 /// The address `stepclimb serve` listens on when `STEPCLIMB_BIND` is not set.
 pub const DEFAULT_BIND: &str = "127.0.0.1:8080";
 
-/// Server configuration, validated. `Debug` shows the encryption key ids, never the keys.
-#[derive(Debug, Clone)]
+/// Server configuration, validated. `Debug` hides the database password and query string and
+/// shows only the encryption key ids.
+#[derive(Clone)]
 pub struct Config {
     /// `STEPCLIMB_BIND`: the socket address to listen on.
     pub bind: SocketAddr,
@@ -24,6 +27,32 @@ pub struct Config {
     /// `STEPCLIMB_ENCRYPTION_KEYS`, or the contents of the file `STEPCLIMB_ENCRYPTION_KEYS_FILE`
     /// names: the AES-256-GCM key ring (`stepclimb_auth::encryption`), required.
     pub encryption_keys: KeyRing,
+}
+
+impl fmt::Debug for Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Config")
+            .field("bind", &self.bind)
+            .field("database_url", &redacted_database_url(&self.database_url))
+            .field("encryption_keys", &self.encryption_keys)
+            .finish()
+    }
+}
+
+/// The parts of the database URL that are safe to print: user, host, port and database, read with
+/// sqlx's own parser. The password and every query parameter (which can carry `password=`) are
+/// left out.
+fn redacted_database_url(url: &str) -> String {
+    match url.parse::<PgConnectOptions>() {
+        Ok(options) => format!(
+            "postgres://{}@{}:{}/{} (password and parameters hidden)",
+            options.get_username(),
+            options.get_host(),
+            options.get_port(),
+            options.get_database().unwrap_or_default(),
+        ),
+        Err(_) => "<not a parseable PostgreSQL URL>".to_owned(),
+    }
 }
 
 /// Why the configuration was refused. Each message names the variable to fix.
@@ -253,7 +282,7 @@ mod tests {
             ("STEPCLIMB_DATABASE_URL", "postgres://u@h/db"),
             (
                 "STEPCLIMB_ENCRYPTION_KEYS",
-                "k2:c3RlcGNsaW1iLWxvY2FsLWRldmVsb3BtZW50LWtleSE=,k1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+                "k2:ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=,k1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
             ),
         ]))
         .unwrap();
@@ -261,7 +290,7 @@ mod tests {
         let printed = format!("{config:?}");
         assert!(printed.contains(r#"key_ids: ["k2", "k1"]"#), "{printed}");
         assert!(
-            !printed.contains("AAEC") && !printed.contains("c3Rl"),
+            !printed.contains("AAEC") && !printed.contains("ICEi"),
             "{printed}"
         );
     }
@@ -321,5 +350,36 @@ mod tests {
                 name: "STEPCLIMB_ENCRYPTION_KEYS"
             }
         );
+    }
+
+    #[test]
+    fn debug_hides_the_database_password_and_query() {
+        let config = Config::from_lookup(with_keys(&[(
+            "STEPCLIMB_DATABASE_URL",
+            "postgres://app:s3cret-pa55@db.internal:5432/stepclimb?sslmode=require&password=q-s3cret",
+        )]))
+        .unwrap();
+        let printed = format!("{config:?}");
+        assert!(
+            printed.contains(
+                r#"database_url: "postgres://app@db.internal:5432/stepclimb (password and parameters hidden)""#
+            ),
+            "{printed}"
+        );
+        assert!(!printed.contains("s3cret"), "{printed}");
+    }
+
+    #[test]
+    fn redaction_never_shows_a_password_with_odd_characters() {
+        for url in [
+            "postgres://u:zq%40ss%2Fw0rd@h/db",
+            "postgres://u:zq?ss@h/db",
+            "postgres://u:zq@ss@h/db",
+            "postgres://u@h/db?password=zq",
+            "not a url zq",
+        ] {
+            let printed = redacted_database_url(url);
+            assert!(!printed.contains("zq"), "{url} -> {printed}");
+        }
     }
 }

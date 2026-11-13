@@ -60,7 +60,7 @@ openapi-diff: web-install
     echo "openapi-diff: ok (document and client match the code)"
 
 # Run the server against the local database, with the web build embedded. Without
-# STEPCLIMB_ENCRYPTION_KEYS(_FILE) it uses the local development key from compose.yaml, whose
-# bytes spell "stepclimb-local-development-key!"; never use it for real data.
+# STEPCLIMB_ENCRYPTION_KEYS(_FILE) it uses the published development key ring,
+# deploy/compose/development-encryption-keys, and says so; never use it for real data.
 serve: web-build
-    if [[ -z "${STEPCLIMB_ENCRYPTION_KEYS:-}${STEPCLIMB_ENCRYPTION_KEYS_FILE:-}" ]]; then export STEPCLIMB_ENCRYPTION_KEYS="local:c3RlcGNsaW1iLWxvY2FsLWRldmVsb3BtZW50LWtleSE="; fi; STEPCLIMB_DATABASE_URL="${STEPCLIMB_DATABASE_URL:-$DATABASE_URL}" cargo run --locked -p stepclimb-server --bin stepclimb -- serve
+    if [[ -z "${STEPCLIMB_ENCRYPTION_KEYS:-}${STEPCLIMB_ENCRYPTION_KEYS_FILE:-}" ]]; then echo "just serve: using the development encryption key (deploy/compose/development-encryption-keys); never use it for real data" >&2; export STEPCLIMB_ENCRYPTION_KEYS_FILE="{{ justfile_directory() }}/deploy/compose/development-encryption-keys"; fi; STEPCLIMB_DATABASE_URL="${STEPCLIMB_DATABASE_URL:-$DATABASE_URL}" cargo run --locked -p stepclimb-server --bin stepclimb -- serve

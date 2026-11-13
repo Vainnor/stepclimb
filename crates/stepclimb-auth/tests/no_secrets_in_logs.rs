@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! `docs/specs/m0/08-sessions-and-csrf.md` B4, T3 as far as this crate goes today: tokens, API
-//! keys, their hashes, the key ring and every error this crate returns, logged through `tracing`
-//! at every level as `?field`, `{:?}` and `{}`, leave no secret in the output. The full-flow T3
-//! (a sign-in, an API-key request and a token exchange) runs once those routes exist.
+//! `docs/specs/m0/08-sessions-and-csrf.md` B4, T3 as far as this crate goes today: a `Token`, an
+//! `ApiKey`, a `TokenHash`, a `KeyRing`, a `DecryptError`, a `KeyRingError` and an
+//! `ApiKeyFormatError`, logged through `tracing` at every level as `?field`, `%field` and format
+//! arguments, leave no secret in the output. `EncryptError` and `RandomError` are not covered:
+//! the test cannot make the OS generator fail or build a 64 GiB value, and neither error carries
+//! caller input. The full-flow T3 (a sign-in, an API-key request and a token exchange) is covered
+//! by spec 08 I6 and I8.
 
 use std::io::Write;
 use std::sync::{Arc, Mutex};
@@ -47,10 +50,14 @@ fn no_level_logs_a_token_key_or_key_material() {
     let token = Token::generate().expect("a token");
     let api_key = ApiKey::generate().expect("an API key");
     let ring = KeyRing::parse(&format!("k1:{KEY_MATERIAL}")).expect("a key ring");
-    let sealed = ring.encrypt(b"provider client secret").expect("sealed");
+    let sealed = ring
+        .encrypt(b"provider client secret", &[b"test"])
+        .expect("sealed");
     let mut altered = sealed.clone();
     *altered.last_mut().expect("a tag") ^= 1;
-    let decrypt_error = ring.decrypt(&altered).expect_err("altered bytes fail");
+    let decrypt_error = ring
+        .decrypt(&altered, &[b"test"])
+        .expect_err("altered bytes fail");
     let ring_error = KeyRing::parse(&format!("k1:{KEY_MATERIAL},k2:{}!", &KEY_MATERIAL[..20]))
         .expect_err("a bad entry");
     let presented = format!("{}x", api_key.expose_secret());

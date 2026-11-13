@@ -15,9 +15,18 @@
 //! version (1 byte, 0x01) | id length (1 byte) | id | nonce (12 bytes) | ciphertext | tag (16 bytes)
 //! ```
 //!
-//! The nonce is fresh from the operating system's CSPRNG for every value. The version, id length
-//! and id are the AEAD's associated data, so changing them fails decryption like changing the
+//! The nonce is fresh from the operating system's CSPRNG for every value. The AEAD's associated
+//! data is the version, id length and id, then the caller's context: the parts that say where the
+//! value lives, for example `[b"identity_providers", org_id, row_id, b"client_secret"]`. Each
+//! context part is length-prefixed (4 bytes, big-endian) before it is authenticated, so two
+//! different part lists never produce the same bytes. The context is not stored; the caller
+//! passes the same parts to decrypt. Changing the header, or opening the value with any other
+//! context (another row, organization, table or column), fails decryption like changing the
 //! ciphertext does.
+//!
+//! The key whose 32 bytes are [`DEVELOPMENT_KEY`] is the published local development key
+//! (`deploy/compose/development-encryption-keys`). The ring accepts it, and
+//! [`KeyRing::development_key_ids`] names it so the server can warn.
 //!
 //! Errors and `Debug` output name key ids and entry positions, never key material or plaintext.
 
@@ -28,6 +37,7 @@ use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use subtle::ConstantTimeEq;
 
 use crate::token::{RandomError, random_bytes};
 
@@ -37,6 +47,10 @@ const NONCE_BYTES: usize = 12;
 const TAG_BYTES: usize = 16;
 const FORMAT_VERSION: u8 = 1;
 const MAX_KEY_ID_LEN: usize = 32;
+
+/// The bytes of the published local development key. Anything encrypted under it is readable by
+/// anyone with this repository.
+pub const DEVELOPMENT_KEY: [u8; KEY_BYTES] = *b"stepclimb-local-development-key!";
 
 /// The encryption keys from configuration. Cloning is cheap; clones share the keys.
 #[derive(Clone)]
@@ -48,6 +62,7 @@ pub struct KeyRing {
 struct RingKey {
     id: String,
     cipher: Aes256Gcm,
+    is_development_key: bool,
 }
 
 /// Why the configured key ring was refused. Entries are counted from 1.
@@ -110,13 +125,24 @@ impl KeyRing {
         &self.current().id
     }
 
-    /// Seal `plaintext` under the current key with a fresh nonce.
-    pub fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, EncryptError> {
-        seal(self.current(), random_bytes()?, plaintext)
+    /// The ids of the keys whose bytes are the published [`DEVELOPMENT_KEY`].
+    pub fn development_key_ids(&self) -> Vec<&str> {
+        self.keys
+            .iter()
+            .filter(|key| key.is_development_key)
+            .map(|key| key.id.as_str())
+            .collect()
     }
 
-    /// Open a value sealed by [`KeyRing::encrypt`] under any key in the ring.
-    pub fn decrypt(&self, sealed: &[u8]) -> Result<Vec<u8>, DecryptError> {
+    /// Seal `plaintext` under the current key with a fresh nonce, bound to `context` (see the
+    /// module docs).
+    pub fn encrypt(&self, plaintext: &[u8], context: &[&[u8]]) -> Result<Vec<u8>, EncryptError> {
+        seal(self.current(), random_bytes()?, plaintext, context)
+    }
+
+    /// Open a value sealed by [`KeyRing::encrypt`] under any key in the ring, with the same
+    /// `context` it was sealed with.
+    pub fn decrypt(&self, sealed: &[u8], context: &[&[u8]]) -> Result<Vec<u8>, DecryptError> {
         let (&version, rest) = sealed.split_first().ok_or(DecryptError::Malformed)?;
         let (&id_len, rest) = rest.split_first().ok_or(DecryptError::Malformed)?;
         let id_len = usize::from(id_len);
@@ -139,7 +165,7 @@ impl KeyRing {
                 &nonce.into(),
                 Payload {
                     msg: ciphertext,
-                    aad: header,
+                    aad: &associated_data(header, context),
                 },
             )
             .map_err(|_| DecryptError::Inauthentic)
@@ -182,13 +208,29 @@ fn parse_entry(position: usize, entry: &str) -> Result<RingKey, KeyRingError> {
     Ok(RingKey {
         id: id.to_owned(),
         cipher: Aes256Gcm::new(&Key::<Aes256Gcm>::from(bytes)),
+        is_development_key: bytes.ct_eq(&DEVELOPMENT_KEY).into(),
     })
+}
+
+/// The header, then each context part prefixed by its length. The header carries its own id
+/// length, so where it ends is never ambiguous.
+fn associated_data(header: &[u8], context: &[&[u8]]) -> Vec<u8> {
+    let mut data = header.to_vec();
+    for part in context {
+        // A context part longer than 4 GiB is a programming error: contexts are table, column
+        // and id names.
+        let len = u32::try_from(part.len()).expect("a context part is shorter than 4 GiB");
+        data.extend_from_slice(&len.to_be_bytes());
+        data.extend_from_slice(part);
+    }
+    data
 }
 
 fn seal(
     key: &RingKey,
     nonce: [u8; NONCE_BYTES],
     plaintext: &[u8],
+    context: &[&[u8]],
 ) -> Result<Vec<u8>, EncryptError> {
     // `parse` holds ids to 32 bytes, so the length fits in one byte.
     let id_len = u8::try_from(key.id.len()).expect("key ids are at most 32 bytes");
@@ -203,7 +245,7 @@ fn seal(
             &nonce.into(),
             Payload {
                 msg: plaintext,
-                aad: &sealed,
+                aad: &associated_data(&sealed, context),
             },
         )
         .map_err(|_| EncryptError::TooLong)?;
@@ -217,9 +259,12 @@ mod tests {
     use super::*;
 
     const KEY_A: &str = "a:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
-    const KEY_B: &str = "b:c3RlcGNsaW1iLWxvY2FsLWRldmVsb3BtZW50LWtleSE=";
+    const KEY_B: &str = "b:ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=";
     /// Key id `a` with different key material.
-    const KEY_A_OTHER: &str = "a:c3RlcGNsaW1iLWxvY2FsLWRldmVsb3BtZW50LWtleSE=";
+    const KEY_A_OTHER: &str = "a:ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=";
+
+    /// Where a test value lives: table, organization, row, column.
+    const CTX: &[&[u8]] = &[b"identity_providers", b"org-1", b"row-1", b"client_secret"];
 
     fn ring(text: &str) -> KeyRing {
         KeyRing::parse(text).unwrap()
@@ -259,38 +304,38 @@ mod tests {
     #[test]
     fn the_sealed_layout_is_version_id_nonce_ciphertext_tag() {
         let ring = ring(KEY_A);
-        let sealed = seal(ring.current(), [7; 12], b"secret").unwrap();
+        let sealed = seal(ring.current(), [7; 12], b"secret", CTX).unwrap();
         assert_eq!(&sealed[..3], &[1, 1, b'a']);
         assert_eq!(&sealed[3..15], &[7; 12]);
         assert_eq!(sealed.len(), 3 + 12 + b"secret".len() + 16);
-        assert_eq!(ring.decrypt(&sealed).unwrap(), b"secret");
+        assert_eq!(ring.decrypt(&sealed, CTX).unwrap(), b"secret");
     }
 
     #[test]
     fn a_value_sealed_under_a_decrypts_under_a_ring_holding_a() {
-        let sealed = ring(KEY_A).encrypt(b"client secret").unwrap();
-        assert_eq!(ring(KEY_A).decrypt(&sealed).unwrap(), b"client secret");
+        let sealed = ring(KEY_A).encrypt(b"client secret", CTX).unwrap();
+        assert_eq!(ring(KEY_A).decrypt(&sealed, CTX).unwrap(), b"client secret");
         // After rotation, b encrypts and a still decrypts.
         let rotated = ring(&format!("{KEY_B},{KEY_A}"));
         assert_eq!(rotated.current_key_id(), "b");
-        assert_eq!(rotated.decrypt(&sealed).unwrap(), b"client secret");
-        assert_eq!(&rotated.encrypt(b"x").unwrap()[..3], &[1, 1, b'b']);
+        assert_eq!(rotated.decrypt(&sealed, CTX).unwrap(), b"client secret");
+        assert_eq!(&rotated.encrypt(b"x", CTX).unwrap()[..3], &[1, 1, b'b']);
     }
 
     #[test]
     fn a_ring_without_the_key_refuses_by_id() {
-        let sealed = ring(KEY_A).encrypt(b"client secret").unwrap();
+        let sealed = ring(KEY_A).encrypt(b"client secret", CTX).unwrap();
         assert_eq!(
-            ring(KEY_B).decrypt(&sealed).unwrap_err(),
+            ring(KEY_B).decrypt(&sealed, CTX).unwrap_err(),
             DecryptError::UnknownKey { id: "a".to_owned() }
         );
     }
 
     #[test]
     fn the_same_id_with_other_key_material_fails_authentication() {
-        let sealed = ring(KEY_A).encrypt(b"client secret").unwrap();
+        let sealed = ring(KEY_A).encrypt(b"client secret", CTX).unwrap();
         assert_eq!(
-            ring(KEY_A_OTHER).decrypt(&sealed).unwrap_err(),
+            ring(KEY_A_OTHER).decrypt(&sealed, CTX).unwrap_err(),
             DecryptError::Inauthentic
         );
     }
@@ -298,12 +343,12 @@ mod tests {
     #[test]
     fn tampering_any_nonce_ciphertext_or_tag_byte_fails() {
         let ring = ring(KEY_A);
-        let sealed = ring.encrypt(b"totp seed").unwrap();
+        let sealed = ring.encrypt(b"totp seed", CTX).unwrap();
         for index in 3..sealed.len() {
             let mut altered = sealed.clone();
             altered[index] ^= 0x01;
             assert_eq!(
-                ring.decrypt(&altered).unwrap_err(),
+                ring.decrypt(&altered, CTX).unwrap_err(),
                 DecryptError::Inauthentic,
                 "byte {index}"
             );
@@ -315,25 +360,31 @@ mod tests {
         let ring = ring(&format!(
             "{KEY_A},c:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
         ));
-        let sealed = ring.encrypt(b"totp seed").unwrap();
+        let sealed = ring.encrypt(b"totp seed", CTX).unwrap();
         let mut version = sealed.clone();
         version[0] = 2;
-        assert_eq!(ring.decrypt(&version).unwrap_err(), DecryptError::Malformed);
+        assert_eq!(
+            ring.decrypt(&version, CTX).unwrap_err(),
+            DecryptError::Malformed
+        );
         // Pointing the value at key c, which holds the same bytes as a, still fails: the id is
         // authenticated.
         let mut id = sealed.clone();
         id[2] = b'c';
-        assert_eq!(ring.decrypt(&id).unwrap_err(), DecryptError::Inauthentic);
+        assert_eq!(
+            ring.decrypt(&id, CTX).unwrap_err(),
+            DecryptError::Inauthentic
+        );
     }
 
     #[test]
     fn short_or_empty_values_are_malformed() {
         let ring = ring(KEY_A);
-        let sealed = ring.encrypt(b"").unwrap();
-        assert_eq!(ring.decrypt(&sealed).unwrap(), b"");
+        let sealed = ring.encrypt(b"", CTX).unwrap();
+        assert_eq!(ring.decrypt(&sealed, CTX).unwrap(), b"");
         for length in 0..sealed.len() {
             assert_eq!(
-                ring.decrypt(&sealed[..length]).unwrap_err(),
+                ring.decrypt(&sealed[..length], CTX).unwrap_err(),
                 DecryptError::Malformed,
                 "length {length}"
             );
@@ -343,8 +394,8 @@ mod tests {
     #[test]
     fn two_encryptions_of_one_value_differ() {
         let ring = ring(KEY_A);
-        let first = ring.encrypt(b"same").unwrap();
-        let second = ring.encrypt(b"same").unwrap();
+        let first = ring.encrypt(b"same", CTX).unwrap();
+        let second = ring.encrypt(b"same", CTX).unwrap();
         assert_ne!(first, second);
         assert_ne!(first[3..15], second[3..15], "fresh nonce");
     }
@@ -408,5 +459,50 @@ mod tests {
                 "{message}"
             );
         }
+    }
+
+    #[test]
+    fn a_value_moved_to_another_context_fails() {
+        let ring = ring(KEY_A);
+        let sealed = ring.encrypt(b"client secret", CTX).unwrap();
+        let elsewhere: [&[&[u8]]; 6] = [
+            &[b"identity_providers", b"org-2", b"row-1", b"client_secret"],
+            &[b"identity_providers", b"org-1", b"row-2", b"client_secret"],
+            &[b"admission_webhooks", b"org-1", b"row-1", b"client_secret"],
+            &[b"identity_providers", b"org-1", b"row-1", b"totp_seed"],
+            &[b"identity_providers", b"org-1", b"row-1"],
+            &[],
+        ];
+        for context in elsewhere {
+            assert_eq!(
+                ring.decrypt(&sealed, context).unwrap_err(),
+                DecryptError::Inauthentic,
+                "{context:?}"
+            );
+        }
+        assert_eq!(ring.decrypt(&sealed, CTX).unwrap(), b"client secret");
+    }
+
+    #[test]
+    fn context_part_boundaries_are_authenticated() {
+        let ring = ring(KEY_A);
+        let sealed = ring.encrypt(b"x", &[b"ab", b"c"]).unwrap();
+        assert_eq!(
+            ring.decrypt(&sealed, &[b"a", b"bc"]).unwrap_err(),
+            DecryptError::Inauthentic
+        );
+        assert_eq!(
+            ring.decrypt(&sealed, &[b"abc"]).unwrap_err(),
+            DecryptError::Inauthentic
+        );
+    }
+
+    #[test]
+    fn the_development_key_is_named_wherever_it_sits() {
+        use base64::Engine as _;
+        let development = STANDARD.encode(DEVELOPMENT_KEY);
+        assert!(ring(KEY_A).development_key_ids().is_empty());
+        let ring = ring(&format!("{KEY_A},local:{development}"));
+        assert_eq!(ring.development_key_ids(), ["local"]);
     }
 }

@@ -31,7 +31,9 @@ Read on 2026-11-12.
   Proposed), root user `stepclimb` with the same local password, API and console on
   `127.0.0.1:59000` and `:59001`, named volume `minio`; `stepclimb` in the `stack` profile, built
   from `deploy/Dockerfile` as `stepclimb:local`, `STEPCLIMB_DATABASE_URL` and `STEPCLIMB_BIND` set
-  inline, published on `127.0.0.1:58080`, starting after `postgres` is healthy. The header says
+  inline, `STEPCLIMB_ENCRYPTION_KEYS_FILE` pointing at the Compose secret
+  `encryption_keys` (the published development key in
+  `deploy/compose/development-encryption-keys`), published on `127.0.0.1:58080`, starting after `postgres` is healthy. The header says
   the credentials are for a local machine only.
 - **`just` recipes** (`just/stack.just`): `up` (postgres and minio, `--wait`), `up-stack` (the
   whole stack, rebuilt), `down` (keeps volumes), `e2e` (Playwright against `up-stack`).
@@ -44,9 +46,12 @@ Read on 2026-11-12.
 - **Configuration** (`crates/stepclimb-server/src/config.rs`): `STEPCLIMB_BIND` (default
   `127.0.0.1:8080`, must parse as a socket address), `STEPCLIMB_DATABASE_URL` or
   `STEPCLIMB_DATABASE_URL_FILE` (exactly one; the file is read and trimmed; the URL must start
-  with `postgres://` or `postgresql://`). Each error names the variable. `main.rs` prints
+  with `postgres://` or `postgresql://`), `STEPCLIMB_ENCRYPTION_KEYS` or
+  `STEPCLIMB_ENCRYPTION_KEYS_FILE` (exactly one, required; the AES-256-GCM key ring of
+  `08-sessions-and-csrf.md` B3). Each error names the variable and never repeats a secret. `main.rs` prints
   `stepclimb: configuration error: <message>` and exits with code 2; `STEPCLIMB_LOG` sets the
-  JSON log filter (default `info`). No TOML file, no other keys.
+  JSON log filter (default `info`). No TOML file, no other keys. The server logs a warning at
+  startup naming any key in the ring that is the published development key.
 - **Startup** (`startup.rs`): connect with a 5 s pool acquire timeout, run the embedded
   migrations (`stepclimb_core::db::MIGRATOR`; one migration, `organizations`), then listen, with
   graceful shutdown on SIGINT and SIGTERM. A connect or migration failure exits non-zero with the
