@@ -224,6 +224,64 @@ pub async fn list_children(
     rows.into_iter().map(Account::try_from).collect()
 }
 
+/// Whose topmost accounts [`list_top_visible`] lists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reach<'a> {
+    /// Every account: the root alone is topmost.
+    Organization,
+    /// The subtrees of these accounts: each one with none of the others above it.
+    Accounts(&'a [Uuid]),
+}
+
+/// The topmost accounts of `reach` in the scope's organization, sorted by name then id, starting
+/// after `after` and at most `limit` of them (B24): the root for [`Reach::Organization`], and for
+/// [`Reach::Accounts`] each listed account no other listed account is an ancestor of. Ids that
+/// are not accounts of the organization are left out.
+///
+/// `after` comes from a client's cursor, as in [`list_children`].
+pub async fn list_top_visible(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    reach: Reach<'_>,
+    after: Option<&ListKey>,
+    limit: i64,
+) -> Result<Vec<Account>, Error> {
+    let after_name = after.map(|(name, _)| no_nul("cursor", name)).transpose()?;
+    let (whole_org, ids): (bool, &[Uuid]) = match reach {
+        Reach::Organization => (true, &[]),
+        Reach::Accounts(ids) => (false, ids),
+    };
+    let rows = sqlx::query_as!(
+        Row,
+        r#"SELECT a.id, a.parent_id, a.name, nlevel(a.path) - 1 AS "depth!",
+                  EXISTS (SELECT 1 FROM accounts c WHERE c.org_id = $1 AND c.parent_id = a.id)
+                      AS "has_children!",
+                  (extract(epoch FROM a.created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM a.updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM accounts a
+           WHERE a.org_id = $1
+             AND CASE WHEN $2::bool THEN a.parent_id IS NULL
+                      ELSE a.id = ANY($3::uuid[])
+                           AND NOT EXISTS (
+                               SELECT 1 FROM accounts h
+                               WHERE h.org_id = $1 AND h.id = ANY($3::uuid[]) AND h.id <> a.id
+                                 AND h.path @> a.path)
+                 END
+             AND ($4::text IS NULL OR (a.name, a.id) > ($4, $5::uuid))
+           ORDER BY a.name, a.id
+           LIMIT $6"#,
+        scope.org_id(),
+        whole_org,
+        ids,
+        after_name,
+        after.map(|(_, id)| *id),
+        limit,
+    )
+    .fetch_all(db)
+    .await?;
+    rows.into_iter().map(Account::try_from).collect()
+}
+
 /// Create an account named `name`, trimmed, under the account `parent_id` of the scope's
 /// organization, with `created_at` and `updated_at` set to `now` (B18). The repository computes
 /// the path from the parent's.
@@ -506,7 +564,13 @@ pub async fn delete<'c>(
 /// Take the transaction-scoped advisory lock on the scope's account tree (B22), and refuse a
 /// transaction whose isolation level is not `READ COMMITTED`. The lock is released when the
 /// outermost transaction ends, so a refusal that rolls the transaction back releases it too.
-async fn lock_tree(conn: &mut PgConnection, scope: OrgScope) -> Result<(), Error> {
+///
+/// [`create`], [`move_to`] and [`delete`] take it themselves. A caller that must decide
+/// something from the tree before one of them (who may change which account, spec 02 B23) takes
+/// it first on its own transaction, reads what it decides from in that transaction, and then
+/// calls the write there: the lock is reentrant, so the write's own lock is granted at once and
+/// no other tree write runs between the decision and the write.
+pub async fn lock_tree(conn: &mut PgConnection, scope: OrgScope) -> Result<(), Error> {
     let isolation = sqlx::query_scalar!(
         r#"SELECT current_setting('transaction_isolation') AS "isolation!"
            FROM pg_advisory_xact_lock($1, $2)"#,

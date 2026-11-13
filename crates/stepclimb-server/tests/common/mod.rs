@@ -3,7 +3,7 @@
 //!
 //! [`schema_errors`] checks an answer against a schema of the OpenAPI document (spec 03 T17 and
 //! the specs' later "validated against the OpenAPI schema" cases). It reads the subset of JSON
-//! Schema utoipa writes: `$ref`, `type` (one name or a list), `enum`, `format: uuid`,
+//! Schema utoipa writes: `$ref`, `type` (one name or a list), `enum`, `format` (`uuid`, `date-time` as the API writes it, `int32`, `int64`),
 //! `properties` with `required`, and `items`, plus the annotations `description`, `title` and
 //! `example`, which constrain nothing. Any other keyword, or another `format`, is reported as an
 //! error rather than skipped, so a schema the checker cannot read never passes by default. A
@@ -120,14 +120,37 @@ fn enum_conforms(schema: &Map<String, Value>, value: &Value, at: &str, errors: &
 }
 
 fn format_conforms(schema: &Map<String, Value>, value: &Value, at: &str, errors: &mut Vec<String>) {
-    match (schema.get("format").and_then(Value::as_str), value.as_str()) {
-        (None, _) | (Some("uuid"), None) => {}
-        (Some("uuid"), Some(text)) if Uuid::try_parse(text).is_ok() => {}
-        (Some("uuid"), Some(text)) => errors.push(format!("{at}: {text} is not a UUID")),
-        (Some(other), _) => {
-            errors.push(format!("{at}: the checker does not read format {other:?}"))
+    let Some(format) = schema.get("format").and_then(Value::as_str) else {
+        return;
+    };
+    let fits = match format {
+        "uuid" => value
+            .as_str()
+            .is_none_or(|text| Uuid::try_parse(text).is_ok()),
+        "date-time" => value.as_str().is_none_or(is_api_timestamp),
+        "int32" => !value.is_number() || value.as_i64().is_some_and(|n| i32::try_from(n).is_ok()),
+        "int64" => !value.is_number() || value.is_i64(),
+        other => {
+            errors.push(format!("{at}: the checker does not read format {other:?}"));
+            return;
         }
+    };
+    if !fits {
+        errors.push(format!("{at}: {value} is not a {format}"));
     }
+}
+
+/// RFC 3339 as `stepclimb_server::timestamp` writes it: `2025-11-13T02:13:20.123456Z`.
+fn is_api_timestamp(text: &str) -> bool {
+    const SHAPE: &[u8] = b"dddd-dd-ddTdd:dd:dd.ddddddZ";
+    text.len() == SHAPE.len()
+        && text
+            .bytes()
+            .zip(SHAPE)
+            .all(|(byte, expected)| match expected {
+                b'd' => byte.is_ascii_digit(),
+                other => byte == *other,
+            })
 }
 
 fn object_conforms(

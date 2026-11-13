@@ -146,7 +146,12 @@ These apply to every endpoint in M0, including the ones other specs define.
 - **B22.** Create, move and delete take a transaction-scoped advisory lock keyed on the
   organization id (`pg_advisory_xact_lock`) before reading the tree, so two concurrent moves
   cannot build a cycle and a create cannot attach to an account being deleted. Renames do not
-  take it.
+  take it. The routes for create, move and delete take the lock first, then repeat the B23 check
+  on the account, its parent and the destination as read under the lock, and write in the same
+  transaction, so a move committed after the `Require` extractor's check cannot carry any of
+  them out of the caller's reach unseen (coordinator decision, 13 Nov 2026). A create or move
+  that would put an account more than 16 levels below the root (Q6; 17 levels in all) answers
+  409 `account.too_deep` (coordinator decision, 13 Nov 2026).
 - **B23.** Account permissions apply to a subtree (`09-permissions-and-roles.md`). An account is
   visible to a principal that holds any permission at a scope containing it: the organization,
   the account itself or one of its ancestors. A principal holding `perm::AccountManage` at
@@ -157,7 +162,9 @@ These apply to every endpoint in M0, including the ones other specs define.
 - **B24.** `GET /api/v1/accounts` with `parent_id` lists that account's children, sorted by
   `name` then `id`. Without `parent_id` it lists the top-most accounts the caller can see with
   `perm::AccountView`: the root when the caller holds it at organization scope, otherwise each
-  account where it holds `AccountView` and no ancestor of which it can see.
+  account where it holds `AccountView` and no ancestor of which it can see. "Can see" here means
+  holds `AccountView` at: an ancestor made visible only by another permission does not hide its
+  descendants from this list (coordinator decision, 13 Nov 2026).
 - **B25.** An account response carries `id`, `parent_id`, `name`, `depth` (0 for the root),
   `has_children`, `created_at` and `updated_at`. `parent_id` is shown even when the parent is not
   visible to the caller; reading that parent still answers 404 (the rule protects a resource's
@@ -193,9 +200,9 @@ specific `auth.*` code from `08-sessions-and-csrf.md`), 415 `request.unsupported
 | `PATCH /api/v1/organization/settings` | partial `OrgSettings` | 200 `OrgSettings` | 422 `request.invalid` (`settings.unknown_key`, per-key codes) | `perm::OrgManage` (organization) |
 | `GET /api/v1/accounts` | `?parent_id&cursor&limit` | 200 `Page<Account>` | 400 `pagination.invalid_cursor`, 404 `account.not_found` (parent) | `perm::AccountView` (any scope; filtered, B24) |
 | `GET /api/v1/accounts/{account_id}` | | 200 `Account` | 404 `account.not_found` | `perm::AccountView` (account) |
-| `POST /api/v1/accounts` | `{ "parent_id": uuid, "name": string }` | 201 `Account`, `Location` header | 404 `account.not_found` (parent), 422 `request.invalid` | `perm::AccountManage` (parent account) |
+| `POST /api/v1/accounts` | `{ "parent_id": uuid, "name": string }` | 201 `Account`, `Location` header | 404 `account.not_found` (parent), 409 `account.too_deep`, 422 `request.invalid` | `perm::AccountManage` (parent account) |
 | `PATCH /api/v1/accounts/{account_id}` | `{ "name"?: string }` | 200 `Account` | 404 `account.not_found`, 422 `request.invalid` | `perm::AccountManage` (account) |
-| `POST /api/v1/accounts/{account_id}/move` | `{ "parent_id": uuid }` | 200 `Account` | 404 `account.not_found`, 409 `account.root_immutable`, 409 `account.move_into_descendant` | `perm::AccountManage` (strict ancestor of the account, and the destination) |
+| `POST /api/v1/accounts/{account_id}/move` | `{ "parent_id": uuid }` | 200 `Account` | 404 `account.not_found`, 409 `account.root_immutable`, 409 `account.move_into_descendant`, 409 `account.too_deep` | `perm::AccountManage` (strict ancestor of the account, and the destination) |
 | `DELETE /api/v1/accounts/{account_id}` | | 204 | 404 `account.not_found`, 409 `account.root_immutable`, 409 `account.has_children` | `perm::AccountManage` (strict ancestor of the account) |
 
 Schemas: `Organization { id, slug, name }`; `OrgSettings` (one optional-on-write, always-present-

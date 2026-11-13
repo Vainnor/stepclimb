@@ -4,7 +4,8 @@
 //! The `stepclimb` binary (`src/main.rs`) is a thin wrapper over this library. Today the
 //! application serves the operations endpoints (`/healthz`, `/readyz`), sign-out
 //! (`POST /auth/sign-out`, [`auth`]), the caller's organization and its settings under
-//! `/api/v1/organization` ([`organization`]), the permission catalog and roles routes under
+//! `/api/v1/organization` ([`organization`]), the account tree under `/api/v1/accounts`
+//! ([`accounts`]), the permission catalog and roles routes under
 //! `/api/v1/admin` ([`roles`], with timestamps from [`timestamp`]), the signed-in user at
 //! `GET /api/v1/me` ([`me`]), the OpenAPI document (`/api/openapi.json`) and its Scalar UI
 //! (`/docs`), and the built web SPA for every other path. Every `/api/v1` response carries
@@ -20,6 +21,7 @@
 //! first. Sign-in and token routes declare a [`rate_limit`] budget, counted per client address
 //! as [`client_ip`] finds it.
 
+pub mod accounts;
 pub mod app;
 pub mod auth;
 pub mod client_ip;

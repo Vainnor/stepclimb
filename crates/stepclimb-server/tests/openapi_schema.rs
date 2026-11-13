@@ -82,7 +82,7 @@ fn a_keyword_or_format_the_checker_does_not_read_is_an_error() {
     let cases = [
         ("pattern", json!("^[A-Z]+$")),
         ("minLength", json!(100)),
-        ("format", json!("date-time")),
+        ("format", json!("email")),
     ];
     for (keyword, constraint) in cases {
         let mut document = document();
@@ -99,4 +99,41 @@ fn annotations_constrain_nothing() {
     document["components"]["schemas"]["MeUser"]["title"] = json!("The user");
     let errors = common::schema_errors(&document, "Me", &good());
     assert!(errors.is_empty(), "{errors:#?}");
+}
+
+#[test]
+fn a_timestamp_or_integer_outside_its_format_is_an_error() {
+    let mut document = document();
+    let user = &mut document["components"]["schemas"]["MeUser"]["properties"];
+    user["tz"]["format"] = json!("date-time");
+    user["locale"] = json!({ "type": "integer", "format": "int32" });
+    let errors_with = |tz: Value, locale: Value| {
+        let mut value = good();
+        value["user"]["tz"] = tz;
+        value["user"]["locale"] = locale;
+        common::schema_errors(&document, "Me", &value)
+    };
+    let fine = errors_with(json!("2025-11-13T02:13:20.123456Z"), json!(16));
+    assert!(fine.is_empty(), "{fine:#?}");
+    for tz in [
+        "2025-11-13T02:13:20Z",
+        "2025-11-13 02:13:20.123456Z",
+        "2025-11-13T02:13:20.123456+00:00",
+        "UTC",
+    ] {
+        assert!(
+            !errors_with(json!(tz), json!(16)).is_empty(),
+            "{tz} was accepted"
+        );
+    }
+    for locale in [
+        json!(2_147_483_648_i64),
+        json!(-2_147_483_649_i64),
+        json!(1.5),
+    ] {
+        assert!(
+            !errors_with(json!("2025-11-13T02:13:20.123456Z"), locale.clone()).is_empty(),
+            "{locale} was accepted"
+        );
+    }
 }

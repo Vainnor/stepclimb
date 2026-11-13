@@ -156,23 +156,32 @@ impl Target for AccountParentTarget {
         grants: &Grants,
     ) -> Result<Self, ApiError> {
         let id = account_id(parts, state).await?;
-        let mut path = ancestors_path(state, grants, id).await?;
-        path.pop();
-        let Some(&parent_id) = path.last() else {
-            if grants.holds::<P>(&grants::Target::Organization) {
-                return Ok(Self {
-                    id,
-                    parent_id: None,
-                });
-            }
-            return Err(Denied::AccountNotFound.into());
-        };
-        grants.check::<P>(&grants::Target::Account(path))?;
-        Ok(Self {
-            id,
-            parent_id: Some(parent_id),
-        })
+        let path = ancestors_path(state, grants, id).await?;
+        let parent_id = check_at_parent::<P>(grants, path)?;
+        Ok(Self { id, parent_id })
     }
+}
+
+/// [`AccountParentTarget`]'s check for the account whose path is `path` (the root first, the
+/// account itself last): `P` must be effective over the account's parent. Returns the parent's
+/// id, or `None` for the root, which passes only for a holder of `P` at organization scope; any
+/// other caller gets [`Denied::AccountNotFound`] for it.
+///
+/// Public so a handler can repeat the check on a path it read again under the account tree's
+/// lock (spec 02 B22, B23).
+pub fn check_at_parent<P: Permission>(
+    grants: &Grants,
+    mut path: Vec<Uuid>,
+) -> Result<Option<Uuid>, Denied> {
+    path.pop();
+    let Some(&parent_id) = path.last() else {
+        if grants.holds::<P>(&grants::Target::Organization) {
+            return Ok(None);
+        }
+        return Err(Denied::AccountNotFound);
+    };
+    grants.check::<P>(&grants::Target::Account(path))?;
+    Ok(Some(parent_id))
 }
 
 /// For list routes and routes whose target is in the body: passes when `P` is effective at any

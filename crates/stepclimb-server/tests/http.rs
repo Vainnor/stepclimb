@@ -166,6 +166,9 @@ async fn the_openapi_document_is_3_1_and_lists_every_route() {
     assert_eq!(
         paths,
         [
+            "/api/v1/accounts",
+            "/api/v1/accounts/{account_id}",
+            "/api/v1/accounts/{account_id}/move",
             "/api/v1/admin/permissions",
             "/api/v1/admin/roles",
             "/api/v1/admin/roles/{role_id}",

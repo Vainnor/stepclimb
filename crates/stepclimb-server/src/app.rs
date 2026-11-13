@@ -16,7 +16,7 @@ use tower_http::trace::TraceLayer;
 use utoipa_scalar::{Scalar, Servable};
 
 use crate::{
-    auth,
+    accounts, auth,
     csrf::{self, OriginAllowlist},
     error::ApiError,
     health, me, openapi, organization,
@@ -102,6 +102,20 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         (
             organization::SETTINGS_PATH,
             get(organization::get_settings).patch(organization::update_settings),
+        ),
+        (
+            accounts::ACCOUNTS_PATH,
+            get(accounts::list_accounts).post(accounts::create_account),
+        ),
+        (
+            "/api/v1/accounts/{account_id}",
+            get(accounts::get_account)
+                .patch(accounts::update_account)
+                .delete(accounts::delete_account),
+        ),
+        (
+            "/api/v1/accounts/{account_id}/move",
+            post(accounts::move_account),
         ),
         ("/api/v1/admin/permissions", get(roles::list_permissions)),
         (

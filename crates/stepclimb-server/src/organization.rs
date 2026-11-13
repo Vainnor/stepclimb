@@ -82,7 +82,7 @@ pub struct OrganizationPatch {
 
 /// A member that, when present, must be a value: `null` fails the parse (400), and only an
 /// omitted member reads as `None`, through `#[serde(default)]`.
-fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+pub(crate) fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: Deserialize<'de>,

@@ -5,7 +5,7 @@
 //! TypeScript client (`packages/api-client`) and fails when either differs from what is
 //! committed. Today it lists the operations probes, which the web app's skeleton route calls
 //! through the generated client, sign-out, `GET /api/v1/me`, the caller's organization and its
-//! settings, the permission catalog and roles routes under `/api/v1/admin`, and the shared error
+//! settings, the account tree, the permission catalog and roles routes under `/api/v1/admin`, and the shared error
 //! schemas and responses below. The other M0 specs add their endpoints under `/api/v1`.
 //!
 //! Every `/api/v1` operation lists its errors in `#[utoipa::path]` (spec 02 B6). The errors
@@ -22,7 +22,7 @@ use utoipa::{
 };
 
 use crate::{
-    auth,
+    accounts, auth,
     error::{FieldError, PROBLEM_JSON, Problem},
     health, me, organization, roles,
 };
@@ -50,6 +50,12 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         organization::update_organization,
         organization::get_settings,
         organization::update_settings,
+        accounts::list_accounts,
+        accounts::get_account,
+        accounts::create_account,
+        accounts::update_account,
+        accounts::move_account,
+        accounts::delete_account,
         roles::list_permissions,
         roles::list_roles,
         roles::get_role,
@@ -73,6 +79,10 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             organization::OrganizationPatch,
             organization::OrgSettings,
             organization::OrgSettingsPatch,
+            accounts::Account,
+            accounts::NewAccount,
+            accounts::AccountPatch,
+            accounts::AccountMove,
             roles::ScopeType,
             roles::PermissionInfo,
             roles::Role,
@@ -95,6 +105,14 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             PermissionDenied,
             organization::OrgWriteForbidden,
             organization::SettingsInvalid,
+            accounts::AccountNotFound,
+            accounts::ParentNotFound,
+            accounts::MoveNotFound,
+            accounts::DeleteNotFound,
+            accounts::ManageForbidden,
+            accounts::CreateConflict,
+            accounts::MoveConflict,
+            accounts::DeleteConflict,
             roles::RoleNotFound,
             roles::WriteForbidden,
             roles::DeleteForbidden,
@@ -108,6 +126,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         (name = "auth", description = "Browser sessions"),
         (name = "me", description = "The signed-in user"),
         (name = "organization", description = "The caller's organization and its settings"),
+        (name = "accounts", description = "The account tree inside the organization"),
         (name = "roles", description = "The permission catalog and roles")
     )
 )]
