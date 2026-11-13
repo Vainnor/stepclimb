@@ -21,11 +21,13 @@
 
 use std::time::SystemTime;
 
+use serde_json::json;
 use sqlx::{Acquire, PgExecutor, Postgres};
 use uuid::Uuid;
 
 use crate::{
     OrgScope, Source,
+    audit::{self, Action, Actor},
     db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
     id::new_id,
     role_assignments,
@@ -402,7 +404,9 @@ pub async fn update(
     User::try_from(row)
 }
 
-/// Set the status of the user `id` of the scope's organization and set `updated_at` to `now`.
+/// Set the status of the user `id` of the scope's organization, set `updated_at` to `now`, and
+/// write the `user.set_status` audit entry by `actor` with the status before and after. The
+/// status the user already has writes nothing and returns the user as they are (spec 09 B22).
 ///
 /// Suspending keeps the organization's last active organization-scope Organization admin
 /// ([`Error::LastOrgAdmin`], spec 09 B14): it takes the lock assignment removals take, so a
@@ -415,11 +419,23 @@ pub async fn set_status<'c>(
     id: Uuid,
     status: Status,
     now: SystemTime,
+    actor: Actor,
 ) -> Result<User, Error> {
     let now = epoch_micros(now)?;
     let mut tx = db.begin().await?;
     if status == Status::Suspended {
         role_assignments::refuse_suspending_last_org_admin(&mut tx, scope, id).await?;
+    }
+    let before = sqlx::query_scalar!(
+        "SELECT status FROM users WHERE org_id = $1 AND id = $2 FOR NO KEY UPDATE",
+        scope.org_id(),
+        id,
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(Error::NotFound)?;
+    if before == status.as_str() {
+        return get(&mut *tx, scope, id).await?.ok_or(Error::NotFound);
     }
     let row = sqlx::query_as!(
         Row,
@@ -439,6 +455,8 @@ pub async fn set_status<'c>(
     .fetch_optional(&mut *tx)
     .await?
     .ok_or(Error::NotFound)?;
+    let data = json!({ "before": { "status": before }, "after": { "status": row.status } });
+    audit::record(&mut tx, scope, actor, Action::UserSetStatus, id, &data, now).await?;
     tx.commit().await?;
     User::try_from(row)
 }

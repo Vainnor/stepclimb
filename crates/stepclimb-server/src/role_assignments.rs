@@ -46,6 +46,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::{
     AppState,
+    audit::ClientAddress,
     error::{ApiError, FieldError},
     extract::{ApiJson, ApiPath, ApiQuery},
     me::GrantScope,
@@ -300,6 +301,7 @@ pub async fn list_role_assignments(
 )]
 pub async fn create_role_assignment(
     require: Require<RoleAssign, AnyScope>,
+    client: ClientAddress,
     State(state): State<AppState>,
     ApiJson(body): ApiJson<NewRoleAssignment>,
 ) -> Result<Response, ApiError> {
@@ -333,7 +335,8 @@ pub async fn create_role_assignment(
         source: Source::Local,
         external_id: None,
     };
-    let created = repo::create(&mut *tx, scope, &new, state.clock.now())
+    let actor = client.actor(require.principal());
+    let created = repo::create(&mut *tx, scope, &new, state.clock.now(), actor)
         .await
         .map_err(assignment_error)?;
     tx.commit().await.map_err(|e| ApiError::internal(&e))?;
@@ -368,6 +371,7 @@ pub async fn create_role_assignment(
 )]
 pub async fn delete_role_assignment(
     require: Require<RoleAssign, AnyScope>,
+    client: ClientAddress,
     State(state): State<AppState>,
     ApiPath(AssignmentIdParam { assignment_id }): ApiPath<AssignmentIdParam>,
 ) -> Result<StatusCode, ApiError> {
@@ -397,7 +401,8 @@ pub async fn delete_role_assignment(
             "An outside system owns this assignment. Change it there.",
         ));
     }
-    repo::delete(&mut *tx, scope, assignment_id)
+    let actor = client.actor(require.principal());
+    repo::delete(&mut *tx, scope, assignment_id, state.clock.now(), actor)
         .await
         .map_err(assignment_error)?;
     tx.commit().await.map_err(|e| ApiError::internal(&e))?;

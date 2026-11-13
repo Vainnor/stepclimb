@@ -19,6 +19,7 @@ use sqlx::PgPool;
 use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{
     OrgScope, Source, accounts,
+    audit::Actor,
     clock::ManualClock,
     id::Uuid,
     organizations,
@@ -134,9 +135,16 @@ impl Fixture {
     }
 
     async fn set_status(&self, user: Uuid, status: Status) {
-        users::set_status(&self.pool, scope(self.org), user, status, now())
-            .await
-            .expect("set status");
+        users::set_status(
+            &self.pool,
+            scope(self.org),
+            user,
+            status,
+            now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("set status");
     }
 
     async fn get_me(&self, headers: &[(header::HeaderName, &str)]) -> Answer {
@@ -343,9 +351,15 @@ async fn assign_builtin(fixture: &Fixture, user: Uuid, key: &str, at: Scope) {
         source: Source::Local,
         external_id: None,
     };
-    role_assignments::create(&fixture.pool, scope(fixture.org), &assignment, now())
-        .await
-        .expect("create assignment");
+    role_assignments::create(
+        &fixture.pool,
+        scope(fixture.org),
+        &assignment,
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .expect("create assignment");
 }
 
 /// Spec 09 T17: an account admin of Tower has one grant, at Tower, with B5's list sorted.
@@ -358,10 +372,17 @@ async fn t17_an_account_admin_of_tower_gets_one_sorted_grant(pool: PgPool) {
         .fetch_one(&fixture.pool)
         .await
         .expect("the root");
-    let tower = accounts::create(&fixture.pool, scope(fixture.org), root, "Tower", now())
-        .await
-        .expect("create Tower")
-        .id;
+    let tower = accounts::create(
+        &fixture.pool,
+        scope(fixture.org),
+        root,
+        "Tower",
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .expect("create Tower")
+    .id;
     let sam = fixture.sam().await;
     assign_builtin(&fixture, sam, "account_admin", Scope::Account(tower)).await;
     // Organization admin at Tower adds only its account-grantable permissions, which are

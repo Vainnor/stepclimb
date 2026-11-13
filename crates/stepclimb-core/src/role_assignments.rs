@@ -29,11 +29,13 @@
 
 use std::time::SystemTime;
 
+use serde_json::{Value, json};
 use sqlx::{Acquire, PgConnection, PgExecutor, Postgres};
 use uuid::Uuid;
 
 use crate::{
     OrgScope, Source, accounts,
+    audit::{self, Action, Actor},
     db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
     id::new_id,
     roles,
@@ -299,7 +301,7 @@ pub async fn list(
 }
 
 /// Create an assignment in the scope's organization, with `created_at` and `updated_at` set to
-/// `now` (B11).
+/// `now` (B11), and its `role_assignment.grant` audit entry by `actor`.
 ///
 /// Refuses a course scope ([`Error::ScopeUnavailable`]) and an account scope naming no account
 /// of the organization ([`Error::AccountNotFound`]); the table refuses a user or role outside
@@ -310,6 +312,7 @@ pub async fn create<'c>(
     scope: OrgScope,
     assignment: &NewAssignment,
     now: SystemTime,
+    actor: Actor,
 ) -> Result<RoleAssignment, Error> {
     let external_id = assignment
         .external_id
@@ -346,8 +349,24 @@ pub async fn create<'c>(
     )
     .fetch_one(&mut *tx)
     .await?;
+    let created = RoleAssignment::try_from(row)?;
+    let data = json!({ "after": audit_data(scope, &created) });
+    let grant = Action::RoleAssignmentGrant;
+    audit::record(&mut tx, scope, actor, grant, created.id, &data, now).await?;
     tx.commit().await?;
-    RoleAssignment::try_from(row)
+    Ok(created)
+}
+
+/// What an audit entry records of an assignment: who holds which role where, and its source.
+fn audit_data(scope: OrgScope, assignment: &RoleAssignment) -> Value {
+    let (scope_type, scope_id) = assignment.scope.as_parts(scope.org_id());
+    json!({
+        "user_id": assignment.user_id,
+        "role_id": assignment.role_id,
+        "scope_type": scope_type,
+        "scope_id": scope_id,
+        "source": assignment.source.as_str(),
+    })
 }
 
 /// Read the account `id` of the scope's organization `FOR KEY SHARE`, so a concurrent
@@ -367,7 +386,8 @@ async fn lock_account(conn: &mut PgConnection, scope: OrgScope, id: Uuid) -> Res
 
 /// Delete the assignment `id` of the scope's organization, unless it is the organization's last
 /// organization-scope Organization admin assignment held by an active user
-/// ([`Error::LastOrgAdmin`], B14).
+/// ([`Error::LastOrgAdmin`], B14), and write its `role_assignment.remove` audit entry by `actor`
+/// at `now`, with the assignment as it was.
 ///
 /// Takes the organization's removal lock first ([`lock_removals`]), so concurrent removals in
 /// one organization take turns and each counts what the previous one left. Runs in one
@@ -377,7 +397,10 @@ pub async fn delete<'c>(
     db: impl Acquire<'c, Database = Postgres>,
     scope: OrgScope,
     id: Uuid,
+    now: SystemTime,
+    actor: Actor,
 ) -> Result<(), Error> {
+    let now = epoch_micros(now)?;
     let mut tx = db.begin().await?;
     lock_removals(&mut tx, scope).await?;
     let counted = sqlx::query_scalar!(
@@ -397,13 +420,21 @@ pub async fn delete<'c>(
     if counted && count_active_org_admins(&mut *tx, scope).await? <= 1 {
         return Err(Error::LastOrgAdmin);
     }
-    sqlx::query!(
-        "DELETE FROM role_assignments WHERE org_id = $1 AND id = $2",
+    let removed = sqlx::query_as!(
+        Row,
+        r#"DELETE FROM role_assignments WHERE org_id = $1 AND id = $2
+           RETURNING id, user_id, role_id, scope_type, scope_id, source, external_id,
+                     (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
+                     (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!""#,
         scope.org_id(),
         id,
     )
-    .execute(&mut *tx)
-    .await?;
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(Error::NotFound)?;
+    let data = json!({ "before": audit_data(scope, &RoleAssignment::try_from(removed)?) });
+    let remove = Action::RoleAssignmentRemove;
+    audit::record(&mut tx, scope, actor, remove, id, &data, now).await?;
     tx.commit().await?;
     Ok(())
 }

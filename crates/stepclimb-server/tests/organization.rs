@@ -7,11 +7,13 @@
 //! `test-support` organization header, except the one cross-organization read. `session::start`
 //! stands in for the sign-in specs. Needs `DATABASE_URL` (`just up`).
 
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{
-    Router,
+    Extension, Router,
     body::Body,
+    extract::ConnectInfo,
     http::{HeaderMap, Method, Request, StatusCode, header},
     routing::get,
 };
@@ -21,6 +23,7 @@ use sqlx::PgPool;
 use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{
     OrgScope, Source,
+    audit::Actor,
     clock::ManualClock,
     id::{Uuid, new_id},
     organizations, perm,
@@ -35,6 +38,9 @@ use stepclimb_server::{
     web_origin::WebOrigin,
 };
 use tower::ServiceExt;
+
+/// The client address every test request comes from (TEST-NET-1); audit entries record it.
+const CLIENT: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)), 50_000);
 
 mod common;
 
@@ -161,7 +167,7 @@ impl Fixture {
             .await
             .expect("the root");
         let clock = ManualClock::new(now());
-        let app = router(state(&pool, &clock));
+        let app = router(state(&pool, &clock)).layer(Extension(ConnectInfo(CLIENT)));
         Self {
             pool,
             clock,
@@ -202,9 +208,15 @@ impl Fixture {
             source: Source::Local,
             external_id: None,
         };
-        role_assignments::create(&self.pool, scope(self.org), &assignment, now())
-            .await
-            .expect("create assignment");
+        role_assignments::create(
+            &self.pool,
+            scope(self.org),
+            &assignment,
+            now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("create assignment");
     }
 
     /// A signed-in Organization admin.
@@ -233,7 +245,7 @@ impl Fixture {
             name: "Account manager".into(),
             permissions: keys,
         };
-        let role = roles::create_custom(&self.pool, scope(self.org), &role, now())
+        let role = roles::create_custom(&self.pool, scope(self.org), &role, now(), Actor::Instance)
             .await
             .expect("create role")
             .id;

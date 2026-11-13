@@ -11,6 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use sqlx::PgPool;
 use stepclimb_core::{
     OrgScope, OrgSettings, OrgSettingsPatch,
+    audit::Actor,
     id::{Uuid, new_id},
     organizations::{self, Error, MAX_NAME_CHARS, Organization},
 };
@@ -79,10 +80,10 @@ async fn every_call_with_a_scope_whose_organization_has_no_row_is_not_found(pool
     let now = request_time();
 
     let get = organizations::get(&pool, gone).await;
-    let rename = organizations::rename(&pool, gone, "New", now).await;
+    let rename = organizations::rename(&pool, gone, "New", now, Actor::Instance).await;
     let settings = organizations::settings(&pool, gone).await;
     let patch = OrgSettingsPatch::default();
-    let update = organizations::update_settings(&pool, gone, &patch, now).await;
+    let update = organizations::update_settings(&pool, gone, &patch, now, Actor::Instance).await;
 
     assert!(matches!(get, Err(Error::NotFound)), "{get:?}");
     assert!(matches!(rename, Err(Error::NotFound)), "{rename:?}");
@@ -96,9 +97,15 @@ async fn rename_trims_sets_updated_at_from_the_clock_and_touches_one_organizatio
     let b = insert_org(&pool, "org-b", "Org B").await;
     let b_before = stored(&pool, b).await;
 
-    let renamed = organizations::rename(&pool, scope(a), "  Tower Cab  ", request_time())
-        .await
-        .unwrap();
+    let renamed = organizations::rename(
+        &pool,
+        scope(a),
+        "  Tower Cab  ",
+        request_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(renamed.name, "Tower Cab");
     assert_eq!(renamed.slug, "org-a", "the slug never changes");
@@ -119,16 +126,16 @@ async fn rename_refuses_a_blank_or_too_long_name_and_changes_nothing(pool: PgPoo
     let before = stored(&pool, a).await;
     let now = request_time();
 
-    let blank = organizations::rename(&pool, scope(a), " \t ", now).await;
+    let blank = organizations::rename(&pool, scope(a), " \t ", now, Actor::Instance).await;
     let long = "a".repeat(MAX_NAME_CHARS + 1);
-    let too_long = organizations::rename(&pool, scope(a), &long, now).await;
+    let too_long = organizations::rename(&pool, scope(a), &long, now, Actor::Instance).await;
 
     assert!(matches!(blank, Err(Error::NameEmpty)), "{blank:?}");
     assert!(matches!(too_long, Err(Error::NameTooLong)), "{too_long:?}");
     assert_eq!(stored(&pool, a).await, before);
 
     let at_limit = "a".repeat(MAX_NAME_CHARS);
-    let renamed = organizations::rename(&pool, scope(a), &at_limit, now).await;
+    let renamed = organizations::rename(&pool, scope(a), &at_limit, now, Actor::Instance).await;
     assert_eq!(renamed.unwrap().name, at_limit);
 }
 
@@ -139,7 +146,7 @@ async fn a_far_future_update_time_is_stored_to_the_microsecond(pool: PgPool) {
     let micros = 7_258_118_400_123_457;
     let now = UNIX_EPOCH + Duration::from_micros(micros);
 
-    organizations::rename(&pool, scope(a), "New", now)
+    organizations::rename(&pool, scope(a), "New", now, Actor::Instance)
         .await
         .unwrap();
 
@@ -151,7 +158,7 @@ async fn rename_refuses_a_time_the_database_cannot_store(pool: PgPool) {
     let a = insert_org(&pool, "org-a", "Org A").await;
     let before_epoch = UNIX_EPOCH - Duration::from_secs(1);
 
-    let result = organizations::rename(&pool, scope(a), "New", before_epoch).await;
+    let result = organizations::rename(&pool, scope(a), "New", before_epoch, Actor::Instance).await;
 
     assert!(matches!(result, Err(Error::Time(_))), "{result:?}");
 }
@@ -185,40 +192,39 @@ async fn a_stored_setting_the_code_does_not_know_is_ignored_on_read(pool: PgPool
     assert_eq!(read, OrgSettings::default());
 }
 
+/// `OrgSettingsPatch` has no key yet, so every patch names nothing and writes nothing (spec 09
+/// B22): the stored object, unknown keys included, and `updated_at` stay. The merge of a named
+/// key is tested with the first setting.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn update_settings_merges_into_the_stored_object_of_one_organization(pool: PgPool) {
+async fn update_settings_with_no_key_writes_nothing_in_either_organization(pool: PgPool) {
     let a = insert_org(&pool, "org-a", "Org A").await;
     let b = insert_org(&pool, "org-b", "Org B").await;
     store_settings(&pool, a, r#"{"newer_key": {"kept": true}}"#).await;
+    let a_before = stored(&pool, a).await;
     let b_before = stored(&pool, b).await;
 
     let patch = OrgSettingsPatch::default();
-    let settings = organizations::update_settings(&pool, scope(a), &patch, request_time())
-        .await
-        .unwrap();
+    let settings =
+        organizations::update_settings(&pool, scope(a), &patch, request_time(), Actor::Instance)
+            .await
+            .unwrap();
 
     assert_eq!(settings, OrgSettings::default());
-    let (_, stored_settings, updated_at) = stored(&pool, a).await;
-    assert_eq!(
-        stored_settings, r#"{"newer_key": {"kept": true}}"#,
-        "a stored key the patch does not name survives the merge"
-    );
-    assert_eq!(
-        updated_at, 1_763_000_000_123_456,
-        "updated_at is the clock's reading"
-    );
+    assert_eq!(stored(&pool, a).await, a_before, "org A is unchanged");
     assert_eq!(stored(&pool, b).await, b_before, "org B is unchanged");
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn update_settings_keeps_nothing_when_the_merged_object_does_not_parse(pool: PgPool) {
+async fn update_settings_keeps_nothing_when_the_stored_object_does_not_parse(pool: PgPool) {
     let a = insert_org(&pool, "org-a", "Org A").await;
-    // Not an object: `"oops" || {}` is the array `["oops", {}]`, which is no `OrgSettings`.
+    // Not an object, so no `OrgSettings`: the read of the current values fails before any write.
     store_settings(&pool, a, r#""oops""#).await;
     let before = stored(&pool, a).await;
 
     let patch = OrgSettingsPatch::default();
-    let result = organizations::update_settings(&pool, scope(a), &patch, request_time()).await;
+    let result =
+        organizations::update_settings(&pool, scope(a), &patch, request_time(), Actor::Instance)
+            .await;
 
     assert!(
         matches!(result, Err(Error::StoredSettings(_))),
@@ -227,7 +233,7 @@ async fn update_settings_keeps_nothing_when_the_merged_object_does_not_parse(poo
     assert_eq!(
         stored(&pool, a).await,
         before,
-        "the failed update was rolled back"
+        "the failed update wrote nothing"
     );
 }
 

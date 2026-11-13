@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO audit_events (id, org_id, actor_type, actor_id, action, target_type,\n                                   target_id, data, at, ip, created_at, updated_at)\n         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text::jsonb,\n                 timestamptz 'epoch' + $9::bigint * interval '1 microsecond', $10::text::inet,\n                 timestamptz 'epoch' + $9::bigint * interval '1 microsecond',\n                 timestamptz 'epoch' + $9::bigint * interval '1 microsecond')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Text",
+        "Text",
+        "Uuid",
+        "Text",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a5b951f73dbcf56a4ccf1316ae9036d063923146cc18556e030be5786688f660"
+}

@@ -31,6 +31,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::{
     AppState,
+    audit::ClientAddress,
     error::{ApiError, FieldError},
     extract::{ApiJson, ApiPath, ApiQuery},
     openapi::problem_responses,
@@ -305,6 +306,7 @@ pub async fn get_role(
 )]
 pub async fn create_role(
     require: Require<RoleManage>,
+    client: ClientAddress,
     State(state): State<AppState>,
     ApiJson(body): ApiJson<NewRole>,
 ) -> Result<Response, ApiError> {
@@ -315,7 +317,11 @@ pub async fn create_role(
         permissions: body.permissions,
     };
     let now = state.clock.now();
-    let role = roles::create_custom(&state.db, require.principal().scope(), &new_role, now)
+    let (scope, actor) = (
+        require.principal().scope(),
+        client.actor(require.principal()),
+    );
+    let role = roles::create_custom(&state.db, scope, &new_role, now, actor)
         .await
         .map_err(role_error)?;
     let location = format!("{ROLES_PATH}/{}", role.id);
@@ -353,6 +359,7 @@ pub async fn create_role(
 )]
 pub async fn update_role(
     require: Require<RoleManage>,
+    client: ClientAddress,
     State(state): State<AppState>,
     ApiPath(RoleIdParam { role_id }): ApiPath<RoleIdParam>,
     ApiJson(body): ApiJson<RolePatch>,
@@ -375,7 +382,8 @@ pub async fn update_role(
         permissions: body.permissions,
     };
     let now = state.clock.now();
-    let role = roles::update_custom(&mut *tx, scope, role_id, &patch, now)
+    let actor = client.actor(require.principal());
+    let role = roles::update_custom(&mut *tx, scope, role_id, &patch, now, actor)
         .await
         .map_err(role_error)?;
     tx.commit().await.map_err(|e| ApiError::internal(&e))?;
@@ -403,10 +411,15 @@ pub async fn update_role(
 )]
 pub async fn delete_role(
     require: Require<RoleManage>,
+    client: ClientAddress,
     State(state): State<AppState>,
     ApiPath(RoleIdParam { role_id }): ApiPath<RoleIdParam>,
 ) -> Result<StatusCode, ApiError> {
-    roles::delete_custom(&state.db, require.principal().scope(), role_id)
+    let (scope, actor) = (
+        require.principal().scope(),
+        client.actor(require.principal()),
+    );
+    roles::delete_custom(&state.db, scope, role_id, state.clock.now(), actor)
         .await
         .map_err(role_error)?;
     Ok(StatusCode::NO_CONTENT)

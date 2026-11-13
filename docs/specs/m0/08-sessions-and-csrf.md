@@ -607,7 +607,9 @@ overrule one, which then updates this spec.
    bearer API-key authentication with the CRC-32 precheck, scope intersection per request.
    Covers B24 to B29; T3 (API-key request part), T21 to T26. Depends on: I2, `09-permissions-and-roles.md` (catalog,
    `Require<P>`, effective permissions), Q9. It also makes `GET /api/v1/me` answer an owned key for its owner and
-   adds that case of `03-users-and-identities.md` T17 (03 B24).
+   adds that case of `03-users-and-identities.md` T17 (03 B24). It writes Q14's audit entries for
+   service-account creation and deletion into `audit_events` (`09-permissions-and-roles.md` B22
+   to B24), in the transaction of the change, with the API key as the actor when a key makes it.
 7. **I7. OAuth 2.1 authorization endpoint and codes.** Client registry, `GET /oauth/authorize`,
    the sign-in round trip through a flow, code issuance and storage. Covers B30, B31, B41 (the
    authorization endpoint's sign-in steps); T27 to T29. Depends on: I4, `07-admission.md` I1
@@ -618,7 +620,9 @@ overrule one, which then updates this spec.
    B41 for `/oauth/`. Covers B32 to B37, B41; T3 (full sign-in, API-key request and token
    exchange), T30 to T34. Depends on: I5, I7, Q11 to Q13. Its access-token authentication also
    makes `GET /api/v1/me` answer an app token for its user and adds that case of
-   `03-users-and-identities.md` T17 (03 B24).
+   `03-users-and-identities.md` T17 (03 B24). It writes Q14's audit entry for refresh-token reuse
+   detection into `audit_events` (`09-permissions-and-roles.md` B22 to B24), in the transaction
+   that revokes the family.
 9. **I9. `/.well-known/stepclimb`.** The discovery document's auth fields. Covers B38; T35, T36.
    Depends on: I8, `03-users-and-identities.md` (`identity_providers`), `04-local-accounts.md`
    I1 (local method switches).

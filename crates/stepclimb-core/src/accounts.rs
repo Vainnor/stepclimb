@@ -26,11 +26,13 @@
 
 use std::time::SystemTime;
 
+use serde_json::json;
 use sqlx::{Acquire, PgConnection, PgExecutor, Postgres};
 use uuid::Uuid;
 
 use crate::{
     OrgScope,
+    audit::{self, Action, Actor},
     db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
     id::new_id,
     name, role_assignments,
@@ -305,8 +307,8 @@ pub async fn list_top_visible(
 }
 
 /// Create an account named `name`, trimmed, under the account `parent_id` of the scope's
-/// organization, with `created_at` and `updated_at` set to `now` (B18). The repository computes
-/// the path from the parent's.
+/// organization, with `created_at` and `updated_at` set to `now` (B18), and its
+/// `account.create` audit entry by `actor`. The repository computes the path from the parent's.
 ///
 /// Runs in one transaction (a savepoint when `db` is already one) under the tree lock.
 pub async fn create<'c>(
@@ -315,6 +317,7 @@ pub async fn create<'c>(
     parent_id: Uuid,
     name: &str,
     now: SystemTime,
+    actor: Actor,
 ) -> Result<Account, Error> {
     let name = valid_name(name)?;
     let now = epoch_micros(now)?;
@@ -353,6 +356,8 @@ pub async fn create<'c>(
     )
     .fetch_one(&mut *tx)
     .await?;
+    let data = json!({ "after": { "parent_id": parent_id, "name": row.name } });
+    audit::record(&mut tx, scope, actor, Action::AccountCreate, id, &data, now).await?;
     tx.commit().await?;
     Account::try_from(row)
 }
@@ -383,18 +388,35 @@ pub(crate) async fn create_root(
     Ok(())
 }
 
-/// Rename the account `id` of the scope's organization to `name`, trimmed, and set `updated_at`
-/// to `now` (B19). Changes nothing else, so it takes no tree lock.
-pub async fn rename(
-    db: impl PgExecutor<'_>,
+/// Rename the account `id` of the scope's organization to `name`, trimmed, set `updated_at` to
+/// `now` (B19), and write the `account.rename` audit entry by `actor` with the name before and
+/// after. Changes nothing else, so it takes no tree lock. A name equal to the current one
+/// writes nothing and returns the account as it is (spec 09 B22).
+///
+/// Runs in one transaction (a savepoint when `db` is already one).
+pub async fn rename<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
     scope: OrgScope,
     id: Uuid,
     name: &str,
     now: SystemTime,
+    actor: Actor,
 ) -> Result<Account, Error> {
     let name = valid_name(name)?;
     let now = epoch_micros(now)?;
-    sqlx::query_as!(
+    let mut tx = db.begin().await?;
+    let before = sqlx::query_scalar!(
+        "SELECT name FROM accounts WHERE org_id = $1 AND id = $2 FOR UPDATE",
+        scope.org_id(),
+        id,
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(Error::NotFound)?;
+    if before == name {
+        return get(&mut *tx, scope, id).await?.ok_or(Error::NotFound);
+    }
+    let row = sqlx::query_as!(
         Row,
         r#"UPDATE accounts a
            SET name = $3, updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond'
@@ -409,20 +431,24 @@ pub async fn rename(
         name,
         now,
     )
-    .fetch_optional(db)
+    .fetch_optional(&mut *tx)
     .await?
-    .ok_or(Error::NotFound)?
-    .try_into()
+    .ok_or(Error::NotFound)?;
+    let data = json!({ "before": { "name": before }, "after": { "name": row.name } });
+    audit::record(&mut tx, scope, actor, Action::AccountRename, id, &data, now).await?;
+    tx.commit().await?;
+    row.try_into()
 }
 
 /// Move the account `id` of the scope's organization under the account `parent_id` (B20).
 ///
 /// Refuses the root ([`Error::RootImmutable`]), a new parent that is the account or one of its
 /// descendants ([`Error::MoveIntoDescendant`]), and a move that would put any account of the
-/// subtree deeper than [`MAX_DEPTH`]. A move to the current parent changes nothing and returns
-/// the account as it is. Otherwise one `UPDATE` rewrites the path of the account and every
-/// descendant and sets their `updated_at` to `now`, since each one's path and depth change; only
-/// the account's own `parent_id` changes.
+/// subtree deeper than [`MAX_DEPTH`]. A move to the current parent changes nothing, writes no
+/// audit entry and returns the account as it is. Otherwise one `UPDATE` rewrites the path of
+/// the account and every descendant and sets their `updated_at` to `now`, since each one's path
+/// and depth change; only the account's own `parent_id` changes. The move's `account.move` audit
+/// entry by `actor` holds the parent before and after.
 ///
 /// Runs in one transaction (a savepoint when `db` is already one) under the tree lock.
 pub async fn move_to<'c>(
@@ -431,6 +457,7 @@ pub async fn move_to<'c>(
     id: Uuid,
     parent_id: Uuid,
     now: SystemTime,
+    actor: Actor,
 ) -> Result<Account, Error> {
     let now = epoch_micros(now)?;
     let mut tx = db.begin().await?;
@@ -442,6 +469,11 @@ pub async fn move_to<'c>(
     if subtree.parent_id != Some(parent_id) {
         let destination = check_destination(&mut tx, scope, &subtree, parent_id).await?;
         rewrite_subtree(&mut tx, scope, id, &subtree, &destination, now).await?;
+        let data = json!({
+            "before": { "parent_id": subtree.parent_id },
+            "after": { "parent_id": parent_id },
+        });
+        audit::record(&mut tx, scope, actor, Action::AccountMove, id, &data, now).await?;
     }
     let moved = get(&mut *tx, scope, id).await?.ok_or(Error::NotFound)?;
     tx.commit().await?;
@@ -550,7 +582,8 @@ async fn rewrite_subtree(
     Ok(())
 }
 
-/// Delete the account `id` of the scope's organization (B21). Refuses the root
+/// Delete the account `id` of the scope's organization (B21) and write its `account.delete`
+/// audit entry by `actor` at `now`, with the account's parent and name. Refuses the root
 /// ([`Error::RootImmutable`]), an account with child accounts ([`Error::HasChildren`]) and an
 /// account that role assignments are scoped to ([`Error::HasAssignments`], spec 09 B15).
 ///
@@ -563,7 +596,10 @@ pub async fn delete<'c>(
     db: impl Acquire<'c, Database = Postgres>,
     scope: OrgScope,
     id: Uuid,
+    now: SystemTime,
+    actor: Actor,
 ) -> Result<(), Error> {
+    let now = epoch_micros(now)?;
     let mut tx = db.begin().await?;
     lock_tree(&mut tx, scope).await?;
     let account = get(&mut *tx, scope, id).await?.ok_or(Error::NotFound)?;
@@ -586,6 +622,8 @@ pub async fn delete<'c>(
     )
     .execute(&mut *tx)
     .await?;
+    let data = json!({ "before": { "parent_id": account.parent_id, "name": account.name } });
+    audit::record(&mut tx, scope, actor, Action::AccountDelete, id, &data, now).await?;
     tx.commit().await?;
     Ok(())
 }

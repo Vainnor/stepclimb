@@ -8,6 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use sqlx::PgPool;
 use stepclimb_core::{
     OrgScope, ScopeOrigin, Source,
+    audit::Actor,
     id::{Uuid, new_id},
     organizations::{self, Tenancy},
     sessions::{self, Authentication, Error, IDLE_TIMEOUT, MAX_LIFETIME},
@@ -259,9 +260,16 @@ async fn t7_hourly_use_keeps_a_session_until_thirty_days_and_no_longer(pool: PgP
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn t9_a_suspended_user_is_refused_and_restored_by_unsuspending(pool: PgPool) {
     let (org, user, session) = signed_in(&pool).await;
-    users::set_status(&pool, scope(org), user, Status::Suspended, sign_in_time())
-        .await
-        .unwrap();
+    users::set_status(
+        &pool,
+        scope(org),
+        user,
+        Status::Suspended,
+        sign_in_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
 
     let later = sign_in_time() + HOUR;
     assert_eq!(
@@ -274,9 +282,16 @@ async fn t9_a_suspended_user_is_refused_and_restored_by_unsuspending(pool: PgPoo
         "the row is kept and not refreshed"
     );
 
-    users::set_status(&pool, scope(org), user, Status::Active, later)
-        .await
-        .unwrap();
+    users::set_status(
+        &pool,
+        scope(org),
+        user,
+        Status::Active,
+        later,
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
     assert!(matches!(
         authenticate(&pool, org, later).await,
         Authentication::Valid(_)
@@ -286,9 +301,16 @@ async fn t9_a_suspended_user_is_refused_and_restored_by_unsuspending(pool: PgPoo
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn a_suspended_users_session_still_expires(pool: PgPool) {
     let (org, user, session) = signed_in(&pool).await;
-    users::set_status(&pool, scope(org), user, Status::Suspended, sign_in_time())
-        .await
-        .unwrap();
+    users::set_status(
+        &pool,
+        scope(org),
+        user,
+        Status::Suspended,
+        sign_in_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
 
     let idle = authenticate(&pool, org, sign_in_time() + IDLE_TIMEOUT).await;
 

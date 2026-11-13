@@ -380,10 +380,19 @@ pub struct RateLimited<C> {
 }
 
 /// The server was started without the TCP peer's address (`ConnectInfo`), so no request can be
-/// counted. `startup::serve_on` provides it; anything else is a wiring bug.
+/// counted or audited. `startup::serve_on` provides it; anything else is a wiring bug.
 #[derive(Debug, thiserror::Error)]
 #[error("the request has no peer address; serve the router with connect info")]
 struct NoPeerAddress;
+
+/// The client address of the request in `parts`: [`TrustedProxies::client_ip`] of its TCP peer.
+/// The rate limits count by it and audit entries record it.
+pub(crate) fn client_address(parts: &Parts, state: &AppState) -> Result<IpAddr, ApiError> {
+    let Some(ConnectInfo(peer)) = parts.extensions.get::<ConnectInfo<SocketAddr>>() else {
+        return Err(ApiError::internal(&NoPeerAddress));
+    };
+    Ok(state.rate_limits.client_ip(peer.ip(), &parts.headers))
+}
 
 impl<C, S> FromRequestParts<S> for RateLimited<C>
 where
@@ -395,10 +404,7 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Response> {
         let state = AppState::from_ref(state);
-        let Some(ConnectInfo(peer)) = parts.extensions.get::<ConnectInfo<SocketAddr>>() else {
-            return Err(ApiError::internal(&NoPeerAddress).into_response());
-        };
-        let client = state.rate_limits.client_ip(peer.ip(), &parts.headers);
+        let client = client_address(parts, &state).map_err(IntoResponse::into_response)?;
         state
             .rate_limits
             .hit_address(C::CLASS, client, state.clock.now())

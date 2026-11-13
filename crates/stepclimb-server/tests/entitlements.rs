@@ -22,6 +22,7 @@ use sqlx::PgPool;
 use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{
     OrgScope, Source,
+    audit::Actor,
     clock::ManualClock,
     feature::{self, Feature, Limit, TestSeal},
     id::{Uuid, new_id},
@@ -188,10 +189,11 @@ impl Fixture {
                 name: "Test role".into(),
                 permissions: permissions.iter().map(|&p| p.to_owned()).collect(),
             };
-            let role = roles::create_custom(&self.pool, scope(self.org), &role, now())
-                .await
-                .expect("create role")
-                .id;
+            let role =
+                roles::create_custom(&self.pool, scope(self.org), &role, now(), Actor::Instance)
+                    .await
+                    .expect("create role")
+                    .id;
             let assignment = NewAssignment {
                 user_id: user,
                 role_id: role,
@@ -199,9 +201,15 @@ impl Fixture {
                 source: Source::Local,
                 external_id: None,
             };
-            role_assignments::create(&self.pool, scope(self.org), &assignment, now())
-                .await
-                .expect("create assignment");
+            role_assignments::create(
+                &self.pool,
+                scope(self.org),
+                &assignment,
+                now(),
+                Actor::Instance,
+            )
+            .await
+            .expect("create assignment");
         }
         let started = session::start(&self.pool, scope(self.org), user, &HeaderMap::new(), now())
             .await

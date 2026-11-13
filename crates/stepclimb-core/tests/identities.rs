@@ -12,6 +12,7 @@ use serde_json::{Map, Value, json};
 use sqlx::PgPool;
 use stepclimb_core::{
     OrgScope, Source,
+    audit::Actor,
     id::{Uuid, new_id},
     identities::{self, Error, Identity, NewIdentity},
     identity_providers::{self, Kind},
@@ -388,9 +389,16 @@ async fn find_user_returns_the_linked_user_for_a_known_identity_only(pool: PgPoo
     assert_eq!(found.user, sam);
     assert_eq!(found.user.status, Status::Active);
 
-    users::set_status(&pool, scope(a.id), a.sam, Status::Suspended, later())
-        .await
-        .unwrap();
+    users::set_status(
+        &pool,
+        scope(a.id),
+        a.sam,
+        Status::Suspended,
+        later(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
     let suspended = find(a.id, a.oauth, "1000001").await.unwrap().unwrap();
     assert_eq!(suspended.user.status, Status::Suspended);
 

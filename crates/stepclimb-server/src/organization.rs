@@ -23,6 +23,7 @@ use utoipa::ToSchema;
 
 use crate::{
     AppState,
+    audit::ClientAddress,
     error::{ApiError, FieldError},
     extract::ApiJson,
     openapi::problem_responses,
@@ -155,12 +156,16 @@ pub async fn get_organization(
 )]
 pub async fn update_organization(
     require: Require<OrgManage>,
+    client: ClientAddress,
     State(state): State<AppState>,
     ApiJson(body): ApiJson<OrganizationPatch>,
 ) -> Result<Json<Organization>, ApiError> {
     let scope = require.principal().scope();
     let org = match body.name {
-        Some(name) => organizations::rename(&state.db, scope, &name, state.clock.now()).await,
+        Some(name) => {
+            let actor = client.actor(require.principal());
+            organizations::rename(&state.db, scope, &name, state.clock.now(), actor).await
+        }
         None => organizations::get(&state.db, scope).await,
     }
     .map_err(org_error)?;
@@ -216,13 +221,15 @@ pub async fn get_settings(
 )]
 pub async fn update_settings(
     require: Require<OrgManage>,
+    client: ClientAddress,
     State(state): State<AppState>,
     ApiJson(body): ApiJson<Map<String, Value>>,
 ) -> Result<Json<CoreSettings>, ApiError> {
     let scope = require.principal().scope();
     let settings = match parse_patch(body)? {
         Some(patch) => {
-            organizations::update_settings(&state.db, scope, &patch, state.clock.now()).await
+            let actor = client.actor(require.principal());
+            organizations::update_settings(&state.db, scope, &patch, state.clock.now(), actor).await
         }
         None => organizations::settings(&state.db, scope).await,
     }

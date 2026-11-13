@@ -12,6 +12,7 @@ use sqlx::{PgConnection, PgPool, Postgres, pool::PoolConnection};
 use stepclimb_core::{
     OrgScope,
     accounts::{self, Account, Error, MAX_DEPTH, MAX_NAME_CHARS, Reach},
+    audit::Actor,
     id::{Uuid, new_id},
     organizations,
 };
@@ -49,9 +50,16 @@ async fn org(pool: &PgPool, slug: &str) -> (Uuid, Uuid) {
 }
 
 async fn create(pool: &PgPool, org: Uuid, parent: Uuid, name: &str) -> Account {
-    accounts::create(pool, scope(org), parent, name, request_time())
-        .await
-        .expect("create account")
+    accounts::create(
+        pool,
+        scope(org),
+        parent,
+        name,
+        request_time(),
+        Actor::Instance,
+    )
+    .await
+    .expect("create account")
 }
 
 /// The stored path of an account, as text.
@@ -170,8 +178,24 @@ async fn create_refuses_a_parent_outside_the_scope_and_inserts_nothing(pool: PgP
     let a_before = tree(&pool, a).await;
     let b_before = tree(&pool, b).await;
 
-    let other_org = accounts::create(&pool, scope(a), root_b, "Tower", request_time()).await;
-    let missing = accounts::create(&pool, scope(a), new_id(), "Tower", request_time()).await;
+    let other_org = accounts::create(
+        &pool,
+        scope(a),
+        root_b,
+        "Tower",
+        request_time(),
+        Actor::Instance,
+    )
+    .await;
+    let missing = accounts::create(
+        &pool,
+        scope(a),
+        new_id(),
+        "Tower",
+        request_time(),
+        Actor::Instance,
+    )
+    .await;
 
     assert!(
         matches!(other_org, Err(Error::ParentNotFound)),
@@ -195,15 +219,32 @@ async fn create_and_rename_refuse_invalid_names_and_change_nothing(pool: PgPool)
     ];
 
     for (name, expected) in cases {
-        let created = accounts::create(&pool, scope(a), root, name, request_time()).await;
-        let renamed = accounts::rename(&pool, scope(a), tower.id, name, later_time()).await;
+        let created =
+            accounts::create(&pool, scope(a), root, name, request_time(), Actor::Instance).await;
+        let renamed = accounts::rename(
+            &pool,
+            scope(a),
+            tower.id,
+            name,
+            later_time(),
+            Actor::Instance,
+        )
+        .await;
         assert_eq!(kind(&created), expected, "create {name:?}");
         assert_eq!(kind(&renamed), expected, "rename {name:?}");
     }
     assert_eq!(tree(&pool, a).await, before);
 
     let at_limit = "é".repeat(MAX_NAME_CHARS);
-    let renamed = accounts::rename(&pool, scope(a), tower.id, &at_limit, later_time()).await;
+    let renamed = accounts::rename(
+        &pool,
+        scope(a),
+        tower.id,
+        &at_limit,
+        later_time(),
+        Actor::Instance,
+    )
+    .await;
     assert_eq!(renamed.unwrap().name, at_limit);
 }
 
@@ -217,9 +258,16 @@ async fn rename_changes_the_name_and_updated_at_only(pool: PgPool) {
     let ground_before = accounts::get(&pool, scope(a), ground.id).await.unwrap();
     let b_before = tree(&pool, b).await;
 
-    let renamed = accounts::rename(&pool, scope(a), tower.id, " Tower Cab ", later_time())
-        .await
-        .unwrap();
+    let renamed = accounts::rename(
+        &pool,
+        scope(a),
+        tower.id,
+        " Tower Cab ",
+        later_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
 
     // T11: renaming touches no path.
     assert_eq!(renamed.name, "Tower Cab");
@@ -249,10 +297,19 @@ async fn writes_with_another_organizations_scope_are_not_found_and_change_nothin
     let a_before = tree(&pool, a).await;
     let now = later_time();
 
-    let rename = accounts::rename(&pool, scope(a), tower_b.id, "Taken", now).await;
-    let moved = accounts::move_to(&pool, scope(a), tower_b.id, enroute_b.id, now).await;
-    let into_b = accounts::move_to(&pool, scope(a), enroute_a.id, root_b, now).await;
-    let deleted = accounts::delete(&pool, scope(a), tower_b.id).await;
+    let rename = accounts::rename(&pool, scope(a), tower_b.id, "Taken", now, Actor::Instance).await;
+    let moved = accounts::move_to(
+        &pool,
+        scope(a),
+        tower_b.id,
+        enroute_b.id,
+        now,
+        Actor::Instance,
+    )
+    .await;
+    let into_b =
+        accounts::move_to(&pool, scope(a), enroute_a.id, root_b, now, Actor::Instance).await;
+    let deleted = accounts::delete(&pool, scope(a), tower_b.id, UNIX_EPOCH, Actor::Instance).await;
 
     assert_eq!(kind(&rename), "NotFound");
     assert_eq!(kind(&moved), "NotFound");
@@ -295,9 +352,16 @@ async fn move_rewrites_the_path_of_the_account_and_every_descendant(pool: PgPool
     let other_before = tree(&pool, other.org).await;
     let root_before = accounts::get(&pool, scope(f.org), f.root).await.unwrap();
 
-    let moved = accounts::move_to(&pool, scope(f.org), f.tower, f.enroute, later_time())
-        .await
-        .unwrap();
+    let moved = accounts::move_to(
+        &pool,
+        scope(f.org),
+        f.tower,
+        f.enroute,
+        later_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
 
     // T12.
     assert_eq!(moved.parent_id, Some(f.enroute));
@@ -343,12 +407,18 @@ async fn move_refuses_the_root_and_moves_into_the_own_subtree(pool: PgPool) {
     let now = later_time();
 
     // T13.
-    let root = accounts::move_to(&pool, scope(f.org), f.root, f.enroute, now).await;
-    let under_child = accounts::move_to(&pool, scope(f.org), f.tower, f.ground, now).await;
-    let under_grandchild = accounts::move_to(&pool, scope(f.org), f.tower, f.ramp, now).await;
-    let under_itself = accounts::move_to(&pool, scope(f.org), f.tower, f.tower, now).await;
-    let missing_parent = accounts::move_to(&pool, scope(f.org), f.tower, new_id(), now).await;
-    let missing = accounts::move_to(&pool, scope(f.org), new_id(), f.root, now).await;
+    let root =
+        accounts::move_to(&pool, scope(f.org), f.root, f.enroute, now, Actor::Instance).await;
+    let under_child =
+        accounts::move_to(&pool, scope(f.org), f.tower, f.ground, now, Actor::Instance).await;
+    let under_grandchild =
+        accounts::move_to(&pool, scope(f.org), f.tower, f.ramp, now, Actor::Instance).await;
+    let under_itself =
+        accounts::move_to(&pool, scope(f.org), f.tower, f.tower, now, Actor::Instance).await;
+    let missing_parent =
+        accounts::move_to(&pool, scope(f.org), f.tower, new_id(), now, Actor::Instance).await;
+    let missing =
+        accounts::move_to(&pool, scope(f.org), new_id(), f.root, now, Actor::Instance).await;
 
     assert_eq!(kind(&root), "RootImmutable");
     assert_eq!(kind(&under_child), "MoveIntoDescendant");
@@ -364,13 +434,27 @@ async fn move_to_a_sibling_branch_and_back_keeps_the_tree_consistent(pool: PgPoo
     let f = facility(&pool, "org-a").await;
     let now = later_time();
 
-    accounts::move_to(&pool, scope(f.org), f.ground, f.enroute, now)
-        .await
-        .unwrap();
-    accounts::move_to(&pool, scope(f.org), f.enroute, f.tower, now)
-        .await
-        .unwrap();
-    accounts::move_to(&pool, scope(f.org), f.ground, f.root, now)
+    accounts::move_to(
+        &pool,
+        scope(f.org),
+        f.ground,
+        f.enroute,
+        now,
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+    accounts::move_to(
+        &pool,
+        scope(f.org),
+        f.enroute,
+        f.tower,
+        now,
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+    accounts::move_to(&pool, scope(f.org), f.ground, f.root, now, Actor::Instance)
         .await
         .unwrap();
 
@@ -435,15 +519,29 @@ async fn crossing_moves_in_two_open_transactions_end_with_one_refused_and_no_cyc
     // commits.
     let mut first = begin(&pool).await;
     let mut second = begin(&pool).await;
-    accounts::move_to(&mut *first, scope(f.org), f.tower, f.enroute, later_time())
-        .await
-        .unwrap();
+    accounts::move_to(
+        &mut *first,
+        scope(f.org),
+        f.tower,
+        f.enroute,
+        later_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
     // The crossing move runs in the second transaction while the first is uncommitted.
     let crossing = tokio::spawn({
         let (org, enroute, tower) = (f.org, f.enroute, f.tower);
         async move {
-            let result =
-                accounts::move_to(&mut *second, scope(org), enroute, tower, later_time()).await;
+            let result = accounts::move_to(
+                &mut *second,
+                scope(org),
+                enroute,
+                tower,
+                later_time(),
+                Actor::Instance,
+            )
+            .await;
             second
                 .commit()
                 .await
@@ -491,10 +589,32 @@ async fn tree_writes_refuse_an_isolation_level_above_read_committed(pool: PgPool
     for (level, set_level) in levels {
         sqlx::raw_sql(set_level).execute(&mut *conn).await.unwrap();
 
-        let moved =
-            accounts::move_to(&mut *conn, scope(f.org), f.tower, f.enroute, later_time()).await;
-        let created = accounts::create(&mut *conn, scope(f.org), f.root, "New", later_time()).await;
-        let deleted = accounts::delete(&mut *conn, scope(f.org), f.ramp).await;
+        let moved = accounts::move_to(
+            &mut *conn,
+            scope(f.org),
+            f.tower,
+            f.enroute,
+            later_time(),
+            Actor::Instance,
+        )
+        .await;
+        let created = accounts::create(
+            &mut *conn,
+            scope(f.org),
+            f.root,
+            "New",
+            later_time(),
+            Actor::Instance,
+        )
+        .await;
+        let deleted = accounts::delete(
+            &mut *conn,
+            scope(f.org),
+            f.ramp,
+            UNIX_EPOCH,
+            Actor::Instance,
+        )
+        .await;
 
         for result in [kind(&moved), kind(&created), kind(&deleted)] {
             assert_eq!(result, "IsolationLevel", "{level}");
@@ -513,9 +633,16 @@ async fn a_move_to_the_current_parent_changes_nothing(pool: PgPool) {
     let before = tree(&pool, f.org).await;
     let tower = accounts::get(&pool, scope(f.org), f.tower).await.unwrap();
 
-    let moved = accounts::move_to(&pool, scope(f.org), f.tower, f.root, later_time())
-        .await
-        .unwrap();
+    let moved = accounts::move_to(
+        &pool,
+        scope(f.org),
+        f.tower,
+        f.root,
+        later_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(Some(moved), tower, "updated_at keeps its old value");
     assert_eq!(tree(&pool, f.org).await, before);
@@ -527,9 +654,11 @@ async fn delete_refuses_the_root_and_an_account_with_children(pool: PgPool) {
     let before = tree(&pool, f.org).await;
 
     // T14.
-    let root = accounts::delete(&pool, scope(f.org), f.root).await;
-    let with_child = accounts::delete(&pool, scope(f.org), f.ground).await;
-    let missing = accounts::delete(&pool, scope(f.org), new_id()).await;
+    let root = accounts::delete(&pool, scope(f.org), f.root, UNIX_EPOCH, Actor::Instance).await;
+    let with_child =
+        accounts::delete(&pool, scope(f.org), f.ground, UNIX_EPOCH, Actor::Instance).await;
+    let missing =
+        accounts::delete(&pool, scope(f.org), new_id(), UNIX_EPOCH, Actor::Instance).await;
 
     assert_eq!(kind(&root), "RootImmutable");
     assert_eq!(kind(&with_child), "HasChildren");
@@ -543,7 +672,9 @@ async fn delete_removes_a_leaf_only(pool: PgPool) {
     let other = facility(&pool, "org-b").await;
     let other_before = tree(&pool, other.org).await;
 
-    accounts::delete(&pool, scope(f.org), f.ramp).await.unwrap();
+    accounts::delete(&pool, scope(f.org), f.ramp, UNIX_EPOCH, Actor::Instance)
+        .await
+        .unwrap();
 
     assert_eq!(
         accounts::get(&pool, scope(f.org), f.ramp).await.unwrap(),
@@ -556,7 +687,7 @@ async fn delete_removes_a_leaf_only(pool: PgPool) {
     assert!(!ground.has_children);
     assert_eq!(tree(&pool, f.org).await.len(), 4);
     assert_eq!(tree(&pool, other.org).await, other_before);
-    accounts::delete(&pool, scope(f.org), f.ground)
+    accounts::delete(&pool, scope(f.org), f.ground, UNIX_EPOCH, Actor::Instance)
         .await
         .expect("Ground is a leaf now");
 }
@@ -565,13 +696,29 @@ async fn delete_removes_a_leaf_only(pool: PgPool) {
 async fn a_create_waiting_on_a_delete_of_its_parent_is_refused(pool: PgPool) {
     let f = facility(&pool, "org-a").await;
     let mut deleting = begin(&pool).await;
-    accounts::delete(&mut *deleting, scope(f.org), f.ramp)
-        .await
-        .unwrap();
+    accounts::delete(
+        &mut *deleting,
+        scope(f.org),
+        f.ramp,
+        UNIX_EPOCH,
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
     let creating = tokio::spawn({
         let pool = pool.clone();
         let (org, ramp) = (f.org, f.ramp);
-        async move { accounts::create(&pool, scope(org), ramp, "Apron", later_time()).await }
+        async move {
+            accounts::create(
+                &pool,
+                scope(org),
+                ramp,
+                "Apron",
+                later_time(),
+                Actor::Instance,
+            )
+            .await
+        }
     });
     until_a_call_waits_on_the_tree_lock(&pool, f.org).await;
     deleting.commit().await.unwrap();
@@ -606,7 +753,15 @@ async fn create_refuses_an_account_deeper_than_the_limit(pool: PgPool) {
     assert_eq!(deepest_read.depth, MAX_DEPTH, "depth 16 is allowed");
     let before = tree(&pool, a).await;
 
-    let too_deep = accounts::create(&pool, scope(a), deepest, "Too deep", request_time()).await;
+    let too_deep = accounts::create(
+        &pool,
+        scope(a),
+        deepest,
+        "Too deep",
+        request_time(),
+        Actor::Instance,
+    )
+    .await;
 
     assert_eq!(kind(&too_deep), "TooDeep");
     assert_eq!(tree(&pool, a).await, before);
@@ -625,12 +780,22 @@ async fn move_refuses_a_subtree_that_would_end_deeper_than_the_limit(pool: PgPoo
     let fits = long[long.len() - 1];
     // A sibling account at depth 15 would put Leaf at 17.
     let deeper = create(&pool, a, fits, "Deeper").await.id;
-    let too_deep = accounts::move_to(&pool, scope(a), branch, deeper, later_time()).await;
+    let too_deep = accounts::move_to(
+        &pool,
+        scope(a),
+        branch,
+        deeper,
+        later_time(),
+        Actor::Instance,
+    )
+    .await;
     assert_eq!(kind(&too_deep), "TooDeep");
-    accounts::delete(&pool, scope(a), deeper).await.unwrap();
+    accounts::delete(&pool, scope(a), deeper, UNIX_EPOCH, Actor::Instance)
+        .await
+        .unwrap();
     assert_eq!(tree(&pool, a).await, before);
 
-    let moved = accounts::move_to(&pool, scope(a), branch, fits, later_time())
+    let moved = accounts::move_to(&pool, scope(a), branch, fits, later_time(), Actor::Instance)
         .await
         .unwrap();
     assert_eq!(moved.depth, MAX_DEPTH - 1);

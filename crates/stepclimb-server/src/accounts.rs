@@ -40,6 +40,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::{
     AppState,
+    audit::ClientAddress,
     error::{ApiError, FieldError},
     extract::{ApiJson, ApiQuery},
     openapi::problem_responses,
@@ -285,6 +286,7 @@ pub async fn get_account(
 )]
 pub async fn create_account(
     require: Require<AccountManage, AnyScope>,
+    client: ClientAddress,
     State(state): State<AppState>,
     ApiJson(body): ApiJson<NewAccount>,
 ) -> Result<Response, ApiError> {
@@ -295,7 +297,8 @@ pub async fn create_account(
         .require_at::<AccountManage>(&mut *tx, ScopeId::Account(body.parent_id))
         .await?;
     let now = state.clock.now();
-    let account = accounts::create(&mut *tx, scope, body.parent_id, &body.name, now)
+    let actor = client.actor(require.principal());
+    let account = accounts::create(&mut *tx, scope, body.parent_id, &body.name, now, actor)
         .await
         .map_err(account_error)?;
     commit(tx).await?;
@@ -333,6 +336,7 @@ pub async fn create_account(
 )]
 pub async fn update_account(
     require: Require<AccountManage, AccountTarget>,
+    client: ClientAddress,
     State(state): State<AppState>,
     ApiJson(body): ApiJson<AccountPatch>,
 ) -> Result<Json<Account>, ApiError> {
@@ -348,7 +352,10 @@ pub async fn update_account(
         .grants()
         .check::<AccountManage>(&Target::Account(path))?;
     let account = match body.name {
-        Some(name) => accounts::rename(&mut *tx, scope, id, &name, state.clock.now()).await,
+        Some(name) => {
+            let actor = client.actor(require.principal());
+            accounts::rename(&mut *tx, scope, id, &name, state.clock.now(), actor).await
+        }
         None => accounts::get(&mut *tx, scope, id)
             .await
             .and_then(|found| found.ok_or(accounts::Error::NotFound)),
@@ -382,6 +389,7 @@ pub async fn update_account(
 )]
 pub async fn move_account(
     require: Require<AccountManage, AccountParentTarget>,
+    client: ClientAddress,
     State(state): State<AppState>,
     ApiJson(body): ApiJson<AccountMove>,
 ) -> Result<Json<Account>, ApiError> {
@@ -391,7 +399,8 @@ pub async fn move_account(
     let to = check_destination(&mut tx, require.grants(), body.parent_id).await?;
     refuse_escalation(require.grants(), id, &from, &to)?;
     let now = state.clock.now();
-    let moved = accounts::move_to(&mut *tx, scope, id, body.parent_id, now)
+    let actor = client.actor(require.principal());
+    let moved = accounts::move_to(&mut *tx, scope, id, body.parent_id, now, actor)
         .await
         .map_err(account_error)?;
     commit(tx).await?;
@@ -419,12 +428,14 @@ pub async fn move_account(
 )]
 pub async fn delete_account(
     require: Require<AccountManage, AccountParentTarget>,
+    client: ClientAddress,
     State(state): State<AppState>,
 ) -> Result<StatusCode, ApiError> {
     let (scope, id) = (require.principal().scope(), require.target().id);
     let mut tx = locked_tree(&state, scope).await?;
     check_movable(&mut tx, require.grants(), id).await?;
-    accounts::delete(&mut *tx, scope, id)
+    let actor = client.actor(require.principal());
+    accounts::delete(&mut *tx, scope, id, state.clock.now(), actor)
         .await
         .map_err(account_error)?;
     commit(tx).await?;

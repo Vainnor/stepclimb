@@ -16,6 +16,7 @@ use sqlx::PgPool;
 use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{
     OrgScope, Source,
+    audit::Actor,
     clock::ManualClock,
     id::{Uuid, new_id},
     users::{self, NewUser, Status},
@@ -471,6 +472,7 @@ async fn t9_a_suspended_user_gets_auth_suspended_until_unsuspended(pool: PgPool)
         fixture.user,
         Status::Suspended,
         sign_in_time(),
+        Actor::Instance,
     )
     .await
     .unwrap();
@@ -488,6 +490,7 @@ async fn t9_a_suspended_user_gets_auth_suspended_until_unsuspended(pool: PgPool)
         fixture.user,
         Status::Active,
         sign_in_time(),
+        Actor::Instance,
     )
     .await
     .unwrap();

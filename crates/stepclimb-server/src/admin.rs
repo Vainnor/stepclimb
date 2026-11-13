@@ -17,6 +17,7 @@ use std::time::SystemTime;
 use sqlx::PgPool;
 use stepclimb_core::{
     OrgScope, Source,
+    audit::Actor,
     clock::Clock,
     id::Uuid,
     organizations::{self, Organization},
@@ -177,7 +178,7 @@ pub async fn create_organization_with_admin(
         source: Source::Local,
         external_id: None,
     };
-    let assignment = role_assignments::create(&mut *tx, scope, &assignment, now)
+    let assignment = role_assignments::create(&mut *tx, scope, &assignment, now, Actor::Instance)
         .await
         .map_err(CreateError::Assignment)?;
     tx.commit().await.map_err(CreateError::Commit)?;
