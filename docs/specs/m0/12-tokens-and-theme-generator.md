@@ -115,7 +115,7 @@ it at `packages/tokens/tokens/`. See Open question Q1.
   against `on-brand`, where `on-brand` is the scale's light end in light themes and its dark end
   in dark themes (as the hand-written defaults do: `on-brand` is `oklch(0.99 0.005 195)` in
   default light and `oklch(0.18 0.02 195)` in default dark). Which step to take when several
-  clear is part of Q9.
+  clear is part of Q9. "Clears" is measured as B20 measures it, on the displayed 8-bit colors.
 - **B15.** The other brand tokens come from the same scale: `brand-hover` one step past `brand`
   away from `on-brand`, `brand-soft` a tint near the canvas, `brand-fg` the step that reads as
   text on `brand-soft` and on `bg-canvas`, `ring` the step that clears 3:1 against `bg-canvas`
@@ -136,7 +136,11 @@ it at `packages/tokens/tokens/`. See Open question Q1.
 ### Contrast report and guardrails
 
 - **B20.** `contrastReport(theme)` measures every required pair with the WCAG 2 contrast ratio
-  and returns, per pair, both tokens, the ratio, the minimum and pass or fail. The pairs:
+  and returns, per pair, both tokens, the ratio, the minimum and pass or fail. Contrast is
+  measured on the 8-bit sRGB values a display shows: each color's sRGB channels are clipped to 0
+  to 1 and rounded to one of 256 levels, then the WCAG 2 formula is applied. One function,
+  `contrast()` in `src/color.ts`, does this for the generator's step choice and for the report
+  (coordinator decision, 13 Nov 2026, PR #124). The pairs:
 
   | Pair | Minimum | Why |
   | --- | --- | --- |

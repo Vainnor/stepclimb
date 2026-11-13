@@ -16,13 +16,13 @@ type Vec3 = [number, number, number];
 type Mat3 = [Vec3, Vec3, Vec3];
 
 /** An input the generator cannot use; `field` names the input that failed. */
-export class ColorInputError extends Error {
+export class BrandInputError extends Error {
   constructor(
     readonly field: string,
     message: string,
   ) {
     super(message);
-    this.name = "ColorInputError";
+    this.name = "BrandInputError";
   }
 }
 
@@ -95,8 +95,8 @@ export function oklchToSrgb(color: Oklch): Vec3 {
 }
 
 /**
- * Whether the color is inside sRGB. `epsilon` absorbs floating-point noise only (an achromatic
- * white comes back from the matrices a few 1e-8 above 1).
+ * Whether the color is inside sRGB: every gamma-encoded channel within `epsilon` of 0 to 1. The
+ * default absorbs the matrices' floating-point error only, which is far below 1e-6.
  */
 export function inSrgb(color: Oklch, epsilon = 1e-6): boolean {
   return oklchToSrgb(color).every((x) => x >= -epsilon && x <= 1 + epsilon);
@@ -156,33 +156,54 @@ export function gamutMapSrgb(color: Oklch): Oklch {
   return { ...clipped, ...alpha };
 }
 
-/** WCAG 2 relative luminance of an sRGB color (clipped to sRGB first). */
-export function relativeLuminance(color: Oklch): number {
-  const [r, g, b] = oklchToSrgb(color).map((x) => toLinear(Math.min(1, Math.max(0, x))));
-  return 0.2126 * (r ?? 0) + 0.7152 * (g ?? 0) + 0.0722 * (b ?? 0);
+/**
+ * The 8-bit sRGB color a display shows for `color`: each gamma-encoded channel clipped to 0 to 1
+ * and rounded to the nearest of 256 levels, returned as 0 to 1.
+ */
+export function toSrgb8(color: Oklch): Vec3 {
+  return oklchToSrgb(color).map((x) => Math.round(Math.min(1, Math.max(0, x)) * 255) / 255) as Vec3;
 }
 
-/** WCAG 2 contrast ratio between two opaque colors, 1 to 21, order-independent. */
-export function contrastRatio(a: Oklch, b: Oklch): number {
+/** WCAG 2 relative luminance of the 8-bit sRGB color displayed for `color`. */
+function relativeLuminance(color: Oklch): number {
+  const [r, g, b] = toSrgb8(color).map(toLinear) as Vec3;
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/**
+ * WCAG 2 contrast ratio between two opaque colors, 1 to 21, order-independent. Both colors are
+ * measured as displayed: quantized to 8-bit sRGB first (`toSrgb8`).
+ */
+export function contrast(a: Oklch, b: Oklch): number {
   const la = relativeLuminance(a);
   const lb = relativeLuminance(b);
   return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
 }
 
-const hexPattern = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
-const number = String.raw`[+-]?(?:\d+\.?\d*|\.\d+)`;
+/** CSS whitespace (CSS Syntax 3, after preprocessing): ASCII space, tab, LF, CR and form feed. */
+const ws = "[ \\t\\n\\r\\f]";
+/** A CSS `<number>` (CSS Syntax 3): `1`, `-0.5`, `.5`, `5e-1`; not `1.` or `1.e2`. */
+const number = String.raw`[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?`;
+const hexPattern = new RegExp(`^${ws}*#([0-9a-f]{3}|[0-9a-f]{6})${ws}*$`, "i");
 const oklchPattern = new RegExp(
-  String.raw`^oklch\(\s*(${number})(%?)\s+(${number})(%?)\s+(${number})(?:deg)?\s*\)$`,
+  `^${ws}*oklch\\(${ws}*(${number})(%?)${ws}+(${number})(%?)${ws}+(${number})(?:deg)?${ws}*\\)${ws}*$`,
   "i",
 );
 
 /**
- * Parses an opaque CSS color: hex (`#500E0E`, `#5e0`) or `oklch(L C H)` with lightness as a number
- * or a percentage and chroma as a number or a percentage of 0.4 (CSS Color 4). Anything else,
- * including alpha, is a `ColorInputError` naming `field`.
+ * Parses an opaque CSS color. The grammar, case-insensitive, with `ws` the CSS whitespace above and
+ * `number` a CSS `<number>`:
+ *
+ *     color = ws* (hex | oklch) ws*
+ *     hex   = "#" (3 | 6) hex digits
+ *     oklch = "oklch(" ws* number "%"? ws+ number "%"? ws+ number "deg"? ws* ")"
+ *
+ * Lightness is a number 0 to 1 or a percentage; chroma a number at least 0 or a percentage of 0.4
+ * (CSS Color 4); hue in degrees, normalized to 0 to 360. Anything else, including alpha, `none`
+ * and other color functions, is a `BrandInputError` naming `field`.
  */
 export function parseColor(input: string, field: string): Oklch {
-  const text = input.trim();
+  const text = input;
   const hex = hexPattern.exec(text)?.[1];
   if (hex) {
     const full = hex.length === 3 ? [...hex].map((d) => d + d).join("") : hex;
@@ -195,9 +216,9 @@ export function parseColor(input: string, field: string): Oklch {
     const c = (Number(m[3]) * (m[4] ? 0.4 : 1)) / (m[4] ? 100 : 1);
     const h = ((Number(m[5]) % 360) + 360) % 360;
     if (l < 0 || l > 1 || c < 0) {
-      throw new ColorInputError(field, `${field}: lightness must be 0 to 1 and chroma at least 0`);
+      throw new BrandInputError(field, `${field}: lightness must be 0 to 1 and chroma at least 0`);
     }
     return { l, c, h };
   }
-  throw new ColorInputError(field, `${field}: expected a hex color or oklch(), got "${input}"`);
+  throw new BrandInputError(field, `${field}: expected a hex color or oklch(), got "${input}"`);
 }

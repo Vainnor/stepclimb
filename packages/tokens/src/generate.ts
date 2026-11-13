@@ -4,19 +4,12 @@
 // neutral scale at the brand's hue, gamut-maps every color into sRGB, and picks the brand tokens
 // by their WCAG contrast. No DOM or Node dependency: it runs at build time, in the browser and is
 // the reference the server's port is held equal to. Only the light appearance is generated here.
-import {
-  ColorInputError,
-  contrastRatio,
-  gamutMapSrgb,
-  inSrgb,
-  type Oklch,
-  parseColor,
-} from "./color";
+import { BrandInputError, contrast, gamutMapSrgb, inSrgb, type Oklch, parseColor } from "./color";
 import { variableName } from "./names";
 import learning from "./tokens/learning.json";
 
 export type { Oklch } from "./color";
-export { ColorInputError } from "./color";
+export { BrandInputError } from "./color";
 
 /** The bundled UI fonts an organization chooses from (spec 12, Q8). */
 export const uiFonts = {
@@ -170,8 +163,9 @@ function round(x: number, digits: number): number {
 
 /**
  * The color as it is written: gamut-mapped into sRGB, then lightness and chroma rounded to four
- * decimals and hue to two. Chroma then steps down by 0.0001 while rounding has left the color
- * outside sRGB, so every written color is inside it. Achromatic colors get hue 0.
+ * decimals and hue to two (a hue that rounds to 360 becomes 0). Chroma then steps down by 0.0001 while
+ * rounding has left the color outside sRGB, so every written color is inside it, within 1e-6 per
+ * gamma-encoded channel. A color whose chroma rounds to 0 gets hue 0.
  */
 export function finalize(color: Oklch): Oklch {
   const mapped = gamutMapSrgb(color);
@@ -215,16 +209,13 @@ export function brandTokens(brandScale: Oklch[], inputL: number, canvas: Oklch, 
   const soft = brandScale[1] as Oklch;
   const step = (i: number) => brandScale[i] as Oklch;
   const all = indices(brandScale.length);
-  const brandable = all.slice(0, -1).filter((i) => contrastRatio(step(i), onBrand) >= textContrast);
+  const brandable = all.slice(0, -1).filter((i) => contrast(step(i), onBrand) >= textContrast);
   const brand = nearest(brandable, (i) => Math.abs(step(i).l - inputL), "brand");
   const fgOk = all.filter(
-    (i) =>
-      contrastRatio(step(i), soft) >= textContrast &&
-      contrastRatio(step(i), canvas) >= textContrast,
+    (i) => contrast(step(i), soft) >= textContrast && contrast(step(i), canvas) >= textContrast,
   );
   const ringOk = all.filter(
-    (i) =>
-      contrastRatio(step(i), canvas) >= uiContrast && contrastRatio(step(i), raised) >= uiContrast,
+    (i) => contrast(step(i), canvas) >= uiContrast && contrast(step(i), raised) >= uiContrast,
   );
   return {
     brand: step(brand),
@@ -259,12 +250,12 @@ function lightTheme(primary: Oklch, font: readonly string[]): Theme {
   };
 }
 
-/** Generates the themes for a set of branding inputs. Throws `ColorInputError` on a bad input. */
+/** Generates the themes for a set of branding inputs. Throws `BrandInputError` on a bad input. */
 export function generate(inputs: BrandInputs): GeneratedThemes {
   const primary = parseColor(inputs.primary, "primary");
   const name = inputs.uiFont ?? "Atkinson Hyperlegible Next";
   if (!Object.hasOwn(uiFonts, name)) {
-    throw new ColorInputError("uiFont", `uiFont: "${name}" is not a bundled font`);
+    throw new BrandInputError("uiFont", `uiFont: "${name}" is not a bundled font`);
   }
   return { light: lightTheme(primary, uiFonts[name]) };
 }

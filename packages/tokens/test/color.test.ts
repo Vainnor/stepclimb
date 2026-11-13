@@ -4,18 +4,23 @@
 import Color from "colorjs.io";
 import { describe, expect, it } from "vitest";
 import {
-  ColorInputError,
-  contrastRatio,
+  BrandInputError,
+  contrast,
   gamutMapSrgb,
   inSrgb,
   type Oklch,
   oklchToSrgb,
   parseColor,
   srgbToOklch,
+  toSrgb8,
 } from "../src/color";
 import { mulberry32 } from "./support/random";
 
 const SEED = 0x5c0101;
+const gamutClip = (c: Oklch): Oklch => {
+  const [r, g, b] = oklchToSrgb(c).map((x) => Math.min(1, Math.max(0, x)));
+  return srgbToOklch([r ?? 0, g ?? 0, b ?? 0]);
+};
 const reference = (c: Oklch) => new Color("oklch", [c.l, c.c, c.h]);
 
 describe("parseColor", () => {
@@ -37,7 +42,23 @@ describe("parseColor", () => {
     expect(parseColor("oklch(0.5 0.1 -30)", "primary").h).toBe(330);
   });
 
+  it("accepts CSS whitespace and number syntax", () => {
+    expect(parseColor("\t oklch(\n5e-1 0.09 195 )\r\n", "primary")).toEqual({
+      l: 0.5,
+      c: 0.09,
+      h: 195,
+    });
+    expect(parseColor(" #500E0E\f", "primary")).toEqual(parseColor("#500e0e", "primary"));
+    expect(parseColor("OKLCH(.5 +0.09 195DEG)", "primary")).toEqual({ l: 0.5, c: 0.09, h: 195 });
+  });
+
   it.each([
+    "oklch(1. 0.1 20)",
+    "oklch(0.5 0.1 1.e2)",
+    "oklch(0.5\u00a00.1 20)",
+    "\u00a0#500E0E",
+    "#500E0E\u2003",
+    "oklch(0.5 0.1 none)",
     "red",
     "#12345",
     "#500E0E80",
@@ -47,11 +68,11 @@ describe("parseColor", () => {
     "oklch(0.5 0.1 20 / 0.5)",
     "",
   ])("refuses %j, naming the field", (input) => {
-    expect(() => parseColor(input, "primary")).toThrow(ColorInputError);
+    expect(() => parseColor(input, "primary")).toThrow(BrandInputError);
     try {
       parseColor(input, "primary");
     } catch (e) {
-      expect((e as ColorInputError).field).toBe("primary");
+      expect((e as BrandInputError).field).toBe("primary");
     }
   });
 });
@@ -105,27 +126,38 @@ describe("gamutMapSrgb", () => {
   });
 });
 
-describe("contrastRatio", () => {
+describe("contrast", () => {
   const hex = (h: string) => parseColor(h, "test");
 
   it("gives the published WCAG ratios", () => {
-    expect(contrastRatio(hex("#000"), hex("#fff"))).toBeCloseTo(21, 6);
-    expect(contrastRatio(hex("#fff"), hex("#fff"))).toBeCloseTo(1, 9);
+    expect(contrast(hex("#000"), hex("#fff"))).toBeCloseTo(21, 6);
+    expect(contrast(hex("#fff"), hex("#fff"))).toBeCloseTo(1, 9);
     // #767676 on white is the lightest grey that passes 4.5:1, at 4.54:1.
-    expect(contrastRatio(hex("#767676"), hex("#fff"))).toBeCloseTo(4.54, 2);
-    expect(contrastRatio(hex("#777777"), hex("#fff"))).toBeLessThan(4.5);
+    expect(contrast(hex("#767676"), hex("#fff"))).toBeCloseTo(4.54, 2);
+    expect(contrast(hex("#777777"), hex("#fff"))).toBeLessThan(4.5);
   });
 
-  it("is order-independent and matches colorjs.io over a seeded sweep", () => {
+  it("is order-independent and matches colorjs.io on the 8-bit colors over a seeded sweep", () => {
     const random = mulberry32(SEED + 2);
     for (let n = 0; n < 300; n++) {
-      const a = srgbToOklch([random(), random(), random()]);
-      const b = srgbToOklch([random(), random(), random()]);
-      expect(contrastRatio(a, b)).toBe(contrastRatio(b, a));
+      const a = { l: random(), c: random() * 0.3, h: random() * 360 };
+      const b = { l: random(), c: random() * 0.3, h: random() * 360 };
+      expect(contrast(a, b)).toBe(contrast(b, a));
       // colorjs.io weights luminance by the unrounded sRGB-to-XYZ row; WCAG's coefficients are
       // that row rounded to four decimals, which moves the ratio by under 0.05%.
-      const theirs = reference(a).contrastWCAG21(reference(b));
-      expect(Math.abs(contrastRatio(a, b) / theirs - 1)).toBeLessThan(5e-4);
+      const theirs = new Color("srgb", toSrgb8(a)).contrastWCAG21(new Color("srgb", toSrgb8(b)));
+      expect(Math.abs(contrast(a, b) / theirs - 1)).toBeLessThan(5e-4);
     }
+  });
+
+  it("measures the displayed 8-bit color, not the exact one", () => {
+    // Lightness 0.5 grey is sRGB 0.38857, displayed as 99/255 = 0.38824.
+    const grey = { l: 0.5, c: 0, h: 0 };
+    expect(toSrgb8(grey)).toEqual([99 / 255, 99 / 255, 99 / 255]);
+    expect(contrast(grey, hex("#fff"))).toBe(contrast(hex("#636363"), hex("#fff")));
+    // Out of gamut, each channel clips before it rounds.
+    expect(toSrgb8({ l: 0.63, c: 0.4, h: 30 })).toEqual(
+      toSrgb8(gamutClip({ l: 0.63, c: 0.4, h: 30 })),
+    );
   });
 });
