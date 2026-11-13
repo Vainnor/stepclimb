@@ -2,6 +2,27 @@
 // Generated from openapi/stepclimb.json by scripts/generate.mjs. Do not edit; run
 // `just openapi` instead.
 export interface paths {
+    "/auth/sign-out": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * End the browser's session and clear its cookie.
+         * @description Answers 204 whether or not the cookie named a session. It needs no permission and no valid
+         *     session, so a browser holding an expired or unknown cookie can still clear it.
+         */
+        post: operations["signOut"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -85,6 +106,15 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `auth.csrf_refused`: an unsafe request without a bearer credential did not come from this site: `Sec-Fetch-Site` is not `same-origin`, `Origin` is sent but is not an allowed origin, or neither header is sent. */
+        CsrfRefused: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `internal.error`: the server failed; the cause is in its log. */
         InternalError: {
             headers: {
@@ -96,6 +126,24 @@ export interface components {
         };
         /** @description `request.method_not_allowed`: the path does not take this method; `Allow` lists the methods it takes. */
         MethodNotAllowed: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `org.none`: the instance has no organization yet. */
+        NoOrganization: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `org.not_found`: the request's organization cannot be determined. */
+        OrganizationNotFound: {
             headers: {
                 [name: string]: unknown;
             };
@@ -147,6 +195,30 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    signOut: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session, if there was one, is ended and the cookie cleared */
+            204: {
+                headers: {
+                    /** @description Clears `__Host-sc_session` (`Max-Age=0`) */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["CsrfRefused"];
+            404: components["responses"]["OrganizationNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
     healthz: {
         parameters: {
             query?: never;

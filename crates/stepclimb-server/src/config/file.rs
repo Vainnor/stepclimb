@@ -28,6 +28,8 @@ pub(super) struct FileKeys {
     database_url_file: Option<Spanned<toml::Value>>,
     encryption_keys: Option<Spanned<toml::Value>>,
     encryption_keys_file: Option<Spanned<toml::Value>>,
+    public_url: Option<Spanned<toml::Value>>,
+    allowed_origins: Option<Spanned<toml::Value>>,
 }
 
 impl FileKeys {
@@ -39,6 +41,8 @@ impl FileKeys {
             "database_url_file" => self.database_url_file.as_ref(),
             "encryption_keys" => self.encryption_keys.as_ref(),
             "encryption_keys_file" => self.encryption_keys_file.as_ref(),
+            "public_url" => self.public_url.as_ref(),
+            "allowed_origins" => self.allowed_origins.as_ref(),
             _ => None,
         }
     }

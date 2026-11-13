@@ -7,9 +7,9 @@
 //! 404 `org.not_found`, so no request is ever matched to the wrong organization until
 //! multi-organization resolution is built. Building that replaces [`resolve`] only.
 //!
-//! `clippy.toml` lists [`resolve`] under `disallowed-methods`: its callers are the session
-//! extractor and the resolver of unauthenticated routes (spec 02 B11), each through a `fn` with a
-//! reasoned `#[expect(clippy::disallowed_methods)]`. A handler takes its scope from the
+//! `clippy.toml` lists [`resolve`] under `disallowed-methods`: its callers are the session module
+//! (its extractor and sign-out) and the resolver of unauthenticated routes (spec 02 B11), each
+//! through a `fn` with a reasoned `#[expect(clippy::disallowed_methods)]`. A handler takes its scope from the
 //! credential instead.
 
 use axum::http::StatusCode;

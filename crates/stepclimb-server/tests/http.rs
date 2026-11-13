@@ -12,9 +12,10 @@ use http_body_util::BodyExt;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::clock::ManualClock;
-use stepclimb_server::{AppState, router, startup};
+use stepclimb_server::{AppState, router, startup, web_origin::WebOrigin};
 use tower::ServiceExt;
 
+/// Send a same-origin request, as the web app does; tests/csrf.rs covers the others.
 async fn send(
     app: Router,
     method: Method,
@@ -25,6 +26,7 @@ async fn send(
             Request::builder()
                 .method(method)
                 .uri(path)
+                .header("sec-fetch-site", "same-origin")
                 .body(Body::empty())
                 .expect("a valid request"),
         )
@@ -79,6 +81,8 @@ fn state(db: PgPool) -> AppState {
         clock: ManualClock::new(std::time::SystemTime::UNIX_EPOCH).clock(),
         keys: KeyRing::parse("test:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
             .expect("a valid test key"),
+        public_url: WebOrigin::parse("http://localhost:8080").expect("a valid origin"),
+        allowed_origins: Vec::new(),
     }
 }
 
@@ -140,7 +144,7 @@ async fn startup_migrations_create_the_schema_on_an_empty_database(pool: PgPool)
 }
 
 #[tokio::test]
-async fn the_openapi_document_is_3_1_and_lists_only_the_probes() {
+async fn the_openapi_document_is_3_1_and_lists_the_probes_and_sign_out() {
     let (status, content_type, body) = get(app_without_database(), "/api/openapi.json").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(content_type.as_deref(), Some("application/json"));
@@ -153,7 +157,7 @@ async fn the_openapi_document_is_3_1_and_lists_only_the_probes() {
         .map(String::as_str)
         .collect();
     paths.sort_unstable();
-    assert_eq!(paths, ["/healthz", "/readyz"]);
+    assert_eq!(paths, ["/auth/sign-out", "/healthz", "/readyz"]);
 }
 
 #[tokio::test]

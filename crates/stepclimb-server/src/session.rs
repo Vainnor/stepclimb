@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Browser sessions over HTTP (docs/specs/m0/08-sessions-and-csrf.md B7 to B11, Q4, Q5).
+//! Browser sessions over HTTP (docs/specs/m0/08-sessions-and-csrf.md B7 to B11, B13, B16, Q4,
+//! Q5).
 //!
 //! A sign-in calls [`start`], which ends the session the browser's old cookie names, generates a
 //! new token, stores its hash and returns the `Set-Cookie` value for `__Host-sc_session`. A route
 //! that needs a signed-in user takes the [`Authenticated`] extractor, which reads the cookie,
 //! resolves the request's organization and asks `stepclimb_core::sessions::authenticate` for the
-//! principal. The cookie's value is the token and never reaches a log line or an error body.
+//! principal. Sign-out calls [`end`]. The cookie's value is the token and never reaches a log line
+//! or an error body.
 
 use std::time::SystemTime;
 
@@ -22,7 +24,7 @@ use stepclimb_core::{
     sessions::{self, Authentication, Session},
 };
 
-use crate::{AppState, error::ApiError, request_org};
+use crate::{AppState, csrf, error::ApiError, request_org};
 
 /// The session cookie's name. The `__Host-` prefix makes the browser refuse it unless it is
 /// `Secure`, has `Path=/` and no `Domain`, so no other host can set or read it.
@@ -87,6 +89,32 @@ pub async fn start<'c>(
         session,
         set_cookie,
     })
+}
+
+/// End the session the request's cookie names, for sign-out (B13).
+///
+/// Every `__Host-sc_session` cookie the request carries has the session of the request's
+/// organization it names deleted, live or expired, as [`start`] does. A request with no session
+/// cookie, or with an `Authorization: Bearer` header (whose cookie names no session it may act
+/// on, B16), deletes nothing and does not touch the database.
+pub async fn end(state: &AppState, request_headers: &HeaderMap) -> Result<(), ApiError> {
+    if csrf::carries_bearer(request_headers) {
+        return Ok(());
+    }
+    let presented: Vec<&str> = session_cookies(request_headers)
+        .into_iter()
+        .flatten()
+        .collect();
+    if presented.is_empty() {
+        return Ok(());
+    }
+    let scope = request_organization(state).await?;
+    for token in presented {
+        sessions::delete_by_token_hash(&state.db, scope, TokenHash::of(token).as_bytes())
+            .await
+            .map_err(|error| ApiError::internal(&error))?;
+    }
+    Ok(())
 }
 
 /// `__Host-sc_session=<token>` with the B7 attributes and `Expires` at the session's absolute
@@ -217,6 +245,12 @@ impl FromRequestParts<AppState> for Authenticated {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
+        // B16: a bearer request is authenticated by its bearer credential only, never by a
+        // cookie beside it. Bearer credentials (API keys, app access tokens) are not accepted
+        // yet, so such a request is anonymous; its cookie is left alone.
+        if csrf::carries_bearer(&parts.headers) {
+            return Err(Rejection::keep(unauthenticated()));
+        }
         let hash = match presented_cookie(&parts.headers) {
             Presented::Absent => return Err(Rejection::keep(unauthenticated())),
             // Neither can name a session: answered as an unknown token, without a lookup.
@@ -251,7 +285,7 @@ impl FromRequestParts<AppState> for Authenticated {
 /// The organization the session must belong to (B6, B8): the request's.
 #[expect(
     clippy::disallowed_methods,
-    reason = "spec 08 B8: the session extractor looks the session up within the request's organization"
+    reason = "spec 08 B8, B13: the session extractor and sign-out look the session up within the request's organization"
 )]
 async fn request_organization(state: &AppState) -> Result<OrgScope, ApiError> {
     request_org::resolve(&state.db).await

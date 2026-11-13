@@ -9,6 +9,8 @@ use std::process::{Command, Output};
 use sqlx::{ConnectOptions, PgPool};
 use stepclimb_core::db::MIGRATOR;
 
+/// The binary with no `STEPCLIMB_*` variable from this process but a public URL, which every
+/// test that is not about it would otherwise have to repeat.
 fn stepclimb() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_stepclimb"));
     for (key, _) in std::env::vars() {
@@ -16,7 +18,25 @@ fn stepclimb() -> Command {
             command.env_remove(key);
         }
     }
+    command.env("STEPCLIMB_PUBLIC_URL", "https://lms.example.org");
     command
+}
+
+#[test]
+fn serve_without_a_public_url_exits_2_naming_the_variable() {
+    let output = stepclimb()
+        .arg("serve")
+        .env_remove("STEPCLIMB_PUBLIC_URL")
+        .env("STEPCLIMB_DATABASE_URL", "postgres://u@127.0.0.1:1/db")
+        .env("STEPCLIMB_ENCRYPTION_KEYS", KEYS)
+        .output()
+        .expect("the binary runs");
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = stderr_of(&output);
+    assert!(
+        stderr.contains("STEPCLIMB_PUBLIC_URL is not set"),
+        "stderr: {stderr}"
+    );
 }
 
 #[test]
@@ -262,7 +282,8 @@ fn check_config_exits_0_printing_only_non_secret_values_without_connecting() {
     assert_eq!(
         stdout,
         format!(
-            "stepclimb: the configuration is valid\nfile: {}\nbind: 0.0.0.0:9000\nlog: info\n",
+            "stepclimb: the configuration is valid\nfile: {}\nbind: 0.0.0.0:9000\nlog: info\n\
+             public_url: https://lms.example.org\nallowed_origins: (none)\n",
             file.0.display()
         )
     );

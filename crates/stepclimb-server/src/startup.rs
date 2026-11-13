@@ -87,6 +87,8 @@ pub fn log_configuration(config: &Config) {
         file = config.file.as_ref().map(|path| path.display().to_string()),
         bind = %config.bind,
         log = %config.log,
+        public_url = %config.public_url,
+        allowed_origins = %config.allowed_origins_list(),
         "configuration loaded"
     );
 }
@@ -119,6 +121,8 @@ pub async fn serve(config: Config) -> Result<(), StartupError> {
         db: pool,
         clock,
         keys: config.encryption_keys,
+        public_url: config.public_url,
+        allowed_origins: config.allowed_origins,
     };
     axum::serve(listener, router(state))
         .with_graceful_shutdown(shutdown_signal())
@@ -221,6 +225,7 @@ mod tests {
                     "zq:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
                 ),
                 ("STEPCLIMB_BIND", "0.0.0.0:9000"),
+                ("STEPCLIMB_PUBLIC_URL", "https://lms.example.org"),
             ]
             .into_iter()
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
@@ -232,6 +237,10 @@ mod tests {
         assert!(output.contains("configuration loaded"), "{output}");
         assert!(output.contains("bind=0.0.0.0:9000"), "{output}");
         assert!(output.contains("log=info"), "{output}");
+        assert!(
+            output.contains("public_url=https://lms.example.org"),
+            "{output}"
+        );
         assert!(!output.contains("zq"), "{output}");
         assert!(!output.contains("AAEC"), "{output}");
     }
