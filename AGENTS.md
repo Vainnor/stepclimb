@@ -61,7 +61,7 @@ The plan's layout (`docs/plan/technical.md` -> Architecture and stack).
 | `packages/ui` | | Stepclimb UI (`@stepclimb/ui`): React Aria Components, tailwind-variants. In-repo only. |
 | `packages/api-client` | | The generated TypeScript client of the public API. Apache-2.0. |
 | `packages/assess-wasm` | | `stepclimb-assess` for wasm32. Placeholder (M2). |
-| `deploy/` | | `Dockerfile`, `compose/` (Postgres 16, MinIO, the server), `helm/` (placeholder, 1.0). |
+| `deploy/` | | `Dockerfile`, `compose/` (development: Postgres 16, MinIO, the server; the production example with optional Caddy and nightly dumps), `helm/` (placeholder, 1.0). |
 | `docs-site/` | | Admin, author, API and self-hosting guides. Placeholder (M4). |
 | `docs/` | | `plan/`, `adr/`, `specs/`, `agents.md`. |
 | `references/`, `private/` | | Local-only: reference material; member exports and data sets. Only their READMEs (and `references/INDEX.md`) are committed. |
@@ -166,6 +166,7 @@ just typecheck     # tsc in every package
 just test-web      # Vitest in every package
 just e2e           # Playwright smoke test against the Compose stack (builds the image)
 just compose-check # the production Compose example booted with generated secrets on :58180, then removed
+just compose-ops-check  # the same with Caddy (internal CA) on :28281/:28443: TLS, forwarded headers, dumps, a restore
 just agents-check  # agent hook tests and Codex mirrors of .claude/ (docs/agents.md)
 just secrets-scan  # gitleaks over the tree (staged | history also accepted)
 just clean-stale [--dry-run] [--days N]  # stale build output in every worktree's target/

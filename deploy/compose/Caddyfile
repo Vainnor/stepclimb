@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Caddy for compose.production.yaml's `tls` profile: HTTPS for SC_DOMAIN with an automatic
+# certificate, HTTP redirected to HTTPS, every request proxied to the server on the Compose
+# network.
+#
+# SC_CERT_ISSUER picks where the certificate comes from: `acme` (the default; Let's Encrypt,
+# which needs SC_DOMAIN's DNS to point at this host and ports 80 and 443 open) or
+# `internal` (Caddy's own CA, for a host that is not reachable from the internet; browsers trust
+# it only after its root, /data/caddy/pki/authorities/local/root.crt, is installed).
+#
+# reverse_proxy passes the original Host through and sets three headers: X-Forwarded-For,
+# X-Forwarded-Proto and X-Forwarded-Host. No `trusted_proxies` is set, so Caddy discards those
+# three when a client sends them and writes its own: the server sees the client's address and
+# `https` as Caddy saw them. Every other forwarding header a client could send (Forwarded,
+# X-Forwarded-Port, -Prefix, -Ssl and -Scheme, X-Real-IP and the CDN ones) is removed, so those
+# three are the only ones that reach the server. Which
+# of them the server believes, and from which proxy address (Caddy's fixed address on the
+# `proxy` network), is the server's configuration (docs/specs/m0/08-sessions-and-csrf.md Q7).
+{
+	cert_issuer {$SC_CERT_ISSUER:acme}
+}
+
+{$SC_DOMAIN} {
+	reverse_proxy stepclimb:8080 {
+		header_up -Forwarded
+		header_up -X-Forwarded-Port
+		header_up -X-Forwarded-Prefix
+		header_up -X-Forwarded-Ssl
+		header_up -X-Forwarded-Scheme
+		header_up -X-Real-IP
+		header_up -True-Client-IP
+		header_up -X-Client-IP
+		header_up -CF-Connecting-IP
+	}
+}

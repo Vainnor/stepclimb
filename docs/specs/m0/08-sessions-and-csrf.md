@@ -489,7 +489,12 @@ overrule one, which then updates this spec.
    create/consume/expire, `return_to` validation, cleanup. Covers B17 to B21; T18, T19. Depends
    on: I1, I2, Q8.
 5. **I5. Rate limiting.** The limiter for sign-in and token routes keyed by client IP and account
-   identifier, trusted-proxy client IP, 429 responses. Covers B22, B23; T20. Depends on: I3, Q7.
+   identifier, trusted-proxy client IP (the configuration key, and setting it in
+   `deploy/compose/compose.production.yaml` to Caddy's fixed address on the `proxy` network,
+   14-compose-deploy B7), 429 responses. Real client addresses reach Caddy only on rootful
+   Docker or on rootless Docker with a RootlessKit port driver that propagates source
+   addresses; otherwise every client arrives from the `proxy` network's gateway, and the
+   self-hosting guide says so. Covers B22, B23; T20. Depends on: I3, Q7.
 6. **I6. Service accounts and API keys.** Migration for `service_accounts`, the admin endpoints,
    bearer API-key authentication with the CRC-32 precheck, scope intersection per request.
    Covers B24 to B29; T3 (API-key request part), T21 to T26. Depends on: I2, `09-permissions-and-roles.md` (catalog,

@@ -21,10 +21,54 @@
 #
 #   docker compose -f deploy/compose/compose.production.yaml up -d --build --wait
 #   docker compose -f deploy/compose/compose.production.yaml --profile minio up -d --build --wait
+#   SC_DOMAIN=lms.example.org \
+#     docker compose -f deploy/compose/compose.production.yaml --profile tls up -d --build --wait
 #
 # The server is published on 127.0.0.1:8080 (SC_HTTP_ADDRESS and SC_HTTP_PORT change it), for a
 # reverse proxy on the same host to terminate TLS. PostgreSQL and MinIO are reachable only on the
 # internal `backend` network, which has no route out of the host.
+#
+# The tls profile adds Caddy (./Caddyfile), which serves SC_DOMAIN over HTTPS with an automatic
+# certificate on ports 80 and 443 of every address (SC_PROXY_ADDRESS, SC_PROXY_HTTP_PORT and
+# SC_PROXY_HTTPS_PORT change them), and proxies to the server. The server keeps its 127.0.0.1
+# port, reachable from this host only: a profile cannot remove another service's port.
+# SC_CERT_ISSUER=internal uses Caddy's own CA instead of Let's Encrypt, for a host the internet
+# cannot reach. Caddy keeps its certificates on the `caddy_data` volume, so a restart does not
+# ask for new ones.
+#
+# Caddy and the server share the `proxy` network, a /24 whose first three octets are
+# SC_PROXY_NETWORK (default 10.201.73). Caddy always has address .2 on it, so the server's
+# trusted-proxy setting (spec 08) can name that one address. Other containers get addresses
+# from .128 up, and clients on this host reach the server's published port from the gateway, .1.
+# Change SC_PROXY_NETWORK if 10.201.73.0/24 is in use on this host.
+#
+# Caddy sees each client's real address only where Docker passes it through: rootful Docker does
+# for connections from other hosts; rootless Docker does only with a RootlessKit port driver that
+# propagates source addresses (DOCKERD_ROOTLESS_ROOTLESSKIT_PORT_DRIVER=slirp4netns, pasta with
+# `implicit`, or `builtin` on RootlessKit 3.0 or later with Docker's userland-proxy disabled; see
+# Docker's rootless troubleshooting page). Otherwise every request arrives from the gateway, .1,
+# and limits per client address (spec 08) count every client as one.
+#
+# Backups: the `backup` service dumps the database with pg_dump every night at SC_BACKUP_AT
+# (UTC, default 03:00) into the `backups` volume and keeps the dumps of the last
+# SC_BACKUP_KEEP_DAYS (default 7) days (./backup.sh). Copy them off the host, and never into
+# this checkout: a dump holds every organization's data, and one on the same disk as the
+# database is lost with it. A dump now, and a copy out to a directory outside the repository:
+#
+#   docker compose -f deploy/compose/compose.production.yaml exec backup stepclimb-backup now
+#   mkdir -m 700 -p ~/stepclimb-backups
+#   docker compose -f deploy/compose/compose.production.yaml cp backup:/backups/. ~/stepclimb-backups
+#
+# Restore into a new, empty stack (a fresh `postgres` volume), before the server first starts:
+#
+#   docker compose -f deploy/compose/compose.production.yaml up -d --wait postgres
+#   docker compose -f deploy/compose/compose.production.yaml run --rm \
+#     -v ~/stepclimb-backups:/restore:ro backup stepclimb-backup restore /restore/<file>.dump
+#   docker compose -f deploy/compose/compose.production.yaml up -d --build --wait
+#
+# Upgrades: take a dump (`exec backup stepclimb-backup now`) and copy it off the host, then
+# `pull` and `up -d`. The new server applies its forward-only migrations as it starts; there is
+# no downgrade, so going back means restoring that dump.
 #
 # Until release images are published, the server image is built from this checkout with
 # deploy/Dockerfile. The other images are pinned by digest; MinIO's is Chainguard's build, which
@@ -69,7 +113,7 @@ services:
     ports:
       - "${SC_HTTP_ADDRESS:-127.0.0.1}:${SC_HTTP_PORT:-8080}:8080"
     networks:
-      - default
+      - proxy
       - backend
     depends_on:
       postgres:
@@ -83,6 +127,62 @@ services:
       retries: 3
       start_period: 60s
       start_interval: 2s
+
+  caddy:
+    profiles: ["tls"]
+    image: caddy:2.11.7@sha256:36c24ad91a7ff7bc4c87fe22bfa8df3c4b18da0773d73fc12ee2c52b98c0bb7e
+    restart: unless-stopped
+    environment:
+      SC_DOMAIN: ${SC_DOMAIN:-}
+      SC_CERT_ISSUER: ${SC_CERT_ISSUER:-acme}
+    # Compose cannot require SC_DOMAIN for this profile only, so the container checks it.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        [ -n "$$SC_DOMAIN" ] || { echo "caddy: SC_DOMAIN is not set; set it to the domain
+        Stepclimb is served on, for example SC_DOMAIN=lms.example.org" >&2; exit 1; };
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    # Root in the container, as the image runs, with only the capability to bind ports 80 and
+    # 443 and a read-only root file system; state lives on the volumes below.
+    cap_drop: ["ALL"]
+    cap_add: ["NET_BIND_SERVICE"]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp
+    ports:
+      - "${SC_PROXY_ADDRESS:-0.0.0.0}:${SC_PROXY_HTTP_PORT:-80}:80"
+      - "${SC_PROXY_ADDRESS:-0.0.0.0}:${SC_PROXY_HTTPS_PORT:-443}:443"
+      - "${SC_PROXY_ADDRESS:-0.0.0.0}:${SC_PROXY_HTTPS_PORT:-443}:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      proxy:
+        ipv4_address: ${SC_PROXY_NETWORK:-10.201.73}.2
+    depends_on:
+      stepclimb:
+        condition: service_healthy
+
+  backup:
+    image: postgres:16.16-alpine@sha256:0adbf25a9e96d38823bb813f3ac0ed41fadb665c88f1df7fe6dbfb060cbdc106
+    restart: unless-stopped
+    command: ["stepclimb-backup", "daemon"]
+    environment:
+      SC_BACKUP_AT: ${SC_BACKUP_AT:-03:00}
+      SC_BACKUP_KEEP_DAYS: ${SC_BACKUP_KEEP_DAYS:-7}
+    secrets:
+      - postgres_password
+    volumes:
+      - ./backup.sh:/usr/local/bin/stepclimb-backup:ro
+      - backups:/backups
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   minio:
     profiles: ["minio"]
@@ -101,6 +201,13 @@ services:
       - backend
 
 networks:
+  # Caddy and the server; the server's published port and its way out of the host.
+  proxy:
+    ipam:
+      config:
+        - subnet: ${SC_PROXY_NETWORK:-10.201.73}.0/24
+          ip_range: ${SC_PROXY_NETWORK:-10.201.73}.128/25
+          gateway: ${SC_PROXY_NETWORK:-10.201.73}.1
   backend:
     internal: true
 
@@ -121,3 +228,9 @@ volumes:
   postgres:
   # Object storage, with the minio profile: back it up once M1 stores media there.
   minio:
+  # Nightly database dumps (the backup service): copy them off the host.
+  backups:
+  # Caddy's certificates and keys, with the tls profile: keep it, or a restart asks the CA again.
+  caddy_data:
+  # Caddy's saved configuration, with the tls profile: Caddy rebuilds it from the Caddyfile.
+  caddy_config:

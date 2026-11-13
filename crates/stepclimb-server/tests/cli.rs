@@ -423,10 +423,19 @@ async fn migrate_exits_1_when_a_migration_fails(pool: PgPool) {
     let output = migrate_binary(&pool);
     assert_eq!(output.status.code(), Some(1));
     let stderr = stderr_of(&output);
+    let first = MIGRATOR.iter().next().expect("one migration").version;
     assert!(
-        stderr.contains("stepclimb: could not apply the database migrations"),
+        stderr.contains(&format!(
+            "stepclimb: could not apply the database migrations: while executing migration \
+             {first}: "
+        )),
         "stderr: {stderr}"
     );
+    assert!(
+        stderr.contains(r#"relation "organizations" already exists"#),
+        "stderr: {stderr}"
+    );
+    assert_eq!(applied_versions(&pool).await, Vec::<i64>::new());
 }
 
 /// Every subcommand refuses a database URL sqlx would not read as written, before logging starts

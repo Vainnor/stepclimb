@@ -19,3 +19,7 @@ e2e: up-stack
 # Boot the production Compose example with generated secrets on :58180 and check it, then remove it
 compose-check:
     bash bin/check-production-compose.sh
+
+# Boot the production example with Caddy (internal CA) and check TLS, forwarded headers, nightly dumps and a restore, then remove it
+compose-ops-check:
+    bash bin/check-compose-ops.sh

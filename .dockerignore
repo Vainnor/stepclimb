@@ -13,3 +13,5 @@ private
 .claude
 .codex
 .direnv
+backups
+**/backups
