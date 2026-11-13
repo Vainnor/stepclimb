@@ -24,6 +24,12 @@ export default defineConfig({
   use: {
     baseURL: `http://127.0.0.1:${port}`,
     trace: "retain-on-failure",
+    // When part of a story changes after its first paint (a focus ring, a tooltip opening, a
+    // spinner), Chromium can re-raster only the changed part of a tile, and the anti-aliased edges
+    // there (a focus ring's rounded corner) can come out a color level different from a full
+    // raster of the tile. Which of the two the screenshot sees depended on the machine's load.
+    // With partial raster off every repaint rasters whole tiles, so each story has one rendering.
+    launchOptions: { args: ["--disable-partial-raster"] },
   },
   // A test tagged @phone runs only in the 375 px project, one tagged @desktop only at 1280 px.
   projects: [
