@@ -3,7 +3,7 @@ import { UsersIcon } from "@phosphor-icons/react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useState } from "react";
 import type { Selection, SortDescriptor } from "react-aria-components";
-import { expect, waitFor, within } from "storybook/test";
+import { expect, waitFor } from "storybook/test";
 import { ThemeMatrix } from "../storybook/theme-matrix";
 import { DataTable, type DataTableColumn } from "./data-table";
 import { EmptyState } from "./empty-state";
@@ -31,9 +31,11 @@ const columns: DataTableColumn<Learner>[] = [
   { id: "hours", label: "Hours", align: "end", allowsSorting: true, render: (l) => l.hours },
 ];
 
-/** Waits out the 300 ms before the loading row appears, so the screenshot has it. */
+/** Waits out the 300 ms before the loading line appears, so the screenshot has it. */
 async function loadingShown({ canvasElement }: { canvasElement: HTMLElement }) {
-  await waitFor(() => expect(within(canvasElement).getByText("Loading")).toBeInTheDocument());
+  await waitFor(() =>
+    expect(canvasElement.querySelector('[data-slot="data-table-loading"]')).not.toBeNull(),
+  );
 }
 
 const meta = {
@@ -46,7 +48,7 @@ const meta = {
       description: {
         component: `A page of records from the server in rows and columns. Arrow keys move between rows and cells. A sortable column's header shows its direction and asks for a new sort on a press or Enter; screen readers hear which column is sorted and which way. With \`selectionMode\` each row starts with a checkbox (Space toggles it) and \`multiple\` adds a select-all box. Wider than the screen, the table scrolls sideways on its own. In a compact \`ThemeProvider\` its rows are shorter, for dense views.
 
-The table does not sort or page its rows: the server does. While \`isLoading\` it is busy, after 300 ms it shows a loading row, and it never shows the empty state.
+The table does not sort or page its rows: the server does. While \`isLoading\` it is busy, after 300 ms it shows a loading line under the table (and says so to screen readers), and it never shows the empty state.
 
 **Usage.** \`<DataTable aria-labelledby="learners-heading" columns={columns} rows={page.items} sortDescriptor={sort} onSortChange={setSort} isLoading={query.isFetching} emptyState={<EmptyState>{t("learners.empty")}</EmptyState>} pagination={{ previousCursor: page.prev, nextCursor: page.next, count: page.total, onPageChange: setCursor }} />\`. Each column is \`{ id, label, render, allowsSorting?, align?, isRowHeader? }\`; the first column names each row unless another sets \`isRowHeader\`.
 
@@ -67,12 +69,10 @@ function Learners({
   rows = learners,
   selectable = false,
   isLoading,
-  paged = true,
 }: {
   rows?: Learner[];
   selectable?: boolean;
   isLoading?: boolean;
-  paged?: boolean;
 }) {
   const [sort, setSort] = useState<SortDescriptor>({ column: "name", direction: "ascending" });
   const [selected, setSelected] = useState<Selection>(new Set(selectable ? ["2", "3"] : []));
@@ -88,7 +88,7 @@ function Learners({
       onSelectionChange={setSelected}
       isLoading={isLoading}
       emptyState={<EmptyState icon={UsersIcon}>No learners are enrolled yet.</EmptyState>}
-      pagination={paged ? { nextCursor: "next", count: 48, onPageChange: () => {} } : undefined}
+      pagination={{ nextCursor: "next", count: 48, onPageChange: () => {} }}
     />
   );
 }
@@ -99,7 +99,7 @@ export const Default: Story = { render: () => <Learners /> };
 /** Two rows selected; the select-all box shows that some are. */
 export const Selectable: Story = { render: () => <Learners selectable /> };
 
-/** The first page loading: the loading row after 300 ms. */
+/** The first page loading: the loading line under the table after 300 ms. */
 export const Loading: Story = {
   play: loadingShown,
   render: () => <Learners rows={[]} isLoading />,
@@ -124,18 +124,12 @@ export const LongContent: Story = {
   ),
 };
 
-/**
- * Without Pagination, which has its own matrix. In the matrix's 426.67 px columns its end-aligned
- * buttons sit at fractional positions, and their rounded corners came out a level different when
- * that part of the page was painted again after the first paint, which a loaded machine made
- * happen now and then.
- */
 export const Matrix: Story = {
   tags: ["theme-matrix"],
   parameters: { themeWrapper: false },
   render: () => (
     <ThemeMatrix>
-      <Learners rows={learners.slice(0, 3)} selectable paged={false} />
+      <Learners rows={learners.slice(0, 3)} selectable />
     </ThemeMatrix>
   ),
 };

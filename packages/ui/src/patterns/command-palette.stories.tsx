@@ -22,9 +22,9 @@ const meta = {
     status: { missing: ["States", "Themes", "Accessibility", "Responsive and touch"] },
     docs: {
       description: {
-        component: `A search box over the app's commands, opened with Ctrl+K (⌘K on a Mac) from anywhere on the page. Typing narrows the list by label and keywords, ignoring case and accents. Up and Down move through the matches while focus stays in the search box; Enter runs the highlighted command and closes the palette. Escape clears the search, then closes the palette, and focus goes back where it was. It sits at the top of the screen and ends above the on-screen keyboard on a phone.
+        component: `A search box over the app's commands, opened with ⌘K on Apple platforms and Ctrl+K elsewhere, from anywhere on the page. Typing narrows the list by label and keywords, ignoring case and accents. Up and Down move through the matches while focus stays in the search box; Enter runs the highlighted command and closes the palette. Escape clears the search, then closes the palette, and focus goes back where it was. It sits at the top of the screen and ends above the on-screen keyboard on a phone.
 
-**Usage.** Render one near the root of the app: \`<CommandPalette commands={commands} onAction={(id) => run(id)} />\`. Each command is \`{ id, label, keywords?, icon?, isDisabled? }\`, with its text from the strings. \`isOpen\` and \`onOpenChange\` control it, for a button that opens it.
+**Usage.** Render one near the root of the app: \`<CommandPalette commands={commands} onAction={(id) => run(id)} />\`. Each command is \`{ id, label, keywords?, icon?, isDisabled? }\`, with its text from the strings; when some commands have icons, the others keep the icon column so the labels line up. \`isOpen\` and \`onOpenChange\` control it, for a button that opens it.
 
 **Do** name commands by what they do ("Go to grades", "Switch to dark theme"), and add the words people search for as keywords.
 
@@ -65,7 +65,7 @@ function Opener({
   );
 }
 
-/** Closed: Ctrl+K or the button opens it. */
+/** Closed: the shortcut or the button opens it. */
 export const Default: Story = { render: () => <Opener /> };
 
 /** Open, with focus in the search box. */

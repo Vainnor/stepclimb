@@ -36,8 +36,16 @@ const focusRing =
 
 export const table = tv({
   slots: {
-    // A table wider than the screen scrolls on its own, not the page (plan UI tab -> PageReader).
-    scroller: "w-full overflow-x-auto overscroll-x-contain rounded-md border border-line bg-raised",
+    // A table wider than its box scrolls on its own, not the page (plan UI tab -> PageReader).
+    // overscroll-x-contain: a sideways swipe that reaches the table's edge stops there instead of
+    // becoming the browser's back or forward gesture. contain-paint: Chromium gives a scroller
+    // that overflows a composited layer, and without paint containment it also composites what
+    // the page paints after it (the Pagination) for overlap; with it, the scroller's layer ends at
+    // its own box.
+    scroller: [
+      "w-full overflow-x-auto overscroll-x-contain contain-paint",
+      "rounded-md border border-line bg-raised",
+    ],
     root: "w-full border-separate border-spacing-0 font-ui text-sm text-fg-default outline-none",
     column: [
       "h-(--sc-control-h) cursor-default border-b border-line bg-sunken px-3 text-start align-middle",

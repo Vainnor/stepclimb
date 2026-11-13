@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { BookOpenIcon } from "@phosphor-icons/react";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Button } from "../primitives/button";
 import { renderWithStrings } from "../test/strings";
 import { type Command, CommandPalette, isPaletteShortcut } from "./command-palette";
@@ -29,6 +30,8 @@ function labels() {
 }
 
 describe("CommandPalette", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it("opens on Ctrl+K with focus in its search box, and its data-slots", async () => {
     const user = userEvent.setup();
     renderWithStrings(<CommandPalette commands={commands} onAction={() => {}} />);
@@ -43,13 +46,23 @@ describe("CommandPalette", () => {
     );
   });
 
-  it("opens on ⌘K, and the shortcut closes it again", async () => {
+  it("opens on ⌘K on Apple platforms, and the shortcut closes it again", async () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
     const user = userEvent.setup();
     renderWithStrings(<CommandPalette commands={commands} onAction={() => {}} />);
     await user.keyboard("{Meta>}k{/Meta}");
     expect(palette()).toBeInTheDocument();
     await user.keyboard("{Meta>}k{/Meta}");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await user.keyboard("{Control>}k{/Control}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("ignores ⌘K (the Windows key) elsewhere", async () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
+    renderWithStrings(<CommandPalette commands={commands} onAction={() => {}} />);
+    await userEvent.setup().keyboard("{Meta>}k{/Meta}");
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("leaves the shortcut to a handler that already took it", () => {
@@ -69,14 +82,41 @@ describe("CommandPalette", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("recognizes only Ctrl+K and ⌘K", () => {
-    const key = (init: KeyboardEventInit) => isPaletteShortcut(new KeyboardEvent("keydown", init));
-    expect(key({ key: "k", ctrlKey: true })).toBe(true);
-    expect(key({ key: "K", metaKey: true })).toBe(true);
-    expect(key({ key: "k" })).toBe(false);
-    expect(key({ key: "k", ctrlKey: true, shiftKey: true })).toBe(false);
-    expect(key({ key: "k", ctrlKey: true, altKey: true })).toBe(false);
-    expect(key({ key: "j", ctrlKey: true })).toBe(false);
+  it("recognizes ⌘K on Apple platforms and Ctrl+K elsewhere, without Shift or Alt", () => {
+    const key = (init: KeyboardEventInit, apple: boolean) =>
+      isPaletteShortcut(new KeyboardEvent("keydown", init), apple);
+    expect(key({ key: "k", ctrlKey: true }, false)).toBe(true);
+    expect(key({ key: "k", metaKey: true }, false)).toBe(false);
+    expect(key({ key: "K", metaKey: true }, true)).toBe(true);
+    expect(key({ key: "k", ctrlKey: true }, true)).toBe(false);
+    expect(key({ key: "k", ctrlKey: true, metaKey: true }, false)).toBe(false);
+    expect(key({ key: "k" }, false)).toBe(false);
+    expect(key({ key: "k", ctrlKey: true, shiftKey: true }, false)).toBe(false);
+    expect(key({ key: "k", ctrlKey: true, altKey: true }, false)).toBe(false);
+    expect(key({ key: "j", ctrlKey: true }, false)).toBe(false);
+  });
+
+  it("keeps labels aligned: a command without an icon holds the icon column when others have one", () => {
+    renderWithStrings(
+      <CommandPalette
+        defaultOpen
+        commands={[
+          { id: "a", label: "Go to courses", icon: BookOpenIcon },
+          { id: "b", label: "Go to grades" },
+        ]}
+        onAction={() => {}}
+      />,
+    );
+    const space = document.querySelectorAll('[data-slot="command-palette-icon-space"]');
+    expect(space).toHaveLength(1);
+    expect(space[0]?.closest('[data-slot="command-palette-item"]')).toHaveTextContent(
+      "Go to grades",
+    );
+  });
+
+  it("draws no icon column when no command has an icon", () => {
+    renderWithStrings(<CommandPalette defaultOpen commands={commands} onAction={() => {}} />);
+    expect(document.querySelector('[data-slot="command-palette-icon-space"]')).toBeNull();
   });
 
   it("filters by label and keyword, ignoring case, and says when nothing matches", async () => {

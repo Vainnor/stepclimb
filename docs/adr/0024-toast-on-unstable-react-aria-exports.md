@@ -29,6 +29,12 @@ toast closes, focus moves to the next toast or back to where it was before the r
 `toast.tsx` imports them and exports Stepclimb's own API (`createToastQueue()`, `ToastRegion`,
 `ToastMessage`); no other file imports them. A later rename or change of shape touches one file.
 
+Against it: the `UNSTABLE_` prefix is React Aria's statement that the API may change without a
+major version, so a routine monthly update can break Toast; the region's built-in name ("{count}
+notifications") and close label come from React Aria's own strings unless Stepclimb passes its
+own, which `toast.tsx` must keep doing; and the queue's default of unlimited visible toasts is
+not what Stepclimb wants, so the wrapper sets its own limit.
+
 ### Option B: our own region
 
 An ARIA live region, a landmark and React Aria's focus utilities, written here. It repeats the
@@ -50,7 +56,17 @@ Option A. Toast is built on React Aria's `UNSTABLE_` toast exports, imported onl
 
 ## Consequences
 
-`toast.test.tsx` fails if any other file of `packages/ui` mentions `UNSTABLE_Toast`. Every update
-of `react-aria-components` reruns the Toast tests; when React Aria makes the toast exports stable,
-`toast.tsx` switches to the stable names and this record is superseded. The queue's public API
-does not expose React Aria's `ToastQueue`, so that switch changes no caller.
+What catches a change in React Aria:
+
+- `tsc` (`just typecheck`) fails if a `UNSTABLE_` name `toast.tsx` imports is renamed or removed,
+  or its props change type.
+- `toast.test.tsx` pins the behavior Stepclimb relies on: the roles (`alertdialog` for a toast,
+  `alert` for its content, a `region` named from Stepclimb's strings), that adding a toast leaves
+  focus where it was, the 5 s timer floor and the 6 s default, that an error toast has no timer,
+  that hovering the region or focusing a toast pauses the timers, and that at most three show,
+  the newest first. It also fails if any other file of `packages/ui` mentions `UNSTABLE_Toast`.
+
+Before a monthly update bumps `react-aria-components`, read its release notes for the toast parts
+(the dependency update note in `AGENTS.md` says so). When React Aria makes them stable,
+`toast.tsx` switches to the stable names and this record is superseded. The public API does not
+expose React Aria's `ToastQueue`, so that switch changes no caller.

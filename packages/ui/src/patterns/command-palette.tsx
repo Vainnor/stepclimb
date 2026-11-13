@@ -3,7 +3,8 @@
 // (docs/specs/m0/13-base-ui-components.md M0 inventory). The app passes its commands from M1; this
 // is the component and its keyboard model:
 //
-//   Ctrl+K or ⌘K   opens it from anywhere on the page, and closes it again
+//   ⌘K on Apple platforms, Ctrl+K elsewhere
+//                  opens it from anywhere on the page, and closes it again
 //   typing         filters the commands by label and keywords, ignoring case and accents
 //   Up, Down       move through the matches while focus stays in the search box
 //   Enter          runs the highlighted command and closes the palette
@@ -25,6 +26,7 @@ import {
   ModalOverlay,
   useFilter,
 } from "react-aria-components";
+import { isApplePlatform } from "../lib/platform";
 import { tv } from "../lib/tv";
 import { useStepclimbStrings } from "../strings/strings";
 import { Icon } from "../theme/icon";
@@ -55,7 +57,7 @@ export const commandPalette = tv({
     // box scroll the highlighted one into view. The box that scrolls is a tab stop of its own, so a
     // keyboard can scroll it as well (axe scrollable-region-focusable, WCAG 2.1.1).
     scroll: [
-      "min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none",
+      "min-h-0 flex-1 overflow-y-auto outline-none",
       "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
     ],
     list: "p-1 outline-none",
@@ -66,6 +68,8 @@ export const commandPalette = tv({
       "data-[disabled]:cursor-not-allowed data-[disabled]:text-fg-disabled",
     ],
     itemIcon: "shrink-0 text-fg-sub",
+    // Holds the icon column for a command without an icon when others have one, so labels align.
+    itemIconSpace: "size-4 shrink-0",
     itemLabel: "min-w-0 flex-1",
     empty: "px-3 py-6 text-center text-sm text-fg-sub",
   },
@@ -108,14 +112,13 @@ function useOpenState({ isOpen, defaultOpen = false, onOpenChange }: CommandPale
   return [open, setOpen] as const;
 }
 
-/** Whether `event` is the palette's shortcut: Ctrl+K, or ⌘K on Apple keyboards. */
-export function isPaletteShortcut(event: KeyboardEvent): boolean {
-  return (
-    (event.metaKey || event.ctrlKey) &&
-    !event.altKey &&
-    !event.shiftKey &&
-    event.key.toLowerCase() === "k"
-  );
+/**
+ * Whether `event` is the palette's shortcut: ⌘K on Apple platforms, Ctrl+K elsewhere. Ctrl+K on a
+ * Mac and the Windows key with K elsewhere are left to the system and the page.
+ */
+export function isPaletteShortcut(event: KeyboardEvent, apple = isApplePlatform()): boolean {
+  const modifier = apple ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+  return modifier && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "k";
 }
 
 /**
@@ -146,6 +149,7 @@ export function CommandPalette(props: CommandPaletteProps) {
     const keywords = node.value?.keywords ?? [];
     return contains(text, input) || keywords.some((word) => contains(word, input));
   };
+  const hasIcons = commands.some((command) => command.icon !== undefined);
   const run = (id: string) => {
     setOpen(false);
     onAction(id);
@@ -203,6 +207,11 @@ export function CommandPalette(props: CommandPaletteProps) {
                   >
                     {command.icon ? (
                       <Icon icon={command.icon} size="sm" className={styles.itemIcon()} />
+                    ) : hasIcons ? (
+                      <span
+                        data-slot="command-palette-icon-space"
+                        className={styles.itemIconSpace()}
+                      />
                     ) : null}
                     <span className={styles.itemLabel()}>{command.label}</span>
                   </AriaMenuItem>

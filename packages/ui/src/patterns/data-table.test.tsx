@@ -159,15 +159,22 @@ describe("DataTable", () => {
       <Example rows={[]} isLoading emptyState={<p>No learners yet.</p>} />,
     );
     const scroller = () => grid().closest('[data-slot="table-scroller"]');
+    const status = () => screen.getByRole("status");
+    const line = () => document.querySelector('[data-slot="data-table-loading"]');
     expect(scroller()).toHaveAttribute("aria-busy", "true");
     expect(screen.queryByText("No learners yet.")).toBeNull();
+    // The live region is in the page, empty, before its text arrives, so the text is announced.
+    expect(status()).toHaveAttribute("data-slot", "data-table-status");
+    expect(status()).toHaveTextContent("");
     act(() => vi.advanceTimersByTime(SKELETON_DELAY_MS - 1));
-    expect(screen.queryByText("Loading")).toBeNull();
+    expect(line()).toBeNull();
     act(() => vi.advanceTimersByTime(1));
-    expect(screen.getByRole("status")).toHaveTextContent("Loading");
-    expect(screen.getByRole("status")).toHaveAttribute("data-slot", "data-table-loading");
+    expect(status()).toHaveTextContent("Loading");
+    expect(line()).toHaveTextContent("Loading");
+    expect(line()).toHaveAttribute("aria-hidden", "true");
     rerender(<Example rows={rows} />);
-    expect(screen.queryByText("Loading")).toBeNull();
+    expect(line()).toBeNull();
+    expect(status()).toHaveTextContent("");
     expect(scroller()).not.toHaveAttribute("aria-busy");
   });
 

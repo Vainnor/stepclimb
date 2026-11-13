@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // DataTable: a server-paged table of records built from Table's parts
 // (docs/specs/m0/13-base-ui-components.md M0 inventory): sortable columns, row selection, a loading
-// row, an empty state and cursor pagination. It does not sort or page the rows itself: the server
+// line under the table, an empty state and cursor pagination. It does not sort or page the rows itself: the server
 // does, and the caller passes the page it got back. The table scrolls sideways on its own on a
 // narrow screen; in a compact ThemeProvider its rows are shorter.
 //
 // The loading line under the table appears once the load has taken SKELETON_DELAY_MS (300 ms),
-// like every spinner here, in a live region that is in the page from the start so it is announced;
-// the table's box is `aria-busy` while it loads. It is not a row of the grid: React Aria's
-// `TableLoadMoreItem` puts `aria-level` on a grid row, which ARIA allows only in a treegrid. While
-// it loads the table never shows the empty state: a page that is still loading is not empty yet.
+// like every spinner here. Screen readers hear "Loading" from a visually hidden live region that is
+// in the page, empty, from the first render, since a live region added together with its text is
+// often not announced; the visible line is hidden from them. The table's box is `aria-busy` while
+// it loads. The line is not a row of the grid: React Aria's `TableLoadMoreItem` puts `aria-level`
+// on a grid row, which ARIA allows only in a treegrid. While it loads the table never shows the
+// empty state: a page that is still loading is not empty yet.
 import { CircleNotchIcon } from "@phosphor-icons/react";
 import { type ReactNode, useEffect, useState } from "react";
 import type { Key, Selection, SelectionMode, SortDescriptor } from "react-aria-components";
@@ -17,14 +19,14 @@ import { tv } from "../lib/tv";
 import { Pagination, type PaginationProps } from "../primitives/pagination";
 import { SKELETON_DELAY_MS } from "../primitives/skeleton";
 import { Cell, Column, Row, Table, TableBody, TableHeader } from "../primitives/table";
+import { VisuallyHidden } from "../primitives/visually-hidden";
 import { useStepclimbStrings } from "../strings/strings";
 import { Icon } from "../theme/icon";
 
 export const dataTable = tv({
   slots: {
     root: "flex flex-col gap-3",
-    // Empty, and so taking no room, until the load has lasted SKELETON_DELAY_MS.
-    loading: "flex items-center gap-2 px-3 text-sm text-fg-sub empty:hidden",
+    loading: "flex items-center gap-2 px-3 text-sm text-fg-sub",
   },
 });
 
@@ -130,14 +132,15 @@ export function DataTable<T extends { id: Key }>({
           ))}
         </TableBody>
       </Table>
-      <div data-slot="data-table-loading" role="status" className={styles.loading()}>
-        {showLoading ? (
-          <>
-            <Icon icon={CircleNotchIcon} size="sm" className="animate-spin" />
-            {t("dataTable.loading")}
-          </>
-        ) : null}
-      </div>
+      {showLoading ? (
+        <div data-slot="data-table-loading" aria-hidden="true" className={styles.loading()}>
+          <Icon icon={CircleNotchIcon} size="sm" className="animate-spin" />
+          {t("dataTable.loading")}
+        </div>
+      ) : null}
+      <VisuallyHidden data-slot="data-table-status" role="status">
+        {showLoading ? t("dataTable.loading") : ""}
+      </VisuallyHidden>
       {pagination ? <Pagination {...pagination} /> : null}
     </div>
   );
