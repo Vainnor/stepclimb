@@ -129,6 +129,18 @@ organizations' ids.
   5. the caller holds, at that scope, every permission of the role that is grantable there (403
      `permission.escalation`); an account admin cannot hand out Organization admin at its account;
   6. the same `(user, role, scope)` does not already exist (409 `role_assignment.exists`).
+
+  Coordinator decision (2026-11-13), for issue 6. Step 5 checks every catalog permission of the
+  role, including those not grantable at the scope's type, each held at the scope as B3
+  evaluates it; a key the catalog does not define grants nothing and is not checked. Checking
+  only the grantable ones would let an account admin of Tower assign Organization admin at Tower
+  (its account-grantable permissions are exactly Account admin's), against step 5's own example
+  and T9; the stricter reading fails closed. B13's refusal runs between steps 2 and 3. A 422
+  here follows `02` B1 and B2: `request.invalid` with `errors[].code =
+  "role_assignment.scope_unavailable"` at `/scope/type` (a course) or `/role_id` (Manager,
+  Observer). An `organization` scope naming another id answers 404 `org.not_found`, as
+  `Grants::require_at` does. The 201's `Location` is the assignment's
+  `DELETE /api/v1/admin/role-assignments/{assignment_id}` path.
 - **B13.** Manager and Observer cannot be assigned in M0 (422 `role_assignment.scope_unavailable`):
   their scopes (reports, named students) do not exist yet, and assigning them at organization or
   account scope would mean something the plan does not say.
@@ -137,6 +149,16 @@ organizations' ids.
   `role_assignment.externally_managed`). Removing the last organization-scope Organization admin
   assignment held by an `active` user answers 409 `role_assignment.last_org_admin`; recovery from a
   lost admin is `stepclimb admin create` (`02-organizations-and-accounts.md` B27).
+
+  Coordinator decision (2026-11-13), for issue 6. The checks run in this order: the assignment
+  exists in the organization (404 `role_assignment.not_found`), steps 4 and 5 at its scope (a
+  scope hidden from the caller answers the same 404), `source` (409), the last-admin rule (409).
+  The last-admin rule is race-safe: `role_assignments::delete` locks the organization's row
+  (`FOR NO KEY UPDATE`) before it reads the assignment, so removals in one organization take
+  turns and each counts what the previous one committed, and it refuses a transaction above
+  `READ COMMITTED` as `accounts` does. Suspending a user also lowers the count; the users route
+  that suspends (`03`) must take the same lock. A course-scope assignment, which M0
+  cannot create, is reached only by organization-scope grants.
 - **B15.** An account that assignments are scoped to cannot be deleted (409
   `account.has_assignments`, `02-organizations-and-accounts.md` B21); they are removed first
   through the assignment routes, which apply B14 and the externally-managed rules. This replaces
@@ -252,6 +274,14 @@ permissions: string[], created_at, updated_at }` (built-in roles report their co
 `RoleAssignment { id, user_id, role_id, scope: { type, id }, source, external_id, created_at }`;
 `ScopeType = "organization" | "account" | "course"`. The `role.view` filter on assignments shows
 an assignment when its scope is visible to the caller and `RoleView` is effective there.
+
+Coordinator decision (2026-11-13), for issue 6: the list's `scope_type` and `scope_id` come
+together (400 `request.malformed` otherwise) and are checked as a target with `RoleView`: an
+account that does not exist or is hidden answers 404 `account.not_found`, a visible scope where
+`RoleView` is not effective 403 `permission.denied`, another organization's id 404
+`org.not_found`. The request body's scope is `ScopeRef { type, id }`. `/me`'s `grants` lists the
+organization first, then accounts by id, each scope with the permissions effective there through
+its own assignments; an account inside a granted scope is not listed again.
 
 `GET /api/v1/me` carries the caller's grants (`03-users-and-identities.md` B22).
 

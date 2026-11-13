@@ -14,9 +14,17 @@
 //! and `accounts::delete` locks the account row `FOR UPDATE` before looking for assignments, so
 //! it waits for a create in progress and then sees the new assignment.
 //!
-//! Who may assign which role where (B12 steps 4 and 5, B13, B14) is the routes' to decide, as is
-//! refusing changes to an assignment an outside source owns; the sync API (M4) writes those
-//! through these same functions.
+//! [`delete`] keeps the organization's last organization-scope Organization admin held by an
+//! active user (B14). Removals in one organization take turns: each locks the organization's
+//! row before it reads anything, so two removals of the last two admins cannot both count two.
+//! The lock makes the count current only at `READ COMMITTED`, PostgreSQL's default, where each
+//! statement after the lock sees what the previous holder committed; at `REPEATABLE READ` or
+//! `SERIALIZABLE` the snapshot predates the lock wait, so [`delete`] refuses any other level with
+//! [`Error::IsolationLevel`] before it reads.
+//!
+//! Who may assign which role where (B12 steps 4 and 5, B13, B14's permission half) is the
+//! routes' to decide, as is refusing changes to an assignment an outside source owns; the sync
+//! API (M4) writes those through these same functions.
 
 use std::time::SystemTime;
 
@@ -100,9 +108,13 @@ pub struct NewAssignment {
 
 /// The filters of [`list`]; `None` filters nothing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ListFilter {
+pub struct ListFilter<'a> {
     pub user_id: Option<Uuid>,
     pub scope: Option<Scope>,
+    /// Only assignments at an account inside one of these accounts' subtrees (each account
+    /// included), for a caller whose permission is held at these accounts only. `Some(&[])`
+    /// matches nothing.
+    pub within: Option<&'a [Uuid]>,
 }
 
 /// Where an assignment of [`for_user_with_paths`] takes effect, with what the evaluator needs to
@@ -151,6 +163,14 @@ pub enum Error {
     /// The user already holds the role at that scope.
     #[error("the user already holds this role at this scope")]
     Exists,
+    /// The assignment is the organization's last organization-scope Organization admin held by
+    /// an active user (B14).
+    #[error("the last organization admin assignment of an active user cannot be removed")]
+    LastOrgAdmin,
+    /// The transaction runs at an isolation level other than `READ COMMITTED`, where the
+    /// last-admin count could miss a concurrent removal.
+    #[error("role assignments can be removed only at READ COMMITTED isolation, not {found}")]
+    IsolationLevel { found: String },
     /// A string the caller passed holds NUL, which PostgreSQL `text` cannot store.
     #[error("{field} cannot contain the NUL character")]
     ContainsNul { field: &'static str },
@@ -241,22 +261,28 @@ pub async fn get(
 pub async fn list(
     db: impl PgExecutor<'_>,
     scope: OrgScope,
-    filter: ListFilter,
+    filter: ListFilter<'_>,
     after: Option<Uuid>,
     limit: i64,
 ) -> Result<Vec<RoleAssignment>, Error> {
     let (scope_type, scope_id) = filter.scope.map(|s| s.as_parts(scope.org_id())).unzip();
     let rows = sqlx::query_as!(
         Row,
-        r#"SELECT id, user_id, role_id, scope_type, scope_id, source, external_id,
-                  (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
-                  (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!"
-           FROM role_assignments
-           WHERE org_id = $1
-             AND ($2::uuid IS NULL OR user_id = $2)
-             AND ($3::text IS NULL OR (scope_type = $3 AND scope_id = $4))
-             AND ($5::uuid IS NULL OR id > $5)
-           ORDER BY id
+        r#"SELECT ra.id, ra.user_id, ra.role_id, ra.scope_type, ra.scope_id, ra.source,
+                  ra.external_id,
+                  (extract(epoch FROM ra.created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM ra.updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM role_assignments ra
+           WHERE ra.org_id = $1
+             AND ($2::uuid IS NULL OR ra.user_id = $2)
+             AND ($3::text IS NULL OR (ra.scope_type = $3 AND ra.scope_id = $4))
+             AND ($5::uuid IS NULL OR ra.id > $5)
+             AND ($7::uuid[] IS NULL OR (ra.scope_type = 'account' AND EXISTS (
+                     SELECT 1
+                     FROM accounts a
+                     JOIN accounts w ON w.org_id = a.org_id AND a.path <@ w.path
+                     WHERE a.org_id = $1 AND a.id = ra.scope_id AND w.id = ANY($7))))
+           ORDER BY ra.id
            LIMIT $6"#,
         scope.org_id(),
         filter.user_id,
@@ -264,6 +290,7 @@ pub async fn list(
         scope_id,
         after,
         limit,
+        filter.within,
     )
     .fetch_all(db)
     .await?;
@@ -337,17 +364,64 @@ async fn lock_account(conn: &mut PgConnection, scope: OrgScope, id: Uuid) -> Res
     Ok(())
 }
 
-/// Delete the assignment `id` of the scope's organization.
-pub async fn delete(db: impl PgExecutor<'_>, scope: OrgScope, id: Uuid) -> Result<(), Error> {
-    let deleted = sqlx::query!(
+/// Delete the assignment `id` of the scope's organization, unless it is the organization's last
+/// organization-scope Organization admin assignment held by an active user
+/// ([`Error::LastOrgAdmin`], B14).
+///
+/// Takes the organization's removal lock first ([`lock_removals`]), so concurrent removals in
+/// one organization take turns and each counts what the previous one left. Runs in one
+/// transaction (a savepoint when `db` is already one); the lock is held until the outermost
+/// transaction ends.
+pub async fn delete<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
+    scope: OrgScope,
+    id: Uuid,
+) -> Result<(), Error> {
+    let mut tx = db.begin().await?;
+    lock_removals(&mut tx, scope).await?;
+    let counted = sqlx::query_scalar!(
+        r#"SELECT (r.org_id IS NULL AND r.key = 'org_admin'
+                   AND ra.scope_type = 'organization' AND u.status = $3) AS "counted!"
+           FROM role_assignments ra
+           JOIN roles r ON r.id = ra.role_id
+           JOIN users u ON u.org_id = ra.org_id AND u.id = ra.user_id
+           WHERE ra.org_id = $1 AND ra.id = $2"#,
+        scope.org_id(),
+        id,
+        Status::Active.as_str(),
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(Error::NotFound)?;
+    if counted && count_active_org_admins(&mut *tx, scope).await? <= 1 {
+        return Err(Error::LastOrgAdmin);
+    }
+    sqlx::query!(
         "DELETE FROM role_assignments WHERE org_id = $1 AND id = $2",
         scope.org_id(),
         id,
     )
-    .execute(db)
+    .execute(&mut *tx)
     .await?;
-    if deleted.rows_affected() == 0 {
-        return Err(Error::NotFound);
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Lock the scope's organization row (`FOR NO KEY UPDATE`, which foreign key checks on
+/// `organizations` do not wait for) until the transaction ends, so removals in the organization
+/// take turns, and refuse a transaction whose isolation level is not `READ COMMITTED`.
+async fn lock_removals(conn: &mut PgConnection, scope: OrgScope) -> Result<(), Error> {
+    let isolation = sqlx::query_scalar!(
+        r#"SELECT current_setting('transaction_isolation') AS "isolation!"
+           FROM organizations WHERE id = $1
+           FOR NO KEY UPDATE"#,
+        scope.org_id(),
+    )
+    .fetch_optional(conn)
+    .await?
+    .ok_or(Error::NotFound)?;
+    if isolation != "read committed" {
+        return Err(Error::IsolationLevel { found: isolation });
     }
     Ok(())
 }

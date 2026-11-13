@@ -162,6 +162,23 @@ impl Grants {
         self.scope
     }
 
+    /// Each scope where at least one permission is effective, with those permissions sorted:
+    /// the organization first, then the accounts by id (spec 03 B22's `grants`). Permissions
+    /// an account inherits from the organization or an ancestor are listed at that scope only.
+    pub fn by_scope(&self) -> impl Iterator<Item = (ScopeId, Vec<&'static str>)> + '_ {
+        let organization = (!self.organization.is_empty()).then(|| {
+            (
+                ScopeId::Organization(self.scope.org_id()),
+                self.organization.iter().copied().collect(),
+            )
+        });
+        let accounts = self
+            .accounts
+            .iter()
+            .map(|(id, keys)| (ScopeId::Account(*id), keys.iter().copied().collect()));
+        organization.into_iter().chain(accounts)
+    }
+
     /// The stored permission keys the catalog does not know, which grant nothing (B9).
     pub fn ignored_keys(&self) -> impl Iterator<Item = &str> {
         self.ignored.iter().map(String::as_str)
@@ -539,6 +556,29 @@ mod tests {
             org.scopes_with::<AccountView>(),
             [ScopeId::Organization(org.scope().org_id())]
         );
+    }
+
+    #[test]
+    fn by_scope_lists_each_scope_with_its_sorted_permissions() {
+        let tree = Tree::new();
+        let g = grants(vec![
+            assignment(&["role.view", "account.view"], tree.at(tree.tower)),
+            assignment(&["account.manage"], tree.at(tree.tower)),
+            assignment(&["user.view"], GrantScope::Organization),
+            // Nothing effective at an account: not listed.
+            assignment(&["organization.manage"], tree.at(tree.enroute)),
+        ]);
+        assert_eq!(
+            g.by_scope().collect::<Vec<_>>(),
+            [
+                (ScopeId::Organization(g.scope().org_id()), vec!["user.view"]),
+                (
+                    ScopeId::Account(tree.tower),
+                    vec!["account.manage", "account.view", "role.view"]
+                ),
+            ]
+        );
+        assert_eq!(grants(vec![]).by_scope().count(), 0);
     }
 
     #[test]

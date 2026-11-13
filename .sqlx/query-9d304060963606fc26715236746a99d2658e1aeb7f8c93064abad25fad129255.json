@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, user_id, role_id, scope_type, scope_id, source, external_id,\n                  (extract(epoch FROM created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM role_assignments\n           WHERE org_id = $1\n             AND ($2::uuid IS NULL OR user_id = $2)\n             AND ($3::text IS NULL OR (scope_type = $3 AND scope_id = $4))\n             AND ($5::uuid IS NULL OR id > $5)\n           ORDER BY id\n           LIMIT $6",
+  "query": "SELECT ra.id, ra.user_id, ra.role_id, ra.scope_type, ra.scope_id, ra.source,\n                  ra.external_id,\n                  (extract(epoch FROM ra.created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM ra.updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM role_assignments ra\n           WHERE ra.org_id = $1\n             AND ($2::uuid IS NULL OR ra.user_id = $2)\n             AND ($3::text IS NULL OR (ra.scope_type = $3 AND ra.scope_id = $4))\n             AND ($5::uuid IS NULL OR ra.id > $5)\n             AND ($7::uuid[] IS NULL OR (ra.scope_type = 'account' AND EXISTS (\n                     SELECT 1\n                     FROM accounts a\n                     JOIN accounts w ON w.org_id = a.org_id AND a.path <@ w.path\n                     WHERE a.org_id = $1 AND a.id = ra.scope_id AND w.id = ANY($7))))\n           ORDER BY ra.id\n           LIMIT $6",
   "describe": {
     "columns": [
       {
@@ -100,7 +100,8 @@
         "Text",
         "Uuid",
         "Uuid",
-        "Int8"
+        "Int8",
+        "UuidArray"
       ]
     },
     "nullable": [
@@ -115,5 +116,5 @@
       null
     ]
   },
-  "hash": "fd882a63881322ab6aed3abcd68bca9aadb8f992f56741aa71c2dc7df1539753"
+  "hash": "9d304060963606fc26715236746a99d2658e1aeb7f8c93064abad25fad129255"
 }
