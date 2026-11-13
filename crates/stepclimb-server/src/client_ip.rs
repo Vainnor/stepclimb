@@ -8,6 +8,10 @@
 //! trusted proxy. Each proxy appends the address it received the request from, so the entries
 //! left of the first untrusted one were written by a party the server does not trust and are
 //! never read. No other header (`Forwarded`, `X-Real-IP`, ...) is read.
+//!
+//! A trusted range must hold proxies only, never clients: a client inside it could name any
+//! address it likes. Ranges wider than /8 (IPv4) or /32 (IPv6) are refused, so `0.0.0.0/0` or
+//! `::/0` cannot trust the whole internet by mistake.
 
 use std::fmt;
 use std::net::IpAddr;
@@ -22,7 +26,7 @@ pub const X_FORWARDED_FOR: &str = "x-forwarded-for";
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TrustedProxies(Arc<[Network]>);
 
-/// One address (`10.201.73.2`) or range (`10.201.73.0/24`, `fd00::/8`).
+/// One address (`10.201.73.2`) or range (`10.201.73.0/24`, `fd00::/32`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Network {
     base: IpAddr,
@@ -37,6 +41,11 @@ pub enum TrustedProxyError {
     NotAnAddress,
     #[error("has a prefix longer than the address (at most 32 for IPv4, 128 for IPv6)")]
     PrefixTooLong,
+    #[error(
+        "is wider than /8 (IPv4) or /32 (IPv6); a trusted range must hold proxies only, never \
+         clients"
+    )]
+    PrefixTooShort,
     #[error("has bits set after its prefix; write the range's first address, such as 10.0.0.0/8")]
     HostBitsSet,
     #[error("is an IPv4-mapped IPv6 address; write the IPv4 address instead")]
@@ -129,6 +138,9 @@ impl Network {
         if prefix > bits {
             return Err(TrustedProxyError::PrefixTooLong);
         }
+        if prefix < min_prefix(base) {
+            return Err(TrustedProxyError::PrefixTooShort);
+        }
         let network = Self { base, prefix };
         if network.masked(base) != base {
             return Err(TrustedProxyError::HostBitsSet);
@@ -171,6 +183,14 @@ impl fmt::Display for Network {
         } else {
             write!(f, "{}/{}", self.base, self.prefix)
         }
+    }
+}
+
+/// The widest range that may be trusted: /8 for IPv4, /32 for IPv6.
+fn min_prefix(address: IpAddr) -> u8 {
+    match address {
+        IpAddr::V4(_) => 8,
+        IpAddr::V6(_) => 32,
     }
 }
 
@@ -231,23 +251,25 @@ mod tests {
 
     #[test]
     fn entries_parse_as_addresses_and_ranges() {
-        let trusted = TrustedProxies::parse(" 10.201.73.2 ,10.0.0.0/8,fd00::/8, ::1").unwrap();
-        assert_eq!(trusted.to_string(), "10.201.73.2,10.0.0.0/8,fd00::/8,::1");
-        for inside in ["10.201.73.2", "10.255.0.1", "fd12::5", "::1"] {
+        let trusted = TrustedProxies::parse(" 10.201.73.2 ,10.0.0.0/8,fd00:1::/32, ::1").unwrap();
+        assert_eq!(
+            trusted.to_string(),
+            "10.201.73.2,10.0.0.0/8,fd00:1::/32,::1"
+        );
+        for inside in ["10.201.73.2", "10.255.0.1", "fd00:1::5", "::1"] {
             assert!(trusted.contains(ip(inside)), "{inside}");
         }
         for outside in ["192.0.2.1", "11.0.0.1", "fe80::1", "::2", "0.0.0.0"] {
             assert!(!trusted.contains(ip(outside)), "{outside}");
         }
+        let widest = TrustedProxies::parse("10.0.0.0/8,2001:db8::/32").unwrap();
+        assert!(widest.contains(ip("10.1.2.3")));
+        assert!(widest.contains(ip("2001:db8:ffff::1")));
+        assert!(!widest.contains(ip("11.0.0.1")));
         assert!(
-            TrustedProxies::parse("0.0.0.0/0")
+            !TrustedProxies::parse("10.0.0.0/8")
                 .unwrap()
-                .contains(ip("203.0.113.9"))
-        );
-        assert!(
-            !TrustedProxies::parse("0.0.0.0/0")
-                .unwrap()
-                .contains(ip("::1"))
+                .contains(ip("::a00:1"))
         );
     }
 
@@ -262,8 +284,12 @@ mod tests {
             ("10.0.0.0/33", (1, TrustedProxyError::PrefixTooLong)),
             ("10.0.0.0/999", (1, TrustedProxyError::PrefixTooLong)),
             ("::/129", (1, TrustedProxyError::PrefixTooLong)),
+            ("0.0.0.0/0", (1, TrustedProxyError::PrefixTooShort)),
+            ("10.0.0.0/7", (1, TrustedProxyError::PrefixTooShort)),
+            ("10.0.0.1, ::/0", (2, TrustedProxyError::PrefixTooShort)),
+            ("2001:db8::/31", (1, TrustedProxyError::PrefixTooShort)),
             ("10.0.0.1/8", (1, TrustedProxyError::HostBitsSet)),
-            ("10.0.0.1, fd00::1/8", (2, TrustedProxyError::HostBitsSet)),
+            ("10.0.0.1, fd00::1/32", (2, TrustedProxyError::HostBitsSet)),
             ("::ffff:10.0.0.1", (1, TrustedProxyError::Ipv4Mapped)),
         ] {
             assert_eq!(TrustedProxies::parse(value), Err(expected), "{value}");
@@ -365,7 +391,7 @@ mod tests {
 
     #[test]
     fn ipv6_clients_and_proxies_work_like_ipv4() {
-        let trusted = TrustedProxies::parse("fd00::/8").unwrap();
+        let trusted = TrustedProxies::parse("fd00::/32").unwrap();
         assert_eq!(
             trusted.client_ip(ip("fd00::2"), &xff("2001:db8::1, fd00::3")),
             ip("2001:db8::1")

@@ -23,7 +23,7 @@ use sqlx::postgres::PgPoolOptions;
 use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{OrgScope, clock::ManualClock, id::Uuid};
 use stepclimb_server::{
-    AppState,
+    AppState, Config,
     client_ip::TrustedProxies,
     error::Problem,
     rate_limit::{Limits, RateLimited, RateLimiter, SignIn, Token},
@@ -364,13 +364,14 @@ async fn without_the_peer_address_the_request_fails_closed() {
     assert_eq!(setup.ran.load(Ordering::SeqCst), 0);
 }
 
-/// One HTTP/1.1 POST over TCP; the status code and the body.
-async fn post_over_tcp(addr: SocketAddr, path: &str) -> (u16, String) {
+/// One HTTP/1.1 POST over TCP with `X-Forwarded-For: forwarded`; the status code and the body.
+async fn post_over_tcp(addr: SocketAddr, path: &str, forwarded: &str) -> (u16, String) {
     let mut stream = tokio::net::TcpStream::connect(addr)
         .await
         .expect("the server accepts");
     let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        "POST {path} HTTP/1.1\r\nHost: test\r\nX-Forwarded-For: {forwarded}\r\n\
+         Content-Length: 0\r\nConnection: close\r\n\r\n"
     );
     stream
         .write_all(request.as_bytes())
@@ -386,22 +387,68 @@ async fn post_over_tcp(addr: SocketAddr, path: &str) -> (u16, String) {
     (status, body)
 }
 
-// The server's own serving path hands each request its TCP peer, which the limit counts.
+async fn sign_in_route(limited: RateLimited<SignIn>) -> String {
+    limited.client.to_string()
+}
+
+// The server's serving path builds the limiter from the configuration (a limit of 2, and the
+// test's own loopback address as the trusted proxy) and hands each request its TCP peer.
 #[tokio::test]
-async fn the_server_counts_the_tcp_peer() {
-    let setup = setup(limits(2, 60, 10), "");
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
+async fn the_server_limits_with_its_configuration_over_tcp() {
+    let env = [
+        (
+            "STEPCLIMB_DATABASE_URL",
+            "postgres://stepclimb@127.0.0.1:1/none",
+        ),
+        (
+            "STEPCLIMB_ENCRYPTION_KEYS",
+            "test:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+        ),
+        ("STEPCLIMB_PUBLIC_URL", "https://lms.example.org"),
+        ("STEPCLIMB_SIGN_IN_RATE_LIMIT", "2"),
+        ("STEPCLIMB_TRUSTED_PROXIES", "127.0.0.1"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+    .collect();
+    let config = Config::load(&env, None).expect("a valid configuration");
+    let pool = PgPoolOptions::new()
+        .connect_lazy(&config.database_url)
+        .expect("a lazy pool parses its URL");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a free port");
+    let addr = listener.local_addr().expect("a bound address");
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
-    let server = tokio::spawn(startup::serve_app(listener, setup.router, async {
-        let _ = stopped.await;
-    }));
-    let (status, body) = post_over_tcp(addr, "/test/sign-in").await;
-    assert_eq!((status, body.as_str()), (200, "127.0.0.1"));
-    assert_eq!(post_over_tcp(addr, "/test/sign-in").await.0, 200);
-    assert_eq!(post_over_tcp(addr, "/test/sign-in").await.0, 429);
-    stop.send(()).unwrap();
-    server.await.unwrap().unwrap();
+    let app = |state: AppState| {
+        Router::new()
+            .route("/test/sign-in", post(sign_in_route))
+            .with_state(state)
+    };
+    let server = tokio::spawn(startup::serve_on(
+        listener,
+        config,
+        pool,
+        ManualClock::new(now()).clock(),
+        app,
+        async {
+            let _ = stopped.await;
+        },
+    ));
+    for expected in [200, 200, 429] {
+        let (status, body) = post_over_tcp(addr, "/test/sign-in", "203.0.113.9").await;
+        assert_eq!(status, expected, "{body}");
+        if status == 200 {
+            assert_eq!(body, "203.0.113.9");
+        }
+    }
+    let (status, body) = post_over_tcp(addr, "/test/sign-in", "198.51.100.7").await;
+    assert_eq!((status, body.as_str()), (200, "198.51.100.7"));
+    stop.send(()).expect("the server is running");
+    server
+        .await
+        .expect("the server task")
+        .expect("the server stops cleanly");
 }
 
 // The 429 the coming routes reference is documented with its header.

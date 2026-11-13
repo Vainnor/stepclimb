@@ -1061,11 +1061,11 @@ fn no_proxy_is_trusted_and_q7s_numbers_apply_when_unset() {
 #[test]
 fn trusted_proxies_are_addresses_and_ranges() {
     let config = Config::load(
-        &with_required(&[("STEPCLIMB_TRUSTED_PROXIES", "10.201.73.2, fd00::/8")]),
+        &with_required(&[("STEPCLIMB_TRUSTED_PROXIES", "10.201.73.2, fd00::/32")]),
         None,
     )
     .unwrap();
-    assert_eq!(config.trusted_proxies_or_none(), "10.201.73.2,fd00::/8");
+    assert_eq!(config.trusted_proxies_or_none(), "10.201.73.2,fd00::/32");
     let peer: std::net::IpAddr = "10.201.73.2".parse().unwrap();
     let mut headers = axum::http::HeaderMap::new();
     headers.insert("x-forwarded-for", "203.0.113.9".parse().unwrap());
@@ -1116,7 +1116,7 @@ fn the_limits_are_configurable() {
 #[test]
 fn a_limit_must_be_a_whole_number_of_one_or_more() {
     for setting in [SIGN_IN_RATE_LIMIT, TOKEN_RATE_LIMIT, FAILED_SIGN_IN_LIMIT] {
-        for value in ["0", "-1", "ten", "1.5", "4294967296"] {
+        for value in ["0", "-1", "+5", " 5", "ten", "1.5", "4294967296"] {
             let error = Config::load(&with_required(&[(setting.var, value)]), None).unwrap_err();
             assert_eq!(
                 error.to_string(),
@@ -1151,4 +1151,24 @@ fn the_proxies_and_limits_are_read_from_the_file() {
         ),
         (7, 8, 9)
     );
+}
+
+#[test]
+fn a_trusted_range_wider_than_slash_8_is_refused_naming_the_setting() {
+    for (value, position) in [("0.0.0.0/0", 1), ("10.201.73.2,::/0", 2)] {
+        let error = Config::load(
+            &with_required(&[("STEPCLIMB_TRUSTED_PROXIES", value)]),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "STEPCLIMB_TRUSTED_PROXIES: entry {position} is wider than /8 (IPv4) or /32 \
+                 (IPv6); a trusted range must hold proxies only, never clients; for example {}",
+                TRUSTED_PROXIES.example
+            ),
+            "{value}"
+        );
+    }
 }

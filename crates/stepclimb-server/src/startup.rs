@@ -126,33 +126,37 @@ pub async fn serve(config: Config) -> Result<(), StartupError> {
         })?;
     tracing::info!(addr = %config.bind, "listening");
     flow::spawn_cleanup(pool.clone(), clock.clone());
+    serve_on(listener, config, pool, clock, router, shutdown_signal()).await
+}
+
+/// Build the application state from `config`, `db` and `clock`, with the rate limiter `config`
+/// sets, and serve `app(state)` on `listener` until `shutdown` completes. Each request carries
+/// its TCP peer's address (`ConnectInfo<SocketAddr>`), which the rate limits start from.
+/// [`serve`] passes [`router`]; a test passes a router with a rate-limited route.
+pub async fn serve_on(
+    listener: TcpListener,
+    config: Config,
+    db: PgPool,
+    clock: Clock,
+    app: impl FnOnce(AppState) -> Router,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), StartupError> {
     let rate_limits = RateLimiter::new(config.limits(), config.trusted_proxies.clone());
     let state = AppState {
-        db: pool,
+        db,
         clock,
         keys: config.encryption_keys,
         public_url: config.public_url,
         allowed_origins: config.allowed_origins,
         rate_limits,
     };
-    serve_app(listener, router(state), shutdown_signal())
-        .await
-        .map_err(StartupError::Serve)
-}
-
-/// Serve `app` on `listener` until `shutdown` completes. Each request carries its TCP peer's
-/// address (`ConnectInfo<SocketAddr>`), which the rate limits start from.
-pub async fn serve_app(
-    listener: TcpListener,
-    app: Router,
-    shutdown: impl Future<Output = ()> + Send + 'static,
-) -> std::io::Result<()> {
     axum::serve(
         listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
+        app(state).into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown)
     .await
+    .map_err(StartupError::Serve)
 }
 
 async fn shutdown_signal() {

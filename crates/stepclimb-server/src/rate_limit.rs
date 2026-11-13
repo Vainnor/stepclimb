@@ -20,8 +20,10 @@
 //! usually given, so a client cannot get a new budget by changing the low 64 bits.
 //!
 //! The counters live in this process (Q7): with several server replicas each has its own, and a
-//! restart clears them. Windows read the [`Clock`] in `AppState`, so tests move time.
-//! Windows that have closed are removed whenever the table has doubled since the last sweep.
+//! restart clears them. Windows read the [`Clock`] in `AppState`, so tests move time. An account
+//! is stored as the SHA-256 of its organization and identifier, 32 bytes whatever the identifier's
+//! length. Closed windows are swept out by the first request a minute or more after the last
+//! sweep, and by any request that finds the table doubled since then (see [`Table::sweep`]).
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -35,7 +37,8 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header, request::Parts},
     response::{IntoResponse, Response},
 };
-use stepclimb_core::{OrgScope, id::Uuid};
+use sha2::{Digest, Sha256};
+use stepclimb_core::OrgScope;
 
 use crate::{AppState, client_ip::TrustedProxies, error::ApiError};
 
@@ -52,8 +55,11 @@ pub const TOKEN_WINDOW: Duration = Duration::from_secs(60);
 /// How long an account's failed-check window lasts.
 pub const FAILED_CHECK_WINDOW: Duration = Duration::from_secs(15 * 60);
 
-/// The table is swept for closed windows once it holds at least this many.
+/// The table is swept for closed windows once it holds at least this many, whatever the time.
 const MIN_SWEEP: usize = 1024;
+/// The table is swept at most this long after the last sweep, when a request comes: the
+/// shortest window, so no closed window outlives the next sweep by more than its own length.
+const SWEEP_EVERY: Duration = SIGN_IN_WINDOW;
 
 /// How many requests or failures each window allows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,10 +128,11 @@ impl From<IpAddr> for AddressKey {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Key {
     Address(Class, AddressKey),
-    Account { org: Uuid, identifier: Box<str> },
+    /// SHA-256 of the organization id's 16 bytes, then the identifier's bytes.
+    Account([u8; 32]),
 }
 
 impl Key {
@@ -133,8 +140,18 @@ impl Key {
         match self {
             Self::Address(Class::SignIn, _) => SIGN_IN_WINDOW,
             Self::Address(Class::Token, _) => TOKEN_WINDOW,
-            Self::Account { .. } => FAILED_CHECK_WINDOW,
+            Self::Account(_) => FAILED_CHECK_WINDOW,
         }
+    }
+
+    /// The account key: a fixed 32 bytes, so an identifier of any length costs the table the
+    /// same. The organization id has a fixed length, so no two pairs hash the same input.
+    fn account(scope: OrgScope, identifier: &str) -> Self {
+        let digest = Sha256::new()
+            .chain_update(scope.org_id().as_bytes())
+            .chain_update(identifier.as_bytes())
+            .finalize();
+        Self::Account(digest.into())
     }
 }
 
@@ -153,10 +170,12 @@ impl Window {
     }
 }
 
-#[derive(Default)]
 struct Table {
     windows: HashMap<Key, Window>,
+    /// The size that triggers a sweep before [`SWEEP_EVERY`] has passed.
     sweep_at: usize,
+    /// When the last sweep ran; `None` until the first request.
+    swept: Option<SystemTime>,
 }
 
 /// The counters, shared by every clone. Built once at startup from configuration.
@@ -184,6 +203,7 @@ impl RateLimiter {
             table: Mutex::new(Table {
                 windows: HashMap::new(),
                 sweep_at: MIN_SWEEP,
+                swept: None,
             }),
         }))
     }
@@ -220,11 +240,8 @@ impl RateLimiter {
         identifier: &str,
         now: SystemTime,
     ) -> Result<AccountCheck, TooManyRequests> {
-        let key = Key::Account {
-            org: scope.org_id(),
-            identifier: identifier.into(),
-        };
-        let opened = self.take(key.clone(), self.0.limits.failed_checks, now)?;
+        let key = Key::account(scope, identifier);
+        let opened = self.take(key, self.0.limits.failed_checks, now)?;
         Ok(AccountCheck {
             limiter: self.clone(),
             key,
@@ -277,15 +294,27 @@ impl RateLimiter {
 }
 
 impl Table {
-    /// Drop the closed windows once the table has doubled since the last sweep, so the work is
-    /// constant per request on average and the table holds about two windows' worth of keys.
+    /// Drop the closed windows when [`SWEEP_EVERY`] has passed since the last sweep (or the
+    /// clock went back past it), or when the table has reached `sweep_at`, twice what the last
+    /// sweep left (at least [`MIN_SWEEP`]). The time trigger bounds how long a closed window is
+    /// kept; the size trigger bounds the work, which stays constant per request on average. When
+    /// the table's capacity is more than four times the new `sweep_at`, as after a burst has
+    /// passed, the spare capacity is released down to `sweep_at`.
     fn sweep(&mut self, now: SystemTime) {
-        if self.windows.len() < self.sweep_at {
+        let last = *self.swept.get_or_insert(now);
+        let due = now
+            .duration_since(last)
+            .map_or(true, |elapsed| elapsed >= SWEEP_EVERY);
+        if !due && self.windows.len() < self.sweep_at {
             return;
         }
         self.windows
             .retain(|key, window| !window.closed(key.window(), now));
+        self.swept = Some(now);
         self.sweep_at = (self.windows.len() * 2).max(MIN_SWEEP);
+        if self.windows.capacity() > 4 * self.sweep_at {
+            self.windows.shrink_to(self.sweep_at);
+        }
     }
 }
 
@@ -351,7 +380,7 @@ pub struct RateLimited<C> {
 }
 
 /// The server was started without the TCP peer's address (`ConnectInfo`), so no request can be
-/// counted. `startup::serve_app` provides it; anything else is a wiring bug.
+/// counted. `startup::serve_on` provides it; anything else is a wiring bug.
 #[derive(Debug, thiserror::Error)]
 #[error("the request has no peer address; serve the router with connect info")]
 struct NoPeerAddress;
@@ -383,6 +412,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use stepclimb_core::id::Uuid;
+
     use super::*;
 
     fn at(secs: u64) -> SystemTime {
@@ -581,5 +612,65 @@ mod tests {
         let table = limiter.table();
         assert_eq!(table.windows.len(), 2);
         assert_eq!(table.sweep_at, MIN_SWEEP);
+    }
+
+    #[test]
+    fn a_closed_window_is_swept_a_minute_later_without_the_table_doubling() {
+        let limiter = limiter(20, 60, 10);
+        for n in 0..10u32 {
+            let client = IpAddr::V4(Ipv4Addr::from(n));
+            limiter.hit_address(Class::SignIn, client, at(0)).unwrap();
+        }
+        limiter
+            .hit_address(Class::SignIn, ip("203.0.113.9"), at(59))
+            .unwrap();
+        assert_eq!(limiter.table().windows.len(), 11);
+        limiter
+            .hit_address(Class::SignIn, ip("203.0.113.10"), at(60))
+            .unwrap();
+        // The ten closed at 60 s; the one from 59 s is still open.
+        assert_eq!(limiter.table().windows.len(), 2);
+    }
+
+    #[test]
+    fn capacity_left_by_a_burst_is_released_once_it_has_passed() {
+        let limiter = limiter(20, 60, 10);
+        for n in 0..5_000u32 {
+            let client = IpAddr::V4(Ipv4Addr::from(n));
+            limiter.hit_address(Class::SignIn, client, at(0)).unwrap();
+        }
+        let peak = limiter.table().windows.capacity();
+        assert!(peak >= 5_000, "{peak}");
+        limiter
+            .hit_address(Class::SignIn, ip("203.0.113.9"), at(61))
+            .unwrap();
+        let table = limiter.table();
+        assert_eq!(table.windows.len(), 1);
+        assert_eq!(table.sweep_at, MIN_SWEEP);
+        assert!(
+            table.windows.capacity() <= 4 * MIN_SWEEP,
+            "{} after a peak of {peak}",
+            table.windows.capacity()
+        );
+    }
+
+    #[test]
+    fn an_account_key_is_32_bytes_whatever_the_identifier() {
+        let one = "a".repeat(1 << 20);
+        let mut other = one.clone();
+        other.push('b');
+        let (first, second) = (Key::account(scope(1), &one), Key::account(scope(1), &other));
+        for key in [first, second] {
+            assert!(matches!(key, Key::Account(digest) if digest.len() == 32));
+        }
+        assert_ne!(first, second);
+        assert_ne!(first, Key::account(scope(2), &one));
+        // `Key` is `Copy`, so it owns no heap memory, and its size is fixed.
+        assert!(std::mem::size_of::<Key>() <= 40);
+        // The two long identifiers keep separate budgets.
+        let limiter = limiter(20, 60, 1);
+        drop(limiter.account_check(scope(1), &one, at(0)).unwrap());
+        assert!(limiter.account_check(scope(1), &one, at(0)).is_err());
+        assert!(limiter.account_check(scope(1), &other, at(0)).is_ok());
     }
 }

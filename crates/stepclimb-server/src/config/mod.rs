@@ -161,7 +161,8 @@ pub struct Config {
     pub allowed_origins: Vec<WebOrigin>,
     /// `trusted_proxies`: the addresses and CIDR ranges of the reverse proxies whose
     /// `X-Forwarded-For` names a request's client address for the rate limits (spec 08 Q7).
-    /// Unset means none: every client is its TCP peer.
+    /// Unset means none: every client is its TCP peer. A range must hold proxies only, never
+    /// clients, and may be no wider than /8 (IPv4) or /32 (IPv6).
     pub trusted_proxies: TrustedProxies,
     /// `sign_in_rate_limit`: sign-in requests per minute per client address; 20 when unset.
     pub sign_in_rate_limit: NonZeroU32,
@@ -599,16 +600,21 @@ impl Sources<'_> {
     }
 
     /// A whole number of 1 or more, or `default` when neither source sets it.
+    /// Digits only: `NonZeroU32::from_str` also takes a leading `+`.
     fn count(&self, setting: &Setting, default: NonZeroU32) -> Result<NonZeroU32, ConfigError> {
-        match self.plain(setting)? {
-            Some((value, origin)) => value.parse().map_err(|_| ConfigError::Invalid {
+        let Some((value, origin)) = self.plain(setting)? else {
+            return Ok(default);
+        };
+        let digits = value.bytes().all(|b| b.is_ascii_digit());
+        match value.parse() {
+            Ok(count) if digits => Ok(count),
+            _ => Err(ConfigError::Invalid {
                 origin,
                 problem: format!(
                     "{value:?} is not a whole number of 1 or more; for example {}",
                     setting.example
                 ),
             }),
-            None => Ok(default),
         }
     }
 

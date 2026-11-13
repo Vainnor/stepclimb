@@ -180,10 +180,31 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   from the moment it starts until it succeeds, so parallel guesses cannot all pass before the
   first failure is recorded, and an account over its budget is refused without running the
   check. An IPv6 client is counted by its /64. The client address is the TCP peer, unless the
-  peer is listed in `STEPCLIMB_TRUSTED_PROXIES` (addresses and CIDR ranges, none by default):
+  peer is listed in `STEPCLIMB_TRUSTED_PROXIES` (addresses and CIDR ranges no wider than /8 for
+  IPv4 or /32 for IPv6, none by default; a trusted range must hold proxies only, never clients):
   then it is the right-most `X-Forwarded-For` entry that is not a trusted proxy, or the nearest
   proxy when that entry is not an address. No other forwarding header is read. The production
-  Compose example trusts Caddy's fixed address.
+  Compose example trusts Caddy's fixed address. An account is stored as the SHA-256 of its
+  organization id and identifier, so a long identifier costs the limiter 32 bytes, and closed
+  windows are swept out within about a minute.
+- **B41.** Every route that adds a sign-in step (the `/auth/...` start and finish routes, password
+  and TOTP checks, in `04-local-accounts.md` to `07-admission.md`) takes `RateLimited<SignIn>`,
+  and `POST /oauth/token` and `POST /oauth/revoke` take `RateLimited<Token>`, as their first
+  extractor. The issue that adds the first such route also adds a router walk, like T17's, that
+  fails when a route under `/auth/` or `/oauth/` lacks it, so a route cannot skip its limit
+  silently. A password or TOTP check passes `account_check` its account identifier through one
+  normalizing type shared by the sign-in methods (for example a newtype built only by the
+  function that matches accounts), so `Ada@example.org` and `ada@example.org` cannot get two
+  budgets (security review of I5, 13 Nov 2026).
+- **B42.** Coordinator decision (2026-11-13), for M0, to stand as B40 describes:
+  - The per-account budget refuses the right password too while it is spent, so anyone who
+    knows an identifier can keep that account signed out for up to 15 minutes at a time. An
+    exemption for a browser that signed in to the account before (a device cookie) is deferred
+    to the owner.
+  - Clients behind one address (a shared NAT, a host-run reverse proxy without the `tls`
+    profile, rootless Docker without a port driver that keeps source addresses) share one
+    per-address budget. The self-hosting guide documents this when it is written (M4); until
+    then the production Compose file's header does.
 
 ### Service accounts and API keys
 
@@ -571,19 +592,20 @@ overrule one, which then updates this spec.
    14-compose-deploy B7), 429 responses. Real client addresses reach Caddy only on rootful
    Docker or on rootless Docker with a RootlessKit port driver that propagates source
    addresses; otherwise every client arrives from the `proxy` network's gateway, and the
-   self-hosting guide says so. Covers B22, B23, B40; T20. Depends on: I3, Q7.
+   self-hosting guide says so. Covers B22, B23, B40, B42; T20. Depends on: I3, Q7.
 6. **I6. Service accounts and API keys.** Migration for `service_accounts`, the admin endpoints,
    bearer API-key authentication with the CRC-32 precheck, scope intersection per request.
    Covers B24 to B29; T3 (API-key request part), T21 to T26. Depends on: I2, `09-permissions-and-roles.md` (catalog,
    `Require<P>`, effective permissions), Q9.
 7. **I7. OAuth 2.1 authorization endpoint and codes.** Client registry, `GET /oauth/authorize`,
-   the sign-in round trip through a flow, code issuance and storage. Covers B30, B31; T27 to
-   T29. Depends on: I4, `07-admission.md` I1 (sign-in completion returns to the flow), Q10.
+   the sign-in round trip through a flow, code issuance and storage. Covers B30, B31, B41 (the
+   authorization endpoint's sign-in steps); T27 to T29. Depends on: I4, `07-admission.md` I1
+   (sign-in completion returns to the flow), Q10.
 8. **I8. OAuth 2.1 token and revoke endpoints.** Migration for `oauth_refresh_tokens`; code
    exchange with PKCE, JWT access tokens, rotation, reuse detection, revocation, access-token
-   authentication in the extractor. Covers B32 to B37; T3 (full sign-in, API-key request and
-   token exchange), T30 to T34. Depends on: I5, I7, Q11 to
-   Q13.
+   authentication in the extractor, `RateLimited<Token>` on both endpoints and the router walk of
+   B41 for `/oauth/`. Covers B32 to B37, B41; T3 (full sign-in, API-key request and token
+   exchange), T30 to T34. Depends on: I5, I7, Q11 to Q13.
 9. **I9. `/.well-known/stepclimb`.** The discovery document's auth fields. Covers B38; T35, T36.
    Depends on: I8, `03-users-and-identities.md` (`identity_providers`), `04-local-accounts.md`
    I1 (local method switches).
