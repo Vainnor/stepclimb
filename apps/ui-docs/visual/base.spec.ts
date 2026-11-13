@@ -57,17 +57,23 @@ async function smallTargets(page: Page): Promise<string[]> {
 }
 
 /**
- * Whether something else is drawn over the middle of `target`, such as a modal's underlay over the
- * page behind it. No one can hover what is covered.
+ * What a person points at to reach `target`: the target itself, the label it sits in when the
+ * label is drawn over it (a checkbox, radio or switch whose native input is visually hidden inside
+ * its label), or null when something else is drawn over its middle, such as a modal's underlay
+ * over the page behind it. No one can hover what is covered.
  */
-async function isCovered(target: Locator): Promise<boolean> {
-  return target.evaluate((el) => {
+async function pointTarget(target: Locator): Promise<Locator | null> {
+  const hit = await target.evaluate((el) => {
     // The first box: a link that wraps has one per line, and the middle of their union can fall
     // between them.
     const rect = el.getClientRects()[0] ?? el.getBoundingClientRect();
-    const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
-    return hit === null || !(hit === el || el.contains(hit));
+    const found = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    if (found !== null && (found === el || el.contains(found))) return "self";
+    const label = el.closest("label");
+    return found !== null && label?.contains(found) ? "label" : "covered";
   });
+  if (hit === "self") return target;
+  return hit === "label" ? target.locator("xpath=ancestor::label[1]") : null;
 }
 
 /** Whether `target` is drawn at a size a person can point at: not hidden, nor visually hidden. */
@@ -114,8 +120,9 @@ test.describe("at 1280 px @desktop", () => {
           const target = targets.nth(i);
           if (!(await isPointable(target))) continue;
           visible++;
-          if (await isCovered(target)) continue;
-          await target.hover();
+          const pointed = await pointTarget(target);
+          if (pointed === null) continue;
+          await pointed.hover();
           await target.focus();
           const running = await page.evaluate(
             () => document.getAnimations().filter((a) => a.playState === "running").length,

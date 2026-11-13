@@ -2,15 +2,25 @@
 // T2 (docs/specs/m0/13-base-ui-components.md B5): every component rendered with a catalog whose
 // messages are all «id», and with the caller's content marked the same way, shows no text and no
 // accessible name of its own that is not a catalog message.
-import { CheckCircleIcon, GearIcon } from "@phosphor-icons/react";
+import { CheckCircleIcon, GearIcon, HouseIcon } from "@phosphor-icons/react";
 import type { ReactElement } from "react";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { AppShell } from "../patterns/app-shell";
+import { BottomTabs } from "../patterns/bottom-tabs";
 import { EmptyState } from "../patterns/empty-state";
 import { ErrorState } from "../patterns/error-state";
+import { OrgSwitcher } from "../patterns/org-switcher";
+import { SideNav } from "../patterns/side-nav";
+import { TopBar } from "../patterns/top-bar";
+import { AlertDialog } from "../primitives/alert-dialog";
 import { Avatar } from "../primitives/avatar";
+import { Breadcrumb, Breadcrumbs } from "../primitives/breadcrumbs";
 import { Button } from "../primitives/button";
 import { ButtonGroup } from "../primitives/button-group";
+import { Checkbox, CheckboxGroup } from "../primitives/checkbox";
+import { ComboBox, ComboBoxItem } from "../primitives/combo-box";
 import { CopyButton } from "../primitives/copy-button";
+import { Dialog } from "../primitives/dialog";
 import { Heading } from "../primitives/heading";
 import { IconButton } from "../primitives/icon-button";
 import { Kbd } from "../primitives/kbd";
@@ -18,11 +28,17 @@ import { Link } from "../primitives/link";
 import { Menu, MenuItem, MenuTrigger } from "../primitives/menu";
 import { Meter } from "../primitives/meter";
 import { NumberField } from "../primitives/number-field";
+import { Pagination } from "../primitives/pagination";
 import { Popover, PopoverDialog, PopoverTrigger } from "../primitives/popover";
 import { ProgressBar } from "../primitives/progress-bar";
 import { Prose } from "../primitives/prose";
+import { Radio, RadioGroup } from "../primitives/radio-group";
 import { SearchField } from "../primitives/search-field";
+import { Select, SelectItem } from "../primitives/select";
 import { Separator } from "../primitives/separator";
+import { Sheet } from "../primitives/sheet";
+import { Switch } from "../primitives/switch";
+import { Tab, TabList, TabPanel, Tabs } from "../primitives/tabs";
 import { Text } from "../primitives/text";
 import { TextArea } from "../primitives/text-area";
 import { TextField } from "../primitives/text-field";
@@ -34,7 +50,105 @@ import { renderWithStrings, unmarkedText } from "../test/strings";
 import { Icon } from "../theme/icon";
 import { ThemeProvider } from "../theme/theme-provider";
 
+const navEntries = [{ id: "a", href: "/a", label: "«caller»", icon: HouseIcon }];
+
 const components: [string, ReactElement][] = [
+  [
+    "AlertDialog (open)",
+    <AlertDialog key="ad" defaultOpen title="«caller»" confirmLabel="«caller»" onConfirm={() => {}}>
+      «caller»
+    </AlertDialog>,
+  ],
+  [
+    "AppShell",
+    <AppShell
+      key="as"
+      sideNav={<SideNav entries={navEntries} />}
+      bottomTabs={<BottomTabs entries={navEntries} />}
+      topBar={<TopBar title="«caller»" />}
+    >
+      «caller»
+    </AppShell>,
+  ],
+  [
+    "Breadcrumbs",
+    <Breadcrumbs key="bc">
+      <Breadcrumb href="/a">«caller»</Breadcrumb>
+      <Breadcrumb>«caller»</Breadcrumb>
+    </Breadcrumbs>,
+  ],
+  [
+    "Checkbox",
+    <Checkbox key="cx" isInvalid description="«caller»" errorMessage="«caller»">
+      «caller»
+    </Checkbox>,
+  ],
+  [
+    "CheckboxGroup",
+    <CheckboxGroup key="cg" label="«caller»">
+      <Checkbox value="a">«caller»</Checkbox>
+    </CheckboxGroup>,
+  ],
+  [
+    "ComboBox (open, loading)",
+    <ComboBox key="co" label="«caller»" defaultInputValue="«caller»" isLoading>
+      <ComboBoxItem id="a">«caller»</ComboBoxItem>
+    </ComboBox>,
+  ],
+  [
+    "Dialog (open)",
+    <Dialog key="dl" defaultOpen title="«caller»">
+      «caller»
+    </Dialog>,
+  ],
+  [
+    "OrgSwitcher",
+    <OrgSwitcher
+      key="os"
+      organizations={[{ id: "a", name: "«caller»" }]}
+      current="a"
+      onChange={() => {}}
+    />,
+  ],
+  [
+    "Pagination",
+    <Pagination key="pg" previousCursor="p" nextCursor="n" count={3} onPageChange={() => {}} />,
+  ],
+  [
+    "RadioGroup",
+    <RadioGroup key="rg" label="«caller»">
+      <Radio value="a">«caller»</Radio>
+    </RadioGroup>,
+  ],
+  [
+    "Select",
+    <Select key="se" label="«caller»">
+      <SelectItem id="a">«caller»</SelectItem>
+    </Select>,
+  ],
+  [
+    "Select (open)",
+    <Select key="so" label="«caller»" defaultOpen defaultValue="a">
+      <SelectItem id="a">«caller»</SelectItem>
+    </Select>,
+  ],
+  [
+    "Sheet (open)",
+    <Sheet key="sh" defaultOpen title="«caller»" footer="«caller»">
+      «caller»
+    </Sheet>,
+  ],
+  ["SideNav (collapsed)", <SideNav key="sn" entries={navEntries} collapsed />],
+  ["Switch", <Switch key="sw">«caller»</Switch>],
+  [
+    "Tabs",
+    <Tabs key="tb">
+      <TabList aria-label="«caller»">
+        <Tab id="a">«caller»</Tab>
+      </TabList>
+      <TabPanel id="a">«caller»</TabPanel>
+    </Tabs>,
+  ],
   ["Avatar", <Avatar key="av" name="«caller»" />],
   ["Button", <Button key="b">«caller»</Button>],
   [

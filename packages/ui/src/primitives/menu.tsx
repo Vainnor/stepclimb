@@ -20,6 +20,7 @@ import {
   PopoverContext,
   type PopoverProps,
 } from "react-aria-components";
+import { WIDE_QUERY } from "../lib/breakpoints";
 import { tv } from "../lib/tv";
 import { useMediaQuery } from "../lib/use-media-query";
 import { Icon } from "../theme/icon";
@@ -27,7 +28,7 @@ import { useAppearanceAttributes } from "../theme/theme-provider";
 import { Popover } from "./popover";
 
 /** Where the menu stops being a bottom sheet: BottomTabs' breakpoint (spec 11 B3). */
-export const MENU_POPOVER_QUERY = "(min-width: 768px)";
+export const MENU_POPOVER_QUERY = WIDE_QUERY;
 
 export const menu = tv({
   slots: {

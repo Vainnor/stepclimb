@@ -3,7 +3,7 @@
 // every message is its id in «guillemets», so a test can tell catalog text from hard-coded text
 // (docs/specs/m0/13-base-ui-components.md T2).
 import { render } from "@testing-library/react";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { type Catalog, uiMessages } from "../strings/catalog";
 import { StringsProvider } from "../strings/strings";
 
@@ -11,13 +11,16 @@ const marked: Catalog = {
   en: Object.fromEntries(Object.keys(uiMessages.en).map((id) => [id, `«${id}»`])),
 };
 
+/** Renders `ui` under the provider; `rerender` keeps the provider around the new element. */
 export function renderWithStrings(ui: ReactElement, { marked: useMarked = false } = {}) {
   const catalogs = [useMarked ? marked : uiMessages];
-  return render(
-    <StringsProvider catalogs={catalogs} isDevelopment>
-      {ui}
-    </StringsProvider>,
-  );
+  return render(ui, {
+    wrapper: ({ children }: { children: ReactNode }) => (
+      <StringsProvider catalogs={catalogs} isDevelopment>
+        {children}
+      </StringsProvider>
+    ),
+  });
 }
 
 /**
