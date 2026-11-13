@@ -1,11 +1,12 @@
 ---
 paths:
   - "apps/app/**"
-  - ".github/workflows/**"
+  - "justfile"
+  - "just/**"
   - "web/index.html"
   - "web/vite.config.ts"
 ---
-# Cross-Platform Rules (not loaded at startup; read in full before touching the Tauri app, the web app's shell, or CI)
+# Cross-Platform Rules (not loaded at startup; read in full before touching the Tauri app, the web app's shell, or the gates)
 
 One React app runs in browsers, as an installable web app, and inside the Tauri 2 shell on macOS,
 Windows, Linux and iOS (plan, Technical -> Web app and native apps; ADR 0011).
@@ -34,11 +35,16 @@ Windows, Linux and iOS (plan, Technical -> Web app and native apps; ADR 0011).
   `apps/app/src-tauri/capabilities/`. It has no second UI codebase.
 - Platform-specific code lives in small named modules selected with `cfg`, never inline in shared
   logic.
-- No signing or store work until M5; CI builds unsigned.
+- No signing or store work until M5; `just app-build` builds unsigned.
 
-## CI
+## The gate where you work (ADR 0021)
 
-- `just ci` runs on every PR in GitHub Actions on Linux. The Tauri build runs on Linux for every
-  PR and on macOS and Windows for pushes to `main` (owner, 2026-11-12), on standard hosted
-  runners only. Enabling a paid or larger runner is the owner's call.
-- A change names the OSes it was built and run on, and the ones it was not.
+- There is no hosted CI. `just ci` on the committed HEAD, on the machine you work on, is the merge
+  gate; every "done" names that OS. Never add a GitHub Actions workflow: it spends the private
+  repository's minutes.
+- A change to `apps/app` also runs `just app-build` on the local OS. A change that needs macOS or
+  Windows (platform code, signing, the iOS build) runs there on a machine or VM the owner
+  provides; ask for it, and say in the PR which OSes ran and which did not.
+- Jobs of about an hour or more (long property runs, load tests, cold image builds for several
+  architectures) go to a VM the owner provides. Ask first; report machine, commit, what ran and
+  the result.

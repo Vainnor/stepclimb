@@ -21,8 +21,8 @@ issue: anything else is a new issue you propose, not code you write.
 ## Ship
 `/ship`: `just ci` green on the committed HEAD (the pre-PR gate refuses otherwise), `/review`
 with fresh reviewers, CRITICAL and MAJOR findings fixed, PR against `next` with the template
-filled and `Closes #<n>`, then `.claude/scripts/board-move.sh <n> "In review"`. Wait for the
-PR's `ci` and `tauri` checks; a red check goes to `gate-doctor`.
+filled and `Closes #<n>`, then `.claude/scripts/board-move.sh <n> "In review"`. There is no hosted
+CI: the PR states the `just ci` summary lines and the OS they ran on.
 
 ## Never
 Merge, push to `main` or `next`, add AI attribution anywhere, change `docs/plan/`, accept an ADR,

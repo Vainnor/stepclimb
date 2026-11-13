@@ -148,6 +148,6 @@ command there only if no argument can make it write a file or run another progra
   and the hook's cwd may differ, and whether every model is offered the `apply_patch` tool. In
   either case content-guard may check a patch against the wrong directory or never see it.
 - Codex runs matching hooks concurrently, so no hook may depend on another's result.
-- The hook commands use `/bin/sh` and bash. Their tests (`just agents-check`) run on Linux in CI
+- The hook commands use `/bin/sh` and bash. Their tests (`just agents-check`) run on Linux in `just ci`
   and have not been run on native Windows or macOS for Stepclimb; neither tool has run the hooks
   there.

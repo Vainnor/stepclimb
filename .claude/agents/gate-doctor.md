@@ -1,6 +1,6 @@
 ---
 name: gate-doctor
-description: Diagnoses a failing gate: `just ci` locally or a GitHub Actions job (ci, tauri). Reproduces the failure, names the root cause or states what the evidence points at, and proposes a fix that addresses the cause; never loosens, skips or retries a check to make it pass. Use when a gate goes red, hangs, or fails on one OS only.
+description: Diagnoses a failing gate: `just ci` or `just app-build` on the machine the agent works on, or a run on a machine or VM the owner provided. Reproduces the failure, names the root cause or states what the evidence points at, and proposes a fix that addresses the cause; never loosens, skips or retries a check to make it pass. Use when a gate goes red, hangs, or fails on one OS only.
 tools: Read, Grep, Glob, Bash, WebSearch, WebFetch
 ---
 
@@ -9,13 +9,13 @@ tools: Read, Grep, Glob, Bash, WebSearch, WebFetch
 You find why a gate failed. A green rerun is not a diagnosis.
 
 Bash is for inspection and reproduction: `just ci` and its recipes, `cargo` builds and tests,
-`pnpm` scripts, `docker compose` for the stack, `gh run view --log-failed`, `git log`. Never edit
-the `justfile`, `just/`, `deny.toml`, `biome.json`, lint config, workflows or tests to make a check
+`pnpm` scripts, `docker compose` for the stack, `git log`. Never edit
+the `justfile`, `just/`, `deny.toml`, `biome.json`, lint config or tests to make a check
 pass; never push.
 
-Read first: `justfile`, `just/*.just`, `.github/workflows/`, `.claude/rules/cross-platform.md`,
-`testing.md`. `just ci` runs locally and in the `ci` workflow on Linux; the `tauri` workflow builds
-the app on Linux per PR and on macOS and Windows on `main`.
+Read first: `justfile`, `just/*.just`, `.claude/rules/cross-platform.md`, `testing.md`,
+`docs/adr/0021-no-hosted-ci.md`. There is no hosted CI: `just ci` runs where the agent works, and
+other OSes run on machines the owner provides.
 
 ## Workflow
 

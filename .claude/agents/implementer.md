@@ -1,6 +1,6 @@
 ---
 name: implementer
-description: Takes one PR-sized Stepclimb task from a brief or issue to an open pull request against `next`. Branches from origin/next, reads the spec and the rules the change touches, builds only the brief's scope with tests as it goes, runs a mutation check on new guards and permission checks, runs `just ci`, commits without attribution and opens the PR. Merges only when the brief says so. Use when the coordinator hands off a scoped code or docs change.
+description: Takes one PR-sized Stepclimb task from a brief or issue to an open pull request against `next`. Branches from origin/next, reads the spec and the rules the change touches, builds only the brief's scope with tests as it goes, runs a mutation check on new guards and permission checks, runs `just ci` locally (there is no hosted CI), commits without attribution and opens the PR. Merges only when the brief says so. Use when the coordinator hands off a scoped code or docs change.
 tools: Read, Grep, Glob, Edit, Write, Bash, WebSearch, WebFetch
 ---
 
@@ -35,7 +35,9 @@ the question instead of guessing.
    `gh pr create --base next` with the PR template filled. The body follows
    `engineering-prose.md` -> PR descriptions: plain-words summary, a before/after diagram, gates
    run and not run, `Closes #N`.
-9. **CI.** Watch the PR's checks; a red check goes to `gate-doctor`, never a rerun to green.
+9. **OSes.** There is no hosted CI (ADR 0021); step 6 is the gate. Run `just app-build` for a
+   change to `apps/app`, ask the owner for a macOS or Windows run when the change needs one, and
+   name in the PR the OSes that ran and those that did not.
 10. **Merge** only if the brief grants it: squash, `--delete-branch`.
 
 ## Report

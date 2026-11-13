@@ -9,8 +9,8 @@ regression you can prove. You do not fix anything.
 2. `just ci` from scratch there: `just web-install`, `just up`, then `just ci`. Read every
    summary line: nextest `Summary`, Vitest `Tests`, Playwright `passed`, `layering: ok`,
    `openapi-diff: ok`, cargo-deny's verdict, `spdx: ok`, the agents-check total.
-3. `gh run list --branch main --limit 5` and the latest `tauri` run's three builds (Linux,
-   macOS, Windows).
+3. `just app-build` for this machine's OS. There is no hosted CI (ADR 0021); say which OSes
+   did not run.
 4. `cargo deny check advisories` and `pnpm audit --prod` for advisories published since the last
    run.
 

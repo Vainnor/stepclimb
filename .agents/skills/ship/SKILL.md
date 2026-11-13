@@ -1,6 +1,6 @@
 ---
 name: ship
-description: "Ship the current branch as a pull request into next, gated by just ci locally and in GitHub Actions and a review of the committed HEAD. Use only when the user asks to ship the current branch as a pull request ($ship)."
+description: "Ship the current branch as a pull request into next, gated by just ci on the machine the agent works on (there is no hosted CI) and a review of the committed HEAD. Use only when the user asks to ship the current branch as a pull request ($ship)."
 ---
 
 # ship

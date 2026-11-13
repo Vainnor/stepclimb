@@ -9,7 +9,8 @@
   have added tests.
 - Run the baseline before changing anything and classify any red as pre-existing or yours.
 - Name the gates you did not run and why: "`just ci` green on x86_64 Linux; the macOS and Windows
-  Tauri builds have not run" is a complete statement, "tests pass" is not.
+  Tauri builds have not run" is a complete statement, "tests pass" is not. There is no hosted CI
+  to catch what you skipped (ADR 0021).
 
 ## Layers (plan, Technical -> Testing)
 
@@ -26,7 +27,7 @@
 | Web | Vitest + Testing Library | Component and route behavior |
 | End to end | Playwright against the Compose stack (`just e2e`) | The built binary and SPA together; later mock-OIDC sign-in, a module, a timed quiz, essay grading |
 | Accessibility | axe in Storybook and Playwright | Zero violations in every theme |
-| Apps | Tauri build matrix in CI | Builds on macOS, Windows and Linux |
+| Apps | `just app-build` on each OS the change touches | The shell builds; macOS and Windows on the owner's machines (ADR 0021) |
 | Load | k6 before each minor release | The performance budgets in `docs/plan/technical.md` -> Hosting |
 
 ## Time and randomness

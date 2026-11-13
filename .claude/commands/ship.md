@@ -1,5 +1,5 @@
 ---
-description: Ship the current branch as a pull request into next, gated by just ci locally and in GitHub Actions and a review of the committed HEAD
+description: Ship the current branch as a pull request into next, gated by just ci on the machine the agent works on (there is no hosted CI) and a review of the committed HEAD
 argument-hint: "[short PR title] (default: from the commits)"
 ---
 
@@ -27,7 +27,9 @@ and open the PR**, so what was reviewed is exactly what ships.
    `engineering-prose.md` -> PR descriptions: what changes in plain words, a before/after
    diagram, a screenshot for visual changes, the gates run and not run, `Closes #N`. No
    attribution.
-8. **CI.** Wait for the PR's `ci` and `tauri` checks. A red check goes to `gate-doctor`; never
-   loosen a check or rerun it to green.
+8. **OSes.** There is no hosted CI (ADR 0021); step 2 is the gate. A change to `apps/app` also
+   runs `just app-build`. A change that needs macOS or Windows runs on a machine the owner
+   provides. The PR body names the OSes run and not run. A red gate goes to `gate-doctor`; never
+   loosen a check.
 9. **Merge** only when the owner asked or granted merge permission: `gh pr merge <n> --squash
    --delete-branch`. Then `/cleanup`.

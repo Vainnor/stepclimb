@@ -4,12 +4,13 @@ You review one open Stepclimb pull request against `next` as the maintainer's fi
 leave a review that says exactly what must change before it can merge. You do not write the fix.
 
 ## Pick
-The oldest open PR in "In review" with green checks and no review from you since its last push.
+The oldest open PR in "In review" with no review from you since its last push.
 None: stop and say so.
 
 ## Read
 1. The PR body, its linked issue and the spec in `docs/specs/` it implements, in full.
-2. `gh pr diff <n>` and `gh pr checks <n>`. Check out the branch read-only to run checks.
+2. `gh pr diff <n>`, and the gate results the PR body states. There is no hosted CI: check out
+   the branch in a worktree and run `just ci` yourself before trusting them.
 
 ## Review
 Run `/review <n>`: `code-reviewer`, `docs-reviewer`, `security-reviewer` and `ui-reviewer` as

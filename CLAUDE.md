@@ -23,7 +23,7 @@ work has started, so read them in full at the trigger named below.
 | `security-and-tenancy.md` | Path-scoped: `crates/stepclimb-{auth,server,core}/**`, `migrations/**`. Read in full before writing or reviewing auth, sessions, permissions, entitlements or any query | `OrgScope`, **`Require<P>` and `Require<Feature>`**, sessions and CSRF, identities and admission, secrets |
 | `assessment-integrity.md` | Path-scoped: `crates/stepclimb-{assess,activities,activities-atc}/**`. Read in full before writing or reviewing grading, question types or activities | **Grading on the server**, **no answers in renders or problems**, seeded determinism, `validate` before serving, **feedback settings enforced by the server**, regrade audit |
 | `ui.md` | Path-scoped: `packages/{ui,tokens}/**`, `web/**`, `apps/ui-docs/**`. Read in full before writing a component, token, page or UI copy | **Semantic tokens only**, **React Aria only**, `data-slot`, no hard-coded strings, logical properties, the pitfalls we refuse, the definition of done |
-| `cross-platform.md` | Path-scoped: `apps/app/**`, `.github/workflows/**`, `web/index.html`, `web/vite.config.ts`. Read in full before touching the Tauri app, the web shell or CI | Browsers, **iOS WKWebView** (16 px inputs, safe areas, keyboard), Tauri desktop, the CI matrix and paid runners |
+| `cross-platform.md` | Path-scoped: `apps/app/**`, `justfile`, `just/**`, `web/index.html`, `web/vite.config.ts`. Read in full before touching the Tauri app, the web shell or the gates | Browsers, **iOS WKWebView** (16 px inputs, safe areas, keyboard), Tauri desktop, **no hosted CI: the gate runs where you work**, other OSes and long jobs |
 | `research-and-decisions.md` | Path-scoped: `docs/research/**`, `docs/adr/**`, `docs/plan/**`, `docs/specs/**`. Read in full before writing research, an ADR, a spec or a plan file | Verified vs inferred, source hierarchy, ADR format and lifecycle, specs decide nothing the plan leaves open, the plan is the owner's |
 | `anti-ai-slop.md` | Path-scoped: `docs/**`, `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `references/*.md`. Read in full before writing docs, a commit body, a PR description, an issue or UI copy | Banned vocabulary and patterns, claim validation |
 
@@ -39,7 +39,7 @@ Agents in `.claude/agents/`:
 | `docs-reviewer` | Fresh-eyes review of docs, specs, ADRs, PR bodies and commits (read-only) |
 | `security-reviewer` | Fresh-eyes review of auth, sessions, permissions, tenancy, feedback leakage |
 | `ui-reviewer` | Fresh-eyes review of a UI change against the plan's UI tab |
-| `gate-doctor` | Root cause of a red `just ci` or a red GitHub Actions job |
+| `gate-doctor` | Root cause of a red `just ci` or `just app-build` |
 | `domain-researcher` | LMS standards (SCIM, LTI, QTI, SCORM, Standard Webhooks, FSRS) and ATC/VATSIM procedure, sourced |
 | `dependency-researcher` | Before adding or bumping a crate or npm package |
 
@@ -90,8 +90,9 @@ blocked on and stop.
 **When you judge that an instruction lifts a gate, say so as you pass it**, naming the scope:
 "working autonomously" lifts *asking*, not the prohibitions above.
 
-**Say which "done" you mean.** "Compiles", "`just ci` green on x86_64 Linux", "the PR's checks
-green" and "merged" are different states.
+**Say which "done" you mean.** "Compiles", "`just ci` green on x86_64 Linux at the committed
+HEAD" and "merged" are different states. There is no hosted CI (ADR 0021): `just ci` where you
+work is the gate, and every "done" names that OS.
 
 ---
 
@@ -173,7 +174,8 @@ obvious bug, or you are writing tests for specified behavior.
 
 Before marking any task complete:
 
-- `just ci` green on the committed HEAD, summary lines read, and the PR's checks green.
+- `just ci` green on the committed HEAD on the machine you work on, summary lines read, OS named;
+  `just app-build` too for a change to `apps/app`.
 - Every new route has `Require<P>`, its four-case test and its cross-organization test.
 - A new query filters by the `OrgScope`; `.sqlx/` regenerated.
 - A new or changed endpoint is in the OpenAPI document; the client regenerated.

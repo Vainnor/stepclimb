@@ -120,10 +120,11 @@ The Nix dev shell (`flake.nix`) provides every tool below.
 - PR only, squash merge. Never push to `main` or `next` directly; `.claude/hooks/git-guard`
   refuses it.
 - Dependencies: Dependabot opens update PRs (the plan's supply-chain list,
-  `.github/dependabot.yml`); each passes `just ci` like any PR.
+  `.github/dependabot.yml`), held to versions at least 14 days old. Nothing runs on them on
+  GitHub: check each out and run `just ci` locally before merging it.
 - The remote is the private GitHub repository `Vainnor/stepclimb`; `next` is the default branch.
-  A GitHub ruleset on `main` and `next` enforces PR-only, squash-only, no force push or deletion,
-  and the `ci` and `build (ubuntu-24.04)` checks (ADR 0018). `.claude/hooks/git-guard` refuses the
+  A GitHub ruleset on `main` and `next` enforces PR-only, squash-only, and no force push or
+  deletion (ADR 0018). It requires no status checks: there is no hosted CI (ADR 0021). `.claude/hooks/git-guard` refuses the
   same pushes locally.
 - Issues come from the specs' Issues sections, one per PR, on the GitHub Project "Stepclimb"
   (Todo, In progress, In review, Done); `.claude/scripts/board-move.sh` moves a card.
@@ -131,7 +132,8 @@ The Nix dev shell (`flake.nix`) provides every tool below.
 ## Commands (via `just`)
 
 ```bash
-just ci            # the merge gate: secrets, fmt, clippy, layering, spdx, tests, deny, sqlx, openapi, biome, tsc, vitest, playwright, agents
+just ci            # the merge gate, run locally: secrets, fmt, clippy, layering, spdx, tests, deny, sqlx, openapi, biome, tsc, vitest, playwright, agents
+just app-build     # the Tauri shell for this OS, unbundled and unsigned, after cargo-deny on its workspace
 just up / down     # PostgreSQL 16 and MinIO in Compose (deploy/compose/compose.yaml)
 just serve         # the server on :8080 against the Compose database, web build embedded
 just dev           # Vite on :5173, proxying the API to `just serve`
@@ -164,9 +166,12 @@ installed by hand: Rust via rustup, `just`, `cargo-nextest`, `cargo-deny`, `sqlx
 `gitleaks` (or Docker), Node 26.13 with pnpm 12.9, Playwright's Chromium, `python3`, Docker with
 Compose, and on Linux WebKitGTK 4.1 for the Tauri app.
 
-GitHub Actions runs `just ci` on every PR and push (`.github/workflows/ci.yml`), and the Tauri
-build on Linux for every PR and on macOS and Windows for pushes to `main`
-(`.github/workflows/tauri.yml`), on standard hosted runners.
+There is no hosted CI and no GitHub Actions (ADR 0021): Actions minutes on a private repository
+run out too fast. `just ci` on the committed HEAD, on the machine the change was made on, is the
+merge gate, and every "done" names that machine's OS. `bin/ci-stamp.sh` records the pass and the
+`pr-gate` hook refuses `gh pr create` without it. `just app-build` builds the Tauri shell for the
+local OS; macOS and Windows builds, and jobs of about an hour or more, run on a machine or VM the
+owner provides when a change needs them, and the PR names the OSes it ran on.
 
 ## Testing and verification
 
@@ -176,8 +181,8 @@ build on Linux for every PR and on macOS and Windows for pushes to `main`
 - Read the summary line (nextest `Summary`, Vitest `Tests`, Playwright `passed`), not the exit
   code.
 - Never hit the network in a test outside the Compose stack.
-- Definition of done: `just ci` green on the committed HEAD, locally and in the PR's checks, with
-  the OS named; visual changes carry a screenshot in the PR; auth, permissions, grading, feedback
+- Definition of done: `just ci` green on the committed HEAD on the machine the change was made
+  on, with the OS named (`just app-build` too for `apps/app`); visual changes carry a screenshot in the PR; auth, permissions, grading, feedback
   visibility, billing and deletion changes say so for the maintainer's line-by-line review.
 
 ## Where things are decided
