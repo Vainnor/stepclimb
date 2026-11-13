@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "storybook dev -p 6006 --no-open",
     "build": "storybook build -o storybook-static",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "pnpm --filter @stepclimb/tokens build && tsc -p tsconfig.json",
+    "test": "mkdir -p storybook-static && storybook index --quiet -o storybook-static/index.json && vitest run"
   },
   "dependencies": {
     "@fontsource/atkinson-hyperlegible-mono": "5.3.0",
