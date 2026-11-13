@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./styles.css": "./src/styles/index.css"
+    "./styles.css": "./src/styles/index.css",
+    "./strings-check": "./src/strings/check.ts"
   },
   "scripts": {
     "test": "vitest run",
@@ -13,6 +14,7 @@
   },
   "dependencies": {
     "@stepclimb/tokens": "workspace:*",
+    "intl-messageformat": "12.1.4",
     "react-aria-components": "1.22.1",
     "tailwind-merge": "3.7.0",
     "tailwind-variants": "4.0.0"

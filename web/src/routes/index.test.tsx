@@ -1,15 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { StringsProvider } from "@stepclimb/ui";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { catalogs } from "../messages";
 import { HealthRoute } from "./index";
 
 function renderRoute() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
-    <QueryClientProvider client={client}>
-      <HealthRoute />
-    </QueryClientProvider>,
+    <StringsProvider catalogs={catalogs} isDevelopment>
+      <QueryClientProvider client={client}>
+        <HealthRoute />
+      </QueryClientProvider>
+    </StringsProvider>,
   );
 }
 

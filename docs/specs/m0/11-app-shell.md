@@ -178,9 +178,13 @@ Read on 2026-11-12; the spec builds on it.
   term, not a message id, and carries its singular and plural forms, so every message that uses
   "course" changes together. Components never hard-code nouns (`docs/plan/ui.md` -> Organization
   theming, Words). Where overrides are stored and how they reach the client is Open question Q7.
+  How messages write terms, how an override is capitalized and which catalog rules the test
+  enforces are Open question Q12.
 - **B26.** A message id missing from the catalog fails the Vitest suite (a test walks the source
   for ids and checks the catalog), and at runtime renders the id in development builds and the
-  English default in production builds, never an empty string.
+  English default in production builds, never an empty string. What "English default" means,
+  how lookups must be written for the test to see them, and what a missing value does are Open
+  question Q12.
 
 ### Error and empty states
 
@@ -256,9 +260,12 @@ Web (Vitest and Testing Library, in `web/src`):
   generic message with the code visible.
 - **T9.** (B19) With one organization, the OrgSwitcher is not in the DOM.
 - **T10.** (B23, B26) The catalog test fails when a component uses a message id the catalog
-  lacks (proved once by adding one).
-- **T11.** (B25) With an override Course -> "Training module", every message using the term
-  renders the override, in singular and plural.
+  lacks (proved once by adding one), or looks a message up in a way the test cannot read (Q12).
+- **T11.** (B25) With an override for Course stored in its mid-sentence form ("training
+  module", "training modules"), every message using the term renders the override, in singular
+  and plural, capitalized ("Training module") where the message uses `{Course}` or `{Courses}`.
+  Tested in `packages/ui` (`src/strings/strings.test.tsx`), where the provider lives, against a
+  fixture catalog: M0's own catalogs use no term yet.
 - **T12.** (B27, B28, B29) Not found, a failing query and a network error each render their
   state, and the retry action refetches.
 
@@ -301,9 +308,9 @@ receives another's theme.
 
 ## Open questions
 
-The owner accepted every recommendation below on 13 Nov 2026. Where a behavior or an issue
-says "pending Q<n>" or "Q<n> answered", build the recommended option; the owner can still
-overrule one, which then updates this spec.
+The owner accepted the recommendations of Q1 to Q11 on 13 Nov 2026; Q12 awaits the owner's
+review. Where a behavior or an issue says "pending Q<n>" or "Q<n> answered", build the
+recommended option; the owner can still overrule one, which then updates this spec.
 
 - **Q1. Layout between 768 and 1023 px.** The plan gives SideNav at 1024 px and up and
   BottomTabs under 768 px. Options: (a) BottomTabs up to 1023 px; (b) a collapsed SideNav (icons
@@ -385,6 +392,35 @@ overrule one, which then updates this spec.
   this one); this spec only requires that the SPA needs no inline script or style beyond what
   React Aria injects.
   **Decided:** the recommendation (owner, 13 Nov 2026).
+
+- **Q12. How messages write terms, and the rules the catalog test enforces.** B25 and B26 leave
+  the message format open. Raised by the coordinator on PR #112 (issue I1), 13 Nov 2026.
+  **Built as the recommendation, pending the owner's review.**
+  - *Override format.* Options: (a) store an override's forms as they read mid-sentence
+    ("training module"); messages use `{course}` and `{courses}` mid-sentence and `{Course}` and
+    `{Courses}` at a sentence start, which upper-case the first letter in the active locale and
+    never lower-case anything, so "LOA" survives; (b) store the capitalized form and lower-case it
+    mid-sentence, which breaks acronyms; (c) store all four forms. Recommendation: (a).
+  - *Articles.* Options: (a) no message puts "a" or "an" directly before a term argument (or a
+    tag, plural or select that starts with one), since the article depends on the override ("a
+    course", "an exam"); the catalog test refuses it; (b) overrides carry their article.
+    Recommendation: (a); English-only at 1.0 does not justify a grammar per term.
+  - *Nouns as text.* The catalog test reads each parsed ICU message and refuses a term's default
+    noun in literal text, including plural and select option values; select keys are not text.
+    Alternative: a regular expression over the raw message, which also flags select keys.
+    Recommendation: the parsed message.
+  - *"English default" in B26.* Options: (a) the English catalog's entry for the id, used when
+    the active locale's catalog lacks it; an id English also lacks renders as the id in both
+    builds; (b) an English default written at each call site, as FormatJS's `defaultMessage`.
+    Recommendation: (a): the catalog stays the one source of English text.
+  - *Lookups the test can read.* Options: (a) the lookup function is always called `t` and called
+    directly with a string-literal id; the test fails on any other first argument, on an optional
+    call of `t` and on a destructure of `useStepclimbStrings()` that renames `t`, unless the line
+    carries a `strings-check-ignore` comment; (b) typed ids checked by the compiler. Recommendation:
+    (a), which is the test B26 already names; (b) can be added later.
+  - *Missing values.* A message formatted without a value for one of its arguments throws, as
+    `intl-messageformat` does. A `null` or `undefined` value, which `intl-messageformat` renders
+    as nothing, throws too. Alternative: render the argument's name. Recommendation: throw.
 
 ## Issues
 
