@@ -22,4 +22,4 @@
     color: "fbca04",
     description: "Waits on an open question or ADR",
   }
-- { name: "dependencies", color: "0366d6", description: "Dependabot updates" }
+- { name: "dependencies", color: "0366d6", description: "Monthly dependency updates" }
