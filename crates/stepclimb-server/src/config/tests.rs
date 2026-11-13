@@ -932,8 +932,8 @@ fn a_public_url_with_a_path_is_refused_naming_the_setting() {
     .unwrap_err();
     assert_eq!(
         error.to_string(),
-        "STEPCLIMB_PUBLIC_URL: \"https://example.org/lms\" must be an origin only, with no \
-         path, query or fragment; for example https://lms.example.org"
+        "STEPCLIMB_PUBLIC_URL: must be an origin only, with no path, query or fragment; for \
+         example https://lms.example.org"
     );
 }
 
@@ -967,9 +967,9 @@ fn a_bad_allowed_origin_is_refused_by_position() {
     for (value, problem) in [
         (
             "https://app.example.org,ftp://files.example.org",
-            "entry 2 (\"ftp://files.example.org\") must start with http:// or https://",
+            "entry 2 must start with http:// or https://",
         ),
-        ("https://app.example.org,", "entry 2 (\"\") is not a URL"),
+        ("https://app.example.org,", "entry 2 is not a URL"),
     ] {
         let error = Config::load(
             &with_required(&[("STEPCLIMB_ALLOWED_ORIGINS", value)]),
@@ -997,4 +997,38 @@ fn the_public_url_and_allowed_origins_are_read_from_the_file() {
     let config = Config::load(&vars, Some(&file)).unwrap();
     assert_eq!(config.public_url.as_str(), "https://lms.example.org");
     assert_eq!(config.allowed_origins_list(), "https://app.example.org");
+}
+
+/// An origin with credentials in it is refused without printing the password, in the
+/// environment or the file, in either setting, and every other refusal leaves the value out too.
+#[test]
+fn an_origin_setting_never_repeats_its_value() {
+    for value in [
+        "https://admin:hunter2@lms.example.org",
+        "https://hunter2.example.org/path",
+        "ftp://hunter2.example.org",
+        "hunter2",
+    ] {
+        let list = format!("https://app.example.org,{value}");
+        let errors = [
+            Config::load(&with_required(&[("STEPCLIMB_PUBLIC_URL", value)]), None).unwrap_err(),
+            Config::load(
+                &with_required(&[("STEPCLIMB_ALLOWED_ORIGINS", &list)]),
+                None,
+            )
+            .unwrap_err(),
+            Config::load(
+                &env(&[
+                    ("STEPCLIMB_DATABASE_URL", URL),
+                    ("STEPCLIMB_ENCRYPTION_KEYS", KEYS),
+                ]),
+                Some(&toml(&format!("public_url = \"{value}\"\n"))),
+            )
+            .unwrap_err(),
+        ];
+        for error in errors {
+            let printed = format!("{error} {error:?}");
+            assert!(!printed.contains("hunter2"), "{value}: {printed}");
+        }
+    }
 }

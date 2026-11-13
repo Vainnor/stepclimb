@@ -78,7 +78,7 @@ pub const ALLOWED_ORIGINS: Setting = Setting {
     var: "STEPCLIMB_ALLOWED_ORIGINS",
     key: "allowed_origins",
     secret: false,
-    example: "https://app.example.org,https://admin.example.org",
+    example: "http://localhost:5173 (the Vite dev server), comma-separated",
 };
 
 /// Every setting [`Config`] reads.
@@ -119,10 +119,13 @@ pub struct Config {
     /// required.
     pub encryption_keys: KeyRing,
     /// `public_url`, required: the origin users open the instance at (spec 08 Q1). It is the
-    /// first origin the CSRF check accepts, and an `https` one turns HSTS on.
+    /// first origin the CSRF check accepts in an `Origin` header, and an `https` one turns HSTS
+    /// on.
     pub public_url: WebOrigin,
-    /// `allowed_origins`: further origins the CSRF check accepts, comma-separated (spec 08 Q6).
-    /// Unset means none.
+    /// `allowed_origins`: further origins an unsafe request's `Origin` header may name,
+    /// comma-separated (spec 08 Q6). A request that sends no `Sec-Fetch-Site` is accepted only
+    /// from these or the public URL, and one that sends `Origin` must name one of them even when
+    /// it is same-origin (B14). Unset means none; development sets the Vite dev server's origin.
     pub allowed_origins: Vec<WebOrigin>,
 }
 
@@ -409,14 +412,17 @@ fn log_filter(value: String, origin: Origin) -> Result<String, ConfigError> {
     }
 }
 
+/// The error names the setting and the problem but never repeats the value, which can carry a
+/// password (`https://user:password@host`).
 fn web_origin(value: &str, origin: Origin, setting: &Setting) -> Result<WebOrigin, ConfigError> {
     WebOrigin::parse(value).map_err(|problem| ConfigError::Invalid {
         origin,
-        problem: format!("{value:?} {problem}; for example {}", setting.example),
+        problem: format!("{problem}; for example {}", setting.example),
     })
 }
 
 /// A comma-separated list of origins; blanks around an entry are ignored, an empty entry is not.
+/// An error names the entry by position only, as [`web_origin`] does.
 fn allowed_origins(value: &str, origin: Origin) -> Result<Vec<WebOrigin>, ConfigError> {
     value
         .split(',')
@@ -426,7 +432,7 @@ fn allowed_origins(value: &str, origin: Origin) -> Result<Vec<WebOrigin>, Config
             WebOrigin::parse(entry).map_err(|problem| ConfigError::Invalid {
                 origin: origin.clone(),
                 problem: format!(
-                    "entry {} ({entry:?}) {problem}; for example {}",
+                    "entry {} {problem}; for example {}",
                     index + 1,
                     ALLOWED_ORIGINS.example
                 ),

@@ -93,7 +93,11 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   sign-in flow rows of B17, so a `SameSite=Lax` cookie sent on a cross-site top-level GET can
   do nothing.
 - **B13.** `POST /auth/sign-out` deletes the request's session row and clears the cookie. It
-  answers 204 whether or not a session existed.
+  answers 204 whether or not a session existed. When it carries a session cookie and the
+  request's organization cannot be resolved (B5), it answers that error instead, 404
+  `org.not_found` or 503 `org.none`, deletes nothing and leaves the cookie, since it cannot tell
+  whose session to end; without a session cookie it answers 204 without resolving (coordinator
+  decision, 13 Nov 2026).
 
 ### CSRF
 
@@ -102,7 +106,11 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   carries a session cookie (sign-in POSTs are covered too). The check passes when
   `Sec-Fetch-Site` is `same-origin`, or when `Sec-Fetch-Site` is absent and the `Origin` header
   is on the organization's Origin allowlist. `Sec-Fetch-Site` values `same-site`, `cross-site`
-  and `none` fail. A failure answers 403 `auth.csrf_refused`.
+  and `none` fail. An unsafe request that carries an `Origin` header must also have that origin
+  on the allowlist, even when `Sec-Fetch-Site` is `same-origin`: a page on a name an attacker
+  re-points at the server (DNS rebinding) is same-origin with itself, but its `Origin` is the
+  attacker's name (coordinator decision, 13 Nov 2026). A failure answers 403
+  `auth.csrf_refused`.
 - **B15.** What happens when both `Sec-Fetch-Site` and `Origin` are absent, and where the Origin
   allowlist comes from beyond the organization's own origin: pending Q6.
 - **B16.** Requests authenticated by an `Authorization: Bearer` header (API keys, app access
@@ -124,7 +132,12 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   public URL the header is not sent (plan, Security and privacy: HSTS; coordinator decision,
   13 Nov 2026). The public URL is required configuration, since a default would silently turn
   HSTS off: the server refuses to start without it. `STEPCLIMB_ALLOWED_ORIGINS` (Q6) is an
-  optional comma-separated list of origins (I3's choices, 13 Nov 2026).
+  optional comma-separated list of the further origins an `Origin` header may name, which is
+  what browsers that send no `Sec-Fetch-Site` are accepted by (I3's choices, 13 Nov 2026).
+  Development (`just serve`, `.env.example`) lists the Vite dev server's origin,
+  `http://localhost:5173`, so `just dev` works; nothing lists it by default. A configuration
+  error about either setting names the setting and the problem but never repeats the value,
+  which can carry a password (coordinator decision, 13 Nov 2026).
 
 ### Sign-in flow state
 
@@ -336,7 +349,9 @@ Database tests use `#[sqlx::test]`; time-dependent tests use the controllable cl
   the `x-stepclimb-mutates` extension on the handler's `#[utoipa::path]`; the walk reads the
   OpenAPI document (every path, not only `/api/v1`), and a second test sends each method to each
   documented path so the router cannot mount a handler with another method than the document
-  says.
+  says. The router mounts every route from one list (`app::routes()`), a test checks each of
+  its paths is in the document, and another that `app.rs` mounts nothing else but the document
+  and its UI (coordinator decision, 13 Nov 2026).
 - **T18.** (B18) Completing a flow twice answers `auth.flow_invalid` the second time; a flow used
   after its expiry (clock moved) answers `auth.flow_expired`.
 - **T19.** (B19) `return_to` values `https://evil.example`, `//evil.example`, `/\evil.example`

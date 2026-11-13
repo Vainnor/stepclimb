@@ -97,7 +97,7 @@ problem_responses! {
     UnsupportedMediaType => "`request.unsupported_media_type`: the body is not JSON.",
     UnprocessableEntity => "`request.invalid`: the body parses but breaks a rule; `errors` lists each one.",
     InternalError => "`internal.error`: the server failed; the cause is in its log.",
-    CsrfRefused => "`auth.csrf_refused`: an unsafe request without a bearer credential did not come from this site: `Sec-Fetch-Site` is not `same-origin`, or, without it, `Origin` is not an allowed origin.",
+    CsrfRefused => "`auth.csrf_refused`: an unsafe request without a bearer credential did not come from this site: `Sec-Fetch-Site` is not `same-origin`, `Origin` is sent but is not an allowed origin, or neither header is sent.",
     OrganizationNotFound => "`org.not_found`: the request's organization cannot be determined.",
     NoOrganization => "`org.none`: the instance has no organization yet.",
 }

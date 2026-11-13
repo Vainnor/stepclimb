@@ -275,6 +275,7 @@ async fn sign_out_never_deletes_another_organizations_session(pool: PgPool) {
             .await;
         assert_eq!(answer.status, StatusCode::NOT_FOUND);
         assert_eq!(answer.code(), "org.not_found");
+        assert!(answer.set_cookies().is_empty(), "the cookie is left (B13)");
     }
     assert_eq!(fixture.session_count().await, 2);
 }
@@ -378,6 +379,50 @@ async fn safe_methods_are_never_checked() {
         .await;
         assert_ne!(answer.status, StatusCode::FORBIDDEN, "{method}");
     }
+}
+
+// B14 (coordinator decision, 13 Nov 2026): an `Origin` that is sent must be allowed, even on a
+// same-origin fetch.
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_dns_rebound_page_is_refused_though_its_fetch_is_same_origin(pool: PgPool) {
+    let fixture = Fixture::new(pool).await;
+    let cookie = fixture.sign_in().await;
+
+    let answer = fixture
+        .sign_out(
+            &cookie,
+            &[
+                ("host", "rebound.evil.example"),
+                ("sec-fetch-site", "same-origin"),
+                ("origin", "http://rebound.evil.example"),
+            ],
+        )
+        .await;
+
+    answer.assert_refused("rebound");
+    assert_eq!(fixture.session_count().await, 1, "the handler did not run");
+}
+
+/// `just dev`: the browser loads the web app from Vite on :5173, which proxies API requests to
+/// the server, so the browser's `Origin` is Vite's. The development configuration lists it in
+/// `allowed_origins`; a configuration without it refuses it.
+#[tokio::test]
+async fn the_vite_dev_origin_passes_only_where_it_is_configured() {
+    let vite = [
+        ("sec-fetch-site", "same-origin"),
+        ("origin", "http://localhost:5173"),
+    ];
+    let mut development = state(unreachable_pool(), "http://localhost:8080");
+    development.allowed_origins =
+        vec![WebOrigin::parse("http://localhost:5173").expect("an origin")];
+    let answer = send(router(development), Method::POST, "/auth/sign-out", &vite).await;
+    assert_eq!(answer.status, StatusCode::NO_CONTENT, "{}", answer.body);
+
+    let production = router(state(unreachable_pool(), PUBLIC));
+    send(production, Method::POST, "/auth/sign-out", &vite)
+        .await
+        .assert_refused("vite origin without the development configuration");
 }
 
 // T15 (B16): a bearer request skips the check; the cookie beside it is not acted on.
@@ -549,5 +594,45 @@ async fn t37_an_http_public_url_sends_no_hsts() {
             .headers
             .get(header::STRICT_TRANSPORT_SECURITY)
             .is_none()
+    );
+}
+
+/// Every route `router` mounts besides the document and its UI is an operation of the document,
+/// so the method walk above reaches it.
+#[test]
+fn every_route_is_in_the_openapi_document() {
+    let doc = document();
+    let documented = doc["paths"].as_object().expect("paths");
+    let missing: Vec<&str> = stepclimb_server::app::routes()
+        .into_iter()
+        .map(|(path, _)| path)
+        .filter(|path| !documented.contains_key(*path))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "routes without an operation: {missing:?}"
+    );
+}
+
+/// `router` mounts routes only from `app::routes()` and the two document routes, so the test
+/// above sees every route: a `.route(` call written anywhere else in app.rs fails here.
+#[test]
+fn the_router_mounts_routes_only_from_the_route_list() {
+    let source = include_str!("../src/app.rs");
+    let calls: Vec<&str> = source
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            line.contains(".route(") || line.contains(".merge(") || line.contains(".nest(")
+        })
+        .collect();
+    assert_eq!(
+        calls,
+        [
+            "app = app.route(path, handler);",
+            ".route(OPENAPI_JSON, get(openapi_json))",
+            ".merge(Scalar::with_url(DOCS, openapi::document()))",
+        ],
+        "add the route to app::routes() instead"
     );
 }

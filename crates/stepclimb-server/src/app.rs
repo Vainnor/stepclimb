@@ -6,7 +6,7 @@ use axum::{
     http::{HeaderValue, header},
     middleware,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{MethodRouter, get, post},
 };
 use sqlx::PgPool;
 use stepclimb_auth::encryption::KeyRing;
@@ -47,12 +47,13 @@ pub const HSTS: &str = "max-age=31536000";
 pub fn router(state: AppState) -> Router {
     let allowlist = OriginAllowlist::new(&state.public_url, &state.allowed_origins);
     let https = state.public_url.is_https();
-    let app = Router::new()
-        .route("/healthz", get(health::healthz))
-        .route("/readyz", get(health::readyz))
-        .route("/auth/sign-out", post(auth::sign_out))
-        .route("/api/openapi.json", get(openapi_json))
-        .merge(Scalar::with_url("/docs", openapi::document()))
+    let mut app = Router::new();
+    for (path, handler) in routes() {
+        app = app.route(path, handler);
+    }
+    let app = app
+        .route(OPENAPI_JSON, get(openapi_json))
+        .merge(Scalar::with_url(DOCS, openapi::document()))
         // Applies to the routes above, so it stays after the last of them.
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(spa::serve)
@@ -64,6 +65,24 @@ pub fn router(state: AppState) -> Router {
     with_hsts(app, https)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+/// The path of the API document, which is not an operation in itself.
+pub const OPENAPI_JSON: &str = "/api/openapi.json";
+
+/// The path of the API document's UI.
+pub const DOCS: &str = "/docs";
+
+/// Every route of the API, by path. [`router`] mounts these and only these besides
+/// [`OPENAPI_JSON`] and [`DOCS`]; a test checks each path is an operation of the OpenAPI
+/// document, and another that each takes exactly the methods the document lists, so a route
+/// cannot escape the walk of spec 08 T17.
+pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
+    vec![
+        ("/healthz", get(health::healthz)),
+        ("/readyz", get(health::readyz)),
+        ("/auth/sign-out", post(auth::sign_out)),
+    ]
 }
 
 /// HSTS on every response, refusals included, when the public URL is `https`. The server never
