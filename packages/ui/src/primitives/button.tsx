@@ -7,7 +7,7 @@ import {
   type ButtonProps as AriaButtonProps,
   composeRenderProps,
 } from "react-aria-components";
-import { tv, type VariantProps } from "tailwind-variants";
+import { tv, type VariantProps } from "../lib/tv";
 
 export const button = tv({
   base: [

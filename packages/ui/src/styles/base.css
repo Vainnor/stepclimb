@@ -1,14 +1,24 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* Browser surfaces themed from the tokens (plan, UI tab -> Pitfalls: browser defaults left in).
-   Scrollbars, prose, safe areas and reduced motion are specified in docs/specs/m0/13-base-ui-components.md. */
+/* Browser surfaces themed from the tokens (plan, UI tab -> Pitfalls: browser defaults left in, web-view
+   tells in the apps; docs/specs/m0/13-base-ui-components.md B9, B13 to B17). */
 @layer base {
   html {
     color-scheme: light;
     font-family: var(--sc-font-ui);
     background: var(--sc-bg-canvas);
     color: var(--sc-fg-default);
-    caret-color: var(--sc-brand);
     font-variant-numeric: tabular-nums;
+    /* No rubber-band bounce of the document under fixed chrome (B15). Vertical only: horizontal
+       overscroll is the browser's back and forward swipe. */
+    overscroll-behavior-y: none;
+    /* No grey flash on tap in iOS Safari and the web view. */
+    -webkit-tap-highlight-color: transparent;
+    /* Phones keep the authored text size in landscape. */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+  body {
+    overscroll-behavior-y: none;
   }
   [data-sc-theme="dark"] {
     color-scheme: dark;
@@ -23,8 +33,233 @@
   [data-sc-theme="high-contrast"] {
     color-scheme: light;
   }
+
+  /* Caret and scrollbars read the tokens where each theme is set: an inherited color would keep
+     the outer theme's value inside a nested ThemeProvider. */
+  html,
+  [data-sc-theme] {
+    caret-color: var(--sc-brand);
+    scrollbar-color: var(--sc-line-strong) transparent;
+  }
   ::selection {
     background: var(--sc-brand-soft);
     color: var(--sc-fg-strong);
+  }
+
+  /* The focus ring: `ring`, 2 px, outside a 2 px `bg-canvas` gap, on keyboard focus only (B14).
+     Components draw their own from React Aria's `data-focus-visible`; this covers every other
+     focusable element. The transparent outline is what forced-colors mode paints (B17). */
+  :focus-visible {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    box-shadow:
+      0 0 0 2px var(--sc-bg-canvas),
+      0 0 0 4px var(--sc-ring);
+  }
+  :focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  /* Controls are not text-selectable (B15). */
+  button,
+  [role="button"],
+  [role="checkbox"],
+  [role="menuitem"],
+  [role="option"],
+  [role="radio"],
+  [role="switch"],
+  [role="tab"],
+  label,
+  summary {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+}
+
+/* Prose content (the Prose component sets the reading face, size, line height and measure): the
+   elements of server-sanitized HTML, which carry no classes. Mono is for code only. */
+@layer base {
+  [data-slot="prose"] > * + * {
+    margin-block-start: 1em;
+  }
+  [data-slot="prose"] :is(h1, h2, h3, h4, h5, h6) {
+    font-family: var(--sc-font-ui);
+    font-weight: var(--sc-weight-heading);
+    color: var(--sc-fg-strong);
+    line-height: 1.25;
+    text-wrap: balance;
+  }
+  [data-slot="prose"] > :is(h1, h2, h3, h4, h5, h6):not(:first-child) {
+    margin-block-start: 1.6em;
+  }
+  [data-slot="prose"] h1 {
+    font-size: var(--sc-text-3xl);
+  }
+  [data-slot="prose"] h2 {
+    font-size: var(--sc-text-2xl);
+  }
+  [data-slot="prose"] h3 {
+    font-size: var(--sc-text-xl);
+  }
+  [data-slot="prose"] :is(h4, h5, h6) {
+    font-size: var(--sc-text-lg);
+  }
+  [data-slot="prose"] :is(h1, h2, h3, h4, h5, h6) + * {
+    margin-block-start: 0.5em;
+  }
+  [data-slot="prose"] strong {
+    font-weight: var(--sc-weight-heading);
+    color: var(--sc-fg-strong);
+  }
+  [data-slot="prose"] a {
+    color: var(--sc-brand-fg);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  [data-slot="prose"] a:hover {
+    text-decoration-thickness: 2px;
+  }
+  [data-slot="prose"] :is(ul, ol) {
+    padding-inline-start: 1.5em;
+  }
+  [data-slot="prose"] ul {
+    list-style-type: disc;
+  }
+  [data-slot="prose"] ol {
+    list-style-type: decimal;
+  }
+  [data-slot="prose"] li + li {
+    margin-block-start: 0.25em;
+  }
+  [data-slot="prose"] li::marker {
+    color: var(--sc-fg-sub);
+  }
+  [data-slot="prose"] blockquote {
+    padding-inline-start: 1.5em;
+    color: var(--sc-fg-sub);
+    font-style: italic;
+  }
+  [data-slot="prose"] code {
+    font-family: var(--sc-font-mono);
+    font-size: 0.875em;
+    background: var(--sc-bg-sunken);
+    border-radius: var(--sc-radius-xs);
+    padding: 0.1em 0.3em;
+  }
+  [data-slot="prose"] pre {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    background: var(--sc-bg-sunken);
+    border: 1px solid var(--sc-line);
+    border-radius: var(--sc-radius-md);
+    padding: 1em;
+    line-height: 1.5;
+  }
+  [data-slot="prose"] pre code {
+    background: none;
+    padding: 0;
+  }
+  /* A border, not a background: forced-colors mode keeps borders and drops backgrounds. */
+  [data-slot="prose"] hr {
+    border: 0;
+    border-block-start: 1px solid var(--sc-line);
+    margin-block: 2em;
+  }
+  [data-slot="prose"] :is(img, video) {
+    max-inline-size: 100%;
+    block-size: auto;
+  }
+  /* A wide table scrolls on its own instead of widening the page. */
+  [data-slot="prose"] table {
+    display: block;
+    max-inline-size: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    border-collapse: collapse;
+    font-size: var(--sc-text-base);
+    line-height: 1.5;
+  }
+  [data-slot="prose"] :is(th, td) {
+    padding-block: 0.5em;
+    padding-inline: 0.75em;
+    border-block-end: 1px solid var(--sc-line-soft);
+    text-align: start;
+    vertical-align: top;
+  }
+  [data-slot="prose"] th {
+    font-family: var(--sc-font-ui);
+    font-weight: var(--sc-weight-control);
+    color: var(--sc-fg-strong);
+    border-block-end-color: var(--sc-line);
+  }
+}
+
+/* Touch (B9): targets at least `--sc-control-touch` (44 px) and text inputs at 16 px, so iOS
+   does not zoom on focus. This and the next two blocks are unlayered: an unlayered declaration
+   outranks every layered one, so no component utility undoes them. */
+@media (pointer: coarse) {
+  button,
+  [role="button"],
+  [role="checkbox"],
+  [role="menuitem"],
+  [role="option"],
+  [role="radio"],
+  [role="switch"],
+  [role="tab"],
+  input:not([type="hidden"]),
+  select,
+  textarea {
+    min-block-size: var(--sc-control-touch);
+    min-inline-size: var(--sc-control-touch);
+  }
+  input,
+  select,
+  textarea,
+  [contenteditable="true"] {
+    font-size: max(16px, 1rem);
+  }
+}
+
+/* Reduced motion (B11, B16): every transition and animation is instant. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0s;
+    transition-delay: 0s;
+    animation-duration: 0s;
+    animation-delay: 0s;
+    animation-iteration-count: 1;
+    scroll-behavior: auto;
+  }
+}
+
+/* Forced colors (B17): the browser replaces the palette with system colors and drops box shadows,
+   which draw every focus ring here; the outline replaces a component's `outline-none`. The rules
+   sit in their own layer after Tailwind's `utilities`, so they outrank every component utility
+   and still yield to an unlayered rule. */
+@layer theme, base, components, utilities, forced-colors;
+@layer forced-colors {
+  @media (forced-colors: active) {
+    :focus-visible,
+    [data-focus-visible] {
+      outline: 2px solid Highlight;
+      outline-offset: 2px;
+    }
+    button,
+    [role="button"],
+    input:not([type="hidden"]),
+    select,
+    textarea {
+      border: 1px solid ButtonBorder;
+    }
+    [aria-checked="true"],
+    [aria-current]:not([aria-current="false"]),
+    [aria-pressed="true"],
+    [aria-selected="true"],
+    [data-selected] {
+      outline: 2px solid Highlight;
+    }
   }
 }

@@ -6,6 +6,8 @@ import "@fontsource/atkinson-hyperlegible-next/500.css";
 import "@fontsource/atkinson-hyperlegible-next/700.css";
 import "@fontsource/atkinson-hyperlegible-mono/400.css";
 import "@fontsource/source-serif-4/400.css";
+import "@fontsource/source-serif-4/400-italic.css";
+import "@fontsource/source-serif-4/700.css";
 import "@fontsource/roboto/400.css";
 import "@fontsource/roboto/500.css";
 import "@stepclimb/ui/styles.css";
@@ -48,15 +50,14 @@ const withStrings: Decorator = (Story) => (
 /** A story that draws its own themes (a matrix) sets `parameters.themeWrapper: false`. */
 const withTheme: Decorator = (Story, context) => {
   if (context.parameters.themeWrapper === false) return <Story />;
-  // A story fills the canvas on its own; on a docs page each one is only as tall as its content.
-  const fill = context.viewMode === "docs" ? "" : "min-h-screen";
+  // As tall as its content, so the story suite's screenshot of #storybook-root is too.
   return (
     <ThemeProvider
       theme={context.globals.theme as Theme}
       density={context.globals.density as Density}
       brand={brandAttribute(context.globals.brand as Brand)}
     >
-      <div className={`${fill} bg-canvas p-6 font-ui text-fg-default`}>
+      <div className="bg-canvas p-6 font-ui text-fg-default">
         <Story />
       </div>
     </ThemeProvider>

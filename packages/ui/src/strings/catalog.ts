@@ -9,7 +9,11 @@ export type Messages = Readonly<Record<string, string>>;
 export type Catalog = { readonly en: Messages } & Readonly<Partial<Record<string, Messages>>>;
 
 /** The messages Stepclimb UI's own components render. Each component adds its ids here. */
-export const uiMessages: Catalog = { en: {} };
+export const uiMessages: Catalog = {
+  en: {
+    "link.external": "(external site)",
+  },
+};
 
 /**
  * Merges the catalogs' messages for one locale. An id defined twice is an error, so the app's

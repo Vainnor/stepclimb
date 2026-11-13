@@ -43,13 +43,14 @@ type Story = StoryObj<typeof meta>;
 export const FollowsSystem: Story = {
   render: (args) => (
     <ThemeProvider {...args}>
-      <div className="min-h-screen bg-canvas p-6 font-ui text-fg-default">{args.children}</div>
+      <div className="bg-canvas p-6 font-ui text-fg-default">{args.children}</div>
     </ThemeProvider>
   ),
 };
 
 /** The same sample in each brand, theme and density. */
 export const Matrix: Story = {
+  tags: ["theme-matrix"],
   render: () => (
     <ThemeMatrix>
       <Sample />

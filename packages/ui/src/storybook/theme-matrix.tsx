@@ -39,7 +39,11 @@ export interface ThemeMatrixProps {
   children: ReactNode;
 }
 
-/** One row per brand and density, one column per theme. */
+/**
+ * One row per brand and density, one column per theme. A story that renders it sets
+ * `parameters.themeWrapper: false` and the `theme-matrix` tag, so the story suite screenshots it
+ * once per width instead of once per theme (apps/ui-docs/visual).
+ */
 export function ThemeMatrix({ children }: ThemeMatrixProps) {
   return (
     <div className="flex flex-col">

@@ -32,6 +32,7 @@ export const Disabled: Story = { args: { isDisabled: true, children: "Disabled" 
 
 /** Every intent and size in each brand, theme and density, side by side. */
 export const Matrix: Story = {
+  tags: ["theme-matrix"],
   parameters: { themeWrapper: false },
   render: () => (
     <ThemeMatrix>

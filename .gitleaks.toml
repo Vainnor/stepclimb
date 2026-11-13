@@ -12,4 +12,8 @@ paths = [
   '''(^|/)pnpm-lock\.yaml$''',
   '''(^|/)\.sqlx/''',
   '''(^|/)\.gitleaks\.toml$''',
+  # Ignored output of `just ui-visual`: the minified Storybook bundle trips generic-api-key, a
+  # false positive; test-results holds Playwright's traces of the same bundle.
+  '''^apps/ui-docs/storybook-static/''',
+  '''^apps/ui-docs/test-results/''',
 ]

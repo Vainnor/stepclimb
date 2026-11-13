@@ -96,12 +96,12 @@ names the React Aria Components export each is built on.
 | --- | --- | --- | --- |
 | Foundations | ThemeProvider | none (context) | Sets `data-sc-theme`, `data-sc-density` and, in Storybook, `data-sc-brand` on its element; exposes the current appearance; follows `prefers-color-scheme` when no theme is set (B13) |
 | | Icon | none | Wraps a Phosphor icon with token sizes and the state weights of B10 |
-| | Text, Heading | `Text`, `Heading` | Type scale variants only; Heading's level is required, separate from its size |
+| | Text, Heading | `Text`, `Heading` | Type scale variants; Text also has a `tone` variant (strong, default, sub, soft: the text tokens), since B4 sends color through variants (coordinator decision on PR #126, 13 Nov 2026); Heading's level is required, separate from its size |
 | | Link | `Link` | Navigates through the app's `RouterProvider` (11-app-shell B1); external links say so to screen readers |
 | | Kbd | `Keyboard` | Mono, for shortcuts |
 | | VisuallyHidden | `VisuallyHidden` | |
 | | Separator | `Separator` | Uses `line` or `line-soft` |
-| | Prose | none | Styles server-sanitized HTML: the reading face, a 62 to 68 character measure, reading size and line height (12 Q4), tables that scroll on their own, mono only for code |
+| | Prose | none | Styles server-sanitized HTML: the reading face, a 62 to 68 character measure (sized in `em` at the reading size: `ch` is the width of "0", so `66ch` holds about 75 characters), reading size and line height (12 Q4), tables that scroll on their own, mono only for code |
 | Actions | Button | `Button` | Adds the loading state (`isPending`), with the label kept for screen readers |
 | | IconButton | `Button` | Requires an accessible label; shows it as a Tooltip |
 | | ButtonGroup | `Group` | |
@@ -150,10 +150,15 @@ names the React Aria Components export each is built on.
   (`docs/plan/ui.md` -> Pitfalls: browser defaults left in). The focus ring is `ring`, 2 px with a
   `bg-canvas` offset, shown on `:focus-visible` only.
 - **B15.** Fixed and sticky bars use `env(safe-area-inset-*)`; the document does not rubber-band
-  under fixed chrome (`overscroll-behavior`); controls are not text-selectable.
+  under fixed chrome (`overscroll-behavior-y`, leaving horizontal overscroll to the browser's
+  back and forward swipe); controls are not text-selectable. The safe-area part is built with the
+  first fixed bars in I8: `base.css` has no bar to apply it to, and a utility nothing uses
+  generates no CSS to test (coordinator decision on PR #126, 13 Nov 2026).
 - **B16.** Under `prefers-reduced-motion: reduce` every transition and animation is instant.
 - **B17.** Under `forced-colors: active`, focus rings, control borders and selected states stay
-  visible (see 12 Q5).
+  visible (see 12 Q5). These rules sit in a named cascade layer after Tailwind's `utilities`, so
+  no component utility (`outline-none`) undoes them; rules and separators are drawn with borders,
+  which forced colors keeps (coordinator decision on PR #126, 13 Nov 2026).
 
 ### Lint checks
 
@@ -317,7 +322,9 @@ overrule one, which then updates this spec.
   pinned Docker image so fonts match across machines; (b) Git LFS; (c) not committed, compared
   against the target branch's build in CI. Recommendation: matrix (a), baselines (a);
   Playwright's own image keeps the comparison stable between a laptop and CI.
-  **Decided:** the recommendation (owner, 13 Nov 2026).
+  **Decided:** the recommendation (owner, 13 Nov 2026). The image is pinned by its linux/amd64
+  manifest digest and run with `--platform linux/amd64`, so the baselines are amd64 renders on
+  every machine (coordinator decision on PR #126, 13 Nov 2026).
 - **Q5. The two extreme brands.** Options: (a) a very light, saturated yellow (around `#FFE600`)
   and a very dark navy (around `#0A1A3F`); (b) a saturated magenta and a grey with almost no
   chroma. Recommendation: (a): they push the brand step choice to both ends of the lightness
@@ -372,16 +379,18 @@ In dependency order. Each is one PR.
   private packages, `packages/ui/THIRD_PARTY.md`, and the CI check if Q6 says so. Covers B31,
   B32. Depends on: Q6 answered.
 - **I5. Base styles.** Deliverable: `base.css` completed: `color-scheme` under the OS setting,
-  scrollbars, focus rings, safe areas, overscroll, unselectable controls, reduced motion,
-  forced colors, touch target and input sizes. Covers B9, B13 to B17; T4 to T6. Depends on: I2.
+  scrollbars, focus rings, overscroll, unselectable controls, reduced motion, forced colors,
+  touch target and input sizes. Covers B9, B13 to B17 (B15's safe areas move to I8); T4 to T6.
+  Depends on: I2.
 - **I6. Foundations.** Deliverable: Icon (adds `@phosphor-icons/react`), Text, Heading, Link,
   Kbd, VisuallyHidden, Separator, Prose, with stories, tests and docs pages. Covers B1 to B12 for
   these, B21, B26, B27; T1 to T3, T12 (Link). Depends on: I1, I3, I5; 11 I1 (strings).
 - **I7. Actions.** Deliverable: Button's loading state, IconButton, ButtonGroup, ToggleButton,
   Menu, Toolbar, CopyButton, Tooltip (needed by IconButton), Popover. Covers the Actions row and
   Tooltip and Popover of Overlays; T12 (Menu, Toolbar, CopyButton). Depends on: I6.
-- **I8. Shell navigation.** Deliverable: AppShell, SideNav, BottomTabs, TopBar, OrgSwitcher.
-  Covers those Navigation rows; T12 (SideNav, BottomTabs). Depends on: I7; 11 Q1 answered.
+- **I8. Shell navigation.** Deliverable: AppShell, SideNav, BottomTabs, TopBar, OrgSwitcher,
+  and B15's safe areas for their fixed and sticky bars. Covers those Navigation rows, B15 (safe
+  areas); T12 (SideNav, BottomTabs). Depends on: I7; 11 Q1 answered.
 - **I9. Data states.** Deliverable: Avatar, Skeleton, EmptyState, ErrorState, Meter,
   ProgressBar. Covers those Data rows; T12 (Skeleton, Avatar). Depends on: I6.
 - **I10. Text fields.** Deliverable: Field, TextField, TextArea, NumberField, SearchField.

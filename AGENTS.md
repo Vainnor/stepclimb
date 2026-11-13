@@ -141,7 +141,7 @@ The Nix dev shell (`flake.nix`) provides every tool below.
 ## Commands (via `just`)
 
 ```bash
-just ci            # the merge gate, run locally: secrets, fmt, clippy, layering, lint escapes, spdx, tests, deny, sqlx, openapi, biome, tsc, vitest, playwright, compose, agents
+just ci            # the merge gate, run locally: secrets, fmt, clippy, layering, lint escapes, spdx, tests, deny, sqlx, openapi, biome, tsc, vitest, story screenshots, playwright, compose, agents
 just app-build     # the Tauri shell for this OS, unbundled and unsigned, after cargo-deny on its workspace
 just up / down     # PostgreSQL 16 and MinIO in Compose (deploy/compose/compose.yaml)
 just serve         # the server on :8080 against the Compose database, web build embedded
@@ -166,6 +166,7 @@ just changeset-check  # a changeset for any change to packages/ui or packages/to
 just typecheck     # tsc in every package
 just test-web      # Vitest in every package
 just e2e           # Playwright smoke test against the Compose stack (builds the image)
+just ui-visual     # Storybook story screenshots and axe in Playwright's pinned image (--update-snapshots)
 just compose-check # the production Compose example booted with generated secrets on :58180, then removed
 just compose-ops-check  # the same with Caddy (internal CA) on :28281/:28443: TLS, forwarded headers, dumps, a restore
 just agents-check  # agent hook tests and Codex mirrors of .claude/ (docs/agents.md)
