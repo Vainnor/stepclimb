@@ -34,6 +34,7 @@ use stepclimb_core::{
 use crate::{
     AppState,
     error::ApiError,
+    request_org,
     session::{self, Authenticated},
 };
 
@@ -226,6 +227,11 @@ impl From<Denied> for ApiError {
                 code::ACCOUNT_NOT_FOUND,
                 "No account with this id exists, or you cannot see it.",
             ),
+            Denied::OrganizationNotFound => ApiError::new(
+                StatusCode::NOT_FOUND,
+                request_org::code::ORG_NOT_FOUND,
+                "No organization with this id exists, or you cannot see it.",
+            ),
             Denied::Forbidden => ApiError::new(
                 StatusCode::FORBIDDEN,
                 code::PERMISSION_DENIED,
@@ -361,6 +367,9 @@ mod tests {
         let not_found = ApiError::from(Denied::AccountNotFound);
         assert_eq!(not_found.status(), StatusCode::NOT_FOUND);
         assert_eq!(not_found.code(), "account.not_found");
+        let other_org = ApiError::from(Denied::OrganizationNotFound);
+        assert_eq!(other_org.status(), StatusCode::NOT_FOUND);
+        assert_eq!(other_org.code(), "org.not_found");
         let forbidden = ApiError::from(RequireError::Denied(Denied::Forbidden));
         assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
         assert_eq!(forbidden.code(), "permission.denied");

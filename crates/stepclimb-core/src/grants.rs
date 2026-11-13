@@ -40,8 +40,8 @@ pub enum Target {
 /// checks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ScopeId {
-    /// The organization of the grants.
-    Organization,
+    /// An organization by id. [`Grants::require_at`] finds only the grants' own.
+    Organization(Uuid),
     /// One account of that organization, with its subtree.
     Account(Uuid),
 }
@@ -54,6 +54,9 @@ pub enum Denied {
     /// apart from ids that do not exist.
     #[error("the account does not exist")]
     AccountNotFound,
+    /// The organization named is not the principal's.
+    #[error("the organization does not exist")]
+    OrganizationNotFound,
     /// The target is visible but the permission is not effective at a scope containing it.
     #[error("the permission is not held at this scope")]
     Forbidden,
@@ -105,24 +108,28 @@ impl Grants {
             ignored: BTreeSet::new(),
         };
         for assignment in assignments {
-            let (scope_type, account) = match assignment.scope {
-                GrantScope::Organization => (ScopeType::Organization, None),
-                GrantScope::Account { id, .. } => (ScopeType::Account, Some(id)),
-                GrantScope::Course(_) => continue,
+            // `None` for a course scope, which grants nothing until M1; its unknown keys are
+            // still reported.
+            let placement = match assignment.scope {
+                GrantScope::Organization => Some((ScopeType::Organization, None)),
+                GrantScope::Account { id, .. } => Some((ScopeType::Account, Some(id))),
+                GrantScope::Course(_) => None,
             };
             let mut effective = BTreeSet::new();
             for key in assignment.permissions {
-                match perm::ALL.iter().find(|p| p.key() == key) {
-                    Some(p) if p.grantable().contains(&scope_type) => {
-                        effective.insert(p.key());
-                    }
-                    Some(_) => {}
-                    None => {
-                        grants.ignored.insert(key);
-                    }
+                let Some(p) = perm::ALL.iter().find(|p| p.key() == key) else {
+                    grants.ignored.insert(key);
+                    continue;
+                };
+                if let Some((scope_type, _)) = placement
+                    && p.grantable().contains(&scope_type)
+                {
+                    effective.insert(p.key());
                 }
             }
-            grants.add(account, effective);
+            if let Some((_, account)) = placement {
+                grants.add(account, effective);
+            }
         }
         grants
     }
@@ -218,7 +225,7 @@ impl Grants {
     #[must_use]
     pub fn scopes_with<P: Permission>(&self) -> Vec<ScopeId> {
         if self.organization.contains(P::KEY) {
-            return vec![ScopeId::Organization];
+            return vec![ScopeId::Organization(self.scope.org_id())];
         }
         self.accounts
             .iter()
@@ -227,16 +234,17 @@ impl Grants {
             .collect()
     }
 
-    /// B17 steps 3 to 5 for a target the request names in its body: the account must exist in
-    /// the grants' organization ([`Denied::AccountNotFound`] otherwise), then [`Self::check`].
-    /// Returns the target's path.
+    /// B17 steps 3 to 5 for a target the request names in its body: an organization must be the
+    /// grants' own ([`Denied::OrganizationNotFound`] otherwise) and an account must exist in it
+    /// ([`Denied::AccountNotFound`] otherwise), then [`Self::check`]. Returns the target's path.
     pub async fn require_at<P: Permission>(
         &self,
         db: impl PgExecutor<'_>,
         at: ScopeId,
     ) -> Result<Target, RequireError> {
         let target = match at {
-            ScopeId::Organization => Target::Organization,
+            ScopeId::Organization(id) if id == self.scope.org_id() => Target::Organization,
+            ScopeId::Organization(_) => return Err(Denied::OrganizationNotFound.into()),
             ScopeId::Account(id) => Target::Account(
                 accounts::ancestors_path(db, self.scope, id)
                     .await?
@@ -453,10 +461,18 @@ mod tests {
     #[test]
     fn course_grants_grant_nothing() {
         let tree = Tree::new();
-        let g = grants(vec![builtin("org_admin", GrantScope::Course(new_id()))]);
+        let g = grants(vec![
+            builtin("org_admin", GrantScope::Course(new_id())),
+            assignment(
+                &["account.view", "course.retired"],
+                GrantScope::Course(new_id()),
+            ),
+        ]);
         assert!(!g.is_visible(&tree.root()));
         assert!(!g.holds_anywhere::<AccountView>());
         assert_eq!(g.scopes_with::<AccountView>(), []);
+        // Unknown keys are reported on course rows too.
+        assert_eq!(g.ignored_keys().collect::<Vec<_>>(), ["course.retired"]);
     }
 
     #[test]
@@ -495,7 +511,10 @@ mod tests {
             assignment(&["account.view"], GrantScope::Organization),
             assignment(&["account.view"], tree.at(tree.tower)),
         ]);
-        assert_eq!(org.scopes_with::<AccountView>(), [ScopeId::Organization]);
+        assert_eq!(
+            org.scopes_with::<AccountView>(),
+            [ScopeId::Organization(org.scope().org_id())]
+        );
     }
 
     #[test]

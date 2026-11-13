@@ -298,7 +298,7 @@ async fn require_at_resolves_then_checks(pool: PgPool) {
     }
     assert!(matches!(
         grants
-            .require_at::<OrgManage>(&pool, ScopeId::Organization)
+            .require_at::<OrgManage>(&pool, ScopeId::Organization(a.org))
             .await,
         Err(RequireError::Denied(Denied::Forbidden))
     ));
@@ -326,11 +326,21 @@ async fn an_org_admin_of_a_cannot_reach_org_b_accounts(pool: PgPool) {
     }
     assert_eq!(
         grants
-            .require_at::<OrgManage>(&pool, ScopeId::Organization)
+            .require_at::<OrgManage>(&pool, ScopeId::Organization(a.org))
             .await
             .unwrap(),
         Target::Organization
     );
+    // Naming org B (or an id that is no organization) as the organization target is refused
+    // before any permission is looked at.
+    for org in [b.org, new_id()] {
+        assert!(matches!(
+            grants
+                .require_at::<OrgManage>(&pool, ScopeId::Organization(org))
+                .await,
+            Err(RequireError::Denied(Denied::OrganizationNotFound))
+        ));
+    }
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]

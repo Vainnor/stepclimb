@@ -4,15 +4,17 @@
 //! target; `session::start` stands in for the sign-in specs. Needs `DATABASE_URL` (`just up`).
 //!
 //! The organization has Tower and Enroute under the root and Ground under Tower. The request
-//! organization resolver serves one organization per instance in M0 (spec 08 Q1), so another
-//! organization's ids are tested against the evaluator in `stepclimb-core/tests/grants.rs`.
+//! organization resolver serves one organization per instance in M0 (spec 08 Q1) and refuses
+//! every session while a second one exists, so the cross-organization test calls the targets
+//! from a test route with org A's grants loaded directly, and org B's ids in the path or body.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{
     Router,
     body::Body,
-    http::{HeaderMap, Method, Request, StatusCode, header},
+    extract::State,
+    http::{HeaderMap, Method, Request, StatusCode, header, request::Parts},
     routing::{get, post},
 };
 use http_body_util::BodyExt;
@@ -22,7 +24,7 @@ use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{
     OrgScope, Source, accounts,
     clock::ManualClock,
-    grants::ScopeId,
+    grants::{Grants, ScopeId},
     id::{Uuid, new_id},
     organizations,
     perm::{self, AccountManage, AccountView, OrgManage, RoleAssign, RoleView},
@@ -34,8 +36,9 @@ use stepclimb_server::{
     AppState,
     error::{ApiError, Problem},
     extract::ApiJson,
-    require::{AccountParentTarget, AccountTarget, AnyScope, Require},
+    require::{AccountParentTarget, AccountTarget, AnyScope, Require, Target},
     session,
+    web_origin::WebOrigin,
 };
 use tower::ServiceExt;
 
@@ -82,9 +85,8 @@ async fn assign_role(
     axum::extract::State(state): axum::extract::State<AppState>,
     ApiJson(body): ApiJson<AssignBody>,
 ) -> Result<&'static str, ApiError> {
-    let at = body
-        .account_id
-        .map_or(ScopeId::Organization, ScopeId::Account);
+    let org = ScopeId::Organization(require.principal().scope().org_id());
+    let at = body.account_id.map_or(org, ScopeId::Account);
     require
         .grants()
         .require_at::<RoleAssign>(&state.db, at)
@@ -119,9 +121,15 @@ enum At {
 }
 
 impl Fixture {
+    /// Org A, the only organization, so sessions resolve.
     async fn new(pool: PgPool) -> Self {
         roles::sync_builtin(&pool, now()).await.expect("sync roles");
-        let org = organizations::create(&pool, "org-a", "Org A", now())
+        Self::organization(pool, "org-a").await
+    }
+
+    /// A new organization `slug` with the tree.
+    async fn organization(pool: PgPool, slug: &str) -> Self {
+        let org = organizations::create(&pool, slug, slug, now())
             .await
             .expect("create organization")
             .id;
@@ -152,14 +160,19 @@ impl Fixture {
         }
     }
 
-    fn app(&self) -> Router {
-        let state = AppState {
+    fn state(&self) -> AppState {
+        AppState {
             db: self.pool.clone(),
             clock: ManualClock::new(now()).clock(),
             keys: KeyRing::parse("test:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
                 .expect("a valid test key"),
-        };
-        Router::new()
+            public_url: WebOrigin::parse("https://lms.example.org").expect("a valid origin"),
+            allowed_origins: Vec::new(),
+        }
+    }
+
+    fn app(&self) -> Router {
+        let routes = Router::new()
             .route("/org", get(org))
             .route(
                 "/accounts/{account_id}",
@@ -170,8 +183,12 @@ impl Fixture {
             .route("/twice/{account_id}", get(twice))
             .route("/roles", get(list_roles))
             .route("/assignments", post(assign_role))
-            .route("/no-param", get(no_param))
-            .with_state(state)
+            .route("/no-param", get(no_param));
+        self.routes(routes)
+    }
+
+    fn routes(&self, router: Router<AppState>) -> Router {
+        router.with_state(self.state())
     }
 
     /// A new user, signed in, with no assignments: their `Cookie` header value and id.
@@ -259,7 +276,18 @@ impl Fixture {
         cookie: Option<&str>,
         json: Option<String>,
     ) -> Answer {
-        let mut request = Request::builder().method(method).uri(uri);
+        self.send_to(self.app(), method, uri, cookie, json).await
+    }
+
+    async fn send_to(
+        &self,
+        app: Router,
+        method: Method,
+        uri: impl AsRef<str>,
+        cookie: Option<&str>,
+        json: Option<String>,
+    ) -> Answer {
+        let mut request = Request::builder().method(method).uri(uri.as_ref());
         if let Some(cookie) = cookie {
             request = request.header(header::COOKIE, cookie);
         }
@@ -270,8 +298,7 @@ impl Fixture {
             }
             None => Body::empty(),
         };
-        let response = self
-            .app()
+        let response = app
             .oneshot(request.body(body).expect("a valid request"))
             .await
             .expect("the router never fails");
@@ -517,7 +544,7 @@ async fn any_scope_needs_the_permission_somewhere(pool: PgPool) {
     let at_org = f.holder(&["role.view"], At::Org).await;
     f.call(Method::GET, "/roles", Some(&at_org))
         .await
-        .assert_ok("[Organization]");
+        .assert_ok(&format!("[Organization({})]", f.org));
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
@@ -577,4 +604,118 @@ async fn t7_a_role_change_applies_to_the_next_request(pool: PgPool) {
     f.call(Method::GET, &tower, Some(&cookie))
         .await
         .assert_refused(StatusCode::NOT_FOUND, "account.not_found");
+}
+
+/// What a target or `require_at` answered, as the handler of a protected route would.
+fn answer<T>(result: Result<T, ApiError>) -> Result<&'static str, ApiError> {
+    result.map(|_| "passed")
+}
+
+#[derive(Deserialize)]
+struct AtBody {
+    organization_id: Option<Uuid>,
+    account_id: Option<Uuid>,
+}
+
+async fn probe_account(
+    state: AppState,
+    mut parts: Parts,
+    grants: Grants,
+) -> Result<&'static str, ApiError> {
+    answer(AccountTarget::resolve::<AccountView>(&mut parts, &state, &grants).await)
+}
+
+async fn probe_parent(
+    state: AppState,
+    mut parts: Parts,
+    grants: Grants,
+) -> Result<&'static str, ApiError> {
+    answer(AccountParentTarget::resolve::<AccountManage>(&mut parts, &state, &grants).await)
+}
+
+async fn probe_at(state: AppState, body: AtBody, grants: Grants) -> Result<&'static str, ApiError> {
+    let at = match (body.organization_id, body.account_id) {
+        (Some(org), _) => ScopeId::Organization(org),
+        (None, Some(account)) => ScopeId::Account(account),
+        (None, None) => panic!("the test names a target"),
+    };
+    answer(
+        grants
+            .require_at::<RoleAssign>(&state.db, at)
+            .await
+            .map_err(ApiError::from),
+    )
+}
+
+/// Routes that run each target, and `require_at`, with fixed `grants` in place of the session
+/// and evaluation steps of `Require`.
+fn probe_routes(grants: Grants) -> Router<AppState> {
+    let (account, parent, at) = (grants.clone(), grants.clone(), grants);
+    Router::new()
+        .route(
+            "/probe/account/{account_id}",
+            get(move |State(state): State<AppState>, parts: Parts| {
+                probe_account(state, parts, account)
+            }),
+        )
+        .route(
+            "/probe/parent/{account_id}",
+            get(move |State(state): State<AppState>, parts: Parts| {
+                probe_parent(state, parts, parent)
+            }),
+        )
+        .route(
+            "/probe/at",
+            post(
+                move |State(state): State<AppState>, ApiJson(body): ApiJson<AtBody>| {
+                    probe_at(state, body, at)
+                },
+            ),
+        )
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn another_organizations_ids_are_not_found_for_its_admin(pool: PgPool) {
+    let a = Fixture::new(pool.clone()).await;
+    let (_, admin) = a.user().await;
+    a.assign(admin, a.builtin("org_admin").await, At::Org).await;
+    let b = Fixture::organization(pool.clone(), "org-b").await;
+    let grants = Grants::load(&pool, scope(a.org), admin)
+        .await
+        .expect("load grants");
+    let app = a.routes(probe_routes(grants));
+    let get = |uri: String| a.send_to(app.clone(), Method::GET, uri, None, None);
+    let at = |body: serde_json::Value| {
+        let uri = "/probe/at".to_owned();
+        a.send_to(app.clone(), Method::POST, uri, None, Some(body.to_string()))
+    };
+
+    // Org A's own accounts pass, so the probe reaches the check.
+    get(format!("/probe/account/{}", a.tower))
+        .await
+        .assert_ok("passed");
+    get(format!("/probe/parent/{}", a.ground))
+        .await
+        .assert_ok("passed");
+    for id in [b.root, b.tower, b.ground] {
+        get(format!("/probe/account/{id}"))
+            .await
+            .assert_refused(StatusCode::NOT_FOUND, "account.not_found");
+        get(format!("/probe/parent/{id}"))
+            .await
+            .assert_refused(StatusCode::NOT_FOUND, "account.not_found");
+    }
+
+    at(serde_json::json!({ "account_id": a.tower }))
+        .await
+        .assert_ok("passed");
+    at(serde_json::json!({ "organization_id": a.org }))
+        .await
+        .assert_ok("passed");
+    at(serde_json::json!({ "account_id": b.tower }))
+        .await
+        .assert_refused(StatusCode::NOT_FOUND, "account.not_found");
+    at(serde_json::json!({ "organization_id": b.org }))
+        .await
+        .assert_refused(StatusCode::NOT_FOUND, "org.not_found");
 }
