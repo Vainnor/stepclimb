@@ -105,6 +105,35 @@
       "$description": "Chips and avatars only"
     }
   },
+  "shadow": {
+    "$type": "shadow",
+    "float": {
+      "$value": {
+        "color": {
+          "colorSpace": "oklch",
+          "components": [0, 0, 0],
+          "alpha": 0.14
+        },
+        "offsetX": {
+          "value": 0,
+          "unit": "px"
+        },
+        "offsetY": {
+          "value": 4,
+          "unit": "px"
+        },
+        "blur": {
+          "value": 16,
+          "unit": "px"
+        },
+        "spread": {
+          "value": 0,
+          "unit": "px"
+        }
+      },
+      "$description": "Floating layers only (menus, popovers, toasts); panels use a 1px line and no shadow"
+    }
+  },
   "text": {
     "$type": "dimension",
     "xs": {
@@ -169,6 +198,20 @@
         "unit": "rem"
       },
       "$description": "38px"
+    },
+    "read": {
+      "$value": {
+        "value": 1.125,
+        "unit": "rem"
+      },
+      "$description": "Reading text: 18px"
+    }
+  },
+  "leading": {
+    "$type": "number",
+    "read": {
+      "$value": 1.7,
+      "$description": "Reading text line height"
     }
   },
   "weight": {

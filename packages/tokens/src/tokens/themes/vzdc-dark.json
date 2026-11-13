@@ -1,5 +1,5 @@
 {
-  "$description": "Theme vzdc-dark: every color token, and the UI font. Values from the plan's UI tab.",
+  "$description": "Theme vzdc-dark: every color token, and the UI font. Values from the plan's UI tab; bg-overlay, fg-disabled and info* from spec 12 (Q2, Q4).",
   "color": {
     "bg-canvas": {
       "$type": "color",
@@ -21,6 +21,15 @@
         "colorSpace": "oklch",
         "components": [0.145, 0.007, 20]
       }
+    },
+    "bg-overlay": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.1, 0.007, 20],
+        "alpha": 0.6
+      },
+      "$description": "Modal scrim"
     },
     "fg-strong": {
       "$type": "color",
@@ -49,6 +58,14 @@
         "colorSpace": "oklch",
         "components": [0.64, 0.01, 20]
       }
+    },
+    "fg-disabled": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.45, 0.01, 20]
+      },
+      "$description": "Disabled controls; exempt from contrast minimums (WCAG 1.4.3)"
     },
     "line-strong": {
       "$type": "color",
@@ -167,6 +184,27 @@
       "$value": {
         "colorSpace": "oklch",
         "components": [0.82, 0.11, 25]
+      }
+    },
+    "info": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.74, 0.11, 250]
+      }
+    },
+    "info-soft": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.28, 0.05, 250]
+      }
+    },
+    "info-fg": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.84, 0.08, 250]
       }
     },
     "ring": {
