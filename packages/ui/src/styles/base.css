@@ -1,14 +1,23 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* Browser surfaces themed from the tokens (plan, UI tab -> Pitfalls: browser defaults left in).
-   Scrollbars, prose, safe areas and reduced motion are specified in docs/specs/m0/13-base-ui-components.md. */
+/* Browser surfaces themed from the tokens (plan, UI tab -> Pitfalls: browser defaults left in, web-view
+   tells in the apps; docs/specs/m0/13-base-ui-components.md B9, B13 to B17). */
 @layer base {
   html {
     color-scheme: light;
     font-family: var(--sc-font-ui);
     background: var(--sc-bg-canvas);
     color: var(--sc-fg-default);
-    caret-color: var(--sc-brand);
     font-variant-numeric: tabular-nums;
+    /* No rubber-band bounce of the document under fixed chrome (B15). */
+    overscroll-behavior: none;
+    /* No grey flash on tap in iOS Safari and the web view. */
+    -webkit-tap-highlight-color: transparent;
+    /* Phones keep the authored text size in landscape. */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+  body {
+    overscroll-behavior: none;
   }
   [data-sc-theme="dark"] {
     color-scheme: dark;
@@ -23,8 +32,110 @@
   [data-sc-theme="high-contrast"] {
     color-scheme: light;
   }
+
+  /* Caret and scrollbars read the tokens where each theme is set: an inherited color would keep
+     the outer theme's value inside a nested ThemeProvider. */
+  html,
+  [data-sc-theme] {
+    caret-color: var(--sc-brand);
+    scrollbar-color: var(--sc-line-strong) transparent;
+  }
   ::selection {
     background: var(--sc-brand-soft);
     color: var(--sc-fg-strong);
+  }
+
+  /* The focus ring: `ring`, 2 px, outside a 2 px `bg-canvas` gap, on keyboard focus only (B14).
+     Components draw their own from React Aria's `data-focus-visible`; this covers every other
+     focusable element. The transparent outline is what forced-colors mode paints (B17). */
+  :focus-visible {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    box-shadow:
+      0 0 0 2px var(--sc-bg-canvas),
+      0 0 0 4px var(--sc-ring);
+  }
+  :focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  /* Controls are not text-selectable (B15). */
+  button,
+  [role="button"],
+  [role="checkbox"],
+  [role="menuitem"],
+  [role="option"],
+  [role="radio"],
+  [role="switch"],
+  [role="tab"],
+  label,
+  summary {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+}
+
+/* Touch (B9): targets at least `--sc-control-touch` (44 px) and text inputs at 16 px, so iOS
+   does not zoom on focus. This and the next two blocks are unlayered: an unlayered declaration
+   outranks every layered one, so no component utility undoes them. */
+@media (pointer: coarse) {
+  button,
+  [role="button"],
+  [role="checkbox"],
+  [role="menuitem"],
+  [role="option"],
+  [role="radio"],
+  [role="switch"],
+  [role="tab"],
+  input:not([type="hidden"]),
+  select,
+  textarea {
+    min-block-size: var(--sc-control-touch);
+    min-inline-size: var(--sc-control-touch);
+  }
+  input,
+  select,
+  textarea,
+  [contenteditable="true"] {
+    font-size: max(16px, 1rem);
+  }
+}
+
+/* Reduced motion (B11, B16): every transition and animation is instant. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0s;
+    transition-delay: 0s;
+    animation-duration: 0s;
+    animation-delay: 0s;
+    animation-iteration-count: 1;
+    scroll-behavior: auto;
+  }
+}
+
+/* Forced colors (B17): the browser replaces the palette with system colors and drops box shadows,
+   which draw every focus ring here; the outline replaces a component's `outline-none`. */
+@media (forced-colors: active) {
+  :focus-visible,
+  [data-focus-visible] {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+  button,
+  [role="button"],
+  input:not([type="hidden"]),
+  select,
+  textarea {
+    border: 1px solid ButtonBorder;
+  }
+  [aria-checked="true"],
+  [aria-current]:not([aria-current="false"]),
+  [aria-pressed="true"],
+  [aria-selected="true"],
+  [data-selected] {
+    outline: 2px solid Highlight;
   }
 }

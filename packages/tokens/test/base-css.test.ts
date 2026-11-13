@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // packages/ui's base.css picks `color-scheme` (form controls, scrollbars) with the same theme
 // selectors as variables.css. It is checked here because the cascade model lives here: the
-// color scheme must follow the theme the tokens resolve to.
+// color scheme must follow the theme the tokens resolve to. Only base.css's rules that declare
+// `color-scheme` enter the model; its other rules (focus, touch, motion, forced colors) use
+// selectors and media queries the model does not cover, and apps/ui-docs/visual checks them in
+// a browser.
 import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
 import { buildTokens } from "./support/build";
@@ -19,7 +22,11 @@ const root = (theme?: string): Element => ({
 const inner = (theme: string): Element => ({ attrs: { "data-sc-theme": theme } });
 
 beforeAll(async () => {
-  rules = parseRules(`${(await buildTokens()).variables}\n${baseCss}`);
+  const schemes = parseRules(baseCss).filter((rule) => rule.decls.has("color-scheme"));
+  rules = [...parseRules((await buildTokens()).variables), ...schemes].map((rule, order) => ({
+    ...rule,
+    order,
+  }));
 });
 
 describe("base.css color-scheme", () => {
