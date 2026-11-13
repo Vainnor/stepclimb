@@ -1,0 +1,15 @@
+{/* SPDX-License-Identifier: AGPL-3.0-or-later */}
+import { Meta } from "@storybook/addon-docs/blocks";
+import { TokensTables } from "./tokens-tables";
+
+<Meta title="Foundations/Tokens" />
+
+# Tokens
+
+Stepclimb UI styles everything through these semantic tokens; Tailwind's own palette is removed.
+Each row gives the CSS variable, the usual Tailwind utility and the value in the default brand's
+light, dark and high-contrast themes, with the compact density's value where it differs. The
+tables come from `packages/tokens` (`build/docs/tokens.json`), built from the same token JSON as
+the CSS. An organization's brand changes the color values, not the names.
+
+<TokensTables />

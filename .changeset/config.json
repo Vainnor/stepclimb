@@ -1,0 +1,16 @@
+{
+  "changelog": "@changesets/cli/changelog",
+  "commit": false,
+  "format": false,
+  "baseBranch": "next",
+  "access": "restricted",
+  "updateInternalDependencies": "patch",
+  "privatePackages": { "version": true, "tag": false },
+  "ignore": [
+    "web",
+    "@stepclimb/app",
+    "@stepclimb/ui-docs",
+    "@stepclimb/api-client",
+    "@stepclimb/assess-wasm"
+  ]
+}

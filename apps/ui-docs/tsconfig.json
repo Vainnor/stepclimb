@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "types": ["vite/client"] },
-  "include": [".storybook/*.ts", ".storybook/*.tsx"]
+  "compilerOptions": { "types": ["vite/client", "vitest/importMeta"] },
+  "include": [".storybook/*.ts", ".storybook/*.tsx", "src", "vitest.config.ts"]
 }

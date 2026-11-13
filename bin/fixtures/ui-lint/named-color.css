@@ -1,0 +1,6 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+.card {
+  border-color: white;
+  color: var(--sc-fg-default);
+  color-scheme: dark;
+}

@@ -160,7 +160,8 @@ just sqlx-check    # fail if .sqlx/ is stale
 just openapi       # regenerate openapi/stepclimb.json and the TypeScript client
 just openapi-diff  # fail if either is stale
 just web-build     # tokens, then web/dist
-just web-lint / web-fmt  # Biome
+just web-lint / web-fmt  # Biome, its UI rules and bin/check-ui-lint.mjs (raw colors, emoji)
+just changeset-check  # a changeset for any change to packages/ui or packages/tokens (in web-lint)
 just typecheck     # tsc in every package
 just test-web      # Vitest in every package
 just e2e           # Playwright smoke test against the Compose stack (builds the image)

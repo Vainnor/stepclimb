@@ -1,12 +1,14 @@
 {
   "name": "@stepclimb/ui",
   "private": true,
+  "version": "0.0.0",
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
     "./styles.css": "./src/styles/index.css",
-    "./strings-check": "./src/strings/check.ts"
+    "./strings-check": "./src/strings/check.ts",
+    "./storybook": "./src/storybook/theme-matrix.tsx"
   },
   "scripts": {
     "test": "vitest run",

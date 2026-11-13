@@ -13,15 +13,48 @@
       "!openapi",
       "!packages/api-client/src/schema.ts",
       "!apps/app/src-tauri/gen",
+      "!bin/fixtures",
       "!**/*.md"
     ]
   },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
   "javascript": { "formatter": { "quoteStyle": "double", "semicolons": "always" } },
   "css": { "parser": { "tailwindDirectives": true } },
+  "plugins": [
+    "./packages/ui/lint/classname-styling.grit",
+    "./packages/ui/lint/named-ui-imports.grit"
+  ],
   "linter": {
     "enabled": true,
-    "rules": { "preset": "recommended" }
+    "rules": {
+      "preset": "recommended",
+      "style": {
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "patterns": [
+              {
+                "group": [
+                  "lucide-react",
+                  "lucide-react/**",
+                  "react-feather",
+                  "feather-icons",
+                  "phosphor-react",
+                  "@fortawesome/**",
+                  "*icon*",
+                  "*icon*/**",
+                  "@*/*icon*",
+                  "@*/*icon*/**",
+                  "!@phosphor-icons/react",
+                  "!@phosphor-icons/react/**"
+                ],
+                "message": "Icons are Phosphor only: import them from @phosphor-icons/react and draw them through Icon."
+              }
+            ]
+          }
+        }
+      }
+    }
   },
   "assist": { "enabled": true, "actions": { "source": { "organizeImports": "on" } } }
 }

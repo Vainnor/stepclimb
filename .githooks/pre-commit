@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Refuses a commit that adds a secret, unformatted Rust, or TypeScript, JSON or CSS that Biome
-# rejects. Installed by `just install-hooks`.
+# Refuses a commit that adds a secret, unformatted Rust, TypeScript, JSON or CSS that Biome
+# rejects, or TypeScript or CSS that the UI pattern lint (bin/check-ui-lint.mjs) rejects.
+# Installed by `just install-hooks`.
 # A false positive: add `gitleaks:allow` on the line, or the finding's fingerprint to
 # .gitleaksignore, and say why in the commit body. Never bypass a real finding with --no-verify.
 set -euo pipefail
@@ -14,4 +15,9 @@ web="$(grep -E '\.(ts|tsx|js|mjs|cjs|json|jsonc|css)$' <<<"$staged" || true)"
 if [[ -n "$web" ]]; then
     # shellcheck disable=SC2086 # one path per line, none with spaces in this repo
     pnpm exec biome check --no-errors-on-unmatched --error-on-warnings $web
+fi
+ui="$(grep -E '\.(ts|tsx|css)$' <<<"$staged" || true)"
+if [[ -n "$ui" ]]; then
+    # shellcheck disable=SC2086 # as above
+    node bin/check-ui-lint.mjs $ui
 fi

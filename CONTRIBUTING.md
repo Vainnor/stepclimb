@@ -20,6 +20,8 @@ through pull requests, and every one is reviewed by hand, so small, focused chan
 2. `just install-hooks`, then `just ci` to record the baseline.
 3. Write the change with its tests. Every route needs its four-case permission test and its
    cross-organization test; see [`.claude/rules/testing.md`](.claude/rules/testing.md).
+   A change to `packages/ui` or `packages/tokens` adds a changeset
+   ([`.changeset/README.md`](.changeset/README.md)).
 4. `just ci` must pass on your final commit.
 5. Commit with [Conventional Commits](https://www.conventionalcommits.org/) and a scope:
    `feat(auth): add passkey registration`. Lockfile-only changes go in their own commit. `Closes #N`

@@ -1,0 +1,9 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+:root {
+  --my-color: #ff0000;
+  --accent: white;
+  --gap: var(--sc-space-2);
+}
+@theme {
+  --color-blue-500: oklch(0.6 0.2 250);
+}

@@ -1,0 +1,9 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Stepclimb UI is imported by name (`import { Button } from "@stepclimb/ui"`), never as a
+// namespace: classname-styling.grit recognizes a component by its named import, and `<UI.Button>`
+// would slip past it.
+language js
+
+`import * as $namespace from "@stepclimb/ui"` as $import where {
+  register_diagnostic(span=$import, message="Import Stepclimb UI components by name, as in import { Button } from \"@stepclimb/ui\": the className check reads named imports only.", severity="error")
+}
