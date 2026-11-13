@@ -1,0 +1,11 @@
+{
+  "$description": "Learning states (plan, UI tab -> Tokens). Each is an alias, so a state is retuned here once and resolves in every theme.",
+  "color": {
+    "state-locked": { "$type": "color", "$value": "{color.fg-soft}" },
+    "state-available": { "$type": "color", "$value": "{color.fg-sub}" },
+    "state-progress": { "$type": "color", "$value": "{color.brand}" },
+    "state-complete": { "$type": "color", "$value": "{color.success}" },
+    "state-overdue": { "$type": "color", "$value": "{color.danger}" },
+    "state-review": { "$type": "color", "$value": "{color.warning}" }
+  }
+}

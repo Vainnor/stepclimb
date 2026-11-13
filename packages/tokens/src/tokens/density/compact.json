@@ -1,0 +1,14 @@
+{
+  "$description": "Compact density (plan, UI tab -> Tokens: control height compact 32 / 26). Touch targets stay 44px.",
+  "control": {
+    "$type": "dimension",
+    "h": {
+      "$value": { "value": 2, "unit": "rem" },
+      "$description": "Compact density: 32px"
+    },
+    "h-sm": {
+      "$value": { "value": 1.625, "unit": "rem" },
+      "$description": "Compact density: 26px"
+    }
+  }
+}

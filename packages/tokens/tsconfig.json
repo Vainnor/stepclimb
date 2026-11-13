@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "types": ["node"] },
-  "include": ["terrazzo.config.ts", "test"]
+  "include": ["terrazzo.config.ts", "src", "test"]
 }

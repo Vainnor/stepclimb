@@ -1,9 +1,9 @@
 {
   "name": "Stepclimb UI",
   "version": "2025.10",
-  "description": "The shared scales, then one theme per brand and appearance. The default brand is Stepclimb's; vzdc is the plan's example organization brand.",
+  "description": "The shared scales and the learning-state aliases, then one theme per brand and appearance, then the density. The default brand is Stepclimb's; vzdc is the plan's example organization brand.",
   "sets": {
-    "base": { "sources": [{ "$ref": "base.json" }] }
+    "base": { "sources": [{ "$ref": "base.json" }, { "$ref": "learning.json" }] }
   },
   "modifiers": {
     "theme": {
@@ -11,10 +11,23 @@
       "contexts": {
         "default-light": [{ "$ref": "themes/default-light.json" }],
         "default-dark": [{ "$ref": "themes/default-dark.json" }],
+        "default-high-contrast": [{ "$ref": "themes/default-high-contrast.json" }],
         "vzdc-light": [{ "$ref": "themes/vzdc-light.json" }],
-        "vzdc-dark": [{ "$ref": "themes/vzdc-dark.json" }]
+        "vzdc-dark": [{ "$ref": "themes/vzdc-dark.json" }],
+        "vzdc-high-contrast": [{ "$ref": "themes/vzdc-high-contrast.json" }]
+      }
+    },
+    "density": {
+      "default": "comfortable",
+      "contexts": {
+        "comfortable": [],
+        "compact": [{ "$ref": "density/compact.json" }]
       }
     }
   },
-  "resolutionOrder": [{ "$ref": "#/sets/base" }, { "$ref": "#/modifiers/theme" }]
+  "resolutionOrder": [
+    { "$ref": "#/sets/base" },
+    { "$ref": "#/modifiers/theme" },
+    { "$ref": "#/modifiers/density" }
+  ]
 }

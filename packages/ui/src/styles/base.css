@@ -14,7 +14,7 @@
     color-scheme: dark;
   }
   @media (prefers-color-scheme: dark) {
-    :root:not([data-sc-theme="light"]) {
+    :root:not([data-sc-theme="light"]):not([data-sc-theme="high-contrast"]) {
       color-scheme: dark;
     }
   }
