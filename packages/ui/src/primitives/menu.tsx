@@ -20,6 +20,7 @@ import {
   PopoverContext,
   type PopoverProps,
 } from "react-aria-components";
+import { WIDE_QUERY } from "../lib/breakpoints";
 import { tv } from "../lib/tv";
 import { useMediaQuery } from "../lib/use-media-query";
 import { Icon } from "../theme/icon";
@@ -27,14 +28,17 @@ import { useAppearanceAttributes } from "../theme/theme-provider";
 import { Popover } from "./popover";
 
 /** Where the menu stops being a bottom sheet: BottomTabs' breakpoint (spec 11 B3). */
-export const MENU_POPOVER_QUERY = "(min-width: 768px)";
+export const MENU_POPOVER_QUERY = WIDE_QUERY;
 
 export const menu = tv({
   slots: {
     list: "max-h-[inherit] min-w-48 overflow-auto p-1 outline-none",
-    overlay: "fixed inset-0 z-50 flex items-end bg-overlay",
+    // Top-anchored and as tall as the visual viewport, which React Aria's ModalOverlay sets as
+    // --visual-viewport-height: iOS does not shrink the layout viewport for the on-screen
+    // keyboard, so a panel sized to it would sit under the keyboard.
+    overlay: "fixed inset-x-0 top-0 z-50 flex h-(--visual-viewport-height) items-end bg-overlay",
     sheet: [
-      "max-h-[85dvh] w-full overflow-auto rounded-t-md border-t border-line bg-raised font-ui",
+      "max-h-[calc(var(--visual-viewport-height)*0.85)] w-full overflow-auto rounded-t-md border-t border-line bg-raised font-ui",
       "pb-[env(safe-area-inset-bottom)] text-fg-default shadow-float outline-none",
     ],
     item: [

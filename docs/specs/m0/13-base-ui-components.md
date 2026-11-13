@@ -117,26 +117,26 @@ names the React Aria Components export each is built on.
 | | TextField, TextArea | `TextField`, `Input`, `TextArea` | Error text says what is wrong and how to fix it |
 | | NumberField | `NumberField` | Tabular numerals; locale formatting from React Aria |
 | | SearchField | `SearchField` | Clear button with a label from strings |
-| | Select | `Select`, `SelectValue`, `ListBox`, `Popover` | |
-| | ComboBox | `ComboBox`, `ListBox`, `Popover` | Async loading state |
-| | Checkbox, CheckboxGroup | `Checkbox`, `CheckboxGroup` | Indeterminate state |
-| | RadioGroup | `RadioGroup`, `Radio` | |
-| | Switch | `Switch` | |
+| | Select | `Select`, `SelectValue`, `ListBox`, `Popover` | Opens as a bottom sheet under 768 px (Q10); the sheet's scrim is dimmed, not blurred, like the Menu's (coordinator decision on PR #139, 13 Nov 2026) |
+| | ComboBox | `ComboBox`, `ListBox`, `Popover` | Async loading state. Under 768 px (Q10) the field is a button, named by the label and the text it shows, that opens a bottom sheet holding the input and the options. The button carries the field's description, error and invalid state; while the sheet is closed the input stays in the page, visually hidden, so the form submits its `name` and the browser checks `isRequired`, and focus that lands on it (a press on the label, an invalid submit) moves to the button. `aria-required` is not allowed on a button, so the required state shows only through that check and the error (coordinator decisions on PR #139, 13 Nov 2026) |
+| | Checkbox, CheckboxGroup | `CheckboxField` and `CheckboxButton` (1.22.1 deprecates `Checkbox`), `CheckboxGroup` | Indeterminate state |
+| | RadioGroup | `RadioGroup`, `RadioField` and `RadioButton` (1.22.1 deprecates `Radio`) | |
+| | Switch | `SwitchField` and `SwitchButton` (1.22.1 deprecates `Switch`) | |
 | Overlays | Dialog | `DialogTrigger`, `ModalOverlay`, `Modal`, `Dialog` | For confirmations and short inputs only, never for work (`docs/plan/ui.md` -> Pitfalls: modals for work); scrim is `bg-overlay`, the one place blur is allowed |
-| | AlertDialog | `Dialog` with `role="alertdialog"` | Names the action on its confirm button; destructive confirms use the danger intent |
-| | Sheet (side and bottom) | `Sheet` (stable in 1.22.1) or `ModalOverlay` and `Modal` | Side sheet for editing on wide screens, bottom sheet on phones; respects safe areas |
+| | AlertDialog | `Dialog` with `role="alertdialog"` | Names the action on its confirm button; destructive confirms use the danger intent. No close button and no dismissal from the scrim; focus starts on Cancel (coordinator decision on PR #139, 13 Nov 2026) |
+| | Sheet (side and bottom) | `Sheet` (stable in 1.22.1) or `ModalOverlay` and `Modal` | Side sheet for editing on wide screens, bottom sheet on phones; respects safe areas. Built on `ModalOverlay` and `Modal`, like Dialog and the Menu's sheet: React Aria's `Sheet` adds swipe gestures and snap points no M0 screen asks for. Every modal overlay (Dialog, Sheet, the Menu, Select and ComboBox sheets) is top-anchored and as tall as `--visual-viewport-height`, which ModalOverlay sets, since iOS does not shrink the layout viewport for the keyboard (coordinator decisions on PR #139, 13 Nov 2026) |
 | | Popover | `Popover` | One soft shadow (floating layer) |
 | | Tooltip | `TooltipTrigger`, `Tooltip` | Never the only place information lives |
 | | Toast | `UNSTABLE_ToastRegion`, `UNSTABLE_ToastQueue` (Q7) | Queue API for the app; error toasts stay until dismissed |
 | | CommandPalette | `Autocomplete`, `Menu`, `ModalOverlay` | The component and its keyboard model; the app wires its commands from M1 |
 | Navigation | AppShell | none (landmarks) | `header`, `nav` and `main` landmarks, skip link, the SideNav and BottomTabs breakpoints of 11-app-shell B3 |
-| | SideNav | `Link` in a `nav` | `aria-current="page"` on the active entry; the organization's logo slot; the collapsed variant if 11 Q1 asks for it |
+| | SideNav | `Link` in a `nav` | `aria-current="page"` on the active entry; the organization's logo slot; the collapsed variant (11 Q1): icons only from 768 to 1023 px, labels kept as link names and shown as tooltips |
 | | BottomTabs | `Link` in a `nav` | Navigation links, not ARIA tabs; fixed inside the bottom safe area; no rubber-band bounce |
 | | TopBar | none (`header`) | Title and an inline-end slot for actions and the user menu; sticky on mobile, where blur is allowed |
 | | Breadcrumbs | `Breadcrumbs`, `Breadcrumb` | |
 | | Tabs | `Tabs`, `TabList`, `Tab`, `TabPanel` | |
 | | Pagination | `Button` in a `nav` | Cursor-based Previous and Next (Q9) |
-| | OrgSwitcher | `Select` or `MenuTrigger` | Rendered by the app only in multi-organization mode (11-app-shell B19) |
+| | OrgSwitcher | `Select` or `MenuTrigger` | Rendered by the app only in multi-organization mode (11-app-shell B19). A `MenuTrigger` whose menu checks the current organization; choosing another calls back with its id and the app goes to its origin (11 Q3) (coordinator decision on PR #139, 13 Nov 2026) |
 | Data (M0 part, Q1) | DataTable | `Table`, `TableHeader`, `Column`, `TableBody`, `Row`, `Cell` | Sorting, selection, a loading row, an empty state, cursor pagination; compact density for dense views |
 | | DataList | `GridList` | |
 | | Avatar | none | Image with an initials fallback from the display name; pill radius |
