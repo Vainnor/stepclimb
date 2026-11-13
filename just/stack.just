@@ -25,7 +25,7 @@ e2e:
     SC_E2E_URL="http://$("${gate[@]}" port stepclimb 8080)" pnpm --filter web e2e
 
 # Boot the production Compose example with generated secrets and check it, then remove it; inside
-# a gate run its project, port and image are the run's own
+# a gate run its project, subnet and image are the run's own
 compose-check:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -34,6 +34,12 @@ compose-check:
     fi
     bash bin/check-production-compose.sh
 
-# Boot the production example with Caddy (internal CA) and check TLS, forwarded headers, nightly dumps and a restore, then remove it
+# Boot the production example with Caddy (internal CA) and check TLS, forwarded headers, nightly
+# dumps and a restore, then remove it; inside a gate run its projects and subnet are the run's own
 compose-ops-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -z "${SC_CI_PROJECT:-}" ]]; then
+      exec python3 -X utf8 -B bin/ci_gate.py run -- "{{ just_executable() }}" compose-ops-check
+    fi
     bash bin/check-compose-ops.sh

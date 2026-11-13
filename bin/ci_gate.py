@@ -16,14 +16,16 @@ project, runs CMD with its database in DATABASE_URL, and removes the project wha
 
 The project, `stepclimb-ci-<id>` with `<id>` from the worktree path, is the development Compose
 file plus deploy/compose/ci.yaml: PostgreSQL on tmpfs and the server for `just e2e`, each on a port
-Docker picks. Every database the run touches (migrations, `#[sqlx::test]` databases, whose names
+of the run's slot (slot_env). Every database the run touches (migrations, `#[sqlx::test]` databases, whose names
 depend only on the test's path, the e2e server) lives in it, so runs from checkouts with different
-migrations never meet. The run also names the production check's project
-(`stepclimb-prodcheck-<id>`), and sets SC_IMAGE, the server image tag both Compose files use, to
-`stepclimb:ci-<id>`; it removes both projects and the image at the end. Before it starts, it
-removes what a killed run of this worktree left, and every `stepclimb-ci-*` or
-`stepclimb-prodcheck-*` project whose worktree no longer exists (Compose labels each container
-with the directory of its file, `<worktree>/deploy/compose`).
+migrations never meet. The run also names the production and ops checks' projects
+(`stepclimb-prodcheck-<id>`, `stepclimb-opscheck-<id>` and its `-restore`), gives them its slot's
+ports and proxy subnets (slot_env), and sets SC_IMAGE, the server image
+tag the Compose files use, to `stepclimb:ci-<id>`; it removes every project and the image at the
+end. Before it starts, it removes what a killed run of this worktree left, every such project
+whose worktree no longer exists (Compose labels each container with the directory of its file,
+`<worktree>/deploy/compose`), and any project holding its slot's subnets, which only a killed run
+that had the same slot can.
 
 SIGTERM, SIGHUP and SIGINT while waiting for a lock end the run at once. Later they are passed to
 CMD (SIGINT reaches it from the terminal already), CMD is not started if it has not been, and the
@@ -50,9 +52,22 @@ from pathlib import Path
 LEGACY_LOCK = "stepclimb-ci.lock"
 DEV_UP_LOCK = "stepclimb-dev-up.lock"
 DEFAULT_SLOTS = 3
+# Each slot owns a /24 per proxy network, 10.201.(100 + slot) for the production check and
+# 10.201.(150 + slot) for the ops check (clear of the checks' own defaults, .73 to .75), and ten
+# ports from 20000 + 10 * slot. The ports sit below Linux's ephemeral range (32768 and up): there
+# a host socket, such as an outgoing connection's source port, can hold the number, and rootless
+# Docker, which picks a free port in its own network namespace, cannot see it.
+MAX_SLOTS = 49
+SLOT_PORTS = (
+    "SC_CI_PG_PORT",
+    "SC_CI_PORT",
+    "SC_PROD_CHECK_PORT",
+    "SC_OPS_CHECK_PORT",
+    "SC_OPS_CHECK_HTTP_PORT",
+    "SC_OPS_CHECK_HTTPS_PORT",
+)
 POLL_SECONDS = 2.0
 COMPOSE_FILES = ("deploy/compose/compose.yaml", "deploy/compose/ci.yaml")
-PRODUCTION_FILE = "deploy/compose/compose.production.yaml"
 DB_USER_PASSWORD = "stepclimb:stepclimb-local"  # deploy/compose/compose.yaml
 
 
@@ -80,9 +95,19 @@ def slot_count(env: Mapping[str, str]) -> int:
         count = int(raw)
     except ValueError:
         count = 0
-    if count < 1:
-        raise GateError(f"SC_CI_SLOTS must be a whole number of at least 1, not {raw!r}")
+    if not 1 <= count <= MAX_SLOTS:
+        raise GateError(f"SC_CI_SLOTS must be a whole number from 1 to {MAX_SLOTS}, not {raw!r}")
     return count
+
+
+def slot_env(slot: int) -> dict[str, str]:
+    """The published ports and proxy subnets of one slot, so no two runs share one."""
+    ports = {name: str(20000 + 10 * slot + i) for i, name in enumerate(SLOT_PORTS)}
+    return {
+        **ports,
+        "SC_PROD_CHECK_NETWORK": f"10.201.{100 + slot}",
+        "SC_OPS_CHECK_NETWORK": f"10.201.{150 + slot}",
+    }
 
 
 def run_id(toplevel: Path) -> str:
@@ -215,21 +240,29 @@ def remove_image(image: str, env: Mapping[str, str]) -> None:
                 raise
 
 
-def remove_stack(toplevel: Path, env: Mapping[str, str]) -> None:
-    project = env["SC_CI_PROJECT"]
-    down = ["down", "--volumes", "--remove-orphans", "--timeout", "5"]
-    checked(compose_command(toplevel, project, "--profile", "stack", *down), env, f"removing {project}")
-    production = env["SC_PROD_CHECK_PROJECT"]
-    checked(
-        ["docker", "compose", "-p", production, "-f", str(toplevel / PRODUCTION_FILE)]
-        + ["--profile", "minio", *down],
-        env,
-        f"removing {production}",
-    )
+DOWN = ("down", "--volumes", "--remove-orphans", "--timeout", "5")
+
+
+def remove_project(project: str, env: Mapping[str, str]) -> None:
+    """Remove a Compose project's containers, networks and volumes, by name alone."""
+    checked(["docker", "compose", "-p", project, *DOWN], env, f"removing {project}")
+
+
+def run_projects(env: Mapping[str, str]) -> list[str]:
+    ops = env["SC_OPS_CHECK_PROJECT"]
+    return [env["SC_CI_PROJECT"], env["SC_PROD_CHECK_PROJECT"], ops, f"{ops}-restore"]
+
+
+def remove_stack(env: Mapping[str, str]) -> None:
+    """Remove every project, container and image a run of this worktree creates."""
+    for project in run_projects(env):
+        remove_project(project, env)
+    echo = f"{env['SC_OPS_CHECK_PROJECT']}-echo"  # bin/check-compose-ops.sh runs it outside Compose
+    checked(["docker", "rm", "--force", echo], env, f"removing {echo}")
     remove_image(env["SC_IMAGE"], env)
 
 
-OWN_PROJECT = re.compile(r"^stepclimb-(ci|prodcheck)-([0-9a-f]{8})$")
+OWN_PROJECT = re.compile(r"^stepclimb-(ci|prodcheck|opscheck)-([0-9a-f]{8})(-restore)?$")
 
 
 def orphaned_projects(listing: str, exists: Callable[[str], bool] = os.path.isdir) -> list[str]:
@@ -250,12 +283,40 @@ def remove_orphans(env: Mapping[str, str]) -> None:
         "listing Compose projects",
     )
     for project in orphaned_projects(listing):
-        down = ["down", "--volumes", "--remove-orphans", "--timeout", "5"]
-        checked(["docker", "compose", "-p", project, *down], env, f"removing {project}")
+        remove_project(project, env)
         match = OWN_PROJECT.match(project)
         assert match is not None  # orphaned_projects returns only names it matched
         remove_image(f"stepclimb:ci-{match.group(2)}", env)
         say(f"removed {project}, left by a worktree that no longer exists")
+
+
+def subnet_holders(listing: str, subnets: set[str]) -> list[str]:
+    """Projects in `docker network inspect` output (`<project>|<subnet> ...`) using one of `subnets`."""
+    holders = set()
+    for line in listing.splitlines():
+        project, _, nets = line.partition("|")
+        if project and subnets & set(nets.split()):
+            holders.add(project)
+    return sorted(holders)
+
+
+def free_subnets(env: Mapping[str, str]) -> None:
+    """Remove a project holding this run's proxy subnets: only a killed run that had this slot can."""
+    networks = checked(
+        ["docker", "network", "ls", "--quiet", "--filter", "label=com.docker.compose.project"],
+        env,
+        "listing Compose networks",
+    ).split()
+    if not networks:
+        return
+    template = '{{index .Labels "com.docker.compose.project"}}|{{range .IPAM.Config}}{{.Subnet}} {{end}}'
+    listing = checked(
+        ["docker", "network", "inspect", "--format", template, *networks], env, "reading subnets"
+    )
+    ours = {f"{env[name]}.0/24" for name in ("SC_PROD_CHECK_NETWORK", "SC_OPS_CHECK_NETWORK")}
+    for project in subnet_holders(listing, ours):
+        remove_project(project, env)
+        say(f"removed {project}, which held this slot's subnet")
 
 
 def start_database(toplevel: Path, env: Mapping[str, str]) -> str:
@@ -282,6 +343,7 @@ def run_env(toplevel: Path, base: Mapping[str, str]) -> dict[str, str]:
         "SC_CI_PROJECT": f"stepclimb-ci-{ident}",
         "SC_IMAGE": f"stepclimb:ci-{ident}",
         "SC_PROD_CHECK_PROJECT": f"stepclimb-prodcheck-{ident}",
+        "SC_OPS_CHECK_PROJECT": f"stepclimb-opscheck-{ident}",
     }
 
 
@@ -329,7 +391,7 @@ def run_child(command: list[str], env: Mapping[str, str], signals: Signals) -> i
         signals.child = None
 
 
-def take_locks(env: Mapping[str, str], toplevel: Path) -> list[int]:
+def take_locks(env: Mapping[str, str], toplevel: Path) -> tuple[list[int], int]:
     """The legacy lock (unless inside its wrapper), this worktree's, then a slot: one order for
     every run, so a run under the wrapper and a plain run cannot each hold what the other needs."""
     held: list[int] = []
@@ -354,21 +416,22 @@ def take_locks(env: Mapping[str, str], toplevel: Path) -> list[int]:
             os.close(fd)
         raise
     say(f"slot {slot} of {slot_count(env)}, project stepclimb-ci-{run_id(toplevel)}")
-    return held
+    return held, slot
 
 
 def run_stack(toplevel: Path, env: dict[str, str], command: list[str], signals: Signals) -> int:
     status = 1
     try:
         remove_orphans(env)
-        remove_stack(toplevel, env)  # what a killed run in this worktree left behind
+        remove_stack(env)  # what a killed run in this worktree left behind
+        free_subnets(env)
         if signals.received is None:
             env["DATABASE_URL"] = start_database(toplevel, env)
             say(f"database {env['DATABASE_URL']}")
         status = run_child(command, env, signals)
     finally:
-        remove_stack(toplevel, env)
-        say(f"removed {env['SC_CI_PROJECT']}, {env['SC_PROD_CHECK_PROJECT']} and {env['SC_IMAGE']}")
+        remove_stack(env)
+        say(f"removed {', '.join(run_projects(env))} and {env['SC_IMAGE']}")
     return 128 + signals.received if signals.received and status == 0 else status
 
 
@@ -379,11 +442,12 @@ def run(command: list[str]) -> int:
     env = run_env(toplevel, os.environ)
     with Signals() as signals:
         try:
-            held = take_locks(env, toplevel)
+            held, slot = take_locks(env, toplevel)
         except Stopped as stop:
             say(f"stopped by signal {stop.signum} while waiting")
             return 128 + stop.signum
         signals.waiting = False
+        env.update(slot_env(slot))
         try:
             return run_stack(toplevel, env, command, signals)
         finally:

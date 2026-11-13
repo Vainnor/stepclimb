@@ -1,13 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Laid over compose.yaml for one gate run (bin/ci_gate.py), as the project
 # `stepclimb-ci-<id>`: nothing here is shared with the development stack or another worktree's run.
-# PostgreSQL keeps its data in memory and both published ports are picked by Docker, so runs never
-# compete for a port; the run reads them back with `docker compose port`. The gate sets SC_IMAGE to
-# a tag of its own, so that one run never starts another's build. MinIO is not started.
+# PostgreSQL keeps its data in memory. Both published ports are the run's slot's (SC_CI_PG_PORT,
+# SC_CI_PORT), which no other run holds; the run reads them back with `docker compose port`. The
+# gate sets SC_IMAGE to a tag of its own, so that one run never starts another's build. MinIO is
+# not started.
 services:
   postgres:
     ports: !override
-      - "127.0.0.1::5432"
+      - "127.0.0.1:${SC_CI_PG_PORT:?SC_CI_PG_PORT is set by bin/ci_gate.py}:5432"
     volumes: !reset []
     tmpfs:
       - /var/lib/postgresql/data
@@ -18,4 +19,4 @@ services:
 
   stepclimb:
     ports: !override
-      - "127.0.0.1::8080"
+      - "127.0.0.1:${SC_CI_PORT:?SC_CI_PORT is set by bin/ci_gate.py}:8080"

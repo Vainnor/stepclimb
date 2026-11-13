@@ -167,8 +167,8 @@ just typecheck     # tsc in every package
 just test-web      # Vitest in every package
 just e2e           # Playwright smoke test against this worktree's own Compose stack (builds the image)
 just ui-visual     # Storybook story screenshots and axe in Playwright's pinned image (--update-snapshots)
-just compose-check # the production Compose example booted with generated secrets on a free port, then removed
-just compose-ops-check  # the same with Caddy (internal CA): TLS, forwarded headers, dumps, a restore
+just compose-check # the production Compose example booted with generated secrets on :28180, then removed
+just compose-ops-check  # the same with Caddy (internal CA) on :28280/:28281/:28443: TLS, forwarded headers, dumps, a restore
 just agents-check  # agent hook tests and Codex mirrors of .claude/ (docs/agents.md)
 just secrets-scan  # gitleaks over the tree (staged | history also accepted)
 just clean-stale [--dry-run] [--days N]  # stale build output in every worktree's target/
@@ -188,12 +188,19 @@ merge gate, and every "done" names that machine's OS. `bin/ci-stamp.sh` records 
 Run the gate as plain `just ci` (`nix develop -c just ci`), from as many worktrees as you like:
 no `flock` wrapper. `bin/ci_gate.py` holds one of `SC_CI_SLOTS` (default 3) slots in `/tmp`, so
 the rest wait their turn, and one run per worktree. Each run gets its own PostgreSQL and Compose
-projects (`stepclimb-ci-<id>`, `stepclimb-prodcheck-<id>`, image `stepclimb:ci-<id>`, `<id>` from
-the worktree path) on ports Docker picks, so checkouts with different migrations never share a
-database. It removes them when it ends, whether it passed, failed or was stopped by SIGTERM,
-SIGHUP or SIGINT, and at its start removes what a killed run left and any such project whose
-worktree no longer exists. It never uses or stops the shared `just up` stack.
-A gate under the old `flock /tmp/stepclimb-ci.lock` wrapper still works: the wrapper waits for
+projects (`stepclimb-ci-<id>`, `stepclimb-prodcheck-<id>`, `stepclimb-opscheck-<id>`, image
+`stepclimb:ci-<id>`, `<id>` from the worktree path) and its slot's ports (`20000 + 10 * slot`
+and up) and proxy subnets (`10.201.(100 + slot)`, `10.201.(150 + slot)`), so checkouts with
+different migrations never share a database and runs never share a port or subnet. The ports sit
+below Linux's ephemeral range (32768 to 60999): a port there can be held by a host socket, such
+as an outgoing connection's source port in TIME-WAIT, which rootless Docker cannot see when it
+picks one. The shared stack's fixed ports (55432, 58080, 59000, 59001) are inside that range, so
+`just up` can occasionally hit that; no gate binds them.
+
+The run removes its projects and image when it ends, whether it passed, failed or was stopped by
+SIGTERM, SIGHUP or SIGINT. At its start it removes what a killed run of the worktree left, any
+such project whose worktree no longer exists, and any project on its slot's subnets. It never
+uses or stops the shared `just up` stack. A gate under the old `flock /tmp/stepclimb-ci.lock` wrapper still works: the wrapper waits for
 running gates and runs alone, and the gate inside it skips the lock its wrapper holds. Every
 gate takes the old lock first, then the worktree's, then a slot, so no two can wait on each
 other. The stamp records the commit the run started on, and nothing if HEAD moved during the

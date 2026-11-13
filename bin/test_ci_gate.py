@@ -26,8 +26,8 @@ class SlotCountTest(unittest.TestCase):
     def test_env_overrides(self) -> None:
         self.assertEqual(ci_gate.slot_count({"SC_CI_SLOTS": "4"}), 4)
 
-    def test_rejects_zero_and_words(self) -> None:
-        for raw in ("0", "-1", "three", ""):
+    def test_rejects_zero_words_and_more_than_the_subnets_allow(self) -> None:
+        for raw in ("0", "-1", "three", "", "50"):
             with self.subTest(raw=raw), self.assertRaises(ci_gate.GateError):
                 ci_gate.slot_count({"SC_CI_SLOTS": raw})
 
@@ -44,8 +44,26 @@ class NamesTest(unittest.TestCase):
         ident = env["SC_CI_ID"]
         self.assertEqual(env["SC_CI_PROJECT"], f"stepclimb-ci-{ident}")
         self.assertEqual(env["SC_PROD_CHECK_PROJECT"], f"stepclimb-prodcheck-{ident}")
+        self.assertEqual(env["SC_OPS_CHECK_PROJECT"], f"stepclimb-opscheck-{ident}")
         self.assertEqual(env["SC_IMAGE"], f"stepclimb:ci-{ident}")
         self.assertEqual(env["PATH"], "/bin")
+
+    def test_every_slot_has_its_own_subnets_clear_of_the_defaults(self) -> None:
+        seen: set[str] = set()
+        for slot in range(1, ci_gate.MAX_SLOTS + 1):
+            env = ci_gate.slot_env(slot)
+            seen.update((env["SC_PROD_CHECK_NETWORK"], env["SC_OPS_CHECK_NETWORK"]))
+        self.assertEqual(len(seen), 2 * ci_gate.MAX_SLOTS)
+        self.assertTrue(seen.isdisjoint({"10.201.73", "10.201.74", "10.201.75"}))
+        self.assertTrue(all(0 < int(net.rsplit(".", 1)[1]) < 255 for net in seen))
+
+    def test_every_slot_has_its_own_ports_below_the_ephemeral_range(self) -> None:
+        seen: list[int] = []
+        for slot in range(1, ci_gate.MAX_SLOTS + 1):
+            env = ci_gate.slot_env(slot)
+            seen.extend(int(env[name]) for name in ci_gate.SLOT_PORTS)
+        self.assertEqual(len(set(seen)), len(ci_gate.SLOT_PORTS) * ci_gate.MAX_SLOTS)
+        self.assertTrue(all(1024 < port < 32768 for port in seen), (min(seen), max(seen)))
 
     def test_compose_uses_the_project_and_both_files(self) -> None:
         command = ci_gate.compose_command(Path("/r"), "stepclimb-ci-1", "up")
@@ -196,6 +214,8 @@ class TakeLocksTest(LockTestCase):
             text=True,
             start_new_session=True,
         )
+        for pipe in (child.stdout, child.stderr):
+            self.addCleanup(pipe.close)  # type: ignore[union-attr]
         self.addCleanup(child.wait)
         self.addCleanup(self.kill, child)
         return child
@@ -309,6 +329,7 @@ class OrphanTest(unittest.TestCase):
                 "stepclimb-ci-0123abcd\t/gone/a/deploy/compose",
                 "stepclimb-ci-0123abcd\t/gone/a/deploy/compose",
                 "stepclimb-prodcheck-0123abcd\t/gone/a/deploy/compose",
+                "stepclimb-opscheck-0123abcd-restore\t/gone/a/deploy/compose",
                 "stepclimb-ci-89abcdef\t/here/b/deploy/compose",
                 "stepclimb\t/gone/c/deploy/compose",
                 "stepclimb-ci-xyz\t/gone/d/deploy/compose",
@@ -317,10 +338,17 @@ class OrphanTest(unittest.TestCase):
             ]
         )
         orphans = ci_gate.orphaned_projects(listing, exists=lambda d: d.startswith("/here/"))
-        self.assertEqual(orphans, ["stepclimb-ci-0123abcd", "stepclimb-prodcheck-0123abcd"])
+        self.assertEqual(
+            orphans,
+            [
+                "stepclimb-ci-0123abcd",
+                "stepclimb-opscheck-0123abcd-restore",
+                "stepclimb-prodcheck-0123abcd",
+            ],
+        )
 
     def test_removes_each_orphan_and_its_image(self) -> None:
-        listing = "stepclimb-ci-0123abcd\t/gone/a/deploy/compose\n"
+        listing = "stepclimb-opscheck-0123abcd-restore\t/gone/a/deploy/compose\n"
         with (
             mock.patch.object(ci_gate, "checked", return_value=listing) as checked,
             mock.patch.object(ci_gate, "remove_image") as remove_image,
@@ -329,36 +357,68 @@ class OrphanTest(unittest.TestCase):
             ci_gate.remove_orphans({})
         self.assertEqual(
             checked.call_args_list[1].args[0],
-            ["docker", "compose", "-p", "stepclimb-ci-0123abcd", "down", "--volumes"]
+            ["docker", "compose", "-p", "stepclimb-opscheck-0123abcd-restore", "down", "--volumes"]
             + ["--remove-orphans", "--timeout", "5"],
         )
         remove_image.assert_called_once_with("stepclimb:ci-0123abcd", {})
+
+
+class SubnetTest(unittest.TestCase):
+    env = {"SC_PROD_CHECK_NETWORK": "10.201.101", "SC_OPS_CHECK_NETWORK": "10.201.151"}
+
+    def test_finds_projects_on_this_slots_subnets_only(self) -> None:
+        listing = "\n".join(
+            [
+                "stepclimb-prodcheck-0123abcd|10.201.101.0/24 ",
+                "stepclimb-opscheck-0123abcd|10.201.151.0/24 ",
+                "stepclimb-prodcheck-89abcdef|10.201.102.0/24 ",
+                "stepclimb|172.19.0.0/16 ",
+                "|10.201.101.0/24",
+            ]
+        )
+        ours = {"10.201.101.0/24", "10.201.151.0/24"}
+        self.assertEqual(
+            ci_gate.subnet_holders(listing, ours),
+            ["stepclimb-opscheck-0123abcd", "stepclimb-prodcheck-0123abcd"],
+        )
+
+    def test_frees_this_slots_subnets(self) -> None:
+        answers = iter(["n1 n2", "stepclimb-opscheck-0123abcd|10.201.151.0/24 \nother|10.9.0.0/16 "])
+        with (
+            mock.patch.object(ci_gate, "checked", side_effect=lambda *_: next(answers)),
+            mock.patch.object(ci_gate, "remove_project") as remove_project,
+            mock.patch.object(ci_gate, "say"),
+        ):
+            ci_gate.free_subnets(self.env)
+        remove_project.assert_called_once_with("stepclimb-opscheck-0123abcd", self.env)
 
 
 class StackCommandsTest(unittest.TestCase):
     env = {
         "SC_CI_PROJECT": "stepclimb-ci-0123abcd",
         "SC_PROD_CHECK_PROJECT": "stepclimb-prodcheck-0123abcd",
+        "SC_OPS_CHECK_PROJECT": "stepclimb-opscheck-0123abcd",
         "SC_IMAGE": "stepclimb:ci-0123abcd",
     }
     down = ["down", "--volumes", "--remove-orphans", "--timeout", "5"]
 
-    def test_remove_stack_removes_both_projects_with_volumes_and_the_image(self) -> None:
+    def test_remove_stack_removes_every_project_with_volumes_and_the_image(self) -> None:
         with (
             mock.patch.object(ci_gate, "checked", return_value="") as checked,
             mock.patch.object(ci_gate, "remove_image") as remove_image,
         ):
-            ci_gate.remove_stack(Path("/r"), self.env)
+            ci_gate.remove_stack(self.env)
         commands = [c.args[0] for c in checked.call_args_list]
+        projects = [
+            "stepclimb-ci-0123abcd",
+            "stepclimb-prodcheck-0123abcd",
+            "stepclimb-opscheck-0123abcd",
+            "stepclimb-opscheck-0123abcd-restore",
+        ]
         self.assertEqual(
             commands,
-            [
-                ci_gate.compose_command(Path("/r"), "stepclimb-ci-0123abcd", "--profile", "stack")
-                + self.down,
-                ["docker", "compose", "-p", "stepclimb-prodcheck-0123abcd"]
-                + ["-f", "/r/deploy/compose/compose.production.yaml", "--profile", "minio"]
-                + self.down,
-            ],
+            [["docker", "compose", "-p", project, *self.down] for project in projects]
+            + [["docker", "rm", "--force", "stepclimb-opscheck-0123abcd-echo"]],
         )
         remove_image.assert_called_once_with("stepclimb:ci-0123abcd", self.env)
 
@@ -397,8 +457,9 @@ class RunTeardownTest(unittest.TestCase):
     def setUp(self) -> None:
         patches = {
             "git": mock.patch.object(ci_gate, "git", return_value="/work/stepclimb"),
-            "take_locks": mock.patch.object(ci_gate, "take_locks", return_value=[]),
+            "take_locks": mock.patch.object(ci_gate, "take_locks", return_value=([], 1)),
             "remove_orphans": mock.patch.object(ci_gate, "remove_orphans"),
+            "free_subnets": mock.patch.object(ci_gate, "free_subnets"),
             "remove_stack": mock.patch.object(ci_gate, "remove_stack"),
             "start_database": mock.patch.object(
                 ci_gate, "start_database", return_value="postgres://db"
@@ -414,8 +475,15 @@ class RunTeardownTest(unittest.TestCase):
         self.assertEqual(self.mocks["remove_stack"].call_count, 2)
         self.mocks["remove_orphans"].assert_called_once()
 
-    def test_command_sees_the_run_database(self) -> None:
-        probe = "import os; assert os.environ['DATABASE_URL'] == 'postgres://db'"
+    def test_command_sees_the_run_database_and_its_slots_subnets(self) -> None:
+        probe = "\n".join(
+            [
+                "import os",
+                "assert os.environ['DATABASE_URL'] == 'postgres://db'",
+                "assert os.environ['SC_PROD_CHECK_NETWORK'] == '10.201.101'",
+                "assert os.environ['SC_OPS_CHECK_NETWORK'] == '10.201.151'",
+            ]
+        )
         self.assertEqual(ci_gate.run([sys.executable, "-B", "-c", probe]), 0)
 
     def test_a_failed_database_start_is_torn_down(self) -> None:
@@ -448,8 +516,9 @@ with contextlib.ExitStack() as patches:
     patch = lambda name, **kw: patches.enter_context(mock.patch.object(ci_gate, name, **kw))
     patch("git", return_value=sys.argv[3])
     if not os.environ.get("REAL_LOCKS"):
-        patch("take_locks", return_value=[])
+        patch("take_locks", return_value=([], 1))
     patch("remove_orphans")
+    patch("free_subnets")
     patch("remove_stack", side_effect=lambda *_: note("remove"))
     patch("start_database", side_effect=start)
     sys.exit(ci_gate.main(["run", "--", *sys.argv[4:]]))

@@ -42,7 +42,8 @@ release recipe. What a release ships beyond a tagged GitHub Release is pending Q
   `openapi/stepclimb.json` and `packages/api-client/src/schema.ts` against what the code
   generates), `web-lint` (Biome), `typecheck` (tsc in every package), `test-web` (Vitest),
   `e2e` (Playwright against the Compose stack, image built from `deploy/Dockerfile`),
-  `compose-check` (the production Compose example) and `agents-check`. `bin/ci_gate.py` runs
+  `compose-check` (the production Compose example), `compose-ops-check` (the same with Caddy and
+  the dumps) and `agents-check`. `bin/ci_gate.py` runs
   them with the run's own PostgreSQL and Compose projects, named from the worktree path and
   removed when the run ends, and lets at most `SC_CI_SLOTS` (default 3) runs share the machine,
   so several worktrees can gate at once. `just ci`'s last step, `bin/ci-stamp.sh`, records the
