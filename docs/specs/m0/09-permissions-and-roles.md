@@ -177,7 +177,7 @@ organizations' ids.
 
 - **B20.** `crates/stepclimb-server/tests/permissions.rs` holds one table entry per protected
   operation: the OpenAPI `operation_id`, the permission, the target kind and a setup function that
-  builds the target in a fresh database. From each entry the permission suite generates:
+  builds the target in a new organization. From each entry the permission suite generates:
   - **401:** no credential;
   - **403:** a user holding a custom role with every catalog permission except `P`, assigned at
     the target's scope (or the organization for `OrgTarget`), so the target is visible;
@@ -188,7 +188,17 @@ organizations' ids.
     alone suffices (an entry may add permissions the route documents, such as the destination of
     a move);
   - **cross-organization:** an Organization admin of org A calling the route with the target built
-    in org B: 404, and org B's rows unchanged.
+    in org B: 404, and org B's rows unchanged. A route without a target (`OrgTarget`, an
+    `AnyScope` list, `AuthOnly`) acts on org A instead and answers 2xx; org B's rows stay
+    unchanged and none of their ids appears in the response.
+
+  Each case builds its own organizations in the test's database, so cases cannot disturb each
+  other. Because the production resolver answers 404
+  `org.not_found` whenever two organizations exist (`02-organizations-and-accounts.md` B11), the
+  suite names the request's organization with the `x-stepclimb-test-org` header, which only a
+  build with the server's `test-support` cargo feature reads. Only the server's own tests enable
+  that feature (a dev-dependency of the crate on itself); the release build ignores the header,
+  which the e2e smoke test checks against the Compose image (coordinator decision, 13 Nov 2026).
 - **B21.** A walker test reads `openapi::document()` and fails, naming each one, when an
   operation is neither in the suite table nor in the public list (`healthz`, `readyz`, and the
   unauthenticated routes `04` to `08` declare), so a new route cannot skip the four cases. Routes
