@@ -18,8 +18,8 @@ CREATE TABLE accounts (
     -- Lets later tables point at an account with (org_id, account_id), so they cannot reference
     -- another organization's account.
     UNIQUE (org_id, id),
-    -- A parent is in the same organization as its child; the default RESTRICT refuses deleting
-    -- an account that still has children.
+    -- A parent is in the same organization as its child; the default action, NO ACTION, refuses
+    -- deleting an account that still has children.
     FOREIGN KEY (org_id, parent_id) REFERENCES accounts (org_id, id),
     CHECK ((parent_id IS NULL) = (nlevel(path) = 1))
 );

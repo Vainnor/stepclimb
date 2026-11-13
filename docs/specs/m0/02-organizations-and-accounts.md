@@ -128,7 +128,10 @@ These apply to every endpoint in M0, including the ones other specs define.
 - **B20.** Moving an account takes a new `parent_id`. The root cannot be moved (409
   `account.root_immutable`). The new parent cannot be the account itself or one of its
   descendants (409 `account.move_into_descendant`). The move rewrites the path of the account
-  and every descendant in one `UPDATE ... WHERE org_id = $1 AND path <@ $old` statement.
+  and every descendant in one `UPDATE ... WHERE org_id = $1 AND path <@ $old` statement and sets
+  `updated_at` on each of them, since each one's path and depth change. A move to the account's
+  current parent changes nothing: no path is rewritten and no `updated_at` moves (coordinator
+  decision, 13 Nov 2026).
 - **B21.** Deleting an account is allowed only for a non-root account with no child accounts
   (409 `account.root_immutable`, 409 `account.has_children`). In the same transaction it deletes
   the role assignments whose scope is that account (`09-permissions-and-roles.md`). From M1 an
@@ -222,8 +225,8 @@ CREATE INDEX accounts_parent ON accounts (org_id, parent_id, name, id);
 CREATE INDEX accounts_path ON accounts USING gist (path);
 ```
 
-The composite foreign key keeps a parent in the same organization as its child, and the default
-`RESTRICT` on it backs B21. `UNIQUE (org_id, id)` also lets later tables point at an account with
+The composite foreign key keeps a parent in the same organization as its child, and its default
+action, `NO ACTION`, refuses deleting an account that still has children, which backs B21. `UNIQUE (org_id, id)` also lets later tables point at an account with
 `(org_id, account_id)` so they cannot reference another organization's account. That the path
 matches the parent chain is kept by the repository under the B22 lock and checked by T12; SQL
 cannot express it as a constraint across rows.

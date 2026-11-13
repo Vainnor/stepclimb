@@ -386,13 +386,37 @@ async fn begin(pool: &PgPool) -> sqlx::Transaction<'static, Postgres> {
     pool.begin().await.expect("begin")
 }
 
-/// Waits until some session waits on an advisory lock, so the test knows the second call has
-/// read nothing yet and is blocked on the tree lock.
-async fn until_a_session_waits_on_an_advisory_lock(pool: &PgPool) {
+/// The tree lock's keys as `pg_locks` shows them (`classid`, `objid`, as unsigned 32-bit
+/// values): a copy of the repository's private `TREE_LOCK_CLASS` and key fold. If the two drift,
+/// [`until_a_call_waits_on_the_tree_lock`] times out and the test fails.
+fn tree_lock_keys(org: Uuid) -> (i64, i64) {
+    let class: i32 = 0x6163_6374;
+    let (words, _) = org.as_bytes().as_chunks::<4>();
+    let key = words
+        .iter()
+        .map(|word| i32::from_be_bytes(*word))
+        .fold(0, |key, word| key ^ word);
+    (
+        i64::from(class.cast_unsigned()),
+        i64::from(key.cast_unsigned()),
+    )
+}
+
+/// Waits until a session of this test's database waits on `org`'s tree lock, so the test knows
+/// the second call has read nothing yet. Matches the lock exactly: sqlx's test harness takes
+/// advisory locks of its own, in another database. Each poll borrows a pool connection only for
+/// its query.
+async fn until_a_call_waits_on_the_tree_lock(pool: &PgPool, org: Uuid) {
+    let (class, key) = tree_lock_keys(org);
     for _ in 0..500 {
         let waiting: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted",
+            "SELECT count(*) FROM pg_locks
+             WHERE locktype = 'advisory' AND NOT granted
+               AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+               AND classid = $1::bigint::oid AND objid = $2::bigint::oid AND objsubid = 2",
         )
+        .bind(class)
+        .bind(key)
         .fetch_one(pool)
         .await
         .expect("read pg_locks");
@@ -405,26 +429,35 @@ async fn until_a_session_waits_on_an_advisory_lock(pool: &PgPool) {
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn crossing_moves_in_two_connections_end_with_one_refused_and_no_cycle(pool: PgPool) {
+async fn crossing_moves_in_two_open_transactions_end_with_one_refused_and_no_cycle(pool: PgPool) {
     let f = facility(&pool, "org-a").await;
-    // The first move runs and holds the tree lock in its open transaction.
+    // Both transactions are open before either move runs: two pool connections, held until each
+    // commits.
     let mut first = begin(&pool).await;
+    let mut second = begin(&pool).await;
     accounts::move_to(&mut *first, scope(f.org), f.tower, f.enroute, later_time())
         .await
         .unwrap();
-    // The crossing move starts in a second connection while the first is uncommitted.
-    let second = tokio::spawn({
-        let pool = pool.clone();
+    // The crossing move runs in the second transaction while the first is uncommitted.
+    let crossing = tokio::spawn({
         let (org, enroute, tower) = (f.org, f.enroute, f.tower);
-        async move { accounts::move_to(&pool, scope(org), enroute, tower, later_time()).await }
+        async move {
+            let result =
+                accounts::move_to(&mut *second, scope(org), enroute, tower, later_time()).await;
+            second
+                .commit()
+                .await
+                .expect("commit the second transaction");
+            result
+        }
     });
-    until_a_session_waits_on_an_advisory_lock(&pool).await;
+    until_a_call_waits_on_the_tree_lock(&pool, f.org).await;
     first.commit().await.unwrap();
 
-    let second = second.await.expect("the second move ran");
+    let crossing = crossing.await.expect("the second move ran");
 
     // T12: the second move read the tree only after the first committed.
-    assert_eq!(kind(&second), "MoveIntoDescendant");
+    assert_eq!(kind(&crossing), "MoveIntoDescendant");
     assert_eq!(inconsistent_paths(&pool, f.org).await, Vec::<Uuid>::new());
     let tower = accounts::get(&pool, scope(f.org), f.tower)
         .await
@@ -439,19 +472,53 @@ async fn crossing_moves_in_two_connections_end_with_one_refused_and_no_cycle(poo
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn crossing_moves_run_together_never_both_succeed(pool: PgPool) {
+async fn tree_writes_refuse_an_isolation_level_above_read_committed(pool: PgPool) {
     let f = facility(&pool, "org-a").await;
+    let before = tree(&pool, f.org).await;
+    let mut conn = pool.acquire().await.unwrap();
 
-    let (one, two) = tokio::join!(
-        accounts::move_to(&pool, scope(f.org), f.tower, f.enroute, later_time()),
-        accounts::move_to(&pool, scope(f.org), f.enroute, f.tower, later_time()),
-    );
+    let levels = [
+        (
+            "repeatable read",
+            "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+        ),
+        (
+            "serializable",
+            "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+        ),
+    ];
 
-    let mut kinds = [kind(&one), kind(&two)];
-    kinds.sort();
-    assert_eq!(kinds[0], "MoveIntoDescendant", "{kinds:?}");
-    assert!(kinds[1].starts_with("Ok("), "{kinds:?}");
-    assert_eq!(inconsistent_paths(&pool, f.org).await, Vec::<Uuid>::new());
+    for (level, set_level) in levels {
+        sqlx::raw_sql(set_level).execute(&mut *conn).await.unwrap();
+
+        let moved =
+            accounts::move_to(&mut *conn, scope(f.org), f.tower, f.enroute, later_time()).await;
+        let created = accounts::create(&mut *conn, scope(f.org), f.root, "New", later_time()).await;
+        let deleted = accounts::delete(&mut *conn, scope(f.org), f.ramp).await;
+
+        for result in [kind(&moved), kind(&created), kind(&deleted)] {
+            assert_eq!(result, "IsolationLevel", "{level}");
+        }
+        assert!(
+            matches!(&moved, Err(Error::IsolationLevel { found }) if found == level),
+            "{moved:?}"
+        );
+    }
+    assert_eq!(tree(&pool, f.org).await, before);
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_move_to_the_current_parent_changes_nothing(pool: PgPool) {
+    let f = facility(&pool, "org-a").await;
+    let before = tree(&pool, f.org).await;
+    let tower = accounts::get(&pool, scope(f.org), f.tower).await.unwrap();
+
+    let moved = accounts::move_to(&pool, scope(f.org), f.tower, f.root, later_time())
+        .await
+        .unwrap();
+
+    assert_eq!(Some(moved), tower, "updated_at keeps its old value");
+    assert_eq!(tree(&pool, f.org).await, before);
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
@@ -506,7 +573,7 @@ async fn a_create_waiting_on_a_delete_of_its_parent_is_refused(pool: PgPool) {
         let (org, ramp) = (f.org, f.ramp);
         async move { accounts::create(&pool, scope(org), ramp, "Apron", later_time()).await }
     });
-    until_a_session_waits_on_an_advisory_lock(&pool).await;
+    until_a_call_waits_on_the_tree_lock(&pool, f.org).await;
     deleting.commit().await.unwrap();
 
     let created = creating.await.expect("the create ran");
@@ -751,6 +818,6 @@ async fn the_table_ties_a_missing_parent_to_a_one_label_path(pool: PgPool) {
     assert_eq!(
         refusal(delete_parent).0,
         "23503",
-        "RESTRICT refuses deleting a parent"
+        "the foreign key (NO ACTION) refuses deleting a parent"
     );
 }

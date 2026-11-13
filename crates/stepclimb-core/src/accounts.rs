@@ -11,9 +11,15 @@
 //! (SQL cannot express it across rows): [`create`], [`move_to`] and [`delete`] take a
 //! transaction-scoped advisory lock on the organization's tree before reading it (B22), so two
 //! concurrent moves cannot build a cycle and a create cannot attach to an account being
-//! deleted. [`rename`] does not take it. The lock is only correct at PostgreSQL's default
-//! `READ COMMITTED` isolation, where each statement after the lock sees what the previous holder
-//! committed: a caller passing in its own transaction must not raise the isolation level.
+//! deleted. [`rename`] does not take it.
+//!
+//! The lock protects the tree only at `READ COMMITTED`, PostgreSQL's default, where each
+//! statement after the lock sees what the previous holder committed. At `REPEATABLE READ` or
+//! `SERIALIZABLE` the transaction's snapshot is taken before the lock wait ends, so it would read
+//! the tree as it was before the previous holder's move. A database or role default (or a
+//! caller's own transaction) can raise the level, so the statement that takes the lock also
+//! reads `transaction_isolation`, and any other level is refused with
+//! [`Error::IsolationLevel`] before the tree is read.
 //!
 //! Who may do what to which account (B23) is the routes' to decide; this module checks only the
 //! rules of the tree itself.
@@ -89,6 +95,10 @@ pub enum Error {
     /// The create or move would put an account deeper than [`MAX_DEPTH`].
     #[error("accounts cannot be nested deeper than {MAX_DEPTH} levels below the root")]
     TooDeep,
+    /// The transaction runs at an isolation level other than `READ COMMITTED`, where the tree
+    /// lock does not protect the tree (see the module documentation).
+    #[error("the account tree can be changed only at READ COMMITTED isolation, not {found}")]
+    IsolationLevel { found: String },
     /// A time that cannot be stored or read.
     #[error(transparent)]
     Time(#[from] TimeOutOfRange),
@@ -300,9 +310,10 @@ pub async fn rename(
 ///
 /// Refuses the root ([`Error::RootImmutable`]), a new parent that is the account or one of its
 /// descendants ([`Error::MoveIntoDescendant`]), and a move that would put any account of the
-/// subtree deeper than [`MAX_DEPTH`]. One `UPDATE` rewrites the path of the account and every
-/// descendant and sets their `updated_at` to `now`, since each one's depth may change; only the
-/// account's own `parent_id` changes.
+/// subtree deeper than [`MAX_DEPTH`]. A move to the current parent changes nothing and returns
+/// the account as it is. Otherwise one `UPDATE` rewrites the path of the account and every
+/// descendant and sets their `updated_at` to `now`, since each one's path and depth change; only
+/// the account's own `parent_id` changes.
 ///
 /// Runs in one transaction (a savepoint when `db` is already one) under the tree lock.
 pub async fn move_to<'c>(
@@ -315,7 +326,40 @@ pub async fn move_to<'c>(
     let now = epoch_micros(now)?;
     let mut tx = db.begin().await?;
     lock_tree(&mut tx, scope).await?;
-    let account = sqlx::query!(
+    let subtree = read_subtree(&mut tx, scope, id).await?;
+    if subtree.parent_id.is_none() {
+        return Err(Error::RootImmutable);
+    }
+    if subtree.parent_id != Some(parent_id) {
+        let destination = check_destination(&mut tx, scope, &subtree, parent_id).await?;
+        rewrite_subtree(&mut tx, scope, id, &subtree, &destination, now).await?;
+    }
+    let moved = get(&mut *tx, scope, id).await?.ok_or(Error::NotFound)?;
+    tx.commit().await?;
+    Ok(moved)
+}
+
+/// The account being moved, as [`move_to`] reads it under the tree lock.
+struct Subtree {
+    parent_id: Option<Uuid>,
+    path: String,
+    depth: i32,
+    /// The depth of the deepest account in the subtree, the account itself included.
+    deepest: i32,
+}
+
+/// The new parent of a move, once [`check_destination`] has accepted it.
+struct Destination {
+    id: Uuid,
+    path: String,
+}
+
+async fn read_subtree(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    id: Uuid,
+) -> Result<Subtree, Error> {
+    let row = sqlx::query!(
         r#"SELECT a.parent_id, a.path::text AS "path!", nlevel(a.path) - 1 AS "depth!",
                   (SELECT max(nlevel(d.path)) - 1 FROM accounts d
                    WHERE d.org_id = $1 AND d.path <@ a.path) AS "deepest!"
@@ -323,21 +367,35 @@ pub async fn move_to<'c>(
         scope.org_id(),
         id,
     )
-    .fetch_optional(&mut *tx)
+    .fetch_optional(conn)
     .await?
     .ok_or(Error::NotFound)?;
-    if account.parent_id.is_none() {
-        return Err(Error::RootImmutable);
-    }
+    Ok(Subtree {
+        parent_id: row.parent_id,
+        path: row.path,
+        depth: row.depth,
+        deepest: row.deepest,
+    })
+}
+
+/// The account `parent_id` as the new parent of `subtree`, or why it cannot be: it does not
+/// exist in the scope's organization, it is inside the subtree, or the subtree would end up
+/// deeper than [`MAX_DEPTH`].
+async fn check_destination(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    subtree: &Subtree,
+    parent_id: Uuid,
+) -> Result<Destination, Error> {
     let parent = sqlx::query!(
         r#"SELECT path::text AS "path!", nlevel(path) - 1 AS "depth!",
                   path <@ $3::text::ltree AS "inside!"
            FROM accounts WHERE org_id = $1 AND id = $2"#,
         scope.org_id(),
         parent_id,
-        account.path,
+        subtree.path,
     )
-    .fetch_optional(&mut *tx)
+    .fetch_optional(conn)
     .await?
     .ok_or(Error::ParentNotFound)?;
     if parent.inside {
@@ -345,9 +403,25 @@ pub async fn move_to<'c>(
     }
     // The subtree's deepest account keeps its distance below the moved account, which lands at
     // the new parent's depth plus one.
-    if parent.depth + 1 + (account.deepest - account.depth) > MAX_DEPTH {
+    if parent.depth + 1 + (subtree.deepest - subtree.depth) > MAX_DEPTH {
         return Err(Error::TooDeep);
     }
+    Ok(Destination {
+        id: parent_id,
+        path: parent.path,
+    })
+}
+
+/// Rewrite the path of the account `id` and every descendant to start at `destination`'s path,
+/// in one statement, and point the account itself at its new parent.
+async fn rewrite_subtree(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    id: Uuid,
+    subtree: &Subtree,
+    destination: &Destination,
+    now_micros: i64,
+) -> Result<(), Error> {
     sqlx::query!(
         "UPDATE accounts
          SET path = $4::text::ltree || subpath(path, $5),
@@ -356,17 +430,15 @@ pub async fn move_to<'c>(
          WHERE org_id = $1 AND path <@ $7::text::ltree",
         scope.org_id(),
         id,
-        parent_id,
-        parent.path,
-        account.depth,
-        now,
-        account.path,
+        destination.id,
+        destination.path,
+        subtree.depth,
+        now_micros,
+        subtree.path,
     )
-    .execute(&mut *tx)
+    .execute(conn)
     .await?;
-    let moved = get(&mut *tx, scope, id).await?.ok_or(Error::NotFound)?;
-    tx.commit().await?;
-    Ok(moved)
+    Ok(())
 }
 
 /// Delete the account `id` of the scope's organization (B21). Refuses the root
@@ -399,16 +471,21 @@ pub async fn delete<'c>(
     Ok(())
 }
 
-/// Take the transaction-scoped advisory lock on the scope's account tree (B22). It is released
-/// when the outermost transaction ends.
-async fn lock_tree(conn: &mut PgConnection, scope: OrgScope) -> Result<(), sqlx::Error> {
-    sqlx::query!(
-        r#"SELECT true AS "locked!" FROM pg_advisory_xact_lock($1, $2)"#,
+/// Take the transaction-scoped advisory lock on the scope's account tree (B22), and refuse a
+/// transaction whose isolation level is not `READ COMMITTED`. The lock is released when the
+/// outermost transaction ends, so a refusal that rolls the transaction back releases it too.
+async fn lock_tree(conn: &mut PgConnection, scope: OrgScope) -> Result<(), Error> {
+    let isolation = sqlx::query_scalar!(
+        r#"SELECT current_setting('transaction_isolation') AS "isolation!"
+           FROM pg_advisory_xact_lock($1, $2)"#,
         TREE_LOCK_CLASS,
         tree_lock_key(scope.org_id()),
     )
     .fetch_one(conn)
     .await?;
+    if isolation != "read committed" {
+        return Err(Error::IsolationLevel { found: isolation });
+    }
     Ok(())
 }
 
