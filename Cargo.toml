@@ -90,8 +90,9 @@ unsafe_code = "forbid"
 unused_must_use = "deny"
 
 [workspace.lints.clippy]
-# A lint is silenced only with `#[expect(lint, reason = "...")]`, which fails once the lint stops
-# firing; `#[allow]` and a reason-less attribute are refused.
+# Clippy refuses an outer `#[allow]` and any `allow` or `expect` without a reason, so an outer
+# lint is silenced with `#[expect(lint, reason = "...")]`, which fails once the lint stops firing.
+# It does not see inner `#![allow]`; bin/check-lint-escapes.py (`just lint-escapes`) refuses those.
 allow_attributes = "deny"
 allow_attributes_without_reason = "deny"
 dbg_macro = "deny"

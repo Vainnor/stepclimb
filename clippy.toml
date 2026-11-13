@@ -3,10 +3,12 @@ allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-print-in-tests = true
 
-# Spec 02 B9: a request's `OrgScope` comes from its credential. Building one for the instance is
-# allowed only in startup tasks, the `stepclimb admin` CLI, job workers and the request-organization
-# resolver of unauthenticated routes, each with
-# `#[expect(clippy::disallowed_methods, reason = "...")]`.
+# Spec 02 B9: a request's `OrgScope` comes from its credential. `from_credential` is for the
+# credential resolvers in stepclimb-core; `instance` only for startup tasks, the `stepclimb admin`
+# CLI, job workers and the request-organization resolver of unauthenticated routes. Each call site
+# carries `#[expect(clippy::disallowed_methods, reason = "...")]` on its calling `fn`. This must
+# stay the only clippy.toml: `just lint-escapes` refuses another one and the attribute forms that
+# would get around these entries.
 disallowed-methods = [
     { path = "stepclimb_core::OrgScope::from_credential", reason = "only the credential resolvers of spec 08 build a credential scope (spec 02 B9)" },
     { path = "stepclimb_core::OrgScope::instance", reason = "a request's scope comes from its credential; only startup, the CLI, jobs and the unauthenticated organization resolver build an instance scope (spec 02 B9)" },

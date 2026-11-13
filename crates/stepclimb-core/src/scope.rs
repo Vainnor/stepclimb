@@ -13,13 +13,18 @@
 //!    `stepclimb admin` CLI, job workers and the request-organization resolver of
 //!    unauthenticated routes.
 //!
-//! `clippy.toml` lists both constructors under `disallowed-methods`, and the workspace denies
-//! `#[allow]` and any lint attribute without a reason. So every direct call site needs its own
-//! `#[expect(clippy::disallowed_methods, reason = "...")]`, and `just lint` fails on a call
-//! without one. The lint sees direct calls only: an `expect` on a whole module, or a wrapper
-//! function that calls the constructor once and is then called freely, launders every call
-//! behind it. Reviewers refuse both; the `expect` belongs on the function that is itself an
-//! allowed call site.
+//! `clippy.toml` lists both constructors under `disallowed-methods`, so `just lint` fails on a
+//! call that nothing silences. What is enforced mechanically:
+//!
+//! - clippy refuses an outer `#[allow]` and any `allow` or `expect` without a reason;
+//! - `just lint-escapes` (`bin/check-lint-escapes.py`) refuses any inner `#![allow]`, any lint
+//!   attribute naming `disallowed_methods` other than an outer `#[expect]` on a `fn` (so not on
+//!   a file, a `mod` or an `impl`), any lint attribute on `clippy::all`, `clippy::style` or
+//!   `warnings`, and any `clippy.toml` besides the root one.
+//!
+//! What review still has to catch: a reasoned `#[expect]` on a wrapper `fn` that calls a
+//! constructor and is then called freely launders every call behind it. The `expect` belongs on
+//! a function that is itself an allowed call site; reviewers refuse a wrapper.
 //!
 //! An id from the client (a path parameter, a body field, a cursor, a header) never builds or
 //! changes a scope: there is no constructor from a bare id that a handler can reach without the

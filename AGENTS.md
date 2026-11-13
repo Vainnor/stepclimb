@@ -137,7 +137,7 @@ The Nix dev shell (`flake.nix`) provides every tool below.
 ## Commands (via `just`)
 
 ```bash
-just ci            # the merge gate, run locally: secrets, fmt, clippy, layering, spdx, tests, deny, sqlx, openapi, biome, tsc, vitest, playwright, agents
+just ci            # the merge gate, run locally: secrets, fmt, clippy, layering, lint escapes, spdx, tests, deny, sqlx, openapi, biome, tsc, vitest, playwright, agents
 just app-build     # the Tauri shell for this OS, unbundled and unsigned, after cargo-deny on its workspace
 just up / down     # PostgreSQL 16 and MinIO in Compose (deploy/compose/compose.yaml)
 just serve         # the server on :8080 against the Compose database, web build embedded
@@ -148,6 +148,7 @@ just fmt / fmt-check   # cargo fmt
 just lint          # cargo clippy --workspace --all-targets --locked -- -D warnings
 just test-rust     # web build, then cargo nextest run --workspace and doctests
 just layering      # bin/check-layering.sh
+just lint-escapes  # bin/check-lint-escapes.py: no inner allows or wide expects around the OrgScope gate, one clippy.toml
 just spdx-check    # bin/check-spdx.sh: SPDX headers on every source file
 just deny          # cargo deny check
 just migrate       # apply migrations to the local database
