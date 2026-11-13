@@ -76,7 +76,10 @@ Read on 2026-11-12.
   naming the missing file. Its images are pinned by digest like the development file. How Caddy
   is made optional is Open question Q1.
 - **B3.** In the production example, only the reverse proxy (or, without Caddy, the server on a
-  port the self-hoster chooses) is published. Postgres is reachable only on the Compose network.
+  port the self-hoster chooses) is published to the network. Postgres is reachable only on the
+  Compose network. With the `tls` profile the server keeps its `127.0.0.1:8080` port, reachable
+  from the host only, because a Compose profile cannot remove another service's port (Q1 chose
+  one file with profiles).
 - **B4.** MinIO stays optional and out of the production example's default services in M0,
   because nothing reads object storage before M1 (ADR 0019). The image choice remains ADR 0019's
   open decision (Q6).
@@ -92,8 +95,11 @@ Read on 2026-11-12.
   environment.
 - **B7.** Behind Caddy, the server sees the original scheme and host, so cookies marked `Secure`
   (08-sessions-and-csrf: `__Host-sc_session`), the Origin allowlist (08) and provider redirect
-  URLs (05, 06) use the public HTTPS origin. Which forwarded headers the server trusts, and from
-  whom, is configuration this spec's loader carries and 08 defines.
+  URLs (05, 06) use the public HTTPS origin. Caddy discards the forwarding headers a client
+  sends and writes its own, and has a fixed address on the `proxy` network it shares with the
+  server, so the server can trust exactly that address. Which forwarded headers the server
+  trusts, and from whom, is configuration this spec's loader carries and 08 defines; the key
+  and the code that reads it are 08's I5.
 
 ### Configuration
 
@@ -286,7 +292,9 @@ overrule one, which then updates this spec.
   `stepclimb` subcommand (the plan's CLI lists `backup-verify`, not a dump command).
   Recommendation: M0, as a sidecar service (a) that keeps 7 days, because the vZDC pilot's data
   lives on the test server from M0, and `backup-verify` comes with M4's restore drill.
-  **Decided:** the recommendation (owner, 13 Nov 2026).
+  **Decided:** the recommendation (owner, 13 Nov 2026). Retention is by age: a dump is deleted
+  when it is more than 7 days older than the newest dump, so the newest is never deleted and a
+  dump taken by hand never pushes a nightly one out.
 - **Q5. Which spec publishes the image.** The M0 row has "releases" (01-repo-and-ci) and
   "Compose deploy" (this spec). Options: (a) 01's release workflow builds multi-arch, signs with
   cosign, attaches the SBOM and pushes to GHCR, and this spec owns the Dockerfile's contents and a
@@ -329,9 +337,9 @@ In dependency order. Each is one PR.
   the container healthcheck as Q3 decides, and a CI job booting it with generated secrets.
   Covers B2, B3, B5, B17, B18; T8 to T10. Depends on: I1; Q1 and Q3 answered.
 - **I5. Optional Caddy.** Deliverable: the Caddy service and Caddyfile with automatic TLS, its
-  volumes, the forwarded-header configuration keys, and the T9 run through Caddy's internal CA.
-  Covers B6, B7; T8, T9. Depends on: I4; 08-sessions-and-csrf (which forwarded headers are
-  trusted).
+  volumes, Caddy's side of the forwarded headers (its own values only, from a fixed address),
+  and the T9 run through Caddy's internal CA. The server's trusted-proxy key is 08's I5. Covers
+  B6, B7; T8, T9. Depends on: I4.
 - **I6. Nightly dumps and restore.** Deliverable: the nightly dump as Q4 decides, with retention,
   and the dump-and-restore CI check. Covers B19, B20; T12. Depends on: I4; Q4 answered.
 - **I7. Image architectures.** Deliverable: the Dockerfile building for amd64 and arm64 (a

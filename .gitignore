@@ -25,6 +25,9 @@ node_modules/
 *.pfx
 # The production Compose example's secret files (deploy/compose/compose.production.yaml)
 /deploy/compose/secrets/
+# Database dumps copied off the backup service: they hold every organization's data. Keep them
+# outside the checkout; this catches a copy made into it by mistake.
+backups/
 
 # direnv: a local .envrc (`use flake`) is each developer's own.
 .envrc

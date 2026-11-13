@@ -15,7 +15,7 @@ default:
     @just --list
 
 # Every merge check. Must pass on the committed HEAD before a merge.
-ci: secrets-scan fmt-check lint layering lint-escapes spdx-check up test-rust deny sqlx-check openapi-diff web-lint typecheck test-web e2e compose-check agents-check
+ci: secrets-scan fmt-check lint layering lint-escapes spdx-check up test-rust deny sqlx-check openapi-diff web-lint typecheck test-web e2e compose-check compose-ops-check agents-check
     @echo "just ci: all gates passed"
     bash bin/ci-stamp.sh
 

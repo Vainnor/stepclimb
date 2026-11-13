@@ -8,7 +8,8 @@
 #   T9   `up` with generated secrets turns healthy, /readyz answers 200 on the published port,
 #        the server is published on 127.0.0.1 only (the default), and PostgreSQL publishes no
 #        port and sits only on internal networks.
-# SC_PROD_CHECK_PROJECT and SC_PROD_CHECK_PORT override the project name and the port.
+# SC_PROD_CHECK_PROJECT, SC_PROD_CHECK_PORT and SC_PROD_CHECK_NETWORK (the proxy network's first
+# three octets) override the project name, the port and the subnet.
 # It runs as its own Compose project on its own port, so it never touches the development stack
 # (project `stepclimb`, :55432, :58080), and removes its containers, volumes and secrets on exit.
 # Needs the server image to build (deploy/Dockerfile); `just e2e` before it leaves it cached.
@@ -20,7 +21,8 @@ project=${SC_PROD_CHECK_PROJECT:-stepclimb-prodcheck}
 port=${SC_PROD_CHECK_PORT:-58180}
 production=deploy/compose/compose.production.yaml
 work=$(mktemp -d "${TMPDIR:-/tmp}/stepclimb-prodcheck.XXXXXX")
-export SC_HTTP_PORT=$port SC_SECRETS_DIR="$work/secrets"
+export SC_HTTP_PORT=$port SC_SECRETS_DIR="$work/secrets" \
+    SC_PROXY_NETWORK=${SC_PROD_CHECK_NETWORK:-10.201.75}
 
 compose() { docker compose -p "$project" -f "$production" "$@"; }
 fail() {
@@ -31,6 +33,8 @@ cleanup() {
     compose --profile minio down --volumes --remove-orphans >/dev/null 2>&1 || true
     rm -rf "$work"
 }
+# A run that was killed before its cleanup leaves its stack behind; start from nothing.
+compose --profile minio down --volumes --remove-orphans >/dev/null 2>&1 || true
 trap cleanup EXIT
 
 # T8: every file and profile combination parses.
