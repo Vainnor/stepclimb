@@ -30,7 +30,9 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   clock, this spec uses it.
 - **B2.** Session tokens, API keys, refresh tokens, sign-in flow tokens and authorization codes
   are generated from the operating system's CSPRNG. The server stores only a hash of each and
-  compares hashes in constant time. Token length, encoding and hash function: pending Q2.
+  looks a token up by the SHA-256 of the presented value; in-process comparisons of hashes are
+  constant time (coordinator decision, 13 Nov 2026). Token length, encoding and hash function:
+  pending Q2.
 - **B3.** Secrets the server must read back (provider client secrets, TOTP seeds, the admission
   webhook secret, sign-in flow payloads) are encrypted with AES-256-GCM under the server's
   encryption key, with a fresh nonce per value and a key identifier stored beside the
@@ -63,7 +65,10 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   `kind = 'browser'`, `last_seen_at = now`, `expires_at = now + 30 days`, and sets the cookie
   `__Host-sc_session` with `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/` and no `Domain`
   attribute. Whether the cookie also carries `Expires`: pending Q5. A sign-in never reuses an
-  existing session token, so a token planted before sign-in is never promoted.
+  existing session token, so a token planted before sign-in is never promoted. Before it creates
+  the new session, a sign-in deletes the session of the request's organization that each
+  `__Host-sc_session` cookie the browser presented names, live or expired, so the old cookie's
+  session does not stay alive (coordinator decision, 13 Nov 2026).
 - **B8.** On each request carrying the cookie the server hashes the token and looks up the
   session through its user, within the request's organization. The session is valid when the
   row exists, `now < expires_at` (30 days at most) and `now < last_seen_at + 12 hours` (12 hours
@@ -71,12 +76,19 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
 - **B9.** A valid session refreshes `last_seen_at`. How often the write happens: pending Q4.
 - **B10.** An expired or idle session is deleted, the response clears the cookie
   (`Max-Age=0`), and a route that needs authentication answers 401 `auth.session_expired`. A
-  cookie whose hash matches no row is cleared and answers 401 `auth.unauthenticated`.
+  cookie whose hash matches no row is cleared and answers 401 `auth.unauthenticated`. A request
+  carrying two or more `__Host-sc_session` cookies, or one whose value is not ASCII, is treated
+  the same way without a lookup: 401 `auth.unauthenticated` and the cookie cleared. Other
+  cookies in the `Cookie` header, ASCII or not, never hide the session cookie (coordinator
+  decision, 13 Nov 2026).
 - **B11.** The request authenticator reads the user's `status` on every request
   (`03-users-and-identities.md` B7). A session, API key or access token whose user is suspended
   authenticates nothing and the request answers 401 `auth.suspended`. The session row is kept,
   so unsuspending before it expires restores it; a refresh token of a suspended user is refused
-  at `/oauth/token` with `invalid_grant`.
+  at `/oauth/token` with `invalid_grant`. Expiry is checked before suspension: an expired or idle
+  session of a suspended user is deleted and answers `auth.session_expired` per B10, and a
+  suspended user's session is not refreshed, so it still idles out after 12 hours (coordinator
+  decision, 13 Nov 2026).
 - **B12.** Safe methods (GET, HEAD, OPTIONS) change no state other than `last_seen_at` and the
   sign-in flow rows of B17, so a `SameSite=Lax` cookie sent on a cross-site top-level GET can
   do nothing.

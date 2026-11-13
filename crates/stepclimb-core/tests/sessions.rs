@@ -317,6 +317,29 @@ async fn delete_removes_the_session_of_the_scope(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn delete_by_token_hash_ends_the_named_session_of_the_scope_only(pool: PgPool) {
+    let (org, _, session) = signed_in(&pool).await;
+    let b = insert_org(&pool, "org-b").await;
+
+    let from_b = sessions::delete_by_token_hash(&pool, scope(b), &hash(1))
+        .await
+        .unwrap();
+    assert!(!from_b, "org B's scope deletes nothing");
+    assert!(last_seen_us(&pool, session.id).await.is_some());
+    assert!(
+        !sessions::delete_by_token_hash(&pool, scope(org), &hash(2))
+            .await
+            .unwrap()
+    );
+
+    let from_a = sessions::delete_by_token_hash(&pool, scope(org), &hash(1))
+        .await
+        .unwrap();
+    assert!(from_a);
+    assert_eq!(last_seen_us(&pool, session.id).await, None);
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn deleting_the_user_deletes_their_sessions(pool: PgPool) {
     let (_, user, session) = signed_in(&pool).await;
     sqlx::query("DELETE FROM users WHERE id = $1")

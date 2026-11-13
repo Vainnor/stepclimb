@@ -99,16 +99,32 @@ impl Fixture {
             .with_state(state)
     }
 
-    /// What a sign-in does: start a session at the clock's time.
+    /// What a sign-in does: start a session at the clock's time, from a request without cookies.
     async fn sign_in(&self) -> Started {
-        session::start(
-            &self.pool,
+        self.sign_in_with(None).await
+    }
+
+    /// A sign-in from a request whose `Cookie` header is `cookie`.
+    async fn sign_in_with(&self, cookie: Option<&str>) -> Started {
+        let mut headers = HeaderMap::new();
+        if let Some(cookie) = cookie {
+            headers.insert(
+                header::COOKIE,
+                cookie.parse().expect("a valid Cookie header"),
+            );
+        }
+        let mut tx = self.pool.begin().await.expect("begin");
+        let started = session::start(
+            &mut tx,
             scope(self.org),
             self.user,
+            &headers,
             self.clock.clock().now(),
         )
         .await
-        .expect("start a session")
+        .expect("start a session");
+        tx.commit().await.expect("commit");
+        started
     }
 
     async fn whoami(&self, cookie: Option<&str>) -> Answer {
@@ -302,7 +318,7 @@ async fn t5_a_cookie_planted_before_sign_in_is_never_promoted(pool: PgPool) {
         StatusCode::UNAUTHORIZED
     );
 
-    let started = fixture.sign_in().await;
+    let started = fixture.sign_in_with(Some(planted)).await;
 
     assert_ne!(cookie_pair(&started), planted);
     let old = fixture.whoami(Some(planted)).await;
@@ -310,6 +326,50 @@ async fn t5_a_cookie_planted_before_sign_in_is_never_promoted(pool: PgPool) {
     assert_eq!(old.code(), "auth.unauthenticated");
     let new = fixture.whoami(Some(&cookie_pair(&started))).await;
     assert_eq!(new.status, StatusCode::OK);
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn signing_in_again_ends_the_session_the_browser_presented(pool: PgPool) {
+    let fixture = Fixture::new(pool).await;
+    let first = cookie_pair(&fixture.sign_in().await);
+    let other_browser = cookie_pair(&fixture.sign_in().await);
+
+    let second = fixture
+        .sign_in_with(Some(&format!("theme=dark; {first}")))
+        .await;
+
+    let old = fixture.whoami(Some(&first)).await;
+    assert_eq!(old.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(old.code(), "auth.unauthenticated", "the old row is gone");
+    let new = fixture.whoami(Some(&cookie_pair(&second))).await;
+    assert_eq!(new.status, StatusCode::OK);
+    let other = fixture.whoami(Some(&other_browser)).await;
+    assert_eq!(
+        other.status,
+        StatusCode::OK,
+        "another browser's session stays"
+    );
+    assert_eq!(fixture.session_count().await, 2);
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_non_ascii_neighbor_cookie_does_not_sign_the_user_out(pool: PgPool) {
+    let fixture = Fixture::new(pool).await;
+    let cookie = cookie_pair(&fixture.sign_in().await);
+    let mut request = Request::get("/whoami");
+    request = request.header(
+        header::COOKIE,
+        axum::http::HeaderValue::from_bytes(format!("theme=café; {cookie}").as_bytes())
+            .expect("a header value may hold UTF-8 bytes"),
+    );
+
+    let response = fixture
+        .app()
+        .oneshot(request.body(Body::empty()).expect("a valid request"))
+        .await
+        .expect("the router never fails");
+
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]

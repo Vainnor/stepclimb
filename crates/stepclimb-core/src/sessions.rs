@@ -266,6 +266,26 @@ pub async fn delete(db: impl PgExecutor<'_>, scope: OrgScope, id: Uuid) -> Resul
     Ok(result.rows_affected() > 0)
 }
 
+/// Delete the session of the scope's organization whose token hashes to `token_hash`, live or
+/// expired, for a sign-in that replaces the session cookie the browser presented. Returns
+/// whether a row was deleted; a hash of another organization's session deletes nothing.
+pub async fn delete_by_token_hash(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    token_hash: &[u8; 32],
+) -> Result<bool, Error> {
+    let result = sqlx::query!(
+        r#"DELETE FROM sessions s
+           USING users u
+           WHERE u.id = s.user_id AND u.org_id = $1 AND s.token_hash = $2"#,
+        scope.org_id(),
+        token_hash.as_slice(),
+    )
+    .execute(db)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::UNIX_EPOCH;
