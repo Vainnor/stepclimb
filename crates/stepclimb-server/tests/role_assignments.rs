@@ -855,3 +855,122 @@ async fn a_course_scope_assignment_is_reached_only_from_the_organization(pool: P
     assert_eq!(by_admin.status, StatusCode::NO_CONTENT, "{by_admin:?}");
     assert!(!f.exists(course).await);
 }
+
+// An account move between the permission check and the write.
+
+/// Ground moves from Tower to Enroute in a transaction that holds the tree lock; a request by
+/// Tower's admin at Ground waits for it, then finds Ground out of reach.
+async fn while_ground_moves_to_enroute<F, Fut>(f: &Fixture, request: F) -> Answer
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Answer> + Send + 'static,
+{
+    let mut moving = f.pool.begin().await.expect("begin the move");
+    accounts::move_to(&mut *moving, scope(f.a.id), f.a.ground, f.a.enroute, now())
+        .await
+        .expect("move Ground");
+    let waiting = tokio::spawn(request());
+    until_a_call_waits_on_a_lock(&f.pool).await;
+    moving.commit().await.expect("commit the move");
+    waiting.await.expect("the request ran")
+}
+
+/// One request through a clone of the fixture's router, in org A.
+fn send_owned(
+    f: &Fixture,
+    method: Method,
+    uri: String,
+    cookie: String,
+    body: Option<Value>,
+) -> impl std::future::Future<Output = Answer> + Send + 'static {
+    let app = f.app.clone();
+    let org = f.a.id;
+    async move {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(TEST_ORG_HEADER, org.to_string())
+            .header(header::COOKIE, cookie)
+            .header("sec-fetch-site", "same-origin");
+        let body = match body {
+            Some(json) => {
+                request = request.header(header::CONTENT_TYPE, "application/json");
+                Body::from(json.to_string())
+            }
+            None => Body::empty(),
+        };
+        let response = app
+            .oneshot(request.body(body).expect("a valid request"))
+            .await
+            .expect("the router never fails");
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("the body is readable")
+            .to_bytes();
+        let body = if bytes.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&bytes).expect("a JSON body")
+        };
+        Answer {
+            status,
+            headers,
+            body,
+        }
+    }
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_grant_waits_for_an_account_move_and_checks_the_new_path(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (tower_admin, _) = f.holder_of("account_admin", At::Account(f.a.tower)).await;
+    let (_, pat) = f.user().await;
+    let role = f.custom_role(&["account.view"]).await;
+    let body = json!({
+        "user_id": pat, "role_id": role,
+        "scope": { "type": "account", "id": f.a.ground },
+    });
+
+    let answer = while_ground_moves_to_enroute(&f, || {
+        send_owned(
+            &f,
+            Method::POST,
+            ASSIGNMENTS.into(),
+            tower_admin,
+            Some(body),
+        )
+    })
+    .await;
+
+    assert_eq!(answer.status, StatusCode::NOT_FOUND, "{answer:?}");
+    assert_eq!(answer.code(), "account.not_found");
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM role_assignments WHERE role_id = $1")
+        .bind(role)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0);
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_removal_waits_for_an_account_move_and_checks_the_new_path(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (tower_admin, _) = f.holder_of("account_admin", At::Account(f.a.tower)).await;
+    let (_, pat) = f.user().await;
+    let role = f.custom_role(&["account.view"]).await;
+    let at_ground = f.assign(pat, role, At::Account(f.a.ground)).await;
+    let uri = format!("{ASSIGNMENTS}/{at_ground}");
+
+    let answer = while_ground_moves_to_enroute(&f, || {
+        send_owned(&f, Method::DELETE, uri, tower_admin, None)
+    })
+    .await;
+
+    assert_eq!(answer.status, StatusCode::NOT_FOUND, "{answer:?}");
+    assert_eq!(answer.code(), "role_assignment.not_found");
+    assert!(f.exists(at_ground).await);
+}

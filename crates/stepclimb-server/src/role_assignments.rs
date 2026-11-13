@@ -12,7 +12,9 @@
 //! `role.not_found`; 409 `role.unknown_builtin` for a built-in role this release does not
 //! define), Manager and Observer (422, B13), the scope (404, or 422 for a course), the
 //! caller's `role.assign` there (404 when the scope is hidden from the caller, else 403), the
-//! escalation rule (403), and a repeat (409). The role is read `FOR KEY SHARE` in the
+//! escalation rule (403), and a repeat (409). Both writes take the account tree lock before
+//! they read the scope's path, so an account move or delete cannot carry the scope out of the
+//! caller's reach between the check and the write. The role is read `FOR KEY SHARE` in the
 //! transaction that inserts, so a concurrent change of the role waits until the insert commits.
 //! `DELETE` reads the assignment (404), applies the same permission, unknown-role and
 //! escalation checks at its scope in the transaction that deletes (a hidden scope answers 404
@@ -31,8 +33,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
+use sqlx::{PgConnection, Postgres, Transaction};
 use stepclimb_core::{
-    Source,
+    Source, accounts,
     grants::{self, Denied, Grants, RequireError, ScopeId},
     id::Uuid,
     perm::{self, Permission, RoleAssign, RoleView},
@@ -232,7 +235,12 @@ pub async fn list_role_assignments(
         (None, None) => None,
         (Some(scope_type), Some(id)) => {
             let scope = requested_scope(org_id, scope_type, id)?;
-            permission_at::<RoleView>(&state, grants, scope).await?;
+            let mut conn = state
+                .db
+                .acquire()
+                .await
+                .map_err(|e| ApiError::internal(&e))?;
+            permission_at::<RoleView>(&mut conn, grants, scope).await?;
             Some(scope)
         }
         _ => {
@@ -301,7 +309,7 @@ pub async fn create_role_assignment(
         .await
         .map_err(|error| ApiError::internal(&error))?
         .ok_or_else(user_not_found)?;
-    let mut tx = state.db.begin().await.map_err(|e| ApiError::internal(&e))?;
+    let mut tx = begin_with_tree_locked(&state, grants).await?;
     // Locked until the commit, so the permissions the escalation check reads are the ones the
     // role has when the assignment is inserted.
     let role = roles::get_for_key_share(&mut tx, scope, body.role_id)
@@ -316,7 +324,7 @@ pub async fn create_role_assignment(
     if let Scope::Course(_) = at {
         return Err(scope_unavailable(&["scope", "type"]));
     }
-    let target = permission_at::<RoleAssign>(&state, grants, at).await?;
+    let target = permission_at::<RoleAssign>(&mut tx, grants, at).await?;
     refuse_escalation(grants, &role.permissions, &target)?;
     let new = NewAssignment {
         user_id: body.user_id,
@@ -365,17 +373,17 @@ pub async fn delete_role_assignment(
 ) -> Result<StatusCode, ApiError> {
     let grants = require.grants();
     let scope = grants.scope();
-    let assignment = repo::get(&state.db, scope, assignment_id)
+    let mut tx = begin_with_tree_locked(&state, grants).await?;
+    let assignment = repo::get(&mut *tx, scope, assignment_id)
         .await
         .map_err(|error| ApiError::internal(&error))?
         .ok_or_else(assignment_not_found)?;
-    let target = permission_at::<RoleAssign>(&state, grants, assignment.scope)
+    let target = permission_at::<RoleAssign>(&mut tx, grants, assignment.scope)
         .await
         .map_err(|error| match error.code() {
             crate::require::code::ACCOUNT_NOT_FOUND => assignment_not_found(),
             _ => error,
         })?;
-    let mut tx = state.db.begin().await.map_err(|e| ApiError::internal(&e))?;
     let role = roles::get_for_key_share(&mut tx, scope, assignment.role_id)
         .await
         .map_err(|error| ApiError::internal(&error))?
@@ -396,6 +404,21 @@ pub async fn delete_role_assignment(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// A transaction holding the organization's account tree lock (`accounts::lock_tree`, spec 02
+/// B22) until it ends, for a write whose permission check reads an account's path: no account
+/// move or delete runs between the check and the write, so an account cannot leave the caller's
+/// reach in between.
+async fn begin_with_tree_locked(
+    state: &AppState,
+    grants: &Grants,
+) -> Result<Transaction<'static, Postgres>, ApiError> {
+    let mut tx = state.db.begin().await.map_err(|e| ApiError::internal(&e))?;
+    accounts::lock_tree(&mut tx, grants.scope())
+        .await
+        .map_err(|error| ApiError::internal(&error))?;
+    Ok(tx)
+}
+
 /// The scope a request names. An organization scope must name the request's own organization
 /// (404 `org.not_found` otherwise).
 fn requested_scope(org_id: Uuid, scope_type: ScopeType, id: Uuid) -> Result<Scope, ApiError> {
@@ -411,7 +434,7 @@ fn requested_scope(org_id: Uuid, scope_type: ScopeType, id: Uuid) -> Result<Scop
 /// account does not exist or is hidden from the caller, 403 when it is visible but `P` is not
 /// effective there. A course counts as inside the organization only (see the module docs).
 async fn permission_at<P: Permission>(
-    state: &AppState,
+    conn: &mut PgConnection,
     grants: &Grants,
     scope: Scope,
 ) -> Result<grants::Target, ApiError> {
@@ -424,7 +447,7 @@ async fn permission_at<P: Permission>(
         }
     };
     grants
-        .require_at::<P>(&state.db, at)
+        .require_at::<P>(conn, at)
         .await
         .map_err(|error: RequireError| error.into())
 }

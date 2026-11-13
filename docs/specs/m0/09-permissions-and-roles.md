@@ -150,6 +150,13 @@ organizations' ids.
   409 `role.unknown_builtin`. The route reads the role `FOR KEY SHARE` in the transaction that
   inserts or deletes, so a concurrent `PATCH` of the role (which locks it `FOR UPDATE`, B9) waits,
   and the permissions the escalation check read are the role's when the change commits.
+
+  Coordinator decision (2026-11-13), from the sweep after `02` issue 13's review. `POST` and
+  `DELETE` begin their transaction by taking the organization's account tree lock
+  (`accounts::lock_tree`, `02` B22), then read the scope's path, run steps 4 and 5 and write in
+  that transaction. An account move or delete therefore cannot carry the scope out of the
+  caller's reach between the check and the write: a request that waits on a move checks the
+  account's new path (404 when it left the caller's subtree, nothing written).
 - **B13.** Manager and Observer cannot be assigned in M0 (422 `role_assignment.scope_unavailable`):
   their scopes (reports, named students) do not exist yet, and assigning them at organization or
   account scope would mean something the plan does not say.
