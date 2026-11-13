@@ -8,7 +8,9 @@ project, runs CMD with its database in DATABASE_URL, and removes the project wha
 1. the lock `flock /tmp/stepclimb-ci.lock` takes, held shared: a gate run under that exclusive
    wrapper (an older checkout's gate, which uses the fixed project `stepclimb` and port 58080 and
    assumes it runs alone) waits for these runs and they wait for it. A run that is itself inside
-   such a wrapper skips this lock, which its wrapper already holds;
+   such a wrapper skips this lock, which its wrapper already holds. Only the command form,
+   `flock <file> <command>`, is recognized: a wrapper that holds the lock on a descriptor
+   (`exec 9>file; flock 9`) is not, and a gate inside it waits for itself;
 2. this worktree's lock (`<git dir>/stepclimb-ci.lock`): one run per worktree, since the project
    name, the image tag and the PR stamp are per worktree;
 3. one of SC_CI_SLOTS (default 3) slot files in /tmp, so at most that many gates share the
@@ -105,6 +107,7 @@ def slot_env(slot: int) -> dict[str, str]:
     ports = {name: str(20000 + 10 * slot + i) for i, name in enumerate(SLOT_PORTS)}
     return {
         **ports,
+        "SC_CI_SLOT": str(slot),
         "SC_PROD_CHECK_NETWORK": f"10.201.{100 + slot}",
         "SC_OPS_CHECK_NETWORK": f"10.201.{150 + slot}",
     }
@@ -241,10 +244,19 @@ def remove_image(image: str, env: Mapping[str, str]) -> None:
 
 
 DOWN = ("down", "--volumes", "--remove-orphans", "--timeout", "5")
+OWN_PROJECT = re.compile(r"^stepclimb-(ci|prodcheck|opscheck)-([0-9a-f]{8})(-restore)?$")
+SLOT_LABEL = "stepclimb.ci.slot"  # on the run's own project, deploy/compose/ci.yaml
 
 
 def remove_project(project: str, env: Mapping[str, str]) -> None:
-    """Remove a Compose project's containers, networks and volumes, by name alone."""
+    """Remove a Compose project's containers, networks and volumes, by name alone.
+
+    An ops check project first loses the echo container bin/check-compose-ops.sh starts on its
+    proxy network outside Compose, which would otherwise keep that network in use."""
+    match = OWN_PROJECT.match(project)
+    if match and match.group(1) == "opscheck" and not match.group(3):
+        echo = f"{project}-echo"
+        checked(["docker", "rm", "--force", echo], env, f"removing {echo}")
     checked(["docker", "compose", "-p", project, *DOWN], env, f"removing {project}")
 
 
@@ -257,12 +269,7 @@ def remove_stack(env: Mapping[str, str]) -> None:
     """Remove every project, container and image a run of this worktree creates."""
     for project in run_projects(env):
         remove_project(project, env)
-    echo = f"{env['SC_OPS_CHECK_PROJECT']}-echo"  # bin/check-compose-ops.sh runs it outside Compose
-    checked(["docker", "rm", "--force", echo], env, f"removing {echo}")
     remove_image(env["SC_IMAGE"], env)
-
-
-OWN_PROJECT = re.compile(r"^stepclimb-(ci|prodcheck|opscheck)-([0-9a-f]{8})(-restore)?$")
 
 
 def orphaned_projects(listing: str, exists: Callable[[str], bool] = os.path.isdir) -> list[str]:
@@ -300,23 +307,46 @@ def subnet_holders(listing: str, subnets: set[str]) -> list[str]:
     return sorted(holders)
 
 
-def free_subnets(env: Mapping[str, str]) -> None:
-    """Remove a project holding this run's proxy subnets: only a killed run that had this slot can."""
+def free_slot(env: Mapping[str, str]) -> None:
+    """Remove what a killed run with this slot left on its ports and subnets.
+
+    The slot lock is exclusive, so a gate project labelled with this slot (the PostgreSQL and e2e
+    server project) or on this slot's subnets (the check projects) belongs to a run that died. A
+    project that is not a gate's is never removed: it fails the run, naming the project."""
+    labelled = checked(
+        ["docker", "ps", "--all", "--filter", f"label={SLOT_LABEL}={env['SC_CI_SLOT']}"]
+        + ["--format", '{{.Label "com.docker.compose.project"}}'],
+        env,
+        "listing this slot's containers",
+    ).split()
+    stale = set(labelled) | set(subnet_holders(subnet_listing(env), slot_subnets(env)))
+    foreign = sorted(p for p in stale if not OWN_PROJECT.match(p))
+    if foreign:
+        raise GateError(
+            f"{', '.join(foreign)} uses this gate slot's subnet "
+            f"({' or '.join(sorted(slot_subnets(env)))}); remove it or lower SC_CI_SLOTS"
+        )
+    for project in sorted(stale):
+        remove_project(project, env)
+        say(f"removed {project}, left on this slot by a run that was killed")
+
+
+def slot_subnets(env: Mapping[str, str]) -> set[str]:
+    return {f"{env[name]}.0/24" for name in ("SC_PROD_CHECK_NETWORK", "SC_OPS_CHECK_NETWORK")}
+
+
+def subnet_listing(env: Mapping[str, str]) -> str:
     networks = checked(
         ["docker", "network", "ls", "--quiet", "--filter", "label=com.docker.compose.project"],
         env,
         "listing Compose networks",
     ).split()
     if not networks:
-        return
+        return ""
     template = '{{index .Labels "com.docker.compose.project"}}|{{range .IPAM.Config}}{{.Subnet}} {{end}}'
-    listing = checked(
+    return checked(
         ["docker", "network", "inspect", "--format", template, *networks], env, "reading subnets"
     )
-    ours = {f"{env[name]}.0/24" for name in ("SC_PROD_CHECK_NETWORK", "SC_OPS_CHECK_NETWORK")}
-    for project in subnet_holders(listing, ours):
-        remove_project(project, env)
-        say(f"removed {project}, which held this slot's subnet")
 
 
 def start_database(toplevel: Path, env: Mapping[str, str]) -> str:
@@ -424,7 +454,7 @@ def run_stack(toplevel: Path, env: dict[str, str], command: list[str], signals: 
     try:
         remove_orphans(env)
         remove_stack(env)  # what a killed run in this worktree left behind
-        free_subnets(env)
+        free_slot(env)
         if signals.received is None:
             env["DATABASE_URL"] = start_database(toplevel, env)
             say(f"database {env['DATABASE_URL']}")

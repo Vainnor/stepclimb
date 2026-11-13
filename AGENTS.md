@@ -167,8 +167,8 @@ just typecheck     # tsc in every package
 just test-web      # Vitest in every package
 just e2e           # Playwright smoke test against this worktree's own Compose stack (builds the image)
 just ui-visual     # Storybook story screenshots and axe in Playwright's pinned image (--update-snapshots)
-just compose-check # the production Compose example booted with generated secrets on :28180, then removed
-just compose-ops-check  # the same with Caddy (internal CA) on :28280/:28281/:28443: TLS, forwarded headers, dumps, a restore
+just compose-check # the production Compose example booted with generated secrets on the slot's port, then removed
+just compose-ops-check  # the same with Caddy (internal CA) on the slot's ports: TLS, forwarded headers, dumps, a restore
 just agents-check  # agent hook tests and Codex mirrors of .claude/ (docs/agents.md)
 just secrets-scan  # gitleaks over the tree (staged | history also accepted)
 just clean-stale [--dry-run] [--days N]  # stale build output in every worktree's target/
@@ -191,20 +191,28 @@ the rest wait their turn, and one run per worktree. Each run gets its own Postgr
 projects (`stepclimb-ci-<id>`, `stepclimb-prodcheck-<id>`, `stepclimb-opscheck-<id>`, image
 `stepclimb:ci-<id>`, `<id>` from the worktree path) and its slot's ports (`20000 + 10 * slot`
 and up) and proxy subnets (`10.201.(100 + slot)`, `10.201.(150 + slot)`), so checkouts with
-different migrations never share a database and runs never share a port or subnet. The ports sit
-below Linux's ephemeral range (32768 to 60999): a port there can be held by a host socket, such
-as an outgoing connection's source port in TIME-WAIT, which rootless Docker cannot see when it
-picks one. The shared stack's fixed ports (55432, 58080, 59000, 59001) are inside that range, so
-`just up` can occasionally hit that; no gate binds them.
+different migrations never share a database and runs never share a port or subnet.
+
+`just e2e`, `just compose-check` and `just compose-ops-check` always run inside the gate, alone
+or not, and use the slot's ports. The fixed ports in `bin/check-production-compose.sh` (28180)
+and `bin/check-compose-ops.sh` (28280, 28281, 28443) are only their defaults when run directly
+with `bash`. All of these sit below Linux's ephemeral range (32768 to 60999), where a host socket
+such as an outgoing connection's source port in TIME-WAIT can hold a port, and rootless Docker
+cannot see that when it picks one. The shared `just up` stack's fixed ports (55432, 58080,
+59000, 59001) are inside that range, so `just up` can occasionally hit it; no gate binds them.
 
 The run removes its projects and image when it ends, whether it passed, failed or was stopped by
 SIGTERM, SIGHUP or SIGINT. At its start it removes what a killed run of the worktree left, any
-such project whose worktree no longer exists, and any project on its slot's subnets. It never
-uses or stops the shared `just up` stack. A gate under the old `flock /tmp/stepclimb-ci.lock` wrapper still works: the wrapper waits for
-running gates and runs alone, and the gate inside it skips the lock its wrapper holds. Every
-gate takes the old lock first, then the worktree's, then a slot, so no two can wait on each
-other. The stamp records the commit the run started on, and nothing if HEAD moved during the
-run.
+such project whose worktree no longer exists, and any gate project labelled with its slot or on
+its slot's subnets (a killed run's, since the slot is exclusive); a project that is not a gate's
+on those subnets stops the run instead. It never uses or stops the shared `just up` stack.
+
+A gate under the old `flock /tmp/stepclimb-ci.lock <command>` wrapper still works: the wrapper
+waits for running gates and runs alone, and the gate inside it skips the lock its wrapper holds.
+The descriptor form (`exec 9>/tmp/stepclimb-ci.lock; flock 9`) is not recognized, and a gate
+inside it waits forever. Every gate takes the old lock first, then the worktree's, then a slot,
+so no two can wait on each other. The stamp records the commit the run started on, and nothing
+if HEAD moved during the run or the tree had changes when it started.
 
 `just app-build` builds the Tauri shell for the local OS; macOS and Windows builds, and jobs of
 about an hour or more, run on a machine or VM the owner provides when a change needs them, and the

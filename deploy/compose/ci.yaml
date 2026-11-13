@@ -3,10 +3,13 @@
 # `stepclimb-ci-<id>`: nothing here is shared with the development stack or another worktree's run.
 # PostgreSQL keeps its data in memory. Both published ports are the run's slot's (SC_CI_PG_PORT,
 # SC_CI_PORT), which no other run holds; the run reads them back with `docker compose port`. The
-# gate sets SC_IMAGE to a tag of its own, so that one run never starts another's build. MinIO is
-# not started.
+# gate sets SC_IMAGE to a tag of its own, so that one run never starts another's build. Each
+# container carries the slot's number, so that a later run on the slot can remove what a killed run
+# left on those ports. MinIO is not started.
 services:
   postgres:
+    labels:
+      stepclimb.ci.slot: "${SC_CI_SLOT:?SC_CI_SLOT is set by bin/ci_gate.py}"
     ports: !override
       - "127.0.0.1:${SC_CI_PG_PORT:?SC_CI_PG_PORT is set by bin/ci_gate.py}:5432"
     volumes: !reset []
@@ -18,5 +21,10 @@ services:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U stepclimb -d stepclimb"]
 
   stepclimb:
+    environment:
+      # The address Playwright opens (just e2e), which the CSRF check accepts as an Origin.
+      STEPCLIMB_PUBLIC_URL: http://127.0.0.1:${SC_CI_PORT:?SC_CI_PORT is set by bin/ci_gate.py}
+    labels:
+      stepclimb.ci.slot: "${SC_CI_SLOT:?SC_CI_SLOT is set by bin/ci_gate.py}"
     ports: !override
       - "127.0.0.1:${SC_CI_PORT:?SC_CI_PORT is set by bin/ci_gate.py}:8080"

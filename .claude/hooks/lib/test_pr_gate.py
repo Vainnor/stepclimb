@@ -91,6 +91,13 @@ class PrGate(unittest.TestCase):
         code, _ = self.hook("gh pr create")
         self.assertEqual(code, 2)
 
+    def test_a_run_that_started_dirty_records_no_pass(self):
+        tested = self.head()
+        self.assertIn("not recorded", self.stamp(tested, "dirty"))
+        code, _ = self.hook("gh pr create")
+        self.assertEqual(code, 2)
+        self.assertIn("recorded", self.stamp(tested, "clean"))
+
     def test_a_dirty_tree_records_no_pass(self):
         with open(os.path.join(self.repo, "new"), "w") as f:
             f.write("x")
@@ -113,7 +120,8 @@ class PrGate(unittest.TestCase):
         with open(os.path.join(ROOT, "justfile"), encoding="utf-8") as f:
             recipe = f.read().split("\nci:", 1)[1].split("\n\n", 1)[0]
         self.assertIn('tested="$(git rev-parse HEAD)"', recipe)
-        self.assertTrue(recipe.rstrip().endswith('bash bin/ci-stamp.sh "$tested"'), recipe)
+        self.assertIn("git status --porcelain --untracked-files=normal", recipe)
+        self.assertTrue(recipe.rstrip().endswith('bash bin/ci-stamp.sh "$tested" "$tree"'), recipe)
 
     def test_claude_and_codex_run_the_gate_on_bash(self):
         with open(os.path.join(ROOT, ".claude", "settings.json"), encoding="utf-8") as f:

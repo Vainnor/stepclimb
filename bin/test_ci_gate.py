@@ -364,8 +364,6 @@ class OrphanTest(unittest.TestCase):
 
 
 class SubnetTest(unittest.TestCase):
-    env = {"SC_PROD_CHECK_NETWORK": "10.201.101", "SC_OPS_CHECK_NETWORK": "10.201.151"}
-
     def test_finds_projects_on_this_slots_subnets_only(self) -> None:
         listing = "\n".join(
             [
@@ -382,15 +380,72 @@ class SubnetTest(unittest.TestCase):
             ["stepclimb-opscheck-0123abcd", "stepclimb-prodcheck-0123abcd"],
         )
 
-    def test_frees_this_slots_subnets(self) -> None:
-        answers = iter(["n1 n2", "stepclimb-opscheck-0123abcd|10.201.151.0/24 \nother|10.9.0.0/16 "])
+
+
+class FreeSlotTest(unittest.TestCase):
+    env = {
+        "SC_CI_SLOT": "2",
+        "SC_PROD_CHECK_NETWORK": "10.201.102",
+        "SC_OPS_CHECK_NETWORK": "10.201.152",
+    }
+
+    def free(self, labelled: str, networks: str) -> tuple[mock.Mock, list[list[str]]]:
+        listings = {"ps": labelled, "ls": "n1" if networks else "", "inspect": networks}
+        commands: list[list[str]] = []
+
+        def checked(command: list[str], *_: object) -> str:
+            commands.append(command)
+            return listings[command[2] if command[1] == "network" else command[1]]
+
         with (
-            mock.patch.object(ci_gate, "checked", side_effect=lambda *_: next(answers)),
+            mock.patch.object(ci_gate, "checked", side_effect=checked),
             mock.patch.object(ci_gate, "remove_project") as remove_project,
             mock.patch.object(ci_gate, "say"),
         ):
-            ci_gate.free_subnets(self.env)
-        remove_project.assert_called_once_with("stepclimb-opscheck-0123abcd", self.env)
+            ci_gate.free_slot(self.env)
+        return remove_project, commands
+
+    def test_removes_another_worktrees_leftover_on_this_slot(self) -> None:
+        leftover = "stepclimb-ci-89abcdef\nstepclimb-ci-89abcdef\n"
+        remove_project, commands = self.free(leftover, "")
+        self.assertIn("label=stepclimb.ci.slot=2", commands[0])
+        remove_project.assert_called_once_with("stepclimb-ci-89abcdef", self.env)
+
+    def test_removes_check_projects_on_this_slots_subnets(self) -> None:
+        networks = "stepclimb-opscheck-89abcdef|10.201.152.0/24 \nother|10.9.0.0/16 "
+        remove_project, _ = self.free("", networks)
+        remove_project.assert_called_once_with("stepclimb-opscheck-89abcdef", self.env)
+
+    def test_never_removes_a_project_that_is_not_a_gates(self) -> None:
+        networks = "homelab|10.201.102.0/24 \nstepclimb-opscheck-89abcdef|10.201.152.0/24 "
+        with self.assertRaisesRegex(ci_gate.GateError, "homelab uses this gate slot's subnet"):
+            self.free("", networks)
+        with (
+            mock.patch.object(ci_gate, "checked", side_effect=["", "n1", networks]),
+            mock.patch.object(ci_gate, "remove_project") as remove_project,
+            self.assertRaises(ci_gate.GateError),
+        ):
+            ci_gate.free_slot(self.env)
+        remove_project.assert_not_called()
+
+
+class RemoveProjectTest(unittest.TestCase):
+    def commands(self, project: str) -> list[list[str]]:
+        with mock.patch.object(ci_gate, "checked", return_value="") as checked:
+            ci_gate.remove_project(project, {})
+        return [c.args[0] for c in checked.call_args_list]
+
+    def test_an_ops_project_loses_its_echo_container_first(self) -> None:
+        down = ["down", "--volumes", "--remove-orphans", "--timeout", "5"]
+        self.assertEqual(
+            self.commands("stepclimb-opscheck-0123abcd"),
+            [
+                ["docker", "rm", "--force", "stepclimb-opscheck-0123abcd-echo"],
+                ["docker", "compose", "-p", "stepclimb-opscheck-0123abcd", *down],
+            ],
+        )
+        self.assertEqual(len(self.commands("stepclimb-ci-0123abcd")), 1)
+        self.assertEqual(len(self.commands("stepclimb-opscheck-0123abcd-restore")), 1)
 
 
 class StackCommandsTest(unittest.TestCase):
@@ -415,11 +470,9 @@ class StackCommandsTest(unittest.TestCase):
             "stepclimb-opscheck-0123abcd",
             "stepclimb-opscheck-0123abcd-restore",
         ]
-        self.assertEqual(
-            commands,
-            [["docker", "compose", "-p", project, *self.down] for project in projects]
-            + [["docker", "rm", "--force", "stepclimb-opscheck-0123abcd-echo"]],
-        )
+        down = [["docker", "compose", "-p", project, *self.down] for project in projects]
+        echo = ["docker", "rm", "--force", "stepclimb-opscheck-0123abcd-echo"]
+        self.assertEqual(commands, [*down[:2], echo, *down[2:]])
         remove_image.assert_called_once_with("stepclimb:ci-0123abcd", self.env)
 
     def test_start_database_uses_the_runs_own_postgres(self) -> None:
@@ -459,7 +512,7 @@ class RunTeardownTest(unittest.TestCase):
             "git": mock.patch.object(ci_gate, "git", return_value="/work/stepclimb"),
             "take_locks": mock.patch.object(ci_gate, "take_locks", return_value=([], 1)),
             "remove_orphans": mock.patch.object(ci_gate, "remove_orphans"),
-            "free_subnets": mock.patch.object(ci_gate, "free_subnets"),
+            "free_slot": mock.patch.object(ci_gate, "free_slot"),
             "remove_stack": mock.patch.object(ci_gate, "remove_stack"),
             "start_database": mock.patch.object(
                 ci_gate, "start_database", return_value="postgres://db"
@@ -508,6 +561,9 @@ log = Path(sys.argv[2])
 def note(text):
     with log.open("a") as f:
         f.write(text + "\\n")
+def orphans(*_):
+    note("orphans")
+    time.sleep(float(os.environ.get("ORPHAN_SECONDS", "0")))
 def start(*_):
     note("start")
     time.sleep(float(os.environ.get("START_SECONDS", "0")))
@@ -517,14 +573,15 @@ with contextlib.ExitStack() as patches:
     patch("git", return_value=sys.argv[3])
     if not os.environ.get("REAL_LOCKS"):
         patch("take_locks", return_value=([], 1))
-    patch("remove_orphans")
-    patch("free_subnets")
+    patch("remove_orphans", side_effect=orphans)
+    patch("free_slot")
     patch("remove_stack", side_effect=lambda *_: note("remove"))
     patch("start_database", side_effect=start)
     sys.exit(ci_gate.main(["run", "--", *sys.argv[4:]]))
 """
 
-# The command the gate runs: notes that it started and which signal reached it.
+# The command the gate runs: notes that it started and which signal reached it, then exits with
+# 128 + the signal, or 0 for SIGHUP when CHILD_HUP_STATUS says so.
 CHILD = """
 import signal, sys, time
 from pathlib import Path
@@ -532,8 +589,9 @@ log = Path(sys.argv[1])
 def got(signum, _):
     with log.open("a") as f:
         f.write(f"child got {signum}\\n")
-    sys.exit(128 + signum)
+    sys.exit(0 if signum == signal.SIGHUP else 128 + signum)
 signal.signal(signal.SIGTERM, got)
+signal.signal(signal.SIGHUP, got)
 with log.open("a") as f:
     f.write("child running\\n")
 time.sleep(30)
@@ -577,7 +635,7 @@ class SignalTest(LockTestCase):
         gate.send_signal(signal.SIGTERM)
         self.assertEqual(gate.wait(timeout=20), 128 + signal.SIGTERM)
         self.assertEqual(
-            self.lines(), ["remove", "start", "child running", f"child got {signal.SIGTERM}", "remove"]
+            self.lines(), ["orphans", "remove", "start", "child running", f"child got {signal.SIGTERM}", "remove"]
         )
 
     def test_sigterm_during_setup_skips_the_command_and_still_removes(self) -> None:
@@ -585,7 +643,21 @@ class SignalTest(LockTestCase):
         self.wait_for("start")
         gate.send_signal(signal.SIGTERM)
         self.assertEqual(gate.wait(timeout=20), 128 + signal.SIGTERM)
-        self.assertEqual(self.lines(), ["remove", "start", "remove"])
+        self.assertEqual(self.lines(), ["orphans", "remove", "start", "remove"])
+
+    def test_a_signal_during_cleanup_skips_the_database_and_the_command(self) -> None:
+        gate = self.gate({"ORPHAN_SECONDS": "1"})
+        self.wait_for("orphans")
+        gate.send_signal(signal.SIGTERM)
+        self.assertEqual(gate.wait(timeout=20), 128 + signal.SIGTERM)
+        self.assertEqual(self.lines(), ["orphans", "remove", "remove"])
+
+    def test_a_command_that_exits_0_after_a_signal_still_fails_the_run(self) -> None:
+        gate = self.gate()
+        self.wait_for("child running")
+        gate.send_signal(signal.SIGHUP)
+        self.assertEqual(gate.wait(timeout=20), 128 + signal.SIGHUP)
+        self.assertIn(f"child got {signal.SIGHUP}", self.lines())
 
     def test_sigterm_while_waiting_for_a_lock_ends_the_run(self) -> None:
         self.hold(ci_gate.LEGACY_LOCK, fcntl.LOCK_EX)
