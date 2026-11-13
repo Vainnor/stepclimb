@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "includeCoAuthoredBy": false,
+  "permissions": {
+    "allow": [
+      "Bash(just --list)",
+      "Bash(just ci)",
+      "Bash(just check)",
+      "Bash(just lint)",
+      "Bash(just layering)",
+      "Bash(just test-rust)",
+      "Bash(just test-web)",
+      "Bash(just typecheck)",
+      "Bash(just web-lint)",
+      "Bash(just agents-check)",
+      "Bash(cargo check:*)",
+      "Bash(cargo tree:*)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)"
+    ],
+    "deny": []
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/attribution-gate.sh\"; [ -f \"$f\" ] || { echo \"hook missing: $f\" >&2; exit 2; }; bash \"$f\""
+          },
+          {
+            "type": "command",
+            "command": "f=\"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/git-guard.sh\"; [ -f \"$f\" ] || { echo \"hook missing: $f\" >&2; exit 2; }; bash \"$f\""
+          },
+          {
+            "type": "command",
+            "command": "f=\"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/pr-gate.sh\"; [ -f \"$f\" ] || { echo \"hook missing: $f\" >&2; exit 2; }; bash \"$f\""
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/content-guard.sh\"; [ -f \"$f\" ] || { echo \"hook missing: $f\" >&2; exit 2; }; bash \"$f\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/format-on-edit.sh\"; [ -f \"$f\" ] && bash \"$f\"; exit 0"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/post-merge-cleanup.sh\"; [ -f \"$f\" ] && bash \"$f\"; exit 0",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-context.sh\"; [ -f \"$f\" ] && bash \"$f\"; exit 0"
+          }
+        ]
+      }
+    ]
+  }
+}

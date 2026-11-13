@@ -1,0 +1,18 @@
+# Codex execution-policy rules for Stepclimb (Starlark; https://developers.openai.com/codex/agent-configuration/rules).
+# A Codex `allow` rule does more than Claude Code's permissions.allow: it skips the approval
+# prompt and also runs the command outside the sandbox (codex-rs core/src/exec_policy.rs). Rules
+# match by token prefix and cannot exclude an argument, so a command is allowed here only if no
+# argument can make it write or run another program. That rules out the `just` recipes (an
+# edited justfile, or `just ci install-hooks`), `cargo` (`--config build.rustc-wrapper=...`) and
+# `git diff`/`git log` (`--output=<file>`), which Claude Code allows; under Codex they go through
+# the normal approval prompt. Nothing is forbidden: Claude Code has no deny entries, and the
+# git-guard and attribution-gate hooks in .codex/config.toml do the blocking.
+# Codex checks the match and not_match examples when it loads this file.
+
+prefix_rule(
+    pattern = ["git", "status"],
+    decision = "allow",
+    justification = "Read-only working-tree status.",
+    match = ["git status", "git status --short"],
+    not_match = ["git diff", "git log --output=x", "git push", "git -C .. status"],
+)
