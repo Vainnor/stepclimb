@@ -19,7 +19,7 @@ use crate::{
     auth,
     csrf::{self, OriginAllowlist},
     error::ApiError,
-    health, me, openapi,
+    health, me, openapi, organization,
     rate_limit::RateLimiter,
     roles, spa,
     web_origin::WebOrigin,
@@ -95,6 +95,14 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         ("/readyz", get(health::readyz)),
         ("/auth/sign-out", post(auth::sign_out)),
         (me::ME_PATH, get(me::get_me)),
+        (
+            organization::ORGANIZATION_PATH,
+            get(organization::get_organization).patch(organization::update_organization),
+        ),
+        (
+            organization::SETTINGS_PATH,
+            get(organization::get_settings).patch(organization::update_settings),
+        ),
         ("/api/v1/admin/permissions", get(roles::list_permissions)),
         (
             roles::ROLES_PATH,

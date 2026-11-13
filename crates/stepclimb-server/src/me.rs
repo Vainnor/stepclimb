@@ -14,7 +14,9 @@ use serde::Serialize;
 use stepclimb_core::{Source, id::Uuid, organizations, users};
 use utoipa::ToSchema;
 
-use crate::{AppState, error::ApiError, roles::ScopeType, session::Authenticated};
+use crate::{
+    AppState, error::ApiError, organization::Organization, roles::ScopeType, session::Authenticated,
+};
 
 /// The path of the route.
 pub const ME_PATH: &str = "/api/v1/me";
@@ -23,7 +25,7 @@ pub const ME_PATH: &str = "/api/v1/me";
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, ToSchema)]
 pub struct Me {
     pub user: MeUser,
-    pub organization: MeOrganization,
+    pub organization: Organization,
     /// Each scope where the caller holds at least one effective permission, with those
     /// permissions sorted. Always empty until the server computes grants for this route.
     pub grants: Vec<MeGrant>,
@@ -50,15 +52,6 @@ pub struct MeUser {
     pub tz: String,
     pub status: UserStatus,
     pub source: UserSource,
-}
-
-/// The signed-in user's organization.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, ToSchema)]
-pub struct MeOrganization {
-    #[schema(value_type = String, format = "uuid")]
-    pub id: Uuid,
-    pub slug: String,
-    pub name: String,
 }
 
 /// The permissions the caller holds at one scope.
@@ -170,11 +163,7 @@ pub async fn get_me(
         .map_err(|error| ApiError::internal(&error))?;
     Ok(Json(Me {
         user: user.into(),
-        organization: MeOrganization {
-            id: organization.id,
-            slug: organization.slug,
-            name: organization.name,
-        },
+        organization: organization.into(),
         grants: Vec::new(),
         features: Vec::new(),
     }))

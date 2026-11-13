@@ -15,11 +15,14 @@
 //! there the header is ignored.
 //!
 //! `clippy.toml` lists [`resolve`] under `disallowed-methods`: its callers are the session module
-//! (its extractor and sign-out) and the resolver of unauthenticated routes (spec 02 B11), each
-//! through a `fn` with a reasoned `#[expect(clippy::disallowed_methods)]`. A handler takes its scope from the
-//! credential instead.
+//! (its extractor and sign-out) and [`RequestOrg`], the extractor of unauthenticated routes
+//! (spec 02 B11), each through a `fn` with a reasoned `#[expect(clippy::disallowed_methods)]`.
+//! A handler that has a credential takes its scope from the credential instead.
 
-use axum::http::{HeaderMap, StatusCode};
+use axum::{
+    extract::FromRequestParts,
+    http::{HeaderMap, StatusCode, request::Parts},
+};
 use sqlx::PgExecutor;
 use stepclimb_core::{
     OrgScope,
@@ -27,7 +30,7 @@ use stepclimb_core::{
     organizations::{self, Tenancy},
 };
 
-use crate::error::ApiError;
+use crate::{AppState, error::ApiError};
 
 /// The codes this module produces.
 pub mod code {
@@ -40,6 +43,42 @@ pub mod code {
 /// The header a `test-support` build reads to pick the request's organization: its id.
 #[cfg(feature = "test-support")]
 pub const TEST_ORG_HEADER: &str = "x-stepclimb-test-org";
+
+/// The organization of a request that carries no credential (spec 02 B11): the sign-in start
+/// and callback (specs 04 to 06) and the admission flow (spec 07) take it. It rejects as
+/// [`resolve`] does: 503 `org.none` with no organization, 404 `org.not_found` with several. A
+/// route that has a credential takes its scope from the credential (`session::Authenticated`,
+/// `require::Require`), never from this.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RequestOrg(OrgScope);
+
+impl RequestOrg {
+    /// The request's organization, which every repository call of the route acts in.
+    pub fn scope(&self) -> OrgScope {
+        self.0
+    }
+}
+
+impl FromRequestParts<AppState> for RequestOrg {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
+        unauthenticated_route_org(state, &parts.headers)
+            .await
+            .map(Self)
+    }
+}
+
+#[expect(
+    clippy::disallowed_methods,
+    reason = "spec 02 B9, B11: the extractor of unauthenticated routes resolves the request's organization"
+)]
+async fn unauthenticated_route_org(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<OrgScope, ApiError> {
+    resolve(&state.db, headers).await
+}
 
 /// The request's organization, as an instance scope. `headers` are read only by a
 /// `test-support` build.

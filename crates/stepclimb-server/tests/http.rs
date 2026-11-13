@@ -170,6 +170,8 @@ async fn the_openapi_document_is_3_1_and_lists_every_route() {
             "/api/v1/admin/roles",
             "/api/v1/admin/roles/{role_id}",
             "/api/v1/me",
+            "/api/v1/organization",
+            "/api/v1/organization/settings",
             "/auth/sign-out",
             "/healthz",
             "/readyz"

@@ -98,7 +98,14 @@ These apply to every endpoint in M0, including the ones other specs define.
 - **B13.** `GET /api/v1/organization` returns the caller's organization (`id`, `slug`, `name`) to
   any authenticated principal. `PATCH /api/v1/organization` changes `name` (trimmed, not empty,
   length limit pending Q6) and needs `perm::OrgManage`. The slug is not changed through the API
-  in M0 (pending Q3).
+  in M0 (pending Q3). A `PATCH` without `name` changes nothing: it answers the organization as it
+  is and `updated_at` does not move. `"name": null` is not an omitted name: the schema's `name`
+  is not nullable, so it answers 400 `request.malformed`. The settings `PATCH` follows the same
+  rules: a patch naming no key writes nothing and leaves `updated_at` alone, and a member sent
+  as `null`, under any key, answers 400 `request.malformed` (omit a key to leave it as it is). A
+  422 for unknown settings keys lists at most the first 20. `GET /api/v1/me` answers its
+  organization with the same `Organization` schema as `GET /api/v1/organization` (coordinator
+  decisions, 13 Nov 2026).
 - **B14.** `organizations.settings` is read and written only through the typed `OrgSettings`
   struct in `stepclimb-core`. Each key is owned by the spec that uses it (for example the email
   matching setting in `03-users-and-identities.md`, the local sign-in method switches in

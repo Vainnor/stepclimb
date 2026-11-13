@@ -27,6 +27,17 @@ pub struct OrgSettings {}
 #[serde(deny_unknown_fields)]
 pub struct OrgSettingsPatch {}
 
+impl OrgSettingsPatch {
+    /// Whether a patch may name `key`, so the API can report each unknown key by name
+    /// (`settings.unknown_key`) instead of failing the whole parse. It asks the type itself:
+    /// every member is optional, so `{ key: null }` parses exactly when `key` is a member, and
+    /// a key added to the struct is known here without a second list to keep in step.
+    pub fn knows(key: &str) -> bool {
+        let probe = serde_json::Map::from_iter([(key.to_owned(), serde_json::Value::Null)]);
+        serde_json::from_value::<Self>(serde_json::Value::Object(probe)).is_ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -47,6 +58,20 @@ mod tests {
     fn a_patch_with_an_unknown_key_is_refused() {
         let parsed = serde_json::from_str::<OrgSettingsPatch>(r#"{"no_such_key": true}"#);
         assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn a_patch_knows_every_settings_key_and_no_other() {
+        let serde_json::Value::Object(defaults) =
+            serde_json::to_value(OrgSettings::default()).unwrap()
+        else {
+            panic!("the settings serialize to an object");
+        };
+        for key in defaults.keys() {
+            assert!(OrgSettingsPatch::knows(key), "{key}");
+        }
+        assert!(!OrgSettingsPatch::knows("no_such_key"));
+        assert!(!OrgSettingsPatch::knows(""));
     }
 
     #[test]
