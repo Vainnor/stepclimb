@@ -11,9 +11,15 @@
 //!    `OrgScope::from_credential`, which no other crate can call.
 //! 2. **By the instance itself.** [`OrgScope::instance`] is public for startup tasks, the
 //!    `stepclimb admin` CLI, job workers and the request-organization resolver of
-//!    unauthenticated routes. `clippy.toml` lists it under `disallowed-methods`, so every call
-//!    site carries `#[expect(clippy::disallowed_methods, reason = "...")]` and `just lint` fails
-//!    on any other.
+//!    unauthenticated routes.
+//!
+//! `clippy.toml` lists both constructors under `disallowed-methods`, and the workspace denies
+//! `#[allow]` and any lint attribute without a reason. So every direct call site needs its own
+//! `#[expect(clippy::disallowed_methods, reason = "...")]`, and `just lint` fails on a call
+//! without one. The lint sees direct calls only: an `expect` on a whole module, or a wrapper
+//! function that calls the constructor once and is then called freely, launders every call
+//! behind it. Reviewers refuse both; the `expect` belongs on the function that is itself an
+//! allowed call site.
 //!
 //! An id from the client (a path parameter, a body field, a cursor, a header) never builds or
 //! changes a scope: there is no constructor from a bare id that a handler can reach without the
@@ -42,7 +48,8 @@ pub struct OrgScope {
     origin: ScopeOrigin,
 }
 
-/// Where an [`OrgScope`] came from.
+/// Where an [`OrgScope`] came from, for logs and audit. An origin never grants a right:
+/// permissions are checked for the principal, never inferred from how the scope was built.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScopeOrigin {
     /// A browser session's user.
@@ -51,8 +58,9 @@ pub enum ScopeOrigin {
     ApiKey,
     /// An OAuth access token of one of Stepclimb's own apps.
     AppToken,
-    /// The instance acting on its own behalf: startup, the CLI, a job, an unauthenticated
-    /// route's organization.
+    /// Built by [`OrgScope::instance`]. This covers both the privileged contexts (startup, the
+    /// CLI, a job) and the organization of an unauthenticated request (`RequestOrg`, spec 02
+    /// B9, B11), so it says nothing about who is asking.
     Instance,
 }
 
@@ -105,7 +113,7 @@ impl OrgScope {
         self.org_id
     }
 
-    /// Where this scope came from.
+    /// Where this scope came from. Never a basis for an authorization decision ([`ScopeOrigin`]).
     #[must_use]
     pub fn origin(self) -> ScopeOrigin {
         self.origin
@@ -118,6 +126,10 @@ mod tests {
     use crate::id::new_id;
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "tests the credential constructor itself"
+    )]
     fn a_credential_scope_keeps_its_organization_and_origin() {
         let org = new_id();
         let cases = [

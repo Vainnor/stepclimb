@@ -8,5 +8,6 @@ allow-print-in-tests = true
 # resolver of unauthenticated routes, each with
 # `#[expect(clippy::disallowed_methods, reason = "...")]`.
 disallowed-methods = [
+    { path = "stepclimb_core::OrgScope::from_credential", reason = "only the credential resolvers of spec 08 build a credential scope (spec 02 B9)" },
     { path = "stepclimb_core::OrgScope::instance", reason = "a request's scope comes from its credential; only startup, the CLI, jobs and the unauthenticated organization resolver build an instance scope (spec 02 B9)" },
 ]
