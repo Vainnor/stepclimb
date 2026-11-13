@@ -1,0 +1,103 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH inserted AS (\n               INSERT INTO identities (id, org_id, user_id, provider_id, subject, attributes,\n                                       created_at, updated_at)\n               VALUES ($1, $2, $3, $4, $5, $6::text::jsonb,\n                       timestamptz 'epoch' + $7::bigint * interval '1 microsecond',\n                       timestamptz 'epoch' + $7::bigint * interval '1 microsecond')\n               RETURNING id, org_id, user_id, provider_id, subject, attributes, created_at,\n                         updated_at\n           )\n           SELECT i.id AS \"id!\", i.user_id AS \"user_id!\", i.provider_id AS \"provider_id!\",\n                  p.key AS \"provider_key!\", i.subject AS \"subject!\",\n                  i.attributes::text AS \"attributes!\",\n                  (extract(epoch FROM i.created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM i.updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM inserted i\n           JOIN identity_providers p ON p.org_id = i.org_id AND p.id = i.provider_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "identities",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id!",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "identities",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "provider_id!",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "identities",
+            "name": "provider_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "provider_key!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "identity_providers",
+            "name": "key"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "subject!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "identities",
+            "name": "subject"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "attributes!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at_us!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "updated_at_us!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "c8d0454a8d5203c57118d5718f5ab7d1906f4fba1fb6112a682c3a8b0c0e486e"
+}
