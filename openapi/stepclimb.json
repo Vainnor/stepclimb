@@ -65,6 +65,24 @@
   },
   "components": {
     "schemas": {
+      "FieldError": {
+        "type": "object",
+        "description": "One rule a request body broke, in a 422's `errors`.",
+        "required": [
+          "field",
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The stable code of the rule, such as `settings.unknown_key`."
+          },
+          "field": {
+            "type": "string",
+            "description": "A JSON Pointer (RFC 6901) to the member that broke the rule, such as `/name`."
+          }
+        }
+      },
       "Health": {
         "type": "object",
         "description": "A probe's answer.",
@@ -84,6 +102,120 @@
           "ok",
           "unavailable"
         ]
+      },
+      "Problem": {
+        "type": "object",
+        "description": "The body of every error response (RFC 9457).",
+        "required": [
+          "type",
+          "title",
+          "status",
+          "detail",
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The stable error code, `area.reason`."
+          },
+          "detail": {
+            "type": "string",
+            "description": "A sentence for a human reader. Clients branch on `code`, never on this text."
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldError"
+            },
+            "description": "On a 422, each rule the body broke."
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The HTTP status code, repeated.",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string",
+            "description": "The HTTP status phrase."
+          },
+          "type": {
+            "type": "string",
+            "description": "`about:blank` until the docs site documents each code."
+          }
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "`request.malformed`: the body, a path parameter or a query parameter does not parse or does not match the schema, or `limit` is outside 1 to 200. `pagination.invalid_cursor`: the cursor does not decode.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "InternalError": {
+        "description": "`internal.error`: the server failed; the cause is in its log.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "MethodNotAllowed": {
+        "description": "`request.method_not_allowed`: the path does not take this method; `Allow` lists the methods it takes.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "PayloadTooLarge": {
+        "description": "`request.too_large`: the body is larger than the server accepts.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "RouteNotFound": {
+        "description": "`request.not_found`: no API operation has this path.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "UnprocessableEntity": {
+        "description": "`request.invalid`: the body parses but breaks a rule; `errors` lists each one.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "UnsupportedMediaType": {
+        "description": "`request.unsupported_media_type`: the body is not JSON.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
       }
     }
   },

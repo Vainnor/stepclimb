@@ -4,12 +4,22 @@
 //! It is committed as `openapi/stepclimb.json`; `just openapi-diff` regenerates it and the
 //! TypeScript client (`packages/api-client`) and fails when either differs from what is
 //! committed. Today it lists only the operations probes, which the web app's skeleton route
-//! calls through the generated client. Product endpoints are added under `/api/v1` by the M0
-//! specs.
+//! calls through the generated client, and the shared error schemas and responses below.
+//! Product endpoints are added under `/api/v1` by the M0 specs.
+//!
+//! Every `/api/v1` operation lists its errors in `#[utoipa::path]` (spec 02 B6). The errors
+//! common to every operation reference the responses here, such as
+//! `(status = 400, response = BadRequest)`, so each error body is documented once.
 
-use utoipa::OpenApi;
+use utoipa::{
+    OpenApi, ToResponse,
+    openapi::{ContentBuilder, RefOr, Response, ResponseBuilder, schema::Ref},
+};
 
-use crate::health;
+use crate::{
+    error::{FieldError, PROBLEM_JSON, Problem},
+    health,
+};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -19,10 +29,61 @@ use crate::health;
         license(name = "AGPL-3.0-or-later", identifier = "AGPL-3.0-or-later")
     ),
     paths(health::healthz, health::readyz),
-    components(schemas(health::Health, health::HealthStatus)),
+    components(
+        schemas(health::Health, health::HealthStatus, Problem, FieldError),
+        responses(
+            BadRequest,
+            RouteNotFound,
+            MethodNotAllowed,
+            PayloadTooLarge,
+            UnsupportedMediaType,
+            UnprocessableEntity,
+            InternalError
+        )
+    ),
     tags((name = "operations", description = "Liveness and readiness probes"))
 )]
 struct ApiDoc;
+
+fn problem_response(description: &str) -> RefOr<Response> {
+    ResponseBuilder::new()
+        .description(description)
+        .content(
+            PROBLEM_JSON,
+            ContentBuilder::new()
+                .schema(Some(Ref::from_schema_name("Problem")))
+                .build(),
+        )
+        .build()
+        .into()
+}
+
+// BadRequest's description repeats pagination::MAX_LIMIT, since it is a literal; a test in
+// tests/http.rs checks the two agree.
+
+/// Declares a shared problem response: its component name is the type's name.
+macro_rules! problem_responses {
+    ($($name:ident => $description:literal,)+) => {$(
+        #[doc = $description]
+        pub struct $name;
+
+        impl<'r> ToResponse<'r> for $name {
+            fn response() -> (&'r str, RefOr<Response>) {
+                (stringify!($name), problem_response($description))
+            }
+        }
+    )+};
+}
+
+problem_responses! {
+    BadRequest => "`request.malformed`: the body, a path parameter or a query parameter does not parse or does not match the schema, or `limit` is outside 1 to 200. `pagination.invalid_cursor`: the cursor does not decode.",
+    RouteNotFound => "`request.not_found`: no API operation has this path.",
+    MethodNotAllowed => "`request.method_not_allowed`: the path does not take this method; `Allow` lists the methods it takes.",
+    PayloadTooLarge => "`request.too_large`: the body is larger than the server accepts.",
+    UnsupportedMediaType => "`request.unsupported_media_type`: the body is not JSON.",
+    UnprocessableEntity => "`request.invalid`: the body parses but breaks a rule; `errors` lists each one.",
+    InternalError => "`internal.error`: the server failed; the cause is in its log.",
+}
 
 /// The API's OpenAPI document.
 pub fn document() -> utoipa::openapi::OpenApi {
