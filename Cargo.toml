@@ -65,6 +65,16 @@ uuid = { version = "=1.29.0", default-features = false, features = ["std", "v7",
 # Pagination cursors are base64url (spec 02 B3).
 base64 = { version = "=0.22.1", default-features = false, features = ["std"] }
 
+# Cryptography for stepclimb-auth (docs/specs/m0/08-sessions-and-csrf.md B2, B3, Q2, Q3): tokens
+# from the OS CSPRNG, SHA-256 token hashes compared in constant time, CRC-32 API-key checksums,
+# base64 encodings (the `base64` entry above), AES-256-GCM for secrets the server reads back.
+# crc is the version sqlx already brings.
+getrandom = { version = "=0.4.3", default-features = false }
+sha2 = { version = "=0.11.1", default-features = false }
+subtle = { version = "=2.6.1", default-features = false }
+crc = "=3.4.0"
+aes-gcm = { version = "=0.11.1", default-features = false, features = ["aes", "alloc"] }
+
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
 thiserror = "=2.0.21"
