@@ -3,8 +3,8 @@
 //!
 //! It is committed as `openapi/stepclimb.json`; `just openapi-diff` regenerates it and the
 //! TypeScript client (`packages/api-client`) and fails when either differs from what is
-//! committed. Today it lists only the operations probes, which the web app's skeleton route
-//! calls through the generated client, and the shared error schemas and responses below.
+//! committed. Today it lists the operations probes, which the web app's skeleton route calls
+//! through the generated client, sign-out, and the shared error schemas and responses below.
 //! Product endpoints are added under `/api/v1` by the M0 specs.
 //!
 //! Every `/api/v1` operation lists its errors in `#[utoipa::path]` (spec 02 B6). The errors
@@ -17,9 +17,17 @@ use utoipa::{
 };
 
 use crate::{
+    auth,
     error::{FieldError, PROBLEM_JSON, Problem},
     health,
 };
+
+/// The operation extension that marks a handler as changing state (spec 08 B12, T17). Every
+/// handler that writes anything but `last_seen_at` or a sign-in flow carries
+/// `extensions(("x-stepclimb-mutates" = json!(true)))` in its `#[utoipa::path]` (the macro takes
+/// a literal there, not this constant); a test walks the document and fails when a GET, HEAD or
+/// OPTIONS operation carries it.
+pub const MUTATES: &str = "x-stepclimb-mutates";
 
 #[derive(OpenApi)]
 #[openapi(
@@ -28,7 +36,7 @@ use crate::{
         description = "The public API every Stepclimb client uses. There are no private endpoints.",
         license(name = "AGPL-3.0-or-later", identifier = "AGPL-3.0-or-later")
     ),
-    paths(health::healthz, health::readyz),
+    paths(health::healthz, health::readyz, auth::sign_out),
     components(
         schemas(health::Health, health::HealthStatus, Problem, FieldError),
         responses(
@@ -38,10 +46,16 @@ use crate::{
             PayloadTooLarge,
             UnsupportedMediaType,
             UnprocessableEntity,
-            InternalError
+            InternalError,
+            CsrfRefused,
+            OrganizationNotFound,
+            NoOrganization
         )
     ),
-    tags((name = "operations", description = "Liveness and readiness probes"))
+    tags(
+        (name = "operations", description = "Liveness and readiness probes"),
+        (name = "auth", description = "Browser sessions")
+    )
 )]
 struct ApiDoc;
 
@@ -83,6 +97,9 @@ problem_responses! {
     UnsupportedMediaType => "`request.unsupported_media_type`: the body is not JSON.",
     UnprocessableEntity => "`request.invalid`: the body parses but breaks a rule; `errors` lists each one.",
     InternalError => "`internal.error`: the server failed; the cause is in its log.",
+    CsrfRefused => "`auth.csrf_refused`: an unsafe request without a bearer credential did not come from this site: `Sec-Fetch-Site` is not `same-origin`, or, without it, `Origin` is not an allowed origin.",
+    OrganizationNotFound => "`org.not_found`: the request's organization cannot be determined.",
+    NoOrganization => "`org.none`: the instance has no organization yet.",
 }
 
 /// The API's OpenAPI document.

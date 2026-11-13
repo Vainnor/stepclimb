@@ -28,6 +28,8 @@ use tracing_subscriber::EnvFilter;
 
 pub use file::ConfigFile;
 
+use crate::web_origin::WebOrigin;
+
 /// One configuration setting: its variable, its TOML key and whether its value is a secret.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Setting {
@@ -66,8 +68,28 @@ pub const ENCRYPTION_KEYS: Setting = Setting {
     example: "k1:<32 random bytes in base64, from openssl rand -base64 32>",
 };
 
+pub const PUBLIC_URL: Setting = Setting {
+    var: "STEPCLIMB_PUBLIC_URL",
+    key: "public_url",
+    secret: false,
+    example: "https://lms.example.org",
+};
+pub const ALLOWED_ORIGINS: Setting = Setting {
+    var: "STEPCLIMB_ALLOWED_ORIGINS",
+    key: "allowed_origins",
+    secret: false,
+    example: "https://app.example.org,https://admin.example.org",
+};
+
 /// Every setting [`Config`] reads.
-pub const SETTINGS: &[Setting] = &[BIND, LOG, DATABASE_URL, ENCRYPTION_KEYS];
+pub const SETTINGS: &[Setting] = &[
+    BIND,
+    LOG,
+    DATABASE_URL,
+    ENCRYPTION_KEYS,
+    PUBLIC_URL,
+    ALLOWED_ORIGINS,
+];
 
 /// The variable naming the configuration file when `--config` is not given.
 pub const CONFIG_VAR: &str = "STEPCLIMB_CONFIG";
@@ -96,6 +118,12 @@ pub struct Config {
     /// `encryption_keys`, secret: the AES-256-GCM key ring (`stepclimb_auth::encryption`),
     /// required.
     pub encryption_keys: KeyRing,
+    /// `public_url`, required: the origin users open the instance at (spec 08 Q1). It is the
+    /// first origin the CSRF check accepts, and an `https` one turns HSTS on.
+    pub public_url: WebOrigin,
+    /// `allowed_origins`: further origins the CSRF check accepts, comma-separated (spec 08 Q6).
+    /// Unset means none.
+    pub allowed_origins: Vec<WebOrigin>,
 }
 
 impl fmt::Debug for Config {
@@ -106,6 +134,8 @@ impl fmt::Debug for Config {
             .field("log", &self.log)
             .field("database_url", &redacted_database_url(&self.database_url))
             .field("encryption_keys", &self.encryption_keys)
+            .field("public_url", &self.public_url)
+            .field("allowed_origins", &self.allowed_origins)
             .finish()
     }
 }
@@ -292,12 +322,22 @@ impl Config {
             origin,
             problem: format!("{e}; for example {}", ENCRYPTION_KEYS.example),
         })?;
+        let public_url = match sources.plain(&PUBLIC_URL)? {
+            Some((value, origin)) => web_origin(&value, origin, &PUBLIC_URL)?,
+            None => return Err(ConfigError::Missing(PUBLIC_URL)),
+        };
+        let allowed_origins = match sources.plain(&ALLOWED_ORIGINS)? {
+            Some((value, origin)) => allowed_origins(&value, origin)?,
+            None => Vec::new(),
+        };
         Ok(Self {
             file: file.map(|f| f.path().to_path_buf()),
             bind,
             log,
             database_url,
             encryption_keys,
+            public_url,
+            allowed_origins,
         })
     }
 }
@@ -309,7 +349,26 @@ impl Config {
         vec![
             (BIND.key, self.bind.to_string()),
             (LOG.key, self.log.clone()),
+            (PUBLIC_URL.key, self.public_url.to_string()),
+            (ALLOWED_ORIGINS.key, self.allowed_origins_or_none()),
         ]
+    }
+
+    fn allowed_origins_or_none(&self) -> String {
+        if self.allowed_origins.is_empty() {
+            "(none)".to_owned()
+        } else {
+            self.allowed_origins_list()
+        }
+    }
+
+    /// `allowed_origins` as it is configured, comma-separated; empty when unset.
+    pub fn allowed_origins_list(&self) -> String {
+        self.allowed_origins
+            .iter()
+            .map(WebOrigin::as_str)
+            .collect::<Vec<_>>()
+            .join(",")
     }
 }
 
@@ -348,6 +407,32 @@ fn log_filter(value: String, origin: Origin) -> Result<String, ConfigError> {
             problem: format!("{value:?} is not a log filter; for example {}", LOG.example),
         }),
     }
+}
+
+fn web_origin(value: &str, origin: Origin, setting: &Setting) -> Result<WebOrigin, ConfigError> {
+    WebOrigin::parse(value).map_err(|problem| ConfigError::Invalid {
+        origin,
+        problem: format!("{value:?} {problem}; for example {}", setting.example),
+    })
+}
+
+/// A comma-separated list of origins; blanks around an entry are ignored, an empty entry is not.
+fn allowed_origins(value: &str, origin: Origin) -> Result<Vec<WebOrigin>, ConfigError> {
+    value
+        .split(',')
+        .enumerate()
+        .map(|(index, entry)| {
+            let entry = entry.trim();
+            WebOrigin::parse(entry).map_err(|problem| ConfigError::Invalid {
+                origin: origin.clone(),
+                problem: format!(
+                    "entry {} ({entry:?}) {problem}; for example {}",
+                    index + 1,
+                    ALLOWED_ORIGINS.example
+                ),
+            })
+        })
+        .collect()
 }
 
 fn check_database_url(url: &str, origin: Origin) -> Result<(), ConfigError> {

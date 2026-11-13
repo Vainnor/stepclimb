@@ -108,7 +108,23 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
 - **B16.** Requests authenticated by an `Authorization: Bearer` header (API keys, app access
   tokens, the `/oauth/token` and `/oauth/revoke` form posts) skip the CSRF check: a browser
   never attaches those credentials on its own. A request that carries both a bearer header and
-  a session cookie is authenticated by the bearer only.
+  a session cookie is authenticated by the bearer only. Only the `Bearer` scheme (in any case)
+  skips the check in B14; another scheme such as `Basic`, which a browser resends on its own to
+  a site behind a proxy that asks for it, does not, and does not hide the session cookie. Sign-out
+  with a bearer header ends no session (I3's reading of B14 and B16, 13 Nov 2026; the owner can
+  overrule it).
+
+### Transport security
+
+- **B39.** When the configured public URL (Q1, `STEPCLIMB_PUBLIC_URL`) is `https`, every
+  response carries `Strict-Transport-Security: max-age=31536000` (one year, without
+  `includeSubDomains`: subdomains of the public host may be other services of the operator's).
+  The server never terminates TLS itself and trusts no proxy header until I5, so the
+  configuration, not the request, says the instance is served over HTTPS. With an `http`
+  public URL the header is not sent (plan, Security and privacy: HSTS; coordinator decision,
+  13 Nov 2026). The public URL is required configuration, since a default would silently turn
+  HSTS off: the server refuses to start without it. `STEPCLIMB_ALLOWED_ORIGINS` (Q6) is an
+  optional comma-separated list of origins (I3's choices, 13 Nov 2026).
 
 ### Sign-in flow state
 
@@ -316,7 +332,11 @@ Database tests use `#[sqlx::test]`; time-dependent tests use the controllable cl
 - **T16.** (B16) A request with a valid bearer header and another user's session cookie is
   authenticated as the bearer's principal.
 - **T17.** (B12) A router walk asserts no GET route under `/api/v1` is registered with a handler
-  marked as mutating (the marker the issue adds), so B12 cannot regress silently.
+  marked as mutating (the marker the issue adds), so B12 cannot regress silently. The marker is
+  the `x-stepclimb-mutates` extension on the handler's `#[utoipa::path]`; the walk reads the
+  OpenAPI document (every path, not only `/api/v1`), and a second test sends each method to each
+  documented path so the router cannot mount a handler with another method than the document
+  says.
 - **T18.** (B18) Completing a flow twice answers `auth.flow_invalid` the second time; a flow used
   after its expiry (clock moved) answers `auth.flow_expired`.
 - **T19.** (B19) `return_to` values `https://evil.example`, `//evil.example`, `/\evil.example`
@@ -361,6 +381,8 @@ Database tests use `#[sqlx::test]`; time-dependent tests use the controllable cl
   no other field (the test compares the JSON key set).
 - **T36.** Contract: `just openapi-diff` passes with every endpoint above in
   `openapi/stepclimb.json`.
+- **T37.** (B39) With an `https` public URL, a GET, a refused POST and an unknown `/api/` path
+  each answer with `Strict-Transport-Security: max-age=31536000`; with an `http` one, none does.
 
 ## Out of scope
 
@@ -372,8 +394,8 @@ Database tests use `#[sqlx::test]`; time-dependent tests use the controllable cl
 - The sign-in UI and the sign-out button: `11-app-shell.md`.
 - Branding fields and `theme.css` in `/.well-known/stepclimb`: the spec that owns branding
   (`11-app-shell.md` or `12-tokens-and-theme-generator.md`); this spec serves the auth fields.
-- Strict CSP and HSTS headers (plan, Security and privacy): not in this spec's issue list; they
-  belong with the app shell or the deploy spec.
+- A strict CSP (plan, Security and privacy): not in this spec's issue list; it belongs with the
+  app shell or the deploy spec. HSTS is B39.
 - Per-organization API rate quotas from plan entitlements: M6.
 - A user-facing list of one's own sessions: the plan does not ask for it.
 
@@ -496,7 +518,10 @@ overrule one, which then updates this spec.
    Compose stack's origin; if it does not, the e2e stack serves HTTPS. Covers B5 to B11; T1
    (database half: no plaintext token in any token column after a sign-in), T4 to T10. Depends on: I1, `03-users-and-identities.md` (users table, status), Q1, Q4, Q5.
 3. **I3. CSRF layer and sign-out.** The tower layer of B14 to B16, the GET-mutation marker and
-   router walk, `POST /auth/sign-out`. Covers B12 to B16; T11 to T17. Depends on: I2, Q6.
+   router walk, `POST /auth/sign-out`, the `STEPCLIMB_PUBLIC_URL` and
+   `STEPCLIMB_ALLOWED_ORIGINS` settings, and HSTS. Covers B12 to B16, B39; T11 to T17, T37. T15
+   and T16 use a bearer header the server does not accept yet; their valid-API-key halves come
+   with I6. Depends on: I2, Q6.
 4. **I4. Sign-in flow state.** Migration for `auth_flows` (pending Q8), the flow cookie,
    create/consume/expire, `return_to` validation, cleanup. Covers B17 to B21; T18, T19. Depends
    on: I1, I2, Q8.

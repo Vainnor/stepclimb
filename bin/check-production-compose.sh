@@ -21,7 +21,7 @@ project=${SC_PROD_CHECK_PROJECT:-stepclimb-prodcheck}
 port=${SC_PROD_CHECK_PORT:-58180}
 production=deploy/compose/compose.production.yaml
 work=$(mktemp -d "${TMPDIR:-/tmp}/stepclimb-prodcheck.XXXXXX")
-export SC_HTTP_PORT=$port SC_SECRETS_DIR="$work/secrets" \
+export SC_HTTP_PORT=$port SC_SECRETS_DIR="$work/secrets" SC_PUBLIC_URL="http://127.0.0.1:$port" \
     SC_PROXY_NETWORK=${SC_PROD_CHECK_NETWORK:-10.201.75}
 
 compose() { docker compose -p "$project" -f "$production" "$@"; }

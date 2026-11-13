@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Browser sessions over HTTP (docs/specs/m0/08-sessions-and-csrf.md B5 to B11; T1's database
-//! half, T4 to T9). A test-only route takes the `Authenticated` extractor; `session::start`
+//! half, T4 to T9, T16). A test-only route takes the `Authenticated` extractor; `session::start`
 //! stands in for the sign-in specs that will call it. Needs `DATABASE_URL` (`just up`).
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -24,6 +24,7 @@ use stepclimb_server::{
     AppState,
     error::Problem,
     session::{self, Authenticated, Started},
+    web_origin::WebOrigin,
 };
 use tower::ServiceExt;
 
@@ -93,6 +94,8 @@ impl Fixture {
             clock: self.clock.clock(),
             keys: KeyRing::parse("test:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
                 .expect("a valid test key"),
+            public_url: WebOrigin::parse("https://lms.example.org").expect("a valid origin"),
+            allowed_origins: Vec::new(),
         };
         Router::new()
             .route("/whoami", get(whoami))
@@ -519,4 +522,60 @@ async fn b5_without_an_organization_the_request_answers_org_none(pool: PgPool) {
 
     assert_eq!(answer.status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(answer.code(), "org.none");
+}
+
+/// `/whoami` with the session cookie `cookie` and an `Authorization` header.
+async fn whoami_with_authorization(fixture: &Fixture, cookie: &str, authorization: &str) -> Answer {
+    let request = Request::get("/whoami")
+        .header(header::COOKIE, cookie)
+        .header(header::AUTHORIZATION, authorization)
+        .body(Body::empty())
+        .expect("a valid request");
+    let response = fixture
+        .app()
+        .oneshot(request)
+        .await
+        .expect("the router never fails");
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body is readable")
+        .to_bytes();
+    Answer {
+        status,
+        headers,
+        body: String::from_utf8_lossy(&body).into_owned(),
+    }
+}
+
+/// T16 (B16): a bearer request is authenticated by the bearer only. No bearer credential is
+/// accepted until API keys and app tokens exist (spec 08 I6, I8), so a valid session cookie
+/// beside one authenticates nothing, and is neither cleared nor deleted.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t16_a_bearer_header_is_never_answered_with_the_cookie_beside_it(pool: PgPool) {
+    let fixture = Fixture::new(pool).await;
+    let cookie = cookie_pair(&fixture.sign_in().await);
+
+    for authorization in ["Bearer sc_someone-else_000000", "bearer x"] {
+        let answer = whoami_with_authorization(&fixture, &cookie, authorization).await;
+        assert_eq!(answer.status, StatusCode::UNAUTHORIZED, "{authorization}");
+        assert_eq!(answer.code(), "auth.unauthenticated");
+        assert!(answer.set_cookies().is_empty(), "the cookie is not cleared");
+    }
+    assert_eq!(fixture.session_count().await, 1);
+}
+
+/// A `Basic` header (a proxy's, which the browser resends on its own) is not a credential of
+/// Stepclimb's and does not hide the session cookie.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_basic_authorization_header_leaves_the_session_cookie_in_charge(pool: PgPool) {
+    let fixture = Fixture::new(pool).await;
+    let cookie = cookie_pair(&fixture.sign_in().await);
+
+    let answer = whoami_with_authorization(&fixture, &cookie, "Basic dTpw").await;
+
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
 }

@@ -38,6 +38,7 @@ production=deploy/compose/compose.production.yaml
 work=$(mktemp -d "${TMPDIR:-/tmp}/stepclimb-opscheck.XXXXXX")
 echo_server=$project-echo
 export SC_HTTP_PORT=$port SC_SECRETS_DIR="$work/secrets" SC_DOMAIN=$domain \
+    SC_PUBLIC_URL=https://$domain \
     SC_CERT_ISSUER=internal SC_PROXY_ADDRESS=127.0.0.1 SC_PROXY_HTTP_PORT=$http_port \
     SC_PROXY_HTTPS_PORT=$https_port SC_PROXY_NETWORK=$network
 

@@ -267,8 +267,8 @@ pub async fn delete(db: impl PgExecutor<'_>, scope: OrgScope, id: Uuid) -> Resul
 }
 
 /// Delete the session of the scope's organization whose token hashes to `token_hash`, live or
-/// expired, for a sign-in that replaces the session cookie the browser presented. Returns
-/// whether a row was deleted; a hash of another organization's session deletes nothing.
+/// expired, for a sign-in that replaces the session cookie the browser presented or a sign-out.
+/// Returns whether a row was deleted; a hash of another organization's session deletes nothing.
 pub async fn delete_by_token_hash(
     db: impl PgExecutor<'_>,
     scope: OrgScope,

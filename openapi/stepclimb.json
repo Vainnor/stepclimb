@@ -10,6 +10,42 @@
     "version": "0.0.0"
   },
   "paths": {
+    "/auth/sign-out": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "End the browser's session and clear its cookie.",
+        "description": "Answers 204 whether or not the cookie named a session. It needs no permission and no valid\nsession, so a browser holding an expired or unknown cookie can still clear it.",
+        "operationId": "signOut",
+        "responses": {
+          "204": {
+            "description": "The session, if there was one, is ended and the cookie cleared",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Clears `__Host-sc_session` (`Max-Age=0`)"
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/CsrfRefused"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/healthz": {
       "get": {
         "tags": [
@@ -157,6 +193,16 @@
           }
         }
       },
+      "CsrfRefused": {
+        "description": "`auth.csrf_refused`: an unsafe request without a bearer credential did not come from this site: `Sec-Fetch-Site` is not `same-origin`, or, without it, `Origin` is not an allowed origin.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "InternalError": {
         "description": "`internal.error`: the server failed; the cause is in its log.",
         "content": {
@@ -169,6 +215,26 @@
       },
       "MethodNotAllowed": {
         "description": "`request.method_not_allowed`: the path does not take this method; `Allow` lists the methods it takes.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "NoOrganization": {
+        "description": "`org.none`: the instance has no organization yet.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "OrganizationNotFound": {
+        "description": "`org.not_found`: the request's organization cannot be determined.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -223,6 +289,10 @@
     {
       "name": "operations",
       "description": "Liveness and readiness probes"
+    },
+    {
+      "name": "auth",
+      "description": "Browser sessions"
     }
   ]
 }

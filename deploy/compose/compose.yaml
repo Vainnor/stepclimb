@@ -49,6 +49,8 @@ services:
     environment:
       STEPCLIMB_DATABASE_URL: postgres://stepclimb:stepclimb-local@postgres:5432/stepclimb
       STEPCLIMB_BIND: 0.0.0.0:8080
+      # The address the browser opens; the CSRF check accepts it as an Origin (spec 08 Q1, Q6).
+      STEPCLIMB_PUBLIC_URL: http://localhost:${SC_DEV_PORT:-58080}
       # The published development key ring (development-encryption-keys): one key whose 32
       # bytes spell "stepclimb-local-development-key!". The server warns about it at startup.
       # Never use it for real data.

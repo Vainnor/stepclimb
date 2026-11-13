@@ -67,8 +67,9 @@ openapi-diff: web-install
 
 # Run the server against the local database, with the web build embedded. Without
 # STEPCLIMB_ENCRYPTION_KEYS(_FILE) it uses the published development key ring,
-# deploy/compose/development-encryption-keys, and says so; never use it for real data. With
-# STEPCLIMB_CONFIG set it supplies neither default, since a variable would override the file.
+# deploy/compose/development-encryption-keys, and says so; never use it for real data. Without
+# STEPCLIMB_PUBLIC_URL it uses http://localhost:8080. With STEPCLIMB_CONFIG set it supplies none
+# of these defaults, since a variable would override the file.
 serve: web-build
     #!/usr/bin/env bash
     set -euo pipefail
@@ -81,6 +82,9 @@ serve: web-build
       fi
       if [[ -z "${STEPCLIMB_DATABASE_URL:-}${STEPCLIMB_DATABASE_URL_FILE:-}" ]]; then
         export STEPCLIMB_DATABASE_URL="$DATABASE_URL"
+      fi
+      if [[ -z "${STEPCLIMB_PUBLIC_URL:-}" ]]; then
+        export STEPCLIMB_PUBLIC_URL="http://localhost:8080"
       fi
     fi
     exec cargo run --locked -p stepclimb-server --bin stepclimb -- serve

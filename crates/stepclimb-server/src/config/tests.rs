@@ -3,6 +3,7 @@ use super::*;
 
 const KEYS: &str = "k1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
 const URL: &str = "postgres://u@h/db";
+const PUBLIC: &str = "https://lms.example.org";
 
 /// A valid value for each secret setting, and the part of it no output may show.
 const SECRET_SAMPLES: &[(Setting, &str, &str)] = &[
@@ -25,10 +26,15 @@ fn env(pairs: &[(&str, &str)]) -> Env {
         .collect()
 }
 
-/// `pairs` plus a database URL and a key ring, unless `pairs` sets one of their variables.
+/// `pairs` plus a database URL, a key ring and a public URL, unless `pairs` sets one of their
+/// variables.
 fn with_required(pairs: &[(&str, &str)]) -> Env {
     let mut all = env(pairs);
-    for (setting, value) in [(DATABASE_URL, URL), (ENCRYPTION_KEYS, KEYS)] {
+    for (setting, value) in [
+        (DATABASE_URL, URL),
+        (ENCRYPTION_KEYS, KEYS),
+        (PUBLIC_URL, PUBLIC),
+    ] {
         if !pairs.iter().any(|(k, _)| k.starts_with(setting.var)) {
             all.insert(setting.var.to_owned(), value.to_owned());
         }
@@ -208,6 +214,8 @@ fn every_known_variable_is_accepted() {
             "STEPCLIMB_DATABASE_URL_FILE",
             "STEPCLIMB_ENCRYPTION_KEYS",
             "STEPCLIMB_ENCRYPTION_KEYS_FILE",
+            "STEPCLIMB_PUBLIC_URL",
+            "STEPCLIMB_ALLOWED_ORIGINS",
             "STEPCLIMB_CONFIG",
         ]
     );
@@ -253,7 +261,10 @@ fn a_secret_in_the_environment_wins_over_the_file_whichever_variant_each_uses() 
         "database_url = \"postgres://from-file@h/db\"\nencryption_keys = \"{KEYS}\"\n"
     ));
     let config = Config::load(
-        &env(&[("STEPCLIMB_DATABASE_URL_FILE", url_file.path())]),
+        &env(&[
+            ("STEPCLIMB_DATABASE_URL_FILE", url_file.path()),
+            ("STEPCLIMB_PUBLIC_URL", PUBLIC),
+        ]),
         Some(&file),
     )
     .unwrap();
@@ -264,7 +275,8 @@ fn a_secret_in_the_environment_wins_over_the_file_whichever_variant_each_uses() 
 #[test]
 fn the_file_alone_configures_the_server() {
     let file = toml(&format!(
-        "bind = \"0.0.0.0:7000\"\ndatabase_url = \"{URL}\"\nencryption_keys = \"{KEYS}\"\n"
+        "bind = \"0.0.0.0:7000\"\ndatabase_url = \"{URL}\"\nencryption_keys = \"{KEYS}\"\n\
+         public_url = \"{PUBLIC}\"\n"
     ));
     let config = Config::load(&Env::new(), Some(&file)).unwrap();
     assert_eq!(config.bind, "0.0.0.0:7000".parse::<SocketAddr>().unwrap());
@@ -348,7 +360,14 @@ fn a_relative_file_key_resolves_against_the_config_files_directory() {
     let dir = secret.0.parent().unwrap();
     let text = "database_url_file = \"relative\"\n".to_owned();
     let file = ConfigFile::parse(dir.join("stepclimb.toml"), text).unwrap();
-    let config = Config::load(&env(&[("STEPCLIMB_ENCRYPTION_KEYS", KEYS)]), Some(&file)).unwrap();
+    let config = Config::load(
+        &env(&[
+            ("STEPCLIMB_ENCRYPTION_KEYS", KEYS),
+            ("STEPCLIMB_PUBLIC_URL", PUBLIC),
+        ]),
+        Some(&file),
+    )
+    .unwrap();
     assert_eq!(config.database_url, URL);
 
     // A variable's relative path is relative to the working directory, not the file's.
@@ -386,12 +405,16 @@ fn every_config_field_is_a_classified_setting() {
         log: _,
         database_url: _,
         encryption_keys: _,
+        public_url: _,
+        allowed_origins: _,
     } = config;
     let fields = [
         (BIND, false),
         (LOG, false),
         (DATABASE_URL, true),
         (ENCRYPTION_KEYS, true),
+        (PUBLIC_URL, false),
+        (ALLOWED_ORIGINS, false),
     ];
     for (setting, secret) in fields {
         assert!(
@@ -404,13 +427,15 @@ fn every_config_field_is_a_classified_setting() {
     assert_eq!(fields.len(), SETTINGS.len());
 }
 
-/// The environment with every secret but `except` set directly.
+/// The environment with the public URL and every secret but `except` set directly.
 fn other_secrets(except: Setting) -> Env {
-    SECRET_SAMPLES
+    let mut vars: Env = SECRET_SAMPLES
         .iter()
         .filter(|(s, _, _)| *s != except)
         .map(|(s, v, _)| (s.var.to_owned(), (*v).to_owned()))
-        .collect()
+        .collect();
+    vars.insert(PUBLIC_URL.var.to_owned(), PUBLIC.to_owned());
+    vars
 }
 
 #[test]
@@ -527,6 +552,7 @@ fn reads_the_encryption_key_ring_and_shows_only_its_ids() {
     let config = Config::load(
         &env(&[
             ("STEPCLIMB_DATABASE_URL", URL),
+            ("STEPCLIMB_PUBLIC_URL", PUBLIC),
             (
                 "STEPCLIMB_ENCRYPTION_KEYS",
                 "k2:ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=,k1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
@@ -640,10 +666,11 @@ fn reads_a_config_file_from_disk() {
 
 #[test]
 fn debug_with_every_secret_set_shows_none_of_them() {
-    let vars: Env = SECRET_SAMPLES
+    let mut vars: Env = SECRET_SAMPLES
         .iter()
         .map(|(s, v, _)| (s.var.to_owned(), (*v).to_owned()))
         .collect();
+    vars.insert(PUBLIC_URL.var.to_owned(), PUBLIC.to_owned());
     let config = Config::load(&vars, None).unwrap();
     let printed = format!("{config:?}");
     assert!(
@@ -691,7 +718,10 @@ fn redaction_never_shows_a_password_with_odd_characters() {
 /// may be.
 #[test]
 fn non_secret_values_list_every_non_secret_setting_and_no_secret() {
-    let mut pairs: Vec<(&str, &str)> = vec![("STEPCLIMB_BIND", "0.0.0.0:9000")];
+    let mut pairs: Vec<(&str, &str)> = vec![
+        ("STEPCLIMB_BIND", "0.0.0.0:9000"),
+        ("STEPCLIMB_PUBLIC_URL", PUBLIC),
+    ];
     pairs.extend(SECRET_SAMPLES.iter().map(|(s, value, _)| (s.var, *value)));
     let config = Config::load(&env(&pairs), None).unwrap();
     let values = config.non_secret_values();
@@ -706,7 +736,9 @@ fn non_secret_values_list_every_non_secret_setting_and_no_secret() {
         values,
         [
             ("bind", "0.0.0.0:9000".to_owned()),
-            ("log", "info".to_owned())
+            ("log", "info".to_owned()),
+            ("public_url", PUBLIC.to_owned()),
+            ("allowed_origins", "(none)".to_owned()),
         ]
     );
     let printed = format!("{values:?}");
@@ -856,4 +888,113 @@ fn an_at_sign_after_the_host_is_refused_without_repeating_the_url() {
         );
         assert!(!message.contains("zq"), "{url}: {message}");
     }
+}
+
+// Spec 08 Q1, Q6: the public URL and the allowed origins.
+
+#[test]
+fn a_missing_public_url_is_refused_by_name_with_an_example() {
+    let error = Config::load(
+        &env(&[
+            ("STEPCLIMB_DATABASE_URL", URL),
+            ("STEPCLIMB_ENCRYPTION_KEYS", KEYS),
+        ]),
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(error, ConfigError::Missing(PUBLIC_URL));
+    assert!(
+        error
+            .to_string()
+            .contains("for example https://lms.example.org"),
+        "{error}"
+    );
+}
+
+#[test]
+fn the_public_url_is_kept_as_its_origin() {
+    let config = Config::load(
+        &with_required(&[("STEPCLIMB_PUBLIC_URL", "https://LMS.example.org:443/")]),
+        None,
+    )
+    .unwrap();
+    assert_eq!(config.public_url.as_str(), "https://lms.example.org");
+    assert!(config.public_url.is_https());
+    assert!(config.allowed_origins.is_empty());
+}
+
+#[test]
+fn a_public_url_with_a_path_is_refused_naming_the_setting() {
+    let error = Config::load(
+        &with_required(&[("STEPCLIMB_PUBLIC_URL", "https://example.org/lms")]),
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "STEPCLIMB_PUBLIC_URL: \"https://example.org/lms\" must be an origin only, with no \
+         path, query or fragment; for example https://lms.example.org"
+    );
+}
+
+#[test]
+fn allowed_origins_are_a_comma_separated_list() {
+    let config = Config::load(
+        &with_required(&[(
+            "STEPCLIMB_ALLOWED_ORIGINS",
+            "https://app.example.org, http://localhost:5173/",
+        )]),
+        None,
+    )
+    .unwrap();
+    let origins: Vec<&str> = config
+        .allowed_origins
+        .iter()
+        .map(WebOrigin::as_str)
+        .collect();
+    assert_eq!(
+        origins,
+        ["https://app.example.org", "http://localhost:5173"]
+    );
+    assert_eq!(
+        config.allowed_origins_list(),
+        "https://app.example.org,http://localhost:5173"
+    );
+}
+
+#[test]
+fn a_bad_allowed_origin_is_refused_by_position() {
+    for (value, problem) in [
+        (
+            "https://app.example.org,ftp://files.example.org",
+            "entry 2 (\"ftp://files.example.org\") must start with http:// or https://",
+        ),
+        ("https://app.example.org,", "entry 2 (\"\") is not a URL"),
+    ] {
+        let error = Config::load(
+            &with_required(&[("STEPCLIMB_ALLOWED_ORIGINS", value)]),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().starts_with(&format!(
+                "STEPCLIMB_ALLOWED_ORIGINS: {problem}; for example "
+            )),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn the_public_url_and_allowed_origins_are_read_from_the_file() {
+    let file = toml(
+        "public_url = \"https://lms.example.org\"\nallowed_origins = \"https://app.example.org\"\n",
+    );
+    let vars = env(&[
+        ("STEPCLIMB_DATABASE_URL", URL),
+        ("STEPCLIMB_ENCRYPTION_KEYS", KEYS),
+    ]);
+    let config = Config::load(&vars, Some(&file)).unwrap();
+    assert_eq!(config.public_url.as_str(), "https://lms.example.org");
+    assert_eq!(config.allowed_origins_list(), "https://app.example.org");
 }
