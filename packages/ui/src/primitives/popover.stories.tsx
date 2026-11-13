@@ -41,6 +41,9 @@ function Example({ defaultOpen }: { defaultOpen?: boolean }) {
           <Text size="sm" elementType="p">
             80 percent. Your best of three attempts counts toward the course.
           </Text>
+          <Button slot="close" size="sm" className="self-start">
+            Close
+          </Button>
         </PopoverDialog>
       </Popover>
     </PopoverTrigger>

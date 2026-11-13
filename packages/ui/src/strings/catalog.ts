@@ -15,6 +15,8 @@ export const uiMessages: Catalog = {
     "copyButton.copied": "Copied",
     "copyButton.failed": "Could not copy. Select the text and copy it yourself.",
     "copyButton.label": "Copy",
+    "field.invalid": "Check what you entered in this field.",
+    "field.valueMissing": "Fill in this field.",
     "link.external": "(external site)",
     "meter.value": "{value, number, percent}",
     "numberField.decrement": "Decrease",

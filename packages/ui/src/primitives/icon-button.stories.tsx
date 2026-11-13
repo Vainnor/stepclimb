@@ -43,7 +43,6 @@ export const Intents: Story = {
       <IconButton icon={PencilSimpleIcon} label="Edit" />
       <IconButton icon={DotsThreeIcon} label="More actions" intent="secondary" />
       <IconButton icon={TrashIcon} label="Delete" intent="danger" />
-      <IconButton icon={GearIcon} label="Settings" intent="primary" />
     </div>
   ),
 };
@@ -73,7 +72,6 @@ export const Matrix: Story = {
         <IconButton icon={PencilSimpleIcon} label="Edit" />
         <IconButton icon={DotsThreeIcon} label="More actions" intent="secondary" />
         <IconButton icon={TrashIcon} label="Delete" intent="danger" />
-        <IconButton icon={GearIcon} label="Settings" intent="primary" />
         <IconButton icon={GearIcon} label="Settings" size="sm" />
         <IconButton icon={GearIcon} label="Settings" isDisabled />
       </div>

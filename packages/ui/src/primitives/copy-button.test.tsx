@@ -6,6 +6,8 @@ import { stubMatchMedia } from "../test/media";
 import { renderWithStrings, unmarkedText } from "../test/strings";
 import { CopyButton } from "./copy-button";
 
+const root = () => document.querySelector('[data-slot="copy-button"]');
+
 function stubClipboard(writeText: (text: string) => Promise<void>) {
   Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
 }
@@ -21,10 +23,12 @@ describe("CopyButton", () => {
   it("is a button named Copy from the catalog, with an empty status region", () => {
     renderWithStrings(<CopyButton value="ZDC-4417" />);
     const el = screen.getByRole("button", { name: "Copy" });
-    expect(el).toHaveAttribute("data-slot", "copy-button");
-    expect(el).toHaveAttribute("data-result", "idle");
+    expect(el).toHaveAttribute("data-slot", "copy-button-button");
+    expect(root()).toHaveAttribute("data-result", "idle");
+    expect(root()).toContainElement(el);
     expect(screen.getByRole("status")).toHaveTextContent("");
     expect(screen.getByRole("status")).toHaveAttribute("data-slot", "copy-button-status");
+    expect(screen.getByRole("status")).toHaveClass("sr-only");
   });
 
   it("copies the value and announces that it did (T12)", async () => {
@@ -36,7 +40,8 @@ describe("CopyButton", () => {
     await user.click(screen.getByRole("button", { name: "Copy" }));
     expect(writeText).toHaveBeenCalledWith("ZDC-4417");
     expect(screen.getByRole("status")).toHaveTextContent("Copied");
-    expect(screen.getByRole("button")).toHaveAttribute("data-result", "copied");
+    expect(screen.getByRole("status")).toHaveClass("sr-only");
+    expect(root()).toHaveAttribute("data-result", "copied");
     expect(onCopy).toHaveBeenCalledWith("copied");
   });
 
@@ -51,7 +56,10 @@ describe("CopyButton", () => {
     expect(screen.getByRole("status")).toHaveTextContent(
       "Could not copy. Select the text and copy it yourself.",
     );
-    expect(screen.getByRole("button")).toHaveAttribute("data-result", "failed");
+    expect(root()).toHaveAttribute("data-result", "failed");
+    // Shown on screen too, not only announced.
+    expect(screen.getByRole("status")).not.toHaveClass("sr-only");
+    expect(screen.getByRole("status")).toHaveClass("not-sr-only", "text-danger-fg");
     expect(onCopy).toHaveBeenCalledWith("failed");
   });
 
@@ -81,7 +89,28 @@ describe("CopyButton", () => {
       vi.advanceTimersByTime(1);
     });
     expect(screen.getByRole("status")).toHaveTextContent("");
-    expect(screen.getByRole("button")).toHaveAttribute("data-result", "idle");
+    expect(root()).toHaveAttribute("data-result", "idle");
+  });
+
+  it("empties the live region before each copy, so a repeated result is announced again", async () => {
+    const user = userEvent.setup();
+    let finish: () => void = () => undefined;
+    stubClipboard(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    renderWithStrings(<CopyButton value="ZDC-4417" />);
+    const button = screen.getByRole("button", { name: "Copy" });
+    await user.click(button);
+    await act(async () => finish());
+    expect(screen.getByRole("status")).toHaveTextContent("Copied");
+
+    await user.click(button);
+    expect(screen.getByRole("status")).toHaveTextContent("");
+    await act(async () => finish());
+    expect(screen.getByRole("status")).toHaveTextContent("Copied");
   });
 
   it("takes a label of its own", () => {

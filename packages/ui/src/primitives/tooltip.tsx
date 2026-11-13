@@ -12,11 +12,10 @@ import { tv } from "../lib/tv";
 import { useAppearanceAttributes } from "../theme/theme-provider";
 
 /** Drawn in the strong text color on the canvas color, so it reads in every theme. The border
- * keeps its outline in forced-colors mode, which drops backgrounds. It takes no pointer events, so
- * it never blocks a press on the control beside its trigger. */
+ * keeps its outline in forced-colors mode, which drops backgrounds. */
 export const tooltip = tv({
   base: [
-    "pointer-events-none max-w-64 rounded-xs border border-fg-strong bg-fg-strong px-2 py-1",
+    "max-w-64 rounded-xs border border-fg-strong bg-fg-strong px-2 py-1",
     "font-ui text-caption text-canvas text-balance",
   ],
 });

@@ -1,26 +1,36 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// CopyButton: copies a value with the Clipboard API and says what happened through a live region,
-// and in its icon, for a few seconds: copied, or that the copy failed and how to copy it instead
-// (docs/specs/m0/13-base-ui-components.md M0 inventory).
+// CopyButton: copies a value with the Clipboard API and says what happened for a few seconds,
+// through a live region and in its icon: copied, or that the copy failed and how to copy it
+// instead, which also shows as text beside the button (docs/specs/m0/13-base-ui-components.md M0
+// inventory).
 import { CheckIcon, CopyIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
-import { composeRenderProps } from "react-aria-components";
 import { tv } from "../lib/tv";
 import { useStepclimbStrings } from "../strings/strings";
 import { IconButton, type IconButtonProps } from "./icon-button";
-import { VisuallyHidden } from "./visually-hidden";
 
 export const copyButton = tv({
-  base: "",
+  slots: {
+    root: "inline-flex items-center gap-2",
+    button: "",
+    status: "sr-only",
+  },
   variants: {
-    result: { idle: "", copied: "text-success-fg", failed: "text-danger-fg" },
+    result: {
+      idle: {},
+      copied: { button: "text-success-fg" },
+      failed: {
+        button: "text-danger-fg",
+        status: "not-sr-only font-ui text-caption text-danger-fg",
+      },
+    },
   },
 });
 
 export type CopyResult = "idle" | "copied" | "failed";
 
 export interface CopyButtonProps
-  extends Omit<IconButtonProps, "icon" | "iconState" | "label" | "onPress"> {
+  extends Omit<IconButtonProps, "icon" | "iconState" | "label" | "onPress" | "className"> {
   /** The text to copy. */
   value: string;
   /** The accessible name and tooltip; "Copy" from the strings catalog by default. */
@@ -29,6 +39,8 @@ export interface CopyButtonProps
   resetAfterMs?: number;
   /** Called with the result of each copy. */
   onCopy?: (result: Exclude<CopyResult, "idle">) => void;
+  /** Layout only, on the root around the button and its message. */
+  className?: string;
 }
 
 const icons = { idle: CopyIcon, copied: CheckIcon, failed: WarningCircleIcon } as const;
@@ -63,27 +75,29 @@ export function CopyButton({
   }, [result, resetAfterMs]);
 
   async function copy() {
+    // Empty the live region first, so a second copy with the same result is announced again.
+    setResult("idle");
     const outcome = (await writeToClipboard(value)) ? "copied" : "failed";
     setResult(outcome);
     onCopy?.(outcome);
   }
 
   const messages = { idle: "", copied: t("copyButton.copied"), failed: t("copyButton.failed") };
+  const styles = copyButton({ result });
   return (
-    <>
+    <span data-slot="copy-button" data-result={result} className={styles.root({ className })}>
       <IconButton
-        data-slot="copy-button"
-        data-result={result}
+        data-slot="copy-button-button"
         {...props}
         icon={icons[result]}
         iconState={result === "copied" ? "complete" : "available"}
         label={label ?? t("copyButton.label")}
         onPress={copy}
-        className={composeRenderProps(className, (cls) => copyButton({ result, className: cls }))}
+        className={styles.button()}
       />
-      <VisuallyHidden data-slot="copy-button-status" role="status">
+      <span data-slot="copy-button-status" role="status" className={styles.status()}>
         {messages[result]}
-      </VisuallyHidden>
-    </>
+      </span>
+    </span>
   );
 }

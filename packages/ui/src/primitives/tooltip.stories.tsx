@@ -44,15 +44,13 @@ export const Default: Story = {
   },
 };
 
-/** Wraps at its maximum width. */
+/** Wraps at its maximum width. It still only expands what the trigger says. */
 export const LongContent: Story = {
   render: () => (
     <div className="pt-16">
       <TooltipTrigger defaultOpen>
-        <Button>Retake</Button>
-        <Tooltip>
-          You can retake this quiz twice more before Friday; your best score counts.
-        </Tooltip>
+        <Button>Due 14 Nov</Button>
+        <Tooltip>Thursday, 14 November 2026, at 23:59 Coordinated Universal Time</Tooltip>
       </TooltipTrigger>
     </div>
   ),

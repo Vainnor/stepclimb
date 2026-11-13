@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { DotsThreeIcon } from "@phosphor-icons/react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import { expect, userEvent, within } from "storybook/test";
 import { ThemeMatrix } from "../storybook/theme-matrix";
 import { Button } from "./button";
 import { IconButton } from "./icon-button";
@@ -14,7 +15,7 @@ const meta = {
     status: { missing: ["States", "Themes", "Accessibility", "Responsive and touch"] },
     docs: {
       description: {
-        component: `A list of actions opened from a button. At 768 px and wider it opens in a popover beside the button; under 768 px it opens as a sheet from the bottom of the screen, where it is easy to reach with a thumb. A submenu always opens in a popover beside its item. Arrow keys move between items, typing jumps to an item, Escape closes the menu and returns focus to the button.
+        component: `A list of actions opened from a button. At 768 px and wider it opens in a popover beside the button; under 768 px it opens as a sheet from the bottom of the screen, where it is easy to reach with a thumb. A submenu always opens in a popover: beside its item, or above it under 768 px, where the item spans the sheet. Arrow keys move between items, typing jumps to an item, Escape closes the menu and returns focus to the button.
 
 **Usage.** \`<MenuTrigger><Button>Course actions</Button><Menu onAction={run}><MenuItem id="edit">Edit</MenuItem></Menu></MenuTrigger>\`. \`selectionMode\` on \`Menu\` makes its items checkable; \`SubmenuTrigger\` wraps an item and the \`Menu\` it opens. \`isOpen\` and \`onOpenChange\` on \`MenuTrigger\` control it.
 
@@ -98,6 +99,16 @@ export const Submenu: Story = {
       </MenuTrigger>
     </div>
   ),
+};
+
+/** The submenu open: beside its item at 1280 px, above it over the bottom sheet at 375 px. */
+export const SubmenuOpen: Story = {
+  render: Submenu.render,
+  play: async () => {
+    const body = within(document.body);
+    await userEvent.click(await body.findByRole("menuitem", { name: "Export" }));
+    await expect(await body.findByRole("menuitem", { name: "Course archive" })).toBeVisible();
+  },
 };
 
 export const LongContent: Story = {

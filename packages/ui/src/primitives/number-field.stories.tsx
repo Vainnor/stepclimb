@@ -46,7 +46,9 @@ export const Percent: Story = {
   },
 };
 
-export const Empty: Story = { args: { defaultValue: undefined, placeholder: "1 to 10" } };
+export const Empty: Story = {
+  args: { defaultValue: undefined, description: "From 1 to 10." },
+};
 
 export const Invalid: Story = {
   args: { isInvalid: true, errorMessage: "Allow between 1 and 10 attempts." },

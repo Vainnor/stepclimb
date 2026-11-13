@@ -17,11 +17,15 @@ const INTERACTIVE = [
   "button",
   "[role=button]",
   "[role=checkbox]",
+  "[role=gridcell]",
   "[role=menuitem]",
+  "[role=menuitemcheckbox]",
+  "[role=menuitemradio]",
   "[role=option]",
   "[role=radio]",
   "[role=switch]",
   "[role=tab]",
+  "[role=treeitem]",
   "input:not([type=hidden])",
   "select",
   "textarea",
@@ -53,15 +57,24 @@ async function smallTargets(page: Page): Promise<string[]> {
 }
 
 /**
- * Whether something else is drawn over the middle of `target`: a modal's underlay over the page
- * behind it, or a tooltip over its neighbor. No one can hover what is covered.
+ * Whether something else is drawn over the middle of `target`, such as a modal's underlay over the
+ * page behind it. No one can hover what is covered.
  */
 async function isCovered(target: Locator): Promise<boolean> {
   return target.evaluate((el) => {
-    const rect = el.getBoundingClientRect();
+    // The first box: a link that wraps has one per line, and the middle of their union can fall
+    // between them.
+    const rect = el.getClientRects()[0] ?? el.getBoundingClientRect();
     const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
     return hit === null || !(hit === el || el.contains(hit));
   });
+}
+
+/** Whether `target` is drawn at a size a person can point at: not hidden, nor visually hidden. */
+async function isPointable(target: Locator): Promise<boolean> {
+  if (!(await target.isVisible())) return false;
+  const box = await target.boundingBox();
+  return box !== null && box.width > 1 && box.height > 1;
 }
 
 test.describe("on a phone (375 px, coarse pointer) @phone", () => {
@@ -95,16 +108,26 @@ test.describe("at 1280 px @desktop", () => {
         await markStoryRoots(page);
         // The story's controls and those of an overlay it opened.
         const targets = page.locator(`:is(${STORY_ROOT}) :is(${INTERACTIVE})`);
-        for (let i = 0; i < Math.min(await targets.count(), 4); i++) {
+        let visible = 0;
+        let exercised = 0;
+        for (let i = 0; i < (await targets.count()) && exercised < 4; i++) {
           const target = targets.nth(i);
-          if (!(await target.isVisible()) || (await isCovered(target))) continue;
+          if (!(await isPointable(target))) continue;
+          visible++;
+          if (await isCovered(target)) continue;
           await target.hover();
           await target.focus();
           const running = await page.evaluate(
             () => document.getAnimations().filter((a) => a.playState === "running").length,
           );
           expect(running).toBe(0);
+          exercised++;
+          // A tooltip the target opened can cover the next one; Escape closes it, as a person would.
+          if (await page.getByRole("tooltip").first().isVisible())
+            await page.keyboard.press("Escape");
         }
+        // A story with something to press had at least one of its controls exercised.
+        if (visible > 0) expect(exercised).toBeGreaterThan(0);
       });
     }
   });

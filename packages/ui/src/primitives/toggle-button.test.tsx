@@ -17,6 +17,22 @@ describe("ToggleButton", () => {
     expect(el).toHaveClass("data-[selected]:bg-brand-soft");
   });
 
+  it("frames a selected ghost button, not only tints it", () => {
+    render(
+      <ToggleButton intent="ghost" defaultSelected>
+        Show answers
+      </ToggleButton>,
+    );
+    const el = screen.getByRole("button", { name: "Show answers" });
+    expect(el).toHaveClass(
+      "border",
+      "border-transparent",
+      "data-[selected]:border-brand",
+      "data-[selected]:inset-ring",
+      "data-[selected]:inset-ring-brand",
+    );
+  });
+
   it("toggles with Enter and Space", async () => {
     const user = userEvent.setup();
     render(<ToggleButton defaultSelected>Bold</ToggleButton>);

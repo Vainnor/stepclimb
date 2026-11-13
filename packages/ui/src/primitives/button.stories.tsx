@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 import { ThemeMatrix } from "../storybook/theme-matrix";
 import { Button } from "./button";
 
@@ -41,9 +41,22 @@ export const Danger: Story = { args: { intent: "danger", children: "Delete attem
 export const Small: Story = { args: { size: "sm", children: "Small" } };
 export const Disabled: Story = { args: { isDisabled: true, children: "Disabled" } };
 
-/** Loading: the label keeps the button's width and stays its accessible name under a spinner. */
+/** Waits out the 300 ms before a pending button draws its spinner, so the screenshot has it. */
+async function spinnersShown({ canvasElement }: { canvasElement: HTMLElement }) {
+  await waitFor(() => {
+    const spinners = canvasElement.querySelectorAll('[data-slot="button-pending"]');
+    expect(spinners.length).toBeGreaterThan(0);
+    for (const s of spinners) expect(s).toHaveAttribute("data-shown");
+  });
+}
+
+/**
+ * Loading: after 300 ms the label turns invisible under a spinner, keeping the button's width and
+ * its accessible name.
+ */
 export const Pending: Story = {
   args: { intent: "primary", isPending: true, children: "Submit quiz" },
+  play: spinnersShown,
 };
 
 export const FocusVisible: Story = {
@@ -58,6 +71,7 @@ export const FocusVisible: Story = {
 export const Matrix: Story = {
   tags: ["theme-matrix"],
   parameters: { themeWrapper: false },
+  play: spinnersShown,
   render: () => (
     <ThemeMatrix>
       <div className="flex flex-wrap items-center gap-3">

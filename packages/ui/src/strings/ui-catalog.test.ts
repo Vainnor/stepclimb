@@ -12,15 +12,21 @@ import {
   missingMessageIds,
 } from "./check";
 
-const sources = import.meta.glob<string>(["../**/*.{ts,tsx}", "!../**/*.test.{ts,tsx}"], {
-  query: "?raw",
-  import: "default",
-  eager: true,
-});
+// Stories are left out: their docs text shows lookups with the app's own ids as examples.
+const sources = import.meta.glob<string>(
+  ["../**/*.{ts,tsx}", "!../**/*.test.{ts,tsx}", "!../**/*.stories.tsx"],
+  {
+    query: "?raw",
+    import: "default",
+    eager: true,
+  },
+);
 
 describe("Stepclimb UI catalog", () => {
   it("walks the package's source", () => {
     expect(Object.keys(sources)).toContain("../primitives/button.tsx");
+    expect(Object.keys(sources)).toContain("../primitives/copy-button.tsx");
+    expect(Object.keys(sources).filter((f) => f.endsWith(".stories.tsx"))).toEqual([]);
   });
 
   it("has every message id the components use", () => {

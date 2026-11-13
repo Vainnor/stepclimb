@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { render, screen } from "@testing-library/react";
-import { TextField as AriaTextField, Input } from "react-aria-components";
+import userEvent from "@testing-library/user-event";
+import { TextField as AriaTextField, Form, Input } from "react-aria-components";
 import { describe, expect, it } from "vitest";
+import { renderWithStrings, unmarkedText } from "../test/strings";
 import { FieldDescription, FieldError, FieldLabel, field } from "./field";
 
 describe("Field parts", () => {
@@ -23,8 +25,8 @@ describe("Field parts", () => {
     expect(screen.getByText(/^Use letters/).closest('[data-slot="field-error"]')).not.toBeNull();
   });
 
-  it("show the validation errors when the error has no text of its own", () => {
-    render(
+  it("show a validate function's message when the error has no text of its own", () => {
+    renderWithStrings(
       <AriaTextField validationBehavior="aria" validate={() => "Too short."}>
         <FieldLabel>Callsign</FieldLabel>
         <Input />
@@ -32,6 +34,34 @@ describe("Field parts", () => {
       </AriaTextField>,
     );
     expect(screen.getByText("Too short.")).toBeInTheDocument();
+  });
+
+  it("replace the browser's message for a missing required value with the catalog's", async () => {
+    const user = userEvent.setup();
+    renderWithStrings(
+      <Form>
+        <AriaTextField isRequired>
+          <FieldLabel>Callsign</FieldLabel>
+          <Input />
+          <FieldError />
+        </AriaTextField>
+        <button type="submit">Save</button>
+      </Form>,
+    );
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(screen.getByRole("textbox")).toHaveAccessibleDescription("Fill in this field.");
+  });
+
+  it("say the field needs checking when it is invalid with no message at all (T2)", () => {
+    const { container } = renderWithStrings(
+      <AriaTextField isInvalid aria-label="«caller»">
+        <Input />
+        <FieldError />
+      </AriaTextField>,
+      { marked: true },
+    );
+    expect(screen.getByRole("textbox")).toHaveAccessibleDescription("«field.invalid»");
+    expect(unmarkedText(container)).toEqual([]);
   });
 
   it("render no error while the field is valid", () => {

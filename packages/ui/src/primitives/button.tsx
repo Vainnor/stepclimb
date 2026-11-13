@@ -2,9 +2,11 @@
 // The convention example from the plan's UI tab (Component conventions), with one change for
 // Tailwind 4: a CSS variable in an arbitrary value is written `h-(--sc-control-h)`, where the
 // plan's `h-[--sc-control-h]` is Tailwind 3 syntax and generates no height in Tailwind 4.
-// `isPending` draws the loading state: the label stays in the button, invisible but still its
-// accessible name, under a spinner named from the strings catalog.
+// `isPending` draws the loading state: once the wait has lasted SKELETON_DELAY_MS (300 ms), so a
+// fast request never flashes it, the label turns invisible, still the button's accessible name and
+// width, under a spinner named from the strings catalog.
 import { CircleNotchIcon } from "@phosphor-icons/react";
+import { type ReactNode, useEffect, useState } from "react";
 import {
   Button as AriaButton,
   type ButtonProps as AriaButtonProps,
@@ -14,6 +16,7 @@ import {
 import { tv, type VariantProps } from "../lib/tv";
 import { useStepclimbStrings } from "../strings/strings";
 import { Icon } from "../theme/icon";
+import { SKELETON_DELAY_MS } from "./skeleton";
 
 export const button = tv({
   base: [
@@ -36,18 +39,41 @@ export const button = tv({
 
 export interface ButtonProps extends AriaButtonProps, VariantProps<typeof button> {}
 
-/** The spinner over a pending button's label. React Aria names the button by both. */
-function Pending() {
+/**
+ * A pending button's content. The spinner is in the tree from the start, so React Aria can name
+ * the button by it at once; it and the hidden label only show after the delay.
+ */
+function Pending({ children }: { children: ReactNode }) {
   const { t } = useStepclimbStrings();
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setShown(true), SKELETON_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, []);
   return (
-    <ProgressBar
-      data-slot="button-pending"
-      isIndeterminate
-      aria-label={t("button.pending")}
-      className="absolute inset-0 flex items-center justify-center"
-    >
-      <Icon icon={CircleNotchIcon} size="md" className="animate-spin" />
-    </ProgressBar>
+    <>
+      <span
+        data-slot="button-label"
+        className={
+          shown ? "inline-flex items-center gap-2 opacity-0" : "inline-flex items-center gap-2"
+        }
+      >
+        {children}
+      </span>
+      <ProgressBar
+        data-slot="button-pending"
+        data-shown={shown || undefined}
+        isIndeterminate
+        aria-label={t("button.pending")}
+        className={
+          shown
+            ? "absolute inset-0 flex items-center justify-center"
+            : "absolute inset-0 flex items-center justify-center opacity-0"
+        }
+      >
+        <Icon icon={CircleNotchIcon} size="md" className="animate-spin" />
+      </ProgressBar>
+    </>
   );
 }
 
@@ -59,16 +85,7 @@ export function Button({ intent, size, className, children, ...props }: ButtonPr
       className={composeRenderProps(className, (cls) => button({ intent, size, className: cls }))}
     >
       {composeRenderProps(children, (content, { isPending }) =>
-        isPending ? (
-          <>
-            <span data-slot="button-label" className="inline-flex items-center gap-2 opacity-0">
-              {content}
-            </span>
-            <Pending />
-          </>
-        ) : (
-          content
-        ),
+        isPending ? <Pending>{content}</Pending> : content,
       )}
     </AriaButton>
   );

@@ -69,7 +69,10 @@ From `docs/plan/ui.md` -> Component conventions and `.claude/rules/ui.md`.
 - **B4.** `className` is for layout only; color and type changes go through variants (B20).
 - **B5.** No hard-coded strings: every label, including accessible names that are not visible
   (a close button's label, a copy confirmation), comes from `useStepclimbStrings()`
-  (11-app-shell B23). Components never hard-code nouns.
+  (11-app-shell B23). Components never hard-code nouns. React Aria's own accessibility strings,
+  which it translates and offers no prop to replace, are accepted as they are: the hidden
+  "Dismiss" button at each end of a modal overlay and NumberField's `aria-roledescription`
+  (coordinator decision on PR #131, 13 Nov 2026, option (a) of the two raised there).
 - **B6.** Logical properties only (`ms-`, `pe-`, `start-`), so right-to-left works.
 - **B7.** Every stateful component works controlled and uncontrolled (`value` and `defaultValue`,
   `isOpen` and `defaultOpen`, following React Aria's names).
@@ -85,7 +88,8 @@ From `docs/plan/ui.md` -> Component conventions and `.claude/rules/ui.md`.
   motion library. With `prefers-reduced-motion: reduce`, transitions are instant. No section
   entrances, no shimmer for loads under 300 ms.
 - **B12.** Primary is opt-in (`intent="primary"`); secondary is the default, so a view has one
-  primary action unless a developer asks for more.
+  primary action unless a developer asks for more. IconButton defaults to ghost, since icon
+  buttons sit in toolbars and rows (coordinator decision on PR #131, 13 Nov 2026).
 
 ### M0 inventory
 

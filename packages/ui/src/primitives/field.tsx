@@ -16,6 +16,7 @@ import {
   type ValidationResult,
 } from "react-aria-components";
 import { tv } from "../lib/tv";
+import { useStepclimbStrings } from "../strings/strings";
 import { Icon } from "../theme/icon";
 
 export const field = tv({
@@ -53,7 +54,7 @@ export interface FieldPartsProps {
   description?: ReactNode;
   /**
    * Shown when the field is invalid: what is wrong and how to fix it ("Enter a number from 1 to
-   * 20"). Without one, the browser's or `validate`'s message shows.
+   * 20"). Without one, `validate`'s message shows, or a general one from the strings catalog.
    */
   errorMessage?: FieldErrorMessage;
 }
@@ -88,14 +89,31 @@ export interface FieldErrorProps extends Omit<AriaFieldErrorProps, "className"> 
   className?: string;
 }
 
-/** Renders only while the field is invalid, after a warning icon so color is not the only sign. */
+/**
+ * The message for a field that is invalid with no message of its own. A `validate` function's
+ * text is the caller's; the browser's text for a native constraint (`isRequired`, `type="email"`)
+ * is generic and in the browser's language, so it is replaced from the strings catalog.
+ */
+function FallbackMessage({ validation }: { validation: ValidationResult }) {
+  const { t } = useStepclimbStrings();
+  // `isInvalid` alone also reports a custom error, with no text.
+  const custom = validation.validationErrors.join(" ");
+  if (validation.validationDetails.customError && custom !== "") return custom;
+  return validation.validationDetails.valueMissing ? t("field.valueMissing") : t("field.invalid");
+}
+
+/**
+ * Renders only while the field is invalid, after a warning icon so color is not the only sign.
+ * Without text of its own it shows a `validate` function's message, or a message from the strings
+ * catalog for a native constraint, never the browser's.
+ */
 export function FieldError({ className, children, ...props }: FieldErrorProps) {
   return (
     <AriaFieldError data-slot="field-error" {...props} className={styles.error({ className })}>
-      {composeRenderProps(children, (content, { validationErrors }) => (
+      {composeRenderProps(children, (content, validation) => (
         <>
           <Icon icon={WarningCircleIcon} className={styles.errorIcon()} />
-          <span>{content ?? validationErrors.join(" ")}</span>
+          <span>{content ?? <FallbackMessage validation={validation} />}</span>
         </>
       ))}
     </AriaFieldError>

@@ -173,7 +173,9 @@ describe("Menu", () => {
     exportItem.focus();
     await user.keyboard("{ArrowRight}");
     const submenu = await screen.findByRole("menu", { name: "Export" });
-    expect(submenu.closest('[data-slot="menu-popover"]')).not.toBeNull();
+    const submenuPopover = submenu.closest('[data-slot="menu-popover"]');
+    expect(submenuPopover).toHaveClass("min-w-48");
+    expect(submenuPopover).not.toHaveClass("min-w-(--trigger-width)");
     expect(within(submenu).getByRole("menuitem", { name: "Course archive" })).toHaveFocus();
   });
 

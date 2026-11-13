@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Menu: a list of actions opened from a button. At 768 px and wider it opens in a Popover; under
 // 768 px, the breakpoint of the bottom tab bar, it opens as a bottom sheet
-// (docs/specs/m0/13-base-ui-components.md M0 inventory, Q10). A submenu always opens in a Popover
-// beside its item. Arrow keys move between items; typing jumps to an item.
+// (docs/specs/m0/13-base-ui-components.md M0 inventory, Q10). A submenu always opens in a Popover,
+// beside its item, or above it under 768 px. Arrow keys move between items; typing jumps to an item.
 import { CaretRightIcon, CheckIcon } from "@phosphor-icons/react";
 import { use } from "react";
 import {
@@ -71,7 +71,14 @@ export function Menu<T extends object>({ placement, className, ...props }: MenuP
   const list = <AriaMenu data-slot="menu" {...props} className={styles.list({ className })} />;
   if (wide || isSubmenu) {
     return (
-      <Popover data-slot="menu-popover" placement={placement}>
+      // A submenu's trigger is an item as wide as its menu: the submenu does not take its width.
+      // Under 768 px the item spans the sheet, so there is no room beside it: the submenu opens
+      // above it instead.
+      <Popover
+        data-slot="menu-popover"
+        placement={isSubmenu && !wide ? "top end" : placement}
+        className={isSubmenu ? "min-w-48" : undefined}
+      >
         {list}
       </Popover>
     );

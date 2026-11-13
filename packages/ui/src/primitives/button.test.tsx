@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { renderWithStrings, unmarkedText } from "../test/strings";
@@ -74,8 +74,22 @@ describe("Button", () => {
   });
 
   describe("pending", () => {
-    it("keeps its label as the accessible name and shows a named spinner", () => {
+    it("keeps its label as the accessible name and shows a named spinner after 300 ms", () => {
+      vi.useFakeTimers();
       renderWithStrings(<Button isPending>Submit quiz</Button>);
+      const spinnerAt0 = screen.getByRole("progressbar", { name: "In progress" });
+      expect(spinnerAt0).toHaveClass("opacity-0");
+      expect(spinnerAt0).not.toHaveAttribute("data-shown");
+      act(() => {
+        vi.advanceTimersByTime(299);
+      });
+      expect(
+        screen.getByRole("button").querySelector('[data-slot="button-label"]'),
+      ).not.toHaveClass("opacity-0");
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      vi.useRealTimers();
       const el = screen.getByRole("button", { name: /^Submit quiz/ });
       expect(el).toHaveAttribute("data-pending", "true");
       expect(el).toHaveAttribute("aria-disabled", "true");
@@ -83,6 +97,8 @@ describe("Button", () => {
       expect(el.querySelector('[data-slot="button-label"]')).toHaveClass("opacity-0");
       const spinner = screen.getByRole("progressbar", { name: "In progress" });
       expect(spinner).toHaveAttribute("data-slot", "button-pending");
+      expect(spinner).toHaveAttribute("data-shown", "true");
+      expect(spinner).not.toHaveClass("opacity-0");
       expect(el).toContainElement(spinner);
     });
 

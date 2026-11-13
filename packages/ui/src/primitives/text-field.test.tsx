@@ -2,6 +2,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { renderWithStrings } from "../test/strings";
 import { TextField } from "./text-field";
 
 describe("TextField", () => {
@@ -58,7 +59,7 @@ describe("TextField", () => {
 
   it("shows a validate function's message after a commit", async () => {
     const user = userEvent.setup();
-    render(
+    renderWithStrings(
       <TextField
         label="Code"
         validationBehavior="aria"
