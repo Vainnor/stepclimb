@@ -156,3 +156,33 @@ async fn an_unknown_api_path_is_404_not_the_spa() {
     let (status, _, _) = get(app_without_database(), "/api/v1/nothing-here").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn the_openapi_document_has_the_shared_problem_responses() {
+    let (_, _, body) = get(app_without_database(), "/api/openapi.json").await;
+    let doc: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
+
+    let problem = &doc["components"]["schemas"]["Problem"];
+    let mut required: Vec<&str> = problem["required"]
+        .as_array()
+        .expect("Problem lists its required members")
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    required.sort_unstable();
+    assert_eq!(required, ["code", "detail", "status", "title", "type"]);
+    assert!(problem["properties"]["errors"].is_object());
+    assert!(doc["components"]["schemas"]["FieldError"].is_object());
+
+    for name in [
+        "BadRequest",
+        "PayloadTooLarge",
+        "UnsupportedMediaType",
+        "UnprocessableEntity",
+        "InternalError",
+    ] {
+        let schema = &doc["components"]["responses"][name]["content"]["application/problem+json"]["schema"]
+            ["$ref"];
+        assert_eq!(schema, "#/components/schemas/Problem", "response {name}");
+    }
+}

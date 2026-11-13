@@ -4,12 +4,17 @@
 //! The `stepclimb` binary (`src/main.rs`) is a thin wrapper over this library. Today the
 //! application serves the operations endpoints (`/healthz`, `/readyz`), the OpenAPI document
 //! (`/api/openapi.json`) and its Scalar UI (`/docs`), and the built web SPA for every other
-//! path. No product endpoint exists yet; the M0 specs in `docs/specs/m0/` add them.
+//! path. No product endpoint exists yet; the M0 specs in `docs/specs/m0/` add them on the
+//! conventions in [`error`] (problem details), [`extract`] (extractors that reject with them) and
+//! [`pagination`] (cursor pages).
 
 pub mod app;
 pub mod config;
+pub mod error;
+pub mod extract;
 pub mod health;
 pub mod openapi;
+pub mod pagination;
 pub mod spa;
 pub mod startup;
 
