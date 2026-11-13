@@ -26,8 +26,9 @@ permission catalog and roles routes under `/api/v1/admin` (spec 09 I5), `GET /ap
 (spec 03 I5), the caller's organization and its settings under `/api/v1/organization` (spec 02
 I4), the account tree under `/api/v1/accounts` (spec 02 I5), `/docs` (Scalar over a
 utoipa OpenAPI 3.1 document of those routes) and the built web SPA. `stepclimb migrate`
-applies the migrations and exits; `stepclimb admin create` creates an organization and its first
-Organization admin user in one transaction (no sign-in link yet: spec 04 I2); `stepclimb check-config` validates the configuration without
+applies the migrations and exits; `stepclimb admin create` creates the instance's organization and its
+first Organization admin user in one transaction, and refuses once one exists (no sign-in link
+yet: spec 04 I2); `stepclimb check-config` validates the configuration without
 connecting and prints its non-secret values (exit 2 on bad configuration, 1 on a database
 failure). `web/` has one route that reads
 `/healthz` through `packages/api-client`. `packages/tokens` builds the default and vZDC example

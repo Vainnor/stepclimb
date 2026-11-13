@@ -676,16 +676,23 @@ async fn admin_create_on_an_empty_database_creates_the_organization_and_its_admi
     .expect("the organization's plan row");
     assert_eq!(plan, ("unlimited".to_owned(), "selfhost".to_owned()));
 
-    let user: (Uuid, String, String, String, String, String) = sqlx::query_as(
-        "SELECT id, email, display_name, source, status, tz FROM users WHERE org_id = $1",
+    let user: (Uuid, String, String, String, String, String, String) = sqlx::query_as(
+        "SELECT id, email, display_name, source, status, tz, locale FROM users WHERE org_id = $1",
     )
     .bind(org_id)
     .fetch_one(&pool)
     .await
     .expect("exactly one user");
     assert_eq!(
-        (&*user.1, &*user.2, &*user.3, &*user.4, &*user.5),
-        ("sam@example.test", "Sam Admin", "local", "active", "UTC")
+        (&*user.1, &*user.2, &*user.3, &*user.4, &*user.5, &*user.6),
+        (
+            "sam@example.test",
+            "Sam Admin",
+            "local",
+            "active",
+            "UTC",
+            "en"
+        )
     );
     let assignment: (String, String, Uuid, String) = sqlx::query_as(
         "SELECT r.key, ra.scope_type, ra.scope_id, ra.source
@@ -714,6 +721,13 @@ async fn admin_create_on_an_empty_database_creates_the_organization_and_its_admi
         8
     );
 
+    assert!(
+        stderr.contains(
+            "stepclimb: admin create: the admin has no sign-in method yet; the setup link arrives \
+             with local accounts (docs/specs/m0/04-local-accounts.md)\n"
+        ),
+        "stderr: {stderr}"
+    );
     assert_eq!(
         stdout,
         format!(
@@ -735,43 +749,32 @@ async fn admin_create_on_an_empty_database_creates_the_organization_and_its_admi
     }
 }
 
-/// T20 (spec 02 B27): run again with the same slug, the command exits 2 naming the slug flag
-/// and changes nothing.
+/// While an organization exists the command refuses, whatever the slug, and changes nothing
+/// (B27, decided by the owner, 13 Nov 2026): a second organization would make every
+/// unauthenticated request answer 404 until spec 02 Q2's resolution by host exists. With the
+/// same slug this is also T20's "run again".
 #[sqlx::test(migrations = false)]
-async fn admin_create_with_a_taken_slug_exits_2_and_changes_nothing(pool: PgPool) {
+async fn admin_create_with_an_organization_present_exits_2_and_changes_nothing(pool: PgPool) {
     let first = admin_create_binary(&pool, &create_args("example", "sam@example.test"));
     assert_eq!(first.status.code(), Some(0), "{}", stderr_of(&first));
     let before = created_rows(&pool).await;
 
-    let again = admin_create_binary(&pool, &create_args("example", "kim@example.test"));
-    assert_eq!(again.status.code(), Some(2), "{}", stderr_of(&again));
-    let stderr = stderr_of(&again);
-    assert!(
-        stderr.contains(
-            "stepclimb: admin create: --org-slug: another organization has this slug; nothing \
-             was created"
-        ),
-        "stderr: {stderr}"
-    );
-    assert_eq!(stdout_of(&again), "");
-    assert_eq!(created_rows(&pool).await, before);
-}
-
-/// Spec 02 Q1 (A): with a new slug, the command adds another organization with its own admin.
-#[sqlx::test(migrations = false)]
-async fn admin_create_with_a_new_slug_adds_another_organization(pool: PgPool) {
-    let first = admin_create_binary(&pool, &create_args("example", "sam@example.test"));
-    assert_eq!(first.status.code(), Some(0), "{}", stderr_of(&first));
-    let second = admin_create_binary(&pool, &create_args("second", "sam@example.test"));
-    assert_eq!(second.status.code(), Some(0), "{}", stderr_of(&second));
-    assert_eq!(count(&pool, "organizations").await, 2);
-    assert_eq!(count(&pool, "users").await, 2);
-    let distinct_orgs: i64 =
-        sqlx::query_scalar("SELECT count(DISTINCT org_id) FROM role_assignments")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(distinct_orgs, 2);
+    for slug in ["example", "second"] {
+        let again = admin_create_binary(&pool, &create_args(slug, "kim@example.test"));
+        let stderr = stderr_of(&again);
+        assert_eq!(again.status.code(), Some(2), "{slug}: {stderr}");
+        assert!(
+            stderr.contains(
+                "stepclimb: admin create: the instance already has an organization; a second one \
+                 cannot be created until requests are matched to organizations by host (spec 02 \
+                 Q2); nothing was created"
+            ),
+            "{slug}: {stderr}"
+        );
+        assert!(!stderr.contains("no sign-in method"), "{slug}: {stderr}");
+        assert_eq!(stdout_of(&again), "", "{slug}");
+        assert_eq!(created_rows(&pool).await, before, "{slug}");
+    }
 }
 
 /// A refused value exits 2 naming its flag, and leaves no organization behind: the email is
@@ -867,6 +870,12 @@ fn admin_create_against_an_unreachable_database_exits_1() {
         stderr.contains("stepclimb: admin create: could not connect to the database: "),
         "stderr: {stderr}"
     );
-    assert!(stderr.contains("nothing was created"), "stderr: {stderr}");
+    assert!(
+        stderr.contains(
+            "; no organization was created, but the migrations or the built-in role and plan sync \
+             may have run"
+        ),
+        "stderr: {stderr}"
+    );
     assert!(!stderr.contains("zq-db-secret"), "stderr: {stderr}");
 }

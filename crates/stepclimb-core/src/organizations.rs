@@ -9,7 +9,7 @@
 
 use std::time::SystemTime;
 
-use sqlx::{Acquire, PgExecutor, Postgres};
+use sqlx::{Acquire, PgConnection, PgExecutor, Postgres};
 use uuid::Uuid;
 
 use crate::{
@@ -257,6 +257,21 @@ pub async fn count(db: impl PgExecutor<'_>) -> Result<i64, Error> {
         .fetch_one(db)
         .await?;
     Ok(count)
+}
+
+/// Lock the `organizations` table against inserts until the end of the caller's transaction,
+/// then count its rows, so the count holds until that transaction ends: `stepclimb admin create`
+/// refuses on a non-zero count and creates the first organization in the same transaction
+/// (spec 02 B27). `SHARE ROW EXCLUSIVE` conflicts with itself and with the lock an `INSERT`
+/// takes, so a second caller waits here until the first commits, then counts its organization;
+/// reads of the table are not blocked.
+pub async fn lock_and_count(conn: &mut PgConnection) -> Result<i64, Error> {
+    // Instance-wide on purpose, so it takes no `OrgScope`: whether any organization exists is a
+    // fact about the instance. It returns a number, never another organization's row.
+    sqlx::query!("LOCK TABLE organizations IN SHARE ROW EXCLUSIVE MODE")
+        .execute(&mut *conn)
+        .await?;
+    count(&mut *conn).await
 }
 
 /// The id of every organization, for instance-wide jobs that then act in each organization

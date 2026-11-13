@@ -69,7 +69,7 @@ creates and hands over.
   `stepclimb admin create` printing an enrollment link): pending Q7. Self sign-up with a local
   account needs email verification and waits for email (M1): pending Q6. `stepclimb admin
   create` exists (`02-organizations-and-accounts.md` B27) and creates the admin without a link;
-  issue I2 adds the printed enrollment link (coordinator decision, 2026-11-13).
+  issue I2 adds the printed enrollment link (decided by the owner, 13 Nov 2026).
 
 ### Passkey sign-in
 

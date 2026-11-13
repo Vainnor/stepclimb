@@ -148,3 +148,48 @@ async fn a_refused_value_names_its_flag_and_leaves_nothing_behind(pool: PgPool) 
         assert_nothing_created(&pool).await;
     }
 }
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_existing_organization_is_refused_and_nothing_is_written(pool: PgPool) {
+    roles::sync_builtin(&pool, now()).await.unwrap();
+    organizations::create(&pool, "first", "First", now())
+        .await
+        .unwrap();
+    let result = create_organization_with_admin(&pool, &input("second"), now()).await;
+    let error = result.expect_err("refused");
+    assert!(
+        matches!(error, CreateError::OrganizationExists),
+        "{error:?}"
+    );
+    assert!(error.is_refusal());
+    assert_eq!(count(&pool, "organizations").await, 1);
+    assert_eq!(count(&pool, "users").await, 0);
+    assert_eq!(count(&pool, "role_assignments").await, 0);
+}
+
+/// The count holds until the commit: a create that starts while another transaction is creating
+/// the first organization waits for it, then refuses, so two concurrent runs never make two.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_concurrent_create_waits_for_the_first_and_is_refused(pool: PgPool) {
+    roles::sync_builtin(&pool, now()).await.unwrap();
+    let mut first = pool.begin().await.unwrap();
+    assert_eq!(organizations::lock_and_count(&mut first).await.unwrap(), 0);
+    organizations::create(&mut *first, "first", "First", now())
+        .await
+        .unwrap();
+
+    let input = input("second");
+    let second = create_organization_with_admin(&pool, &input, now());
+    tokio::pin!(second);
+    let early = tokio::time::timeout(Duration::from_millis(300), &mut second).await;
+    assert!(early.is_err(), "the second create did not wait: {early:?}");
+    first.commit().await.unwrap();
+
+    let error = second.await.expect_err("refused");
+    assert!(
+        matches!(error, CreateError::OrganizationExists),
+        "{error:?}"
+    );
+    assert_eq!(count(&pool, "organizations").await, 1);
+    assert_eq!(count(&pool, "users").await, 0);
+}

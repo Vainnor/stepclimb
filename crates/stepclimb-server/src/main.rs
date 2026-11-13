@@ -5,8 +5,8 @@
 //! 0023).
 //!
 //! Exit codes: 0 on success; 2 when the command line or the configuration is refused, before
-//! anything connects, or when `admin create` refuses an argument's value (including a slug
-//! another organization has); 1 when the database, the migrations or the HTTP server fail, when
+//! anything connects, or when `admin create` refuses an argument's value or finds an
+//! organization already there; 1 when the database, the migrations or the HTTP server fail, when
 //! `check-config` or `admin create` cannot write its report, or when `healthcheck` finds the
 //! server not ready.
 
@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use stepclimb_server::admin::{self, CommandError, NewOrganizationAdmin};
+use stepclimb_server::admin::{self, NewOrganizationAdmin};
 use stepclimb_server::{Config, healthcheck, startup};
 use tracing_subscriber::EnvFilter;
 
@@ -56,9 +56,9 @@ enum Command {
 
 #[derive(Subcommand)]
 enum AdminCommand {
-    /// Apply database migrations and write the built-in roles, then create an organization with
-    /// its first Organization admin in one transaction. Exit 0 on success; 2 when a value is
-    /// refused (nothing is created); 1 when the database fails (nothing is created).
+    /// Apply database migrations and write the built-in roles, then create the instance's
+    /// organization with its first Organization admin in one transaction. Exit 0 on success; 2
+    /// when a value is refused or an organization already exists; 1 when the database fails.
     Create(CreateArgs),
 }
 
@@ -141,25 +141,17 @@ fn admin_create(config: &Config, args: CreateArgs) -> ExitCode {
         return ExitCode::FAILURE;
     };
     match runtime.block_on(admin::create_command(config, &input)) {
-        Ok(created) => write_stdout(&admin::report(&created)),
-        Err(error) => admin_create_failed(&error),
-    }
-}
-
-fn admin_create_failed(error: &CommandError) -> ExitCode {
-    let refused = match error {
-        CommandError::Create(create) => create.refused_argument(),
-        CommandError::Startup(_) => None,
-    };
-    match refused {
-        Some(flag) => {
-            eprintln!("stepclimb: admin create: {flag}: {error}; nothing was created");
-            ExitCode::from(2)
+        Ok(created) => {
+            eprint!("{}", admin::NO_SIGN_IN_NOTICE);
+            write_stdout(&admin::report(&created))
         }
-        None => {
-            tracing::error!(%error, "admin create failed");
-            eprintln!("stepclimb: admin create: {error}; nothing was created");
-            ExitCode::FAILURE
+        Err(error) => {
+            let (code, message) = admin::failure_report(&error, &input.org_slug);
+            if code != 2 {
+                tracing::error!(%error, "admin create failed");
+            }
+            eprint!("{message}");
+            ExitCode::from(code)
         }
     }
 }

@@ -7,6 +7,10 @@
 //! even when `stepclimb serve` has never run. It then creates the organization (with its root
 //! account and plan row, B26), the user and the user's organization-scope Organization admin
 //! assignment in one transaction: when any step fails, none of them is kept.
+//!
+//! While any organization exists the command refuses (decided by the owner, 13 Nov 2026): with
+//! two, the request-organization resolver answers 404 to every unauthenticated request until
+//! spec 02 Q2's resolution by host exists (B11).
 
 use std::time::SystemTime;
 
@@ -50,9 +54,16 @@ pub struct Created {
     pub assignment_id: Uuid,
 }
 
-/// Why creating the organization and its admin failed. Nothing was written.
+/// Why creating the organization and its admin failed. Nothing was written, except after
+/// [`CreateError::Commit`], whose outcome is unknown.
 #[derive(Debug, thiserror::Error)]
 pub enum CreateError {
+    /// The instance already has an organization (spec 02 B27, Q2).
+    #[error(
+        "the instance already has an organization; a second one cannot be created until \
+         requests are matched to organizations by host (spec 02 Q2)"
+    )]
+    OrganizationExists,
     #[error(transparent)]
     Organization(organizations::Error),
     #[error(transparent)]
@@ -65,8 +76,11 @@ pub enum CreateError {
     RoleMissing,
     #[error("could not assign the Organization admin role: {0}")]
     Assignment(#[source] role_assignments::Error),
-    #[error("the database failed: {0}")]
-    Database(#[source] sqlx::Error),
+    #[error("could not start the transaction: {0}")]
+    Begin(#[source] sqlx::Error),
+    /// The commit failed: the database may or may not have applied it.
+    #[error("could not commit the transaction, so whether the organization exists is unknown: {0}")]
+    Commit(#[source] sqlx::Error),
 }
 
 impl CreateError {
@@ -93,6 +107,11 @@ impl CreateError {
             ) => Some("--email"),
             _ => None,
         }
+    }
+
+    /// Whether the command refuses what it was asked (exit 2) rather than failing (exit 1).
+    pub fn is_refusal(&self) -> bool {
+        matches!(self, Self::OrganizationExists) || self.refused_argument().is_some()
     }
 }
 
@@ -123,7 +142,8 @@ pub async fn create_command(
     result
 }
 
-/// Create the organization `input` names, with its root account and plan row
+/// Create the organization `input` names, refusing with [`CreateError::OrganizationExists`] when
+/// the instance has one already (the count holds until the commit, [`organizations::lock_and_count`]), with its root account and plan row
 /// ([`organizations::create`]), a `local`, `active` user with `input`'s email and name, and that
 /// user's Organization admin assignment at organization scope, all in one transaction stamped
 /// `now`. The built-in roles must have been synced ([`roles::sync_builtin`]).
@@ -132,7 +152,13 @@ pub async fn create_organization_with_admin(
     input: &NewOrganizationAdmin,
     now: SystemTime,
 ) -> Result<Created, CreateError> {
-    let mut tx = pool.begin().await.map_err(CreateError::Database)?;
+    let mut tx = pool.begin().await.map_err(CreateError::Begin)?;
+    let existing = organizations::lock_and_count(&mut tx)
+        .await
+        .map_err(CreateError::Organization)?;
+    if existing > 0 {
+        return Err(CreateError::OrganizationExists);
+    }
     let organization = organizations::create(&mut *tx, &input.org_slug, &input.org_name, now)
         .await
         .map_err(CreateError::Organization)?;
@@ -154,7 +180,7 @@ pub async fn create_organization_with_admin(
     let assignment = role_assignments::create(&mut *tx, scope, &assignment, now)
         .await
         .map_err(CreateError::Assignment)?;
-    tx.commit().await.map_err(CreateError::Database)?;
+    tx.commit().await.map_err(CreateError::Commit)?;
     Ok(Created {
         organization,
         user,
@@ -197,4 +223,115 @@ pub fn report(created: &Created) -> String {
         org_id = created.organization.id,
         user_id = created.user.id,
     )
+}
+
+/// The line `stepclimb admin create` prints to stderr on success: the admin cannot sign in yet
+/// (decided by the owner, 13 Nov 2026; spec 04 I2 adds the setup link).
+pub const NO_SIGN_IN_NOTICE: &str = "stepclimb: admin create: the admin has no sign-in method \
+     yet; the setup link arrives with local accounts (docs/specs/m0/04-local-accounts.md)\n";
+
+/// The exit code and the stderr message for a failed `stepclimb admin create` of the
+/// organization `slug`: 2 for a refusal, 1 otherwise. The message says what is known of the
+/// outcome: nothing was created before the commit; a failed commit leaves it unknown; a failure
+/// while preparing the database may follow migrations or the role and plan sync.
+pub fn failure_report(error: &CommandError, slug: &str) -> (u8, String) {
+    let prefix = "stepclimb: admin create:";
+    match error {
+        CommandError::Startup(error) => (
+            1,
+            format!(
+                "{prefix} {error}; no organization was created, but the migrations or the \
+                 built-in role and plan sync may have run\n"
+            ),
+        ),
+        CommandError::Create(error @ CreateError::Commit(_)) => (
+            1,
+            format!(
+                "{prefix} {error}; check whether organization {slug:?} exists before running \
+                 the command again\n"
+            ),
+        ),
+        CommandError::Create(error) => {
+            let code = if error.is_refusal() { 2 } else { 1 };
+            let message = match error.refused_argument() {
+                Some(flag) => format!("{prefix} {flag}: {error}; nothing was created\n"),
+                None => format!("{prefix} {error}; nothing was created\n"),
+            };
+            (code, message)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn database_error() -> sqlx::Error {
+        sqlx::Error::PoolClosed
+    }
+
+    #[test]
+    fn a_refused_value_exits_2_naming_its_flag() {
+        let error =
+            CommandError::Create(CreateError::Organization(organizations::Error::SlugTaken));
+        let (code, message) = failure_report(&error, "example");
+        assert_eq!(code, 2);
+        assert_eq!(
+            message,
+            "stepclimb: admin create: --org-slug: another organization has this slug; nothing \
+             was created\n"
+        );
+    }
+
+    #[test]
+    fn an_existing_organization_exits_2_naming_q2() {
+        let (code, message) =
+            failure_report(&CommandError::Create(CreateError::OrganizationExists), "x");
+        assert_eq!(code, 2);
+        assert!(message.contains("already has an organization"), "{message}");
+        assert!(message.contains("spec 02 Q2"), "{message}");
+        assert!(message.ends_with("; nothing was created\n"), "{message}");
+    }
+
+    #[test]
+    fn a_failure_before_the_commit_exits_1_saying_nothing_was_created() {
+        let error = CommandError::Create(CreateError::Begin(database_error()));
+        let (code, message) = failure_report(&error, "example");
+        assert_eq!(code, 1);
+        assert!(
+            message.starts_with("stepclimb: admin create: could not start"),
+            "{message}"
+        );
+        assert!(message.ends_with("; nothing was created\n"), "{message}");
+    }
+
+    #[test]
+    fn a_failed_commit_says_the_outcome_is_unknown() {
+        let error = CommandError::Create(CreateError::Commit(database_error()));
+        let (code, message) = failure_report(&error, "example");
+        assert_eq!(code, 1);
+        assert!(
+            message.contains("whether the organization exists is unknown"),
+            "{message}"
+        );
+        assert!(
+            message.contains(r#"check whether organization "example" exists"#),
+            "{message}"
+        );
+        assert!(!message.contains("nothing was created"), "{message}");
+    }
+
+    #[test]
+    fn a_startup_failure_says_migrations_may_have_run() {
+        let error = CommandError::Startup(startup::StartupError::Connect(database_error()));
+        let (code, message) = failure_report(&error, "example");
+        assert_eq!(code, 1);
+        assert!(
+            message.contains(
+                "no organization was created, but the migrations or the built-in role and plan \
+                 sync may have run"
+            ),
+            "{message}"
+        );
+    }
 }
