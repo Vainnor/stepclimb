@@ -106,7 +106,10 @@ Read on 2026-11-12.
   an error. A secret may also be in the TOML file, with a `_file` key beside it; a relative
   `_file` path resolves against the directory holding `stepclimb.toml`, while a variable's
   relative `_FILE` path is relative to the working directory. The self-hosting guide says a file
-  holding a secret needs owner-only permissions.
+  holding a secret needs owner-only permissions. In the Compose production example, the secrets
+  directory is owner-only (0700) and the files are 0644, because Compose outside Swarm
+  bind-mounts secret files and ignores their mode and uid, and the server and MinIO run as uid
+  65532.
 - **B10.** Bad configuration stops startup before the server connects to anything, with a message
   that names the variable or the TOML key (with its file and line), says what is wrong and, where
   there is one, gives an example of a valid value. Bad configuration includes: a missing required
@@ -214,7 +217,9 @@ Compose and image (CI, Linux):
 - **T8.** (B2) `docker compose config` validates the development file and the production example
   in each Caddy and MinIO combination Q1 allows.
 - **T9.** (B2, B3, B14, B17) The production example starts with generated secret files, `/readyz`
-  answers 200 through the published port, and Postgres's port is not reachable from the host.
+  answers 200 through the published port, and Postgres's port is not reachable from the host,
+  checked as no published port on the Postgres container and only internal networks attached to
+  it.
 - **T10.** (B2) The production example started without its secret files exits with an error
   naming a missing file.
 - **T11.** (B21) The image's configured user is non-root and its final stage has no shell

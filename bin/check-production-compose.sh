@@ -6,7 +6,9 @@
 #        without the minio profile;
 #   T10  `up` without the secret files fails and names a missing file;
 #   T9   `up` with generated secrets turns healthy, /readyz answers 200 on the published port,
-#        and PostgreSQL publishes no port and sits only on internal networks.
+#        the server is published on 127.0.0.1 only (the default), and PostgreSQL publishes no
+#        port and sits only on internal networks.
+# SC_PROD_CHECK_PROJECT and SC_PROD_CHECK_PORT override the project name and the port.
 # It runs as its own Compose project on its own port, so it never touches the development stack
 # (project `stepclimb`, :55432, :58080), and removes its containers, volumes and secrets on exit.
 # Needs the server image to build (deploy/Dockerfile); `just e2e` before it leaves it cached.
@@ -18,7 +20,7 @@ project=${SC_PROD_CHECK_PROJECT:-stepclimb-prodcheck}
 port=${SC_PROD_CHECK_PORT:-58180}
 production=deploy/compose/compose.production.yaml
 work=$(mktemp -d "${TMPDIR:-/tmp}/stepclimb-prodcheck.XXXXXX")
-export SC_HTTP_ADDRESS=127.0.0.1 SC_HTTP_PORT=$port SC_SECRETS_DIR="$work/secrets"
+export SC_HTTP_PORT=$port SC_SECRETS_DIR="$work/secrets"
 
 compose() { docker compose -p "$project" -f "$production" "$@"; }
 fail() {
@@ -78,6 +80,10 @@ PY
 )
 [[ $status == 200 ]] || fail "/readyz on :$port answered $status"
 
+server=$(compose ps --quiet stepclimb)
+hosts=$(docker inspect --format '{{range $port, $bindings := .HostConfig.PortBindings}}{{range $bindings}}{{.HostIp}} {{end}}{{end}}' "$server")
+[[ $hosts == "127.0.0.1 " ]] || fail "the server is published on '$hosts', not on 127.0.0.1 only"
+
 postgres=$(compose ps --quiet postgres)
 published=$(docker inspect --format '{{json .HostConfig.PortBindings}}' "$postgres")
 [[ $published == "{}" || $published == "null" ]] || fail "postgres publishes $published"
@@ -85,5 +91,5 @@ for network in $(docker inspect --format '{{range $name, $_ := .NetworkSettings.
     [[ $(docker network inspect --format '{{.Internal}}' "$network") == true ]] \
         || fail "postgres is on $network, which is not internal"
 done
-echo "production compose: healthy, /readyz 200 on 127.0.0.1:$port, postgres on internal networks only"
+echo "production compose: healthy, /readyz 200 on 127.0.0.1:$port (published there only), postgres on internal networks only"
 echo "production compose: ok"

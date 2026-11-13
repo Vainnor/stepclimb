@@ -46,3 +46,7 @@ otherwise, printing the reason to stderr. A configuration error exits 2, as for 
 The plan's CLI list gains `healthcheck`. The production Compose example uses it as the server's
 health check. The check speaks HTTP over a plain TCP connection, so it adds no HTTP client to the
 binary; if the server ever serves only TLS on its own port, the check needs revisiting.
+
+Docker's health check reference reserves exit code 2. `healthcheck` still exits 2 on a
+configuration error, like every command, because Docker counts any non-zero exit as a failed
+check: a server whose configuration the check cannot read is reported unhealthy either way.
