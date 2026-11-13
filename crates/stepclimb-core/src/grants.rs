@@ -192,12 +192,20 @@ impl Grants {
     /// Whether `P` is effective at a scope containing the target.
     #[must_use]
     pub fn holds<P: Permission>(&self, target: &Target) -> bool {
-        if self.organization.contains(P::KEY) {
+        self.holds_key(P::KEY, target)
+    }
+
+    /// Whether the permission with catalog key `key` is effective at a scope containing the
+    /// target, for checks over a list of keys such as a role's (the escalation rule, B8 and
+    /// B12). A key the catalog does not define is never effective.
+    #[must_use]
+    pub fn holds_key(&self, key: &str, target: &Target) -> bool {
+        if self.organization.contains(key) {
             return true;
         }
         match target {
             Target::Organization => false,
-            Target::Account(path) => self.account_keys_on(path).any(|keys| keys.contains(P::KEY)),
+            Target::Account(path) => self.account_keys_on(path).any(|keys| keys.contains(key)),
         }
     }
 
@@ -367,6 +375,22 @@ mod tests {
         assert!(!g.holds::<AccountView>(&tree.enroute()));
         assert!(!g.holds::<AccountView>(&tree.root()));
         assert!(!g.holds::<AccountView>(&Target::Organization));
+    }
+
+    #[test]
+    fn holds_key_answers_as_holds_and_never_for_an_unknown_key() {
+        let tree = Tree::new();
+        let g = grants(vec![
+            assignment(&["role.view"], GrantScope::Organization),
+            assignment(&["account.manage", "retired.key"], tree.at(tree.tower)),
+        ]);
+        assert!(g.holds_key("role.view", &Target::Organization));
+        assert!(g.holds_key("role.view", &tree.enroute()));
+        assert!(g.holds_key("account.manage", &tree.ground()));
+        assert!(!g.holds_key("account.manage", &tree.enroute()));
+        assert!(!g.holds_key("account.manage", &Target::Organization));
+        assert!(!g.holds_key("retired.key", &tree.tower()));
+        assert!(!g.holds_key("", &Target::Organization));
     }
 
     #[test]

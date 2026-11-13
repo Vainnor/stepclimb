@@ -150,7 +150,7 @@ async fn startup_migrations_create_the_schema_on_an_empty_database(pool: PgPool)
 }
 
 #[tokio::test]
-async fn the_openapi_document_is_3_1_and_lists_the_probes_and_sign_out() {
+async fn the_openapi_document_is_3_1_and_lists_every_route() {
     let (status, content_type, body) = get(app_without_database(), "/api/openapi.json").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(content_type.as_deref(), Some("application/json"));
@@ -163,7 +163,17 @@ async fn the_openapi_document_is_3_1_and_lists_the_probes_and_sign_out() {
         .map(String::as_str)
         .collect();
     paths.sort_unstable();
-    assert_eq!(paths, ["/auth/sign-out", "/healthz", "/readyz"]);
+    assert_eq!(
+        paths,
+        [
+            "/api/v1/admin/permissions",
+            "/api/v1/admin/roles",
+            "/api/v1/admin/roles/{role_id}",
+            "/auth/sign-out",
+            "/healthz",
+            "/readyz"
+        ]
+    );
 }
 
 #[tokio::test]

@@ -515,6 +515,33 @@ pub async fn delete_custom<'c>(
     Ok(())
 }
 
+/// The custom role `id` of the scope's organization, with its row locked until the end of the
+/// caller's transaction, so a check on its current permissions holds until the caller's
+/// [`update_custom`] in the same transaction writes. A built-in role is refused with
+/// [`Error::BuiltinImmutable`] without locking its instance-wide row.
+pub async fn lock_custom(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    id: Uuid,
+) -> Result<Role, Error> {
+    refuse_builtin(&mut *conn, scope, id).await?;
+    sqlx::query_as!(
+        Row,
+        r#"SELECT id, key, name, builtin, permissions,
+                  (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM roles
+           WHERE org_id = $1 AND id = $2
+           FOR UPDATE"#,
+        scope.org_id(),
+        id,
+    )
+    .fetch_optional(conn)
+    .await?
+    .ok_or(Error::NotFound)
+    .and_then(Role::try_from)
+}
+
 /// [`Error::BuiltinImmutable`] when `id` is a built-in role, [`Error::NotFound`] when it is
 /// neither built-in nor a custom role of the scope's organization.
 async fn refuse_builtin(db: impl PgExecutor<'_>, scope: OrgScope, id: Uuid) -> Result<(), Error> {

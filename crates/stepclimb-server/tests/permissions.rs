@@ -49,7 +49,8 @@ use stepclimb_core::{
     id::{Uuid, new_id},
     organizations,
     perm::{
-        self, AccountManage, AccountView, OrgManage, Permission, RoleAssign, RoleView, ScopeType,
+        self, AccountManage, AccountView, OrgManage, Permission, RoleAssign, RoleManage, RoleView,
+        ScopeType,
     },
     role_assignments::{self, NewAssignment, Scope},
     roles::{self, NewRole},
@@ -74,9 +75,77 @@ use tower::ServiceExt;
 /// to 08 declare (B21).
 const PUBLIC: &[&str] = &["healthz", "readyz", "signOut"];
 
-/// One entry per operation that needs a principal (B20). No `/api/v1` operation exists yet; the
-/// M0 specs' routes add theirs here as they land.
-const TABLE: &[Entry] = &[];
+/// One entry per operation that needs a principal (B20). The M0 specs' routes add theirs here
+/// as they land.
+const TABLE: &[Entry] = &[
+    Entry {
+        operation_id: "listPermissions",
+        access: permission(RoleView::KEY, Target::AnyScope, at_org),
+    },
+    Entry {
+        operation_id: "listRoles",
+        access: permission(RoleView::KEY, Target::AnyScope, at_org),
+    },
+    Entry {
+        operation_id: "getRole",
+        access: permission(RoleView::KEY, ROLE_NOT_FOUND, custom_role_in_path),
+    },
+    Entry {
+        operation_id: "createRole",
+        access: permission(RoleManage::KEY, Target::Org, new_role_in_body),
+    },
+    Entry {
+        operation_id: "updateRole",
+        access: permission(RoleManage::KEY, ROLE_NOT_FOUND, rename_custom_role),
+    },
+    Entry {
+        operation_id: "deleteRole",
+        access: permission(RoleManage::KEY, ROLE_NOT_FOUND, custom_role_in_path),
+    },
+];
+
+/// A role that is not the organization's: 404 `role.not_found`. Roles are organization-wide,
+/// so a role route's scope is the organization and it has no wrong-account 404 case.
+const ROLE_NOT_FOUND: Target = Target::Scoped {
+    not_found: "role.not_found",
+};
+
+/// A new unassigned custom role of `org`, named in the path; the caller acts at organization
+/// scope.
+fn custom_role_in_path(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: vec![("role_id", org.custom_role().await)],
+            body: None,
+            at: At::Org,
+        }
+    })
+}
+
+/// [`custom_role_in_path`] with a new name in the body.
+fn rename_custom_role(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            body: Some(serde_json::json!({ "name": "Renamed role" })),
+            ..custom_role_in_path(org).await
+        }
+    })
+}
+
+/// A role with no permissions, which any `role.manage` holder may define.
+fn new_role_in_body(_: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: Vec::new(),
+            body: Some(serde_json::json!({
+                "key": "suite_new_role",
+                "name": "Suite new role",
+                "permissions": [],
+            })),
+            at: At::Org,
+        }
+    })
+}
 
 /// A protected operation and how to call it.
 struct Entry {
@@ -807,6 +876,19 @@ impl Org {
         cookie
     }
 
+    /// A new custom role with no permissions and no assignment.
+    async fn custom_role(&self) -> Uuid {
+        let role = NewRole {
+            key: format!("r{}", new_id().simple()),
+            name: "Target role".into(),
+            permissions: Vec::new(),
+        };
+        roles::create_custom(&self.pool, scope(self.id), &role, now())
+            .await
+            .expect("create role")
+            .id
+    }
+
     async fn holder_of_builtin(&self, key: &str, at: At) -> String {
         let (cookie, user) = self.user().await;
         let role = sqlx::query_scalar("SELECT id FROM roles WHERE org_id IS NULL AND key = $1")
@@ -977,7 +1059,7 @@ const ACCOUNT_NOT_FOUND: Target = Target::Scoped {
     not_found: "account.not_found",
 };
 
-fn permission(key: &'static str, target: Target, setup: Setup) -> Access {
+const fn permission(key: &'static str, target: Target, setup: Setup) -> Access {
     Access::Permission {
         key,
         target,

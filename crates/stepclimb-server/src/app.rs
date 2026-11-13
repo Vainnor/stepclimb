@@ -20,7 +20,7 @@ use crate::{
     error::ApiError,
     health, openapi,
     rate_limit::RateLimiter,
-    spa,
+    roles, spa,
     web_origin::WebOrigin,
 };
 
@@ -86,6 +86,17 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         ("/healthz", get(health::healthz)),
         ("/readyz", get(health::readyz)),
         ("/auth/sign-out", post(auth::sign_out)),
+        ("/api/v1/admin/permissions", get(roles::list_permissions)),
+        (
+            roles::ROLES_PATH,
+            get(roles::list_roles).post(roles::create_role),
+        ),
+        (
+            "/api/v1/admin/roles/{role_id}",
+            get(roles::get_role)
+                .patch(roles::update_role)
+                .delete(roles::delete_role),
+        ),
     ]
 }
 
