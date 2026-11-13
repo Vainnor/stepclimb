@@ -6,15 +6,18 @@
 //! stored object missing a key reads as that default and no migration backfills settings. M0's
 //! keys arrive with specs 03, 04 and 07; until then both structs are empty.
 //!
-//! A stored key this code does not know is an error on read, not a value to drop: the column
-//! is only ever written from an [`OrgSettingsPatch`], so such a key means the data and the code
-//! disagree. Removing a key therefore takes a migration that strips it from every row.
+//! Stored settings are read tolerantly: a key this code does not know is ignored on read and
+//! kept in the row, because the repository merges a patch into the stored object
+//! (`settings || patch`) instead of replacing it. Migrations are forward-only (expand, then
+//! contract), so during a rolling deploy or after a rollback a server can meet a key a newer
+//! release wrote; it must neither fail nor drop it. A patch is strict: it refuses unknown keys
+//! (spec 02 B14, `settings.unknown_key`).
 
 use serde::{Deserialize, Serialize};
 
 /// Every organization setting with its effective value.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct OrgSettings {}
 
 /// A partial update of [`OrgSettings`]: one optional member per key, `None` for "leave as it
@@ -35,12 +38,9 @@ mod tests {
     }
 
     #[test]
-    fn a_stored_key_the_code_does_not_know_is_an_error() {
-        let read = serde_json::from_str::<OrgSettings>(r#"{"no_such_key": true}"#);
-        assert!(
-            read.is_err(),
-            "an unknown stored key is refused, not dropped"
-        );
+    fn a_stored_key_the_code_does_not_know_is_ignored_on_read() {
+        let settings: OrgSettings = serde_json::from_str(r#"{"newer_key": true}"#).unwrap();
+        assert_eq!(settings, OrgSettings::default());
     }
 
     #[test]

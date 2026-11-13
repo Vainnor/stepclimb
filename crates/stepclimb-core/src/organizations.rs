@@ -8,7 +8,7 @@
 
 use std::time::SystemTime;
 
-use sqlx::PgExecutor;
+use sqlx::{Acquire, PgExecutor, Postgres};
 use uuid::Uuid;
 
 use crate::{
@@ -101,10 +101,15 @@ pub async fn settings(db: impl PgExecutor<'_>, scope: OrgScope) -> Result<OrgSet
 
 /// Merge `patch` into the scope's organization settings and set `updated_at` to `now`. The
 /// merge (`settings || patch`) runs inside the `UPDATE` against the row it locks, never against
-/// a copy read earlier, so a patch cannot write back a stale value for a key it does not name.
+/// a copy read earlier, so a patch cannot write back a stale value for a key it does not name,
+/// and stored keys the patch does not name (including ones this release does not know) stay.
 /// Returns the settings after the merge.
-pub async fn update_settings(
-    db: impl PgExecutor<'_>,
+///
+/// The `UPDATE` and the parse of its result run in one transaction, a savepoint when `db` is
+/// already one: if the merged object does not parse, the call returns
+/// [`Error::StoredSettings`] and nothing it wrote is kept.
+pub async fn update_settings<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
     scope: OrgScope,
     patch: &OrgSettingsPatch,
     now: SystemTime,
@@ -113,6 +118,7 @@ pub async fn update_settings(
     // serializes; it fails only on a map with non-string keys or a failing `Serialize` impl.
     let patch = serde_json::to_string(patch).expect("a settings patch serializes to JSON");
     let now = epoch_micros(now)?;
+    let mut tx = db.begin().await?;
     let stored = sqlx::query_scalar!(
         r#"UPDATE organizations
            SET settings = settings || $2::text::jsonb,
@@ -123,10 +129,13 @@ pub async fn update_settings(
         patch,
         now,
     )
-    .fetch_optional(db)
+    .fetch_optional(&mut *tx)
     .await?
     .ok_or(Error::NotFound)?;
-    parse_settings(&stored)
+    // An early return drops `tx`, which rolls the update back.
+    let settings = parse_settings(&stored)?;
+    tx.commit().await?;
+    Ok(settings)
 }
 
 /// How many organizations the instance has, for the request-organization resolver of
