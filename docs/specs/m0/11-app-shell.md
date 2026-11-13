@@ -43,8 +43,8 @@ Read on 2026-11-12; the spec builds on it.
   everything else `no-cache`. `web/e2e/smoke.spec.ts` already checks that `/c/example/m/1/i/1`
   is served the SPA.
 - `apps/app`: a Tauri 2 shell loading `web/dist`, no native features, identifier
-  `dev.stepclimb.shell`; `.github/workflows/tauri.yml` builds it unsigned on Linux for every PR
-  and on macOS and Windows for pushes to `main`.
+  `dev.stepclimb.shell`; `just app-build` builds it unsigned for the local OS (there is no hosted
+  CI, ADR 0021).
 
 ## Behavior
 
@@ -198,8 +198,8 @@ Read on 2026-11-12; the spec builds on it.
 
 ### Native shell
 
-- **B31.** `apps/app` keeps loading `web/dist` with no native features and keeps building in CI
-  (`.github/workflows/tauri.yml`). Server discovery through `/.well-known/stepclimb`, PKCE sign-in,
+- **B31.** `apps/app` keeps loading `web/dist` with no native features and keeps building with
+  `just app-build`. Server discovery through `/.well-known/stepclimb`, PKCE sign-in,
   the keychain, downloads and notifications are M5 (`docs/specs/m5.md`). The final bundle
   identifier is Open question Q9.
 

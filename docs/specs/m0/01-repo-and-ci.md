@@ -11,12 +11,13 @@
 
 ## Summary
 
-The repository skeleton, its toolchains, the `just ci` merge gate, the GitHub Actions workflows,
+The repository skeleton, its toolchains, the `just ci` merge gate (run locally; there is no hosted
+CI, ADR 0021),
 Dependabot and the git hooks already exist; this spec records what they do (checked against the
 files on 12 Nov 2026) so later changes have a baseline. It then specifies what M0 still needs
 for "Repo, CI, releases": the GitHub repository itself, the governance files the plan names, the
 `pnpm audit` gate, Dependabot for the Compose images, one version number with a check, and a
-release workflow. What a release ships beyond a tagged GitHub Release is pending Q1.
+release recipe. What a release ships beyond a tagged GitHub Release is pending Q1.
 
 ## Behavior
 
@@ -48,21 +49,20 @@ release workflow. What a release ships beyond a tagged GitHub Release is pending
   suite from `09-permissions-and-roles.md`), the sqlx offline check (`sqlx-check`), the OpenAPI diff
   (`openapi-diff`), Playwright (`e2e`), secret scanning (`secrets-scan`). The activity known-case
   library joins `test-rust` in M3; property tests arrive with `stepclimb-assess` in M2.
-- **B4. `ci.yml`.** Runs on every pull request and on pushes to `main` and `next`, on
-  `ubuntu-24.04`, 60-minute timeout, `permissions: contents: read`, one run per ref
-  (`cancel-in-progress`). It checks out the full history, installs the toolchain from
-  `rust-toolchain.toml`, installs `just` 1.59.0, `cargo-nextest` 0.9.149, `cargo-deny` 0.20.2,
-  `sqlx-cli` 0.9.0 and `gitleaks` 8.30.1, sets up pnpm and Node from `.node-version`, installs
-  packages and Playwright's Chromium, scans the git history for secrets
-  (`just secrets-scan history`), then runs `just ci` with `NEXTEST_PROFILE=ci`. Every action is
-  pinned by commit SHA.
-- **B5. `tauri.yml`.** Builds `apps/app` unsigned and unbundled: on Linux for every pull request
-  and push to `main` or `next`; on `macos-15` and `windows-2025` only for pushes to `main`
-  (owner, 2026-11-12, to save the private repository's Actions minutes). On Linux it also runs
-  `cargo deny` over the app's own workspace. Standard hosted runners only.
+- **B4. No hosted CI** (ADR 0021). The repository has no GitHub Actions workflows: Actions
+  minutes on a private repository run out too fast. `just ci` on the committed HEAD, on the
+  machine the change was made on, is the merge gate; `bin/ci-stamp.sh` records a pass on a clean
+  tree and the `pr-gate` hook refuses `gh pr create` without one. The PR body quotes the summary
+  lines and names the OS. The history secret scan (`just secrets-scan history`) runs before every
+  push, in place of a hosted scan.
+- **B5. `just app-build`.** Builds `apps/app` unsigned and unbundled for the local OS, after
+  `cargo deny` over the app's own workspace. It is not part of `just ci`; a change to `apps/app`
+  runs it. macOS and Windows builds run on a machine or VM the owner provides, when a change
+  needs them.
 - **B6. Dependabot** (`.github/dependabot.yml`). Weekly Cargo updates for `/` and
   `/apps/app/src-tauri`, weekly npm updates for `/`, monthly GitHub Actions and Docker
-  (`/deploy`) updates; every entry targets `next`, holds versions for 14 days (`cooldown`) and
+  (`/deploy`) updates (nothing runs on Dependabot's PRs on GitHub; they are checked locally with
+  `just ci` like any other); every entry targets `next`, holds versions for 14 days (`cooldown`) and
   groups minor and patch updates for Cargo and npm. Commit prefixes are `chore(deps)` and
   `ci(deps)`.
 - **B7. Git hooks** (`.githooks/`, installed once per clone by `just install-hooks`):
@@ -103,8 +103,7 @@ release workflow. What a release ships beyond a tagged GitHub Release is pending
 - **B12. `pnpm audit` gate.** The plan's supply-chain list names `pnpm audit`; `just ci` does not
   run it today. A recipe `web-audit` runs `pnpm audit --prod` and `pnpm audit` (dev dependencies
   too) at the severity threshold pending Q7, and fails on a finding at or above it. It needs the
-  npm registry, so it runs in `ci.yml` as its own step before `just ci`, and in `just ci` only
-  when the registry answers (pending Q7 for whether a local run without the network fails or
+  npm registry, so it runs in `just ci` only when the registry answers (pending Q7 for whether a local run without the network fails or
   skips with a message).
 - **B13. Dependabot for the Compose images.** `deploy/compose/compose.yaml` pins `postgres` and
   `minio` by digest, and the `docker` entry for `/deploy` reads only `deploy/Dockerfile`. A
@@ -123,15 +122,15 @@ release workflow. What a release ships beyond a tagged GitHub Release is pending
 - **B15. Release process.** A release is a PR from `next` to `main` titled
   `chore(release): vX.Y.Z`, carrying the version bump (B14) and the release notes. After it is
   merged (merge method pending Q3), the owner tags the merge result on `main` as `vX.Y.Z` (an
-  annotated tag). Pushing a `v*` tag runs `.github/workflows/release.yml`, which checks that the
-  tag equals the workspace version and that `just ci` passed on that commit's `ci.yml` run, then
-  creates the GitHub Release with the notes. Release notes are generated from the Conventional
+  annotated tag). The owner then runs `just release vX.Y.Z` in a clean worktree of the tag: it
+  checks that the tag equals the workspace version and that `just ci` passes on that commit, then
+  creates the GitHub Release with `gh release create` and the notes. Release notes are generated from the Conventional
   Commit subjects since the previous tag, grouped by type, with `feat` and `fix` first (tool
   pending Q4); breaking changes (a `!` after the type, or a `BREAKING CHANGE:` footer) are listed
   first under their own heading.
-- **B16. Release artifacts.** What the release workflow publishes besides the GitHub Release is
-  pending Q1. Whatever Q1 decides, artifacts are built only by `release.yml` from the tagged
-  commit, never uploaded from a workstation.
+- **B16. Release artifacts.** What a release publishes besides the GitHub Release is pending Q1.
+  Whatever Q1 decides, artifacts are built by `just release` from a clean worktree of the tagged
+  commit, on the owner's machine or a VM the owner provides, never from a working checkout.
 - **B17. DCO.** The plan says contributions are under the DCO (License and governance). How it is
   checked, and how a `Signed-off-by` trailer fits `AGENTS.md`'s "`Closes #N` is the only trailer"
   rule and the `commit-msg` hook, is pending Q5. Until Q5 is decided no DCO check runs.
@@ -166,9 +165,9 @@ None.
   first run, recorded in the issue).
 - **T6** (B14). Changing only `tauri.conf.json`'s version makes `just version-check` fail naming
   both values; `just release-version 0.1.0` makes every file agree and `just ci` pass.
-- **T7** (B15). In a fork or a scratch repository, pushing tag `v0.0.1-test.1` on a commit whose
+- **T7** (B15). In a scratch repository, `just release v0.0.1-test.1` on a tagged commit whose
   workspace version is `0.0.1-test.1` creates a GitHub Release with grouped notes; a tag
-  that differs from the workspace version fails the workflow before it creates anything.
+  that differs from the workspace version makes `just release` stop before it creates anything.
 - **T8** (B11). `docs-reviewer` reviews the three governance files against `anti-ai-slop.md` and
   the plan's License and governance section.
 
@@ -213,13 +212,13 @@ None.
 - **Q4. The release-notes tool.** Options: A, `git-cliff` (reads Conventional Commits, a single
   binary, in nixpkgs), configured in `cliff.toml`; B, `release-please`, which opens its own release
   PRs and expects to own the version bump; C, a short script in `bin/` over `git log`.
-  Recommendation: A, run by the `release-version` recipe and by `release.yml`, after
+  Recommendation: A, run by the `release-version` recipe and by `just release`, after
   `dependency-researcher` checks it.
 - **Q5. DCO enforcement and the trailer rule.** `AGENTS.md` says `Closes #N` is the only trailer
   and the `commit-msg` hook refuses attribution lines; the DCO is usually shown with a
   `Signed-off-by` trailer. Options: A, require `Signed-off-by` on PR commits from outside
-  contributors only, checked by a workflow step, and allow that trailer in `AGENTS.md` and the
-  hook; B, a CONTRIBUTING statement that opening a PR certifies the DCO, with no trailer and no
+  contributors only, checked by the commit-msg hook and `just ci`, and allow that trailer in
+  `AGENTS.md` and the hook; B, a CONTRIBUTING statement that opening a PR certifies the DCO, with no trailer and no
   check; C, the DCO GitHub App on every PR, including the maintainer's (the trailer then appears on
   every commit). Recommendation: A, since the plan expects few outside contributors and the
   maintainer's own commits stay as they are.
@@ -244,19 +243,19 @@ None.
    `CODE_OF_CONDUCT.md` (B9). Deliver what Q5 and Q6 decide: the DCO mechanism, the contact
    address, and private vulnerability reporting once the repository is public. Covers B11, T8. Depends on: issue 1 (the repository URL).
 3. **`pnpm audit` gate** (threshold pending Q7). Deliver the `web-audit` recipe, its place in
-   `just ci` and `ci.yml`, and the allowlist file if Q7 adopts one. Covers B12, T2, T4. Depends on:
-   none.
+   `just ci`, and the allowlist file if Q7 adopts one. Covers B12, T2, T4. Depends on: none.
 4. **Dependabot for the Compose images.** Deliver the `docker-compose` entry after confirming it
    reads digest pins. Covers B13, T5. Depends on: issue 1 (Dependabot runs only on GitHub).
 5. **One version and its check.** Deliver `bin/check-versions.sh` (with an SPDX header), the
    `version-check` recipe in `just ci`, and `release-version <x.y.z>`. Covers B14, T2, T6.
    Depends on: none. The starting number waits for Q2.
-6. **Release workflow and notes** (tool pending Q4, merge method pending Q3). Deliver
-   `.github/workflows/release.yml` (tag check, CI check, GitHub Release with grouped notes),
-   the notes configuration, and the release steps in `CONTRIBUTING.md`. Covers B15, T7. Depends
-   on: issues 1, 2 and 5.
-7. **Release artifacts** (pending Q1). Deliver the artifacts Q1 chooses in `release.yml` (for
-   option B: multi-arch image to GHCR, cosign keyless signature, SBOM attached to the release).
-   Covers B16. Depends on: issue 6; `14-compose-deploy.md` for the Dockerfile.
+6. **Release recipe and notes** (tool pending Q4, merge method pending Q3). Deliver
+   `just release vX.Y.Z` (tag check, `just ci` on the tagged commit, GitHub Release with grouped
+   notes through `gh`), the notes configuration, and the release steps in `CONTRIBUTING.md`.
+   Covers B15, T7. Depends on: issues 1, 2 and 5.
+7. **Release artifacts** (pending Q1). Deliver the artifacts Q1 chooses in `just release` (for
+   option B: multi-arch image to GHCR, cosign signature, SBOM attached to the release), built on
+   the owner's machine or VM. Covers B16. Depends on: issue 6; `14-compose-deploy.md` for the
+   Dockerfile.
 8. **DCO check** (pending Q5). Deliver the check Q5 chooses and the matching change to `AGENTS.md`
    and `.githooks/commit-msg` if a trailer is allowed. Covers B17. Depends on: issue 2.

@@ -20,5 +20,5 @@ scheduled.
 
 ## Consequences
 
-`apps/app` builds unsigned in CI from M0. The Apple developer account is the maintainer's,
+`apps/app` builds unsigned from M0 (`just app-build`, locally; ADR 0021). The Apple developer account is the maintainer's,
 created before M5.

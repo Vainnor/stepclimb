@@ -39,8 +39,8 @@ Read on 2026-11-12.
   builds `stepclimb` in release mode with the SPA embedded; the final stage is
   `gcr.io/distroless/cc-debian12:nonroot`, all three pinned by digest, `USER nonroot`,
   `EXPOSE 8080`, `STEPCLIMB_BIND=0.0.0.0:8080`, entry point `stepclimb serve`. It builds for the
-  host's architecture only; nothing builds multi-arch, signs or attaches an SBOM, and no
-  workflow pushes an image (`.github/workflows/` has `ci.yml` and `tauri.yml`).
+  host's architecture only; nothing builds multi-arch, signs or attaches an SBOM, and
+  nothing pushes an image. There is no hosted CI (ADR 0021).
 - **Configuration** (`crates/stepclimb-server/src/config.rs`): `STEPCLIMB_BIND` (default
   `127.0.0.1:8080`, must parse as a socket address), `STEPCLIMB_DATABASE_URL` or
   `STEPCLIMB_DATABASE_URL_FILE` (exactly one; the file is read and trimmed; the URL must start
@@ -265,9 +265,9 @@ using its internal CA, which proves the proxy path.
   cosign, attaches the SBOM and pushes to GHCR, and this spec owns the Dockerfile's contents and a
   CI check that both architectures build; (b) this spec owns the whole image pipeline.
   Recommendation: (a): signing and publishing belong with the release tags and the other release
-  artifacts. The arm64 build of the Rust stage under emulation is slow on standard runners; a
-  cross-compiling stage or a native arm64 runner is the owner's call (`.claude/rules/
-  cross-platform.md`: paid runners need the owner).
+  artifacts. The arm64 build of the Rust stage under emulation is slow; a cross-compiling stage
+  or a native arm64 machine the owner provides is the owner's call (ADR 0021: long jobs go to a
+  VM the owner provides).
 - **Q6. The MinIO image (ADR 0019, Proposed).** Options are ADR 0019's: (a) Chainguard's image
   pinned by digest; (b) MinIO built from source into our own image; (c) another S3-compatible
   server (Garage, SeaweedFS). Recommendation: as the ADR: (a) for development now, revisited
@@ -304,9 +304,10 @@ In dependency order. Each is one PR.
   trusted).
 - **I6. Nightly dumps and restore.** Deliverable: the nightly dump as Q4 decides, with retention,
   and the dump-and-restore CI check. Covers B19, B20; T12. Depends on: I4; Q4 answered.
-- **I7. Image architectures.** Deliverable: the Dockerfile building for amd64 and arm64 in CI,
-  the non-root and no-shell checks; publishing, cosign and SBOM in 01's release workflow if Q5
-  (a) is chosen. Covers B21; T11. Depends on: Q5 answered; 01-repo-and-ci (release workflow).
+- **I7. Image architectures.** Deliverable: the Dockerfile building for amd64 and arm64 (a
+  recipe run locally or on the owner's VM), the non-root and no-shell checks; publishing, cosign
+  and SBOM in 01's `just release` if Q5 (a) is chosen. Covers B21; T11. Depends on: Q5
+  answered; 01-repo-and-ci (release recipe).
 - **I8. Self-hosting guide.** Deliverable: `deploy/compose/README.md` with every section of B22
   and the generated or tested configuration reference. Covers B12, B22; T4. Depends on: I1, I4,
   I5, I6.
