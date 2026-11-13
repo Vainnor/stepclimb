@@ -17,20 +17,24 @@ Clippy (`allow_attributes`, `allow_attributes_without_reason`) refuses an outer 
    inside;
 3. an `allow`, `expect` or `warn` naming `clippy::all`, `clippy::style` (the group holding
    `disallowed_methods`), `warnings`, `renamed_and_removed_lints` or `unknown_lints`;
-4. a lint attribute containing a macro variable (`$`), which hides the lint name from this text
+4. a `cfg(...)` or `cfg_attr(...)` predicate on `clippy`: `#[cfg(not(clippy))]` builds code that
+   clippy never sees;
+5. a lint attribute containing a macro variable (`$`), which hides the lint name from this text
    check, and any `#[$x]` unless the same file captures `$x` with the attribute matcher
    `#[$x:meta]`: then every value comes from a call site written as an attribute, which this
    scan reads (the doc-forwarding idiom `$(#[$attr:meta])*`).
 
 And in configuration:
 
-5. any `clippy.toml` or `.clippy.toml` but the root one (clippy reads the nearest file);
-6. in any `Cargo.toml`, one of the names in rule 3 or `disallowed_methods` set below `deny` in a
-   `[lints]` or `[workspace.lints]` table, and a workspace member whose `[lints]` is not
-   `workspace = true`;
-7. in any `.cargo/config` or `.cargo/config.toml`, `rustflags` (in `[build]` or a `[target]`),
-   `rustc-wrapper`, `rustc-workspace-wrapper`, an `alias.clippy`, and `RUSTFLAGS`,
-   `CARGO_ENCODED_RUSTFLAGS`, `CLIPPY_ARGS` or `CLIPPY_CONF_DIR` in `[env]`.
+6. any `clippy.toml` or `.clippy.toml` but the root one (clippy reads the nearest file);
+7. in any `Cargo.toml`, one of the names in rule 3 or `disallowed_methods` (spelled with `_` or
+   `-`) set below `deny` in a `[lints]` or `[workspace.lints]` table, and a workspace member
+   whose `[lints]` is not `workspace = true`;
+8. in any `.cargo/config` or `.cargo/config.toml`, an `include` of another file, `rustflags` (in
+   `[build]` or a `[target]`), `rustc-wrapper`, `rustc-workspace-wrapper`, an `alias.clippy`, and
+   `RUSTFLAGS`, `CARGO_ENCODED_RUSTFLAGS`, `CLIPPY_ARGS` or `CLIPPY_CONF_DIR` in `[env]`.
+
+`just lint` runs clippy with `--all-features`, so feature-gated code is linted too.
 
 Comments and string, raw string, byte string and char literals are blanked before the attribute
 scan, so neither hides an attribute nor fakes one.
@@ -44,7 +48,10 @@ Review-only (no mechanical check):
 - a lint attribute assembled by one macro and forwarded through another's `#[$x:meta]`, or
   produced by a procedural macro;
 - lint flags or `CLIPPY_CONF_DIR` set in the shell environment, on the command line or in a
-  Cargo configuration outside the repository.
+  Cargo configuration outside the repository, and environment the repository sets without this
+  script reading it: the `flake.nix` dev shell and `export`s in `justfile` and `just/*.just`;
+- the `build.rustc` and `[host]` keys of a `.cargo/config`;
+- code gated on a platform (`target_os` and the like): the gate runs on Linux only (ADR 0021).
 
 Usage: `check-lint-escapes.py [ROOT]` checks the repository at ROOT (default: the current
 directory); `check-lint-escapes.py --self-test` runs the checks against the fixtures below.
@@ -62,6 +69,7 @@ DISALLOWED = re.compile(r"\bdisallowed_methods?\b")
 WIDE = re.compile(
     r"\b(clippy\s*::\s*(all|style)|warnings|renamed_and_removed_lints|unknown_lints)\b"
 )
+# Cargo accepts lint names in `[lints]` with `-` or `_`; compared after `-` becomes `_`.
 CARGO_GUARDED = {
     "disallowed_methods",
     "disallowed_method",
@@ -75,6 +83,8 @@ ENV_REFUSED = {"RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CLIPPY_ARGS", "CLIPPY_CO
 FN_ITEM = re.compile(
     r"(pub(\s*\([^)]*\))?\s+)?(const\s+)?(async\s+)?(unsafe\s+)?(extern\s+(\"[^\"]*\"\s+)?)?fn\b"
 )
+CFG = re.compile(r"\bcfg(_attr)?\s*\(")
+CLIPPY_CFG = re.compile(r"\bclippy\b(?!\s*::)")
 STRING_START = re.compile(r'(?:[bc]?r(#*)")|(?:[bc]?")')
 
 
@@ -225,9 +235,11 @@ def attribute_problems(code, end, inner, body, matchers):
     kinds = lint_kinds(body)
     if body.lstrip().startswith("$"):
         return macro_attribute_problems(body, matchers)
-    if not kinds:
-        return []
     problems = []
+    if CFG.search(body) and CLIPPY_CFG.search(body):
+        problems.append("a cfg on `clippy` hides code from the lint run")
+    if not kinds:
+        return problems
     if "$" in body:
         problems.append("lint attribute with a macro variable hides the lint name")
     if inner and "allow" in kinds:
@@ -270,7 +282,7 @@ def lint_level_problems(table, where):
             continue
         for name, setting in entries.items():
             level = setting.get("level") if isinstance(setting, dict) else setting
-            if name in CARGO_GUARDED and level not in ("deny", "forbid"):
+            if name.replace("-", "_") in CARGO_GUARDED and level not in ("deny", "forbid"):
                 problems.append(f"{where}: [{tool}] {name} = {level!r} is below deny")
     return problems
 
@@ -288,7 +300,7 @@ def manifest_problems(path, rel):
 
 def cargo_config_problems(path, rel):
     config = read_toml(path)
-    found = []
+    found = ["include"] if "include" in config else []
     build = config.get("build", {})
     found += [f"build.{k}" for k in ("rustflags", "rustc-wrapper", "rustc-workspace-wrapper") if k in build]
     found += [f"target.{t}.rustflags" for t, v in config.get("target", {}).items() if "rustflags" in v]
@@ -372,6 +384,17 @@ FIXTURES = {
     "target rustflags": ({".cargo/config.toml": "[target.x86_64-unknown-linux-gnu]\nrustflags = []\n"}, 1),
     "env CLIPPY_CONF_DIR and RUSTFLAGS": ({"crates/a/.cargo/config": '[env]\nCLIPPY_CONF_DIR = "x"\nRUSTFLAGS = "x"\n'}, 2),
     "an alias for clippy": ({".cargo/config.toml": '[alias]\nclippy = "check"\n'}, 1),
+    "a config include": ({".cargo/config.toml": 'include = "other.toml"\n'}, 1),
+    "build rustc-wrapper and rustc-workspace-wrapper": ({".cargo/config.toml": '[build]\nrustc-wrapper = "x"\nrustc-workspace-wrapper = "x"\n'}, 2),
+    "env CARGO_ENCODED_RUSTFLAGS and CLIPPY_ARGS": ({".cargo/config.toml": '[env]\nCARGO_ENCODED_RUSTFLAGS = "x"\nCLIPPY_ARGS = "x"\n'}, 2),
+    "lint names with dashes in Cargo.toml": ({"Cargo.toml": '[workspace]\n\n[workspace.lints.clippy]\n"disallowed-methods" = "allow"\n\n[workspace.lints.rust]\nunknown-lints = "allow"\nrenamed-and-removed-lints = "warn"\n'}, 3),
+    "a cfg hiding code from clippy": ({LIB: SPDX + "#[cfg(not(clippy))]\nfn p() {}\n"}, 1),
+    "a cfg_attr on clippy": ({LIB: SPDX + '#![cfg_attr(clippy, expect(dead_code, reason = "x"))]\n'}, 1),
+    "a cfg_attr with a clippy lint path is fine": ({LIB: SPDX + '#[cfg_attr(test, expect(clippy::unwrap_used, reason = "x"))]\nfn p() {}\n'}, 0),
+    "expect on clippy::all": ({LIB: SPDX + '#[expect(clippy::all, reason = "x")]\nfn p() {}\n'}, 1),
+    "expect on warnings": ({LIB: SPDX + '#[expect(warnings, reason = "x")]\nfn p() {}\n'}, 1),
+    "warn on the style group": ({LIB: SPDX + "#[warn(clippy::style)]\nfn p() {}\n"}, 1),
+    "a .clippy.toml": ({"crates/a/.clippy.toml": ""}, 1),
 }
 
 

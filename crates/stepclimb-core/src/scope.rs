@@ -24,11 +24,13 @@
 //!   refuses, in every `.rs` file of the repository: an inner `#![allow]`; a lint attribute
 //!   naming `disallowed_methods` other than an outer `#[expect]` on a `fn` (so not on a file, a
 //!   `mod` or an `impl`); one silencing `clippy::all`, `clippy::style`, `warnings`,
-//!   `renamed_and_removed_lints` or `unknown_lints`; a lint attribute built from a macro
-//!   variable. In configuration it refuses a second `clippy.toml`, a lint level below `deny`
-//!   for those names in any `Cargo.toml`, a member whose `[lints]` is not `workspace = true`,
-//!   and `rustflags`, wrappers, a `clippy` alias or `RUSTFLAGS`/`CLIPPY_CONF_DIR`-style
-//!   variables in a `.cargo/config`.
+//!   `renamed_and_removed_lints` or `unknown_lints`; a `cfg` or `cfg_attr` on `clippy`; a lint
+//!   attribute built from a macro variable. In configuration it refuses a second
+//!   `clippy.toml`, a lint level below `deny` for those names in any `Cargo.toml` (with `_` or
+//!   `-`), a member whose `[lints]` is not `workspace = true`, and an `include`, `rustflags`,
+//!   wrappers, a `clippy` alias or `RUSTFLAGS`/`CLIPPY_CONF_DIR`-style variables in a
+//!   `.cargo/config`;
+//! - `just lint` runs clippy with `--all-features`, so feature-gated calls are linted.
 //!
 //! Review-only:
 //!
@@ -39,7 +41,11 @@
 //! - a lint attribute assembled by one macro and forwarded through another's `#[$x:meta]`, or
 //!   produced by a procedural macro;
 //! - lint flags or `CLIPPY_CONF_DIR` set in the shell environment, on the command line or in a
-//!   Cargo configuration outside the repository.
+//!   Cargo configuration outside the repository, and environment the repository sets without
+//!   the script reading it: the `flake.nix` dev shell and `export`s in `justfile` and
+//!   `just/*.just`;
+//! - the `build.rustc` and `[host]` keys of a `.cargo/config`;
+//! - code gated on a platform (`target_os` and the like): the gate runs on Linux only (ADR 0021).
 //!
 //! An id from the client (a path parameter, a body field, a cursor, a header) never builds or
 //! changes a scope: there is no constructor from a bare id that a handler can reach without the

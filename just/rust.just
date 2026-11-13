@@ -12,7 +12,7 @@ check:
 
 # Clippy with warnings as errors
 lint:
-    cargo clippy --workspace --all-targets --locked -- -D warnings
+    cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
 # Rust tests: nextest for unit and integration tests, cargo test for doctests. The server's SPA
 # tests read the web build, and the database tests need `just up`.

@@ -145,7 +145,7 @@ just dev           # Vite on :5173, proxying the API to `just serve`
 just storybook     # Storybook on :6006
 just check         # cargo check --workspace --all-targets --locked
 just fmt / fmt-check   # cargo fmt
-just lint          # cargo clippy --workspace --all-targets --locked -- -D warnings
+just lint          # cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 just test-rust     # web build, then cargo nextest run --workspace and doctests
 just layering      # bin/check-layering.sh
 just lint-escapes  # bin/check-lint-escapes.py: no way around the OrgScope lint gate (inner allows, wide expects, lint config)
