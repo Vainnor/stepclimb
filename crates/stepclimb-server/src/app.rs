@@ -3,8 +3,9 @@
 
 use axum::{
     Router,
+    extract::Request,
     http::{HeaderValue, header},
-    middleware,
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{MethodRouter, get, post},
 };
@@ -18,7 +19,7 @@ use crate::{
     auth,
     csrf::{self, OriginAllowlist},
     error::ApiError,
-    health, openapi,
+    health, me, openapi,
     rate_limit::RateLimiter,
     roles, spa,
     web_origin::WebOrigin,
@@ -44,10 +45,15 @@ pub struct AppState {
 /// public host may be other services of the operator's, which this server does not speak for.
 pub const HSTS: &str = "max-age=31536000";
 
-/// The whole application: probes, sign-out, the API document and its UI, and the SPA for the
-/// rest. An unknown `/api/` path and a known path with the wrong method answer problem details.
-/// Every unsafe request passes the CSRF check first, and with an `https` public URL every
-/// response carries HSTS.
+/// The `Cache-Control` value of every `/api/v1` response: API answers carry personal data, which
+/// neither a shared cache nor the browser's may keep.
+pub const API_CACHE_CONTROL: &str = "no-store";
+
+/// The whole application: probes, sign-out, the signed-in user, the API document and its UI,
+/// and the SPA for the rest. An unknown `/api/` path and a known path with the wrong method
+/// answer problem details. Every unsafe request passes the CSRF check first, every `/api/v1`
+/// response carries `Cache-Control: no-store`, and with an `https` public URL every response
+/// carries HSTS.
 pub fn router(state: AppState) -> Router {
     let allowlist = OriginAllowlist::new(&state.public_url, &state.allowed_origins);
     let https = state.public_url.is_https();
@@ -65,7 +71,9 @@ pub fn router(state: AppState) -> Router {
         .layer(middleware::from_fn_with_state(
             allowlist,
             csrf::refuse_cross_site,
-        ));
+        ))
+        // Outside the CSRF check, so its refusals carry the header too.
+        .layer(middleware::from_fn(no_store_for_api));
     with_hsts(app, https)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -86,6 +94,7 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         ("/healthz", get(health::healthz)),
         ("/readyz", get(health::readyz)),
         ("/auth/sign-out", post(auth::sign_out)),
+        (me::ME_PATH, get(me::get_me)),
         ("/api/v1/admin/permissions", get(roles::list_permissions)),
         (
             roles::ROLES_PATH,
@@ -110,6 +119,22 @@ fn with_hsts(app: Router<AppState>, https: bool) -> Router<AppState> {
     } else {
         app
     }
+}
+
+/// `Cache-Control: no-store` on the response to any request under `/api/v1`: answers, errors,
+/// refusals and unknown paths alike. The path is read before the request runs, since only the
+/// request knows it.
+async fn no_store_for_api(request: Request, next: Next) -> Response {
+    let path = request.uri().path();
+    let api = path == "/api/v1" || path.starts_with("/api/v1/");
+    let mut response = next.run(request).await;
+    if api {
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static(API_CACHE_CONTROL),
+        );
+    }
+    response
 }
 
 async fn add_hsts(mut response: Response) -> Response {

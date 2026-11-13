@@ -1,0 +1,102 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//! The schema checker of `tests/common` must be able to fail: each test breaks one thing a
+//! conforming `Me` answer or the document's schema has and expects an error for it. No
+//! database.
+
+use serde_json::{Value, json};
+use stepclimb_server::openapi;
+
+mod common;
+
+fn document() -> Value {
+    serde_json::to_value(openapi::document()).expect("the document as JSON")
+}
+
+/// A `Me` answer with every member the schema allows, a grant and a feature included.
+fn good() -> Value {
+    json!({
+        "user": {
+            "id": "0190a000-0000-7000-8000-000000000000", "display_name": "Sam Ortiz",
+            "given_name": "Sam", "family_name": "Ortiz", "email": null, "locale": "en",
+            "tz": "UTC", "status": "active", "source": "local",
+        },
+        "organization": {
+            "id": "0190a000-0000-7000-8000-000000000001", "slug": "example", "name": "Example Org",
+        },
+        "grants": [{
+            "scope": { "type": "account", "id": "0190a000-0000-7000-8000-000000000002" },
+            "permissions": ["account.view"],
+        }],
+        "features": ["custom_roles"],
+    })
+}
+
+fn errors_for(value: &Value) -> Vec<String> {
+    common::schema_errors(&document(), "Me", value)
+}
+
+#[test]
+fn a_conforming_answer_has_no_errors() {
+    let errors = errors_for(&good());
+    assert!(errors.is_empty(), "{errors:#?}");
+}
+
+#[test]
+fn a_wrong_type_enum_value_or_uuid_is_an_error() {
+    let broken = [
+        ("/user/tz", Value::Null),
+        ("/user/status", json!("deleted")),
+        ("/grants/0/scope/type", json!("planet")),
+        ("/organization/id", json!("not-a-uuid")),
+        ("/features", json!("custom_roles")),
+        ("/grants/0/permissions/0", json!(7)),
+    ];
+    for (pointer, replacement) in broken {
+        let mut value = good();
+        *value.pointer_mut(pointer).expect("a member") = replacement;
+        assert!(!errors_for(&value).is_empty(), "{pointer} was accepted");
+    }
+}
+
+#[test]
+fn a_missing_or_undeclared_member_is_an_error() {
+    let mut extra = good();
+    extra["user"]["external_id"] = json!("E1");
+    assert!(
+        !errors_for(&extra).is_empty(),
+        "an undeclared member was accepted"
+    );
+    let mut missing = good();
+    missing["user"]
+        .as_object_mut()
+        .expect("an object")
+        .remove("email");
+    assert!(
+        !errors_for(&missing).is_empty(),
+        "a missing member was accepted"
+    );
+}
+
+#[test]
+fn a_keyword_or_format_the_checker_does_not_read_is_an_error() {
+    let cases = [
+        ("pattern", json!("^[A-Z]+$")),
+        ("minLength", json!(100)),
+        ("format", json!("date-time")),
+    ];
+    for (keyword, constraint) in cases {
+        let mut document = document();
+        document["components"]["schemas"]["MeUser"]["properties"]["tz"][keyword] = constraint;
+        let errors = common::schema_errors(&document, "Me", &good());
+        assert!(!errors.is_empty(), "{keyword} was skipped");
+    }
+}
+
+#[test]
+fn annotations_constrain_nothing() {
+    let mut document = document();
+    document["components"]["schemas"]["MeUser"]["properties"]["tz"]["example"] = json!("UTC");
+    document["components"]["schemas"]["MeUser"]["title"] = json!("The user");
+    let errors = common::schema_errors(&document, "Me", &good());
+    assert!(errors.is_empty(), "{errors:#?}");
+}

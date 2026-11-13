@@ -169,6 +169,7 @@ async fn the_openapi_document_is_3_1_and_lists_every_route() {
             "/api/v1/admin/permissions",
             "/api/v1/admin/roles",
             "/api/v1/admin/roles/{role_id}",
+            "/api/v1/me",
             "/auth/sign-out",
             "/healthz",
             "/readyz"
@@ -261,6 +262,48 @@ async fn a_known_path_with_another_method_is_a_405_problem() {
         let problem: serde_json::Value = serde_json::from_str(&body).expect("JSON");
         assert_eq!(problem["code"], "request.method_not_allowed");
         assert_eq!(problem["status"], 405);
+    }
+}
+
+/// Spec 08 B43: answers, errors and refusals under `/api/v1` are never stored by a cache.
+#[tokio::test]
+async fn every_api_v1_response_is_no_store_and_nothing_else_is_changed() {
+    let api = [
+        (Method::GET, "/api/v1/nothing-here", StatusCode::NOT_FOUND),
+        (Method::POST, "/api/v1/me", StatusCode::METHOD_NOT_ALLOWED),
+        (Method::GET, "/api/v1/me", StatusCode::UNAUTHORIZED),
+    ];
+    for (method, path, expected) in api {
+        let (status, headers, _) = send(app_without_database(), method.clone(), path).await;
+        assert_eq!(status, expected, "{method} {path}");
+        assert_eq!(
+            headers
+                .get(header::CACHE_CONTROL)
+                .map(|v| v.to_str().unwrap()),
+            Some("no-store"),
+            "{method} {path}"
+        );
+    }
+    let cross_site = app_without_database()
+        .oneshot(
+            Request::post("/api/v1/admin/roles")
+                .header("sec-fetch-site", "cross-site")
+                .body(Body::empty())
+                .expect("a valid request"),
+        )
+        .await
+        .expect("the router never fails");
+    assert_eq!(cross_site.status(), StatusCode::FORBIDDEN);
+    assert_eq!(cross_site.headers()[header::CACHE_CONTROL], "no-store");
+    for path in ["/healthz", "/api/openapi.json", "/api/v1x"] {
+        let (_, headers, _) = send(app_without_database(), Method::GET, path).await;
+        assert_ne!(
+            headers
+                .get(header::CACHE_CONTROL)
+                .map(|v| v.to_str().unwrap()),
+            Some("no-store"),
+            "{path}"
+        );
     }
 }
 
