@@ -2,14 +2,18 @@
 //! `stepclimb serve` (connect, migrate, sync the built-in roles, start the sign-in flow cleanup,
 //! listen) and `stepclimb migrate` (connect, migrate, exit).
 
+use std::future::Future;
+use std::net::SocketAddr;
 use std::time::Duration;
+
+use axum::Router;
 
 use sqlx::{PgPool, migrate::Migrator, postgres::PgPoolOptions};
 use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{clock::Clock, db::MIGRATOR, roles};
 use tokio::net::TcpListener;
 
-use crate::{AppState, Config, flow, router};
+use crate::{AppState, Config, flow, rate_limit::RateLimiter, router};
 
 /// How long a request waits for a database connection from the pool.
 pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -89,6 +93,10 @@ pub fn log_configuration(config: &Config) {
         log = %config.log,
         public_url = %config.public_url,
         allowed_origins = %config.allowed_origins_list(),
+        trusted_proxies = %config.trusted_proxies_or_none(),
+        sign_in_rate_limit = %config.sign_in_rate_limit,
+        token_rate_limit = %config.token_rate_limit,
+        failed_sign_in_limit = %config.failed_sign_in_limit,
         "configuration loaded"
     );
 }
@@ -118,17 +126,37 @@ pub async fn serve(config: Config) -> Result<(), StartupError> {
         })?;
     tracing::info!(addr = %config.bind, "listening");
     flow::spawn_cleanup(pool.clone(), clock.clone());
+    serve_on(listener, config, pool, clock, router, shutdown_signal()).await
+}
+
+/// Build the application state from `config`, `db` and `clock`, with the rate limiter `config`
+/// sets, and serve `app(state)` on `listener` until `shutdown` completes. Each request carries
+/// its TCP peer's address (`ConnectInfo<SocketAddr>`), which the rate limits start from.
+/// [`serve`] passes [`router`]; a test passes a router with a rate-limited route.
+pub async fn serve_on(
+    listener: TcpListener,
+    config: Config,
+    db: PgPool,
+    clock: Clock,
+    app: impl FnOnce(AppState) -> Router,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), StartupError> {
+    let rate_limits = RateLimiter::new(config.limits(), config.trusted_proxies.clone());
     let state = AppState {
-        db: pool,
+        db,
         clock,
         keys: config.encryption_keys,
         public_url: config.public_url,
         allowed_origins: config.allowed_origins,
+        rate_limits,
     };
-    axum::serve(listener, router(state))
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .map_err(StartupError::Serve)
+    axum::serve(
+        listener,
+        app(state).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await
+    .map_err(StartupError::Serve)
 }
 
 async fn shutdown_signal() {

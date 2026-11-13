@@ -20,6 +20,7 @@ mod file;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::net::SocketAddr;
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 
 use sqlx::postgres::PgConnectOptions;
@@ -28,6 +29,8 @@ use tracing_subscriber::EnvFilter;
 
 pub use file::ConfigFile;
 
+use crate::client_ip::TrustedProxies;
+use crate::rate_limit::Limits;
 use crate::web_origin::WebOrigin;
 
 /// One configuration setting: its variable, its TOML key and whether its value is a secret.
@@ -80,6 +83,31 @@ pub const ALLOWED_ORIGINS: Setting = Setting {
     secret: false,
     example: "http://localhost:5173 (the Vite dev server), comma-separated",
 };
+pub const TRUSTED_PROXIES: Setting = Setting {
+    var: "STEPCLIMB_TRUSTED_PROXIES",
+    key: "trusted_proxies",
+    secret: false,
+    example: "10.201.73.2 (Caddy in the production Compose stack), comma-separated addresses \
+              or CIDR ranges",
+};
+pub const SIGN_IN_RATE_LIMIT: Setting = Setting {
+    var: "STEPCLIMB_SIGN_IN_RATE_LIMIT",
+    key: "sign_in_rate_limit",
+    secret: false,
+    example: "20 (sign-in requests per minute from one client address)",
+};
+pub const TOKEN_RATE_LIMIT: Setting = Setting {
+    var: "STEPCLIMB_TOKEN_RATE_LIMIT",
+    key: "token_rate_limit",
+    secret: false,
+    example: "60 (token and revoke requests per minute from one client address)",
+};
+pub const FAILED_SIGN_IN_LIMIT: Setting = Setting {
+    var: "STEPCLIMB_FAILED_SIGN_IN_LIMIT",
+    key: "failed_sign_in_limit",
+    secret: false,
+    example: "10 (failed password or TOTP checks per account per 15 minutes)",
+};
 
 /// Every setting [`Config`] reads.
 pub const SETTINGS: &[Setting] = &[
@@ -89,6 +117,10 @@ pub const SETTINGS: &[Setting] = &[
     ENCRYPTION_KEYS,
     PUBLIC_URL,
     ALLOWED_ORIGINS,
+    TRUSTED_PROXIES,
+    SIGN_IN_RATE_LIMIT,
+    TOKEN_RATE_LIMIT,
+    FAILED_SIGN_IN_LIMIT,
 ];
 
 /// The variable naming the configuration file when `--config` is not given.
@@ -127,6 +159,19 @@ pub struct Config {
     /// from these or the public URL, and one that sends `Origin` must name one of them even when
     /// it is same-origin (B14). Unset means none; development sets the Vite dev server's origin.
     pub allowed_origins: Vec<WebOrigin>,
+    /// `trusted_proxies`: the addresses and CIDR ranges of the reverse proxies whose
+    /// `X-Forwarded-For` names a request's client address for the rate limits (spec 08 Q7).
+    /// Unset means none: every client is its TCP peer. A range must hold proxies only, never
+    /// clients, and may be no wider than /8 (IPv4) or /32 (IPv6).
+    pub trusted_proxies: TrustedProxies,
+    /// `sign_in_rate_limit`: sign-in requests per minute per client address; 20 when unset.
+    pub sign_in_rate_limit: NonZeroU32,
+    /// `token_rate_limit`: `/oauth/token` and `/oauth/revoke` requests per minute per client
+    /// address; 60 when unset.
+    pub token_rate_limit: NonZeroU32,
+    /// `failed_sign_in_limit`: failed password or TOTP checks per account per 15 minutes; 10
+    /// when unset.
+    pub failed_sign_in_limit: NonZeroU32,
 }
 
 impl fmt::Debug for Config {
@@ -139,6 +184,10 @@ impl fmt::Debug for Config {
             .field("encryption_keys", &self.encryption_keys)
             .field("public_url", &self.public_url)
             .field("allowed_origins", &self.allowed_origins)
+            .field("trusted_proxies", &self.trusted_proxies)
+            .field("sign_in_rate_limit", &self.sign_in_rate_limit)
+            .field("token_rate_limit", &self.token_rate_limit)
+            .field("failed_sign_in_limit", &self.failed_sign_in_limit)
             .finish()
     }
 }
@@ -333,6 +382,11 @@ impl Config {
             Some((value, origin)) => allowed_origins(&value, origin)?,
             None => Vec::new(),
         };
+        let trusted_proxies = match sources.plain(&TRUSTED_PROXIES)? {
+            Some((value, origin)) => trusted_proxies(&value, origin)?,
+            None => TrustedProxies::none(),
+        };
+        let defaults = Limits::DEFAULT;
         Ok(Self {
             file: file.map(|f| f.path().to_path_buf()),
             bind,
@@ -341,7 +395,20 @@ impl Config {
             encryption_keys,
             public_url,
             allowed_origins,
+            trusted_proxies,
+            sign_in_rate_limit: sources.count(&SIGN_IN_RATE_LIMIT, defaults.sign_in)?,
+            token_rate_limit: sources.count(&TOKEN_RATE_LIMIT, defaults.token)?,
+            failed_sign_in_limit: sources.count(&FAILED_SIGN_IN_LIMIT, defaults.failed_checks)?,
         })
+    }
+
+    /// The rate limits these settings configure.
+    pub fn limits(&self) -> Limits {
+        Limits {
+            sign_in: self.sign_in_rate_limit,
+            token: self.token_rate_limit,
+            failed_checks: self.failed_sign_in_limit,
+        }
     }
 }
 
@@ -354,7 +421,23 @@ impl Config {
             (LOG.key, self.log.clone()),
             (PUBLIC_URL.key, self.public_url.to_string()),
             (ALLOWED_ORIGINS.key, self.allowed_origins_or_none()),
+            (TRUSTED_PROXIES.key, self.trusted_proxies_or_none()),
+            (SIGN_IN_RATE_LIMIT.key, self.sign_in_rate_limit.to_string()),
+            (TOKEN_RATE_LIMIT.key, self.token_rate_limit.to_string()),
+            (
+                FAILED_SIGN_IN_LIMIT.key,
+                self.failed_sign_in_limit.to_string(),
+            ),
         ]
+    }
+
+    /// `trusted_proxies` as it is configured, comma-separated, or `(none)`.
+    pub fn trusted_proxies_or_none(&self) -> String {
+        if self.trusted_proxies.is_empty() {
+            "(none)".to_owned()
+        } else {
+            self.trusted_proxies.to_string()
+        }
     }
 
     fn allowed_origins_or_none(&self) -> String {
@@ -441,6 +524,17 @@ fn allowed_origins(value: &str, origin: Origin) -> Result<Vec<WebOrigin>, Config
         .collect()
 }
 
+/// A comma-separated list of proxy addresses and ranges, refused by entry position.
+fn trusted_proxies(value: &str, origin: Origin) -> Result<TrustedProxies, ConfigError> {
+    TrustedProxies::parse(value).map_err(|(position, problem)| ConfigError::Invalid {
+        origin,
+        problem: format!(
+            "entry {position} {problem}; for example {}",
+            TRUSTED_PROXIES.example
+        ),
+    })
+}
+
 fn check_database_url(url: &str, origin: Origin) -> Result<(), ConfigError> {
     let problem = if !(url.starts_with("postgres://") || url.starts_with("postgresql://")) {
         "the URL must start with postgres:// or postgresql://".to_owned()
@@ -502,6 +596,25 @@ impl Sources<'_> {
         match self.var(setting.var) {
             Some(found) => Ok(Some(found)),
             None => self.key(setting.key),
+        }
+    }
+
+    /// A whole number of 1 or more, or `default` when neither source sets it.
+    /// Digits only: `NonZeroU32::from_str` also takes a leading `+`.
+    fn count(&self, setting: &Setting, default: NonZeroU32) -> Result<NonZeroU32, ConfigError> {
+        let Some((value, origin)) = self.plain(setting)? else {
+            return Ok(default);
+        };
+        let digits = value.bytes().all(|b| b.is_ascii_digit());
+        match value.parse() {
+            Ok(count) if digits => Ok(count),
+            _ => Err(ConfigError::Invalid {
+                origin,
+                problem: format!(
+                    "{value:?} is not a whole number of 1 or more; for example {}",
+                    setting.example
+                ),
+            }),
         }
     }
 

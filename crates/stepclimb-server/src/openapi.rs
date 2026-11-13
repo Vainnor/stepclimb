@@ -13,7 +13,11 @@
 
 use utoipa::{
     OpenApi, ToResponse,
-    openapi::{ContentBuilder, RefOr, Response, ResponseBuilder, schema::Ref},
+    openapi::{
+        ContentBuilder, RefOr, Response, ResponseBuilder,
+        header::HeaderBuilder,
+        schema::{ObjectBuilder, Ref, Type},
+    },
 };
 
 use crate::{
@@ -49,7 +53,8 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             InternalError,
             CsrfRefused,
             OrganizationNotFound,
-            NoOrganization
+            NoOrganization,
+            RateLimited
         )
     ),
     tags(
@@ -60,16 +65,16 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
 struct ApiDoc;
 
 fn problem_response(description: &str) -> RefOr<Response> {
-    ResponseBuilder::new()
-        .description(description)
-        .content(
-            PROBLEM_JSON,
-            ContentBuilder::new()
-                .schema(Some(Ref::from_schema_name("Problem")))
-                .build(),
-        )
-        .build()
-        .into()
+    problem_builder(description).build().into()
+}
+
+fn problem_builder(description: &str) -> ResponseBuilder {
+    ResponseBuilder::new().description(description).content(
+        PROBLEM_JSON,
+        ContentBuilder::new()
+            .schema(Some(Ref::from_schema_name("Problem")))
+            .build(),
+    )
 }
 
 // BadRequest's description repeats pagination::MAX_LIMIT, since it is a literal; a test in
@@ -100,6 +105,27 @@ problem_responses! {
     CsrfRefused => "`auth.csrf_refused`: an unsafe request without a bearer credential did not come from this site: `Sec-Fetch-Site` is not `same-origin`, `Origin` is sent but is not an allowed origin, or neither header is sent.",
     OrganizationNotFound => "`org.not_found`: the request's organization cannot be determined.",
     NoOrganization => "`org.none`: the instance has no organization yet.",
+}
+
+/// 429 `auth.rate_limited`, with `Retry-After`. A sign-in or token route that takes
+/// `rate_limit::RateLimited` lists `(status = 429, response = crate::openapi::RateLimited)`.
+pub struct RateLimited;
+
+impl<'r> ToResponse<'r> for RateLimited {
+    fn response() -> (&'r str, RefOr<Response>) {
+        let retry_after = HeaderBuilder::new()
+            .schema(ObjectBuilder::new().schema_type(Type::Integer))
+            .description(Some("Seconds to wait before trying again, at least 1."))
+            .build();
+        let response = problem_builder(
+            "`auth.rate_limited`: too many sign-in or token requests from this client address, or \
+             too many failed password or TOTP checks for this account; `Retry-After` gives the \
+             seconds until the limit's window closes.",
+        )
+        .header("Retry-After", retry_after)
+        .build();
+        ("RateLimited", response.into())
+    }
 }
 
 /// The API's OpenAPI document.

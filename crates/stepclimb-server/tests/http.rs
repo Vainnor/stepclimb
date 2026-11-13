@@ -83,6 +83,7 @@ fn state(db: PgPool) -> AppState {
             .expect("a valid test key"),
         public_url: WebOrigin::parse("http://localhost:8080").expect("a valid origin"),
         allowed_origins: Vec::new(),
+        rate_limits: Default::default(),
     }
 }
 

@@ -18,7 +18,9 @@ use crate::{
     auth,
     csrf::{self, OriginAllowlist},
     error::ApiError,
-    health, openapi, spa,
+    health, openapi,
+    rate_limit::RateLimiter,
+    spa,
     web_origin::WebOrigin,
 };
 
@@ -34,6 +36,8 @@ pub struct AppState {
     pub public_url: WebOrigin,
     /// Further origins the CSRF check accepts (`allowed_origins`).
     pub allowed_origins: Vec<WebOrigin>,
+    /// The sign-in and token rate limits and the proxies trusted to name a client's address.
+    pub rate_limits: RateLimiter,
 }
 
 /// The `Strict-Transport-Security` value: one year, for this host only. Subdomains of the
@@ -86,8 +90,9 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
 }
 
 /// HSTS on every response, refusals included, when the public URL is `https`. The server never
-/// terminates TLS itself and does not yet trust a proxy's `X-Forwarded-Proto` (spec 08 I5), so
-/// the configured public URL is what says the instance is served over HTTPS.
+/// terminates TLS itself and reads no proxy's `X-Forwarded-Proto` (of the forwarding headers it
+/// reads only `X-Forwarded-For`, for the rate limits), so the configured public URL is what says
+/// the instance is served over HTTPS.
 fn with_hsts(app: Router<AppState>, https: bool) -> Router<AppState> {
     if https {
         app.layer(middleware::map_response(add_hsts))

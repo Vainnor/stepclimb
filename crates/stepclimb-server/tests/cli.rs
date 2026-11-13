@@ -283,7 +283,9 @@ fn check_config_exits_0_printing_only_non_secret_values_without_connecting() {
         stdout,
         format!(
             "stepclimb: the configuration is valid\nfile: {}\nbind: 0.0.0.0:9000\nlog: info\n\
-             public_url: https://lms.example.org\nallowed_origins: (none)\n",
+             public_url: https://lms.example.org\nallowed_origins: (none)\n\
+             trusted_proxies: (none)\nsign_in_rate_limit: 20\ntoken_rate_limit: 60\n\
+             failed_sign_in_limit: 10\n",
             file.0.display()
         )
     );

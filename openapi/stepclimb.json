@@ -253,6 +253,24 @@
           }
         }
       },
+      "RateLimited": {
+        "description": "`auth.rate_limited`: too many sign-in or token requests from this client address, or too many failed password or TOTP checks for this account; `Retry-After` gives the seconds until the limit's window closes.",
+        "headers": {
+          "Retry-After": {
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Seconds to wait before trying again, at least 1."
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "RouteNotFound": {
         "description": "`request.not_found`: no API operation has this path.",
         "content": {
