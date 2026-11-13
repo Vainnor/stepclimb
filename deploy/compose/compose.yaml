@@ -8,7 +8,7 @@
 #
 # Images are pinned by digest. MinIO's own image is no longer on Docker Hub, so this uses
 # Chainguard's build, which publishes only `latest`: the digest is the pin
-# (docs/specs/m0/14-compose-deploy.md).
+# (docs/adr/0019-minio-image.md).
 name: stepclimb
 
 services:

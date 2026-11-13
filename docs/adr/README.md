@@ -25,6 +25,6 @@ Decided list (`docs/plan/technical.md` -> Decided, and `docs/plan/ui.md` -> UI d
 | [0016](0016-live-control-out-of-scope.md) | Live control simulation is out of scope | Accepted |
 | [0017](0017-scorm-in-1x.md) | SCORM playback in 1.x | Accepted |
 | [0018](0018-repository-and-ci.md) | Repository setup and CI | Accepted (CI amended by 0021) |
-| [0019](0019-minio-image.md) | Which MinIO image the Compose stack uses | **Proposed** |
+| [0019](0019-minio-image.md) | Which MinIO image the Compose stack uses | Accepted (Chainguard image, revisit in M1) |
 | [0020](0020-american-english.md) | American English in docs, comments and UI copy | Accepted |
 | [0021](0021-no-hosted-ci.md) | No hosted CI: the merge gate runs locally | Accepted |

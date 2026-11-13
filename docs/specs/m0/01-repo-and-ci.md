@@ -99,7 +99,7 @@ release recipe. What a release ships beyond a tagged GitHub Release is pending Q
   at `AGENTS.md` for the workflow and gates, states the DCO (pending Q5 for how it is checked),
   the license split (AGPL-3.0-or-later; Apache-2.0 for `packages/api-client`) and that
   contributions come through pull requests against `next`. `CODE_OF_CONDUCT.md` holds the text
-  pending Q6. `bin/check-spdx.sh` does not cover Markdown, so these files need no header.
+  decided in Q6. `bin/check-spdx.sh` does not cover Markdown, so these files need no header.
 - **B12. `pnpm audit` gate.** The plan's supply-chain list names `pnpm audit`; `just ci` does not
   run it today. A recipe `web-audit` runs `pnpm audit --prod` and `pnpm audit` (dev dependencies
   too) at the severity threshold pending Q7, and fails on a finding at or above it. It needs the
@@ -131,9 +131,9 @@ release recipe. What a release ships beyond a tagged GitHub Release is pending Q
 - **B16. Release artifacts.** What a release publishes besides the GitHub Release is pending Q1.
   Whatever Q1 decides, artifacts are built by `just release` from a clean worktree of the tagged
   commit, on the owner's machine or a VM the owner provides, never from a working checkout.
-- **B17. DCO.** The plan says contributions are under the DCO (License and governance). How it is
-  checked, and how a `Signed-off-by` trailer fits `AGENTS.md`'s "`Closes #N` is the only trailer"
-  rule and the `commit-msg` hook, is pending Q5. Until Q5 is decided no DCO check runs.
+- **B17. DCO** (Q5, decided). Opening a pull request certifies the DCO: `CONTRIBUTING.md` says
+  so and the PR template has a certification box. No `Signed-off-by` trailer is required, so
+  `Closes #N` stays the only trailer and the `commit-msg` hook is unchanged.
 
 ## API
 
@@ -214,23 +214,15 @@ None.
   PRs and expects to own the version bump; C, a short script in `bin/` over `git log`.
   Recommendation: A, run by the `release-version` recipe and by `just release`, after
   `dependency-researcher` checks it.
-- **Q5. DCO enforcement and the trailer rule.** `AGENTS.md` says `Closes #N` is the only trailer
-  and the `commit-msg` hook refuses attribution lines; the DCO is usually shown with a
-  `Signed-off-by` trailer. Options: A, require `Signed-off-by` on PR commits from outside
-  contributors only, checked by the commit-msg hook and `just ci`, and allow that trailer in
-  `AGENTS.md` and the hook; B, a CONTRIBUTING statement that opening a PR certifies the DCO, with no trailer and no
-  check; C, the DCO GitHub App on every PR, including the maintainer's (the trailer then appears on
-  every commit). Recommendation: A, since the plan expects few outside contributors and the
-  maintainer's own commits stay as they are.
-- **Q6. The disclosure channel and the code of conduct text.** `SECURITY.md` needs a private
-  channel: A, GitHub private vulnerability reporting on the repository (it needs the repository to
-  be public, or GitHub's support for private ones confirmed when it is created); B, an email
-  address the owner provides. `CODE_OF_CONDUCT.md`: A, the Contributor Covenant 2.1 with the
-  owner's contact; B, a short text of the owner's own. Recommendation: channel A with B as the
-  fallback while the repository is private; Contributor Covenant 2.1.
+- **Q5. DCO enforcement and the trailer rule.** Decided by the owner on 13 Nov 2026 (left to the
+  agent's choice): option B, opening a PR certifies the DCO, with a box in the PR template and no
+  trailer or check. Option A (a `Signed-off-by` trailer for outside contributors) was the earlier
+  recommendation; B keeps the "only trailer" rule without an exception.
+- **Q6. The disclosure channel and the code of conduct text.** Decided by the owner on 13 Nov
+  2026: reports go to contact@vainnor.com, plus GitHub private vulnerability reporting once the
+  repository is public; the code of conduct is the Contributor Covenant 2.1 with that address.
 - **Q7. The `pnpm audit` threshold and offline behavior.** Options: A, fail on `high` and
-  `critical`, and skip with a printed warning when the registry cannot be reached locally (CI
-  always reaches it); B, fail on any severity; C, fail on `moderate` and above. Recommendation: A,
+  `critical`, and skip with a printed warning when the registry cannot be reached; B, fail on any severity; C, fail on `moderate` and above. Recommendation: A,
   with a reviewed allowlist file for advisories that do not apply.
 
 ## Issues
@@ -240,8 +232,9 @@ None.
    Project board, and the result in ADR 0018's Consequences (an agent drafts the ADR text). Covers
    B10, T3. Depends on: none.
 2. **Governance files.** The skeleton drafted `SECURITY.md`, `CONTRIBUTING.md` and
-   `CODE_OF_CONDUCT.md` (B9). Deliver what Q5 and Q6 decide: the DCO mechanism, the contact
-   address, and private vulnerability reporting once the repository is public. Covers B11, T8. Depends on: issue 1 (the repository URL).
+   `CODE_OF_CONDUCT.md` (B9), and Q5 and Q6 are decided and in them. Left: turn on GitHub private
+   vulnerability reporting and mention it in `SECURITY.md` when the repository goes public.
+   Covers B11, T8. Depends on: issue 1.
 3. **`pnpm audit` gate** (threshold pending Q7). Deliver the `web-audit` recipe, its place in
    `just ci`, and the allowlist file if Q7 adopts one. Covers B12, T2, T4. Depends on: none.
 4. **Dependabot for the Compose images.** Deliver the `docker-compose` entry after confirming it
@@ -257,5 +250,5 @@ None.
    option B: multi-arch image to GHCR, cosign signature, SBOM attached to the release), built on
    the owner's machine or VM. Covers B16. Depends on: issue 6; `14-compose-deploy.md` for the
    Dockerfile.
-8. **DCO check** (pending Q5). Deliver the check Q5 chooses and the matching change to `AGENTS.md`
-   and `.githooks/commit-msg` if a trailer is allowed. Covers B17. Depends on: issue 2.
+8. **DCO certification** (Q5, decided: option B). Delivered with the docs PR: the
+   `CONTRIBUTING.md` text and the PR template box. Covers B17. Depends on: issue 2.

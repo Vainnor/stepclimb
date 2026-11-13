@@ -28,12 +28,11 @@ through pull requests, and every one is reviewed by hand, so small, focused chan
 
 ## Developer Certificate of Origin
 
-Contributions are accepted under the [Developer Certificate of Origin](https://developercertificate.org/):
-you certify that you wrote the change or have the right to submit it under the project's licenses
-(AGPL-3.0-or-later; Apache-2.0 for `packages/api-client`). How that is recorded, a `Signed-off-by`
-line or a statement in the pull request, is not settled yet
-(`docs/specs/m0/01-repo-and-ci.md` Q5). Until it is, say in your pull request that you agree to
-the DCO.
+Contributions are accepted under the [Developer Certificate of Origin](https://developercertificate.org/).
+Opening a pull request certifies that you wrote the change or have the right to submit it under
+the project's licenses (AGPL-3.0-or-later; Apache-2.0 for `packages/api-client`); the pull request
+template has a box for it. No `Signed-off-by` line is needed: `Closes #N` stays the only commit
+trailer.
 
 ## What we will not merge
 

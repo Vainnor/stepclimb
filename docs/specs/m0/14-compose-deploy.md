@@ -268,10 +268,11 @@ using its internal CA, which proves the proxy path.
   artifacts. The arm64 build of the Rust stage under emulation is slow; a cross-compiling stage
   or a native arm64 machine the owner provides is the owner's call (ADR 0021: long jobs go to a
   VM the owner provides).
-- **Q6. The MinIO image (ADR 0019, Proposed).** Options are ADR 0019's: (a) Chainguard's image
-  pinned by digest; (b) MinIO built from source into our own image; (c) another S3-compatible
-  server (Garage, SeaweedFS). Recommendation: as the ADR: (a) for development now, revisited
-  in the M1 media spec. Until the owner decides, the production example documents MinIO as
+- **Q6. The MinIO image (ADR 0019, Accepted).** Decided by the owner on 13 Nov 2026: option (a),
+  Chainguard's image pinned by digest; revisited in the M1 media spec. Options are ADR 0019's: (a)
+  Chainguard's image pinned by digest; (b) MinIO built from source into our own image; (c) another
+  S3-compatible server (Garage, SeaweedFS). Recommendation: as the ADR: (a) for development now,
+  revisited in the M1 media spec. Until the owner decides, the production example documents MinIO as
   optional with the same pin and names the ADR.
 - **Q7. Which CLI subcommands land in M0.** The plan lists `serve | migrate | admin create |
   export-course | import-course | check-config | backup-verify` without milestones. Options:

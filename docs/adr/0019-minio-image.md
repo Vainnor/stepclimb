@@ -1,8 +1,8 @@
 # 0019. Which MinIO image the Compose stack uses
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-12
-- **Decider:** the owner (open)
+- **Decider:** the owner, 2026-11-13
 - **Related:** `deploy/compose/compose.yaml`; `docs/specs/m0/14-compose-deploy.md`
 
 ## Context
@@ -36,7 +36,8 @@ GCS and Azure) and Compose only needs a local S3 for tests and demos.
 
 ## Decision
 
-Not decided yet.
+Option A: Chainguard's MinIO image, pinned by digest, for the Compose stack. The M1 media spec
+revisits it against option C.
 
 ## Consequences
 
