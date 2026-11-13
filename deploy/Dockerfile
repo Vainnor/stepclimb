@@ -35,9 +35,10 @@ COPY --from=web /src/web/dist web/dist
 # the checkout's mtimes, so the inputs are touched to now first: every workspace crate, and what it
 # reads at compile time (migrations, .sqlx, web/dist), is compiled from these sources, while
 # third-party crates stay cached. The touch runs in this RUN so that a cached layer cannot carry an
-# older time.
+# older time, and `sharing=locked` holds the target cache for the whole RUN so that no concurrent
+# build can write newer artifacts between the touch and cargo.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target \
+    --mount=type=cache,target=/src/target,sharing=locked \
     find Cargo.toml Cargo.lock .sqlx crates migrations web/dist -exec touch {} + \
     && cargo build --release --locked -p stepclimb-server --bin stepclimb \
     && cp target/release/stepclimb /stepclimb
