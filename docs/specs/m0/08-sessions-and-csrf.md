@@ -35,9 +35,15 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   webhook secret, sign-in flow payloads) are encrypted with AES-256-GCM under the server's
   encryption key, with a fresh nonce per value and a key identifier stored beside the
   ciphertext so the key can be rotated. Where the key comes from and how rotation works: pending
-  Q3.
+  Q3. Each value is also bound to where it lives: the caller passes context parts (for example
+  table, organization id, row id and column) that are authenticated with it but not stored, and
+  the same value opened with any other context fails decryption, so a ciphertext copied to another
+  row, organization or column is useless. The server logs a warning at startup for each
+  configured key that is the published development key.
 - **B4.** No secret, token, cookie value, password, TOTP seed, API key or authorization code
-  appears in a log line, an error body or a `problem+json` `detail`, at any log level.
+  appears in a log line, an error body or a `problem+json` `detail`, at any log level. The
+  configuration's debug output hides the database password and URL parameters and shows only
+  encryption key ids.
 
 ### Organization of an unauthenticated request
 
@@ -470,13 +476,13 @@ overrule one, which then updates this spec.
 
 1. **I1. Auth foundations: clock, tokens, hashing, encryption.** Adds the controllable clock to
    `AppState` (unless present), token generation and hashing (Q2), and the AES-256-GCM key ring
-   with keys from configuration (Q3). Covers B1 to B4; T1 to T3. Depends on: Q2, Q3 answered;
-   `01-repo-and-ci.md` (CI gates).
+   with keys from configuration (Q3). Covers B1 to B4; T1 (generation half), T2, T3 (the
+   crate's own types and errors). Depends on: Q2, Q3 answered; `01-repo-and-ci.md` (CI gates).
 2. **I2. Browser sessions.** Migration for `sessions`; create, look up, refresh and delete;
    the request extractor that authenticates by cookie; idle and absolute expiry; suspension
    hook. Check in this issue that Playwright's Chromium accepts a `__Host-` cookie on the
-   Compose stack's origin; if it does not, the e2e stack serves HTTPS. Covers B5 to B11; T4 to
-   T10. Depends on: I1, `03-users-and-identities.md` (users table, status), Q1, Q4, Q5.
+   Compose stack's origin; if it does not, the e2e stack serves HTTPS. Covers B5 to B11; T1
+   (database half: no plaintext token in any token column after a sign-in), T4 to T10. Depends on: I1, `03-users-and-identities.md` (users table, status), Q1, Q4, Q5.
 3. **I3. CSRF layer and sign-out.** The tower layer of B14 to B16, the GET-mutation marker and
    router walk, `POST /auth/sign-out`. Covers B12 to B16; T11 to T17. Depends on: I2, Q6.
 4. **I4. Sign-in flow state.** Migration for `auth_flows` (pending Q8), the flow cookie,
@@ -486,14 +492,15 @@ overrule one, which then updates this spec.
    identifier, trusted-proxy client IP, 429 responses. Covers B22, B23; T20. Depends on: I3, Q7.
 6. **I6. Service accounts and API keys.** Migration for `service_accounts`, the admin endpoints,
    bearer API-key authentication with the CRC-32 precheck, scope intersection per request.
-   Covers B24 to B29; T21 to T26. Depends on: I2, `09-permissions-and-roles.md` (catalog,
+   Covers B24 to B29; T3 (API-key request part), T21 to T26. Depends on: I2, `09-permissions-and-roles.md` (catalog,
    `Require<P>`, effective permissions), Q9.
 7. **I7. OAuth 2.1 authorization endpoint and codes.** Client registry, `GET /oauth/authorize`,
    the sign-in round trip through a flow, code issuance and storage. Covers B30, B31; T27 to
    T29. Depends on: I4, `07-admission.md` I1 (sign-in completion returns to the flow), Q10.
 8. **I8. OAuth 2.1 token and revoke endpoints.** Migration for `oauth_refresh_tokens`; code
    exchange with PKCE, JWT access tokens, rotation, reuse detection, revocation, access-token
-   authentication in the extractor. Covers B32 to B37; T30 to T34. Depends on: I5, I7, Q11 to
+   authentication in the extractor. Covers B32 to B37; T3 (full sign-in, API-key request and
+   token exchange), T30 to T34. Depends on: I5, I7, Q11 to
    Q13.
 9. **I9. `/.well-known/stepclimb`.** The discovery document's auth fields. Covers B38; T35, T36.
    Depends on: I8, `03-users-and-identities.md` (`identity_providers`), `04-local-accounts.md`

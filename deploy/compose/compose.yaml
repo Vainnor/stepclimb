@@ -49,11 +49,21 @@ services:
     environment:
       STEPCLIMB_DATABASE_URL: postgres://stepclimb:stepclimb-local@postgres:5432/stepclimb
       STEPCLIMB_BIND: 0.0.0.0:8080
+      # The published development key ring (development-encryption-keys): one key whose 32
+      # bytes spell "stepclimb-local-development-key!". The server warns about it at startup.
+      # Never use it for real data.
+      STEPCLIMB_ENCRYPTION_KEYS_FILE: /run/secrets/encryption_keys
+    secrets:
+      - encryption_keys
     ports:
       - "127.0.0.1:${STEPCLIMB_PORT:-58080}:8080"
     depends_on:
       postgres:
         condition: service_healthy
+
+secrets:
+  encryption_keys:
+    file: ./development-encryption-keys
 
 volumes:
   postgres:

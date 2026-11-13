@@ -3,11 +3,13 @@
 //!
 //! Today it holds [`db::MIGRATOR`], the migrations in the repository's `migrations/` folder
 //! compiled into the binary, which `stepclimb serve` runs at startup; [`id::new_id`], the UUID
-//! v7 generator for every row key; the permission catalog ([`perm`]); and the built-in role
-//! lists ([`roles::BUILTIN`]). The domain types and the repositories (every one taking an
-//! `OrgScope`) are **not built yet**; they arrive with the M0 specs in `docs/specs/m0/`
-//! (organizations and accounts, users and identities, roles).
+//! v7 generator for every row key; the permission catalog ([`perm`]); the built-in role lists
+//! ([`roles::BUILTIN`]); and [`clock::Clock`], the controllable clock every time rule reads. The
+//! domain types and the repositories (every one taking an `OrgScope`) are **not built yet**; they
+//! arrive with the M0 specs in `docs/specs/m0/` (organizations and accounts, users and
+//! identities, roles).
 
+pub mod clock;
 pub mod db;
 pub mod id;
 pub mod perm;

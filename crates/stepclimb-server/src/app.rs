@@ -3,6 +3,8 @@
 
 use axum::{Router, http::header, response::IntoResponse, routing::get};
 use sqlx::PgPool;
+use stepclimb_auth::encryption::KeyRing;
+use stepclimb_core::clock::Clock;
 use tower_http::trace::TraceLayer;
 use utoipa_scalar::{Scalar, Servable};
 
@@ -12,6 +14,10 @@ use crate::{error::ApiError, health, openapi, spa};
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
+    /// The time every expiry and lifetime rule reads; tests pass a manual clock.
+    pub clock: Clock,
+    /// The AES-256-GCM keys for secrets the server reads back, from configuration.
+    pub keys: KeyRing,
 }
 
 /// The whole application: probes, the API document and its UI, and the SPA for the rest. An
