@@ -13,6 +13,7 @@ describe("VisuallyHidden", () => {
     );
     expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
     const el = screen.getByText("Close");
+    expect(el.tagName).toBe("SPAN");
     expect(el).toHaveAttribute("data-slot", "visually-hidden");
     expect(el.style.position).toBe("absolute");
     expect(el.style.width).toBe("1px");
@@ -21,12 +22,12 @@ describe("VisuallyHidden", () => {
 
   it("renders the element elementType names, and a part's own data-slot", () => {
     render(
-      <VisuallyHidden elementType="span" data-slot="link-external">
+      <VisuallyHidden elementType="div" data-slot="link-external">
         external
       </VisuallyHidden>,
     );
     const el = screen.getByText("external");
-    expect(el.tagName).toBe("SPAN");
+    expect(el.tagName).toBe("DIV");
     expect(el).toHaveAttribute("data-slot", "link-external");
   });
 });

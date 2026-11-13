@@ -8,7 +8,10 @@
 # `--update-snapshots` to rewrite the baselines after an intended change.
 set -euo pipefail
 
-image="mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f"
+# The linux/amd64 manifest of the v1.64.1-noble image, not its multi-arch index: the baselines are
+# amd64 renders, so an arm64 machine (Apple silicon) runs the same image under emulation instead of
+# drawing with its native build and differing in anti-aliasing.
+image="mcr.microsoft.com/playwright:v1.64.1-noble@sha256:ee15712262f017b8157421b212b12099146645f44b1bc5c0514cbbe6a229b1d0"
 root="$(git rev-parse --show-toplevel)"
 
 [[ -f "$root/apps/ui-docs/storybook-static/index.json" ]] || {
@@ -23,6 +26,6 @@ if ! docker info --format '{{.SecurityOptions}}' | grep -q rootless; then
     user=(--user "$(id -u):$(id -g)" --env HOME=/tmp)
 fi
 
-exec docker run --rm --init --ipc=host "${user[@]}" \
+exec docker run --rm --init --ipc=host --platform linux/amd64 "${user[@]}" \
     --volume "$root:$root" --workdir "$root/apps/ui-docs" \
     "$image" node node_modules/@playwright/test/cli.js test "$@"

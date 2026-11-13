@@ -15,7 +15,7 @@ const meta = {
       description: {
         component: `Content for screen readers only: it is in the accessibility tree and draws nothing. It has no matrix story, since it looks the same in every theme.
 
-**Usage.** A label for a control whose visible content is an icon: \`<Button><Icon icon={XIcon} /><VisuallyHidden>{closeLabel}</VisuallyHidden></Button>\`, with \`closeLabel\` from \`useStepclimbStrings()\`. Use \`elementType="span"\` inside text.
+**Usage.** A label for a control whose visible content is an icon: \`<Button><Icon icon={XIcon} /><VisuallyHidden>{closeLabel}</VisuallyHidden></Button>\`, with \`closeLabel\` from \`useStepclimbStrings()\`. It renders a \`span\`, valid inside a button or a line of text; \`elementType="div"\` for block content.
 
 **Do** take the hidden text from \`useStepclimbStrings()\`, and keep it short.
 

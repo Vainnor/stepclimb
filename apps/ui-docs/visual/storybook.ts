@@ -62,3 +62,26 @@ export async function openStory(page: Page, story: Story, theme: Theme): Promise
   if (failed !== null) throw new Error(`story ${story.id} failed: ${failed}`);
   await page.evaluate(() => document.fonts.ready.then(() => undefined));
 }
+
+/** The attribute `markStoryRoots` sets on everything the story drew. */
+export const STORY_ROOT = "[data-sc-visual-root]";
+
+/**
+ * Marks the story's root and every element the story portaled to the body (React Aria's overlays
+ * and its top layer), leaving out Storybook's own nodes: its `sb-` wrappers, `#storybook-docs`,
+ * scripts and styles. Axe and the target check read what `STORY_ROOT` selects.
+ */
+export async function markStoryRoots(page: Page): Promise<void> {
+  await page.evaluate(
+    (attribute) => {
+      for (const el of document.body.children) {
+        const own =
+          el.id === "storybook-docs" ||
+          [...el.classList].some((c) => c.startsWith("sb-")) ||
+          ["SCRIPT", "STYLE", "LINK", "TEMPLATE"].includes(el.tagName);
+        if (el.id === "storybook-root" || !own) el.setAttribute(attribute, "");
+      }
+    },
+    STORY_ROOT.slice(1, -1),
+  );
+}

@@ -3,7 +3,7 @@
 // B17; T4 to T6): touch targets, reduced motion, the OS color scheme, forced colors, overscroll and
 // unselectable controls, over the stories of the static Storybook build.
 import { expect, type Page, test } from "@playwright/test";
-import { openStory, type Story, stories } from "./storybook";
+import { markStoryRoots, openStory, STORY_ROOT, type Story, stories } from "./storybook";
 
 const all = stories();
 const story = (id: string): Story => {
@@ -29,23 +29,27 @@ const INTERACTIVE = [
 ].join(", ");
 
 /**
- * Targets in the story smaller than 44 by 44 px. A link set inline in text is left out: its size
+ * Targets in the story and its portaled overlays smaller than 44 by 44 px. A link set inline in text is left out: its size
  * follows the line it sits in (WCAG 2.5.8's inline exception). So is anything hidden or visually
  * hidden (1 px), which no one can tap.
  */
-function smallTargets(page: Page): Promise<string[]> {
-  return page.evaluate((selector) => {
-    const out: string[] = [];
-    for (const el of document.querySelectorAll<HTMLElement>(`#storybook-root :is(${selector})`)) {
-      const rect = el.getBoundingClientRect();
-      if (!el.checkVisibility() || rect.width <= 1 || rect.height <= 1) continue;
-      if (el.matches("a") && getComputedStyle(el).display === "inline") continue;
-      if (rect.width < 44 || rect.height < 44) {
-        out.push(`${el.outerHTML.slice(0, 80)} is ${rect.width}x${rect.height}`);
+async function smallTargets(page: Page): Promise<string[]> {
+  await markStoryRoots(page);
+  return page.evaluate(
+    ([roots, selector]) => {
+      const out: string[] = [];
+      for (const el of document.querySelectorAll<HTMLElement>(`:is(${roots}) :is(${selector})`)) {
+        const rect = el.getBoundingClientRect();
+        if (!el.checkVisibility() || rect.width <= 1 || rect.height <= 1) continue;
+        if (el.matches("a") && getComputedStyle(el).display === "inline") continue;
+        if (rect.width < 44 || rect.height < 44) {
+          out.push(`${el.outerHTML.slice(0, 80)} is ${rect.width}x${rect.height}`);
+        }
       }
-    }
-    return out;
-  }, INTERACTIVE);
+      return out;
+    },
+    [STORY_ROOT, INTERACTIVE],
+  );
 }
 
 test.describe("on a phone (375 px, coarse pointer) @phone", () => {
@@ -141,6 +145,23 @@ test.describe("at 1280 px @desktop", () => {
     });
   });
 
+  test.describe("with forced colors, rules stay visible", () => {
+    for (const [id, selector] of [
+      ["foundations-separator--horizontal", "[data-slot=separator]"],
+      ["foundations-prose--lesson", "[data-slot=prose] hr"],
+    ] as const) {
+      test(`${selector} in ${id}`, async ({ page }) => {
+        await openStory(page, story(id), "light");
+        await page.emulateMedia({ forcedColors: "active" });
+        const border = await page.locator(selector).evaluate((el) => {
+          const style = getComputedStyle(el);
+          return { style: style.borderBlockStartStyle, width: style.borderBlockStartWidth };
+        });
+        expect(border).toEqual({ style: "solid", width: "1px" });
+      });
+    }
+  });
+
   test("the document does not rubber-band, and controls are not text-selectable", async ({
     page,
   }) => {
@@ -167,6 +188,42 @@ test.describe("at 1280 px @desktop", () => {
     });
     expect(colors.dark.caret).not.toBe(colors.page.caret);
     expect(colors.dark.scrollbar).not.toBe(colors.page.scrollbar);
+  });
+
+  test("Prose sets a measure of 62 to 68 characters at the reading size", async ({ page }) => {
+    await openStory(page, story("foundations-prose--lesson"), "light");
+    const lines = await page.evaluate(() => {
+      // Characters on each line of every paragraph but its last line, which ends early.
+      const counts: number[] = [];
+      for (const p of document.querySelectorAll('[data-slot="prose"] p')) {
+        // A character starts a new line when it sits wholly below the line so far; inline code,
+        // in a smaller face, shares its line with the text around it.
+        const perLine: number[] = [];
+        let lineBottom = Number.NEGATIVE_INFINITY;
+        const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+        const range = document.createRange();
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          for (let i = 0; i < (node.textContent ?? "").length; i++) {
+            range.setStart(node, i);
+            range.setEnd(node, i + 1);
+            const rect = range.getClientRects()[0];
+            if (!rect) continue;
+            if (rect.top >= lineBottom) {
+              perLine.push(0);
+              lineBottom = rect.bottom;
+            }
+            lineBottom = Math.max(lineBottom, rect.bottom);
+            perLine[perLine.length - 1] = (perLine.at(-1) ?? 0) + 1;
+          }
+        }
+        counts.push(...perLine.slice(0, -1));
+      }
+      return counts;
+    });
+    expect(lines.length).toBeGreaterThanOrEqual(4);
+    const mean = lines.reduce((a, b) => a + b, 0) / lines.length;
+    expect(mean, `characters per line: ${lines.join(", ")}`).toBeGreaterThanOrEqual(62);
+    expect(mean, `characters per line: ${lines.join(", ")}`).toBeLessThanOrEqual(68);
   });
 
   test("keyboard focus on an unstyled element draws the ring", async ({ page }) => {

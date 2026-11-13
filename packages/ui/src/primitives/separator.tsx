@@ -7,17 +7,18 @@ import {
 } from "react-aria-components";
 import { tv, type VariantProps } from "../lib/tv";
 
+/** Drawn with a border, not a background, so forced-colors mode keeps it visible. */
 export const separator = tv({
   base: "shrink-0 border-0",
   variants: {
     orientation: {
-      horizontal: "h-px w-full",
-      vertical: "w-px self-stretch",
+      horizontal: "w-full border-t",
+      vertical: "self-stretch border-s",
     },
     /** `line` for dividers, `line-soft` for row separators. */
     tone: {
-      default: "bg-line",
-      soft: "bg-line-soft",
+      default: "border-line",
+      soft: "border-line-soft",
     },
   },
   defaultVariants: { orientation: "horizontal", tone: "default" },

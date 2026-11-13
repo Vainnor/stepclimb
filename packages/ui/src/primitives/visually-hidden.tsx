@@ -11,7 +11,20 @@ export interface VisuallyHiddenProps extends AriaVisuallyHiddenProps {
   "data-slot"?: string;
 }
 
-/** A `div` unless `elementType` names another element; use `span` inside text. */
-export function VisuallyHidden({ "data-slot": slot, ...props }: VisuallyHiddenProps) {
-  return <AriaVisuallyHidden data-slot={slot ?? "visually-hidden"} {...props} />;
+/**
+ * A `span` unless `elementType` names another element, so it is valid inside a button, a link or
+ * a line of text; use `div` for block content.
+ */
+export function VisuallyHidden({
+  "data-slot": slot,
+  elementType = "span",
+  ...props
+}: VisuallyHiddenProps) {
+  return (
+    <AriaVisuallyHidden
+      data-slot={slot ?? "visually-hidden"}
+      elementType={elementType}
+      {...props}
+    />
+  );
 }

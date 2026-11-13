@@ -8,8 +8,9 @@
     background: var(--sc-bg-canvas);
     color: var(--sc-fg-default);
     font-variant-numeric: tabular-nums;
-    /* No rubber-band bounce of the document under fixed chrome (B15). */
-    overscroll-behavior: none;
+    /* No rubber-band bounce of the document under fixed chrome (B15). Vertical only: horizontal
+       overscroll is the browser's back and forward swipe. */
+    overscroll-behavior-y: none;
     /* No grey flash on tap in iOS Safari and the web view. */
     -webkit-tap-highlight-color: transparent;
     /* Phones keep the authored text size in landscape. */
@@ -17,7 +18,7 @@
     text-size-adjust: 100%;
   }
   body {
-    overscroll-behavior: none;
+    overscroll-behavior-y: none;
   }
   [data-sc-theme="dark"] {
     color-scheme: dark;
@@ -148,6 +149,7 @@
   }
   [data-slot="prose"] pre {
     overflow-x: auto;
+    overscroll-behavior-x: contain;
     background: var(--sc-bg-sunken);
     border: 1px solid var(--sc-line);
     border-radius: var(--sc-radius-md);
@@ -158,10 +160,10 @@
     background: none;
     padding: 0;
   }
+  /* A border, not a background: forced-colors mode keeps borders and drops backgrounds. */
   [data-slot="prose"] hr {
     border: 0;
-    block-size: 1px;
-    background: var(--sc-line);
+    border-block-start: 1px solid var(--sc-line);
     margin-block: 2em;
   }
   [data-slot="prose"] :is(img, video) {
@@ -173,6 +175,7 @@
     display: block;
     max-inline-size: 100%;
     overflow-x: auto;
+    overscroll-behavior-x: contain;
     border-collapse: collapse;
     font-size: var(--sc-text-base);
     line-height: 1.5;
@@ -233,25 +236,30 @@
 }
 
 /* Forced colors (B17): the browser replaces the palette with system colors and drops box shadows,
-   which draw every focus ring here; the outline replaces a component's `outline-none`. */
-@media (forced-colors: active) {
-  :focus-visible,
-  [data-focus-visible] {
-    outline: 2px solid Highlight;
-    outline-offset: 2px;
-  }
-  button,
-  [role="button"],
-  input:not([type="hidden"]),
-  select,
-  textarea {
-    border: 1px solid ButtonBorder;
-  }
-  [aria-checked="true"],
-  [aria-current]:not([aria-current="false"]),
-  [aria-pressed="true"],
-  [aria-selected="true"],
-  [data-selected] {
-    outline: 2px solid Highlight;
+   which draw every focus ring here; the outline replaces a component's `outline-none`. The rules
+   sit in their own layer after Tailwind's `utilities`, so they outrank every component utility
+   and still yield to an unlayered rule. */
+@layer theme, base, components, utilities, forced-colors;
+@layer forced-colors {
+  @media (forced-colors: active) {
+    :focus-visible,
+    [data-focus-visible] {
+      outline: 2px solid Highlight;
+      outline-offset: 2px;
+    }
+    button,
+    [role="button"],
+    input:not([type="hidden"]),
+    select,
+    textarea {
+      border: 1px solid ButtonBorder;
+    }
+    [aria-checked="true"],
+    [aria-current]:not([aria-current="false"]),
+    [aria-pressed="true"],
+    [aria-selected="true"],
+    [data-selected] {
+      outline: 2px solid Highlight;
+    }
   }
 }

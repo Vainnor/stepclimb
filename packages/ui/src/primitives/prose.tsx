@@ -7,8 +7,13 @@
 import { type ReactNode, useEffect, useRef } from "react";
 import { tv } from "../lib/tv";
 
+/**
+ * The measure is in `em` of the reading size, not `ch`: `ch` is the width of "0", wider than the
+ * average letter, so a measure of `66ch` holds about 75 characters. 31.5em holds 62 to 68 characters of the
+ * reading face at the reading size (apps/ui-docs/visual/base.spec.ts counts them).
+ */
 export const prose = tv({
-  base: "max-w-[66ch] font-read text-read leading-read text-fg-default break-words",
+  base: "max-w-[31.5em] font-read text-read leading-read text-fg-default break-words",
 });
 
 export interface ProseProps {

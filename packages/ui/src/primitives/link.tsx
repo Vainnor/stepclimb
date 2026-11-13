@@ -46,9 +46,7 @@ export function Link({ className, children, ...props }: LinkProps) {
           {content}
           {external ? (
             // The space sits inside the hidden span, so the visible underline ends with the text.
-            <VisuallyHidden elementType="span" data-slot="link-external">
-              {` ${t("link.external")}`}
-            </VisuallyHidden>
+            <VisuallyHidden data-slot="link-external">{` ${t("link.external")}`}</VisuallyHidden>
           ) : null}
         </>
       ))}

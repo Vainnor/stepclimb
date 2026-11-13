@@ -11,7 +11,7 @@ const meta = {
     status: { missing: ["Themes", "Accessibility", "Responsive and touch"] },
     docs: {
       description: {
-        component: `Long-form content: lesson pages and descriptions, rendered from HTML the server sanitized. It sets the reading face (Source Serif 4 unless the organization chose sans), the reading size and line height, and a measure of about 66 characters, and styles the elements inside: headings, lists, links, quotes, code and tables. A wide table scrolls on its own.
+        component: `Long-form content: lesson pages and descriptions, rendered from HTML the server sanitized. It sets the reading face (Source Serif 4 unless the organization chose sans), the reading size and line height, and a measure of 62 to 68 characters, and styles the elements inside: headings, lists, links, quotes, code and tables. A wide table scrolls on its own.
 
 **Usage.** \`<Prose>{content}</Prose>\`, where \`content\` is the lesson's elements.
 

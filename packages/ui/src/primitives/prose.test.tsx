@@ -19,7 +19,7 @@ describe("Prose", () => {
     );
     const root = screen.getByRole("heading", { name: "Readbacks" }).parentElement;
     expect(root).toHaveAttribute("data-slot", "prose");
-    expect(root).toHaveClass("font-read", "text-read", "leading-read", "max-w-[66ch]");
+    expect(root).toHaveClass("font-read", "text-read", "leading-read", "max-w-[31.5em]");
     expect(screen.getByText("Read back the clearance.").tagName).toBe("P");
   });
 

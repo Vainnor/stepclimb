@@ -9,20 +9,20 @@ describe("Separator", () => {
     const el = screen.getByRole("separator");
     expect(el.tagName).toBe("HR");
     expect(el).toHaveAttribute("data-slot", "separator");
-    expect(el).toHaveClass("bg-line", "h-px", "w-full");
+    expect(el).toHaveClass("border-t", "border-line", "w-full");
   });
 
   it("is a vertical separator with its orientation exposed", () => {
     render(<Separator orientation="vertical" />);
     const el = screen.getByRole("separator");
     expect(el).toHaveAttribute("aria-orientation", "vertical");
-    expect(el).toHaveClass("w-px", "self-stretch");
+    expect(el).toHaveClass("border-s", "self-stretch");
   });
 
   it("uses line-soft for row separators", () => {
     render(<Separator tone="soft" />);
     const el = screen.getByRole("separator");
-    expect(el).toHaveClass("bg-line-soft");
-    expect(el).not.toHaveClass("bg-line");
+    expect(el).toHaveClass("border-line-soft");
+    expect(el).not.toHaveClass("border-line");
   });
 });
