@@ -63,12 +63,9 @@ pub enum ConfigError {
     Missing { name: &'static str },
     #[error("set only one of {name} and {name}_FILE")]
     Twice { name: &'static str },
-    #[error("{name}_FILE names {path}, which could not be read: {reason}")]
-    File {
-        name: &'static str,
-        path: String,
-        reason: String,
-    },
+    /// The path is left out: an operator may have pasted the secret itself into `{name}_FILE`.
+    #[error("{name}_FILE names a file that could not be read: {reason}")]
+    File { name: &'static str, reason: String },
     #[error("STEPCLIMB_DATABASE_URL must start with postgres:// or postgresql://")]
     DatabaseUrlScheme,
     #[error("STEPCLIMB_BIND is {value:?}, which is not a socket address such as 0.0.0.0:8080")]
@@ -120,8 +117,7 @@ fn secret(
             .map(|contents| contents.trim().to_owned())
             .map_err(|e| ConfigError::File {
                 name,
-                path,
-                reason: e.to_string(),
+                reason: e.kind().to_string(),
             }),
         (None, None) => Err(ConfigError::Missing { name }),
     }
@@ -249,16 +245,41 @@ mod tests {
     }
 
     #[test]
-    fn an_unreadable_file_variant_names_the_path() {
+    fn an_unreadable_file_variant_names_the_variable_only() {
         let error = Config::from_lookup(with_keys(&[(
             "STEPCLIMB_DATABASE_URL_FILE",
             "/nonexistent/stepclimb/database_url",
         )]))
         .unwrap_err();
-        assert!(
-            matches!(error, ConfigError::File { name: "STEPCLIMB_DATABASE_URL", ref path, .. }
-            if path == "/nonexistent/stepclimb/database_url")
+        assert!(matches!(
+            error,
+            ConfigError::File {
+                name: "STEPCLIMB_DATABASE_URL",
+                ..
+            }
+        ));
+        assert_eq!(
+            error.to_string(),
+            "STEPCLIMB_DATABASE_URL_FILE names a file that could not be read: entity not found"
         );
+    }
+
+    #[test]
+    fn a_secret_pasted_into_a_file_variable_is_not_echoed() {
+        let error = Config::from_lookup(env(&[
+            ("STEPCLIMB_DATABASE_URL", "postgres://u@h/db"),
+            (
+                "STEPCLIMB_ENCRYPTION_KEYS_FILE",
+                "k1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+            ),
+        ]))
+        .unwrap_err();
+        let message = format!("{error} {error:?}");
+        assert!(
+            message.contains("STEPCLIMB_ENCRYPTION_KEYS_FILE"),
+            "{message}"
+        );
+        assert!(!message.contains("AAEC"), "{message}");
     }
 
     #[test]

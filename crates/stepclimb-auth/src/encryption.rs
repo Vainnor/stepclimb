@@ -17,12 +17,24 @@
 //!
 //! The nonce is fresh from the operating system's CSPRNG for every value. The AEAD's associated
 //! data is the version, id length and id, then the caller's context: the parts that say where the
-//! value lives, for example `[b"identity_providers", org_id, row_id, b"client_secret"]`. Each
+//! value lives (the encoding is below). Each
 //! context part is length-prefixed (4 bytes, big-endian) before it is authenticated, so two
 //! different part lists never produce the same bytes. The context is not stored; the caller
 //! passes the same parts to decrypt. Changing the header, or opening the value with any other
 //! context (another row, organization, table or column), fails decryption like changing the
-//! ciphertext does.
+//! ciphertext does. An empty context is refused on both sides, so no value is sealed unbound.
+//!
+//! Every caller encodes its context the same way, or a value sealed by one code path cannot be
+//! opened by another:
+//!
+//! - for a row that belongs to an organization, the organization id is the first part;
+//! - the table and the column are their static ASCII names (`b"identity_providers"`,
+//!   `b"client_secret"`), never a computed or user-supplied string;
+//! - UUIDs (organization and row ids) are their 16 raw bytes (`Uuid::as_bytes`), not text.
+//!
+//! So a provider's client secret is `[org_id, b"identity_providers", row_id, b"client_secret"]`.
+//! Binding to a row id means the id exists before the value is sealed: the application
+//! generates it (UUID v7) before the `INSERT`, never takes it from the database's `RETURNING`.
 //!
 //! The key whose 32 bytes are [`DEVELOPMENT_KEY`] is the published local development key
 //! (`deploy/compose/development-encryption-keys`). The ring accepts it, and
@@ -87,6 +99,8 @@ pub enum EncryptError {
     Random(#[from] RandomError),
     #[error("the value is too long for AES-GCM")]
     TooLong,
+    #[error("no context was given; every sealed value is bound to where it lives")]
+    NoContext,
 }
 
 /// Why a sealed value could not be decrypted. None of these says which byte was wrong.
@@ -96,8 +110,10 @@ pub enum DecryptError {
     Malformed,
     #[error("the value is sealed under key {id:?}, which is not in the key ring")]
     UnknownKey { id: String },
-    #[error("the sealed value failed authentication (wrong key or altered bytes)")]
+    #[error("the sealed value failed authentication (wrong key, context or altered bytes)")]
     Inauthentic,
+    #[error("no context was given; every sealed value is bound to where it lives")]
+    NoContext,
 }
 
 impl KeyRing {
@@ -137,12 +153,18 @@ impl KeyRing {
     /// Seal `plaintext` under the current key with a fresh nonce, bound to `context` (see the
     /// module docs).
     pub fn encrypt(&self, plaintext: &[u8], context: &[&[u8]]) -> Result<Vec<u8>, EncryptError> {
+        if context.is_empty() {
+            return Err(EncryptError::NoContext);
+        }
         seal(self.current(), random_bytes()?, plaintext, context)
     }
 
     /// Open a value sealed by [`KeyRing::encrypt`] under any key in the ring, with the same
     /// `context` it was sealed with.
     pub fn decrypt(&self, sealed: &[u8], context: &[&[u8]]) -> Result<Vec<u8>, DecryptError> {
+        if context.is_empty() {
+            return Err(DecryptError::NoContext);
+        }
         let (&version, rest) = sealed.split_first().ok_or(DecryptError::Malformed)?;
         let (&id_len, rest) = rest.split_first().ok_or(DecryptError::Malformed)?;
         let id_len = usize::from(id_len);
@@ -263,8 +285,8 @@ mod tests {
     /// Key id `a` with different key material.
     const KEY_A_OTHER: &str = "a:ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=";
 
-    /// Where a test value lives: table, organization, row, column.
-    const CTX: &[&[u8]] = &[b"identity_providers", b"org-1", b"row-1", b"client_secret"];
+    /// Where a test value lives: organization, table, row, column.
+    const CTX: &[&[u8]] = &[b"org-1", b"identity_providers", b"row-1", b"client_secret"];
 
     fn ring(text: &str) -> KeyRing {
         KeyRing::parse(text).unwrap()
@@ -465,13 +487,12 @@ mod tests {
     fn a_value_moved_to_another_context_fails() {
         let ring = ring(KEY_A);
         let sealed = ring.encrypt(b"client secret", CTX).unwrap();
-        let elsewhere: [&[&[u8]]; 6] = [
-            &[b"identity_providers", b"org-2", b"row-1", b"client_secret"],
-            &[b"identity_providers", b"org-1", b"row-2", b"client_secret"],
-            &[b"admission_webhooks", b"org-1", b"row-1", b"client_secret"],
-            &[b"identity_providers", b"org-1", b"row-1", b"totp_seed"],
-            &[b"identity_providers", b"org-1", b"row-1"],
-            &[],
+        let elsewhere: [&[&[u8]]; 5] = [
+            &[b"org-2", b"identity_providers", b"row-1", b"client_secret"],
+            &[b"org-1", b"identity_providers", b"row-2", b"client_secret"],
+            &[b"org-1", b"admission_webhooks", b"row-1", b"client_secret"],
+            &[b"org-1", b"identity_providers", b"row-1", b"totp_seed"],
+            &[b"org-1", b"identity_providers", b"row-1"],
         ];
         for context in elsewhere {
             assert_eq!(
@@ -504,5 +525,19 @@ mod tests {
         assert!(ring(KEY_A).development_key_ids().is_empty());
         let ring = ring(&format!("{KEY_A},local:{development}"));
         assert_eq!(ring.development_key_ids(), ["local"]);
+    }
+
+    #[test]
+    fn an_empty_context_is_refused_both_ways() {
+        let ring = ring(KEY_A);
+        assert!(matches!(
+            ring.encrypt(b"client secret", &[]),
+            Err(EncryptError::NoContext)
+        ));
+        let sealed = ring.encrypt(b"client secret", CTX).unwrap();
+        assert_eq!(
+            ring.decrypt(&sealed, &[]).unwrap_err(),
+            DecryptError::NoContext
+        );
     }
 }

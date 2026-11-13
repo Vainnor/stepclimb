@@ -25,8 +25,9 @@ not.** `stepclimb serve` reads `STEPCLIMB_*` configuration (`STEPCLIMB_ENCRYPTIO
 document with only those probes) and the built web SPA. `web/` has one route that reads
 `/healthz` through `packages/api-client`. `packages/tokens` builds the default and vZDC example
 themes with Terrazzo; `packages/ui` has `Button`. `apps/app` is a Tauri 2 shell that loads `web/`.
-`stepclimb-core` has the controllable clock and `stepclimb-auth` has tokens, token hashes and the
-encryption key ring (spec 08 I1). Every other crate and package is a documented placeholder. M0's work is specified in
+`stepclimb-core` has UUID v7 ids, the permission catalog, the built-in role lists and the
+controllable clock; `stepclimb-auth` has tokens, token hashes and the encryption key ring (spec 08
+I1). Every other crate and package is a documented placeholder. M0's work is specified in
 `docs/specs/m0/` and broken into issues on the GitHub Project.
 
 ## Workspace layout
