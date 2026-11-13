@@ -1,0 +1,470 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//! The identities repository (docs/specs/m0/03-users-and-identities.md B14 to B16, B20).
+//!
+//! An identity links one user to one identity provider by the provider's `subject`. Every query
+//! here filters by `org_id = scope.org_id()`, and the table's composite foreign keys keep an
+//! identity's user and provider in the identity's organization. `(provider_id, subject)` is
+//! unique, so one external account maps to at most one user; [`link`] reports a taken pair as
+//! [`Error::Taken`].
+//!
+//! Lookup is by `(provider, subject)` only ([`find_user`]): nothing here matches a user by email
+//! (B17). Who may link or unlink, and refusing to remove a user's last sign-in method (B19), are
+//! the routes' to decide.
+//!
+//! `attributes` are the mapped attributes of the latest sign-in (B15), a JSON object stored as
+//! given. PostgreSQL `jsonb` cannot store NUL in a string or key, so a NUL anywhere in it is
+//! refused with [`Error::ContainsNul`], as is a NUL in the subject.
+
+use std::time::SystemTime;
+
+use serde_json::{Map, Value};
+use sqlx::PgExecutor;
+use uuid::Uuid;
+
+use crate::{
+    OrgScope,
+    db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
+    id::new_id,
+    users::{self, User},
+};
+
+/// The composite foreign key that keeps the user in the identity's organization.
+const USER_FKEY: &str = "identities_org_id_user_id_fkey";
+/// The composite foreign key that keeps the provider in the identity's organization.
+const PROVIDER_FKEY: &str = "identities_org_id_provider_id_fkey";
+/// The unique constraint on `(provider_id, subject)` (B14).
+const SUBJECT_UNIQUE: &str = "identities_provider_id_subject_key";
+
+/// An identity as the repository reads it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Identity {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub provider_id: Uuid,
+    /// The provider's `key`, read with the identity.
+    pub provider_key: String,
+    pub subject: String,
+    /// The mapped attributes of the latest sign-in (B15).
+    pub attributes: Map<String, Value>,
+    pub created_at: SystemTime,
+    pub updated_at: SystemTime,
+}
+
+/// Leaves `attributes` out: they can hold personal data the provider sent, which logs never
+/// carry (docs/specs/m0/07-admission.md B2).
+impl std::fmt::Debug for Identity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Identity")
+            .field("id", &self.id)
+            .field("user_id", &self.user_id)
+            .field("provider_id", &self.provider_id)
+            .field("provider_key", &self.provider_key)
+            .field("subject", &self.subject)
+            .field("created_at", &self.created_at)
+            .field("updated_at", &self.updated_at)
+            .finish_non_exhaustive()
+    }
+}
+
+/// An identity to create.
+#[derive(Clone, PartialEq, Eq)]
+pub struct NewIdentity {
+    /// A user of the scope's organization.
+    pub user_id: Uuid,
+    /// A provider of the scope's organization.
+    pub provider_id: Uuid,
+    /// Stored exactly as given; empty is refused.
+    pub subject: String,
+    /// Empty for an identity an admin pre-provisions (B18).
+    pub attributes: Map<String, Value>,
+}
+
+/// What [`find_user`] found: the identity and its user, with the user's status.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Linked {
+    pub identity_id: Uuid,
+    pub user: User,
+}
+
+/// Why an identities repository call failed.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// No identity with that id (of that user, where one is named) in the scope's organization.
+    #[error("the identity does not exist")]
+    NotFound,
+    /// No user with that id in the scope's organization.
+    #[error("the user does not exist")]
+    UserNotFound,
+    /// No provider with that id in the scope's organization.
+    #[error("the identity provider does not exist")]
+    ProviderNotFound,
+    /// The provider's subject is already linked to a user (B14).
+    #[error("this identity is already linked to a user")]
+    Taken,
+    /// The subject is empty.
+    #[error("a subject cannot be empty")]
+    SubjectEmpty,
+    /// A string the caller passed holds NUL, which PostgreSQL `text` and `jsonb` cannot store.
+    #[error("{field} cannot contain the NUL character")]
+    ContainsNul { field: &'static str },
+    /// Stored `attributes` that are not a JSON object. The table's check constraint keeps this
+    /// from happening, and the read fails closed if it does.
+    #[error("the stored identity attributes are not a JSON object")]
+    StoredAttributes,
+    /// The linked user's row does not read back.
+    #[error(transparent)]
+    User(#[from] users::Error),
+    /// A time that cannot be stored or read.
+    #[error(transparent)]
+    Time(#[from] TimeOutOfRange),
+    #[error(transparent)]
+    Database(sqlx::Error),
+}
+
+impl From<sqlx::Error> for Error {
+    fn from(error: sqlx::Error) -> Self {
+        let constraint = error.as_database_error().and_then(|e| e.constraint());
+        match constraint {
+            Some(USER_FKEY) => Self::UserNotFound,
+            Some(PROVIDER_FKEY) => Self::ProviderNotFound,
+            Some(SUBJECT_UNIQUE) => Self::Taken,
+            _ => Self::Database(error),
+        }
+    }
+}
+
+/// An `identities` row joined to its provider's key, `attributes` as JSON text.
+struct Row {
+    id: Uuid,
+    user_id: Uuid,
+    provider_id: Uuid,
+    provider_key: String,
+    subject: String,
+    attributes: String,
+    created_at_us: i64,
+    updated_at_us: i64,
+}
+
+impl TryFrom<Row> for Identity {
+    type Error = Error;
+
+    fn try_from(row: Row) -> Result<Self, Error> {
+        let attributes =
+            serde_json::from_str(&row.attributes).map_err(|_| Error::StoredAttributes)?;
+        Ok(Self {
+            id: row.id,
+            user_id: row.user_id,
+            provider_id: row.provider_id,
+            provider_key: row.provider_key,
+            subject: row.subject,
+            attributes,
+            created_at: from_epoch_micros(row.created_at_us)?,
+            updated_at: from_epoch_micros(row.updated_at_us)?,
+        })
+    }
+}
+
+/// The user linked to `(provider_id, subject)` in the scope's organization, with the identity's
+/// id, or `None` when no identity of the organization matches (B16). Matches the subject exactly
+/// and never by email (B17).
+pub async fn find_user(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    provider_id: Uuid,
+    subject: &str,
+) -> Result<Option<Linked>, Error> {
+    let subject = no_nul("subject", subject)?;
+    let Some(row) = sqlx::query!(
+        r#"SELECT i.id AS identity_id,
+                  u.id, u.display_name, u.given_name, u.family_name, u.email, u.locale, u.tz,
+                  u.status, u.source, u.external_id,
+                  (extract(epoch FROM u.created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM u.updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM identities i
+           JOIN users u ON u.org_id = i.org_id AND u.id = i.user_id
+           WHERE i.org_id = $1 AND i.provider_id = $2 AND i.subject = $3"#,
+        scope.org_id(),
+        provider_id,
+        subject,
+    )
+    .fetch_optional(db)
+    .await?
+    else {
+        return Ok(None);
+    };
+    let user = User::try_from(users::Row {
+        id: row.id,
+        display_name: row.display_name,
+        given_name: row.given_name,
+        family_name: row.family_name,
+        email: row.email,
+        locale: row.locale,
+        tz: row.tz,
+        status: row.status,
+        source: row.source,
+        external_id: row.external_id,
+        created_at_us: row.created_at_us,
+        updated_at_us: row.updated_at_us,
+    })?;
+    Ok(Some(Linked {
+        identity_id: row.identity_id,
+        user,
+    }))
+}
+
+/// Link a user to a provider's subject in the scope's organization, with `created_at` and
+/// `updated_at` set to `now` (B14, B18, B20).
+///
+/// Refuses a user or provider outside the organization ([`Error::UserNotFound`],
+/// [`Error::ProviderNotFound`]) and a `(provider, subject)` already linked to any user
+/// ([`Error::Taken`]).
+///
+/// The insert takes the provider from a `SELECT` filtered by the scope, so another
+/// organization's provider inserts no row and is [`Error::ProviderNotFound`] before the
+/// `(provider_id, subject)` unique index is consulted. Left to the composite foreign key alone,
+/// PostgreSQL checks that index first, and [`Error::Taken`] would tell org A whether a subject
+/// is linked at org B's provider.
+pub async fn link(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    identity: &NewIdentity,
+    now: SystemTime,
+) -> Result<Identity, Error> {
+    let subject = valid_subject(&identity.subject)?;
+    let attributes = valid_attributes(&identity.attributes)?;
+    let now = epoch_micros(now)?;
+    let row = sqlx::query_as!(
+        Row,
+        r#"WITH inserted AS (
+               INSERT INTO identities (id, org_id, user_id, provider_id, subject, attributes,
+                                       created_at, updated_at)
+               SELECT $1, p.org_id, $3, p.id, $5, $6::text::jsonb,
+                      timestamptz 'epoch' + $7::bigint * interval '1 microsecond',
+                      timestamptz 'epoch' + $7::bigint * interval '1 microsecond'
+               FROM identity_providers p
+               WHERE p.org_id = $2 AND p.id = $4
+               RETURNING id, org_id, user_id, provider_id, subject, attributes, created_at,
+                         updated_at
+           )
+           SELECT i.id AS "id!", i.user_id AS "user_id!", i.provider_id AS "provider_id!",
+                  p.key AS "provider_key!", i.subject AS "subject!",
+                  i.attributes::text AS "attributes!",
+                  (extract(epoch FROM i.created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM i.updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM inserted i
+           JOIN identity_providers p ON p.org_id = i.org_id AND p.id = i.provider_id"#,
+        new_id(),
+        scope.org_id(),
+        identity.user_id,
+        identity.provider_id,
+        subject,
+        attributes,
+        now,
+    )
+    .fetch_optional(db)
+    .await?
+    .ok_or(Error::ProviderNotFound)?;
+    Identity::try_from(row)
+}
+
+/// Delete the identity `id` of the user `user_id` in the scope's organization. An identity of
+/// another user, or of another organization, is [`Error::NotFound`].
+pub async fn unlink(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    user_id: Uuid,
+    id: Uuid,
+) -> Result<(), Error> {
+    let deleted = sqlx::query!(
+        "DELETE FROM identities WHERE org_id = $1 AND user_id = $2 AND id = $3",
+        scope.org_id(),
+        user_id,
+        id,
+    )
+    .execute(db)
+    .await?;
+    if deleted.rows_affected() == 0 {
+        return Err(Error::NotFound);
+    }
+    Ok(())
+}
+
+/// The identities of the user `user_id` in the scope's organization, sorted by id (creation
+/// order). Empty for a user the organization does not have.
+pub async fn list_for_user(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    user_id: Uuid,
+) -> Result<Vec<Identity>, Error> {
+    let rows = sqlx::query_as!(
+        Row,
+        r#"SELECT i.id, i.user_id, i.provider_id, p.key AS "provider_key!", i.subject,
+                  i.attributes::text AS "attributes!",
+                  (extract(epoch FROM i.created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM i.updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM identities i
+           JOIN identity_providers p ON p.org_id = i.org_id AND p.id = i.provider_id
+           WHERE i.org_id = $1 AND i.user_id = $2
+           ORDER BY i.id"#,
+        scope.org_id(),
+        user_id,
+    )
+    .fetch_all(db)
+    .await?;
+    rows.into_iter().map(Identity::try_from).collect()
+}
+
+/// Replace the attributes of the identity `id` in the scope's organization with `attributes`
+/// and set `updated_at` to `now` (B15; docs/specs/m0/07-admission.md B7).
+pub async fn update_attributes(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    id: Uuid,
+    attributes: &Map<String, Value>,
+    now: SystemTime,
+) -> Result<Identity, Error> {
+    let attributes = valid_attributes(attributes)?;
+    let now = epoch_micros(now)?;
+    let row = sqlx::query_as!(
+        Row,
+        r#"WITH updated AS (
+               UPDATE identities
+               SET attributes = $3::text::jsonb,
+                   updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond'
+               WHERE org_id = $1 AND id = $2
+               RETURNING id, org_id, user_id, provider_id, subject, attributes, created_at,
+                         updated_at
+           )
+           SELECT i.id AS "id!", i.user_id AS "user_id!", i.provider_id AS "provider_id!",
+                  p.key AS "provider_key!", i.subject AS "subject!",
+                  i.attributes::text AS "attributes!",
+                  (extract(epoch FROM i.created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM i.updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM updated i
+           JOIN identity_providers p ON p.org_id = i.org_id AND p.id = i.provider_id"#,
+        scope.org_id(),
+        id,
+        attributes,
+        now,
+    )
+    .fetch_optional(db)
+    .await?
+    .ok_or(Error::NotFound)?;
+    Identity::try_from(row)
+}
+
+/// `value` unchanged, or [`Error::ContainsNul`] naming `field`.
+fn no_nul<'a>(field: &'static str, value: &'a str) -> Result<&'a str, Error> {
+    if value.contains('\0') {
+        return Err(Error::ContainsNul { field });
+    }
+    Ok(value)
+}
+
+fn valid_subject(subject: &str) -> Result<&str, Error> {
+    let subject = no_nul("subject", subject)?;
+    if subject.is_empty() {
+        return Err(Error::SubjectEmpty);
+    }
+    Ok(subject)
+}
+
+/// `attributes` as JSON text, or [`Error::ContainsNul`] when a key or string anywhere in it
+/// holds NUL.
+fn valid_attributes(attributes: &Map<String, Value>) -> Result<String, Error> {
+    if attributes
+        .iter()
+        .any(|(key, value)| key.contains('\0') || value_has_nul(value))
+    {
+        return Err(Error::ContainsNul {
+            field: "attributes",
+        });
+    }
+    // Invariant: a `Map<String, Value>` has string keys and plain values, which serde_json
+    // always serializes.
+    Ok(serde_json::to_string(attributes).expect("a JSON object serializes"))
+}
+
+fn value_has_nul(value: &Value) -> bool {
+    match value {
+        Value::String(s) => s.contains('\0'),
+        Value::Array(items) => items.iter().any(value_has_nul),
+        Value::Object(map) => map
+            .iter()
+            .any(|(key, value)| key.contains('\0') || value_has_nul(value)),
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn object(value: Value) -> Map<String, Value> {
+        match value {
+            Value::Object(map) => map,
+            other => panic!("not an object: {other}"),
+        }
+    }
+
+    #[test]
+    fn a_subject_is_kept_exactly_and_empty_is_refused() {
+        assert_eq!(valid_subject(" 1000001 ").unwrap(), " 1000001 ");
+        assert!(matches!(valid_subject(""), Err(Error::SubjectEmpty)));
+        assert!(matches!(
+            valid_subject("10\0"),
+            Err(Error::ContainsNul { field: "subject" })
+        ));
+    }
+
+    #[test]
+    fn nul_anywhere_in_the_attributes_is_refused() {
+        let cases = [
+            json!({ "rating\u{0}": 5 }),
+            json!({ "rating": "S\u{0}1" }),
+            json!({ "teams": ["a", "b\u{0}"] }),
+            json!({ "nested": { "deeper": [{ "k\u{0}": 1 }] } }),
+        ];
+        for case in cases {
+            assert!(
+                matches!(
+                    valid_attributes(&object(case.clone())),
+                    Err(Error::ContainsNul {
+                        field: "attributes"
+                    })
+                ),
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn attributes_without_nul_serialize_as_given() {
+        let attributes = object(json!({
+            "rating": 5, "subdivision": "EXA", "teams": ["a", null, true, 1.5],
+            "nested": { "k": "v" }
+        }));
+        let text = valid_attributes(&attributes).unwrap();
+        let back: Map<String, Value> = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, attributes);
+    }
+
+    #[test]
+    fn debug_leaves_the_attributes_out() {
+        let identity = Identity {
+            id: Uuid::nil(),
+            user_id: Uuid::nil(),
+            provider_id: Uuid::nil(),
+            provider_key: "example".into(),
+            subject: "1000001".into(),
+            attributes: object(json!({ "email_hint": "private-value" })),
+            created_at: SystemTime::UNIX_EPOCH,
+            updated_at: SystemTime::UNIX_EPOCH,
+        };
+        let debug = format!("{identity:?}");
+        assert!(debug.contains("1000001"), "{debug}");
+        assert!(!debug.contains("private-value"), "{debug}");
+    }
+}

@@ -183,20 +183,20 @@ impl From<sqlx::Error> for Error {
     }
 }
 
-/// A `users` row as the queries select it.
-struct Row {
-    id: Uuid,
-    display_name: String,
-    given_name: String,
-    family_name: String,
-    email: Option<String>,
-    locale: String,
-    tz: String,
-    status: String,
-    source: String,
-    external_id: Option<String>,
-    created_at_us: i64,
-    updated_at_us: i64,
+/// A `users` row as the queries select it. `identities::find_user` builds one from its join.
+pub(crate) struct Row {
+    pub(crate) id: Uuid,
+    pub(crate) display_name: String,
+    pub(crate) given_name: String,
+    pub(crate) family_name: String,
+    pub(crate) email: Option<String>,
+    pub(crate) locale: String,
+    pub(crate) tz: String,
+    pub(crate) status: String,
+    pub(crate) source: String,
+    pub(crate) external_id: Option<String>,
+    pub(crate) created_at_us: i64,
+    pub(crate) updated_at_us: i64,
 }
 
 impl TryFrom<Row> for User {

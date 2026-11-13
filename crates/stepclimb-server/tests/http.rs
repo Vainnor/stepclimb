@@ -135,6 +135,8 @@ async fn startup_migrations_create_the_schema_on_an_empty_database(pool: PgPool)
         [
             "accounts",
             "auth_flows",
+            "identities",
+            "identity_providers",
             "organizations",
             "role_assignments",
             "roles",
