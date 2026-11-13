@@ -119,9 +119,10 @@ The Nix dev shell (`flake.nix`) provides every tool below.
 - Lockfile-only changes and toolchain or framework version bumps go in their own commit.
 - PR only, squash merge. Never push to `main` or `next` directly; `.claude/hooks/git-guard`
   refuses it.
-- Dependencies: Dependabot opens update PRs (the plan's supply-chain list,
-  `.github/dependabot.yml`), held to versions at least 14 days old. Nothing runs on them on
-  GitHub: check each out and run `just ci` locally before merging it.
+- Dependencies are updated by hand once a month and before each release, as in Mainline:
+  `cargo update` in both Cargo workspaces and `pnpm update`, then `just ci`, `just deny` and
+  `just app-build`, opened as a lockfile-only PR. A framework or major-version bump goes through
+  `dependency-researcher` first. There is no Dependabot (owner, 13 Nov 2026).
 - The remote is the private GitHub repository `Vainnor/stepclimb`; `next` is the default branch.
   A GitHub ruleset on `main` and `next` enforces PR-only, squash-only, and no force push or
   deletion (ADR 0018). It requires no status checks: there is no hosted CI (ADR 0021). `.claude/hooks/git-guard` refuses the
