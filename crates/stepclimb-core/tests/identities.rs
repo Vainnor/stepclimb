@@ -127,16 +127,20 @@ async fn table(pool: &PgPool) -> Vec<String> {
         .expect("read identities")
 }
 
-/// The variant name of an identities error.
-fn kind<T: std::fmt::Debug>(result: &Result<T, Error>) -> String {
-    match result {
-        Ok(value) => format!("Ok({value:?})"),
-        Err(error) => format!("{error:?}")
-            .split([' ', '(', '{'])
-            .next()
-            .unwrap_or_default()
-            .to_owned(),
-    }
+/// Assert that `result` is an `Err` matching `pattern`.
+macro_rules! assert_err {
+    ($result:expr, $pattern:pat $(,)?) => {{
+        let result = $result;
+        assert!(
+            matches!(result, Err($pattern)),
+            "expected Err({}), got {result:?}",
+            stringify!($pattern)
+        );
+    }};
+}
+
+async fn try_link(pool: &PgPool, org: Uuid, identity: NewIdentity) -> Result<Identity, Error> {
+    identities::link(pool, scope(org), &identity, request_time()).await
 }
 
 /// The SQLSTATE and constraint of a failed statement.
@@ -192,22 +196,10 @@ async fn a_provider_subject_links_to_at_most_one_user(pool: PgPool) {
     link(&pool, a.id, new(a.sam, a.oauth, "1000001")).await;
     let before = table(&pool).await;
 
-    let taken = identities::link(
-        &pool,
-        scope(a.id),
-        &new(a.pat, a.oauth, "1000001"),
-        request_time(),
-    )
-    .await;
-    let again = identities::link(
-        &pool,
-        scope(a.id),
-        &new(a.sam, a.oauth, "1000001"),
-        request_time(),
-    )
-    .await;
-    assert_eq!(kind(&taken), "Taken");
-    assert_eq!(kind(&again), "Taken");
+    let taken = try_link(&pool, a.id, new(a.pat, a.oauth, "1000001")).await;
+    let again = try_link(&pool, a.id, new(a.sam, a.oauth, "1000001")).await;
+    assert_err!(taken, Error::Taken);
+    assert_err!(again, Error::Taken);
     assert_eq!(table(&pool).await, before);
 
     link(&pool, a.id, new(a.pat, a.oidc, "1000001")).await;
@@ -227,25 +219,50 @@ async fn link_refuses_what_is_outside_the_scope_and_inserts_nothing(pool: PgPool
     let a = org(&pool, "org-a").await;
     let b = org(&pool, "org-b").await;
     link(&pool, a.id, new(a.sam, a.oauth, "1000001")).await;
+    link(&pool, b.id, new(b.sam, b.oauth, "2000001")).await;
     let before = table(&pool).await;
     let nul_attributes = NewIdentity {
         attributes: object(json!({ "team": "a\u{0}" })),
         ..new(a.sam, a.oauth, "1000003")
     };
+    let link = |identity| try_link(&pool, a.id, identity);
 
-    let cases = [
-        (new(b.sam, a.oauth, "1000002"), "UserNotFound"),
-        (new(new_id(), a.oauth, "1000002"), "UserNotFound"),
-        (new(a.sam, b.oauth, "1000002"), "ProviderNotFound"),
-        (new(a.sam, new_id(), "1000002"), "ProviderNotFound"),
-        (new(a.sam, a.oauth, ""), "SubjectEmpty"),
-        (new(a.sam, a.oauth, "10\0"), "ContainsNul"),
-        (nul_attributes, "ContainsNul"),
-    ];
-    for (identity, expected) in cases {
-        let result = identities::link(&pool, scope(a.id), &identity, request_time()).await;
-        assert_eq!(kind(&result), expected, "subject {:?}", identity.subject);
-    }
+    assert_err!(
+        link(new(b.sam, a.oauth, "1000002")).await,
+        Error::UserNotFound
+    );
+    assert_err!(
+        link(new(new_id(), a.oauth, "1000002")).await,
+        Error::UserNotFound
+    );
+    assert_err!(
+        link(new(a.sam, b.oauth, "1000002")).await,
+        Error::ProviderNotFound
+    );
+    // A subject linked at org B's provider answers the same as a free one: org A learns nothing.
+    assert_err!(
+        link(new(a.sam, b.oauth, "2000001")).await,
+        Error::ProviderNotFound
+    );
+    assert_err!(
+        link(new(b.sam, b.oauth, "2000001")).await,
+        Error::ProviderNotFound
+    );
+    assert_err!(
+        link(new(a.sam, new_id(), "1000002")).await,
+        Error::ProviderNotFound
+    );
+    assert_err!(link(new(a.sam, a.oauth, "")).await, Error::SubjectEmpty);
+    assert_err!(
+        link(new(a.sam, a.oauth, "10\0")).await,
+        Error::ContainsNul { field: "subject" }
+    );
+    assert_err!(
+        link(nul_attributes).await,
+        Error::ContainsNul {
+            field: "attributes"
+        }
+    );
 
     assert_eq!(table(&pool).await, before);
 }
@@ -341,7 +358,12 @@ async fn the_tables_refuse_values_outside_their_checks(pool: PgPool) {
         ("23514".into(), "identities_attributes_check".into())
     );
     let b = org(&pool, "org-b").await;
-    assert_ne!(a.oidc, b.oidc, "another organization may reuse a key");
+    let reused = identity_providers::get_by_key(&pool, scope(b.id), "oidc-example").await;
+    assert_eq!(
+        reused.unwrap().map(|p| p.id),
+        Some(b.oidc),
+        "another organization may reuse a key"
+    );
 }
 
 /// T13 (B16, B17): the linked user and status for a known `(provider, subject)`, none for
@@ -387,7 +409,7 @@ async fn find_user_returns_the_linked_user_for_a_known_identity_only(pool: PgPoo
         assert_eq!(result, None, "{subject:?}");
     }
     let nul = find(a.id, a.oauth, "10\0").await;
-    assert_eq!(kind(&nul), "ContainsNul");
+    assert_err!(nul, Error::ContainsNul { field: "subject" });
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
@@ -427,16 +449,16 @@ async fn unlink_deletes_an_identity_of_that_user_in_the_scope_only(pool: PgPool)
     let other_user = identities::unlink(&pool, scope(a.id), a.sam, pats.id).await;
     let other_org = identities::unlink(&pool, scope(a.id), b.sam, theirs.id).await;
     let other_org_own_user = identities::unlink(&pool, scope(a.id), a.sam, theirs.id).await;
-    assert_eq!(kind(&other_user), "NotFound");
-    assert_eq!(kind(&other_org), "NotFound");
-    assert_eq!(kind(&other_org_own_user), "NotFound");
+    assert_err!(other_user, Error::NotFound);
+    assert_err!(other_org, Error::NotFound);
+    assert_err!(other_org_own_user, Error::NotFound);
     assert_eq!(table(&pool).await, before);
 
     identities::unlink(&pool, scope(a.id), a.sam, mine.id)
         .await
         .unwrap();
     let again = identities::unlink(&pool, scope(a.id), a.sam, mine.id).await;
-    assert_eq!(kind(&again), "NotFound");
+    assert_err!(again, Error::NotFound);
     let found = identities::find_user(&pool, scope(a.id), a.oauth, "1000001").await;
     assert_eq!(found.unwrap(), None);
     assert_eq!(table(&pool).await.len(), 2);
@@ -480,9 +502,14 @@ async fn update_attributes_replaces_them_in_the_scope_only(pool: PgPool) {
         later(),
     )
     .await;
-    assert_eq!(kind(&across), "NotFound");
-    assert_eq!(kind(&unknown), "NotFound");
-    assert_eq!(kind(&nul), "ContainsNul");
+    assert_err!(across, Error::NotFound);
+    assert_err!(unknown, Error::NotFound);
+    assert_err!(
+        nul,
+        Error::ContainsNul {
+            field: "attributes"
+        }
+    );
     assert_eq!(table(&pool).await, before);
 }
 

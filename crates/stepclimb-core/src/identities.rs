@@ -218,6 +218,12 @@ pub async fn find_user(
 /// Refuses a user or provider outside the organization ([`Error::UserNotFound`],
 /// [`Error::ProviderNotFound`]) and a `(provider, subject)` already linked to any user
 /// ([`Error::Taken`]).
+///
+/// The insert takes the provider from a `SELECT` filtered by the scope, so another
+/// organization's provider inserts no row and is [`Error::ProviderNotFound`] before the
+/// `(provider_id, subject)` unique index is consulted. Left to the composite foreign key alone,
+/// PostgreSQL checks that index first, and [`Error::Taken`] would tell org A whether a subject
+/// is linked at org B's provider.
 pub async fn link(
     db: impl PgExecutor<'_>,
     scope: OrgScope,
@@ -232,9 +238,11 @@ pub async fn link(
         r#"WITH inserted AS (
                INSERT INTO identities (id, org_id, user_id, provider_id, subject, attributes,
                                        created_at, updated_at)
-               VALUES ($1, $2, $3, $4, $5, $6::text::jsonb,
-                       timestamptz 'epoch' + $7::bigint * interval '1 microsecond',
-                       timestamptz 'epoch' + $7::bigint * interval '1 microsecond')
+               SELECT $1, p.org_id, $3, p.id, $5, $6::text::jsonb,
+                      timestamptz 'epoch' + $7::bigint * interval '1 microsecond',
+                      timestamptz 'epoch' + $7::bigint * interval '1 microsecond'
+               FROM identity_providers p
+               WHERE p.org_id = $2 AND p.id = $4
                RETURNING id, org_id, user_id, provider_id, subject, attributes, created_at,
                          updated_at
            )
@@ -253,8 +261,9 @@ pub async fn link(
         attributes,
         now,
     )
-    .fetch_one(db)
-    .await?;
+    .fetch_optional(db)
+    .await?
+    .ok_or(Error::ProviderNotFound)?;
     Identity::try_from(row)
 }
 
