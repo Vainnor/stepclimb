@@ -678,6 +678,8 @@ fn redaction_never_shows_a_password_with_odd_characters() {
         "postgres://u:zq?ss@h/db",
         "postgres://u:zq@ss@h/db",
         "postgres://u@h/db?password=zq",
+        "postgres://u:123/zq@h/db",
+        "postgres://u@h/db?dbname=zq.x",
         "not a url zq",
     ] {
         let printed = redacted_database_url(url);
@@ -739,7 +741,7 @@ impl std::io::Write for Writer {
 }
 
 #[test]
-fn a_database_url_parameter_sqlx_ignores_is_refused_by_name_only() {
+fn a_database_url_parameter_sqlx_ignores_is_refused_by_position_only() {
     let output = logged(|| {
         let error = Config::load(
             &with_required(&[(
@@ -752,11 +754,12 @@ fn a_database_url_parameter_sqlx_ignores_is_refused_by_name_only() {
         let message = error.to_string();
         assert!(
             message.starts_with(
-                r#"STEPCLIMB_DATABASE_URL: the URL has the parameter "sslpassword", which the server does not read"#
+                "STEPCLIMB_DATABASE_URL: query parameter 2 of the URL is not one the server reads"
             ),
             "{message}"
         );
         assert!(!message.contains("zqsecret"), "{message}");
+        assert!(!message.contains("sslpassword"), "{message}");
     });
     assert!(!output.contains("zqsecret"), "{output}");
 }
@@ -822,4 +825,35 @@ fn redacting_a_url_with_an_unknown_parameter_logs_nothing() {
     });
     assert_eq!(output, "");
     assert_eq!(printed, "<not a parseable PostgreSQL URL>");
+}
+
+#[test]
+fn an_unencoded_ampersand_in_a_password_is_refused_without_its_tail() {
+    let error = Config::load(
+        &with_required(&[("STEPCLIMB_DATABASE_URL", "postgres://u@h/db?password=ab&zq")]),
+        None,
+    )
+    .unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.starts_with(
+            "STEPCLIMB_DATABASE_URL: query parameter 2 of the URL is not one the server reads"
+        ),
+        "{message}"
+    );
+    assert!(!message.contains("zq"), "{message}");
+}
+
+#[test]
+fn an_at_sign_after_the_host_is_refused_without_repeating_the_url() {
+    for url in ["postgres://u:123/zq@h/db", "postgres://u@h/zq@db"] {
+        let error =
+            Config::load(&with_required(&[("STEPCLIMB_DATABASE_URL", url)]), None).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.starts_with("STEPCLIMB_DATABASE_URL: has an @ after the host;"),
+            "{url}: {message}"
+        );
+        assert!(!message.contains("zq"), "{url}: {message}");
+    }
 }

@@ -112,7 +112,8 @@ impl fmt::Debug for Config {
 
 /// The parts of the database URL that are safe to print: user, host, port and database, read with
 /// sqlx's own parser. The password and every query parameter (which can carry `password=`) are
-/// left out.
+/// left out, and so is a database name of other than letters, digits, `_` and `-`, since a
+/// password with an unencoded `/` can end up there.
 fn redacted_database_url(url: &str) -> String {
     match parse_database_url(url) {
         Ok(options) => format!(
@@ -120,10 +121,17 @@ fn redacted_database_url(url: &str) -> String {
             options.get_username(),
             options.get_host(),
             options.get_port(),
-            options.get_database().unwrap_or_default(),
+            printable_database(options.get_database().unwrap_or_default()),
         ),
         Err(_) => "<not a parseable PostgreSQL URL>".to_owned(),
     }
+}
+
+fn printable_database(name: &str) -> &str {
+    let plain = name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if plain { name } else { "<hidden>" }
 }
 
 /// The query parameters sqlx 0.9 reads from a PostgreSQL URL (`PgConnectOptions::parse_from_url`),
@@ -150,22 +158,28 @@ const DATABASE_URL_PARAMETERS: &[&str] = &[
     "options",
 ];
 
-/// Why a database URL was refused. Neither variant carries any part of the URL but a parameter
-/// name.
+/// Why a database URL was refused. No variant carries any part of the URL: a parameter's name
+/// can be the tail of a password with an unencoded `&` or `?`, so it is reported by position.
 #[derive(Debug, PartialEq, Eq)]
 enum DatabaseUrlProblem {
     Unparsable,
-    UnknownParameter(String),
+    /// The database part holds an `@`: a password with an unencoded `/` or `#` before it.
+    AtInPath,
+    /// The 1-based position of a query parameter sqlx does not read.
+    UnknownParameter(usize),
 }
 
 /// Parse `url` as sqlx will, after checking that sqlx will not log any of its parameters.
 fn parse_database_url(url: &str) -> Result<PgConnectOptions, DatabaseUrlProblem> {
     let parsed = url::Url::parse(url).map_err(|_| DatabaseUrlProblem::Unparsable)?;
-    for (name, _) in parsed.query_pairs() {
+    if parsed.path().contains('@') {
+        return Err(DatabaseUrlProblem::AtInPath);
+    }
+    for (position, (name, _)) in parsed.query_pairs().enumerate() {
         let known = DATABASE_URL_PARAMETERS.contains(&&*name)
             || (name.starts_with("options[") && name.ends_with(']'));
         if !known {
-            return Err(DatabaseUrlProblem::UnknownParameter(name.into_owned()));
+            return Err(DatabaseUrlProblem::UnknownParameter(position + 1));
         }
     }
     url.parse().map_err(|_| DatabaseUrlProblem::Unparsable)
@@ -343,8 +357,14 @@ fn check_database_url(url: &str, origin: Origin) -> Result<(), ConfigError> {
         match parse_database_url(url) {
             Ok(_) => return Ok(()),
             Err(DatabaseUrlProblem::Unparsable) => "is not a valid PostgreSQL URL".to_owned(),
-            Err(DatabaseUrlProblem::UnknownParameter(name)) => format!(
-                "the URL has the parameter {name:?}, which the server does not read (it reads {})",
+            Err(DatabaseUrlProblem::AtInPath) => {
+                "has an @ after the host; percent-encode @, /, ?, & and # in the password \
+                 (@ as %40)"
+                    .to_owned()
+            }
+            Err(DatabaseUrlProblem::UnknownParameter(position)) => format!(
+                "query parameter {position} of the URL is not one the server reads (it reads {}; \
+                 percent-encode & and ? in the password)",
                 DATABASE_URL_PARAMETERS.join(", ")
             ),
         }

@@ -436,7 +436,15 @@ fn every_subcommand_refuses_a_database_url_sqlx_would_not_read_as_written() {
     let cases = [
         (
             "postgres://u@127.0.0.1:1/db?sslpassword=zqsecret",
-            r#"the URL has the parameter "sslpassword""#,
+            "query parameter 1 of the URL is not one the server reads",
+        ),
+        (
+            "postgres://u@127.0.0.1:1/db?password=ab&zqsecret",
+            "query parameter 2 of the URL is not one the server reads",
+        ),
+        (
+            "postgres://u:123/zqsecret@127.0.0.1:1/db",
+            "has an @ after the host",
         ),
         (
             "postgres://u:zqsecret@127.0.0.1:notaport/db",
