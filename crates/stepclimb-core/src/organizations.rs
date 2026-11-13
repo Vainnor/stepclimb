@@ -83,6 +83,9 @@ pub enum Error {
     /// Another organization of the instance has this slug.
     #[error("another organization has this slug")]
     SlugTaken,
+    /// The patch's `default_tz` is no time zone of the IANA database ([`crate::tz`]).
+    #[error("the default time zone is not an IANA time zone")]
+    DefaultTzUnknown,
     /// The stored settings object does not parse as [`OrgSettings`].
     #[error("the stored organization settings do not parse")]
     StoredSettings(#[source] serde_json::Error),
@@ -241,7 +244,8 @@ pub async fn settings(db: impl PgExecutor<'_>, scope: OrgScope) -> Result<OrgSet
 /// merge (`settings || patch`) runs inside the `UPDATE` against the row it locks, never against
 /// a copy read earlier, so a patch cannot write back a stale value for a key it does not name,
 /// and stored keys the patch does not name (including ones this release does not know) stay.
-/// Returns the settings after the merge.
+/// Returns the settings after the merge. A `default_tz` that is no IANA time zone is refused
+/// with [`Error::DefaultTzUnknown`] before anything is read.
 ///
 /// It writes the `organization.update_settings` audit entry by `actor` with the effective
 /// value of each key the patch names, before and after. A patch that names no key, or only keys
@@ -258,9 +262,10 @@ pub async fn update_settings<'c>(
     now: SystemTime,
     actor: Actor,
 ) -> Result<OrgSettings, Error> {
+    let patch = valid_patch(patch)?;
     // Invariant: the patch is a struct of plain, string-keyed fields, which serde_json always
     // serializes; it fails only on a map with non-string keys or a failing `Serialize` impl.
-    let patch = serde_json::to_value(patch).expect("a settings patch serializes to JSON");
+    let patch = serde_json::to_value(&patch).expect("a settings patch serializes to JSON");
     let now = epoch_micros(now)?;
     let mut tx = db.begin().await?;
     let before = sqlx::query_scalar!(
@@ -295,6 +300,16 @@ pub async fn update_settings<'c>(
     audit::record(&mut tx, scope, actor, update, scope.org_id(), &data, now).await?;
     tx.commit().await?;
     Ok(settings)
+}
+
+/// `patch` with each value validated and in its stored form: `default_tz` in the time zone
+/// database's spelling, so `utc` stores, and compares with the current value, as `UTC`.
+fn valid_patch(patch: &OrgSettingsPatch) -> Result<OrgSettingsPatch, Error> {
+    let default_tz = match patch.default_tz.as_deref() {
+        Some(name) => Some(crate::tz::canonical(name).ok_or(Error::DefaultTzUnknown)?),
+        None => None,
+    };
+    Ok(OrgSettingsPatch { default_tz })
 }
 
 /// Whether `patch` names a key whose value differs from its effective value in `before`.

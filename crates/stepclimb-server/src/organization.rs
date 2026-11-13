@@ -31,6 +31,7 @@ use crate::{
     require::Require,
     roles::code::{NAME_EMPTY, NAME_TOO_LONG, TEXT_CONTAINS_NUL},
     session::Authenticated,
+    users::code::TZ_UNKNOWN,
 };
 
 /// The path of the caller's organization.
@@ -47,7 +48,7 @@ pub mod code {
 
 problem_responses! {
     OrgWriteForbidden => "`permission.denied`: the caller does not hold `organization.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site.",
-    SettingsInvalid => "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting.",
+    SettingsInvalid => "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `tz.unknown` a `default_tz` that is no IANA time zone.",
 }
 
 /// The caller's organization.
@@ -97,7 +98,10 @@ where
 // The document's form of `stepclimb_core::OrgSettings`, which the routes serialize;
 // `tests/organization.rs` checks the core type's answer against this schema.
 #[derive(ToSchema)]
-pub struct OrgSettings {}
+pub struct OrgSettings {
+    /// The IANA time zone a user created without one gets; `UTC` unless set.
+    pub default_tz: String,
+}
 
 /// A partial change to the organization settings: one optional member per setting; only the
 /// members present change. A member that is no setting is refused.
@@ -107,7 +111,12 @@ pub struct OrgSettings {}
 // it declares the same members as `OrgSettings`.
 #[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct OrgSettingsPatch {}
+pub struct OrgSettingsPatch {
+    /// An IANA time zone, matched in any letter case and stored in the database's spelling.
+    #[serde(default)]
+    #[schema(value_type = String)]
+    pub default_tz: Option<String>,
+}
 
 /// Read the caller's organization.
 #[utoipa::path(
@@ -280,6 +289,7 @@ fn org_error(error: organizations::Error) -> ApiError {
         E::NameEmpty => invalid(NAME_EMPTY),
         E::NameTooLong => invalid(NAME_TOO_LONG),
         E::NameContainsNul => invalid(TEXT_CONTAINS_NUL),
+        E::DefaultTzUnknown => ApiError::invalid(vec![FieldError::at(&["default_tz"], TZ_UNKNOWN)]),
         other @ (E::SlugInvalid
         | E::SlugReserved
         | E::SlugTaken
@@ -372,6 +382,12 @@ mod tests {
                 422,
                 "request.invalid",
                 Some(("/name", "text.contains_nul")),
+            ),
+            (
+                organizations::Error::DefaultTzUnknown,
+                422,
+                "request.invalid",
+                Some(("/default_tz", "tz.unknown")),
             ),
             (organizations::Error::SlugTaken, 500, "internal.error", None),
         ];

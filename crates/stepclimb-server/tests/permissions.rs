@@ -52,7 +52,7 @@ use stepclimb_core::{
     organizations,
     perm::{
         self, AccountManage, AccountView, OrgManage, Permission, RoleAssign, RoleManage, RoleView,
-        ScopeType,
+        ScopeType, UserManage, UserView,
     },
     role_assignments::{self, NewAssignment, Scope},
     roles::{self, NewRole},
@@ -186,7 +186,63 @@ const TABLE: &[Entry] = &[
             assignment_at_tower_in_path,
         ),
     },
+    Entry {
+        operation_id: "listUsers",
+        access: permission(UserView::KEY, Target::Org, at_org),
+    },
+    Entry {
+        operation_id: "getUser",
+        access: permission(UserView::KEY, USER_NOT_FOUND, user_in_path),
+    },
+    Entry {
+        operation_id: "createUser",
+        access: permission(UserManage::KEY, Target::Org, new_user_in_body),
+    },
+    Entry {
+        operation_id: "updateUser",
+        access: permission(UserManage::KEY, USER_NOT_FOUND, rename_user_in_path),
+    },
 ];
+
+/// A user that is not the organization's: 404 `user.not_found`. The user routes take the
+/// organization as their target (spec 03 API), so they have no wrong-account 404 case.
+const USER_NOT_FOUND: Target = Target::Scoped {
+    not_found: "user.not_found",
+    cross_org: "user.not_found",
+};
+
+/// A new user of `org`, named in the path; the caller acts at organization scope.
+fn user_in_path(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let (_, user) = org.user().await;
+        Call {
+            params: vec![("user_id", user)],
+            body: None,
+            at: At::Org,
+        }
+    })
+}
+
+/// [`user_in_path`] with a new display name in the body.
+fn rename_user_in_path(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            body: Some(serde_json::json!({ "display_name": "Renamed user" })),
+            ..user_in_path(org).await
+        }
+    })
+}
+
+/// A new user named in the body.
+fn new_user_in_body(_: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: Vec::new(),
+            body: Some(serde_json::json!({ "display_name": "Casey Example" })),
+            at: At::Org,
+        }
+    })
+}
 
 /// A new name for the caller's organization.
 fn rename_organization(_: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {

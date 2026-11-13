@@ -18,7 +18,8 @@
 //! plan, and how a request's plan bounds what it adds ([`org_plans::check_room`]); and
 //! [`requirement`], which lets the server's `Require` check a permission or a feature; and
 //! [`audit`], the entries the repository functions that change roles, assignments, accounts,
-//! organizations and user status write with their change. The other
+//! organizations and user status write with their change; and [`tz`], the IANA time zone names
+//! users and organizations are set to. The other
 //! repositories arrive with the M0 specs in `docs/specs/m0/`.
 
 pub mod accounts;
@@ -43,6 +44,7 @@ mod scope;
 pub mod sessions;
 mod settings;
 mod source;
+pub mod tz;
 pub mod users;
 
 pub use scope::{OrgScope, ScopeOrigin};

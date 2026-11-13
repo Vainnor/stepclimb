@@ -10,7 +10,7 @@
 //! UI; every route checks its own permission and feature on the server.
 
 use axum::{Json, extract::State};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use stepclimb_core::{
     Source,
     grants::{Grants, ScopeId},
@@ -79,7 +79,7 @@ pub struct GrantScope {
 }
 
 /// Whether a user may sign in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum UserStatus {
     Active,
@@ -97,7 +97,7 @@ impl From<users::Status> for UserStatus {
 
 /// Where the user record came from: made by an admin (`local`), at sign-in through an identity
 /// provider (`idp`), or by the sync API, SCIM or a connector, which own it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum UserSource {
     Local,

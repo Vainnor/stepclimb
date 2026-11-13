@@ -6,7 +6,7 @@
 //! committed. Today it lists the operations probes, which the web app's skeleton route calls
 //! through the generated client, sign-out, `GET /api/v1/me`, the caller's organization and its
 //! settings, the account tree, the permission catalog, roles and role assignment routes under `/api/v1/admin`,
-//! and the shared error schemas and responses below. The other M0 specs add their endpoints under `/api/v1`.
+//! the user admin routes, and the shared error schemas and responses below. The other M0 specs add their endpoints under `/api/v1`.
 //!
 //! Every `/api/v1` operation lists its errors in `#[utoipa::path]` (spec 02 B6). The errors
 //! common to every operation reference the responses here, such as
@@ -24,7 +24,7 @@ use utoipa::{
 use crate::{
     accounts, auth,
     error::{FieldError, PROBLEM_JSON, Problem},
-    health, me, organization, role_assignments, roles,
+    health, me, organization, role_assignments, roles, users,
 };
 
 /// The operation extension that marks a handler as changing state (spec 08 B12, T17). Every
@@ -64,7 +64,11 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         roles::delete_role,
         role_assignments::list_role_assignments,
         role_assignments::create_role_assignment,
-        role_assignments::delete_role_assignment
+        role_assignments::delete_role_assignment,
+        users::list_users,
+        users::get_user,
+        users::create_user,
+        users::update_user
     ),
     components(
         schemas(
@@ -94,7 +98,11 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             role_assignments::RoleAssignment,
             role_assignments::AssignmentSource,
             role_assignments::NewRoleAssignment,
-            role_assignments::ScopeRef
+            role_assignments::ScopeRef,
+            users::User,
+            users::NewUser,
+            users::NewUserIdentity,
+            users::UserPatch
         ),
         responses(
             BadRequest,
@@ -134,7 +142,12 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             role_assignments::AssignmentCreateConflict,
             role_assignments::AssignmentDeleteForbidden,
             role_assignments::AssignmentDeleteNotFound,
-            role_assignments::AssignmentDeleteConflict
+            role_assignments::AssignmentDeleteConflict,
+            users::UserNotFound,
+            users::UserWriteForbidden,
+            users::UserCreateForbidden,
+            users::UserCreateConflict,
+            users::UserUpdateConflict
         )
     ),
     tags(
@@ -143,7 +156,8 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         (name = "me", description = "The signed-in user"),
         (name = "organization", description = "The caller's organization and its settings"),
         (name = "accounts", description = "The account tree inside the organization"),
-        (name = "roles", description = "The permission catalog, roles and role assignments")
+        (name = "roles", description = "The permission catalog, roles and role assignments"),
+        (name = "users", description = "The organization's users")
     )
 )]
 struct ApiDoc;

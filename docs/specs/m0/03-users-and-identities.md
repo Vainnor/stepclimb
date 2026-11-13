@@ -33,12 +33,26 @@ these rows are in `04` to `07`.
   store; `email` also refuses control characters and Unicode format characters (general category
   Cf, such as U+200B) (B12). The repository refuses them with typed errors; issue 3 maps them to
   the API's validation errors.
+
+  Coordinator decision (2026-11-13), for issue 3. Spec 02 Q6 sets limits for organization and
+  account names only, so the user fields take the same rule for names: `display_name`,
+  `given_name` and `family_name` hold at most 200 characters, `email` at most 254 (the longest
+  address an SMTP path carries, RFC 5321) and `external_id` at most 200. The repository refuses a
+  longer value (422, `errors[].code = "text.too_long"` at the field).
 - **B3.** `locale` defaults to `en`: Stepclimb is English-only at 1.0 with every string through
   ICU messages (`docs/plan/technical.md` -> Decided). Any other value is refused in M0 (422,
   `errors[].code = "user.locale_unsupported"`). A user created without a `tz` gets the
   organization's default time zone, an `OrgSettings` key that itself defaults to `UTC`, and every
   `tz` is validated as an IANA time zone with `jiff` (Q4). The column has no default; the caller
   resolves the setting before inserting.
+
+  Coordinator decision (2026-11-13), for issue 3. The setting is `default_tz`. Both it and a
+  user's `tz` are checked against the time zone database `jiff` bundles (`jiff-tzdb`), not the
+  host's zoneinfo, so a name is accepted the same way on every host and in the distroless image;
+  the database is updated with the monthly dependency update. A name is matched in any ASCII
+  letter case and stored in the database's spelling (`america/new_york` is stored as
+  `America/New_York`). `Etc/Unknown` and fixed offsets are refused. A name the database lacks
+  answers 422 with `errors[].code = "tz.unknown"` at `/tz` or `/default_tz`.
 - **B4.** Every user records its `source`: `local`, `idp` (identity provider), `sync` (sync API),
   `scim` or `connector`, with an optional `external_id`. The plan names these five sources
   (Identity and access -> Provisioning); the stored spellings are this spec's. A user created by
@@ -50,8 +64,9 @@ these rows are in `04` to `07`.
 - **B6.** Records owned by an external source are read-only in the UI, so the two never fight
   (Provisioning). Through the admin API, a user whose `source` is not `local` refuses changes to
   `display_name`, `given_name`, `family_name`, `email` and `external_id` (409
-  `user.externally_managed`). Whether an admin may still change such a user's `status` is
-  pending Q3; until Q3 is decided, `status` changes are refused for non-`local` users too.
+  `user.externally_managed`). Q3 is decided (option A): an admin may change such a user's
+  `status`, `locale` and `tz`; the "suspended by" marker that keeps a sync from unsuspending
+  them is M4's (coordinator decision, 2026-11-13, applying Q3 for issue 3).
 - **B7.** `status` is `active` or `suspended` in M0. A suspended user is refused at sign-in
   (Admission step 1, enforced in `07-admission.md`), and every credential of theirs stops working
   on its next request: the request authenticator in `08-sessions-and-csrf.md` reads the user's
@@ -82,7 +97,9 @@ these rows are in `04` to `07`.
   may each have a user with the same address. It is stored as given (trimmed), keeping its case,
   and is refused if it holds a NUL, a control character or a Unicode format character (B2), so
   an invisible character cannot make a second address that looks like the first.
-  Nothing in M0 looks a user up by email except `04-local-accounts.md`.
+  Nothing in M0 looks a user up by email except `04-local-accounts.md`. An address another user
+  of the organization has answers 409 `user.email_taken` on `POST` and `PATCH` (coordinator
+  decision, 2026-11-13).
 
 ### Identity providers and identities
 
@@ -182,10 +199,10 @@ Common errors as in `02-organizations-and-accounts.md` -> API (400, 401, 415, 50
 | `GET /api/v1/me` | | 200 `Me` | 403 `auth.not_a_user` (not answered in M0, B24) | authenticated user |
 | `GET /api/v1/me/identities` | | 200 `MyIdentity[]` | 403 `auth.not_a_user` | authenticated user |
 | `DELETE /api/v1/me/identities/{identity_id}` | | 204 | 404 `identity.not_found`, 409 `identity.last_sign_in_method`, 409 `identity.externally_managed` | authenticated user (own identities only) |
-| `GET /api/v1/users` | `?status&source&q&cursor&limit` | 200 `Page<User>` | 400 `pagination.invalid_cursor` | `perm::UserView` (organization) |
+| `GET /api/v1/users` | `?status&source&q&cursor&limit` | 200 `Page<User>` | 400 `pagination.invalid_cursor`, 400 `request.malformed` | `perm::UserView` (organization) |
 | `GET /api/v1/users/{user_id}` | | 200 `User` | 404 `user.not_found` | `perm::UserView` (organization) |
-| `POST /api/v1/users` | `{ display_name, given_name?, family_name?, email?, locale?, tz?, external_id?, identities?: [{ provider_key, subject }] }` | 201 `User`, `Location` | 409 `identity.taken`, 409 `user.external_id_taken`, 422 `request.invalid`, limit error from `10` | `perm::UserManage` (organization) |
-| `PATCH /api/v1/users/{user_id}` | `{ display_name?, given_name?, family_name?, email?, locale?, tz?, status? }` | 200 `User` | 404 `user.not_found`, 409 `user.externally_managed`, 409 `user.cannot_suspend_self`, 409 `role_assignment.last_org_admin`, 422 `request.invalid` | `perm::UserManage` (organization) |
+| `POST /api/v1/users` | `{ display_name, given_name?, family_name?, email?, locale?, tz?, external_id?, identities?: [{ provider_key, subject }] }` | 201 `User`, `Location` | 409 `identity.taken`, 409 `user.external_id_taken`, 409 `user.email_taken`, 422 `request.invalid`, limit error from `10` | `perm::UserManage` (organization) |
+| `PATCH /api/v1/users/{user_id}` | `{ display_name?, given_name?, family_name?, email?, locale?, tz?, status? }` | 200 `User` | 404 `user.not_found`, 409 `user.externally_managed`, 409 `user.cannot_suspend_self`, 409 `user.email_taken`, 409 `role_assignment.last_org_admin`, 422 `request.invalid` | `perm::UserManage` (organization) |
 | `GET /api/v1/users/{user_id}/identities` | | 200 `Identity[]` | 404 `user.not_found` | `perm::UserView` (organization) |
 | `POST /api/v1/users/{user_id}/identities` | `{ provider_key, subject }` | 201 `Identity` | 404 `user.not_found`, 409 `identity.taken`, 422 `request.invalid` | `perm::UserManage` (organization) |
 | `DELETE /api/v1/users/{user_id}/identities/{identity_id}` | | 204 | 404 `user.not_found`, 404 `identity.not_found`, 409 `identity.last_sign_in_method` | `perm::UserManage` (organization) |
@@ -194,6 +211,20 @@ Schemas: `User { id, display_name, given_name, family_name, email, locale, tz, s
 external_id, created_at, updated_at }`; `Identity { id, provider_key, subject, attributes,
 created_at, updated_at }` (admins see `attributes`, since admission rules read them);
 `MyIdentity` as in B23; `Me` as in B22.
+
+Coordinator decisions (2026-11-13), for issue 3. The list's `limit` is spec 02's: 1 to 200,
+default 50. In `POST`, `email` and `external_id` may be `null` (read as omitted); any other
+member sent as `null` answers 400 `request.malformed`, as do unknown members. In `PATCH`, `null`
+is accepted only for `email`, where it removes the address. `POST` takes at most 20
+`identities` (422, `errors[].code = "identities.too_many"` at `/identities`); an unknown or other
+organization's `provider_key` is 422 `identity.unknown_provider` at
+`/identities/{index}/provider_key`, an empty subject 422 `identity.subject_empty`, and any
+refusal creates neither the user nor any identity. The 422 field codes are `name.empty`
+(`display_name`), `email.empty`, `email.invalid_character`, `text.contains_nul`,
+`text.too_long`, `tz.unknown` and `user.locale_unsupported`. A `PATCH` naming nothing changes
+nothing; the field changes and the status change of one `PATCH` run in one transaction, so a
+refused suspension leaves the fields as they were. User creation and field changes write no
+audit entry (spec 09 Q5); a status change writes `user.set_status`.
 
 `PATCH` with `status: "suspended"` on the caller's own user answers 409
 `user.cannot_suspend_self`, so an admin cannot lock themselves out by accident. The users routes

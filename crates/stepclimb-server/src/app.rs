@@ -21,7 +21,7 @@ use crate::{
     error::ApiError,
     health, me, openapi, organization,
     rate_limit::RateLimiter,
-    role_assignments, roles, spa,
+    role_assignments, roles, spa, users,
     web_origin::WebOrigin,
 };
 
@@ -127,6 +127,14 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
             get(roles::get_role)
                 .patch(roles::update_role)
                 .delete(roles::delete_role),
+        ),
+        (
+            users::USERS_PATH,
+            get(users::list_users).post(users::create_user),
+        ),
+        (
+            "/api/v1/users/{user_id}",
+            get(users::get_user).patch(users::update_user),
         ),
         (
             role_assignments::ROLE_ASSIGNMENTS_PATH,
