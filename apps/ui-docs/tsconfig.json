@@ -1,5 +1,12 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "types": ["vite/client", "vitest/importMeta"] },
-  "include": [".storybook/*.ts", ".storybook/*.tsx", "src", "vitest.config.ts"]
+  "compilerOptions": { "types": ["vite/client", "vitest/importMeta", "node"] },
+  "include": [
+    ".storybook/*.ts",
+    ".storybook/*.tsx",
+    "src",
+    "visual",
+    "vitest.config.ts",
+    "playwright.config.ts"
+  ]
 }

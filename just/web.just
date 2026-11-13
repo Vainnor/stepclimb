@@ -48,3 +48,11 @@ storybook: web-build
 app-build: web-build
     cargo deny --manifest-path apps/app/src-tauri/Cargo.toml check
     pnpm --filter @stepclimb/app build
+
+# Builds Storybook, then runs the story suite in Playwright's pinned image: a screenshot against
+# apps/ui-docs/visual/baselines and axe for every story, theme and width (bin/ui-visual.sh).
+# `just ui-visual --update-snapshots` rewrites the baselines after an intended change
+ui-visual *args: web-install
+    pnpm --filter @stepclimb/tokens build
+    pnpm --filter @stepclimb/ui-docs build
+    bash bin/ui-visual.sh {{ args }}

@@ -12,4 +12,8 @@ paths = [
   '''(^|/)pnpm-lock\.yaml$''',
   '''(^|/)\.sqlx/''',
   '''(^|/)\.gitleaks\.toml$''',
+  # Ignored build output: the minified Storybook bundle trips generic-api-key, a false positive.
+  '''(^|/)storybook-static/''',
+  '''(^|/)dist/''',
+  '''(^|/)test-results/''',
 ]

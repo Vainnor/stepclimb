@@ -50,6 +50,7 @@ export const FollowsSystem: Story = {
 
 /** The same sample in each brand, theme and density. */
 export const Matrix: Story = {
+  tags: ["theme-matrix"],
   render: () => (
     <ThemeMatrix>
       <Sample />
