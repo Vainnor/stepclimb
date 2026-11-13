@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The built theme files (run `pnpm build` first; `just web-build` does). They are what every
 // consumer imports, so the test reads the output rather than the token JSON.
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const read = (file: string) =>
@@ -56,5 +56,17 @@ describe("tailwind-theme.css", () => {
     expect(css).toMatch(
       /@utility duration-fast \{\n {2}transition-duration: var\(--sc-motion-fast\);/,
     );
+  });
+});
+
+describe("package exports", () => {
+  it("point at files the build wrote", () => {
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
+      exports: Record<string, string>;
+    };
+    expect(Object.keys(pkg.exports)).toContain("./docs/tokens.json");
+    for (const target of Object.values(pkg.exports)) {
+      expect(existsSync(new URL(`../${target}`, import.meta.url)), target).toBe(true);
+    }
   });
 });

@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     "./variables.css": "./build/css/variables.css",
-    "./tailwind-theme.css": "./build/css/tailwind-theme.css"
+    "./tailwind-theme.css": "./build/css/tailwind-theme.css",
+    "./docs/tokens.json": "./build/docs/tokens.json"
   },
   "scripts": {
     "build": "tz build",
