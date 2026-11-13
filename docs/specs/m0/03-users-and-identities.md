@@ -152,6 +152,15 @@ these rows are in `04` to `07`.
 - **B23.** `GET /api/v1/me/identities` lists the user's identities with `id`, `provider_key`,
   `provider_label` (from the provider's config), `subject` and `created_at`; never `attributes`
   (they can hold personal data the provider sent, and the user's own copy belongs to M4's export).
+- **B24.** Coordinator decision (2026-11-13), for issue 5. API keys arrive with
+  `08-sessions-and-csrf.md` issue 6, and until then the server accepts no bearer credential, so
+  `GET /api/v1/me` answers browser sessions only and a bearer request is anonymous (401). The
+  owned-key half of B21 and T17 lands with that issue, which adds the key principal to the
+  route and its test. The ownerless half cannot arise in M0: `08` Q9 (a) makes every service
+  account have an owner, so no M0 principal is not a user. The server therefore neither produces
+  nor documents 403 `auth.not_a_user` until a principal without a user exists. `user` carries
+  B22's nine members only (no `external_id` or timestamps), and `email` is always present, `null`
+  when the user has none. The owner can overrule this.
 
 ## API
 
@@ -407,7 +416,7 @@ overrule one, which then updates this spec.
    ownerless-key cases, and the response schema with `grants` and `features` declared. `grants`
    is filled by `09-permissions-and-roles.md` issue 6 and `features` by
    `10-entitlements-framework.md` issue 3; until then this issue returns both as empty arrays and
-   the schema says so. Covers B21, B22, T6, T17. Depends on: issue 1; the `08-sessions-and-csrf.md`
+   the schema says so. Covers B21, B22, B24, T6, T17 (the key cases as B24 says). Depends on: issue 1; the `08-sessions-and-csrf.md`
    issue that provides the authenticated principal.
 6. **The `email_matching` setting.** Deliver the `OrgSettings` key (default `false`), the refusal
    to enable it until Q2 is decided, and T14 proving no M0 path links by email. After Q2, a

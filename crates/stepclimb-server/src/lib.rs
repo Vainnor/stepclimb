@@ -4,7 +4,8 @@
 //! The `stepclimb` binary (`src/main.rs`) is a thin wrapper over this library. Today the
 //! application serves the operations endpoints (`/healthz`, `/readyz`), sign-out
 //! (`POST /auth/sign-out`, [`auth`]), the permission catalog and roles routes under
-//! `/api/v1/admin` ([`roles`], with timestamps from [`timestamp`]), the OpenAPI document
+//! `/api/v1/admin` ([`roles`], with timestamps from [`timestamp`]), the signed-in user at
+//! `GET /api/v1/me` ([`me`]), the OpenAPI document
 //! (`/api/openapi.json`) and its Scalar UI (`/docs`), and the built web SPA for every other
 //! path. The other M0 specs in `docs/specs/m0/` add their `/api/v1` endpoints on the
 //! conventions in [`error`] (problem details), [`extract`] (extractors that reject with them)
@@ -28,6 +29,7 @@ pub mod extract;
 pub mod flow;
 pub mod health;
 pub mod healthcheck;
+pub mod me;
 pub mod openapi;
 pub mod pagination;
 pub mod rate_limit;

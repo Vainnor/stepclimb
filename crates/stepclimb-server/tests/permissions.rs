@@ -79,6 +79,10 @@ const PUBLIC: &[&str] = &["healthz", "readyz", "signOut"];
 /// as they land.
 const TABLE: &[Entry] = &[
     Entry {
+        operation_id: "getMe",
+        access: Access::AuthOnly(at_org),
+    },
+    Entry {
         operation_id: "listPermissions",
         access: permission(RoleView::KEY, Target::AnyScope, at_org),
     },

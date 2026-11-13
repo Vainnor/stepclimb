@@ -596,7 +596,8 @@ overrule one, which then updates this spec.
 6. **I6. Service accounts and API keys.** Migration for `service_accounts`, the admin endpoints,
    bearer API-key authentication with the CRC-32 precheck, scope intersection per request.
    Covers B24 to B29; T3 (API-key request part), T21 to T26. Depends on: I2, `09-permissions-and-roles.md` (catalog,
-   `Require<P>`, effective permissions), Q9.
+   `Require<P>`, effective permissions), Q9. It also makes `GET /api/v1/me` answer an owned key for its owner and
+   adds that case of `03-users-and-identities.md` T17 (03 B24).
 7. **I7. OAuth 2.1 authorization endpoint and codes.** Client registry, `GET /oauth/authorize`,
    the sign-in round trip through a flow, code issuance and storage. Covers B30, B31, B41 (the
    authorization endpoint's sign-in steps); T27 to T29. Depends on: I4, `07-admission.md` I1

@@ -18,7 +18,7 @@ use crate::{
     auth,
     csrf::{self, OriginAllowlist},
     error::ApiError,
-    health, openapi,
+    health, me, openapi,
     rate_limit::RateLimiter,
     roles, spa,
     web_origin::WebOrigin,
@@ -44,7 +44,7 @@ pub struct AppState {
 /// public host may be other services of the operator's, which this server does not speak for.
 pub const HSTS: &str = "max-age=31536000";
 
-/// The whole application: probes, sign-out, the API document and its UI, and the SPA for the
+/// The whole application: probes, sign-out, the signed-in user, the API document and its UI, and the SPA for the
 /// rest. An unknown `/api/` path and a known path with the wrong method answer problem details.
 /// Every unsafe request passes the CSRF check first, and with an `https` public URL every
 /// response carries HSTS.
@@ -86,6 +86,7 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         ("/healthz", get(health::healthz)),
         ("/readyz", get(health::readyz)),
         ("/auth/sign-out", post(auth::sign_out)),
+        (me::ME_PATH, get(me::get_me)),
         ("/api/v1/admin/permissions", get(roles::list_permissions)),
         (
             roles::ROLES_PATH,

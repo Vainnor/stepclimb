@@ -56,6 +56,23 @@ export interface paths {
         patch: operations["updateRole"];
         trace?: never;
     };
+    "/api/v1/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the signed-in user. */
+        get: operations["getMe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/sign-out": {
         parameters: {
             query?: never;
@@ -122,6 +139,12 @@ export interface components {
             /** @description A JSON Pointer (RFC 6901) to the member that broke the rule, such as `/name`. */
             field: string;
         };
+        /** @description A scope a grant applies at: the organization, an account or a course, by id. */
+        GrantScope: {
+            /** Format: uuid */
+            id: string;
+            type: components["schemas"]["ScopeType"];
+        };
         /** @description A probe's answer. */
         Health: {
             status: components["schemas"]["HealthStatus"];
@@ -131,6 +154,51 @@ export interface components {
          * @enum {string}
          */
         HealthStatus: "ok" | "unavailable";
+        /** @description What `GET /api/v1/me` answers. */
+        Me: {
+            /**
+             * @description The keys of the organization's enabled features. Always empty until the server computes
+             *     features for this route.
+             */
+            features: string[];
+            /**
+             * @description Each scope where the caller holds at least one effective permission, with those
+             *     permissions sorted. Always empty until the server computes grants for this route.
+             */
+            grants: components["schemas"]["MeGrant"][];
+            organization: components["schemas"]["MeOrganization"];
+            user: components["schemas"]["MeUser"];
+        };
+        /** @description The permissions the caller holds at one scope. */
+        MeGrant: {
+            /** @description Catalog keys, sorted. */
+            permissions: string[];
+            scope: components["schemas"]["GrantScope"];
+        };
+        /** @description The signed-in user's organization. */
+        MeOrganization: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            slug: string;
+        };
+        /** @description The signed-in user. */
+        MeUser: {
+            display_name: string;
+            email: string | null;
+            /** @description `""` when the identity provider sent none. */
+            family_name: string;
+            /** @description `""` when the identity provider sent none. */
+            given_name: string;
+            /** Format: uuid */
+            id: string;
+            /** @description `en` in M0. */
+            locale: string;
+            source: components["schemas"]["UserSource"];
+            status: components["schemas"]["UserStatus"];
+            /** @description An IANA time zone. */
+            tz: string;
+        };
         /** @description A custom role to create. */
         NewRole: {
             /**
@@ -243,6 +311,17 @@ export interface components {
          * @enum {string}
          */
         ScopeType: "organization" | "account" | "course";
+        /**
+         * @description Where the user record came from: made by an admin (`local`), at sign-in through an identity
+         *     provider (`idp`), or by the sync API, SCIM or a connector, which own it.
+         * @enum {string}
+         */
+        UserSource: "local" | "idp" | "sync" | "scim" | "connector";
+        /**
+         * @description Whether a user may sign in.
+         * @enum {string}
+         */
+        UserStatus: "active" | "suspended";
     };
     responses: {
         /** @description `request.malformed`: the body, a path parameter or a query parameter does not parse or does not match the schema, or `limit` is outside 1 to 200. `pagination.invalid_cursor`: the cursor does not decode. */
@@ -608,6 +687,30 @@ export interface operations {
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             422: components["responses"]["UnprocessableEntity"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    getMe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The signed-in user and their organization */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Me"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["OrganizationNotFound"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };
