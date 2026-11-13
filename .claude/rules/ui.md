@@ -21,7 +21,7 @@ the pitfalls we refuse and the definition of done. This file is the checklist.
 - `className` is for layout only. Color and type changes go through a component's variants.
 - **Logical properties only**: `ms-`, `me-`, `ps-`, `pe-`, `start-`, `end-`, never `ml-`, `pl-`,
   `left-`.
-- A token change is made in `packages/tokens/tokens/*.json` and rebuilt; never edit `build/`.
+- A token change is made in `packages/tokens/src/tokens/*.json` and rebuilt; never edit `build/`.
 
 ## Components
 

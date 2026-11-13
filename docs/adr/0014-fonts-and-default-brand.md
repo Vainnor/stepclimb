@@ -21,4 +21,4 @@ high-contrast themes.
 ## Consequences
 
 The fonts are OFL and installed from `@fontsource`. The values are in
-`packages/tokens/tokens/themes/`.
+`packages/tokens/src/tokens/themes/`.

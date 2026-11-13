@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Builds build/css/variables.css (every theme as CSS variables) and build/css/tailwind-theme.css
-// (Tailwind 4's theme mapped onto those variables) from the DTCG tokens in tokens/.
+// (Tailwind 4's theme mapped onto those variables) from the DTCG tokens in src/tokens/.
 import { defineConfig } from "@terrazzo/cli";
 import type { Plugin } from "@terrazzo/parser";
 import css from "@terrazzo/plugin-css";
@@ -65,7 +65,7 @@ function tailwindTheme(): Plugin {
 }
 
 export default defineConfig({
-  tokens: ["./tokens/resolver.json"],
+  tokens: ["./src/tokens/resolver.json"],
   outDir: "./build/",
   plugins: [
     css({

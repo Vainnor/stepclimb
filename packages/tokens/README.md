@@ -1,6 +1,6 @@
 # @stepclimb/tokens
 
-Stepclimb UI's design tokens: W3C design-token (DTCG 2025.10) JSON in `tokens/`, built with
+Stepclimb UI's design tokens: W3C design-token (DTCG 2025.10) JSON in `src/tokens/`, built with
 [Terrazzo](https://terrazzo.app) into:
 
 - `build/css/variables.css`: every theme as `--sc-*` CSS variables. The default brand is on
