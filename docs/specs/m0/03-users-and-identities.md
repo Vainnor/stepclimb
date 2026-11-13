@@ -169,8 +169,8 @@ created_at, updated_at }` (admins see `attributes`, since admission rules read t
 
 `PATCH` with `status: "suspended"` on the caller's own user answers 409
 `user.cannot_suspend_self`, so an admin cannot lock themselves out by accident. The users routes
-are scoped to the organization only in M0; whether an account admin manages "users within an
-account subtree" is `09-permissions-and-roles.md` Q2.
+take an organization target in M0, so a `user.view` grant at account scope
+(`09-permissions-and-roles.md` Q2) does not reach them.
 
 ## Data
 
@@ -249,8 +249,8 @@ Repository modules (every function takes `OrgScope`): `stepclimb_core::users` (`
 
 | Permission | Key | Grantable at | Built-in roles in M0 |
 | --- | --- | --- | --- |
-| `perm::UserView` | `user.view` | organization (account pending `09` Q2) | Organization admin |
-| `perm::UserManage` | `user.manage` | organization (account pending `09` Q2) | Organization admin |
+| `perm::UserView` | `user.view` | organization, account (`09` Q2) | Organization admin, Account admin |
+| `perm::UserManage` | `user.manage` | organization (`09` Q2) | Organization admin |
 
 `/me` and `/me/identities` need authentication only. Entitlements: user creation checks the
 `users` limit (`10-entitlements-framework.md`); whether the user routes also take a
@@ -301,9 +301,10 @@ synthetic.
   `auth.not_a_user`; an owned key gets the owner with the key's narrowed grants.
 - **T18** (B23). `/me/identities` never contains `attributes`.
 - **T19** (every `/api/v1/users` route). Four cases: anonymous 401; a user with
-  `AccountManage` on the root but no user permission gets 403; wrong scope (404) is recorded as
-  not applicable while users are organization-scoped (pending `09` Q2); an organization admin
-  gets the 2xx. Routes with `UserManage` also get a 403 for a user holding only `UserView`.
+  `AccountManage` on the root but no user permission gets 403; a user holding `UserView` at account
+  scope only gets 403 on `GET /api/v1/users`, since the route's target is the organization;
+  wrong scope (404) is not applicable to an organization target; an organization admin gets the
+  2xx. Routes with `UserManage` also get a 403 for a user holding only `UserView`.
 - **T20** (every route with an id). Cross-organization: org A's organization admin calling each
   users and identities route with org B's `user_id` or `identity_id` gets 404 and org B's rows
   are unchanged; `DELETE /api/v1/me/identities/{id}` with another user's identity id in the same

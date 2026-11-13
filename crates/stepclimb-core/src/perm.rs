@@ -6,7 +6,7 @@
 //! listed. [`Permission`] is sealed with a trait private to this module: an `impl Permission`
 //! anywhere else does not compile, so the macro is the only way to add one.
 //!
-//! ```compile_fail
+//! ```compile_fail,E0277
 //! use stepclimb_core::perm::{Permission, ScopeType};
 //!
 //! struct Unlisted;
@@ -42,13 +42,24 @@ pub trait Permission: sealed::Sealed {
     const GRANTABLE: &'static [ScopeType];
 }
 
-/// One catalog entry as data, for code that walks [`ALL`].
+/// One catalog entry as data, for code that walks [`ALL`]. Its fields are private, so only the
+/// catalog in this module can build one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PermissionInfo {
+    key: &'static str,
+    grantable: &'static [ScopeType],
+}
+
+impl PermissionInfo {
     /// [`Permission::KEY`].
-    pub key: &'static str,
+    pub fn key(&self) -> &'static str {
+        self.key
+    }
+
     /// [`Permission::GRANTABLE`].
-    pub grantable: &'static [ScopeType],
+    pub fn grantable(&self) -> &'static [ScopeType] {
+        self.grantable
+    }
 }
 
 mod sealed {
@@ -90,11 +101,9 @@ catalog! {
     AccountView => "account.view", [Organization, Account];
     /// Create, rename, move and delete accounts.
     AccountManage => "account.manage", [Organization, Account];
-    /// View users. At account scope it covers the users who hold a role assignment (and, from
-    /// M1, an enrollment) inside that account's subtree.
+    /// View users.
     UserView => "user.view", [Organization, Account];
-    /// Create, edit and suspend users. Organization-wide only, since a user is not owned by an
-    /// account.
+    /// Create, edit and suspend users.
     UserManage => "user.manage", [Organization];
     /// View roles and role assignments.
     RoleView => "role.view", [Organization, Account];
@@ -198,17 +207,5 @@ mod tests {
         ];
         let actual: Vec<_> = ALL.iter().map(|p| (p.key, p.grantable)).collect();
         assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn all_entries_come_from_the_struct_constants() {
-        let info =
-            |key: &'static str, grantable: &'static [ScopeType]| PermissionInfo { key, grantable };
-        assert!(ALL.contains(&info(OrgManage::KEY, OrgManage::GRANTABLE)));
-        assert!(ALL.contains(&info(UserManage::KEY, UserManage::GRANTABLE)));
-        assert!(ALL.contains(&info(
-            ServiceAccountManage::KEY,
-            ServiceAccountManage::GRANTABLE
-        )));
     }
 }

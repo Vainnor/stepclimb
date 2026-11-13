@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Roles: the eight built-in roles and their permission lists.
 //!
-//! The server reads a built-in role's permissions from [`BUILTIN`], never from its database row.
 //! Organization admin is defined as [`perm::ALL`] and Instructor as Course designer's list plus
 //! its own, so a permission added to the catalog or to Course designer reaches them without a
 //! second edit.
@@ -11,9 +10,9 @@ use crate::perm::{self, Permission};
 /// A role shipped with Stepclimb, the same in every organization.
 #[derive(Debug)]
 pub struct BuiltinRole {
-    /// The stable key, stored in `roles.key`.
+    /// The stable key, in the custom role key format (`^[a-z][a-z0-9_]{0,62}$`).
     pub key: &'static str,
-    /// The display name, stored in `roles.name`.
+    /// The display name.
     pub name: &'static str,
     permissions: RolePermissions,
 }
@@ -35,7 +34,7 @@ impl BuiltinRole {
     /// The role's permission keys: a base role's first, then its own, in definition order.
     pub fn permissions(&self) -> Vec<&'static str> {
         match self.permissions {
-            RolePermissions::All => perm::ALL.iter().map(|p| p.key).collect(),
+            RolePermissions::All => perm::ALL.iter().map(|p| p.key()).collect(),
             RolePermissions::Keys(keys) => keys.to_vec(),
             RolePermissions::Extends { base, own } => {
                 let mut keys = base.permissions();
@@ -52,8 +51,8 @@ static ORG_ADMIN: BuiltinRole = BuiltinRole {
     permissions: RolePermissions::All,
 };
 
-/// Account admin manages an account subtree. It can view (not manage) the users in it, and view
-/// and assign (not define) roles there; custom roles and user changes are organization-wide.
+/// Leaves out `user.manage` and `role.manage`, which are grantable only at organization scope
+/// (spec 09 Q2, Q3).
 static ACCOUNT_ADMIN: BuiltinRole = BuiltinRole {
     key: "account_admin",
     name: "Account admin",
@@ -166,8 +165,23 @@ mod tests {
 
     #[test]
     fn org_admin_holds_every_catalog_key() {
-        let all: Vec<_> = perm::ALL.iter().map(|p| p.key).collect();
+        let all: Vec<_> = perm::ALL.iter().map(|p| p.key()).collect();
         assert_eq!(role("org_admin").permissions(), all);
+    }
+
+    /// Organization admin is defined as the whole catalog, not a list that matches it today.
+    #[test]
+    fn org_admin_is_defined_as_all() {
+        assert!(matches!(ORG_ADMIN.permissions, RolePermissions::All));
+    }
+
+    /// Instructor is defined by extending Course designer, so the designer's later keys reach it.
+    #[test]
+    fn instructor_is_defined_as_extending_course_designer() {
+        assert!(matches!(
+            INSTRUCTOR.permissions,
+            RolePermissions::Extends { base, .. } if std::ptr::eq(base, &COURSE_DESIGNER)
+        ));
     }
 
     #[test]
@@ -225,7 +239,7 @@ mod tests {
 
     #[test]
     fn every_role_key_is_in_the_catalog_once() {
-        let catalog: HashSet<_> = perm::ALL.iter().map(|p| p.key).collect();
+        let catalog: HashSet<_> = perm::ALL.iter().map(|p| p.key()).collect();
         for r in BUILTIN {
             let keys = r.permissions();
             assert_eq!(
