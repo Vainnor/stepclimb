@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The Terrazzo configuration: build/css/variables.css (every theme as CSS variables) and
-// build/css/tailwind-theme.css (Tailwind 4's theme mapped onto those variables). It takes the
-// resolver path so a test can build a modified copy of the token JSON with the same settings.
+// The Terrazzo configuration: build/css/variables.css (every theme as CSS variables),
+// build/css/tailwind-theme.css (Tailwind 4's theme mapped onto those variables) and the docs
+// tables in build/docs/ (src/docs.ts). It takes the resolver path so a test can build a
+// modified copy of the token JSON with the same settings.
+import { pathToFileURL } from "node:url";
 import type { Config, Plugin } from "@terrazzo/parser";
 import css from "@terrazzo/plugin-css";
-
-/** `color.bg-canvas` -> `--sc-bg-canvas`; `radius.sm` -> `--sc-radius-sm`. */
-export function variableName(id: string): string {
-  const [group, ...rest] = id.split(".");
-  return `--sc-${(group === "color" ? rest : [group, ...rest]).join("-")}`;
-}
+import { docsTables } from "./docs";
+import { tailwindKey, variableName } from "./names";
 
 /**
  * Theme selectors. The page's `data-sc-theme` wins over the OS setting (plan, UI tab -> What we
@@ -65,17 +63,6 @@ function tailwindTheme(): Plugin {
   return {
     name: "stepclimb-tailwind-theme",
     async build({ tokens, outputFile }) {
-      const prefixes: Record<string, string> = {
-        color: "color",
-        radius: "radius",
-        text: "text",
-        leading: "leading",
-        weight: "font-weight",
-        font: "font",
-        ease: "ease",
-        space: "spacing",
-        shadow: "shadow",
-      };
       const lines = ["--color-*: initial;"];
       // Tailwind 4 has no duration namespace in @theme, so `duration-fast` (the plan's Button)
       // is a utility of its own per motion token.
@@ -89,11 +76,8 @@ function tailwindTheme(): Plugin {
           );
           continue;
         }
-        const prefix = group ? prefixes[group] : undefined;
-        if (!prefix) continue;
-        // Surfaces drop their `bg-` so the utilities read `bg-canvas`, `bg-overlay`, `ring-offset-canvas`.
-        const name = group === "color" ? rest.join("-").replace(/^bg-/, "") : rest.join("-");
-        lines.push(`--${prefix}-${name}: var(${variableName(id)});`);
+        const key = tailwindKey(id);
+        if (key) lines.push(`--${key.namespace}-${key.name}: var(${variableName(id)});`);
       }
       outputFile(
         "css/tailwind-theme.css",
@@ -125,6 +109,9 @@ export function tokensConfig(resolver: string): Config {
         ],
       }),
       tailwindTheme(),
+      docsTables(
+        new URL("descriptions.json", new URL(resolver, pathToFileURL(`${process.cwd()}/`))),
+      ),
     ],
   };
 }

@@ -12,6 +12,10 @@ import { tokensConfig } from "../../src/config";
 export interface Built {
   variables: string;
   tailwind: string;
+  /** build/docs/tokens.json, the docs tables' data. */
+  docs: string;
+  /** build/docs/tokens.md. */
+  docsMarkdown: string;
 }
 
 export const tokensDir = new URL("../../src/tokens/", import.meta.url);
@@ -31,7 +35,12 @@ export async function buildTokens(dir: URL = tokensDir): Promise<Built> {
     if (!out) throw new Error(`the build wrote no ${name}`);
     return String(out.contents);
   };
-  return { variables: file("css/variables.css"), tailwind: file("css/tailwind-theme.css") };
+  return {
+    variables: file("css/variables.css"),
+    tailwind: file("css/tailwind-theme.css"),
+    docs: file("docs/tokens.json"),
+    docsMarkdown: file("docs/tokens.md"),
+  };
 }
 
 /**
