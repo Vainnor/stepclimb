@@ -1,0 +1,123 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Stepclimb on Docker Compose for a self-hosted deployment: the server and PostgreSQL 16, with
+# MinIO as an option (plan, Technical -> Hosting: "stepclimb and postgres, with optional Caddy
+# (automatic TLS) and MinIO"). compose.yaml beside this file is the development stack and is not
+# for production: its passwords and encryption key are published.
+#
+# There are no default passwords. Every secret is a file in the secrets directory
+# (./secrets beside this file, or the directory SC_SECRETS_DIR names), mounted with Compose
+# `secrets:`; `up` refuses to start while one is missing and names the file:
+#
+#   postgres_password  the PostgreSQL password for the user `stepclimb`
+#   database_url       postgres://stepclimb:<that password>@postgres:5432/stepclimb
+#   encryption_keys    the server's key ring, e.g. k1:<openssl rand -base64 32>
+#   minio_root_user, minio_root_password   only with the minio profile
+#
+# Outside Swarm, Compose bind-mounts each secret file as it is on the host and ignores a secret's
+# uid and mode. The server and MinIO run as uid 65532 and cannot read a file only its owner can,
+# so the directory is owner-only (0700) and the files in it are 0644. The directory is the
+# protection: a copy of a file outside it is readable by every user on the host. database_url
+# repeats the PostgreSQL password, so treat it as that password.
+#
+#   docker compose -f deploy/compose/compose.production.yaml up -d --build --wait
+#   docker compose -f deploy/compose/compose.production.yaml --profile minio up -d --build --wait
+#
+# The server is published on 127.0.0.1:8080 (SC_HTTP_ADDRESS and SC_HTTP_PORT change it), for a
+# reverse proxy on the same host to terminate TLS. PostgreSQL and MinIO are reachable only on the
+# internal `backend` network, which has no route out of the host.
+#
+# Until release images are published, the server image is built from this checkout with
+# deploy/Dockerfile. The other images are pinned by digest; MinIO's is Chainguard's build, which
+# publishes only `latest` (docs/adr/0019-minio-image.md). Nothing reads object storage before
+# M1, so MinIO is off unless the minio profile is named.
+name: stepclimb-production
+
+services:
+  postgres:
+    image: postgres:16.16-alpine@sha256:0adbf25a9e96d38823bb813f3ac0ed41fadb665c88f1df7fe6dbfb060cbdc106
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: stepclimb
+      POSTGRES_DB: stepclimb
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stepclimb -d stepclimb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      start_interval: 2s
+
+  stepclimb:
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile
+    image: stepclimb:local
+    restart: unless-stopped
+    environment:
+      STEPCLIMB_DATABASE_URL_FILE: /run/secrets/database_url
+      STEPCLIMB_ENCRYPTION_KEYS_FILE: /run/secrets/encryption_keys
+    secrets:
+      - database_url
+      - encryption_keys
+    ports:
+      - "${SC_HTTP_ADDRESS:-127.0.0.1}:${SC_HTTP_PORT:-8080}:8080"
+    networks:
+      - default
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+        restart: true
+    # The image has no shell or curl; `stepclimb healthcheck` asks /readyz (ADR 0023).
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/stepclimb", "healthcheck"]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+      start_interval: 2s
+
+  minio:
+    profiles: ["minio"]
+    image: cgr.dev/chainguard/minio:latest@sha256:96b6cf3e14084d3427ec46de10c2873af61b945ad9272eec266cfc8df551cba5
+    restart: unless-stopped
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER_FILE: /run/secrets/minio_root_user
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_root_password
+    secrets:
+      - minio_root_user
+      - minio_root_password
+    volumes:
+      - minio:/data
+    networks:
+      - backend
+
+networks:
+  backend:
+    internal: true
+
+secrets:
+  postgres_password:
+    file: ${SC_SECRETS_DIR:-./secrets}/postgres_password
+  database_url:
+    file: ${SC_SECRETS_DIR:-./secrets}/database_url
+  encryption_keys:
+    file: ${SC_SECRETS_DIR:-./secrets}/encryption_keys
+  minio_root_user:
+    file: ${SC_SECRETS_DIR:-./secrets}/minio_root_user
+  minio_root_password:
+    file: ${SC_SECRETS_DIR:-./secrets}/minio_root_password
+
+volumes:
+  # The database: back it up.
+  postgres:
+  # Object storage, with the minio profile: back it up once M1 stores media there.
+  minio:

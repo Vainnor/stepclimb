@@ -23,6 +23,8 @@ node_modules/
 *.key
 *.p12
 *.pfx
+# The production Compose example's secret files (deploy/compose/compose.production.yaml)
+/deploy/compose/secrets/
 
 # direnv: a local .envrc (`use flake`) is each developer's own.
 .envrc

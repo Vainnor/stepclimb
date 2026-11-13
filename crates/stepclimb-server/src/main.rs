@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The `stepclimb` binary. The plan's full CLI is `serve | migrate | admin create |
 //! export-course | import-course | check-config | backup-verify`; `serve`, `migrate` and
-//! `check-config` exist so far.
+//! `check-config` exist so far, beside `healthcheck` for containers (ADR 0023).
 //!
 //! Exit codes: 0 on success; 2 when the command line or the configuration is refused, before
-//! anything connects; 1 when the database, the migrations or the HTTP server fail, or when
-//! `check-config` cannot write its report.
+//! anything connects; 1 when the database, the migrations or the HTTP server fail, when
+//! `check-config` cannot write its report, or when `healthcheck` finds the server not ready.
 
 use std::future::Future;
 use std::io::Write as _;
@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use stepclimb_server::{Config, startup};
+use stepclimb_server::{Config, healthcheck, startup};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -40,6 +40,9 @@ enum Command {
     /// Validate the configuration without connecting to anything, print its non-secret values,
     /// and exit 0; 2 when it is refused, 1 when the report cannot be written.
     CheckConfig,
+    /// Exit 0 when the server on STEPCLIMB_BIND answers 200 from /readyz, else 1. The container
+    /// health check, for images without a shell or curl.
+    Healthcheck,
 }
 
 fn main() -> ExitCode {
@@ -61,6 +64,13 @@ fn main() -> ExitCode {
             run(async move { startup::migrate_only(&config).await })
         }
         Command::CheckConfig => check_config(&config),
+        Command::Healthcheck => match healthcheck::check(config.bind) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("stepclimb: healthcheck: {error}");
+                ExitCode::FAILURE
+            }
+        },
     }
 }
 

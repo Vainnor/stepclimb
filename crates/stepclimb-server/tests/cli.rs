@@ -474,3 +474,61 @@ fn every_subcommand_refuses_a_database_url_sqlx_would_not_read_as_written() {
         }
     }
 }
+
+#[test]
+fn healthcheck_with_nothing_listening_exits_1_naming_the_address() {
+    let free = std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("bind a free port")
+        .local_addr()
+        .expect("local address");
+    let output = stepclimb()
+        .arg("healthcheck")
+        .env("STEPCLIMB_DATABASE_URL", "postgres://u@127.0.0.1:1/db")
+        .env(
+            "STEPCLIMB_ENCRYPTION_KEYS",
+            "k1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+        )
+        .env("STEPCLIMB_BIND", free.to_string())
+        .output()
+        .expect("the binary runs");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = stderr_of(&output);
+    assert!(
+        stderr.contains(&format!(
+            "stepclimb: healthcheck: could not connect to {free}"
+        )),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn healthcheck_exits_0_when_readyz_answers_200() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a free port");
+    let addr = listener.local_addr().expect("local address");
+    let server = std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        let (mut stream, _) = listener.accept().expect("accept");
+        let mut buffer = [0_u8; 1024];
+        let _ = stream.read(&mut buffer).expect("read the request");
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+            .expect("answer");
+    });
+    let output = stepclimb()
+        .arg("healthcheck")
+        .env("STEPCLIMB_DATABASE_URL", "postgres://u@127.0.0.1:1/db")
+        .env(
+            "STEPCLIMB_ENCRYPTION_KEYS",
+            "k1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+        )
+        .env("STEPCLIMB_BIND", addr.to_string())
+        .output()
+        .expect("the binary runs");
+    server.join().expect("server thread");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_of(&output)
+    );
+}

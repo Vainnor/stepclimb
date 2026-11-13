@@ -281,3 +281,40 @@ async fn the_openapi_document_has_the_shared_problem_responses() {
         "{bad_request}"
     );
 }
+
+/// Serve `app` on a free loopback port and run `stepclimb healthcheck`'s check against it.
+async fn healthcheck_against(
+    app: Router,
+) -> Result<(), stepclimb_server::healthcheck::HealthcheckError> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind a free port");
+    let addr = listener.local_addr().expect("local address");
+    let server = tokio::spawn(async move { axum::serve(listener, app).await });
+    let result = tokio::task::spawn_blocking(move || stepclimb_server::healthcheck::check(addr))
+        .await
+        .expect("the check runs");
+    server.abort();
+    result
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_healthcheck_passes_when_readyz_answers_200(pool: PgPool) {
+    healthcheck_against(router(state(pool)))
+        .await
+        .expect("the server is ready");
+}
+
+#[tokio::test]
+async fn the_healthcheck_fails_when_the_database_is_unreachable() {
+    let error = healthcheck_against(app_without_database())
+        .await
+        .expect_err("the server is not ready");
+    assert!(
+        matches!(
+            error,
+            stepclimb_server::healthcheck::HealthcheckError::NotReady { status: 503, .. }
+        ),
+        "{error:?}"
+    );
+}

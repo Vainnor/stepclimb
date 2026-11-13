@@ -29,3 +29,4 @@ Decided list (`docs/plan/technical.md` -> Decided, and `docs/plan/ui.md` -> UI d
 | [0020](0020-american-english.md) | American English in docs, comments and UI copy | Accepted |
 | [0021](0021-no-hosted-ci.md) | No hosted CI: the merge gate runs locally | Accepted |
 | [0022](0022-configuration-names-and-file.md) | Configuration names and the stepclimb.toml layout | Accepted |
+| [0023](0023-container-healthcheck-subcommand.md) | Container health checks through `stepclimb healthcheck` | Accepted |

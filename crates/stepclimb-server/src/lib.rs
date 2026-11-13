@@ -13,6 +13,7 @@ pub mod config;
 pub mod error;
 pub mod extract;
 pub mod health;
+pub mod healthcheck;
 pub mod openapi;
 pub mod pagination;
 pub mod spa;
