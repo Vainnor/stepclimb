@@ -4,24 +4,46 @@
 //! (docs/specs/m0/10-entitlements-framework.md B1, B2).
 //!
 //! The `catalog!` invocation below defines each feature struct, its [`Feature`] impl and its
-//! entry in [`ALL`]. Unlike [`crate::perm::Permission`], [`Feature`] is not sealed: a test crate
-//! defines a feature of its own to check that the `unlimited` plan enables a feature the catalog
-//! does not list (B4). Such a feature is not in [`ALL`], so it is never written to the
-//! `unlimited` row or shown by the API; on any other plan it reads from the plan's row like any
-//! other key.
+//! entry in [`ALL`]. [`Feature`] is sealed, as [`crate::perm::Permission`] is, so a production
+//! build has no feature outside [`ALL`]. A build with the `test-support` cargo feature, which
+//! only this workspace's tests enable (a dev-dependency), re-exports the seal as `TestSeal`, so
+//! a test crate can define a feature of its own and check that the `unlimited` plan enables a
+//! feature the catalog does not list (B4). Such a feature is never written to the `unlimited`
+//! row; on any other plan it reads from the plan's row like any other key.
+//!
+//! ```compile_fail,E0277
+//! use stepclimb_core::feature::Feature;
+//!
+//! struct Unlisted;
+//!
+//! impl Feature for Unlisted {
+//!     const KEY: &'static str = "unlisted";
+//! }
+//! ```
 //!
 //! Keys are one lowercase snake case word (`custom_roles`, `users`): the part format of spec 09
-//! Q1, without the `area.action` dot, because the spec names the limit keys and the plan's API
+//! Q1, without the `area.action` dot, because the spec names the limit keys and its API
 //! example shows them as single words.
 
 /// A feature in the catalog.
 ///
 /// Handlers name the type in `Require<F>` (spec 10 B9); the key is what plan rows store and the
 /// API shows.
-pub trait Feature {
+pub trait Feature: sealed::Sealed {
     /// The stored and API name, one lowercase snake case word.
     const KEY: &'static str;
 }
+
+mod sealed {
+    /// Private to `feature`, so only this module, and a `test-support` build's tests through
+    /// [`super::TestSeal`], can implement [`super::Feature`].
+    pub trait Sealed {}
+}
+
+/// The seal of [`Feature`], for a test crate's own feature (B4). Only a build with the
+/// `test-support` cargo feature has it.
+#[cfg(feature = "test-support")]
+pub use sealed::Sealed as TestSeal;
 
 /// Defines each feature struct, implements [`Feature`] and lists its key in [`ALL`].
 macro_rules! catalog {
@@ -33,6 +55,8 @@ macro_rules! catalog {
             $(#[$attr])*
             #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
             pub struct $name;
+
+            impl sealed::Sealed for $name {}
 
             impl Feature for $name {
                 const KEY: &'static str = $key;

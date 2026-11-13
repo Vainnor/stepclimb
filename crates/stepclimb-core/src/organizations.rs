@@ -4,7 +4,8 @@
 //! An organization is one row in `organizations`, the tenant every other row is scoped to. The
 //! table is the scope itself, so its queries filter by `id = scope.org_id()` where every other
 //! table's filter by `org_id`. [`create`] is the one function that makes an organization, with
-//! its root account (B26) and its `org_plans` row (spec 10 B5). `branding` belongs to spec 12 and is neither read nor written here.
+//! its root account (B26) and its `org_plans` row (spec 10 B5). `branding` belongs to spec 12
+//! and is neither read nor written here.
 
 use std::time::SystemTime;
 
@@ -84,10 +85,10 @@ pub enum Error {
     #[error("the stored organization settings do not parse")]
     StoredSettings(#[source] serde_json::Error),
     /// Writing the `unlimited` plan failed.
-    #[error("could not write the unlimited plan: {0}")]
+    #[error("could not write the unlimited plan")]
     Plan(#[from] plans::Error),
     /// Giving the organization its plan failed.
-    #[error("could not give the organization its plan: {0}")]
+    #[error("could not give the organization its plan")]
     OrgPlan(#[from] org_plans::Error),
     /// The update time cannot be stored.
     #[error(transparent)]
@@ -108,9 +109,10 @@ impl From<sqlx::Error> for Error {
 
 /// Create an organization named `name`, trimmed, with the slug `slug`, its root account, named
 /// after it (B16, B26), and its `org_plans` row, plan `unlimited` with source `selfhost` (spec
-/// 10 B5), in one transaction (a savepoint when `db` is already one). It writes the `unlimited`
-/// plan first ([`plans::sync_unlimited`]), so it works before `stepclimb serve` has ever
-/// started. `created_at` and `updated_at` of the new rows are `now`.
+/// 10 B5), in one transaction (a savepoint when `db` is already one). It inserts the
+/// `unlimited` plan first when it does not exist yet, so it works before `stepclimb serve` has
+/// ever started; it never rewrites an existing one, which is startup's job. `created_at` and
+/// `updated_at` of the new rows are `now`.
 ///
 /// Only instance contexts call this: the `stepclimb admin` CLI in M0, the operator console in
 /// M6 (B9, B26). It takes no `OrgScope` because the organization it acts in does not exist
@@ -143,7 +145,7 @@ pub async fn create<'c>(
     .await?;
     let scope = new_org_scope(organization.id);
     accounts::create_root(&mut tx, scope, name, now_micros).await?;
-    plans::sync_unlimited(&mut *tx, now).await?;
+    plans::insert_unlimited_if_missing(&mut tx, now_micros).await?;
     org_plans::ensure_selfhost(&mut *tx, scope, now).await?;
     tx.commit().await?;
     Ok(organization)

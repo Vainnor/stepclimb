@@ -14,7 +14,7 @@
 use std::time::SystemTime;
 
 use serde_json::{Map, Value};
-use sqlx::{Acquire, PgExecutor, Postgres};
+use sqlx::{Acquire, PgConnection, PgExecutor, Postgres};
 use uuid::Uuid;
 
 use crate::{
@@ -118,8 +118,9 @@ impl PlanEntitlements {
 /// which the first insert generates and later runs keep. Runs in one transaction (a savepoint
 /// when `db` is already one).
 ///
-/// The startup task of `stepclimb serve` calls this before serving (B4), and
-/// [`crate::organizations::create`] calls it before giving a new organization the plan.
+/// The startup task of `stepclimb serve` calls this before serving (B4). Only startup rewrites
+/// the row: `ON CONFLICT DO UPDATE` locks it until the transaction ends, even when nothing
+/// differs, so [`crate::organizations::create`] uses [`insert_unlimited_if_missing`] instead.
 pub async fn sync_unlimited<'c>(
     db: impl Acquire<'c, Database = Postgres>,
     now: SystemTime,
@@ -152,6 +153,38 @@ pub async fn sync_unlimited<'c>(
         .fetch_one(&mut *tx)
         .await?;
     tx.commit().await?;
+    Ok(id)
+}
+
+/// Insert the `unlimited` row as [`sync_unlimited`] writes it when there is none, and return its
+/// id. An existing row is neither changed nor locked (`ON CONFLICT DO NOTHING`), so organizations
+/// created in concurrent transactions do not wait on each other, and an older binary creating an
+/// organization never rewrites what a newer one wrote. For [`crate::organizations::create`],
+/// so an organization created before `stepclimb serve` ever ran still gets its plan (B5).
+pub(crate) async fn insert_unlimited_if_missing(
+    conn: &mut PgConnection,
+    now_micros: i64,
+) -> Result<Uuid, Error> {
+    let (features, limits) = unlimited_values();
+    // Instance-wide on purpose, so it takes no `OrgScope`: a plan belongs to no organization.
+    sqlx::query!(
+        "INSERT INTO plans (id, key, features, limits, created_at, updated_at)
+         VALUES ($1, $2, $3::text::jsonb, $4::text::jsonb,
+                 timestamptz 'epoch' + $5::bigint * interval '1 microsecond',
+                 timestamptz 'epoch' + $5::bigint * interval '1 microsecond')
+         ON CONFLICT (key) DO NOTHING",
+        new_id(),
+        UNLIMITED,
+        features,
+        limits,
+        now_micros,
+    )
+    .execute(&mut *conn)
+    .await?;
+    // Instance-wide on purpose, as above: reads the id of the row that now exists.
+    let id = sqlx::query_scalar!("SELECT id FROM plans WHERE key = $1", UNLIMITED)
+        .fetch_one(&mut *conn)
+        .await?;
     Ok(id)
 }
 
@@ -221,6 +254,8 @@ mod tests {
 
     /// A feature outside the catalog, as a test crate defines one.
     struct Outside;
+
+    impl feature::TestSeal for Outside {}
 
     impl Feature for Outside {
         const KEY: &'static str = "outside_feature";

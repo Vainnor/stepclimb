@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use sqlx::PgPool;
 use stepclimb_core::{
     OrgScope,
-    feature::{self, Feature, Limit},
+    feature::{self, Feature, Limit, TestSeal},
     id::{Uuid, new_id},
     org_plans::{self, Error, PlanSource},
     organizations,
@@ -17,6 +17,8 @@ use stepclimb_core::{
 
 /// A feature defined only in this test crate, so not in `feature::ALL`.
 struct TestOnly;
+
+impl TestSeal for TestOnly {}
 
 impl Feature for TestOnly {
     const KEY: &'static str = "test_only_feature";
@@ -415,4 +417,50 @@ async fn the_database_refuses_a_second_plan_row_and_an_unknown_source(pool: PgPo
     assert!(second.is_err(), "one row per organization");
     assert!(bad_source.is_err(), "source is checked");
     assert!(not_object.is_err(), "features must be an object");
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn create_inserts_a_missing_unlimited_plan_but_never_rewrites_one(pool: PgPool) {
+    organizations::create(&pool, "org-a", "Org A", request_time())
+        .await
+        .unwrap();
+    let (features, limits, created) = unlimited_row(&pool).await;
+    assert_eq!(features, catalog_features());
+    assert_eq!(limits, serde_json::json!({ "users": null }));
+    assert_eq!(created, 1_763_000_000_123_456);
+    sqlx::query("UPDATE plans SET features = '{\"retired\": true}' WHERE key = 'unlimited'")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    organizations::create(&pool, "org-b", "Org B", later_time())
+        .await
+        .unwrap();
+
+    let (features, _, updated) = unlimited_row(&pool).await;
+    assert_eq!(features, serde_json::json!({ "retired": true }));
+    assert_eq!(updated, 1_763_000_000_123_456);
+}
+
+/// A create whose transaction is still open does not hold the `unlimited` row: a second create
+/// on another connection finishes without waiting for it.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_open_create_does_not_block_another(pool: PgPool) {
+    plans::sync_unlimited(&pool, request_time()).await.unwrap();
+    let mut open = pool.begin().await.unwrap();
+    organizations::create(&mut *open, "org-a", "Org A", request_time())
+        .await
+        .unwrap();
+
+    let second = tokio::time::timeout(
+        Duration::from_secs(5),
+        organizations::create(&pool, "org-b", "Org B", request_time()),
+    )
+    .await;
+
+    assert!(
+        matches!(second, Ok(Ok(_))),
+        "the second create waited on the first: {second:?}"
+    );
+    open.rollback().await.unwrap();
 }

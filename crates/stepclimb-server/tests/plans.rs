@@ -2,15 +2,19 @@
 //! The startup pass over plans (docs/specs/m0/10-entitlements-framework.md B4, B5; T2, T3):
 //! `startup::prepare`, which `stepclimb serve` runs before it listens, writes the `unlimited`
 //! row from the catalogs, rewrites it on a restart, and gives every organization without a plan
-//! the `unlimited` one while leaving an existing row alone. Needs `DATABASE_URL` (`just up`).
+//! the `unlimited` one while leaving an existing row alone; it warns about plan keys this
+//! release does not know (B7) and stops when it cannot give an organization its plan. Needs
+//! `DATABASE_URL` (`just up`).
 
+use std::io::Write;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
 
 use sqlx::PgPool;
 use stepclimb_core::{
     OrgScope,
     clock::ManualClock,
-    feature::{self, Feature, Limit},
+    feature::{self, Feature, Limit, TestSeal},
     id::{Uuid, new_id},
     org_plans,
 };
@@ -18,6 +22,8 @@ use stepclimb_server::startup;
 
 /// A feature defined only in this test crate, so not in `feature::ALL`.
 struct TestOnly;
+
+impl TestSeal for TestOnly {}
 
 impl Feature for TestOnly {
     const KEY: &'static str = "test_only_feature";
@@ -151,4 +157,96 @@ async fn startup_gives_organizations_without_a_plan_the_unlimited_one_and_keeps_
     ];
     expected.sort();
     assert_eq!(org_plan_rows(&pool).await, expected);
+}
+
+#[sqlx::test(migrations = false)]
+async fn startup_stops_when_it_cannot_give_an_organization_its_plan(pool: PgPool) {
+    let clock = clock();
+    startup::prepare(&pool, &clock.clock())
+        .await
+        .expect("first start");
+    let org = insert_org(&pool, "org-a").await;
+    sqlx::query(
+        "ALTER TABLE org_plans ADD CONSTRAINT test_refuse CHECK (source = 'none') NOT VALID",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let started = startup::prepare(&pool, &clock.clock()).await;
+
+    let error = started.expect_err("startup refuses");
+    assert!(
+        matches!(error, startup::StartupError::OrgPlan { org_id, .. } if org_id == org),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains(&org.to_string()), "{error}");
+    assert!(org_plan_rows(&pool).await.is_empty());
+}
+
+/// Log lines written while the guard returned by [`capture`] lives, on this thread.
+#[derive(Clone, Default)]
+struct Captured(Arc<Mutex<Vec<u8>>>);
+
+impl Write for Captured {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("log buffer").extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Captured {
+    fn text(&self) -> String {
+        String::from_utf8(self.0.lock().expect("log buffer").clone()).expect("UTF-8 logs")
+    }
+}
+
+fn capture() -> (Captured, tracing::subscriber::DefaultGuard) {
+    let captured = Captured::default();
+    let writer = captured.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(move || writer.clone())
+        .finish();
+    (captured, tracing::subscriber::set_default(subscriber))
+}
+
+#[sqlx::test(migrations = false)]
+async fn startup_warns_about_plan_keys_this_release_does_not_know(pool: PgPool) {
+    let clock = clock();
+    startup::prepare(&pool, &clock.clock())
+        .await
+        .expect("first start");
+    sqlx::query(
+        "INSERT INTO plans (id, key, features, limits)
+         VALUES ($1, 'test_plan', '{\"custom_roles\": true, \"retired_feature\": true}',
+                 '{\"users\": 2, \"retired_limit\": 1}')",
+    )
+    .bind(new_id())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let (captured, guard) = capture();
+    startup::prepare(&pool, &clock.clock())
+        .await
+        .expect("restart");
+    drop(guard);
+
+    let output = captured.text();
+    let warning = output
+        .lines()
+        .find(|line| line.contains("WARN"))
+        .unwrap_or_else(|| panic!("no warning in {output}"));
+    assert!(
+        warning.contains(r#"plan "test_plan" holds keys this release does not know"#),
+        "{warning}"
+    );
+    assert!(warning.contains("retired_feature"), "{warning}");
+    assert!(warning.contains("retired_limit"), "{warning}");
+    assert!(!warning.contains("custom_roles"), "{warning}");
+    assert_eq!(output.matches("WARN").count(), 1, "{output}");
 }

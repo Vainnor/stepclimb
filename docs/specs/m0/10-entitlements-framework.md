@@ -28,12 +28,21 @@ only bites on managed hosting (M6); self-hosted gets everything, which fits the 
   as `09-permissions-and-roles.md` B1 does for permissions. The M0 catalog is Q1's option A:
   `CustomRoles` (`custom_roles`), `OidcProviders` (`oidc_providers`), `Oauth2Providers`
   (`oauth2_providers`), `AdmissionWebhook` (`admission_webhook`), `ApiKeys` (`api_keys`) and
-  `CustomBranding` (`custom_branding`); issue 4 puts the checks on their routes. Unlike
-  `Permission`, `Feature` is not sealed, so a test crate can define a feature outside `ALL`
-  (B4) (coordinator decision, 13 Nov 2026). Feature and limit keys are one lowercase snake case
-  word, the part format of `09-permissions-and-roles.md` Q1 without its dot, since the limit keys
-  below are single words (coordinator decision, 13 Nov 2026). Plan tiers (which plan includes which feature) are
+  `CustomBranding` (`custom_branding`); issue 4 puts the checks on their routes. `Feature` is
+  sealed as `Permission` is; a build with `stepclimb-core`'s `test-support` cargo feature, which
+  only the workspace's tests enable through dev-dependencies, re-exports the seal as
+  `feature::TestSeal` so a test crate can define a feature outside `ALL` (B4) (coordinator
+  decision, 13 Nov 2026). Plan tiers (which plan includes which feature) are
   deferred to M6 (`docs/plan/technical.md` -> Deferred decisions) and are not decided here.
+- **B1a. Key format. Coordinator decision (2026-11-13), for the owner's sign-off before issue 3
+  exposes the keys in the API.** Feature and limit keys are one lowercase snake case word
+  (`^[a-z][a-z0-9_]*$`: `custom_roles`, `users`), not the `area.action` format that
+  `09-permissions-and-roles.md` Q1 chose for permission keys. Permission keys name an action on
+  an area; a feature or limit names one thing, and this spec already writes the limit keys
+  (`users`, `video_storage`) and Q1's feature names as single words, as the API example below
+  shows them. The rule is Q1's for each part (lowercase snake case starting with a letter),
+  without the dot. Once issue 3 publishes the keys in `GET /api/v1/organization/entitlements`
+  and `/me` they are hard to change, so the owner confirms or overrules this before then.
 - **B2.** Every limit is a variant of `stepclimb_core::feature::Limit` with a stable key. The
   plan names the limits: `users`, `storage`, `video_storage`, `transcode_minutes`, `api_rate` and
   `connectors`. M0 adds only `Limit::Users`, because user creation is the only M0 action one
@@ -54,9 +63,11 @@ only bites on managed hosting (M6); self-hosted gets everything, which fits the 
   every self-hosted organization the moment the binary runs, without a migration.
 - **B5.** Every organization has exactly one `org_plans` row. `organizations::create`
   (`02-organizations-and-accounts.md` B26) inserts it in the same transaction: plan `unlimited`,
-  source `selfhost`. It upserts the `unlimited` row first, as startup does, so an organization
-  created before `stepclimb serve` ever ran still gets its plan (coordinator decision, 13 Nov
-  2026). At startup the server also inserts that row for any organization that has
+  source `selfhost`. When the `unlimited` row does not exist yet it inserts it first, with the
+  values startup writes, so an organization created before `stepclimb serve` ever ran still gets
+  its plan; it never rewrites or locks an existing row, which only startup rewrites (coordinator
+  decision, 13 Nov 2026). If startup cannot give an organization its row, the server does not
+  start (coordinator decision, 13 Nov 2026). At startup the server also inserts that row for any organization that has
   none, so a database created before this spec's migration is brought into line; it never
   changes an existing row.
 - **B6.** M0 has no way to change an organization's plan: no API, no CLI, no Stripe. `ends_at`
@@ -148,16 +159,18 @@ CREATE TABLE org_plans (
 `plans` has no `org_id`: like built-in roles (`09-permissions-and-roles.md` -> Data) it is an
 instance-wide definition, and queries on it are commented as such. `org_plans` carries `org_id`
 as its key, which gives B5's one row per organization. The `source` values are the data model's.
-The `plans.id` of `unlimited` is generated once by the startup upsert and stays fixed after.
+The `plans.id` of `unlimited` is generated once, by whichever writes the row first (the startup
+upsert or `organizations::create`, B5), and stays fixed after.
 
-Repository functions: `stepclimb_core::plans::sync_unlimited` (instance-wide, commented),
+Repository functions: `stepclimb_core::plans::sync_unlimited` and, for `organizations::create`,
+the crate-private `plans::insert_unlimited_if_missing` (both instance-wide, commented),
 `stepclimb_core::org_plans::{get_with_plan, ensure_selfhost}` (taking `OrgScope`; the startup
 pass calls `ensure_selfhost` per organization with an `Instance` scope).
 
 ## Permissions
 
 No catalog entries. `GET /api/v1/organization/entitlements` checks `perm::OrgManage`
-(`09-permissions-and-roles.md` B2). The features this spec defines are pending Q1.
+(`09-permissions-and-roles.md` B2). The features this spec defines are Q1's (B1).
 
 ## Test cases
 
@@ -166,7 +179,7 @@ feature off or a limit reached insert a test plan row and point the organization
 at it by SQL, since M0 has no API for it.
 
 - **T1** (B1, B2). Unit: every key in `feature::ALL` and every `Limit` key is unique and is one
-  lowercase snake case word (B1).
+  lowercase snake case word (B1a).
 - **T2** (B4). After startup, the `unlimited` row lists every `feature::ALL` key as `true` and
   `users` as `null`; setting one feature to `false` in the row by SQL does not disable it for an
   organization on `unlimited`; a restart rewrites the row.

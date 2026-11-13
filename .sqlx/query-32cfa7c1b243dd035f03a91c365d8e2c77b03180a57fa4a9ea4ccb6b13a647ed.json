@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO plans (id, key, features, limits, created_at, updated_at)\n         VALUES ($1, $2, $3::text::jsonb, $4::text::jsonb,\n                 timestamptz 'epoch' + $5::bigint * interval '1 microsecond',\n                 timestamptz 'epoch' + $5::bigint * interval '1 microsecond')\n         ON CONFLICT (key) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "32cfa7c1b243dd035f03a91c365d8e2c77b03180a57fa4a9ea4ccb6b13a647ed"
+}
