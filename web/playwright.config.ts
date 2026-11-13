@@ -8,7 +8,7 @@ export default defineConfig({
   retries: 0,
   reporter: [["list"]],
   use: {
-    baseURL: process.env.STEPCLIMB_E2E_URL ?? "http://127.0.0.1:58080",
+    baseURL: process.env.SC_E2E_URL ?? "http://127.0.0.1:58080",
     trace: "retain-on-failure",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],

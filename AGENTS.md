@@ -19,10 +19,10 @@ the first deployment. The plan is `docs/plan/` (source: the plan artifact, linke
 `docs/plan/README.md`).
 
 **Status: M0 Foundations in progress. The repository skeleton is in place; most product code is
-not.** `stepclimb serve` reads `STEPCLIMB_*` configuration (`STEPCLIMB_ENCRYPTION_KEYS` or its
-`_FILE` variant is required), runs the embedded migrations (one:
-`organizations`), and serves `/healthz`, `/readyz`, `/docs` (Scalar over a utoipa OpenAPI 3.1
-document with only those probes) and the built web SPA. `web/` has one route that reads
+not.** `stepclimb serve` reads `STEPCLIMB_*` variables over an optional `stepclimb.toml` (ADR
+0022; `STEPCLIMB_ENCRYPTION_KEYS` or its `_FILE` variant is required), runs the embedded
+migrations (one: `organizations`), and serves `/healthz`, `/readyz`, `/docs` (Scalar over a
+utoipa OpenAPI 3.1 document with only those probes) and the built web SPA. `web/` has one route that reads
 `/healthz` through `packages/api-client`. `packages/tokens` builds the default and vZDC example
 themes with Terrazzo; `packages/ui` has `Button` and `useStepclimbStrings()`, the ICU message
 lookup every `web/` string goes through (spec 11 I1). `apps/app` is a Tauri 2 shell that loads
