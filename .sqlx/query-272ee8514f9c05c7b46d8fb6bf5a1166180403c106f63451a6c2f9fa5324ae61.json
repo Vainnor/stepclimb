@@ -1,0 +1,85 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO accounts (id, org_id, parent_id, name, path, created_at, updated_at)\n           VALUES ($1, $2, $3, $4, $5::text::ltree,\n                   timestamptz 'epoch' + $6::bigint * interval '1 microsecond',\n                   timestamptz 'epoch' + $6::bigint * interval '1 microsecond')\n           RETURNING id, parent_id, name, nlevel(path) - 1 AS \"depth!\",\n                     false AS \"has_children!\",\n                     (extract(epoch FROM created_at) * 1000000)::bigint AS \"created_at_us!\",\n                     (extract(epoch FROM updated_at) * 1000000)::bigint AS \"updated_at_us!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "parent_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "parent_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "depth!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "has_children!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "created_at_us!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "updated_at_us!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "272ee8514f9c05c7b46d8fb6bf5a1166180403c106f63451a6c2f9fa5324ae61"
+}

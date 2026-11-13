@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The organizations repository against a fresh database per test (spec 02 B7, B13, B14).
+//! The organizations repository against a fresh database per test (spec 02 B7, B13, B14, B16,
+//! B26; T10).
 //! Needs `DATABASE_URL` (`just up`).
 //!
 //! Every test makes two organizations and checks that a call with org A's scope reads or
@@ -27,7 +28,7 @@ fn scope(org_id: Uuid) -> OrgScope {
     OrgScope::instance(org_id)
 }
 
-/// Inserts an organization directly; `organizations::create` belongs to spec 02 issue 3.
+/// Inserts an organization row alone, without the root account `organizations::create` adds.
 async fn insert_org(pool: &PgPool, slug: &str, name: &str) -> Uuid {
     let id = new_id();
     sqlx::query("INSERT INTO organizations (id, slug, name) VALUES ($1, $2, $3)")
@@ -238,4 +239,160 @@ async fn count_is_instance_wide(pool: PgPool) {
     insert_org(&pool, "org-b", "Org B").await;
 
     assert_eq!(organizations::count(&pool).await.unwrap(), 2);
+}
+
+/// `(accounts of the organization, of which roots)` straight from the table.
+async fn account_counts(pool: &PgPool, org: Uuid) -> (i64, i64) {
+    sqlx::query_as(
+        "SELECT count(*), count(*) FILTER (WHERE parent_id IS NULL)
+         FROM accounts WHERE org_id = $1",
+    )
+    .bind(org)
+    .fetch_one(pool)
+    .await
+    .expect("count accounts")
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn create_inserts_the_organization_and_its_root_account(pool: PgPool) {
+    let created = organizations::create(&pool, "org-a", "  Org A  ", request_time())
+        .await
+        .unwrap();
+
+    assert_eq!(created.slug, "org-a");
+    assert_eq!(created.name, "Org A", "the name is trimmed");
+    assert_eq!(created.id.get_version_num(), 7);
+    assert_eq!(
+        organizations::get(&pool, scope(created.id)).await.unwrap(),
+        created
+    );
+    let (_, settings, updated_at) = stored(&pool, created.id).await;
+    assert_eq!(settings, "{}");
+    assert_eq!(updated_at, 1_763_000_000_123_456);
+
+    // T10: exactly one root, depth 0, named after the organization, with the clock's times.
+    let root: (Uuid, String, i32, String, i64, i64) = sqlx::query_as(
+        "SELECT id, name, nlevel(path) - 1, path::text,
+                (extract(epoch FROM created_at) * 1000000)::bigint,
+                (extract(epoch FROM updated_at) * 1000000)::bigint
+         FROM accounts WHERE org_id = $1 AND parent_id IS NULL",
+    )
+    .bind(created.id)
+    .fetch_one(&pool)
+    .await
+    .expect("the root account");
+    let (root_id, root_name, depth, path, created_at, root_updated_at) = root;
+    assert_eq!(root_name, "Org A");
+    assert_eq!(depth, 0);
+    assert_eq!(path, root_id.simple().to_string());
+    assert_eq!(root_id.get_version_num(), 7);
+    assert_eq!((created_at, root_updated_at), (updated_at, updated_at));
+    assert_eq!(account_counts(&pool, created.id).await, (1, 1));
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_second_root_for_an_organization_is_refused_by_the_database(pool: PgPool) {
+    let org = organizations::create(&pool, "org-a", "Org A", request_time())
+        .await
+        .unwrap();
+    let id = new_id();
+
+    let second = sqlx::query(
+        "INSERT INTO accounts (id, org_id, name, path) VALUES ($1, $2, 'Second', $3::text::ltree)",
+    )
+    .bind(id)
+    .bind(org.id)
+    .bind(id.simple().to_string())
+    .execute(&pool)
+    .await;
+
+    let error = second.expect_err("a second root is refused");
+    let constraint = error.as_database_error().and_then(|e| e.constraint());
+    assert_eq!(constraint, Some("accounts_one_root"), "{error}");
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn create_refuses_a_taken_slug_and_inserts_nothing(pool: PgPool) {
+    let first = organizations::create(&pool, "org-a", "Org A", request_time())
+        .await
+        .unwrap();
+
+    let again = organizations::create(&pool, "org-a", "Another", request_time()).await;
+
+    assert!(matches!(again, Err(Error::SlugTaken)), "{again:?}");
+    assert_eq!(organizations::count(&pool).await.unwrap(), 1);
+    let accounts: i64 = sqlx::query_scalar("SELECT count(*) FROM accounts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(accounts, 1, "no root account was left behind");
+    assert_eq!(account_counts(&pool, first.id).await, (1, 1));
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn create_refuses_an_invalid_slug_or_name_and_inserts_nothing(pool: PgPool) {
+    let now = request_time();
+    let long = "a".repeat(MAX_NAME_CHARS + 1);
+    let cases: [(&str, &str, &str); 6] = [
+        ("Org-A", "Org A", "SlugInvalid"),
+        ("-org", "Org A", "SlugInvalid"),
+        ("api", "Org A", "SlugReserved"),
+        ("org-a", " ", "NameEmpty"),
+        ("org-a", &long, "NameTooLong"),
+        ("org-a", "Org\0A", "NameContainsNul"),
+    ];
+
+    for (slug, name, expected) in cases {
+        let result = organizations::create(&pool, slug, name, now).await;
+        let matched = match &result {
+            Err(Error::SlugInvalid) => "SlugInvalid",
+            Err(Error::SlugReserved) => "SlugReserved",
+            Err(Error::NameEmpty) => "NameEmpty",
+            Err(Error::NameTooLong) => "NameTooLong",
+            Err(Error::NameContainsNul) => "NameContainsNul",
+            _ => "other",
+        };
+        assert_eq!(matched, expected, "{slug:?} {name:?}: {result:?}");
+    }
+    assert_eq!(organizations::count(&pool).await.unwrap(), 0);
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn create_inside_a_transaction_is_undone_with_it(pool: PgPool) {
+    let mut tx = pool.begin().await.unwrap();
+    organizations::create(&mut *tx, "org-a", "Org A", request_time())
+        .await
+        .unwrap();
+    tx.rollback().await.unwrap();
+
+    assert_eq!(organizations::count(&pool).await.unwrap(), 0);
+    let accounts: i64 = sqlx::query_scalar("SELECT count(*) FROM accounts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(accounts, 0);
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn create_keeps_no_organization_when_its_root_account_fails(pool: PgPool) {
+    // A trigger in this test's own database makes the root insert fail after the organization
+    // row is written.
+    sqlx::raw_sql(
+        "CREATE FUNCTION refuse_accounts() RETURNS trigger LANGUAGE plpgsql
+             AS $$ BEGIN RAISE EXCEPTION 'refused by the test'; END $$;
+         CREATE TRIGGER refuse_accounts BEFORE INSERT ON accounts
+             FOR EACH ROW EXECUTE FUNCTION refuse_accounts();",
+    )
+    .execute(&pool)
+    .await
+    .expect("install the trigger");
+
+    let result = organizations::create(&pool, "org-a", "Org A", request_time()).await;
+
+    assert!(matches!(result, Err(Error::Database(_))), "{result:?}");
+    assert_eq!(
+        organizations::count(&pool).await.unwrap(),
+        0,
+        "the organization row was rolled back with the failed root"
+    );
 }

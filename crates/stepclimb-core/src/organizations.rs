@@ -3,8 +3,8 @@
 //!
 //! An organization is one row in `organizations`, the tenant every other row is scoped to. The
 //! table is the scope itself, so its queries filter by `id = scope.org_id()` where every other
-//! table's filter by `org_id`. `branding` belongs to spec 12 and is neither read nor written
-//! here.
+//! table's filter by `org_id`. [`create`] is the one function that makes an organization, with
+//! its root account (B26). `branding` belongs to spec 12 and is neither read nor written here.
 
 use std::time::SystemTime;
 
@@ -12,13 +12,38 @@ use sqlx::{Acquire, PgExecutor, Postgres};
 use uuid::Uuid;
 
 use crate::{
-    OrgScope,
+    OrgScope, accounts,
     db::{TimeOutOfRange, epoch_micros},
+    id::new_id,
+    name,
     settings::{OrgSettings, OrgSettingsPatch},
 };
 
 /// The longest organization name, in characters (Unicode scalar values; spec 02 Q6).
-pub const MAX_NAME_CHARS: usize = 200;
+pub const MAX_NAME_CHARS: usize = name::MAX_CHARS;
+
+/// The longest slug, in characters (spec 02 Q3: a DNS label of at most 32).
+pub const MAX_SLUG_CHARS: usize = 32;
+
+/// Slugs no organization may take, because a subdomain of that name serves the instance itself
+/// (spec 02 Q3).
+pub const RESERVED_SLUGS: [&str; 12] = [
+    "www",
+    "api",
+    "admin",
+    "auth",
+    "oauth",
+    "docs",
+    "app",
+    "static",
+    "assets",
+    "status",
+    "mail",
+    "stepclimb",
+];
+
+/// The unique constraint the initial migration put on `organizations.slug`.
+const SLUG_CONSTRAINT: &str = "organizations_slug_key";
 
 /// An organization as its own principals see it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,6 +68,18 @@ pub enum Error {
     /// The name holds NUL, which PostgreSQL `text` cannot store.
     #[error("an organization name cannot contain the NUL character")]
     NameContainsNul,
+    /// The slug is not 1 to [`MAX_SLUG_CHARS`] of lowercase ASCII letters, digits and hyphens,
+    /// starting and ending with a letter or digit.
+    #[error(
+        "an organization slug must be 1 to {MAX_SLUG_CHARS} lowercase letters, digits and inner hyphens"
+    )]
+    SlugInvalid,
+    /// The slug is one of [`RESERVED_SLUGS`].
+    #[error("the organization slug is reserved")]
+    SlugReserved,
+    /// Another organization of the instance has this slug.
+    #[error("another organization has this slug")]
+    SlugTaken,
     /// The stored settings object does not parse as [`OrgSettings`].
     #[error("the stored organization settings do not parse")]
     StoredSettings(#[source] serde_json::Error),
@@ -50,7 +87,64 @@ pub enum Error {
     #[error(transparent)]
     Time(#[from] TimeOutOfRange),
     #[error(transparent)]
-    Database(#[from] sqlx::Error),
+    Database(sqlx::Error),
+}
+
+impl From<sqlx::Error> for Error {
+    fn from(error: sqlx::Error) -> Self {
+        let constraint = error.as_database_error().and_then(|e| e.constraint());
+        match constraint {
+            Some(SLUG_CONSTRAINT) => Self::SlugTaken,
+            _ => Self::Database(error),
+        }
+    }
+}
+
+/// Create an organization named `name`, trimmed, with the slug `slug`, and its root account,
+/// named after it (B16, B26), in one transaction (a savepoint when `db` is already one).
+/// `created_at` and `updated_at` of both rows are `now`.
+///
+/// Only instance contexts call this: the `stepclimb admin` CLI in M0, the operator console in
+/// M6 (B9, B26). It takes no `OrgScope` because the organization it acts in does not exist
+/// until it runs. The slug is fixed after creation (Q3).
+pub async fn create<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
+    slug: &str,
+    name: &str,
+    now: SystemTime,
+) -> Result<Organization, Error> {
+    valid_slug(slug)?;
+    let name = valid_name(name)?;
+    let now = epoch_micros(now)?;
+    let mut tx = db.begin().await?;
+    // Instance-wide on purpose: this inserts the scope row itself, so there is no `org_id` to
+    // filter by. The id is new, so the row is the only one it can touch.
+    let organization = sqlx::query_as!(
+        Organization,
+        "INSERT INTO organizations (id, slug, name, created_at, updated_at)
+         VALUES ($1, $2, $3,
+                 timestamptz 'epoch' + $4::bigint * interval '1 microsecond',
+                 timestamptz 'epoch' + $4::bigint * interval '1 microsecond')
+         RETURNING id, slug, name",
+        new_id(),
+        slug,
+        name,
+        now,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    accounts::create_root(&mut tx, new_org_scope(organization.id), name, now).await?;
+    tx.commit().await?;
+    Ok(organization)
+}
+
+/// The scope of the organization [`create`] has just inserted, for writing its first rows.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "spec 02 B9 allows the instance scope for creating an organization (B26), which no credential can belong to yet"
+)]
+fn new_org_scope(org_id: Uuid) -> OrgScope {
+    OrgScope::instance(org_id)
 }
 
 /// The scope's organization.
@@ -154,17 +248,28 @@ pub async fn count(db: impl PgExecutor<'_>) -> Result<i64, Error> {
 }
 
 fn valid_name(name: &str) -> Result<&str, Error> {
-    if name.contains('\0') {
-        return Err(Error::NameContainsNul);
+    name::valid(name).map_err(|invalid| match invalid {
+        name::Invalid::Empty => Error::NameEmpty,
+        name::Invalid::TooLong => Error::NameTooLong,
+        name::Invalid::ContainsNul => Error::NameContainsNul,
+    })
+}
+
+/// Spec 02 Q3: `^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$`, and not reserved.
+fn valid_slug(slug: &str) -> Result<(), Error> {
+    let bytes = slug.as_bytes();
+    let alnum = |b: &u8| b.is_ascii_lowercase() || b.is_ascii_digit();
+    let well_formed = (1..=MAX_SLUG_CHARS).contains(&bytes.len())
+        && bytes.iter().all(|b| alnum(b) || *b == b'-')
+        && bytes.first().is_some_and(alnum)
+        && bytes.last().is_some_and(alnum);
+    if !well_formed {
+        return Err(Error::SlugInvalid);
     }
-    let name = name.trim();
-    if name.is_empty() {
-        return Err(Error::NameEmpty);
+    if RESERVED_SLUGS.contains(&slug) {
+        return Err(Error::SlugReserved);
     }
-    if name.chars().count() > MAX_NAME_CHARS {
-        return Err(Error::NameTooLong);
-    }
-    Ok(name)
+    Ok(())
 }
 
 fn parse_settings(stored: &str) -> Result<OrgSettings, Error> {
@@ -176,33 +281,66 @@ mod tests {
     use super::*;
 
     #[test]
-    fn names_are_trimmed() {
-        assert_eq!(valid_name("  Tower Cab \n").unwrap(), "Tower Cab");
+    fn name_problems_map_to_organization_errors() {
+        assert_eq!(valid_name("  Tower Cab ").unwrap(), "Tower Cab");
+        assert!(matches!(valid_name(" "), Err(Error::NameEmpty)));
+        assert!(matches!(valid_name("a\0"), Err(Error::NameContainsNul)));
+        let over = "a".repeat(MAX_NAME_CHARS + 1);
+        assert!(matches!(valid_name(&over), Err(Error::NameTooLong)));
     }
 
     #[test]
-    fn an_empty_or_blank_name_is_refused() {
-        for name in ["", "   ", "\t\n"] {
+    fn slugs_of_the_q3_format_are_accepted() {
+        let longest = "a".repeat(MAX_SLUG_CHARS);
+        for slug in [
+            "a",
+            "7",
+            "vzdc",
+            "org-a",
+            "a-b-c",
+            "a--b",
+            "x1-2y",
+            longest.as_str(),
+        ] {
+            assert!(valid_slug(slug).is_ok(), "{slug:?}");
+        }
+    }
+
+    #[test]
+    fn slugs_outside_the_q3_format_are_refused() {
+        let too_long = "a".repeat(MAX_SLUG_CHARS + 1);
+        for slug in [
+            "",
+            "-a",
+            "a-",
+            "-",
+            "Org",
+            "org_a",
+            "org.a",
+            "org a",
+            " org",
+            "orgé",
+            "a\0",
+            too_long.as_str(),
+        ] {
             assert!(
-                matches!(valid_name(name), Err(Error::NameEmpty)),
-                "{name:?}"
+                matches!(valid_slug(slug), Err(Error::SlugInvalid)),
+                "{slug:?}"
             );
         }
     }
 
     #[test]
-    fn a_name_with_nul_is_refused() {
-        assert!(matches!(
-            valid_name("Tower\0Cab"),
-            Err(Error::NameContainsNul)
-        ));
-    }
-
-    #[test]
-    fn the_length_limit_counts_characters_after_trimming() {
-        let at_limit = "é".repeat(MAX_NAME_CHARS);
-        assert_eq!(valid_name(&format!(" {at_limit} ")).unwrap(), at_limit);
-        let over = "a".repeat(MAX_NAME_CHARS + 1);
-        assert!(matches!(valid_name(&over), Err(Error::NameTooLong)));
+    fn reserved_slugs_are_refused() {
+        for slug in RESERVED_SLUGS {
+            assert!(
+                matches!(valid_slug(slug), Err(Error::SlugReserved)),
+                "{slug:?}"
+            );
+        }
+        assert!(
+            valid_slug("stepclimb-ops").is_ok(),
+            "only the exact word is reserved"
+        );
     }
 }

@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE accounts\n         SET path = $4::text::ltree || subpath(path, $5),\n             parent_id = CASE WHEN id = $2 THEN $3 ELSE parent_id END,\n             updated_at = timestamptz 'epoch' + $6::bigint * interval '1 microsecond'\n         WHERE org_id = $1 AND path <@ $7::text::ltree",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Int4",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "eb85edf65a02f236f230e6c2e16aa099e8df7f0a0fc51bcff60366642b8e2987"
+}

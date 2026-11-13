@@ -5,14 +5,16 @@
 //! compiled into the binary, which `stepclimb serve` runs at startup; [`id::new_id`], the UUID
 //! v7 generator for every row key; the permission catalog ([`perm`]); the built-in role lists
 //! ([`roles::BUILTIN`]); [`clock::Clock`], the controllable clock every time rule reads;
-//! [`OrgScope`], the organization every repository function acts in; and the [`organizations`]
-//! repository with its typed [`OrgSettings`]; the [`users`] repository and [`Source`], where a
-//! record came from. The other repositories arrive with the M0 specs in `docs/specs/m0/`
-//! (accounts, identities, roles).
+//! [`OrgScope`], the organization every repository function acts in; the [`organizations`]
+//! repository with its typed [`OrgSettings`]; the [`accounts`] repository, the tree inside an
+//! organization; and the [`users`] repository and [`Source`], where a record came from. The
+//! other repositories arrive with the M0 specs in `docs/specs/m0/` (identities, roles).
 
+pub mod accounts;
 pub mod clock;
 pub mod db;
 pub mod id;
+mod name;
 pub mod organizations;
 pub mod perm;
 pub mod roles;
