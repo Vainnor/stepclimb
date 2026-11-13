@@ -2,6 +2,10 @@
 // Catalog checks for each package's Vitest suite: every message lookup in the source uses a
 // literal id the English catalogs have, every message parses as ICU, and no English message
 // writes an overridable noun as text or puts "a" or "an" before a term argument.
+//
+// The source scan relies on one convention: the lookup function from `useStepclimbStrings()` is
+// always called `t` and called directly with a string literal id. A destructure that renames it
+// or an optional call of it would hide lookups from the scan, so both fail it.
 import { IntlMessageFormat } from "intl-messageformat";
 import { type Catalog, mergeMessages } from "./catalog";
 import { defaultTerms, termArguments } from "./terms";
@@ -11,6 +15,9 @@ const MESSAGE_CALL = /\bt\(\s*(["'])((?:(?!\1)[^\\\n])+)\1/g;
 // Any call of `t`, and a string literal at the start of its arguments.
 const ANY_CALL = /\bt\(\s*/g;
 const LITERAL_ARGUMENT = /^(["'])(?:(?!\1)[^\\\n])+\1/;
+// A destructure of `useStepclimbStrings()` that renames `t`, and an optional call of `t`.
+const RENAMED_T = /\{[^}]*\bt\s*:\s*[A-Za-z_$][\w$]*[^}]*\}\s*=\s*useStepclimbStrings\s*\(/g;
+const OPTIONAL_CALL = /\bt\s*\?\.\s*\(/g;
 
 /** A source line containing this marker may call `t` with an id that is not a literal. */
 export const EXEMPTION = "strings-check-ignore";
@@ -44,16 +51,26 @@ export interface DynamicLookup {
 }
 
 /**
- * Every call of `t` whose first argument is not a string literal (a variable, a template
- * literal), so the missing-id check cannot see its id, unless its line carries `EXEMPTION`.
+ * Every lookup the missing-id check cannot see: a call of `t` whose first argument is not a
+ * string literal (a variable, a template literal), an optional call of `t`, and a destructure
+ * that renames `t`. A line carrying `EXEMPTION` is allowed.
  */
 export function dynamicLookups(sources: Readonly<Record<string, string>>): DynamicLookup[] {
   return Object.entries(sources).flatMap(([file, source]) =>
-    Array.from(source.matchAll(ANY_CALL))
-      .filter((match) => !LITERAL_ARGUMENT.test(source.slice(match.index + match[0].length)))
-      .map((match) => ({ file, line: lineAt(source, match.index) }))
-      .filter(({ line }) => !source.split("\n")[line - 1]?.includes(EXEMPTION)),
+    uncheckedLookups(source)
+      .map((index) => lineAt(source, index))
+      .filter((line) => !source.split("\n")[line - 1]?.includes(EXEMPTION))
+      .map((line) => ({ file, line })),
   );
+}
+
+/** The source offsets of every lookup `dynamicLookups` reports, in order. */
+function uncheckedLookups(source: string): number[] {
+  const nonLiteral = Array.from(source.matchAll(ANY_CALL)).filter(
+    (match) => !LITERAL_ARGUMENT.test(source.slice(match.index + match[0].length)),
+  );
+  const hidden = [...source.matchAll(RENAMED_T), ...source.matchAll(OPTIONAL_CALL)];
+  return [...nonLiteral, ...hidden].map((match) => match.index).sort((a, b) => a - b);
 }
 
 function lineAt(source: string, index: number): number {
@@ -125,7 +142,7 @@ const TRAILING_ARTICLE = /\ban?\s*$/i;
  * the override ("a course", "an exam"), so such a message must be reworded.
  */
 export function articlesBeforeTerms(catalogs: readonly Catalog[]): ArticleBeforeTerm[] {
-  const termNames = new Set(Object.keys(termArguments({}, "en")));
+  const termNames = new Set(Object.keys(termArguments(defaultTerms, {}, "en")));
   return englishAsts(catalogs).flatMap(([id, ast]) =>
     elementLists(ast)
       .flatMap((list) => termsAfterArticles(list, termNames))
@@ -137,10 +154,18 @@ export function articlesBeforeTerms(catalogs: readonly Catalog[]): ArticleBefore
 function termsAfterArticles(list: AstElement[], termNames: ReadonlySet<string>): string[] {
   return list.flatMap((element, i) => {
     const next = list[i + 1];
-    if (!next || !isKind(next, ARGUMENT) || !termNames.has(next.value)) return [];
-    if (!isKind(element, LITERAL) || !TRAILING_ARTICLE.test(element.value)) return [];
-    return [next.value];
+    if (!next || !isKind(element, LITERAL) || !TRAILING_ARTICLE.test(element.value)) return [];
+    return leadingTerms(next, termNames);
   });
+}
+
+/**
+ * The term arguments an element starts with: the element itself, or for a tag, plural or select,
+ * the first element of each of its lists: a tag's contents, each plural or select option.
+ */
+function leadingTerms(element: AstElement, termNames: ReadonlySet<string>): string[] {
+  if (isKind(element, ARGUMENT)) return termNames.has(element.value) ? [element.value] : [];
+  return nestedLists(element).flatMap((list) => (list[0] ? leadingTerms(list[0], termNames) : []));
 }
 
 export interface InvalidMessage {

@@ -4,7 +4,7 @@
 // English forms: `{course}` and `{courses}` mid-sentence, `{Course}` and `{Courses}` at the start
 // of a sentence, which upper-case the first letter and never lower-case anything. An override
 // replaces the forms, so every message using the term changes together. A message never puts "a"
-// or "an" before a term argument: the article depends on the override.
+// or "an" before a term argument: the article depends on the override (spec 11 Q12).
 
 /** A term's singular and plural, written as they read mid-sentence. */
 export interface TermForms {
@@ -22,16 +22,24 @@ export type Term = keyof typeof defaultTerms;
 /** An organization's overrides, by term. A term without one keeps its default. */
 export type TermOverrides = Partial<Record<Term, TermForms>>;
 
-/** The ICU argument values for every term, with the overrides applied. */
-export function termArguments(overrides: TermOverrides, locale: string): Record<string, string> {
+/**
+ * The ICU argument values for every term in `terms`, with the overrides applied. Argument names
+ * are English identifiers in every locale, so they are capitalized in English; the values are
+ * capitalized in the active locale ("istasyon" -> "İstasyon" in Turkish).
+ */
+export function termArguments<T extends string>(
+  terms: Readonly<Record<T, TermForms>>,
+  overrides: Partial<Record<T, TermForms>>,
+  locale: string,
+): Record<string, string> {
   const args: Record<string, string> = {};
-  for (const term of Object.keys(defaultTerms) as Term[]) {
-    const defaults = defaultTerms[term];
+  for (const term of Object.keys(terms) as T[]) {
+    const defaults = terms[term];
     const forms = overrides[term] ?? defaults;
     args[defaults.one] = forms.one;
     args[defaults.other] = forms.other;
-    args[capitalize(defaults.one, locale)] = capitalize(forms.one, locale);
-    args[capitalize(defaults.other, locale)] = capitalize(forms.other, locale);
+    args[capitalize(defaults.one, "en")] = capitalize(forms.one, locale);
+    args[capitalize(defaults.other, "en")] = capitalize(forms.other, locale);
   }
   return args;
 }

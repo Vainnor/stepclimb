@@ -47,6 +47,22 @@ describe("dynamicLookups", () => {
     ]);
   });
 
+  it("reports a destructure that renames t and an optional call of t", () => {
+    const source = [
+      "const { t: translate } = useStepclimbStrings();",
+      "const {",
+      "  t: tr,",
+      "} = useStepclimbStrings();",
+      't?.("shell.title");',
+      "const { t } = useStepclimbStrings();",
+    ].join("\n");
+    expect(dynamicLookups({ "a.tsx": source })).toEqual([
+      { file: "a.tsx", line: 1 },
+      { file: "a.tsx", line: 2 },
+      { file: "a.tsx", line: 5 },
+    ]);
+  });
+
   it("accepts a literal id on the next line and an exempted line", () => {
     const source = ["t(", '  "shell.title",', ");", "t(label); // strings-check-ignore: data"];
     expect(dynamicLookups({ "a.tsx": source.join("\n") })).toEqual([]);
@@ -93,6 +109,23 @@ describe("articlesBeforeTerms", () => {
       { id: "a.a", term: "course" },
       { id: "a.an", term: "Course" },
       { id: "a.plural", term: "course" },
+    ]);
+  });
+
+  it("looks into a tag, plural or select that follows the article", () => {
+    const catalog: Catalog = {
+      en: {
+        "b.tag": "Open a <b>{course}</b>",
+        "b.plural": "Open a {n, plural, one {{course}} other {{courses}}}",
+        "b.select": "Open a {kind, select, new {{course}} other {draft}}",
+        "b.later": "Open a <b>new {course}</b>",
+      },
+    };
+    expect(articlesBeforeTerms([catalog])).toEqual([
+      { id: "b.tag", term: "course" },
+      { id: "b.plural", term: "course" },
+      { id: "b.plural", term: "courses" },
+      { id: "b.select", term: "course" },
     ]);
   });
 });

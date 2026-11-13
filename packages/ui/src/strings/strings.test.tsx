@@ -48,6 +48,13 @@ describe("createStrings", () => {
     expect(() => t("fixture.assigned")).toThrow(/count/);
   });
 
+  it("throws on a null or undefined value instead of rendering nothing", () => {
+    const { t } = english();
+    const values = (name: unknown) => ({ name }) as unknown as Record<string, string>;
+    expect(() => t("fixture.signedIn", values(undefined))).toThrow(/"name" is undefined/);
+    expect(() => t("fixture.signedIn", values(null))).toThrow(/"name" is null/);
+  });
+
   it("renders the default term forms without an override", () => {
     const { t } = english();
     expect(t("fixture.heading")).toBe("Courses");

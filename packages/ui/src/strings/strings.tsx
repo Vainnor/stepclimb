@@ -2,18 +2,22 @@
 // `useStepclimbStrings()`: every user-visible string is an ICU message looked up by id
 // (docs/specs/m0/11-app-shell.md B23 to B26). The provider takes the catalogs of Stepclimb UI and
 // of the app, the locale and the organization's terminology overrides.
-import { IntlMessageFormat, type PrimitiveType } from "intl-messageformat";
+import { IntlMessageFormat } from "intl-messageformat";
 import { createContext, type ReactNode, use, useMemo } from "react";
 import { type Catalog, mergeMessages } from "./catalog";
-import { type TermOverrides, termArguments } from "./terms";
+import { defaultTerms, type TermOverrides, termArguments } from "./terms";
 
-/** Values for a message's ICU arguments: `{count, plural, ...}`, `{when, date, medium}`. */
-export type MessageValues = Readonly<Record<string, PrimitiveType>>;
+/**
+ * Values for a message's ICU arguments: `{count, plural, ...}`, `{when, date, medium}`. There is
+ * no null or undefined: a missing value would render as nothing, so lookups refuse one.
+ */
+export type MessageValues = Readonly<Record<string, string | number | bigint | boolean | Date>>;
 
 export interface Strings {
   /**
    * Formats the message `id`. Term arguments (`{course}`) are filled in by the provider. Every
-   * other argument the message names must be in `values`; a missing one throws.
+   * other argument the message names must be in `values`; a missing, null or undefined one
+   * throws.
    */
   t: (id: string, values?: MessageValues) => string;
 }
@@ -38,7 +42,7 @@ export function createStrings({
 }: StringsOptions): Strings {
   const active = mergeMessages(catalogs, locale);
   const english = locale === "en" ? active : mergeMessages(catalogs, "en");
-  const termArgs = termArguments(terms, locale);
+  const termArgs = termArguments(defaultTerms, terms, locale);
   const compiled = new Map<string, IntlMessageFormat>();
 
   function formatter(id: string): IntlMessageFormat | undefined {
@@ -54,9 +58,12 @@ export function createStrings({
   }
 
   function lookup(id: string, values: MessageValues = {}): string {
-    for (const key of Object.keys(values)) {
+    for (const [key, value] of Object.entries(values)) {
       if (Object.hasOwn(termArgs, key)) {
         throw new Error(`message "${id}": the value "${key}" would replace a term argument`);
+      }
+      if (value === null || value === undefined) {
+        throw new Error(`message "${id}": the value "${key}" is ${value}`);
       }
     }
     const format = formatter(id);
