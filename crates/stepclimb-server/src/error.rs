@@ -10,8 +10,6 @@
 //! underlying error: a parser's message can quote the request body, and a database error can
 //! carry SQL. A 500 logs its cause once and answers a fixed body.
 
-use std::borrow::Cow;
-
 use axum::{
     extract::rejection::{JsonRejection, PathRejection, QueryRejection},
     http::{HeaderValue, StatusCode, header},
@@ -30,6 +28,10 @@ pub const PROBLEM_TYPE: &str = "about:blank";
 pub mod code {
     /// The body or a parameter does not parse or does not match the schema (400).
     pub const REQUEST_MALFORMED: &str = "request.malformed";
+    /// No API route has this path (404).
+    pub const REQUEST_NOT_FOUND: &str = "request.not_found";
+    /// The route exists but not for this method; `Allow` lists the methods it takes (405).
+    pub const REQUEST_METHOD_NOT_ALLOWED: &str = "request.method_not_allowed";
     /// The body is larger than the server accepts (413).
     pub const REQUEST_TOO_LARGE: &str = "request.too_large";
     /// The body is not JSON (415).
@@ -90,28 +92,24 @@ pub struct Problem {
 pub struct ApiError {
     status: StatusCode,
     code: &'static str,
-    detail: Cow<'static, str>,
+    detail: &'static str,
     errors: Vec<FieldError>,
 }
 
 impl ApiError {
     /// An error with any status and code. `detail` must not carry anything the caller could not
     /// otherwise see: no error text from a library, no SQL, no secret, no other organization's id.
-    pub fn new(
-        status: StatusCode,
-        code: &'static str,
-        detail: impl Into<Cow<'static, str>>,
-    ) -> Self {
+    pub fn new(status: StatusCode, code: &'static str, detail: &'static str) -> Self {
         Self {
             status,
             code,
-            detail: detail.into(),
+            detail,
             errors: Vec::new(),
         }
     }
 
     /// 400 `request.malformed`.
-    pub fn malformed(detail: impl Into<Cow<'static, str>>) -> Self {
+    pub fn malformed(detail: &'static str) -> Self {
         Self::new(StatusCode::BAD_REQUEST, code::REQUEST_MALFORMED, detail)
     }
 
@@ -132,7 +130,25 @@ impl ApiError {
         Self::new(
             StatusCode::BAD_REQUEST,
             code::PAGINATION_INVALID_CURSOR,
-            "The cursor is not one this server issued. Start again without a cursor.",
+            "The cursor does not decode. Start again without a cursor.",
+        )
+    }
+
+    /// 404 `request.not_found`: no API route has the request's path.
+    pub fn route_not_found() -> Self {
+        Self::new(
+            StatusCode::NOT_FOUND,
+            code::REQUEST_NOT_FOUND,
+            "No API operation has this path. The API reference is at /docs.",
+        )
+    }
+
+    /// 405 `request.method_not_allowed`: the path exists, but not for the request's method.
+    pub fn method_not_allowed() -> Self {
+        Self::new(
+            StatusCode::METHOD_NOT_ALLOWED,
+            code::REQUEST_METHOD_NOT_ALLOWED,
+            "This path does not take the request's method; the Allow header lists the ones it takes.",
         )
     }
 
@@ -163,7 +179,7 @@ impl ApiError {
             // Only unregistered status codes have no phrase, and the server never builds one.
             title: self.status.canonical_reason().unwrap_or("Error").to_owned(),
             status: self.status.as_u16(),
-            detail: self.detail.clone().into_owned(),
+            detail: self.detail.to_owned(),
             code: self.code.to_owned(),
             errors: self.errors.clone(),
         }

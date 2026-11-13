@@ -6,7 +6,7 @@ use sqlx::PgPool;
 use tower_http::trace::TraceLayer;
 use utoipa_scalar::{Scalar, Servable};
 
-use crate::{health, openapi, spa};
+use crate::{error::ApiError, health, openapi, spa};
 
 /// What every handler can reach.
 #[derive(Clone)]
@@ -14,16 +14,24 @@ pub struct AppState {
     pub db: PgPool,
 }
 
-/// The whole application: probes, the API document and its UI, and the SPA for the rest.
+/// The whole application: probes, the API document and its UI, and the SPA for the rest. An
+/// unknown `/api/` path and a known path with the wrong method answer problem details.
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(health::healthz))
         .route("/readyz", get(health::readyz))
         .route("/api/openapi.json", get(openapi_json))
         .merge(Scalar::with_url("/docs", openapi::document()))
+        // Applies to the routes above, so it stays after the last of them.
+        .method_not_allowed_fallback(method_not_allowed)
         .fallback(spa::serve)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+/// A matched path with another method: 405 as problem details. axum still sets `Allow`.
+async fn method_not_allowed() -> ApiError {
+    ApiError::method_not_allowed()
 }
 
 async fn openapi_json() -> impl IntoResponse {

@@ -6,12 +6,42 @@
 use axum::{
     Router,
     body::Body,
-    http::{Request, StatusCode, header},
+    http::{Method, Request, StatusCode, header},
 };
 use http_body_util::BodyExt;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use stepclimb_server::{AppState, router, startup};
 use tower::ServiceExt;
+
+async fn send(
+    app: Router,
+    method: Method,
+    path: &str,
+) -> (StatusCode, axum::http::HeaderMap, String) {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(path)
+                .body(Body::empty())
+                .expect("a valid request"),
+        )
+        .await
+        .expect("the router never fails");
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body is readable")
+        .to_bytes();
+    (
+        status,
+        headers,
+        String::from_utf8_lossy(&bytes).into_owned(),
+    )
+}
 
 async fn get(app: Router, path: &str) -> (StatusCode, Option<String>, String) {
     let response = app
@@ -152,9 +182,52 @@ async fn a_missing_file_is_404_not_the_spa() {
 }
 
 #[tokio::test]
-async fn an_unknown_api_path_is_404_not_the_spa() {
-    let (status, _, _) = get(app_without_database(), "/api/v1/nothing-here").await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+async fn an_unknown_api_path_is_a_404_problem_not_the_spa() {
+    for method in [Method::GET, Method::POST, Method::DELETE] {
+        for path in ["/api", "/api/v1/nothing-here", "/api/openapi.json/x"] {
+            let (status, headers, body) = send(app_without_database(), method.clone(), path).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}");
+            assert_eq!(
+                headers.get(header::CONTENT_TYPE).unwrap(),
+                "application/problem+json",
+                "{method} {path}"
+            );
+            let problem: serde_json::Value = serde_json::from_str(&body).expect("JSON");
+            assert_eq!(problem["code"], "request.not_found", "{method} {path}");
+            assert_eq!(problem["status"], 404);
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_known_path_with_another_method_is_a_405_problem() {
+    for (method, path, allow) in [
+        (Method::POST, "/healthz", "GET,HEAD"),
+        (Method::DELETE, "/api/openapi.json", "GET,HEAD"),
+    ] {
+        let (status, headers, body) = send(app_without_database(), method.clone(), path).await;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "{method} {path}");
+        assert_eq!(
+            headers.get(header::CONTENT_TYPE).unwrap(),
+            "application/problem+json"
+        );
+        assert_eq!(
+            headers.get(header::ALLOW).unwrap(),
+            allow,
+            "{method} {path}"
+        );
+        let problem: serde_json::Value = serde_json::from_str(&body).expect("JSON");
+        assert_eq!(problem["code"], "request.method_not_allowed");
+        assert_eq!(problem["status"], 405);
+    }
+}
+
+#[tokio::test]
+async fn a_client_route_takes_any_method_and_stays_the_spa() {
+    let (status, headers, body) = send(app_without_database(), Method::POST, "/c/s1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers.get(header::CONTENT_TYPE).unwrap(), "text/html");
+    assert!(body.contains(r#"<div id="root">"#));
 }
 
 #[tokio::test]
@@ -176,6 +249,8 @@ async fn the_openapi_document_has_the_shared_problem_responses() {
 
     for name in [
         "BadRequest",
+        "RouteNotFound",
+        "MethodNotAllowed",
         "PayloadTooLarge",
         "UnsupportedMediaType",
         "UnprocessableEntity",
@@ -185,4 +260,12 @@ async fn the_openapi_document_has_the_shared_problem_responses() {
             ["$ref"];
         assert_eq!(schema, "#/components/schemas/Problem", "response {name}");
     }
+    let bad_request = doc["components"]["responses"]["BadRequest"]["description"]
+        .as_str()
+        .unwrap();
+    let max = stepclimb_server::pagination::MAX_LIMIT;
+    assert!(
+        bad_request.contains(&format!("1 to {max}")),
+        "{bad_request}"
+    );
 }

@@ -59,15 +59,14 @@ async fn list_items(
         .into_iter()
         .filter(|item| {
             request
-                .after
-                .as_ref()
+                .after()
                 .is_none_or(|(name, id)| (&item.name, item.id) > (name, *id))
         })
         .take(fetch)
         .collect();
-    Ok(Json(Page::from_fetched(rows, request.limit, |item| {
-        (item.name.clone(), item.id)
-    })?))
+    Ok(Json(
+        request.page(rows, |item| (item.name.clone(), item.id))?,
+    ))
 }
 
 /// Seven items; two share a name, so the `id` tiebreak is exercised.

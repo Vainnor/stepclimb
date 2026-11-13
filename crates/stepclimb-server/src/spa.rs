@@ -5,7 +5,8 @@
 //! a request comes in, so `just web-build` updates a running debug server. A path that names a
 //! file is served from the build; any other path outside `/api/` gets `index.html`, so the
 //! client router handles it. When the web app has not been built, those requests get a 503
-//! naming the command that builds it.
+//! naming the command that builds it. A path under `/api/` that no route matched answers 404
+//! `request.not_found` as problem details.
 
 use axum::{
     body::Body,
@@ -13,6 +14,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use rust_embed::RustEmbed;
+
+use crate::error::ApiError;
 
 #[derive(RustEmbed)]
 #[folder = "../../web/dist/"]
@@ -27,7 +30,7 @@ const REVALIDATE: &str = "no-cache";
 pub async fn serve(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
     if path == "api" || path.starts_with("api/") {
-        return StatusCode::NOT_FOUND.into_response();
+        return ApiError::route_not_found().into_response();
     }
     if !path.is_empty() {
         if let Some(response) = file(path) {

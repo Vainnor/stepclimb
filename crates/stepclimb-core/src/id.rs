@@ -5,6 +5,12 @@
 //! `uuidv7()`, and a client never supplies a key on create. A v7 UUID starts with its creation
 //! time in milliseconds, so keys sort by creation time, in Rust and in PostgreSQL (both compare
 //! the 16 bytes in order), and keyset pagination by `id` is stable.
+//!
+//! Ids are not secrets. A v7 id reveals when its row was made, and the rest of its bits come
+//! from a counter and a random source chosen for ordering, not for unguessability. Never use an
+//! id as a bearer or capability token (a sign-in link, an invitation, a share URL): those take a
+//! random token generated for that purpose. Access to a row is decided by the caller's scope and
+//! permissions, never by knowing its id.
 
 pub use uuid::Uuid;
 

@@ -76,7 +76,7 @@ export interface components {
         };
     };
     responses: {
-        /** @description `request.malformed`: the body, a path parameter or a query parameter does not parse or does not match the schema. `pagination.invalid_cursor`: the cursor does not decode. */
+        /** @description `request.malformed`: the body, a path parameter or a query parameter does not parse or does not match the schema, or `limit` is outside 1 to 200. `pagination.invalid_cursor`: the cursor does not decode. */
         BadRequest: {
             headers: {
                 [name: string]: unknown;
@@ -94,8 +94,26 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `request.method_not_allowed`: the path does not take this method; `Allow` lists the methods it takes. */
+        MethodNotAllowed: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `request.too_large`: the body is larger than the server accepts. */
         PayloadTooLarge: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.not_found`: no API operation has this path. */
+        RouteNotFound: {
             headers: {
                 [name: string]: unknown;
             };

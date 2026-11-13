@@ -31,7 +31,15 @@ use crate::{
     paths(health::healthz, health::readyz),
     components(
         schemas(health::Health, health::HealthStatus, Problem, FieldError),
-        responses(BadRequest, PayloadTooLarge, UnsupportedMediaType, UnprocessableEntity, InternalError)
+        responses(
+            BadRequest,
+            RouteNotFound,
+            MethodNotAllowed,
+            PayloadTooLarge,
+            UnsupportedMediaType,
+            UnprocessableEntity,
+            InternalError
+        )
     ),
     tags((name = "operations", description = "Liveness and readiness probes"))
 )]
@@ -50,6 +58,9 @@ fn problem_response(description: &str) -> RefOr<Response> {
         .into()
 }
 
+// BadRequest's description repeats pagination::MAX_LIMIT, since it is a literal; a test in
+// tests/http.rs checks the two agree.
+
 /// Declares a shared problem response: its component name is the type's name.
 macro_rules! problem_responses {
     ($($name:ident => $description:literal,)+) => {$(
@@ -65,7 +76,9 @@ macro_rules! problem_responses {
 }
 
 problem_responses! {
-    BadRequest => "`request.malformed`: the body, a path parameter or a query parameter does not parse or does not match the schema. `pagination.invalid_cursor`: the cursor does not decode.",
+    BadRequest => "`request.malformed`: the body, a path parameter or a query parameter does not parse or does not match the schema, or `limit` is outside 1 to 200. `pagination.invalid_cursor`: the cursor does not decode.",
+    RouteNotFound => "`request.not_found`: no API operation has this path.",
+    MethodNotAllowed => "`request.method_not_allowed`: the path does not take this method; `Allow` lists the methods it takes.",
     PayloadTooLarge => "`request.too_large`: the body is larger than the server accepts.",
     UnsupportedMediaType => "`request.unsupported_media_type`: the body is not JSON.",
     UnprocessableEntity => "`request.invalid`: the body parses but breaks a rule; `errors` lists each one.",
