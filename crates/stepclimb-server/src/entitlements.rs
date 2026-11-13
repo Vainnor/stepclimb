@@ -12,9 +12,12 @@
 //!
 //! - `Require<F>` with `F: Feature` ([`crate::require`]): 403 `entitlement.feature_unavailable`
 //!   when the plan does not include `F`;
-//! - [`Entitlements::require`], the same check for an unauthenticated route, on entitlements it
+//! - [`Entitlements::require`], the same check for a route with no principal, on entitlements it
 //!   loads with [`Entitlements::load`] for the organization the request-organization resolver
-//!   gives it;
+//!   gives it. On the entitlements of the [`Entitlements`] extractor it answers 500: a route with
+//!   a principal checks a feature with `Require<F>`, which runs before the permission check;
+//!   a check in the handler body would run after it, and a missing id would answer 404 while
+//!   the feature is off;
 //! - [`Entitlements::check_room`], the limit check a creating transaction runs before it
 //!   inserts: 403 `entitlement.limit_reached` with the problem's `limit` and `max` members.
 //!
@@ -54,20 +57,32 @@ pub mod code {
 pub struct Entitlements {
     scope: OrgScope,
     plan: Arc<OrgPlan>,
+    /// Whether these are the principal's, from the extractor: [`Entitlements::require`] refuses
+    /// them.
+    of_principal: bool,
 }
 
 impl Entitlements {
-    /// The entitlements of `scope`'s organization, with one query. For an unauthenticated route,
-    /// with the scope the request-organization resolver gives; an authenticated handler takes
-    /// [`Entitlements`] as an extractor instead, which loads once per request. 500 when the
-    /// organization has no plan or its plan cannot be read.
+    /// The entitlements of `scope`'s organization, with one query. Only for a route with no
+    /// principal, with the scope the request-organization resolver gives; a handler with a
+    /// principal takes [`Entitlements`] as an extractor instead, which loads once per request.
+    /// 500 when the organization has no plan or its plan cannot be read.
     pub async fn load(db: impl PgExecutor<'_>, scope: OrgScope) -> Result<Self, ApiError> {
+        Self::read(db, scope, false).await
+    }
+
+    async fn read(
+        db: impl PgExecutor<'_>,
+        scope: OrgScope,
+        of_principal: bool,
+    ) -> Result<Self, ApiError> {
         let plan = org_plans::get_with_plan(db, scope)
             .await
             .map_err(|error| ApiError::internal(&error))?;
         Ok(Self {
             scope,
             plan: Arc::new(plan),
+            of_principal,
         })
     }
 
@@ -76,8 +91,19 @@ impl Entitlements {
         &self.plan
     }
 
-    /// `Ok` when the plan includes `F`, otherwise 403 `entitlement.feature_unavailable`.
+    /// For a route with no principal, on entitlements from [`Entitlements::load`]: `Ok` when the
+    /// plan includes `F`, otherwise 403 `entitlement.feature_unavailable`. On the extractor's
+    /// entitlements it answers 500, because a route with a principal checks features with
+    /// `Require<F>` (module documentation).
     pub fn require<F: Feature>(&self) -> Result<(), ApiError> {
+        if self.of_principal {
+            return Err(ApiError::internal(&RequireWithPrincipal(F::KEY)));
+        }
+        self.check::<F>()
+    }
+
+    /// The feature check of `Require<F>` and [`Entitlements::require`].
+    pub(crate) fn check<F: Feature>(&self) -> Result<(), ApiError> {
         if self.plan.entitlements.has::<F>() {
             Ok(())
         } else {
@@ -116,6 +142,11 @@ impl Entitlements {
     }
 }
 
+/// A handler with a principal called [`Entitlements::require`]: a bug in the handler.
+#[derive(Debug, thiserror::Error)]
+#[error("Entitlements::require::<{0}> on a request with a principal; take Require<{0}> instead")]
+struct RequireWithPrincipal(&'static str);
+
 /// The entitlements of the request, kept in its extensions after the first load.
 #[derive(Clone)]
 struct Loaded(Entitlements);
@@ -131,7 +162,7 @@ pub(crate) async fn of_request(
         return Ok(entitlements.clone());
     }
     let principal = require::principal(parts, state).await?;
-    let entitlements = Entitlements::load(&state.db, principal.scope()).await?;
+    let entitlements = Entitlements::read(&state.db, principal.scope(), true).await?;
     parts.extensions.insert(Loaded(entitlements.clone()));
     Ok(entitlements)
 }

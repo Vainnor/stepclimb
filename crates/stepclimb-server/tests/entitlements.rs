@@ -93,6 +93,14 @@ async fn wrong_order(_: Require<AccountView, AccountTarget>, _: Require<Gate>) -
     "unreachable"
 }
 
+async fn body_check(
+    _: Require<OrgManage>,
+    entitlements: Entitlements,
+) -> Result<&'static str, ApiError> {
+    entitlements.require::<Gate>()?;
+    Ok("unreachable")
+}
+
 async fn create_user(
     require: Require<OrgManage>,
     entitlements: Entitlements,
@@ -163,6 +171,7 @@ impl Fixture {
             .route("/two", get(two_features))
             .route("/wrong-order/{account_id}", get(wrong_order))
             .route("/users", post(create_user))
+            .route("/body-check", get(body_check))
             .with_state(state)
     }
 
@@ -307,8 +316,9 @@ impl Statements {
         (statements, tracing::subscriber::set_default(subscriber))
     }
 
-    /// How many logged statements contain `needle`. sqlx logs one event per statement, and a
-    /// statement's text never contains a line break here, so lines stand for statements.
+    /// How many logged statements contain `needle`. sqlx logs one event per statement, and the
+    /// fmt layer writes a string field with `Debug`, which escapes the statement's line breaks,
+    /// so each event is one line.
     fn count(&self, needle: &str) -> usize {
         let text = String::from_utf8(self.0.lock().expect("log buffer").clone()).expect("UTF-8");
         text.lines().filter(|line| line.contains(needle)).count()
@@ -436,6 +446,15 @@ async fn a_feature_check_after_a_permission_check_is_a_server_error(pool: PgPool
     )
     .await
     .assert_refused(StatusCode::INTERNAL_SERVER_ERROR, "internal.error");
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn entitlements_require_in_an_authenticated_handler_is_a_server_error(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let admin = f.holder(&["organization.manage"]).await;
+    f.call(Method::GET, "/body-check", Some(&admin))
+        .await
+        .assert_refused(StatusCode::INTERNAL_SERVER_ERROR, "internal.error");
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]

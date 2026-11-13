@@ -10,6 +10,14 @@
 //!
 //! [`check_room`] is the limit check (B10): the creating transaction calls it before it inserts,
 //! and it locks the organization's row so concurrent creations take turns.
+//!
+//! The lock makes the count current only at `READ COMMITTED`, PostgreSQL's default, where each
+//! statement after the lock sees what the previous holder committed. At `REPEATABLE READ` or
+//! `SERIALIZABLE` the transaction's snapshot is taken before the lock wait ends, so the count
+//! would miss the previous holder's rows and both creations could pass. A database or role
+//! default, or a caller's own transaction, can raise the level, so the statement that takes the
+//! lock also reads `transaction_isolation`, and any other level is refused with
+//! [`Error::IsolationLevel`] before anything is counted.
 
 use std::time::SystemTime;
 
@@ -86,6 +94,10 @@ pub enum Error {
     StoredSource(String),
     #[error(transparent)]
     Plan(#[from] plans::Error),
+    /// The transaction runs at an isolation level other than `READ COMMITTED`, where the limit
+    /// check's lock does not make its count current (see the module documentation).
+    #[error("the limit check runs only at READ COMMITTED isolation, not {found}")]
+    IsolationLevel { found: String },
     /// Counting what a limit counts failed.
     #[error("counting the units of the limit failed")]
     Count(#[source] users::Error),
@@ -169,10 +181,12 @@ pub enum Room {
 /// A limit with no value (`null`, and every limit of `unlimited`) fits without a query. Otherwise
 /// it locks the organization's `org_plans` row for the rest of `tx`, then counts with the
 /// repository function the limit names. The lock makes concurrent creations in one
-/// organization take turns: the second waits until the first commits or rolls back, and its
-/// count, a later statement, sees the first one's rows. Without it two creations at `max - 1`
-/// would both count `max - 1` and both insert. An organization with no `org_plans` row is
-/// [`Error::NotFound`], never room.
+/// organization take turns: the second waits until the first commits or rolls back, and at
+/// `READ COMMITTED` its count, a later statement, sees the first one's rows. Without it two
+/// creations at `max - 1` would both count `max - 1` and both insert. A transaction at any other
+/// isolation level is [`Error::IsolationLevel`], and an organization with no `org_plans` row is
+/// [`Error::NotFound`]; neither is ever room. Nothing ties the caller's insert to `tx`: the
+/// caller inserts in the same transaction and commits after it.
 pub async fn check_room(
     tx: &mut Transaction<'_, Postgres>,
     scope: OrgScope,
@@ -183,13 +197,17 @@ pub async fn check_room(
     let Some(max) = plan.limit(limit) else {
         return Ok(Room::Fits);
     };
-    sqlx::query_scalar!(
-        "SELECT org_id FROM org_plans WHERE org_id = $1 FOR UPDATE",
+    let isolation = sqlx::query_scalar!(
+        r#"SELECT current_setting('transaction_isolation') AS "isolation!"
+           FROM org_plans WHERE org_id = $1 FOR UPDATE"#,
         scope.org_id(),
     )
     .fetch_optional(&mut **tx)
     .await?
     .ok_or(Error::NotFound)?;
+    if isolation != "read committed" {
+        return Err(Error::IsolationLevel { found: isolation });
+    }
     let used = match limit {
         Limit::Users => users::count_for_limit(&mut **tx, scope)
             .await

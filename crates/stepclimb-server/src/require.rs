@@ -335,9 +335,7 @@ impl<F: Feature> Check<F, OrgTarget> for FeatureKind {
         if parts.extensions.get::<PermissionStarted>().is_some() {
             return Err(ApiError::internal(&FeatureAfterPermission(F::KEY)).into());
         }
-        entitlements::of_request(parts, state)
-            .await?
-            .require::<F>()?;
+        entitlements::of_request(parts, state).await?.check::<F>()?;
         Ok(Require {
             principal,
             grants,

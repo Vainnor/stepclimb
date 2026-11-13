@@ -222,6 +222,43 @@ async fn an_open_creation_does_not_block_another_organization(pool: PgPool) {
     open.rollback().await.unwrap();
 }
 
+/// Above `READ COMMITTED` the snapshot predates the lock wait, so the count could miss a
+/// concurrent creation: the check refuses to count at all.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_transaction_above_read_committed_is_refused(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    limit_users(&pool, a, "5").await;
+    let plan = plan_of(&pool, a).await;
+    for (level, set_level) in [
+        (
+            "repeatable read",
+            "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+        ),
+        (
+            "serializable",
+            "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+        ),
+    ] {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::raw_sql(set_level).execute(&mut *tx).await.unwrap();
+        let checked = org_plans::check_room(&mut tx, scope(a), &plan, Limit::Users, 1).await;
+        assert!(
+            matches!(&checked, Err(Error::IsolationLevel { found }) if found == level),
+            "{level}: {checked:?}"
+        );
+        tx.rollback().await.unwrap();
+    }
+    // A limit with no value runs no query, so it has nothing to protect and passes at any level.
+    let unlimited = plan_of(&pool, org(&pool, "org-b").await).await;
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::raw_sql("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let checked = org_plans::check_room(&mut tx, scope(a), &unlimited, Limit::Users, 1).await;
+    assert_eq!(checked.unwrap(), Room::Fits);
+}
+
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn the_unlimited_plan_has_no_users_limit_after_a_sync(pool: PgPool) {
     plans::sync_unlimited(&pool, now()).await.unwrap();
