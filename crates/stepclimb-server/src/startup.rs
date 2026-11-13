@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! `stepclimb serve` (connect, migrate, sync the built-in roles, listen) and `stepclimb migrate`
-//! (connect, migrate, exit).
+//! `stepclimb serve` (connect, migrate, sync the built-in roles, start the sign-in flow cleanup,
+//! listen) and `stepclimb migrate` (connect, migrate, exit).
 
 use std::time::Duration;
 
@@ -9,7 +9,7 @@ use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{clock::Clock, db::MIGRATOR, roles};
 use tokio::net::TcpListener;
 
-use crate::{AppState, Config, router};
+use crate::{AppState, Config, flow, router};
 
 /// How long a request waits for a database connection from the pool.
 pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -117,6 +117,7 @@ pub async fn serve(config: Config) -> Result<(), StartupError> {
             source,
         })?;
     tracing::info!(addr = %config.bind, "listening");
+    flow::spawn_cleanup(pool.clone(), clock.clone());
     let state = AppState {
         db: pool,
         clock,

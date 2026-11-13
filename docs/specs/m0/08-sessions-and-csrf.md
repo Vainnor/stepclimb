@@ -150,7 +150,9 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   `auth.flow_invalid`. An expired flow answers `auth.flow_expired`.
 - **B19.** A flow records a `return_to` path. The server accepts only a path that starts with
   one `/` and is not `//` or `/\`, so a sign-in can never redirect to another host; anything
-  else becomes `/`.
+  else becomes `/`. A path is also kept only when every byte is printable ASCII and it is at
+  most 2,048 bytes: browsers drop tab and newline from a URL, so `/<tab>/evil.example` would
+  reach them as `//evil.example` (I4's reading of B19, 13 Nov 2026; the owner can overrule it).
 - **B20.** Flow payloads that hold secrets (PKCE verifier, OIDC nonce, WebAuthn ceremony state)
   are encrypted per B3.
 - **B21.** Expired flows are deleted by the request that finds them and by a periodic cleanup;
@@ -281,14 +283,18 @@ organizations(id)`, `kind text NOT NULL`, `owner_user_id uuid NULL REFERENCES us
 `secret_hash bytea NOT NULL UNIQUE`, `scopes text[] NOT NULL`, `created_at`, `updated_at`.
 `kind` values, owner nullability in M0, and the proposed `name text NOT NULL` column: pending Q9.
 
-**Proposed, pending Q8: `auth_flows`**: `id uuid PK`, `org_id uuid NOT NULL REFERENCES
-organizations(id)`, `token_hash bytea NOT NULL UNIQUE` (hash of the flow cookie value), `kind
-text NOT NULL` (`oidc`, `oauth2`, `passkey_register`, `passkey_sign_in`, `password_totp`,
-`oauth_authorize`), `provider_id uuid NULL REFERENCES identity_providers(id) ON DELETE CASCADE`,
-`user_id uuid NULL REFERENCES users(id) ON DELETE CASCADE`, `payload bytea NOT NULL`
-(AES-256-GCM, B20), `return_to text NOT NULL`, `expires_at timestamptz NOT NULL`, `created_at`,
-`updated_at`. Index on `expires_at` for cleanup. `org_id` is direct because a flow exists before
-any user is known.
+**`auth_flows`** (Q8): `id uuid PK`, `org_id uuid NOT NULL REFERENCES organizations(id)`,
+`token_hash bytea NOT NULL UNIQUE` (SHA-256 of the flow cookie value, 32 bytes), `kind text NOT
+NULL` (`oidc`, `oauth2`, `passkey_register`, `passkey_sign_in`, `password_totp`,
+`oauth_authorize`), `user_id uuid NULL`, with `(org_id, user_id) REFERENCES users(org_id, id) ON
+DELETE CASCADE` so a flow's user is in the flow's organization, `payload bytea NOT NULL`
+(AES-256-GCM, B20, sealed for `[org_id, "auth_flows", id, "payload"]`), `return_to text NOT NULL`
+(checked against B19's rule, printable ASCII, at most 2,048 bytes), `expires_at timestamptz NOT
+NULL`, `created_at`, `updated_at`. Index on `(org_id, expires_at)` for the per-organization
+cleanup. `org_id` is direct because a flow exists before any user is known. `provider_id uuid
+NULL`, with `(org_id, provider_id) REFERENCES identity_providers(org_id, id) ON DELETE CASCADE`,
+is added by the first issue whose flow names a provider (`05-oidc.md` I2), since
+`identity_providers` (`03-users-and-identities.md` I2) does not exist when I4 lands.
 
 **Proposed, pending Q10: `oauth_authorization_codes`**: `id uuid PK`, `user_id uuid NOT NULL
 REFERENCES users(id) ON DELETE CASCADE`, `client_id text NOT NULL`, `code_hash bytea NOT NULL

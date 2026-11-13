@@ -10,10 +10,13 @@
 //! organization; the [`users`] repository and [`Source`], where a record came from; and the
 //! [`sessions`] repository with the browser-session credential resolver; and the [`roles`] and
 //! [`role_assignments`] repositories, with the startup sync of built-in role rows
-//! ([`roles::sync_builtin`]); and the permission evaluator, [`grants::Grants`]. The other repositories arrive with the M0 specs in
+//! ([`roles::sync_builtin`]); the permission evaluator, [`grants::Grants`]; and the
+//! [`auth_flows`] repository, the state of a sign-in that spans several requests. The other
+//! repositories arrive with the M0 specs in
 //! `docs/specs/m0/` (identities).
 
 pub mod accounts;
+pub mod auth_flows;
 pub mod clock;
 pub mod db;
 pub mod grants;

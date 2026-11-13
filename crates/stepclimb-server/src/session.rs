@@ -24,7 +24,13 @@ use stepclimb_core::{
     sessions::{self, Authentication, Session},
 };
 
-use crate::{AppState, csrf, error::ApiError, request_org};
+use crate::{
+    AppState,
+    cookie::{self, Presented},
+    csrf,
+    error::ApiError,
+    request_org,
+};
 
 /// The session cookie's name. The `__Host-` prefix makes the browser refuse it unless it is
 /// `Secure`, has `Path=/` and no `Domain`, so no other host can set or read it.
@@ -139,45 +145,14 @@ pub fn clear_cookie() -> HeaderValue {
     )
 }
 
-/// What the request's `Cookie` headers say about the session cookie.
-#[derive(Debug, PartialEq, Eq)]
-enum Presented<'a> {
-    Absent,
-    One(&'a str),
-    /// One session cookie whose value is not ASCII, which no token is.
-    NotAscii,
-    /// More than one `__Host-sc_session`, which a browser never sends for one host; the request
-    /// is not trusted to mean either.
-    Ambiguous,
-}
-
 /// The value of every `__Host-sc_session` in the request's `Cookie` headers, `None` for one that
 /// is not ASCII.
-///
-/// The headers are split as bytes, so a neighbor cookie with a non-ASCII value (which
-/// `HeaderValue::to_str` refuses for the whole header) does not hide the session cookie.
 fn session_cookies(headers: &HeaderMap) -> Vec<Option<&str>> {
-    headers
-        .get_all(header::COOKIE)
-        .iter()
-        .flat_map(|line| line.as_bytes().split(|&byte| byte == b';'))
-        .filter_map(|pair| {
-            let pair = pair.trim_ascii();
-            let equals = pair.iter().position(|&byte| byte == b'=')?;
-            let (name, value) = (&pair[..equals], &pair[equals + 1..]);
-            (name == COOKIE_NAME.as_bytes())
-                .then(|| std::str::from_utf8(value).ok().filter(|v| v.is_ascii()))
-        })
-        .collect()
+    cookie::values(headers, COOKIE_NAME)
 }
 
 fn presented_cookie(headers: &HeaderMap) -> Presented<'_> {
-    match session_cookies(headers).as_slice() {
-        [] => Presented::Absent,
-        [Some(value)] => Presented::One(value),
-        [None] => Presented::NotAscii,
-        _ => Presented::Ambiguous,
-    }
+    cookie::presented(headers, COOKIE_NAME)
 }
 
 /// A request a valid browser session authenticates (B8 to B11).

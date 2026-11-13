@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO auth_flows (id, org_id, token_hash, kind, user_id, payload, return_to,\n                                   expires_at, created_at, updated_at)\n           VALUES ($1, $2, $3, $4, $5, $6, $7,\n                   timestamptz 'epoch' + $9::bigint * interval '1 microsecond',\n                   timestamptz 'epoch' + $8::bigint * interval '1 microsecond',\n                   timestamptz 'epoch' + $8::bigint * interval '1 microsecond')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bytea",
+        "Text",
+        "Uuid",
+        "Bytea",
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "19e36039e23097ba325ed425a3ba7ede334e921d36083f2df152c8853da3faef"
+}
