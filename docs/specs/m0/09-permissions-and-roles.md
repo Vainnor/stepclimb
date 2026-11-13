@@ -189,8 +189,11 @@ organizations' ids.
     a move);
   - **cross-organization:** an Organization admin of org A calling the route with the target built
     in org B: 404, and org B's rows unchanged. A route without a target (`OrgTarget`, an
-    `AnyScope` list, `AuthOnly`) acts on org A instead and answers 2xx; org B's rows stay
-    unchanged and none of their ids appears in the response.
+    `AnyScope` list, `AuthOnly`) acts on org A instead and answers 2xx. Org B also holds a user,
+    a session, a custom role and an assignment; its rows (every table with `org_id`, plus the
+    tables scoped through another, such as `sessions` through `users`) stay unchanged, and none
+    of its ids, slug, names or emails appears in the response. A table with neither `org_id` nor
+    a listed scoping fails the suite until it is listed.
 
   Each case builds its own organizations in the test's database, so cases cannot disturb each
   other. Because the production resolver answers 404

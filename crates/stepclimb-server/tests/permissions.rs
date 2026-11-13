@@ -416,9 +416,10 @@ async fn allowed(
     answer.expect_success()
 }
 
-/// An Organization admin of org A calls with the target built in org B: `not_found` (or 2xx
-/// when the route has no target), org B's rows unchanged, and none of their ids answered. Every
-/// one of the three that fails is reported.
+/// An Organization admin of org A calls with the target built in org B, which also holds a
+/// user, a session, a custom role and an assignment: `not_found` (or 2xx when the route has no
+/// target), org B's rows unchanged, and none of their identifying values answered. Every one of
+/// the three that fails is reported.
 async fn cross_organization(
     world: &World,
     app: &Router,
@@ -429,8 +430,9 @@ async fn cross_organization(
     let a = world.org().await;
     let admin = a.holder_of_builtin("org_admin", At::Org).await;
     let b = world.org().await;
+    b.seed().await;
     let call = setup(&b).await;
-    let before = snapshot(&world.pool, b.id).await;
+    let before = snapshot(&world.pool, b.id).await?;
     let answer = call_op(app, op, &call, a.id, Some(&admin)).await?;
     let mut wrong = Vec::new();
     let status = match not_found {
@@ -438,13 +440,16 @@ async fn cross_organization(
         None => answer.expect_success(),
     };
     wrong.extend(status.err());
-    if snapshot(&world.pool, b.id).await != before {
+    if snapshot(&world.pool, b.id).await? != before {
         wrong.push("org B's rows changed".to_owned());
     }
-    let mut ids = Vec::new();
-    uuids(&before, &mut ids);
-    if let Some(id) = ids.iter().find(|id| answer.body.contains(id.as_str())) {
-        wrong.push(format!("the response holds org B's id {id}"));
+    let mut identifying = Vec::new();
+    identifiers(&before, &b.slug, &mut identifying);
+    if let Some(value) = identifying
+        .iter()
+        .find(|v| answer.body.contains(v.as_str()))
+    {
+        wrong.push(format!("the response holds org B's value {value:?}"));
     }
     if wrong.is_empty() {
         Ok(())
@@ -453,43 +458,76 @@ async fn cross_organization(
     }
 }
 
-/// Every row of org B: the `organizations` row and each row of a table with `org_id`.
-async fn snapshot(pool: &PgPool, org: Uuid) -> Value {
-    let tables: Vec<String> = sqlx::query_scalar(
-        "SELECT DISTINCT table_name::text FROM information_schema.columns
-         WHERE table_schema = 'public' AND column_name = 'org_id' ORDER BY 1",
+/// Tables whose rows belong to an organization without an `org_id` column, with the condition
+/// that picks organization `$1`'s rows of `t`.
+const SCOPED_OTHERWISE: &[(&str, &str)] = &[
+    ("organizations", "t.id = $1"),
+    (
+        "sessions",
+        "t.user_id IN (SELECT id FROM users WHERE org_id = $1)",
+    ),
+];
+
+/// Tables that hold no organization's rows.
+const INSTANCE_ONLY: &[&str] = &["_sqlx_migrations"];
+
+/// Every row of organization `org`, by table: each table with `org_id`, and each table of
+/// [`SCOPED_OTHERWISE`]. A table of the schema in neither, nor in [`INSTANCE_ONLY`], is an error,
+/// so a new table scoped through another one cannot be left out of the comparison.
+async fn snapshot(pool: &PgPool, org: Uuid) -> Result<Value, String> {
+    let tables: Vec<(String, bool)> = sqlx::query_as(
+        "SELECT t.table_name::text, EXISTS (
+                SELECT 1 FROM information_schema.columns c
+                WHERE c.table_schema = t.table_schema AND c.table_name = t.table_name
+                  AND c.column_name = 'org_id')
+         FROM information_schema.tables t
+         WHERE t.table_schema = 'public' AND t.table_type = 'BASE TABLE'
+         ORDER BY 1",
     )
     .fetch_all(pool)
     .await
     .expect("list tables");
     let mut rows = serde_json::Map::new();
-    let organization = "SELECT coalesce(jsonb_agg(to_jsonb(t)), '[]')::text
-                        FROM organizations t WHERE id = $1"
-        .to_owned();
-    let queries = tables.iter().map(|table| {
+    let mut unscoped = Vec::new();
+    for (table, has_org_id) in tables {
+        let other = SCOPED_OTHERWISE.iter().find(|(name, _)| *name == table);
+        let condition = match (has_org_id, other) {
+            (_, Some((_, condition))) => *condition,
+            (true, None) => "t.org_id = $1",
+            (false, None) if INSTANCE_ONLY.contains(&table.as_str()) => continue,
+            (false, None) => {
+                unscoped.push(table);
+                continue;
+            }
+        };
         let sql = format!(
             "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text), '[]')::text
-             FROM \"{table}\" t WHERE org_id = $1"
+             FROM \"{table}\" t WHERE {condition}"
         );
-        (table.clone(), sql)
-    });
-    for (name, sql) in std::iter::once(("organizations".to_owned(), organization)).chain(queries) {
         let json: String = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
             .bind(org)
             .fetch_one(pool)
             .await
             .expect("read rows");
-        rows.insert(name, serde_json::from_str(&json).expect("JSON rows"));
+        rows.insert(table, serde_json::from_str(&json).expect("JSON rows"));
     }
-    Value::Object(rows)
+    if unscoped.is_empty() {
+        Ok(Value::Object(rows))
+    } else {
+        Err(format!(
+            "tables with no org_id and no entry in SCOPED_OTHERWISE or INSTANCE_ONLY in \
+             tests/permissions.rs: {unscoped:?}"
+        ))
+    }
 }
 
-/// Every string in `value` that is a UUID.
-fn uuids(value: &Value, out: &mut Vec<String>) {
+/// Every string in `value` that is a UUID or contains the organization's `slug` (its name, and
+/// the seeded names, emails and role key).
+fn identifiers(value: &Value, slug: &str, out: &mut Vec<String>) {
     match value {
-        Value::String(s) if Uuid::try_parse(s).is_ok() => out.push(s.clone()),
-        Value::Array(items) => items.iter().for_each(|v| uuids(v, out)),
-        Value::Object(map) => map.values().for_each(|v| uuids(v, out)),
+        Value::String(s) if Uuid::try_parse(s).is_ok() || s.contains(slug) => out.push(s.clone()),
+        Value::Array(items) => items.iter().for_each(|v| identifiers(v, slug, out)),
+        Value::Object(map) => map.values().for_each(|v| identifiers(v, slug, out)),
         _ => {}
     }
 }
@@ -646,6 +684,7 @@ impl World {
         let mut org = Org {
             pool: self.pool.clone(),
             id,
+            slug,
             tower: root,
             ground: root,
         };
@@ -659,6 +698,8 @@ impl World {
 struct Org {
     pool: PgPool,
     id: Uuid,
+    /// Also its name.
+    slug: String,
     tower: Uuid,
     ground: Uuid,
 }
@@ -683,13 +724,39 @@ impl Org {
         self.account(parent.unwrap_or(account), "Sibling").await
     }
 
+    /// A user, signed in, with a custom role at the organization, every value naming the slug:
+    /// the rows of org B a cross-organization call must neither change nor answer.
+    async fn seed(&self) {
+        let slug = &self.slug;
+        let (_, user) = self
+            .named_user(
+                format!("Robin {slug}"),
+                Some(format!("robin@{slug}.example")),
+            )
+            .await;
+        let role = NewRole {
+            key: format!("r_{}", slug.replace('-', "_")),
+            name: format!("Role of {slug}"),
+            permissions: vec![RoleView::KEY.to_owned()],
+        };
+        let role = roles::create_custom(&self.pool, scope(self.id), &role, now())
+            .await
+            .expect("create role")
+            .id;
+        self.assign(user, role, At::Org).await;
+    }
+
     /// A new user, signed in, with no role: their `Cookie` header value and id.
     async fn user(&self) -> (String, Uuid) {
+        self.named_user("Pat Example".into(), None).await
+    }
+
+    async fn named_user(&self, display_name: String, email: Option<String>) -> (String, Uuid) {
         let new_user = NewUser {
-            display_name: "Pat Example".into(),
+            display_name,
             given_name: String::new(),
             family_name: String::new(),
-            email: None,
+            email,
             locale: None,
             tz: "UTC".into(),
             source: Source::Local,
@@ -814,6 +881,25 @@ async fn open_rename(State(state): State<AppState>, ApiPath(id): ApiPath<Uuid>) 
     StatusCode::OK
 }
 
+/// Signs every other user out, in every organization.
+async fn end_other_sessions(principal: Authenticated, State(state): State<AppState>) -> StatusCode {
+    sqlx::query("DELETE FROM sessions WHERE user_id <> $1")
+        .bind(principal.user_id)
+        .execute(&state.db)
+        .await
+        .expect("delete");
+    StatusCode::NO_CONTENT
+}
+
+/// Every user's name, in every organization.
+async fn every_name(_: Authenticated, State(state): State<AppState>) -> String {
+    let names: Vec<String> = sqlx::query_scalar("SELECT display_name FROM users")
+        .fetch_all(&state.db)
+        .await
+        .expect("select");
+    names.join(",")
+}
+
 /// Checks `account.view` where its entry says `account.manage`.
 async fn wrong_permission(_: Require<AccountView, AccountTarget>) -> StatusCode {
     StatusCode::OK
@@ -831,6 +917,8 @@ fn fixture_app(world: &World) -> Router {
         .route("/t/me", get(me))
         .route("/t/open/{account_id}", patch(open_rename))
         .route("/t/wrong/{account_id}", patch(wrong_permission))
+        .route("/t/sessions", axum::routing::delete(end_other_sessions))
+        .route("/t/names", get(every_name))
         .with_state(world.state())
 }
 
@@ -967,18 +1055,7 @@ async fn t15_a_route_without_require_fails_its_401_and_cross_organization_cases(
     let op = fixture_op(Method::PATCH, "/t/open/{account_id}");
     let access = permission(AccountManage::KEY, ACCOUNT_NOT_FOUND, tower_in_path);
     let report = run(&world, &app, &op, &access).await;
-    let failed: Vec<&str> = report
-        .failures
-        .iter()
-        .map(|f| {
-            f.split(": ")
-                .next()
-                .expect("a case")
-                .rsplit(' ')
-                .next()
-                .expect("a case")
-        })
-        .collect();
+    let failed = failed_cases(&report);
     assert_eq!(
         failed,
         ["401", "403", "404", "cross-organization"],
@@ -997,7 +1074,13 @@ async fn t15_a_route_checking_another_permission_fails_its_2xx_case(pool: PgPool
     let op = fixture_op(Method::PATCH, "/t/wrong/{account_id}");
     let access = permission(AccountManage::KEY, ACCOUNT_NOT_FOUND, tower_in_path);
     let report = run(&world, &app, &op, &access).await;
-    let failed: Vec<&str> = report
+    let failed = failed_cases(&report);
+    assert_eq!(failed, ["403", "2xx"], "{report:#?}");
+}
+
+/// The case names in `report`'s failures, in order.
+fn failed_cases(report: &Report) -> Vec<&str> {
+    report
         .failures
         .iter()
         .map(|f| {
@@ -1008,8 +1091,48 @@ async fn t15_a_route_checking_another_permission_fails_its_2xx_case(pool: PgPool
                 .next()
                 .expect("a case")
         })
-        .collect();
-    assert_eq!(failed, ["403", "2xx"], "{report:#?}");
+        .collect()
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_auth_only_route_ending_org_bs_sessions_fails_the_cross_organization_case(pool: PgPool) {
+    let world = World::new(pool).await;
+    let app = fixture_app(&world);
+    let op = fixture_op(Method::DELETE, "/t/sessions");
+    let report = run(&world, &app, &op, &Access::AuthOnly(at_org)).await;
+    assert_eq!(failed_cases(&report), ["cross-organization"], "{report:#?}");
+    assert!(
+        report.failures[0].ends_with("org B's rows changed"),
+        "{report:#?}"
+    );
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_auth_only_route_answering_org_bs_names_fails_the_cross_organization_case(pool: PgPool) {
+    let world = World::new(pool).await;
+    let app = fixture_app(&world);
+    let op = fixture_op(Method::GET, "/t/names");
+    let report = run(&world, &app, &op, &Access::AuthOnly(at_org)).await;
+    assert_eq!(failed_cases(&report), ["cross-organization"], "{report:#?}");
+    assert!(
+        report.failures[0].contains("the response holds org B's value \"org-"),
+        "{report:#?}"
+    );
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_table_scoped_by_neither_rule_fails_the_snapshot(pool: PgPool) {
+    let world = World::new(pool).await;
+    let org = world.org().await;
+    assert!(snapshot(&world.pool, org.id).await.is_ok());
+    sqlx::query("CREATE TABLE stray_notes (id uuid PRIMARY KEY, user_id uuid)")
+        .execute(&world.pool)
+        .await
+        .expect("create table");
+    let error = snapshot(&world.pool, org.id)
+        .await
+        .expect_err("an unscoped table");
+    assert!(error.ends_with(r#"["stray_notes"]"#), "{error}");
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]

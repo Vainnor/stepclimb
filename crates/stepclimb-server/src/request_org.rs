@@ -7,11 +7,12 @@
 //! 404 `org.not_found`, so no request is ever matched to the wrong organization until
 //! multi-organization resolution is built. Building that replaces [`resolve`] only.
 //!
-//! A build with the `test-support` cargo feature also answers the [`TEST_ORG_HEADER`] header
-//! naming an organization, so the server's tests can run several organizations in one database
-//! (spec 09 B20). Only the server's own tests enable the feature, through its dev-dependency on
-//! itself; the release build (`cargo build -p stepclimb-server`) never does, and there the header
-//! is ignored.
+//! A build with the `test-support` cargo feature also answers the `x-stepclimb-test-org` header
+//! (`TEST_ORG_HEADER`, defined only in that build) naming an organization, so the server's tests
+//! can run several organizations in one database (spec 09 B20). Only the server's own tests
+//! enable the feature, through its dev-dependency on itself; a build without dev-dependencies or
+//! `--all-features` (`cargo build -p stepclimb-server`, the release image) never has it, and
+//! there the header is ignored.
 //!
 //! `clippy.toml` lists [`resolve`] under `disallowed-methods`: its callers are the session module
 //! (its extractor and sign-out) and the resolver of unauthenticated routes (spec 02 B11), each
