@@ -17,6 +17,10 @@ export default defineConfig({
   },
   build: { outDir: "dist", emptyOutDir: true },
   test: {
+    // No file-system module cache: it keys a transformed module on its own text, so a test that
+    // reads files through an eager `import.meta.glob` (the catalog and status checks) keeps the
+    // file list of its first run and misses files added since.
+    fsModuleCache: false,
     environment: "jsdom",
     globals: true,
     include: ["src/**/*.test.{ts,tsx}"],

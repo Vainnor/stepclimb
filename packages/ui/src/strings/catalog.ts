@@ -11,7 +11,18 @@ export type Catalog = { readonly en: Messages } & Readonly<Partial<Record<string
 /** The messages Stepclimb UI's own components render. Each component adds its ids here. */
 export const uiMessages: Catalog = {
   en: {
+    "button.pending": "In progress",
+    "copyButton.copied": "Copied",
+    "copyButton.failed": "Could not copy. Select the text and copy it yourself.",
+    "copyButton.label": "Copy",
+    "field.invalid": "Check what you entered in this field.",
+    "field.valueMissing": "Fill in this field.",
     "link.external": "(external site)",
+    "meter.value": "{value, number, percent}",
+    "numberField.decrement": "Decrease",
+    "numberField.increment": "Increase",
+    "progressBar.value": "{value, number, percent}",
+    "searchField.clear": "Clear search",
   },
 };
 
