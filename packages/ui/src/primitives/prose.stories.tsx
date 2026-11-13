@@ -11,7 +11,7 @@ const meta = {
     status: { missing: ["Themes", "Accessibility", "Responsive and touch"] },
     docs: {
       description: {
-        component: `Long-form content: lesson pages and descriptions, rendered from HTML the server sanitized. It sets the reading face (Source Serif 4 unless the organization chose sans), the reading size and line height, and a measure of 62 to 68 characters, and styles the elements inside: headings, lists, links, quotes, code and tables. A wide table scrolls on its own.
+        component: `Long-form content: lesson pages and descriptions, rendered from HTML the server sanitized. It sets the reading face (Source Serif 4 unless the organization chose sans), the reading size and line height, and a measure of 62 to 68 characters, and styles the elements inside: headings, lists, links, quotes, code and tables. A table or code block wider than the column scrolls on its own and becomes a tab stop, so a keyboard can scroll it; a code block is announced as "Code block". Prose re-checks after the column resizes and after web fonts load.
 
 **Usage.** \`<Prose>{content}</Prose>\`, where \`content\` is the lesson's elements.
 

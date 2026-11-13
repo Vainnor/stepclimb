@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
+import { renderWithStrings as render } from "../test/strings";
 import { markScrollers, Prose } from "./prose";
 
 // jsdom has no layout; widths are set on the elements by hand.
@@ -51,12 +52,128 @@ describe("Prose", () => {
     setWidths(table, 900, 375);
     setWidths(pre, 300, 375);
 
-    markScrollers(root);
+    markScrollers(root, "Code block");
     expect(table).toHaveAttribute("tabindex", "0");
+    expect(table).not.toHaveAttribute("role");
     expect(pre).not.toHaveAttribute("tabindex");
 
     setWidths(table, 375, 375);
-    markScrollers(root);
+    markScrollers(root, "Code block");
     expect(table).not.toHaveAttribute("tabindex");
+  });
+
+  it("names a scrolling code block as a group, and takes only what it added back", () => {
+    const { container } = render(
+      <Prose>
+        <pre>wide</pre>
+        <pre tabIndex={-1}>fits</pre>
+      </Prose>,
+    );
+    const root = container.firstElementChild as HTMLElement;
+    const [wide, fits] = [...root.querySelectorAll("pre")] as HTMLElement[];
+    if (!wide || !fits) throw new Error("no pre");
+    setWidths(wide, 900, 375);
+    setWidths(fits, 300, 375);
+    markScrollers(root, "Code block");
+    expect(screen.getByRole("group", { name: "Code block" })).toBe(wide);
+    expect(wide).toHaveAttribute("tabindex", "0");
+    // An attribute the content set itself stays.
+    expect(fits).toHaveAttribute("tabindex", "-1");
+
+    setWidths(wide, 375, 375);
+    markScrollers(root, "Code block");
+    for (const attr of ["tabindex", "role", "aria-label"]) expect(wide).not.toHaveAttribute(attr);
+  });
+
+  it("keeps a name the content gave a code block or table, through overflow and fitting again", () => {
+    const { container } = render(
+      <Prose>
+        <pre>wide</pre>
+        <table aria-label="Frequencies">
+          <tbody>
+            <tr>
+              <td>wide</td>
+            </tr>
+          </tbody>
+        </table>
+      </Prose>,
+    );
+    const root = container.firstElementChild as HTMLElement;
+    const pre = root.querySelector("pre") as HTMLElement;
+    const table = root.querySelector("table") as HTMLElement;
+    // Set as sanitized lesson HTML would carry it; JSX refuses a name on a pre's generic role.
+    pre.setAttribute("aria-label", "Readback");
+    setWidths(pre, 900, 375);
+    setWidths(table, 900, 375);
+    markScrollers(root, "Code block");
+    expect(pre).toHaveAttribute("aria-label", "Readback");
+    expect(pre).toHaveAttribute("role", "group");
+    expect(pre).toHaveAttribute("tabindex", "0");
+    expect(pre).toHaveAttribute("data-sc-scroller", "tabindex role");
+    expect(table).toHaveAttribute("aria-label", "Frequencies");
+    expect(table).toHaveAttribute("data-sc-scroller", "tabindex");
+
+    setWidths(pre, 375, 375);
+    setWidths(table, 375, 375);
+    markScrollers(root, "Code block");
+    expect(pre).toHaveAttribute("aria-label", "Readback");
+    expect(table).toHaveAttribute("aria-label", "Frequencies");
+    for (const el of [pre, table]) {
+      for (const attr of ["tabindex", "role", "data-sc-scroller"]) {
+        expect(el).not.toHaveAttribute(attr);
+      }
+    }
+  });
+
+  describe("after a web font loads", () => {
+    const original = Object.getOwnPropertyDescriptor(document, "fonts");
+    afterEach(() => {
+      if (original) Object.defineProperty(document, "fonts", original);
+      else Reflect.deleteProperty(document, "fonts");
+    });
+
+    // jsdom has no FontFaceSet; an EventTarget with a `ready` that resolves when asked stands in.
+    function fakeFonts() {
+      let resolve = () => {};
+      const fonts = Object.assign(new EventTarget(), {
+        ready: new Promise<void>((r) => {
+          resolve = r;
+        }),
+      });
+      Object.defineProperty(document, "fonts", { configurable: true, value: fonts });
+      return { fonts, resolve };
+    }
+
+    function widePreAfterRender() {
+      const { container } = render(
+        <Prose>
+          <pre>N123AB, runway 27, taxi via A, B3, hold short of runway 18.</pre>
+        </Prose>,
+      );
+      const pre = container.querySelector("pre") as HTMLElement;
+      expect(pre).not.toHaveAttribute("tabindex");
+      // The font swap widens the text; nothing Prose's ResizeObserver watches changes size.
+      setWidths(pre, 626, 565);
+      return pre;
+    }
+
+    it("re-checks the code blocks when the fonts finish loading", () => {
+      const { fonts } = fakeFonts();
+      const pre = widePreAfterRender();
+      act(() => {
+        fonts.dispatchEvent(new Event("loadingdone"));
+      });
+      expect(pre).toHaveAttribute("tabindex", "0");
+      expect(pre).toHaveAccessibleName("Code block");
+    });
+
+    it("re-checks the code blocks when fonts that were already loading are ready", async () => {
+      const { resolve } = fakeFonts();
+      const pre = widePreAfterRender();
+      await act(async () => {
+        resolve();
+      });
+      expect(pre).toHaveAttribute("tabindex", "0");
+    });
   });
 });

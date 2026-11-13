@@ -288,6 +288,26 @@ test.describe("at 1280 px @desktop", () => {
     expect(mean, `characters per line: ${lines.join(", ")}`).toBeLessThanOrEqual(68);
   });
 
+  test("Prose makes a code block a named tab stop when a late font makes it overflow", async ({
+    page,
+  }) => {
+    // The mono font arrives a second late, after Prose first measured the block in the fallback
+    // face, as on a slow connection.
+    await page.route(/atkinson-hyperlegible-mono.*\.woff2$/, async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await route.continue();
+    });
+    await openStory(page, story("foundations-prose--lesson"), "light");
+    const pre = page.locator('[data-slot="prose"] pre');
+    const overflows = await pre.evaluate((el) => el.scrollWidth > el.clientWidth);
+    expect(overflows).toBe(true);
+    await expect(pre).toHaveAttribute("tabindex", "0");
+    await expect(page.getByRole("group", { name: "Code block" })).toBeVisible();
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Tab");
+    await expect(pre).toBeFocused();
+  });
+
   test("keyboard focus on an unstyled element draws the ring", async ({ page }) => {
     await openStory(page, story("primitives-button--primary"), "light");
     await page.evaluate(() => {
