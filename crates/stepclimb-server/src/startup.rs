@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::{PgPool, migrate::Migrator, postgres::PgPoolOptions};
 use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{clock::Clock, db::MIGRATOR};
 use tokio::net::TcpListener;
@@ -40,7 +40,17 @@ pub async fn connect(database_url: &str) -> Result<PgPool, StartupError> {
 
 /// Apply every embedded migration the database does not have yet.
 pub async fn migrate(pool: &PgPool) -> Result<(), StartupError> {
-    MIGRATOR.run(pool).await.map_err(StartupError::Migrate)
+    run_migrations(&MIGRATOR, pool).await
+}
+
+/// Apply every migration of `migrator` the database does not have yet.
+///
+/// sqlx holds a PostgreSQL advisory lock for the whole run, so a second process starting at the
+/// same time waits, then finds nothing left to apply. Each migration runs in its own transaction
+/// together with its row in `_sqlx_migrations`, so a failing one is rolled back and the error
+/// names its version.
+pub async fn run_migrations(migrator: &Migrator, pool: &PgPool) -> Result<(), StartupError> {
+    migrator.run(pool).await.map_err(StartupError::Migrate)
 }
 
 /// Log a warning for each key in `keys` whose bytes are the published development key, so a

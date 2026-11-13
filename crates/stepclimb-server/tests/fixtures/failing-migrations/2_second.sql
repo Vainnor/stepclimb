@@ -1,0 +1,3 @@
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+-- A fixture migration for tests/migrations.rs.
+CREATE TABLE fixture_second (id integer);
