@@ -43,7 +43,7 @@
 #
 # Caddy and the server share the `proxy` network, a /24 whose first three octets are
 # SC_PROXY_NETWORK (default 10.201.73). Caddy always has address .2 on it, so the server's
-# trusted-proxy setting (spec 08) can name that one address. Other containers get addresses
+# trusted-proxy setting (STEPCLIMB_TRUSTED_PROXIES, spec 08) names that one address. Other containers get addresses
 # from .128 up, and clients on this host reach the server's published port from the gateway, .1.
 # Change SC_PROXY_NETWORK if 10.201.73.0/24 is in use on this host.
 #
@@ -52,7 +52,9 @@
 # propagates source addresses (DOCKERD_ROOTLESS_ROOTLESSKIT_PORT_DRIVER=slirp4netns, pasta with
 # `implicit`, or `builtin` on RootlessKit 3.0 or later with Docker's userland-proxy disabled; see
 # Docker's rootless troubleshooting page). Otherwise every request arrives from the gateway, .1,
-# and limits per client address (spec 08) count every client as one.
+# and the server's sign-in and token rate limits per client address (spec 08) count every client
+# as one: 20 sign-in requests a minute shared by everyone (STEPCLIMB_SIGN_IN_RATE_LIMIT and
+# STEPCLIMB_TOKEN_RATE_LIMIT change the numbers).
 #
 # Backups: the `backup` service dumps the database with pg_dump every night at SC_BACKUP_AT
 # (UTC, default 03:00) into the `backups` volume and keeps the dumps of the last
@@ -116,6 +118,12 @@ services:
       # The address users open, such as https://lms.example.org (https://$SC_DOMAIN with the tls
       # profile). It is required; an https one makes the server send HSTS (spec 08 Q1, B39).
       STEPCLIMB_PUBLIC_URL: ${SC_PUBLIC_URL:?set SC_PUBLIC_URL to the address users open, such as https://lms.example.org}
+      # Caddy (the tls profile) is the one proxy whose X-Forwarded-For names a client's address,
+      # for the sign-in and token rate limits (spec 08 Q7). It always has .2 on the proxy network
+      # and no other container can: Docker hands out .128 and up. Without the tls profile nothing
+      # holds .2, so every client is counted by the address it connects from. The server reads
+      # no other forwarding header.
+      STEPCLIMB_TRUSTED_PROXIES: ${SC_PROXY_NETWORK:-10.201.73}.2
     secrets:
       - database_url
       - encryption_keys

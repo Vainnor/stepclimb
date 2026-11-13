@@ -168,6 +168,7 @@ impl Fixture {
                 .expect("a valid test key"),
             public_url: WebOrigin::parse("https://lms.example.org").expect("a valid origin"),
             allowed_origins: Vec::new(),
+            rate_limits: Default::default(),
         }
     }
 

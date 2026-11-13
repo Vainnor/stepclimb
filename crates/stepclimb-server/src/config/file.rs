@@ -30,6 +30,10 @@ pub(super) struct FileKeys {
     encryption_keys_file: Option<Spanned<toml::Value>>,
     public_url: Option<Spanned<toml::Value>>,
     allowed_origins: Option<Spanned<toml::Value>>,
+    trusted_proxies: Option<Spanned<toml::Value>>,
+    sign_in_rate_limit: Option<Spanned<toml::Value>>,
+    token_rate_limit: Option<Spanned<toml::Value>>,
+    failed_sign_in_limit: Option<Spanned<toml::Value>>,
 }
 
 impl FileKeys {
@@ -43,6 +47,10 @@ impl FileKeys {
             "encryption_keys_file" => self.encryption_keys_file.as_ref(),
             "public_url" => self.public_url.as_ref(),
             "allowed_origins" => self.allowed_origins.as_ref(),
+            "trusted_proxies" => self.trusted_proxies.as_ref(),
+            "sign_in_rate_limit" => self.sign_in_rate_limit.as_ref(),
+            "token_rate_limit" => self.token_rate_limit.as_ref(),
+            "failed_sign_in_limit" => self.failed_sign_in_limit.as_ref(),
             _ => None,
         }
     }

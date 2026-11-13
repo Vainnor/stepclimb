@@ -56,6 +56,7 @@ fn state(db: PgPool, public_url: &str) -> AppState {
             .expect("a valid test key"),
         public_url: WebOrigin::parse(public_url).expect("a valid origin"),
         allowed_origins: vec![WebOrigin::parse(ALLOWED).expect("a valid origin")],
+        rate_limits: Default::default(),
     }
 }
 

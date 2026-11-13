@@ -172,6 +172,18 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
 - **B23.** Failed password and TOTP checks count against the account identifier as well as the
   client IP, so one address cannot try many passwords for one account and many addresses cannot
   share one account's budget (numbers pending Q7).
+- **B40.** How I5 builds Q7 (I5's choices, 13 Nov 2026; the owner can overrule them). Each limit
+  is a fixed window that opens at the first request it counts: 20 sign-in requests a minute and
+  60 token or revoke requests a minute per client address, and 10 failed password or TOTP checks
+  per account identifier in an organization per 15 minutes, set by `STEPCLIMB_SIGN_IN_RATE_LIMIT`,
+  `STEPCLIMB_TOKEN_RATE_LIMIT` and `STEPCLIMB_FAILED_SIGN_IN_LIMIT`. A check counts as a failure
+  from the moment it starts until it succeeds, so parallel guesses cannot all pass before the
+  first failure is recorded, and an account over its budget is refused without running the
+  check. An IPv6 client is counted by its /64. The client address is the TCP peer, unless the
+  peer is listed in `STEPCLIMB_TRUSTED_PROXIES` (addresses and CIDR ranges, none by default):
+  then it is the right-most `X-Forwarded-For` entry that is not a trusted proxy, or the nearest
+  proxy when that entry is not an address. No other forwarding header is read. The production
+  Compose example trusts Caddy's fixed address.
 
 ### Service accounts and API keys
 
@@ -559,7 +571,7 @@ overrule one, which then updates this spec.
    14-compose-deploy B7), 429 responses. Real client addresses reach Caddy only on rootful
    Docker or on rootless Docker with a RootlessKit port driver that propagates source
    addresses; otherwise every client arrives from the `proxy` network's gateway, and the
-   self-hosting guide says so. Covers B22, B23; T20. Depends on: I3, Q7.
+   self-hosting guide says so. Covers B22, B23, B40; T20. Depends on: I3, Q7.
 6. **I6. Service accounts and API keys.** Migration for `service_accounts`, the admin endpoints,
    bearer API-key authentication with the CRC-32 precheck, scope intersection per request.
    Covers B24 to B29; T3 (API-key request part), T21 to T26. Depends on: I2, `09-permissions-and-roles.md` (catalog,

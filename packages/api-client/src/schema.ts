@@ -160,6 +160,17 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `auth.rate_limited`: too many sign-in or token requests from this client address, or too many failed password or TOTP checks for this account; `Retry-After` gives the seconds until the limit's window closes. */
+        RateLimited: {
+            headers: {
+                /** @description Seconds to wait before trying again, at least 1. */
+                "Retry-After"?: number;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `request.not_found`: no API operation has this path. */
         RouteNotFound: {
             headers: {

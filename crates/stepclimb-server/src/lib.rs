@@ -10,10 +10,12 @@
 //! authenticate them with [`session`] (the browser session cookie and the `Authenticated`
 //! extractor) within the organization [`request_org`] resolves, and protect them with
 //! [`require`] (`Require<P, T>`, the permission check). A sign-in that spans several requests
-//! keeps its state in a [`flow`]. Every unsafe request passes [`csrf`] first.
+//! keeps its state in a [`flow`]. Every unsafe request passes [`csrf`] first. Sign-in and token
+//! routes declare a [`rate_limit`] budget, counted per client address as [`client_ip`] finds it.
 
 pub mod app;
 pub mod auth;
+pub mod client_ip;
 pub mod config;
 mod cookie;
 pub mod csrf;
@@ -24,6 +26,7 @@ pub mod health;
 pub mod healthcheck;
 pub mod openapi;
 pub mod pagination;
+pub mod rate_limit;
 pub mod request_org;
 pub mod require;
 pub mod session;

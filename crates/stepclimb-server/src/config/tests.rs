@@ -216,6 +216,10 @@ fn every_known_variable_is_accepted() {
             "STEPCLIMB_ENCRYPTION_KEYS_FILE",
             "STEPCLIMB_PUBLIC_URL",
             "STEPCLIMB_ALLOWED_ORIGINS",
+            "STEPCLIMB_TRUSTED_PROXIES",
+            "STEPCLIMB_SIGN_IN_RATE_LIMIT",
+            "STEPCLIMB_TOKEN_RATE_LIMIT",
+            "STEPCLIMB_FAILED_SIGN_IN_LIMIT",
             "STEPCLIMB_CONFIG",
         ]
     );
@@ -407,6 +411,10 @@ fn every_config_field_is_a_classified_setting() {
         encryption_keys: _,
         public_url: _,
         allowed_origins: _,
+        trusted_proxies: _,
+        sign_in_rate_limit: _,
+        token_rate_limit: _,
+        failed_sign_in_limit: _,
     } = config;
     let fields = [
         (BIND, false),
@@ -415,6 +423,10 @@ fn every_config_field_is_a_classified_setting() {
         (ENCRYPTION_KEYS, true),
         (PUBLIC_URL, false),
         (ALLOWED_ORIGINS, false),
+        (TRUSTED_PROXIES, false),
+        (SIGN_IN_RATE_LIMIT, false),
+        (TOKEN_RATE_LIMIT, false),
+        (FAILED_SIGN_IN_LIMIT, false),
     ];
     for (setting, secret) in fields {
         assert!(
@@ -739,6 +751,10 @@ fn non_secret_values_list_every_non_secret_setting_and_no_secret() {
             ("log", "info".to_owned()),
             ("public_url", PUBLIC.to_owned()),
             ("allowed_origins", "(none)".to_owned()),
+            ("trusted_proxies", "(none)".to_owned()),
+            ("sign_in_rate_limit", "20".to_owned()),
+            ("token_rate_limit", "60".to_owned()),
+            ("failed_sign_in_limit", "10".to_owned()),
         ]
     );
     let printed = format!("{values:?}");
@@ -1031,4 +1047,108 @@ fn an_origin_setting_never_repeats_its_value() {
             assert!(!printed.contains("hunter2"), "{value}: {printed}");
         }
     }
+}
+
+// Spec 08 Q7: trusted proxies and the rate-limit numbers.
+
+#[test]
+fn no_proxy_is_trusted_and_q7s_numbers_apply_when_unset() {
+    let config = Config::load(&with_required(&[]), None).unwrap();
+    assert!(config.trusted_proxies.is_empty());
+    assert_eq!(config.limits(), crate::rate_limit::Limits::DEFAULT);
+}
+
+#[test]
+fn trusted_proxies_are_addresses_and_ranges() {
+    let config = Config::load(
+        &with_required(&[("STEPCLIMB_TRUSTED_PROXIES", "10.201.73.2, fd00::/8")]),
+        None,
+    )
+    .unwrap();
+    assert_eq!(config.trusted_proxies_or_none(), "10.201.73.2,fd00::/8");
+    let peer: std::net::IpAddr = "10.201.73.2".parse().unwrap();
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert("x-forwarded-for", "203.0.113.9".parse().unwrap());
+    assert_eq!(
+        config.trusted_proxies.client_ip(peer, &headers).to_string(),
+        "203.0.113.9"
+    );
+}
+
+#[test]
+fn a_bad_trusted_proxy_is_refused_by_position() {
+    let error = Config::load(
+        &with_required(&[("STEPCLIMB_TRUSTED_PROXIES", "10.201.73.2,caddy")]),
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "STEPCLIMB_TRUSTED_PROXIES: entry 2 is not an IP address or CIDR range; for example {}",
+            TRUSTED_PROXIES.example
+        )
+    );
+}
+
+#[test]
+fn the_limits_are_configurable() {
+    let config = Config::load(
+        &with_required(&[
+            ("STEPCLIMB_SIGN_IN_RATE_LIMIT", "5"),
+            ("STEPCLIMB_TOKEN_RATE_LIMIT", "120"),
+            ("STEPCLIMB_FAILED_SIGN_IN_LIMIT", "3"),
+        ]),
+        None,
+    )
+    .unwrap();
+    let limits = config.limits();
+    assert_eq!(
+        (
+            limits.sign_in.get(),
+            limits.token.get(),
+            limits.failed_checks.get()
+        ),
+        (5, 120, 3)
+    );
+}
+
+#[test]
+fn a_limit_must_be_a_whole_number_of_one_or_more() {
+    for setting in [SIGN_IN_RATE_LIMIT, TOKEN_RATE_LIMIT, FAILED_SIGN_IN_LIMIT] {
+        for value in ["0", "-1", "ten", "1.5", "4294967296"] {
+            let error = Config::load(&with_required(&[(setting.var, value)]), None).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "{}: {value:?} is not a whole number of 1 or more; for example {}",
+                    setting.var, setting.example
+                ),
+                "{value}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_proxies_and_limits_are_read_from_the_file() {
+    let file = toml(
+        "public_url = \"https://lms.example.org\"\ntrusted_proxies = \"10.201.73.2\"\n\
+         sign_in_rate_limit = \"7\"\ntoken_rate_limit = \"8\"\nfailed_sign_in_limit = \"9\"\n",
+    );
+    let vars = env(&[
+        ("STEPCLIMB_DATABASE_URL", URL),
+        ("STEPCLIMB_ENCRYPTION_KEYS", KEYS),
+    ]);
+    let config = Config::load(&vars, Some(&file)).unwrap();
+    assert_eq!(config.trusted_proxies_or_none(), "10.201.73.2");
+    let limits = config.limits();
+    assert_eq!(
+        (
+            limits.sign_in.get(),
+            limits.token.get(),
+            limits.failed_checks.get()
+        ),
+        (7, 8, 9)
+    );
 }

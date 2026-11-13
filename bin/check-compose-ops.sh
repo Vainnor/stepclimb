@@ -7,6 +7,7 @@
 #   B6   Caddy without SC_DOMAIN exits naming it;
 #   T9   through Caddy with its internal CA, /readyz answers 200 over HTTPS for the domain, with a
 #        certificate that verifies against Caddy's root, and HTTP redirects to HTTPS;
+#   08   the server's STEPCLIMB_TRUSTED_PROXIES is Caddy's fixed address and nothing else;
 #   B7   the upstream sees the request come from Caddy's fixed address on the proxy network,
 #        with Host, X-Forwarded-Proto https and the client's address, and none of the
 #        forwarding headers the client sent (an echo server stands in for the server);
@@ -102,6 +103,12 @@ for profiles in "--profile tls" "--profile tls --profile minio"; do
     compose $profiles config --quiet
 done
 echo "compose ops: config ok (tls; tls with minio)"
+
+# Spec 08 I5: the server trusts exactly Caddy's fixed address for X-Forwarded-For.
+trusted=$(compose --profile tls config --format json \
+    | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["services"]["stepclimb"]["environment"]["STEPCLIMB_TRUSTED_PROXIES"])')
+[[ $trusted == "$network.2" ]] || fail "the server trusts '$trusted' as its proxy, not Caddy's $network.2"
+echo "compose ops: the server trusts only Caddy's address, $trusted"
 
 python3 -I - "$SC_SECRETS_DIR" <<'PY'
 import base64, os, secrets, sys
