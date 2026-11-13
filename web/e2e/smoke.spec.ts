@@ -30,3 +30,25 @@ test("the API document and its UI are served", async ({ request }) => {
   expect(docs.status()).toBe(200);
   expect(docs.headers()["content-type"]).toContain("text/html");
 });
+
+// The server's tests pick an organization with this header, which only a `test-support` build
+// reads (crates/stepclimb-server/src/request_org.rs). The release image must ignore it: sign-out
+// with a session cookie resolves the request's organization, and answers the same with the
+// header naming an organization that does not exist as without it.
+test("the release image ignores the test organization header", async ({ request }) => {
+  const signOut = (extra: Record<string, string>) =>
+    request.post("/auth/sign-out", {
+      headers: {
+        cookie: "__Host-sc_session=e2e-unknown-token",
+        "sec-fetch-site": "same-origin",
+        ...extra,
+      },
+    });
+  const plain = await signOut({});
+  // The e2e stack has no organization, so the cookie makes the server resolve one and fail.
+  expect(plain.status()).toBe(503);
+  expect((await plain.json()).code).toBe("org.none");
+  const named = await signOut({ "x-stepclimb-test-org": "01900000-0000-7000-8000-000000000000" });
+  expect(named.status()).toBe(plain.status());
+  expect(await named.text()).toBe(await plain.text());
+});

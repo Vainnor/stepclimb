@@ -12,6 +12,12 @@ publish.workspace = true
 name = "stepclimb"
 path = "src/main.rs"
 
+[features]
+# The organization header of `request_org`, for the server's tests only (spec 09 B20). Enabled by
+# the dev-dependency on this crate below, so a build without dev-dependencies or `--all-features`
+# (`cargo build`, the release image) never has it.
+test-support = []
+
 [dependencies]
 stepclimb-core.workspace = true
 stepclimb-auth.workspace = true
@@ -36,6 +42,7 @@ tracing-subscriber.workspace = true
 [dev-dependencies]
 # `test-util` for `tokio::time::pause` in the sign-in flow cleanup timer test.
 tokio = { workspace = true, features = ["test-util"] }
+stepclimb-server = { path = ".", features = ["test-support"] }
 base64.workspace = true
 tower.workspace = true
 http-body-util.workspace = true

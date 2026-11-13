@@ -114,7 +114,7 @@ pub async fn end(state: &AppState, request_headers: &HeaderMap) -> Result<(), Ap
     if presented.is_empty() {
         return Ok(());
     }
-    let scope = request_organization(state).await?;
+    let scope = request_organization(state, request_headers).await?;
     for token in presented {
         sessions::delete_by_token_hash(&state.db, scope, TokenHash::of(token).as_bytes())
             .await
@@ -237,7 +237,9 @@ impl FromRequestParts<AppState> for Authenticated {
             }
             Presented::One(token) => TokenHash::of(token),
         };
-        let request_org = request_organization(state).await.map_err(Rejection::keep)?;
+        let request_org = request_organization(state, &parts.headers)
+            .await
+            .map_err(Rejection::keep)?;
         let now = state.clock.now();
         let authentication = sessions::authenticate(&state.db, request_org, hash.as_bytes(), now)
             .await
@@ -265,8 +267,8 @@ impl FromRequestParts<AppState> for Authenticated {
     clippy::disallowed_methods,
     reason = "spec 08 B8, B13: the session extractor and sign-out look the session up within the request's organization"
 )]
-async fn request_organization(state: &AppState) -> Result<OrgScope, ApiError> {
-    request_org::resolve(&state.db).await
+async fn request_organization(state: &AppState, headers: &HeaderMap) -> Result<OrgScope, ApiError> {
+    request_org::resolve(&state.db, headers).await
 }
 
 #[cfg(test)]

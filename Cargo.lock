@@ -1587,6 +1587,7 @@ dependencies = [
  "sqlx",
  "stepclimb-auth",
  "stepclimb-core",
+ "stepclimb-server",
  "thiserror",
  "tokio",
  "toml",
