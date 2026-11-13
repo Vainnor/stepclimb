@@ -143,8 +143,8 @@ These apply to every endpoint in M0, including the ones other specs define.
   no role assignment scoped to it (409 `account.root_immutable`, 409 `account.has_children`, 409
   `account.has_assignments`). Assignments are removed first through the role-assignment routes,
   which apply `09-permissions-and-roles.md` B14 and the externally-managed rules; deleting the
-  account never removes one behind them. Coordinator decision (2026-11-13): this replaces
-  deleting the account's assignments in the same transaction. The delete locks the account row
+  account never removes one behind them. This replaces deleting the account's assignments in the
+  same transaction (decided by the owner, 13 Nov 2026). The delete locks the account row
   before looking for assignments, so an assignment created concurrently either refuses the
   delete or finds the account gone. From M1 an account that holds courses also refuses
   deletion; the courses spec adds that check.
@@ -167,11 +167,11 @@ These apply to every endpoint in M0, including the ones other specs define.
   move or delete only strict descendants of A, and only to a new parent inside A's subtree. A
   move whose destination is outside every subtree where the caller holds `AccountManage` answers
   404 `account.not_found` for the destination, as for any id the caller cannot see.
-  Coordinator decision (2026-11-13): a move may not widen the caller's own permissions. After the
-  move every grant on the destination's path contains the moved account, so every permission
-  effective for the caller at the destination must already be effective for them over the moved
-  account; otherwise the move answers 403 `permission.escalation` and changes nothing. A
-  destination inside the account's own subtree is left to B20's 409.
+  A move may not widen the caller's own permissions. After the move every grant on the
+  destination's path contains the moved account, so every permission effective for the caller at
+  the destination must already be effective for them over the moved account; otherwise the move
+  answers 403 `permission.escalation` and changes nothing. A destination inside the account's own
+  subtree is left to B20's 409 (decided by the owner, 13 Nov 2026).
 - **B24.** `GET /api/v1/accounts` with `parent_id` lists that account's children, sorted by
   `name` then `id`. Without `parent_id` it lists the top-most accounts the caller can see with
   `perm::AccountView`: the root when the caller holds it at organization scope, otherwise each

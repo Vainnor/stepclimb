@@ -139,8 +139,8 @@ organizations' ids.
   lost admin is `stepclimb admin create` (`02-organizations-and-accounts.md` B27).
 - **B15.** An account that assignments are scoped to cannot be deleted (409
   `account.has_assignments`, `02-organizations-and-accounts.md` B21); they are removed first
-  through the assignment routes, which apply B14 and the externally-managed rules. Coordinator
-  decision (2026-11-13): this replaces deleting them with the account. Assignments are not deleted when a user is suspended;
+  through the assignment routes, which apply B14 and the externally-managed rules. This replaces
+  deleting them with the account (decided by the owner, 13 Nov 2026). Assignments are not deleted when a user is suspended;
   a suspended user's requests fail authentication before any permission check.
 
 ### Evaluating permissions
