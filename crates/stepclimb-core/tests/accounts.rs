@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use sqlx::{PgConnection, PgPool, Postgres, pool::PoolConnection};
 use stepclimb_core::{
     OrgScope,
-    accounts::{self, Account, Error, MAX_DEPTH, MAX_NAME_CHARS},
+    accounts::{self, Account, Error, MAX_DEPTH, MAX_NAME_CHARS, Reach},
     id::{Uuid, new_id},
     organizations,
 };
@@ -738,6 +738,66 @@ async fn list_children_sorts_by_name_then_id_and_pages_through_ties(pool: PgPool
         Vec::new(),
         "org B's children are not listed for org A"
     );
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn list_top_visible_lists_each_reached_account_below_no_other(pool: PgPool) {
+    let f = facility(&pool, "org-a").await;
+    let other = facility(&pool, "org-b").await;
+    let pool = &pool;
+    let org = f.org;
+    let top = async |reach: Reach<'_>| {
+        accounts::list_top_visible(pool, scope(org), reach, None, 100).await
+    };
+
+    let whole = top(Reach::Organization).await.unwrap();
+    assert_eq!(whole.iter().map(|a| a.id).collect::<Vec<_>>(), [f.root]);
+    assert_eq!(whole[0].depth, 0);
+
+    // T16: Tower and Enroute, by name; Tower and Ground (its child) give Tower only; Ground and
+    // Ramp (its child) give Ground, even though Tower above them is not reached.
+    let pairs = [
+        (vec![f.tower, f.enroute], vec!["Enroute", "Tower"]),
+        (vec![f.ground, f.tower], vec!["Tower"]),
+        (vec![f.ramp, f.ground], vec!["Ground"]),
+        (vec![f.root, f.ramp], vec!["org-a"]),
+        (vec![], Vec::<&str>::new()),
+    ];
+    for (ids, expected) in pairs {
+        let listed = top(Reach::Accounts(&ids)).await.unwrap();
+        assert_eq!(names(&listed), expected, "{ids:?}");
+    }
+
+    // Another organization's ids reach nothing, and do not hide org A's accounts below them.
+    let foreign = [other.root, other.tower, f.ground];
+    let listed = top(Reach::Accounts(&foreign)).await.unwrap();
+    assert_eq!(names(&listed), ["Ground"]);
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn list_top_visible_pages_by_name_then_id(pool: PgPool) {
+    let (a, root) = org(&pool, "org-a").await;
+    let mut ids = Vec::new();
+    for name in ["Bravo", "Alpha", "Bravo", "Charlie"] {
+        ids.push(create(&pool, a, root, name).await.id);
+    }
+    let reach = Reach::Accounts(&ids);
+    let whole = accounts::list_top_visible(&pool, scope(a), reach, None, 100)
+        .await
+        .unwrap();
+    assert_eq!(names(&whole), ["Alpha", "Bravo", "Bravo", "Charlie"]);
+    assert!(whole[1].id < whole[2].id, "equal names sort by id");
+    let after = (whole[1].name.clone(), whole[1].id);
+    let rest = accounts::list_top_visible(&pool, scope(a), reach, Some(&after), 2)
+        .await
+        .unwrap();
+    assert_eq!(rest, whole[2..4]);
+    let nul = ("A\0".to_owned(), new_id());
+    let refused = accounts::list_top_visible(&pool, scope(a), reach, Some(&nul), 2).await;
+    assert!(matches!(
+        refused,
+        Err(Error::ContainsNul { field: "cursor" })
+    ));
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]

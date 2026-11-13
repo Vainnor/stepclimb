@@ -99,6 +99,38 @@ const TABLE: &[Entry] = &[
         access: permission(OrgManage::KEY, Target::Org, empty_settings_patch),
     },
     Entry {
+        operation_id: "listAccounts",
+        access: permission(AccountView::KEY, Target::AnyScope, at_org),
+    },
+    Entry {
+        operation_id: "getAccount",
+        access: permission(AccountView::KEY, ACCOUNT_NOT_FOUND, tower_in_path),
+    },
+    Entry {
+        operation_id: "createAccount",
+        access: permission(
+            AccountManage::KEY,
+            ACCOUNT_NOT_FOUND,
+            new_account_under_tower,
+        ),
+    },
+    Entry {
+        operation_id: "updateAccount",
+        access: permission(AccountManage::KEY, ACCOUNT_NOT_FOUND, rename_tower),
+    },
+    Entry {
+        operation_id: "moveAccount",
+        access: permission(
+            AccountManage::KEY,
+            ACCOUNT_NOT_FOUND,
+            move_ground_within_tower,
+        ),
+    },
+    Entry {
+        operation_id: "deleteAccount",
+        access: permission(AccountManage::KEY, ACCOUNT_NOT_FOUND, ground_under_tower),
+    },
+    Entry {
         operation_id: "listPermissions",
         access: permission(RoleView::KEY, Target::AnyScope, at_org),
     },
@@ -142,6 +174,39 @@ fn empty_settings_patch(_: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '
             params: Vec::new(),
             body: Some(serde_json::json!({})),
             at: At::Org,
+        }
+    })
+}
+
+/// A new account under Tower, named in the body; the caller acts at Tower.
+fn new_account_under_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: Vec::new(),
+            body: Some(serde_json::json!({ "parent_id": org.tower, "name": "Approach" })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// [`tower_in_path`] with a new name in the body.
+fn rename_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            body: Some(serde_json::json!({ "name": "Renamed account" })),
+            ..tower_in_path(org).await
+        }
+    })
+}
+
+/// Ground, checked at its parent Tower, moved under a new account beside it: the destination
+/// is inside Tower's subtree, so `account.manage` at Tower covers both ends of the move.
+fn move_ground_within_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let destination = org.account(org.tower, "Destination").await;
+        Call {
+            body: Some(serde_json::json!({ "parent_id": destination })),
+            ..ground_under_tower(org).await
         }
     })
 }

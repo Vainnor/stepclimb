@@ -139,14 +139,27 @@ These apply to every endpoint in M0, including the ones other specs define.
   `updated_at` on each of them, since each one's path and depth change. A move to the account's
   current parent changes nothing: no path is rewritten and no `updated_at` moves (coordinator
   decision, 13 Nov 2026).
-- **B21.** Deleting an account is allowed only for a non-root account with no child accounts
-  (409 `account.root_immutable`, 409 `account.has_children`). In the same transaction it deletes
-  the role assignments whose scope is that account (`09-permissions-and-roles.md`). From M1 an
-  account that holds courses also refuses deletion; the courses spec adds that check.
+- **B21.** Deleting an account is allowed only for a non-root account with no child accounts and
+  no role assignment scoped to it (409 `account.root_immutable`, 409 `account.has_children`, 409
+  `account.has_assignments`). Assignments are removed first through the role-assignment routes,
+  which apply `09-permissions-and-roles.md` B14 and the externally-managed rules; deleting the
+  account never removes one behind them. This replaces deleting the account's assignments in the
+  same transaction (decided by the owner, 13 Nov 2026). The delete locks the account row
+  before looking for assignments, so an assignment created concurrently either refuses the
+  delete or finds the account gone. From M1 an account that holds courses also refuses
+  deletion; the courses spec adds that check.
 - **B22.** Create, move and delete take a transaction-scoped advisory lock keyed on the
   organization id (`pg_advisory_xact_lock`) before reading the tree, so two concurrent moves
   cannot build a cycle and a create cannot attach to an account being deleted. Renames do not
-  take it.
+  take it. Coordinator decision (2026-11-13): the routes for create, move and delete take the
+  lock first, then repeat the B23 check on the account, its parent and the destination as read
+  under the lock, and write in the same transaction, so a move committed after the `Require`
+  extractor's check cannot carry any of them out of the caller's reach unseen. A rename reads the
+  account row `FOR UPDATE` (which waits for a move in progress over it), repeats its check on
+  that path and renames in the same transaction. Coordinator decision (2026-11-13): a create or
+  move that would put an account deeper than Q6's maximum depth of 16 (counted as `depth`
+  counts it, 0 for the root: 16 levels below the root, 17 in all; `accounts::MAX_DEPTH` from
+  issue 3) answers 409 `account.too_deep`.
 - **B23.** Account permissions apply to a subtree (`09-permissions-and-roles.md`). An account is
   visible to a principal that holds any permission at a scope containing it: the organization,
   the account itself or one of its ancestors. A principal holding `perm::AccountManage` at
@@ -154,10 +167,17 @@ These apply to every endpoint in M0, including the ones other specs define.
   move or delete only strict descendants of A, and only to a new parent inside A's subtree. A
   move whose destination is outside every subtree where the caller holds `AccountManage` answers
   404 `account.not_found` for the destination, as for any id the caller cannot see.
+  A move may not widen the caller's own permissions. After the move every grant on the
+  destination's path contains the moved account, so every permission effective for the caller at
+  the destination must already be effective for them over the moved account; otherwise the move
+  answers 403 `permission.escalation` and changes nothing. A destination inside the account's own
+  subtree is left to B20's 409 (decided by the owner, 13 Nov 2026).
 - **B24.** `GET /api/v1/accounts` with `parent_id` lists that account's children, sorted by
   `name` then `id`. Without `parent_id` it lists the top-most accounts the caller can see with
   `perm::AccountView`: the root when the caller holds it at organization scope, otherwise each
-  account where it holds `AccountView` and no ancestor of which it can see.
+  account where it holds `AccountView` and no ancestor of which it can see. "Can see" here means
+  holds `AccountView` at: an ancestor made visible only by another permission does not hide its
+  descendants from this list (coordinator decision, 13 Nov 2026).
 - **B25.** An account response carries `id`, `parent_id`, `name`, `depth` (0 for the root),
   `has_children`, `created_at` and `updated_at`. `parent_id` is shown even when the parent is not
   visible to the caller; reading that parent still answers 404 (the rule protects a resource's
@@ -193,10 +213,10 @@ specific `auth.*` code from `08-sessions-and-csrf.md`), 415 `request.unsupported
 | `PATCH /api/v1/organization/settings` | partial `OrgSettings` | 200 `OrgSettings` | 422 `request.invalid` (`settings.unknown_key`, per-key codes) | `perm::OrgManage` (organization) |
 | `GET /api/v1/accounts` | `?parent_id&cursor&limit` | 200 `Page<Account>` | 400 `pagination.invalid_cursor`, 404 `account.not_found` (parent) | `perm::AccountView` (any scope; filtered, B24) |
 | `GET /api/v1/accounts/{account_id}` | | 200 `Account` | 404 `account.not_found` | `perm::AccountView` (account) |
-| `POST /api/v1/accounts` | `{ "parent_id": uuid, "name": string }` | 201 `Account`, `Location` header | 404 `account.not_found` (parent), 422 `request.invalid` | `perm::AccountManage` (parent account) |
+| `POST /api/v1/accounts` | `{ "parent_id": uuid, "name": string }` | 201 `Account`, `Location` header | 404 `account.not_found` (parent), 409 `account.too_deep`, 422 `request.invalid` | `perm::AccountManage` (parent account) |
 | `PATCH /api/v1/accounts/{account_id}` | `{ "name"?: string }` | 200 `Account` | 404 `account.not_found`, 422 `request.invalid` | `perm::AccountManage` (account) |
-| `POST /api/v1/accounts/{account_id}/move` | `{ "parent_id": uuid }` | 200 `Account` | 404 `account.not_found`, 409 `account.root_immutable`, 409 `account.move_into_descendant` | `perm::AccountManage` (strict ancestor of the account, and the destination) |
-| `DELETE /api/v1/accounts/{account_id}` | | 204 | 404 `account.not_found`, 409 `account.root_immutable`, 409 `account.has_children` | `perm::AccountManage` (strict ancestor of the account) |
+| `POST /api/v1/accounts/{account_id}/move` | `{ "parent_id": uuid }` | 200 `Account` | 404 `account.not_found`, 403 `permission.escalation`, 409 `account.root_immutable`, 409 `account.move_into_descendant`, 409 `account.too_deep` | `perm::AccountManage` (strict ancestor of the account, and the destination) |
+| `DELETE /api/v1/accounts/{account_id}` | | 204 | 404 `account.not_found`, 409 `account.root_immutable`, 409 `account.has_children`, 409 `account.has_assignments` | `perm::AccountManage` (strict ancestor of the account) |
 
 Schemas: `Organization { id, slug, name }`; `OrgSettings` (one optional-on-write, always-present-
 on-read member per key from B14); `Account { id, parent_id, name, depth, has_children,
@@ -301,8 +321,9 @@ organizations created by B26 in the same test database.
 - **T13** (B20). Moving the root answers 409 `account.root_immutable`; moving Tower under its own
   child answers 409 `account.move_into_descendant`.
 - **T14** (B21). Deleting an account with a child answers 409 `account.has_children`; deleting a
-  leaf removes it and the role assignments scoped to it, and leaves assignments on other
-  accounts.
+  leaf that a role assignment is scoped to answers 409 `account.has_assignments` and changes
+  nothing; once that assignment is removed, deleting the leaf removes it and leaves assignments
+  on other accounts.
 - **T15** (B23). An account admin of Tower: creates under Tower and under Ground (201); renames
   Tower (200); moves Ground within Tower's subtree (200); cannot move or delete Tower (404,
   because the check is at Tower's parent, which it cannot see); cannot move Ground under Enroute

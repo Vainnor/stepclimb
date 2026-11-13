@@ -92,6 +92,9 @@ pub enum Error {
     /// The account still has child accounts (B21).
     #[error("an account with child accounts cannot be deleted")]
     HasChildren,
+    /// Role assignments are still scoped to the account (B21, spec 09 B15).
+    #[error("an account that role assignments are scoped to cannot be deleted")]
+    HasAssignments,
     /// The create or move would put an account deeper than [`MAX_DEPTH`].
     #[error("accounts cannot be nested deeper than {MAX_DEPTH} levels below the root")]
     TooDeep,
@@ -180,6 +183,25 @@ pub async fn ancestors_path(
         .transpose()
 }
 
+/// [`ancestors_path`] for a caller about to change the account `id` in its transaction: reads
+/// the row `FOR UPDATE`, so the path cannot change until the transaction ends. A move in
+/// progress over the account is waited for, and the path it committed is the one returned.
+pub async fn lock_path(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    id: Uuid,
+) -> Result<Option<Vec<Uuid>>, Error> {
+    let path = sqlx::query_scalar!(
+        r#"SELECT path::text AS "path!" FROM accounts WHERE org_id = $1 AND id = $2 FOR UPDATE"#,
+        scope.org_id(),
+        id,
+    )
+    .fetch_optional(conn)
+    .await?;
+    path.map(|path| parse_path(&path).ok_or(Error::CorruptPath { id }))
+        .transpose()
+}
+
 /// The account ids of a stored path, or `None` when a label is not an id.
 pub(crate) fn parse_path(path: &str) -> Option<Vec<Uuid>> {
     path.split('.')
@@ -215,6 +237,64 @@ pub async fn list_children(
            LIMIT $5"#,
         scope.org_id(),
         parent_id,
+        after_name,
+        after.map(|(_, id)| *id),
+        limit,
+    )
+    .fetch_all(db)
+    .await?;
+    rows.into_iter().map(Account::try_from).collect()
+}
+
+/// Whose topmost accounts [`list_top_visible`] lists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reach<'a> {
+    /// Every account: the root alone is topmost.
+    Organization,
+    /// The subtrees of these accounts: each one with none of the others above it.
+    Accounts(&'a [Uuid]),
+}
+
+/// The topmost accounts of `reach` in the scope's organization, sorted by name then id, starting
+/// after `after` and at most `limit` of them (B24): the root for [`Reach::Organization`], and for
+/// [`Reach::Accounts`] each listed account no other listed account is an ancestor of. Ids that
+/// are not accounts of the organization are left out.
+///
+/// `after` comes from a client's cursor, as in [`list_children`].
+pub async fn list_top_visible(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    reach: Reach<'_>,
+    after: Option<&ListKey>,
+    limit: i64,
+) -> Result<Vec<Account>, Error> {
+    let after_name = after.map(|(name, _)| no_nul("cursor", name)).transpose()?;
+    let (whole_org, ids): (bool, &[Uuid]) = match reach {
+        Reach::Organization => (true, &[]),
+        Reach::Accounts(ids) => (false, ids),
+    };
+    let rows = sqlx::query_as!(
+        Row,
+        r#"SELECT a.id, a.parent_id, a.name, nlevel(a.path) - 1 AS "depth!",
+                  EXISTS (SELECT 1 FROM accounts c WHERE c.org_id = $1 AND c.parent_id = a.id)
+                      AS "has_children!",
+                  (extract(epoch FROM a.created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM a.updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM accounts a
+           WHERE a.org_id = $1
+             AND CASE WHEN $2::bool THEN a.parent_id IS NULL
+                      ELSE a.id = ANY($3::uuid[])
+                           AND NOT EXISTS (
+                               SELECT 1 FROM accounts h
+                               WHERE h.org_id = $1 AND h.id = ANY($3::uuid[]) AND h.id <> a.id
+                                 AND h.path @> a.path)
+                 END
+             AND ($4::text IS NULL OR (a.name, a.id) > ($4, $5::uuid))
+           ORDER BY a.name, a.id
+           LIMIT $6"#,
+        scope.org_id(),
+        whole_org,
+        ids,
         after_name,
         after.map(|(_, id)| *id),
         limit,
@@ -471,12 +551,14 @@ async fn rewrite_subtree(
 }
 
 /// Delete the account `id` of the scope's organization (B21). Refuses the root
-/// ([`Error::RootImmutable`]) and an account with child accounts ([`Error::HasChildren`]).
+/// ([`Error::RootImmutable`]), an account with child accounts ([`Error::HasChildren`]) and an
+/// account that role assignments are scoped to ([`Error::HasAssignments`], spec 09 B15).
 ///
-/// Runs in one transaction (a savepoint when `db` is already one) under the tree lock. In the
-/// same transaction it deletes the role assignments scoped to the account (B21, spec 09 B15),
-/// after the account row: the row delete waits for a `role_assignments::create` holding the
-/// account `FOR KEY SHARE`, so an assignment that create commits is deleted too.
+/// Runs in one transaction (a savepoint when `db` is already one) under the tree lock. It locks
+/// the account row `FOR UPDATE` before looking for assignments: that waits for a
+/// `role_assignments::create` holding the account `FOR KEY SHARE`, so an assignment that create
+/// commits is seen and refuses the delete, and a create that starts later waits for the delete
+/// and then finds the account gone.
 pub async fn delete<'c>(
     db: impl Acquire<'c, Database = Postgres>,
     scope: OrgScope,
@@ -491,6 +573,12 @@ pub async fn delete<'c>(
     if account.has_children {
         return Err(Error::HasChildren);
     }
+    lock_path(&mut tx, scope, id)
+        .await?
+        .ok_or(Error::NotFound)?;
+    if role_assignments::any_at_account(&mut tx, scope, id).await? {
+        return Err(Error::HasAssignments);
+    }
     sqlx::query!(
         "DELETE FROM accounts WHERE org_id = $1 AND id = $2",
         scope.org_id(),
@@ -498,7 +586,6 @@ pub async fn delete<'c>(
     )
     .execute(&mut *tx)
     .await?;
-    role_assignments::delete_for_account(&mut tx, scope, id).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -506,7 +593,13 @@ pub async fn delete<'c>(
 /// Take the transaction-scoped advisory lock on the scope's account tree (B22), and refuse a
 /// transaction whose isolation level is not `READ COMMITTED`. The lock is released when the
 /// outermost transaction ends, so a refusal that rolls the transaction back releases it too.
-async fn lock_tree(conn: &mut PgConnection, scope: OrgScope) -> Result<(), Error> {
+///
+/// [`create`], [`move_to`] and [`delete`] take it themselves. A caller that must decide
+/// something from the tree before one of them (who may change which account, spec 02 B23) takes
+/// it first on its own transaction, reads what it decides from in that transaction, and then
+/// calls the write there: the lock is reentrant, so the write's own lock is granted at once and
+/// no other tree write runs between the decision and the write.
+pub async fn lock_tree(conn: &mut PgConnection, scope: OrgScope) -> Result<(), Error> {
     let isolation = sqlx::query_scalar!(
         r#"SELECT current_setting('transaction_isolation') AS "isolation!"
            FROM pg_advisory_xact_lock($1, $2)"#,

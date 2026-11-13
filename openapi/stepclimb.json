@@ -10,6 +10,383 @@
     "version": "0.0.0"
   },
   "paths": {
+    "/api/v1/accounts": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "List an account's children, or without `parent_id` the topmost accounts the caller can see:\nthe root for a holder of `account.view` at organization scope, otherwise each account where\nthe caller holds it below no other such account. Sorted by name, then id.",
+        "operationId": "listAccounts",
+        "parameters": [
+          {
+            "name": "parent_id",
+            "in": "query",
+            "description": "List this account's children. Omitted, list the topmost accounts you can see with\n`account.view`.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page; omit it for the first page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many items to return, 1 to 200; 50 when omitted.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 200,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of accounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Account"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/PermissionDenied"
+          },
+          "404": {
+            "$ref": "#/components/responses/ParentNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Create an account under `parent_id`.",
+        "operationId": "createAccount",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewAccount"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The account is created",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The account's path"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/CreateForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/ParentNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/CreateConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/accounts/{account_id}": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Read one account.",
+        "operationId": "getAccount",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "The account's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/PermissionDenied"
+          },
+          "404": {
+            "$ref": "#/components/responses/AccountNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Delete an account that has no child accounts, and the role assignments scoped to it.",
+        "operationId": "deleteAccount",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "The account's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The account is deleted"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/ManageForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/DeleteNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/DeleteConflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      },
+      "patch": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Rename an account. A patch without `name` changes nothing.",
+        "operationId": "updateAccount",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "The account's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The account after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/ManageForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/AccountNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/accounts/{account_id}/move": {
+      "post": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Move an account and its subtree under `parent_id`.",
+        "operationId": "moveAccount",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "The account's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountMove"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The account after the move",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/MoveForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/MoveNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/MoveConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/api/v1/admin/permissions": {
       "get": {
         "tags": [
@@ -655,6 +1032,80 @@
   },
   "components": {
     "schemas": {
+      "Account": {
+        "type": "object",
+        "description": "An account of the caller's organization.",
+        "required": [
+          "id",
+          "parent_id",
+          "name",
+          "depth",
+          "has_children",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          },
+          "depth": {
+            "type": "integer",
+            "format": "int32",
+            "description": "0 for the root, 1 for its children, and so on; at most 16."
+          },
+          "has_children": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "`null` for the root only. Shown even when the parent is not visible to the caller."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          }
+        }
+      },
+      "AccountMove": {
+        "type": "object",
+        "description": "The new parent of a moved account.",
+        "required": [
+          "parent_id"
+        ],
+        "properties": {
+          "parent_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The new parent; you must hold `account.manage` at a scope containing it. The account's\ncurrent parent changes nothing."
+          }
+        },
+        "additionalProperties": false
+      },
+      "AccountPatch": {
+        "type": "object",
+        "description": "A change to an account; an omitted member is left as it is. A member sent as `null` is\nmalformed: omit it instead.",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Trimmed; 1 to 200 characters."
+          }
+        },
+        "additionalProperties": false
+      },
       "FieldError": {
         "type": "object",
         "description": "One rule a request body broke, in a 422's `errors`.",
@@ -814,6 +1265,26 @@
           }
         }
       },
+      "NewAccount": {
+        "type": "object",
+        "description": "An account to create.",
+        "required": [
+          "parent_id",
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Trimmed; 1 to 200 characters."
+          },
+          "parent_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The parent account; you must hold `account.manage` at a scope containing it."
+          }
+        },
+        "additionalProperties": false
+      },
       "NewRole": {
         "type": "object",
         "description": "A custom role to create.",
@@ -882,6 +1353,75 @@
           }
         },
         "additionalProperties": false
+      },
+      "Page_Account": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "An account of the caller's organization.",
+              "required": [
+                "id",
+                "parent_id",
+                "name",
+                "depth",
+                "has_children",
+                "created_at",
+                "updated_at"
+              ],
+              "properties": {
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "RFC 3339, UTC."
+                },
+                "depth": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "0 for the root, 1 for its children, and so on; at most 16."
+                },
+                "has_children": {
+                  "type": "boolean"
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "parent_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "`null` for the root only. Shown even when the parent is not visible to the caller."
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "RFC 3339, UTC."
+                }
+              }
+            },
+            "description": "The items, in the list's sort order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass this as `cursor` to get the next page; `null` on the last page."
+          }
+        }
       },
       "Page_Role": {
         "type": "object",
@@ -1129,6 +1669,16 @@
       }
     },
     "responses": {
+      "AccountNotFound": {
+        "description": "`account.not_found`: no account with this id exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "BadRequest": {
         "description": "`request.malformed`: the body, a path parameter or a query parameter does not parse or does not match the schema, or `limit` is outside 1 to 200. `pagination.invalid_cursor`: the cursor does not decode.",
         "content": {
@@ -1141,6 +1691,16 @@
       },
       "CreateConflict": {
         "description": "`role.key_taken`: a built-in role or another custom role of the organization has the key.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "CreateForbidden": {
+        "description": "`permission.denied`: you hold `account.manage` nowhere, or you can see the parent without holding it there. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -1179,6 +1739,16 @@
           }
         }
       },
+      "DeleteNotFound": {
+        "description": "`account.not_found`: the account does not exist or you cannot see its parent. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "InternalError": {
         "description": "`internal.error`: the server failed; the cause is in its log.",
         "content": {
@@ -1189,8 +1759,48 @@
           }
         }
       },
+      "ManageForbidden": {
+        "description": "`permission.denied`: you can see the account but do not hold `account.manage` at a scope containing it (for a delete, the account's parent). `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "MethodNotAllowed": {
         "description": "`request.method_not_allowed`: the path does not take this method; `Allow` lists the methods it takes.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "MoveConflict": {
+        "description": "`account.root_immutable`: the root account cannot be moved. `account.move_into_descendant`: the destination is the account itself or one of its descendants. `account.too_deep`: an account of the moved subtree would end more than 16 levels below the root.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "MoveForbidden": {
+        "description": "`permission.denied`: you can see the account's parent but do not hold `account.manage` there. `permission.escalation`: the destination would give you, over the moved account, a permission you do not hold over it now. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "MoveNotFound": {
+        "description": "`account.not_found`: the account does not exist or you cannot see its parent, or the destination `parent_id` does not exist or is outside every subtree where you hold `account.manage`. `org.not_found`: the request's organization cannot be determined.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -1221,6 +1831,16 @@
       },
       "OrganizationNotFound": {
         "description": "`org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ParentNotFound": {
+        "description": "`account.not_found`: no account with `parent_id` exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -1365,6 +1985,10 @@
     {
       "name": "organization",
       "description": "The caller's organization and its settings"
+    },
+    {
+      "name": "accounts",
+      "description": "The account tree inside the organization"
     },
     {
       "name": "roles",

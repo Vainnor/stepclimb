@@ -2,6 +2,64 @@
 // Generated from openapi/stepclimb.json by scripts/generate.mjs. Do not edit; run
 // `just openapi` instead.
 export interface paths {
+    "/api/v1/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List an account's children, or without `parent_id` the topmost accounts the caller can see:
+         *     the root for a holder of `account.view` at organization scope, otherwise each account where
+         *     the caller holds it below no other such account. Sorted by name, then id.
+         */
+        get: operations["listAccounts"];
+        put?: never;
+        /** Create an account under `parent_id`. */
+        post: operations["createAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{account_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one account. */
+        get: operations["getAccount"];
+        put?: never;
+        post?: never;
+        /** Delete an account that has no child accounts, and the role assignments scoped to it. */
+        delete: operations["deleteAccount"];
+        options?: never;
+        head?: never;
+        /** Rename an account. A patch without `name` changes nothing. */
+        patch: operations["updateAccount"];
+        trace?: never;
+    };
+    "/api/v1/accounts/{account_id}/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Move an account and its subtree under `parent_id`. */
+        post: operations["moveAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/permissions": {
         parameters: {
             query?: never;
@@ -171,6 +229,50 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description An account of the caller's organization. */
+        Account: {
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            created_at: string;
+            /**
+             * Format: int32
+             * @description 0 for the root, 1 for its children, and so on; at most 16.
+             */
+            depth: number;
+            has_children: boolean;
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /**
+             * Format: uuid
+             * @description `null` for the root only. Shown even when the parent is not visible to the caller.
+             */
+            parent_id: string | null;
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            updated_at: string;
+        };
+        /** @description The new parent of a moved account. */
+        AccountMove: {
+            /**
+             * Format: uuid
+             * @description The new parent; you must hold `account.manage` at a scope containing it. The account's
+             *     current parent changes nothing.
+             */
+            parent_id: string;
+        };
+        /**
+         * @description A change to an account; an omitted member is left as it is. A member sent as `null` is
+         *     malformed: omit it instead.
+         */
+        AccountPatch: {
+            /** @description Trimmed; 1 to 200 characters. */
+            name?: string;
+        };
         /** @description One rule a request body broke, in a 422's `errors`. */
         FieldError: {
             /** @description The stable code of the rule, such as `settings.unknown_key`. */
@@ -231,6 +333,16 @@ export interface components {
             /** @description An IANA time zone. */
             tz: string;
         };
+        /** @description An account to create. */
+        NewAccount: {
+            /** @description Trimmed; 1 to 200 characters. */
+            name: string;
+            /**
+             * Format: uuid
+             * @description The parent account; you must hold `account.manage` at a scope containing it.
+             */
+            parent_id: string;
+        };
         /** @description A custom role to create. */
         NewRole: {
             /**
@@ -271,6 +383,38 @@ export interface components {
         OrganizationPatch: {
             /** @description Trimmed; 1 to 200 characters. */
             name?: string;
+        };
+        /** @description One page of a list. */
+        Page_Account: {
+            /** @description The items, in the list's sort order. */
+            items: {
+                /**
+                 * Format: date-time
+                 * @description RFC 3339, UTC.
+                 */
+                created_at: string;
+                /**
+                 * Format: int32
+                 * @description 0 for the root, 1 for its children, and so on; at most 16.
+                 */
+                depth: number;
+                has_children: boolean;
+                /** Format: uuid */
+                id: string;
+                name: string;
+                /**
+                 * Format: uuid
+                 * @description `null` for the root only. Shown even when the parent is not visible to the caller.
+                 */
+                parent_id: string | null;
+                /**
+                 * Format: date-time
+                 * @description RFC 3339, UTC.
+                 */
+                updated_at: string;
+            }[];
+            /** @description Pass this as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
         };
         /** @description One page of a list. */
         Page_Role: {
@@ -382,6 +526,15 @@ export interface components {
         UserStatus: "active" | "suspended";
     };
     responses: {
+        /** @description `account.not_found`: no account with this id exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined. */
+        AccountNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `request.malformed`: the body, a path parameter or a query parameter does not parse or does not match the schema, or `limit` is outside 1 to 200. `pagination.invalid_cursor`: the cursor does not decode. */
         BadRequest: {
             headers: {
@@ -393,6 +546,15 @@ export interface components {
         };
         /** @description `role.key_taken`: a built-in role or another custom role of the organization has the key. */
         CreateConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: you hold `account.manage` nowhere, or you can see the parent without holding it there. `auth.csrf_refused`: the request did not come from this site. */
+        CreateForbidden: {
             headers: {
                 [name: string]: unknown;
             };
@@ -427,6 +589,15 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `account.not_found`: the account does not exist or you cannot see its parent. `org.not_found`: the request's organization cannot be determined. */
+        DeleteNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `internal.error`: the server failed; the cause is in its log. */
         InternalError: {
             headers: {
@@ -436,8 +607,44 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `permission.denied`: you can see the account but do not hold `account.manage` at a scope containing it (for a delete, the account's parent). `auth.csrf_refused`: the request did not come from this site. */
+        ManageForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `request.method_not_allowed`: the path does not take this method; `Allow` lists the methods it takes. */
         MethodNotAllowed: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `account.root_immutable`: the root account cannot be moved. `account.move_into_descendant`: the destination is the account itself or one of its descendants. `account.too_deep`: an account of the moved subtree would end more than 16 levels below the root. */
+        MoveConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: you can see the account's parent but do not hold `account.manage` there. `permission.escalation`: the destination would give you, over the moved account, a permission you do not hold over it now. `auth.csrf_refused`: the request did not come from this site. */
+        MoveForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `account.not_found`: the account does not exist or you cannot see its parent, or the destination `parent_id` does not exist or is outside every subtree where you hold `account.manage`. `org.not_found`: the request's organization cannot be determined. */
+        MoveNotFound: {
             headers: {
                 [name: string]: unknown;
             };
@@ -465,6 +672,15 @@ export interface components {
         };
         /** @description `org.not_found`: the request's organization cannot be determined. */
         OrganizationNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `account.not_found`: no account with `parent_id` exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined. */
+        ParentNotFound: {
             headers: {
                 [name: string]: unknown;
             };
@@ -581,6 +797,207 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    listAccounts: {
+        parameters: {
+            query?: {
+                /**
+                 * @description List this account's children. Omitted, list the topmost accounts you can see with
+                 *     `account.view`.
+                 */
+                parent_id?: string;
+                /** @description The `next_cursor` of the previous page; omit it for the first page. */
+                cursor?: string;
+                /** @description How many items to return, 1 to 200; 50 when omitted. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of accounts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_Account"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["PermissionDenied"];
+            404: components["responses"]["ParentNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    createAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewAccount"];
+            };
+        };
+        responses: {
+            /** @description The account is created */
+            201: {
+                headers: {
+                    /** @description The account's path */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Account"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["CreateForbidden"];
+            404: components["responses"]["ParentNotFound"];
+            409: components["responses"]["CreateConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["UnprocessableEntity"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    getAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The account's id. */
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Account"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["PermissionDenied"];
+            404: components["responses"]["AccountNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    deleteAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The account's id. */
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account is deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ManageForbidden"];
+            404: components["responses"]["DeleteNotFound"];
+            409: components["responses"]["DeleteConflict"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    updateAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The account's id. */
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountPatch"];
+            };
+        };
+        responses: {
+            /** @description The account after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Account"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ManageForbidden"];
+            404: components["responses"]["AccountNotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["UnprocessableEntity"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    moveAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The account's id. */
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountMove"];
+            };
+        };
+        responses: {
+            /** @description The account after the move */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Account"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["MoveForbidden"];
+            404: components["responses"]["MoveNotFound"];
+            409: components["responses"]["MoveConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
     listPermissions: {
         parameters: {
             query?: never;
