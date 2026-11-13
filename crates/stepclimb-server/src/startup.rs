@@ -55,8 +55,20 @@ pub fn warn_about_development_keys(keys: &KeyRing) {
     }
 }
 
+/// Log the configuration's non-secret values. The database URL and the key ring are secrets and
+/// are left out.
+pub fn log_configuration(config: &Config) {
+    tracing::info!(
+        file = config.file.as_ref().map(|path| path.display().to_string()),
+        bind = %config.bind,
+        log = %config.log,
+        "configuration loaded"
+    );
+}
+
 /// Connect, migrate, then serve HTTP on `config.bind` until SIGINT or SIGTERM.
 pub async fn serve(config: Config) -> Result<(), StartupError> {
+    log_configuration(&config);
     warn_about_development_keys(&config.encryption_keys);
     let pool = connect(&config.database_url).await?;
     migrate(&pool).await?;
@@ -129,16 +141,20 @@ mod tests {
         }
     }
 
-    fn warnings_for(ring: &str) -> String {
-        let keys = KeyRing::parse(ring).unwrap();
+    fn captured(log: impl FnOnce()) -> String {
         let captured = Captured::default();
         let writer = captured.clone();
         let subscriber = tracing_subscriber::fmt()
             .with_ansi(false)
             .with_writer(move || writer.clone())
             .finish();
-        tracing::subscriber::with_default(subscriber, || warn_about_development_keys(&keys));
+        tracing::subscriber::with_default(subscriber, log);
         String::from_utf8(captured.0.lock().unwrap().clone()).unwrap()
+    }
+
+    fn warnings_for(ring: &str) -> String {
+        let keys = KeyRing::parse(ring).unwrap();
+        captured(|| warn_about_development_keys(&keys))
     }
 
     #[test]
@@ -155,6 +171,34 @@ mod tests {
         );
         assert!(!output.contains("prod"), "{output}");
         assert!(!output.contains(&development), "{output}");
+    }
+
+    #[test]
+    fn the_configuration_log_shows_only_non_secret_values() {
+        let config = Config::load(
+            &[
+                (
+                    "STEPCLIMB_DATABASE_URL",
+                    "postgres://app:zq-db-secret@db:5432/stepclimb",
+                ),
+                (
+                    "STEPCLIMB_ENCRYPTION_KEYS",
+                    "zq:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+                ),
+                ("STEPCLIMB_BIND", "0.0.0.0:9000"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect(),
+            None,
+        )
+        .unwrap();
+        let output = captured(|| log_configuration(&config));
+        assert!(output.contains("configuration loaded"), "{output}");
+        assert!(output.contains("bind=0.0.0.0:9000"), "{output}");
+        assert!(output.contains("log=info"), "{output}");
+        assert!(!output.contains("zq"), "{output}");
+        assert!(!output.contains("AAEC"), "{output}");
     }
 
     #[test]

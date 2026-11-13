@@ -28,3 +28,4 @@ Decided list (`docs/plan/technical.md` -> Decided, and `docs/plan/ui.md` -> UI d
 | [0019](0019-minio-image.md) | Which MinIO image the Compose stack uses | Accepted (Chainguard image, revisit in M1) |
 | [0020](0020-american-english.md) | American English in docs, comments and UI copy | Accepted |
 | [0021](0021-no-hosted-ci.md) | No hosted CI: the merge gate runs locally | Accepted |
+| [0022](0022-configuration-names-and-file.md) | Configuration names and the stepclimb.toml layout | Accepted |
