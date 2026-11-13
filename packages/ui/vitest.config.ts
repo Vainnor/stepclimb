@@ -8,5 +8,7 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
+    // Date messages format in the host's time zone; tests pin it so they pass in every zone.
+    env: { TZ: "UTC" },
   },
 });

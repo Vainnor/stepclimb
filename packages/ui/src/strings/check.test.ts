@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
 import type { Catalog } from "./catalog";
-import { findMessageIds, hardCodedNouns, invalidMessages, missingMessageIds } from "./check";
+import {
+  articlesBeforeTerms,
+  dynamicLookups,
+  findMessageIds,
+  hardCodedNouns,
+  invalidMessages,
+  missingMessageIds,
+} from "./check";
 
 describe("findMessageIds", () => {
   it("finds literal ids passed to t, in either quote style", () => {
@@ -27,19 +34,65 @@ describe("missingMessageIds", () => {
   });
 });
 
+describe("dynamicLookups", () => {
+  it("reports a variable or template-literal id with its line", () => {
+    const source = [
+      "const a = t(id);",
+      `const b = t(\`shell.\${name}\`);`,
+      't("shell.title");',
+    ].join("\n");
+    expect(dynamicLookups({ "a.tsx": source })).toEqual([
+      { file: "a.tsx", line: 1 },
+      { file: "a.tsx", line: 2 },
+    ]);
+  });
+
+  it("accepts a literal id on the next line and an exempted line", () => {
+    const source = ["t(", '  "shell.title",', ");", "t(label); // strings-check-ignore: data"];
+    expect(dynamicLookups({ "a.tsx": source.join("\n") })).toEqual([]);
+  });
+});
+
 describe("hardCodedNouns", () => {
-  it("flags a term's default noun written as text, including inside a plural branch", () => {
+  it("flags a noun in literal text, including plural option values", () => {
     const catalog: Catalog = {
       en: {
         "a.plain": "Open the course",
-        "a.plural": "{n, plural, one {# {course}} other {# Courses}}",
+        "a.options": "{n, plural, one {course} other {courses}}",
         "a.term": "Open the {course}; {Courses} list",
         "a.word": "Discourse is not a noun we rename",
       },
     };
     expect(hardCodedNouns([catalog])).toEqual([
       { id: "a.plain", noun: "course" },
-      { id: "a.plural", noun: "courses" },
+      { id: "a.options", noun: "course" },
+      { id: "a.options", noun: "courses" },
+    ]);
+  });
+
+  it("does not treat a select key as text", () => {
+    const catalog: Catalog = {
+      en: { "a.select": "{kind, select, course {Open the {course}} other {Open}}" },
+    };
+    expect(hardCodedNouns([catalog])).toEqual([]);
+  });
+});
+
+describe("articlesBeforeTerms", () => {
+  it("flags a or an directly before a term argument, at any depth", () => {
+    const catalog: Catalog = {
+      en: {
+        "a.a": "Open a {course}",
+        "a.an": "An {Course} opened",
+        "a.plural": "{n, plural, one {a {course}} other {# {courses}}}",
+        "a.the": "Open the {course}",
+        "a.word": "Data {course} and a {count}",
+      },
+    };
+    expect(articlesBeforeTerms([catalog])).toEqual([
+      { id: "a.a", term: "course" },
+      { id: "a.an", term: "Course" },
+      { id: "a.plural", term: "course" },
     ]);
   });
 });

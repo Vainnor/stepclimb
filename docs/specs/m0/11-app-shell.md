@@ -178,9 +178,24 @@ Read on 2026-11-12; the spec builds on it.
   term, not a message id, and carries its singular and plural forms, so every message that uses
   "course" changes together. Components never hard-code nouns (`docs/plan/ui.md` -> Organization
   theming, Words). Where overrides are stored and how they reach the client is Open question Q7.
+  Coordinator decisions, 13 Nov 2026, for the owner's review:
+  - An override's forms are stored as they read mid-sentence ("training module", "training
+    modules"). Messages use the term's ICU arguments, named after the English defaults:
+    `{course}` and `{courses}` mid-sentence, `{Course}` and `{Courses}` at the start of a
+    sentence, which upper-case the first letter of the stored form. A stored form is never
+    lower-cased, so an acronym such as "LOA" survives.
+  - No message writes a term's noun as text, and none puts "a" or "an" directly before a term
+    argument, because the article depends on the override ("a course", "an exam"). The catalog
+    test checks both on the parsed ICU message: literal text only, including plural and select
+    option values; select keys are not text.
 - **B26.** A message id missing from the catalog fails the Vitest suite (a test walks the source
   for ids and checks the catalog), and at runtime renders the id in development builds and the
-  English default in production builds, never an empty string.
+  English default in production builds, never an empty string. Coordinator decisions, 13 Nov
+  2026, for the owner's review: "English default" means the English catalog's entry for the id,
+  used when the active locale's catalog lacks it; an id the English catalog also lacks renders
+  as the id in both builds. Every lookup passes a string literal as the id; the test fails on any
+  other first argument unless its line carries a `strings-check-ignore` comment. A message
+  formatted without a value for one of its own arguments throws.
 
 ### Error and empty states
 
@@ -256,9 +271,10 @@ Web (Vitest and Testing Library, in `web/src`):
   generic message with the code visible.
 - **T9.** (B19) With one organization, the OrgSwitcher is not in the DOM.
 - **T10.** (B23, B26) The catalog test fails when a component uses a message id the catalog
-  lacks (proved once by adding one).
-- **T11.** (B25) With an override Course -> "Training module", every message using the term
-  renders the override, in singular and plural.
+  lacks (proved once by adding one), or looks a message up by a variable or template literal.
+- **T11.** (B25) With an override for Course stored in its mid-sentence form ("training
+  module", "training modules"), every message using the term renders the override, in singular
+  and plural, capitalized ("Training module") where the message uses `{Course}` or `{Courses}`.
 - **T12.** (B27, B28, B29) Not found, a failing query and a network error each render their
   state, and the retry action refetches.
 

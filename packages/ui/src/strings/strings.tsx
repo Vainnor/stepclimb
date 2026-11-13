@@ -11,7 +11,10 @@ import { type TermOverrides, termArguments } from "./terms";
 export type MessageValues = Readonly<Record<string, PrimitiveType>>;
 
 export interface Strings {
-  /** Formats the message `id`. Term arguments (`{course}`) are filled in by the provider. */
+  /**
+   * Formats the message `id`. Term arguments (`{course}`) are filled in by the provider. Every
+   * other argument the message names must be in `values`; a missing one throws.
+   */
   t: (id: string, values?: MessageValues) => string;
 }
 
@@ -50,7 +53,7 @@ export function createStrings({
     return format;
   }
 
-  function t(id: string, values: MessageValues = {}): string {
+  function lookup(id: string, values: MessageValues = {}): string {
     for (const key of Object.keys(values)) {
       if (Object.hasOwn(termArgs, key)) {
         throw new Error(`message "${id}": the value "${key}" would replace a term argument`);
@@ -64,7 +67,7 @@ export function createStrings({
     return out;
   }
 
-  return { t };
+  return { t: lookup };
 }
 
 const StringsContext = createContext<Strings | null>(null);

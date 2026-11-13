@@ -2,7 +2,9 @@
 // Organization terminology: nouns an organization renames, such as Course -> "Training module".
 // A message never writes such a noun; it uses the term's ICU arguments, named after the default
 // English forms: `{course}` and `{courses}` mid-sentence, `{Course}` and `{Courses}` at the start
-// of a sentence. An override replaces the forms, so every message using the term changes together.
+// of a sentence, which upper-case the first letter and never lower-case anything. An override
+// replaces the forms, so every message using the term changes together. A message never puts "a"
+// or "an" before a term argument: the article depends on the override.
 
 /** A term's singular and plural, written as they read mid-sentence. */
 export interface TermForms {

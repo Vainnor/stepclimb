@@ -18,7 +18,7 @@ const app: Catalog = {
   fr: { "fixture.signedIn": "Connecté en tant que {name}." },
 };
 
-// The organization override the tests use while Q7's delivery (settings, /me) is not built.
+// A fixed organization override, written in its mid-sentence form as overrides are stored.
 const trainingModule: TermOverrides = {
   course: { one: "training module", other: "training modules" },
 };
@@ -33,7 +33,19 @@ describe("createStrings", () => {
     expect(t("fixture.assigned", { count: 1 })).toBe("1 course assigned to you.");
     expect(t("fixture.assigned", { count: 3 })).toBe("3 courses assigned to you.");
     expect(t("fixture.score", { score: 0.85 })).toBe("Score: 85%");
-    expect(t("fixture.due", { when: new Date("2026-11-12T12:00:00Z") })).toBe("Due Nov 12, 2026");
+  });
+
+  it("formats dates in the pinned UTC zone, whatever the host's zone", () => {
+    expect(Intl.DateTimeFormat().resolvedOptions().timeZone).toBe("UTC");
+    const { t } = english();
+    // 23:30 UTC is already the next day east of UTC+1 and still the same day in UTC.
+    expect(t("fixture.due", { when: new Date("2026-11-12T23:30:00Z") })).toBe("Due Nov 12, 2026");
+  });
+
+  it("throws when a value the message names is missing", () => {
+    const { t } = english();
+    expect(() => t("fixture.signedIn")).toThrow(/name/);
+    expect(() => t("fixture.assigned")).toThrow(/count/);
   });
 
   it("renders the default term forms without an override", () => {
@@ -42,7 +54,7 @@ describe("createStrings", () => {
     expect(t("fixture.empty")).toBe("No courses yet. Course progress appears here.");
   });
 
-  it("renders an override in singular, plural and at the start of a sentence", () => {
+  it("renders a mid-sentence override in singular, plural and capitalized at a sentence start", () => {
     const { t } = english(trainingModule);
     expect(t("fixture.assigned", { count: 1 })).toBe("1 training module assigned to you.");
     expect(t("fixture.assigned", { count: 2 })).toBe("2 training modules assigned to you.");
