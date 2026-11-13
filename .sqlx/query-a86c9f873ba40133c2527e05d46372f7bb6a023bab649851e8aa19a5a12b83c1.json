@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO roles (id, org_id, key, name, builtin, permissions, created_at, updated_at)\n             VALUES ($1, NULL, $2, $3, true, $4,\n                     timestamptz 'epoch' + $5::bigint * interval '1 microsecond',\n                     timestamptz 'epoch' + $5::bigint * interval '1 microsecond')\n             ON CONFLICT (key) WHERE org_id IS NULL DO UPDATE\n             SET name = EXCLUDED.name, permissions = EXCLUDED.permissions,\n                 updated_at = EXCLUDED.updated_at\n             WHERE (roles.name, roles.permissions)\n                   IS DISTINCT FROM (EXCLUDED.name, EXCLUDED.permissions)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "TextArray",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a86c9f873ba40133c2527e05d46372f7bb6a023bab649851e8aa19a5a12b83c1"
+}

@@ -1,11 +1,32 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Roles: the eight built-in roles and their permission lists.
+//! Roles: the eight built-in roles and their permission lists, and the roles repository
+//! (docs/specs/m0/09-permissions-and-roles.md B4 to B10).
 //!
 //! Organization admin is defined as [`perm::ALL`] and Instructor as Course designer's list plus
 //! its own, so a permission added to the catalog or to Course designer reaches them without a
 //! second edit.
+//!
+//! A role is one row in `roles`. Built-in roles are instance-wide rows (`org_id` null) that
+//! [`sync_builtin`] writes from [`BUILTIN`] at startup; custom roles belong to one organization.
+//! Every read returns a built-in role's permissions from [`BUILTIN`], never from its row (B6),
+//! so two binaries of different versions each apply their own lists. Every other query filters
+//! by `org_id = scope.org_id()`, and reads see the scope's custom roles and the built-in rows.
+//!
+//! Who may define a role with which permissions (B8's escalation rule) is the routes' to
+//! decide; this module checks the role itself: the key format, a key no other role of the
+//! organization or built-in role has, a non-blank name, and permissions in [`perm::ALL`].
 
-use crate::perm::{self, Permission};
+use std::time::SystemTime;
+
+use sqlx::{Acquire, PgExecutor, Postgres};
+use uuid::Uuid;
+
+use crate::{
+    OrgScope,
+    db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
+    id::new_id,
+    perm::{self, Permission},
+};
 
 /// A role shipped with Stepclimb, the same in every organization.
 #[derive(Debug)]
@@ -115,6 +136,400 @@ pub static BUILTIN: [&BuiltinRole; 8] = [
     &MANAGER,
     &OBSERVER,
 ];
+
+/// The built-in role with this key, if this binary defines one.
+#[must_use]
+pub fn builtin(key: &str) -> Option<&'static BuiltinRole> {
+    BUILTIN.iter().copied().find(|role| role.key == key)
+}
+
+/// The permissions a role row grants: a built-in role's list from [`BUILTIN`], never its
+/// stored one (B6), and none for a built-in row this binary does not define; a custom role's
+/// list as stored.
+pub(crate) fn effective_permissions(key: &str, builtin: bool, stored: Vec<String>) -> Vec<String> {
+    if !builtin {
+        return stored;
+    }
+    self::builtin(key)
+        .map(|role| role.permissions().into_iter().map(str::to_owned).collect())
+        .unwrap_or_default()
+}
+
+/// The longest role key, in characters (spec 09 Q7).
+pub const MAX_KEY_CHARS: usize = 63;
+
+/// The partial unique index that keeps a custom role's key unique in its organization.
+const ORG_KEY_INDEX: &str = "roles_org_key";
+
+/// The foreign key from `role_assignments` to `roles`, whose default action refuses deleting a
+/// role that still has assignments (B10).
+const ASSIGNMENT_ROLE_FKEY: &str = "role_assignments_role_id_fkey";
+
+/// A role as the repository reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Role {
+    pub id: Uuid,
+    pub key: String,
+    pub name: String,
+    pub builtin: bool,
+    /// A built-in role's list from [`BUILTIN`] (empty for a built-in row this binary does not
+    /// define, which a newer binary wrote); a custom role's list as stored.
+    pub permissions: Vec<String>,
+    pub created_at: SystemTime,
+    pub updated_at: SystemTime,
+}
+
+/// A custom role to create.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NewRole {
+    /// `^[a-z][a-z0-9_]{0,62}$`, and not a built-in key (Q7, B8).
+    pub key: String,
+    /// Trimmed before it is stored; blank is refused.
+    pub name: String,
+    /// Every entry must be a key in [`perm::ALL`]. Stored in the given order.
+    pub permissions: Vec<String>,
+}
+
+/// A partial update of a custom role: `None` leaves a field as it is. The same validation as
+/// [`NewRole`] applies to each field it sets.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RolePatch {
+    pub name: Option<String>,
+    pub permissions: Option<Vec<String>>,
+}
+
+/// The sort key of a role in [`list`]: `(custom, key)`, so built-in roles come first.
+pub type ListKey = (bool, String);
+
+/// Why a roles repository call failed.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// No built-in role and no custom role of the scope's organization with that id.
+    #[error("the role does not exist")]
+    NotFound,
+    /// The key is not `^[a-z][a-z0-9_]{0,62}$`.
+    #[error(
+        "a role key must be a lowercase letter then up to 62 lowercase letters, digits or underscores"
+    )]
+    KeyInvalid,
+    /// A built-in role or another custom role of the organization has this key.
+    #[error("another role has this key")]
+    KeyTaken,
+    /// The name is empty once trimmed.
+    #[error("a role name cannot be empty")]
+    NameEmpty,
+    /// A string the caller passed holds NUL, which PostgreSQL `text` cannot store.
+    #[error("{field} cannot contain the NUL character")]
+    ContainsNul { field: &'static str },
+    /// The permission at `index` is not a key in [`perm::ALL`].
+    #[error("permission {index} is not in the catalog")]
+    UnknownPermission { index: usize },
+    /// Built-in roles cannot be changed or deleted (B7).
+    #[error("a built-in role cannot be changed or deleted")]
+    BuiltinImmutable,
+    /// The custom role still has assignments (B10).
+    #[error("a role with assignments cannot be deleted")]
+    InUse,
+    /// A time that cannot be stored or read.
+    #[error(transparent)]
+    Time(#[from] TimeOutOfRange),
+    #[error(transparent)]
+    Database(sqlx::Error),
+}
+
+impl From<sqlx::Error> for Error {
+    fn from(error: sqlx::Error) -> Self {
+        let constraint = error.as_database_error().and_then(|e| e.constraint());
+        match constraint {
+            Some(ORG_KEY_INDEX) => Self::KeyTaken,
+            Some(ASSIGNMENT_ROLE_FKEY) => Self::InUse,
+            _ => Self::Database(error),
+        }
+    }
+}
+
+/// A `roles` row as the queries select it.
+struct Row {
+    id: Uuid,
+    key: String,
+    name: String,
+    builtin: bool,
+    permissions: Vec<String>,
+    created_at_us: i64,
+    updated_at_us: i64,
+}
+
+impl TryFrom<Row> for Role {
+    type Error = Error;
+
+    fn try_from(row: Row) -> Result<Self, Error> {
+        let permissions = effective_permissions(&row.key, row.builtin, row.permissions);
+        Ok(Self {
+            id: row.id,
+            key: row.key,
+            name: row.name,
+            builtin: row.builtin,
+            permissions,
+            created_at: from_epoch_micros(row.created_at_us)?,
+            updated_at: from_epoch_micros(row.updated_at_us)?,
+        })
+    }
+}
+
+/// Write every role of [`BUILTIN`] to its instance-wide row by key, inserting the missing ones
+/// and rewriting `name` and `permissions` where they differ, so SQL readers see this binary's
+/// lists (B6). `updated_at` moves to `now` only on a row it changes. Built-in rows this binary
+/// does not define are left as they are. Runs in one transaction (a savepoint when `db` is
+/// already one).
+///
+/// The startup task of `stepclimb serve` calls this before serving.
+pub async fn sync_builtin<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
+    now: SystemTime,
+) -> Result<(), Error> {
+    let now = epoch_micros(now)?;
+    let mut tx = db.begin().await?;
+    for role in BUILTIN {
+        let permissions: Vec<String> = role.permissions().into_iter().map(str::to_owned).collect();
+        // Instance-wide on purpose, so it takes no `OrgScope`: built-in roles belong to no
+        // organization (`org_id` null), and the conflict target is the built-in key index.
+        sqlx::query!(
+            "INSERT INTO roles (id, org_id, key, name, builtin, permissions, created_at, updated_at)
+             VALUES ($1, NULL, $2, $3, true, $4,
+                     timestamptz 'epoch' + $5::bigint * interval '1 microsecond',
+                     timestamptz 'epoch' + $5::bigint * interval '1 microsecond')
+             ON CONFLICT (key) WHERE org_id IS NULL DO UPDATE
+             SET name = EXCLUDED.name, permissions = EXCLUDED.permissions,
+                 updated_at = EXCLUDED.updated_at
+             WHERE (roles.name, roles.permissions)
+                   IS DISTINCT FROM (EXCLUDED.name, EXCLUDED.permissions)",
+            new_id(),
+            role.key,
+            role.name,
+            &permissions,
+            now,
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// The role `id` when it is built-in or a custom role of the scope's organization, else `None`.
+pub async fn get(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    id: Uuid,
+) -> Result<Option<Role>, Error> {
+    sqlx::query_as!(
+        Row,
+        r#"SELECT id, key, name, builtin, permissions,
+                  (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM roles
+           WHERE (org_id IS NULL OR org_id = $1) AND id = $2"#,
+        scope.org_id(),
+        id,
+    )
+    .fetch_optional(db)
+    .await?
+    .map(Role::try_from)
+    .transpose()
+}
+
+/// The built-in roles, then the scope's custom roles, each group sorted by key, starting after
+/// `after` (the sort key of the previous page's last role) and at most `limit` of them.
+///
+/// `after` comes from a client's cursor: it only bounds a query already filtered by the scope.
+/// A NUL in its key is refused with [`Error::ContainsNul`].
+pub async fn list(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    after: Option<&ListKey>,
+    limit: i64,
+) -> Result<Vec<Role>, Error> {
+    let after_key = after.map(|(_, key)| no_nul("cursor", key)).transpose()?;
+    let rows = sqlx::query_as!(
+        Row,
+        r#"SELECT id, key, name, builtin, permissions,
+                  (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM roles
+           WHERE (org_id IS NULL OR org_id = $1)
+             AND ($2::bool IS NULL OR (org_id IS NOT NULL, key) > ($2, $3::text))
+           ORDER BY org_id IS NOT NULL, key
+           LIMIT $4"#,
+        scope.org_id(),
+        after.map(|(custom, _)| *custom),
+        after_key,
+        limit,
+    )
+    .fetch_all(db)
+    .await?;
+    rows.into_iter().map(Role::try_from).collect()
+}
+
+/// Create a custom role in the scope's organization, with `created_at` and `updated_at` set to
+/// `now` (B8).
+pub async fn create_custom(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    role: &NewRole,
+    now: SystemTime,
+) -> Result<Role, Error> {
+    valid_key(&role.key)?;
+    let name = valid_name(&role.name)?;
+    valid_permissions(&role.permissions)?;
+    let now = epoch_micros(now)?;
+    // The NOT EXISTS refuses a key a built-in row has, also one only a newer binary defines.
+    let row = sqlx::query_as!(
+        Row,
+        r#"INSERT INTO roles (id, org_id, key, name, builtin, permissions, created_at, updated_at)
+           SELECT $1, $2, $3, $4, false, $5,
+                  timestamptz 'epoch' + $6::bigint * interval '1 microsecond',
+                  timestamptz 'epoch' + $6::bigint * interval '1 microsecond'
+           WHERE NOT EXISTS (SELECT 1 FROM roles WHERE org_id IS NULL AND key = $3)
+           RETURNING id, key, name, builtin, permissions,
+                     (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
+                     (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!""#,
+        new_id(),
+        scope.org_id(),
+        role.key,
+        name,
+        &role.permissions,
+        now,
+    )
+    .fetch_optional(db)
+    .await?
+    .ok_or(Error::KeyTaken)?;
+    Role::try_from(row)
+}
+
+/// Change the `name` or `permissions` of the custom role `id` of the scope's organization and
+/// set `updated_at` to `now` (B9). A built-in role is refused with [`Error::BuiltinImmutable`].
+///
+/// Runs in one transaction (a savepoint when `db` is already one).
+pub async fn update_custom<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
+    scope: OrgScope,
+    id: Uuid,
+    patch: &RolePatch,
+    now: SystemTime,
+) -> Result<Role, Error> {
+    let name = patch.name.as_deref().map(valid_name).transpose()?;
+    if let Some(permissions) = &patch.permissions {
+        valid_permissions(permissions)?;
+    }
+    let now = epoch_micros(now)?;
+    let mut tx = db.begin().await?;
+    refuse_builtin(&mut *tx, scope, id).await?;
+    let row = sqlx::query_as!(
+        Row,
+        r#"UPDATE roles
+           SET name = COALESCE($3, name), permissions = COALESCE($4, permissions),
+               updated_at = timestamptz 'epoch' + $5::bigint * interval '1 microsecond'
+           WHERE org_id = $1 AND id = $2
+           RETURNING id, key, name, builtin, permissions,
+                     (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
+                     (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!""#,
+        scope.org_id(),
+        id,
+        name,
+        patch.permissions.as_deref(),
+        now,
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(Error::NotFound)?;
+    tx.commit().await?;
+    Role::try_from(row)
+}
+
+/// Delete the custom role `id` of the scope's organization. A built-in role is refused with
+/// [`Error::BuiltinImmutable`], a role with any assignment with [`Error::InUse`] (B7, B10).
+///
+/// Runs in one transaction (a savepoint when `db` is already one).
+pub async fn delete_custom<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
+    scope: OrgScope,
+    id: Uuid,
+) -> Result<(), Error> {
+    let mut tx = db.begin().await?;
+    refuse_builtin(&mut *tx, scope, id).await?;
+    let deleted = sqlx::query!(
+        "DELETE FROM roles WHERE org_id = $1 AND id = $2",
+        scope.org_id(),
+        id,
+    )
+    .execute(&mut *tx)
+    .await?;
+    if deleted.rows_affected() == 0 {
+        return Err(Error::NotFound);
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// [`Error::BuiltinImmutable`] when `id` is a built-in role, [`Error::NotFound`] when it is
+/// neither built-in nor a custom role of the scope's organization.
+async fn refuse_builtin(db: impl PgExecutor<'_>, scope: OrgScope, id: Uuid) -> Result<(), Error> {
+    let builtin = sqlx::query_scalar!(
+        "SELECT builtin FROM roles WHERE (org_id IS NULL OR org_id = $1) AND id = $2",
+        scope.org_id(),
+        id,
+    )
+    .fetch_optional(db)
+    .await?
+    .ok_or(Error::NotFound)?;
+    if builtin {
+        return Err(Error::BuiltinImmutable);
+    }
+    Ok(())
+}
+
+/// Spec 09 Q7: `^[a-z][a-z0-9_]{0,62}$`; a key of [`BUILTIN`] is taken.
+fn valid_key(key: &str) -> Result<(), Error> {
+    let bytes = key.as_bytes();
+    let well_formed = (1..=MAX_KEY_CHARS).contains(&bytes.len())
+        && bytes.first().is_some_and(u8::is_ascii_lowercase)
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'_');
+    if !well_formed {
+        return Err(Error::KeyInvalid);
+    }
+    if builtin(key).is_some() {
+        return Err(Error::KeyTaken);
+    }
+    Ok(())
+}
+
+fn valid_name(name: &str) -> Result<&str, Error> {
+    let name = no_nul("name", name)?.trim();
+    if name.is_empty() {
+        return Err(Error::NameEmpty);
+    }
+    Ok(name)
+}
+
+fn valid_permissions(permissions: &[String]) -> Result<(), Error> {
+    match permissions
+        .iter()
+        .position(|key| !perm::ALL.iter().any(|p| p.key() == key))
+    {
+        Some(index) => Err(Error::UnknownPermission { index }),
+        None => Ok(()),
+    }
+}
+
+/// `value` unchanged, or [`Error::ContainsNul`] naming `field`.
+fn no_nul<'a>(field: &'static str, value: &'a str) -> Result<&'a str, Error> {
+    if value.contains('\0') {
+        return Err(Error::ContainsNul { field });
+    }
+    Ok(value)
+}
 
 #[cfg(test)]
 mod tests {
@@ -252,5 +667,97 @@ mod tests {
                 assert!(catalog.contains(k), "{} lists {k}, not in perm::ALL", r.key);
             }
         }
+    }
+
+    #[test]
+    fn builtin_finds_a_role_by_key() {
+        assert_eq!(
+            builtin("account_admin").map(|r| r.name),
+            Some("Account admin")
+        );
+        assert!(builtin("tower_admin").is_none());
+    }
+
+    #[test]
+    fn keys_of_the_q7_format_are_accepted() {
+        let longest = format!("a{}", "b".repeat(MAX_KEY_CHARS - 1));
+        for key in ["a", "tower_mentor", "t1", "a_", longest.as_str()] {
+            assert!(valid_key(key).is_ok(), "{key:?}");
+        }
+    }
+
+    #[test]
+    fn keys_outside_the_q7_format_are_refused() {
+        let too_long = "a".repeat(MAX_KEY_CHARS + 1);
+        for key in [
+            "",
+            "_a",
+            "1a",
+            "Tower",
+            "tower-mentor",
+            "tower.mentor",
+            "tower mentor",
+            "tówer",
+            "a\0",
+            too_long.as_str(),
+        ] {
+            assert!(matches!(valid_key(key), Err(Error::KeyInvalid)), "{key:?}");
+        }
+    }
+
+    #[test]
+    fn every_builtin_key_is_taken() {
+        for role in BUILTIN {
+            assert!(
+                matches!(valid_key(role.key), Err(Error::KeyTaken)),
+                "{}",
+                role.key
+            );
+        }
+    }
+
+    #[test]
+    fn names_are_trimmed_and_blank_or_nul_is_refused() {
+        assert_eq!(valid_name("  Tower mentor ").unwrap(), "Tower mentor");
+        assert!(matches!(valid_name(" \t"), Err(Error::NameEmpty)));
+        assert!(matches!(
+            valid_name("T\0"),
+            Err(Error::ContainsNul { field: "name" })
+        ));
+    }
+
+    #[test]
+    fn the_first_permission_outside_the_catalog_is_named_by_index() {
+        let keys = |ks: &[&str]| ks.iter().map(|k| (*k).to_owned()).collect::<Vec<_>>();
+        assert!(valid_permissions(&keys(&[])).is_ok());
+        assert!(valid_permissions(&keys(&["account.view", "role.assign"])).is_ok());
+        assert!(matches!(
+            valid_permissions(&keys(&["account.view", "nonexistent.perm", "x"])),
+            Err(Error::UnknownPermission { index: 1 })
+        ));
+        assert!(matches!(
+            valid_permissions(&keys(&["Account.View"])),
+            Err(Error::UnknownPermission { index: 0 })
+        ));
+    }
+
+    #[test]
+    fn builtin_permissions_come_from_code_and_custom_ones_as_stored() {
+        let stored = vec!["branding.manage".to_owned()];
+        assert_eq!(
+            effective_permissions("account_admin", true, stored.clone()),
+            [
+                "account.view",
+                "account.manage",
+                "user.view",
+                "role.view",
+                "role.assign"
+            ]
+        );
+        assert_eq!(
+            effective_permissions("tower_mentor", false, stored.clone()),
+            stored
+        );
+        assert!(effective_permissions("from_a_newer_release", true, stored).is_empty());
     }
 }

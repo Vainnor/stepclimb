@@ -126,7 +126,17 @@ async fn startup_migrations_create_the_schema_on_an_empty_database(pool: PgPool)
     .fetch_all(&pool)
     .await
     .unwrap();
-    assert_eq!(tables, ["accounts", "organizations", "sessions", "users"]);
+    assert_eq!(
+        tables,
+        [
+            "accounts",
+            "organizations",
+            "role_assignments",
+            "roles",
+            "sessions",
+            "users"
+        ]
+    );
 }
 
 #[tokio::test]

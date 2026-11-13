@@ -33,7 +33,7 @@ use crate::{
     OrgScope,
     db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
     id::new_id,
-    name,
+    name, role_assignments,
 };
 
 /// The longest account name, in characters (Unicode scalar values; spec 02 Q6).
@@ -444,8 +444,10 @@ async fn rewrite_subtree(
 /// Delete the account `id` of the scope's organization (B21). Refuses the root
 /// ([`Error::RootImmutable`]) and an account with child accounts ([`Error::HasChildren`]).
 ///
-/// Runs in one transaction (a savepoint when `db` is already one) under the tree lock. It
-/// deletes the account row only: no other table refers to an account yet.
+/// Runs in one transaction (a savepoint when `db` is already one) under the tree lock. In the
+/// same transaction it deletes the role assignments scoped to the account (B21, spec 09 B15),
+/// after the account row: the row delete waits for a `role_assignments::create` holding the
+/// account `FOR KEY SHARE`, so an assignment that create commits is deleted too.
 pub async fn delete<'c>(
     db: impl Acquire<'c, Database = Postgres>,
     scope: OrgScope,
@@ -467,6 +469,7 @@ pub async fn delete<'c>(
     )
     .execute(&mut *tx)
     .await?;
+    role_assignments::delete_for_account(&mut tx, scope, id).await?;
     tx.commit().await?;
     Ok(())
 }
