@@ -198,6 +198,22 @@ These apply to every endpoint in M0, including the ones other specs define.
   the user (`03-users-and-identities.md`) and assigns the built-in Organization admin role at
   organization scope (`09-permissions-and-roles.md`), all in one transaction, and exits non-zero
   with a message naming the problem if any step fails.
+  Coordinator decisions (2026-11-13), on the owner's delegation:
+  - Before creating anything the command applies the pending migrations and writes the built-in
+    roles and the `unlimited` plan, as `stepclimb serve`'s startup does, so the Organization
+    admin role exists on an instance where `serve` has never run.
+  - The arguments are Q1's: `--org-slug`, `--org-name`, `--email` (the admin's email, which
+    local sign-in finds the user by) and `--name` (the admin's display name). The user is
+    `local`, `active`, with locale `en` and time zone `UTC` (the default of the organization's
+    default time zone, `03-users-and-identities.md` Q4).
+  - Exit codes follow `check-config`: 0 on success; 2 when a value is refused (an invalid,
+    reserved or taken slug, a blank or too long organization name, a blank or invalid email, a
+    blank name, or a missing argument), naming the flag; 1 when the database fails. In every
+    failure nothing is created. On success it prints the organization's slug and id and the
+    user's email and id to stdout, and no secret.
+  - The one-time setup link Q1 names is an enrollment link (`04-local-accounts.md` B6, B10,
+    Q7), whose table and function `04-local-accounts.md` issue I2 delivers; until that issue
+    lands the command creates the admin without one, and I2 adds the printed link to it.
 
 ## API
 

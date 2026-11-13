@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The `stepclimb` binary refuses bad configuration before it touches the network, and its
-//! subcommands exit 0 on success, 2 on refused configuration and 1 when the database fails. The
-//! `#[sqlx::test]` cases need `DATABASE_URL` (`just up`).
+//! subcommands exit 0 on success, 2 on refused configuration or a refused argument value and 1
+//! when the database fails. The `#[sqlx::test]` cases need `DATABASE_URL` (`just up`).
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
 use sqlx::{ConnectOptions, PgPool};
-use stepclimb_core::db::MIGRATOR;
+use stepclimb_core::{db::MIGRATOR, id::Uuid};
 
 /// The binary with no `STEPCLIMB_*` variable from this process but a public URL, which every
 /// test that is not about it would otherwise have to repeat.
@@ -483,10 +483,23 @@ fn every_subcommand_refuses_a_database_url_sqlx_would_not_read_as_written() {
             "is not a valid PostgreSQL URL",
         ),
     ];
-    for subcommand in ["check-config", "migrate", "serve"] {
+    let admin_create = [
+        "admin",
+        "create",
+        "--org-slug",
+        "example",
+        "--org-name",
+        "Example",
+        "--email",
+        "sam@example.test",
+        "--name",
+        "Sam",
+    ];
+    let subcommands: [&[&str]; 4] = [&["check-config"], &["migrate"], &["serve"], &admin_create];
+    for subcommand in subcommands {
         for (url, problem) in cases {
             let output = stepclimb()
-                .arg(subcommand)
+                .args(subcommand)
                 .env("STEPCLIMB_DATABASE_URL", url)
                 .env("STEPCLIMB_ENCRYPTION_KEYS", KEYS)
                 .output()
@@ -495,14 +508,14 @@ fn every_subcommand_refuses_a_database_url_sqlx_would_not_read_as_written() {
             assert_eq!(
                 output.status.code(),
                 Some(2),
-                "{subcommand} {url}: {stderr}"
+                "{subcommand:?} {url}: {stderr}"
             );
             assert!(
                 stderr.contains(&format!("STEPCLIMB_DATABASE_URL: {problem}")),
-                "{subcommand}: {stderr}"
+                "{subcommand:?}: {stderr}"
             );
-            assert!(!stdout.contains("zqsecret"), "{subcommand}: {stdout}");
-            assert!(!stderr.contains("zqsecret"), "{subcommand}: {stderr}");
+            assert!(!stdout.contains("zqsecret"), "{subcommand:?}: {stdout}");
+            assert!(!stderr.contains("zqsecret"), "{subcommand:?}: {stderr}");
         }
     }
 }
@@ -563,4 +576,297 @@ fn healthcheck_exits_0_when_readyz_answers_200() {
         "stderr: {}",
         stderr_of(&output)
     );
+}
+
+/// `stepclimb admin create` with `args` against the database behind `pool`.
+fn admin_create_binary(pool: &PgPool, args: &[&str]) -> Output {
+    stepclimb()
+        .args(["admin", "create"])
+        .args(args)
+        .env(
+            "STEPCLIMB_DATABASE_URL",
+            pool.connect_options().to_url_lossy().as_str(),
+        )
+        .env("STEPCLIMB_ENCRYPTION_KEYS", KEYS)
+        .output()
+        .expect("the binary runs")
+}
+
+/// The arguments of `admin create` for the organization `slug` and its admin.
+fn create_args<'a>(slug: &'a str, email: &'a str) -> [&'a str; 8] {
+    [
+        "--org-slug",
+        slug,
+        "--org-name",
+        "Example Training",
+        "--email",
+        email,
+        "--name",
+        "Sam Admin",
+    ]
+}
+
+/// Every row of the tables `admin create` writes, as text in a fixed order: a snapshot that
+/// shows whether a run changed anything.
+async fn created_rows(pool: &PgPool) -> Vec<String> {
+    let mut rows = Vec::new();
+    for table in [
+        "organizations",
+        "accounts",
+        "org_plans",
+        "users",
+        "role_assignments",
+        "roles",
+        "plans",
+    ] {
+        let query = format!("SELECT '{table} ' || to_jsonb(t)::text FROM {table} t ORDER BY 1");
+        let table_rows: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(query))
+            .fetch_all(pool)
+            .await
+            .expect("read the table");
+        rows.extend(table_rows);
+    }
+    rows
+}
+
+async fn count(pool: &PgPool, table: &str) -> i64 {
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
+        .fetch_one(pool)
+        .await
+        .expect("count rows")
+}
+
+/// T20 (spec 02 B27): on an empty database, one organization with its root account and plan
+/// row, one user and one organization-scope Organization admin assignment.
+#[sqlx::test(migrations = false)]
+async fn admin_create_on_an_empty_database_creates_the_organization_and_its_admin(pool: PgPool) {
+    let output = admin_create_binary(&pool, &create_args("example", "sam@example.test"));
+    let (stdout, stderr) = (stdout_of(&output), stderr_of(&output));
+    assert_eq!(output.status.code(), Some(0), "stderr: {stderr}");
+    assert_eq!(
+        applied_versions(&pool).await,
+        MIGRATOR.iter().map(|m| m.version).collect::<Vec<_>>()
+    );
+
+    let (org_id, slug, name): (Uuid, String, String) =
+        sqlx::query_as("SELECT id, slug, name FROM organizations")
+            .fetch_one(&pool)
+            .await
+            .expect("exactly one organization");
+    assert_eq!(
+        (slug.as_str(), name.as_str()),
+        ("example", "Example Training")
+    );
+    let roots: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM accounts WHERE org_id = $1 AND parent_id IS NULL AND name = $2",
+    )
+    .bind(org_id)
+    .bind("Example Training")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!((roots, count(&pool, "accounts").await), (1, 1));
+    let plan: (String, String) = sqlx::query_as(
+        "SELECT p.key, op.source FROM org_plans op JOIN plans p ON p.id = op.plan_id
+         WHERE op.org_id = $1",
+    )
+    .bind(org_id)
+    .fetch_one(&pool)
+    .await
+    .expect("the organization's plan row");
+    assert_eq!(plan, ("unlimited".to_owned(), "selfhost".to_owned()));
+
+    let user: (Uuid, String, String, String, String, String) = sqlx::query_as(
+        "SELECT id, email, display_name, source, status, tz FROM users WHERE org_id = $1",
+    )
+    .bind(org_id)
+    .fetch_one(&pool)
+    .await
+    .expect("exactly one user");
+    assert_eq!(
+        (&*user.1, &*user.2, &*user.3, &*user.4, &*user.5),
+        ("sam@example.test", "Sam Admin", "local", "active", "UTC")
+    );
+    let assignment: (String, String, Uuid, String) = sqlx::query_as(
+        "SELECT r.key, ra.scope_type, ra.scope_id, ra.source
+         FROM role_assignments ra JOIN roles r ON r.id = ra.role_id
+         WHERE ra.org_id = $1 AND ra.user_id = $2",
+    )
+    .bind(org_id)
+    .bind(user.0)
+    .fetch_one(&pool)
+    .await
+    .expect("exactly one assignment");
+    assert_eq!(
+        assignment,
+        (
+            "org_admin".to_owned(),
+            "organization".to_owned(),
+            org_id,
+            "local".to_owned()
+        )
+    );
+    assert_eq!(count(&pool, "users").await, 1);
+    assert_eq!(count(&pool, "role_assignments").await, 1);
+    // The built-in roles were written by the command itself: `serve` never ran.
+    assert_eq!(
+        count(&pool, "roles WHERE org_id IS NULL AND builtin").await,
+        8
+    );
+
+    assert_eq!(
+        stdout,
+        format!(
+            "stepclimb: created organization \"example\" ({org_id})\n\
+             stepclimb: created user \"sam@example.test\" ({}) with the Organization admin role \
+             at organization scope\n",
+            user.0
+        )
+    );
+    let password = pool
+        .connect_options()
+        .to_url_lossy()
+        .password()
+        .map(str::to_owned)
+        .unwrap_or_default();
+    if !password.is_empty() {
+        assert!(!stdout.contains(&password), "stdout: {stdout}");
+        assert!(!stderr.contains(&password), "stderr: {stderr}");
+    }
+}
+
+/// T20 (spec 02 B27): run again with the same slug, the command exits 2 naming the slug flag
+/// and changes nothing.
+#[sqlx::test(migrations = false)]
+async fn admin_create_with_a_taken_slug_exits_2_and_changes_nothing(pool: PgPool) {
+    let first = admin_create_binary(&pool, &create_args("example", "sam@example.test"));
+    assert_eq!(first.status.code(), Some(0), "{}", stderr_of(&first));
+    let before = created_rows(&pool).await;
+
+    let again = admin_create_binary(&pool, &create_args("example", "kim@example.test"));
+    assert_eq!(again.status.code(), Some(2), "{}", stderr_of(&again));
+    let stderr = stderr_of(&again);
+    assert!(
+        stderr.contains(
+            "stepclimb: admin create: --org-slug: another organization has this slug; nothing \
+             was created"
+        ),
+        "stderr: {stderr}"
+    );
+    assert_eq!(stdout_of(&again), "");
+    assert_eq!(created_rows(&pool).await, before);
+}
+
+/// Spec 02 Q1 (A): with a new slug, the command adds another organization with its own admin.
+#[sqlx::test(migrations = false)]
+async fn admin_create_with_a_new_slug_adds_another_organization(pool: PgPool) {
+    let first = admin_create_binary(&pool, &create_args("example", "sam@example.test"));
+    assert_eq!(first.status.code(), Some(0), "{}", stderr_of(&first));
+    let second = admin_create_binary(&pool, &create_args("second", "sam@example.test"));
+    assert_eq!(second.status.code(), Some(0), "{}", stderr_of(&second));
+    assert_eq!(count(&pool, "organizations").await, 2);
+    assert_eq!(count(&pool, "users").await, 2);
+    let distinct_orgs: i64 =
+        sqlx::query_scalar("SELECT count(DISTINCT org_id) FROM role_assignments")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(distinct_orgs, 2);
+}
+
+/// A refused value exits 2 naming its flag, and leaves no organization behind: the email is
+/// checked after the organization row is inserted, so this is a failure midway through the
+/// transaction.
+#[sqlx::test(migrations = false)]
+async fn admin_create_refusing_a_value_exits_2_naming_the_flag_and_creates_nothing(pool: PgPool) {
+    let cases: [(&[&str], &str); 5] = [
+        (
+            &create_args("example", "  "),
+            "--email: an email cannot be empty",
+        ),
+        (
+            &create_args("example", "sam\u{200b}@example.test"),
+            "--email: an email cannot contain control or invisible formatting characters",
+        ),
+        (
+            &create_args("Example", "sam@example.test"),
+            "--org-slug: an organization slug must be",
+        ),
+        (
+            &create_args("admin", "sam@example.test"),
+            "--org-slug: the organization slug is reserved",
+        ),
+        (
+            &[
+                "--org-slug",
+                "example",
+                "--org-name",
+                "Example",
+                "--email",
+                "sam@example.test",
+                "--name",
+                " ",
+            ],
+            "--name: a display name cannot be empty",
+        ),
+    ];
+    for (args, problem) in cases {
+        let output = admin_create_binary(&pool, args);
+        let stderr = stderr_of(&output);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {stderr}");
+        assert!(
+            stderr.contains(&format!("stepclimb: admin create: {problem}")),
+            "{args:?}: {stderr}"
+        );
+        assert!(stderr.contains("nothing was created"), "{stderr}");
+        for table in [
+            "organizations",
+            "accounts",
+            "org_plans",
+            "users",
+            "role_assignments",
+        ] {
+            assert_eq!(count(&pool, table).await, 0, "{args:?}: {table}");
+        }
+    }
+}
+
+#[test]
+fn admin_create_without_a_required_argument_exits_2_naming_it() {
+    let output = stepclimb()
+        .args([
+            "admin",
+            "create",
+            "--org-slug",
+            "example",
+            "--org-name",
+            "Example",
+        ])
+        .env("STEPCLIMB_DATABASE_URL", UNREACHABLE_URL)
+        .env("STEPCLIMB_ENCRYPTION_KEYS", KEYS)
+        .output()
+        .expect("the binary runs");
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = stderr_of(&output);
+    assert!(stderr.contains("--email <EMAIL>"), "stderr: {stderr}");
+    assert!(stderr.contains("--name <NAME>"), "stderr: {stderr}");
+}
+
+#[test]
+fn admin_create_against_an_unreachable_database_exits_1() {
+    let output = stepclimb()
+        .args(["admin", "create"])
+        .args(create_args("example", "sam@example.test"))
+        .env("STEPCLIMB_DATABASE_URL", UNREACHABLE_URL)
+        .env("STEPCLIMB_ENCRYPTION_KEYS", KEYS)
+        .output()
+        .expect("the binary runs");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = stderr_of(&output);
+    assert!(
+        stderr.contains("stepclimb: admin create: could not connect to the database: "),
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains("nothing was created"), "stderr: {stderr}");
+    assert!(!stderr.contains("zq-db-secret"), "stderr: {stderr}");
 }

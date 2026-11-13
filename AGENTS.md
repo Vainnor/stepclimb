@@ -26,7 +26,8 @@ permission catalog and roles routes under `/api/v1/admin` (spec 09 I5), `GET /ap
 (spec 03 I5), the caller's organization and its settings under `/api/v1/organization` (spec 02
 I4), the account tree under `/api/v1/accounts` (spec 02 I5), `/docs` (Scalar over a
 utoipa OpenAPI 3.1 document of those routes) and the built web SPA. `stepclimb migrate`
-applies the migrations and exits; `stepclimb check-config` validates the configuration without
+applies the migrations and exits; `stepclimb admin create` creates an organization and its first
+Organization admin user in one transaction (no sign-in link yet: spec 04 I2); `stepclimb check-config` validates the configuration without
 connecting and prints its non-secret values (exit 2 on bad configuration, 1 on a database
 failure). `web/` has one route that reads
 `/healthz` through `packages/api-client`. `packages/tokens` builds the default and vZDC example
@@ -44,7 +45,7 @@ The plan's layout (`docs/plan/technical.md` -> Architecture and stack).
 
 | Path | Kind | What it is |
 | --- | --- | --- |
-| `crates/stepclimb-server` | lib + bin | The axum app, handlers, config and the `stepclimb` binary. Today: config, startup and migrations, probes, OpenAPI and Scalar, the embedded SPA, the session cookie and `Authenticated` extractor (`session`), the request-organization resolver and the `RequestOrg` extractor (`request_org`), the sign-in and token rate limits (`rate_limit`), the trusted-proxy client address (`client_ip`), `Require<P, T>` and `Require<F>` (`require`), the per-request entitlements and the limit check (`entitlements`), the permission catalog and roles routes (`roles`) with RFC 3339 timestamps (`timestamp`), the signed-in user (`me`), the organization and settings routes (`organization`), and the account routes (`accounts`). |
+| `crates/stepclimb-server` | lib + bin | The axum app, handlers, config and the `stepclimb` binary. Today: config, startup and migrations, probes, OpenAPI and Scalar, the embedded SPA, the session cookie and `Authenticated` extractor (`session`), the request-organization resolver and the `RequestOrg` extractor (`request_org`), the sign-in and token rate limits (`rate_limit`), the trusted-proxy client address (`client_ip`), `Require<P, T>` and `Require<F>` (`require`), the per-request entitlements and the limit check (`entitlements`), the permission catalog and roles routes (`roles`) with RFC 3339 timestamps (`timestamp`), the signed-in user (`me`), the organization and settings routes (`organization`), the account routes (`accounts`), and `stepclimb admin create` (`admin`). |
 | `crates/stepclimb-core` | lib | Domain types, repositories (SQL), the permission catalog. Today: the embedded migrations (`db::MIGRATOR`), UUID v7 keys (`id`), the permission catalog (`perm`), the built-in role lists (`roles::BUILTIN`), the controllable clock (`clock::Clock`), `OrgScope`, the `organizations` repository with `OrgSettings`, the `accounts` repository (the tree inside an organization), the `users` repository and `Source`, the `sessions` repository with the browser-session credential resolver, the `identity_providers` (read side) and `identities` repositories, the entitlement catalogs (`feature`: features and `Limit`), the `plans` repository with `PlanEntitlements`, the `org_plans` repository with the limit check (`check_room`), and `requirement`, the trait both catalogs implement for `Require`. |
 | `crates/stepclimb-auth` | lib | Providers, sessions, API keys, the OAuth 2.1 server for Stepclimb's own apps. Today: tokens, API keys and their hashes (`token`), the AES-256-GCM key ring (`encryption`). |
 | `crates/stepclimb-assess` | lib | Question types, selection, grading; pure, also wasm32. Placeholder (M2). |

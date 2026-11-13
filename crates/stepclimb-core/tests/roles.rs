@@ -633,3 +633,25 @@ async fn lock_custom_holds_the_row_until_the_transaction_ends(pool: PgPool) {
     tx.commit().await.expect("commit");
     assert!(try_lock(pool.clone()).await.is_ok(), "the lock is released");
 }
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn builtin_id_finds_only_a_builtin_row_by_key(pool: PgPool) {
+    assert_eq!(roles::builtin_id(&pool, "org_admin").await.unwrap(), None);
+    roles::sync_builtin(&pool, request_time()).await.unwrap();
+    let a = org(&pool, "org-a").await;
+    create(&pool, a, "custom_admin", &[]).await;
+
+    assert_eq!(
+        roles::builtin_id(&pool, "org_admin").await.unwrap(),
+        Some(builtin_id(&pool, "org_admin").await)
+    );
+    // A custom role's key is not a built-in row's.
+    assert_eq!(
+        roles::builtin_id(&pool, "custom_admin").await.unwrap(),
+        None
+    );
+    assert_eq!(
+        kind(&roles::builtin_id(&pool, "org\0admin").await),
+        "ContainsNul"
+    );
+}

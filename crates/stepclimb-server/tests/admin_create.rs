@@ -1,0 +1,150 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//! `stepclimb_server::admin::create_organization_with_admin`, the transaction behind
+//! `stepclimb admin create` (docs/specs/m0/02-organizations-and-accounts.md B27, T20). The
+//! binary's own cases are in `tests/cli.rs`. Needs `DATABASE_URL` (`just up`).
+
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use sqlx::PgPool;
+use stepclimb_core::{
+    OrgScope, organizations, perm,
+    role_assignments::{self, GrantScope},
+    roles, users,
+};
+use stepclimb_server::admin::{CreateError, NewOrganizationAdmin, create_organization_with_admin};
+
+/// 2025-11-13T02:13:20.123456Z: an odd microsecond count, so a rounded write shows.
+fn now() -> SystemTime {
+    UNIX_EPOCH + Duration::from_micros(1_763_000_000_123_456)
+}
+
+fn input(slug: &str) -> NewOrganizationAdmin {
+    NewOrganizationAdmin {
+        org_slug: slug.to_owned(),
+        org_name: "Example Training".to_owned(),
+        email: "sam@example.test".to_owned(),
+        name: "Sam Admin".to_owned(),
+    }
+}
+
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the test reads the new organization's rows as the CLI does"
+)]
+fn scope(org_id: stepclimb_core::id::Uuid) -> OrgScope {
+    OrgScope::instance(org_id)
+}
+
+async fn count(pool: &PgPool, table: &str) -> i64 {
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
+        .fetch_one(pool)
+        .await
+        .expect("count rows")
+}
+
+async fn assert_nothing_created(pool: &PgPool) {
+    for table in [
+        "organizations",
+        "accounts",
+        "org_plans",
+        "users",
+        "role_assignments",
+    ] {
+        assert_eq!(count(pool, table).await, 0, "{table}");
+    }
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_first_user_holds_every_permission_at_organization_scope(pool: PgPool) {
+    roles::sync_builtin(&pool, now()).await.unwrap();
+    let created = create_organization_with_admin(&pool, &input("example"), now())
+        .await
+        .unwrap();
+    let scope = scope(created.organization.id);
+
+    assert_eq!(
+        organizations::get(&pool, scope).await.unwrap(),
+        created.organization
+    );
+    let user = users::get(&pool, scope, created.user.id).await.unwrap();
+    assert_eq!(user.as_ref(), Some(&created.user));
+    assert_eq!(created.user.created_at, now());
+
+    let grants = role_assignments::for_user_with_paths(&pool, scope, created.user.id)
+        .await
+        .unwrap();
+    assert_eq!(grants.len(), 1);
+    assert_eq!(grants[0].assignment_id, created.assignment_id);
+    assert_eq!(grants[0].role_key, "org_admin");
+    assert_eq!(grants[0].scope, GrantScope::Organization);
+    let all: Vec<String> = perm::ALL.iter().map(|p| p.key().to_owned()).collect();
+    assert_eq!(grants[0].permissions, all);
+}
+
+/// A failure after the organization and the user are inserted leaves neither: without the
+/// built-in roles, the role lookup fails last.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_failure_after_the_user_is_inserted_leaves_nothing_behind(pool: PgPool) {
+    let result = create_organization_with_admin(&pool, &input("example"), now()).await;
+    assert!(
+        matches!(result, Err(CreateError::RoleMissing)),
+        "{result:?}"
+    );
+    assert_eq!(
+        result
+            .as_ref()
+            .err()
+            .and_then(CreateError::refused_argument),
+        None
+    );
+    assert_nothing_created(&pool).await;
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_refused_value_names_its_flag_and_leaves_nothing_behind(pool: PgPool) {
+    roles::sync_builtin(&pool, now()).await.unwrap();
+    let cases = [
+        (
+            NewOrganizationAdmin {
+                org_slug: "-bad".to_owned(),
+                ..input("unused")
+            },
+            "--org-slug",
+        ),
+        (
+            NewOrganizationAdmin {
+                org_name: "   ".to_owned(),
+                ..input("example")
+            },
+            "--org-name",
+        ),
+        (
+            NewOrganizationAdmin {
+                org_name: "x".repeat(organizations::MAX_NAME_CHARS + 1),
+                ..input("example")
+            },
+            "--org-name",
+        ),
+        (
+            NewOrganizationAdmin {
+                email: "\u{7}sam@example.test".to_owned(),
+                ..input("example")
+            },
+            "--email",
+        ),
+        (
+            NewOrganizationAdmin {
+                name: String::new(),
+                ..input("example")
+            },
+            "--name",
+        ),
+    ];
+    for (input, flag) in cases {
+        let error = create_organization_with_admin(&pool, &input, now())
+            .await
+            .expect_err("refused");
+        assert_eq!(error.refused_argument(), Some(flag), "{error:?}");
+        assert_nothing_created(&pool).await;
+    }
+}

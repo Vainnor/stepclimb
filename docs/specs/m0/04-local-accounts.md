@@ -67,7 +67,9 @@ creates and hands over.
   identity if absent, and completes sign-in.
 - **B10.** How the first organization admin of a new instance gets an account (for example
   `stepclimb admin create` printing an enrollment link): pending Q7. Self sign-up with a local
-  account needs email verification and waits for email (M1): pending Q6.
+  account needs email verification and waits for email (M1): pending Q6. `stepclimb admin
+  create` exists (`02-organizations-and-accounts.md` B27) and creates the admin without a link;
+  issue I2 adds the printed enrollment link (coordinator decision, 2026-11-13).
 
 ### Passkey sign-in
 
