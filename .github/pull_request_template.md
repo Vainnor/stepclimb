@@ -16,6 +16,10 @@
 - [ ] Every new route has `Require<P>`, its four-case test and its cross-organization test
 - [ ] `.sqlx/`, `openapi/stepclimb.json` and the API client regenerated where needed
 
+## Certification
+
+- [ ] I certify this contribution under the [Developer Certificate of Origin](https://developercertificate.org/) (`CONTRIBUTING.md`)
+
 ## Gates
 
 <!-- `just ci` summary lines on the committed HEAD and the OS; anything not run, and why. -->
