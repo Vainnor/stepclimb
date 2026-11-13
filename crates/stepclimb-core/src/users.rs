@@ -21,13 +21,14 @@
 
 use std::time::SystemTime;
 
-use sqlx::PgExecutor;
+use sqlx::{Acquire, PgExecutor, Postgres};
 use uuid::Uuid;
 
 use crate::{
     OrgScope, Source,
     db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
     id::new_id,
+    role_assignments,
 };
 
 /// The locale of a user created without one (B3).
@@ -171,8 +172,33 @@ pub enum Error {
     /// A time that cannot be stored or read.
     #[error(transparent)]
     Time(#[from] TimeOutOfRange),
+    /// Suspending the user would leave the organization without an active organization-scope
+    /// Organization admin (spec 09 B14).
+    #[error("the last active organization admin cannot be suspended")]
+    LastOrgAdmin,
+    /// The transaction runs at an isolation level other than `READ COMMITTED`, where the
+    /// last-admin count could miss a concurrent change.
+    #[error("users can be suspended only at READ COMMITTED isolation, not {found}")]
+    IsolationLevel { found: String },
+    /// Reading the organization's admins before a suspension failed otherwise.
+    #[error("checking the organization's admins failed: {0}")]
+    AdminCheck(#[source] Box<role_assignments::Error>),
     #[error(transparent)]
     Database(sqlx::Error),
+}
+
+impl From<role_assignments::Error> for Error {
+    /// The errors of [`role_assignments::refuse_suspending_last_org_admin`].
+    fn from(error: role_assignments::Error) -> Self {
+        use role_assignments::Error as E;
+        match error {
+            E::NotFound => Self::NotFound,
+            E::LastOrgAdmin => Self::LastOrgAdmin,
+            E::IsolationLevel { found } => Self::IsolationLevel { found },
+            E::Database(error) => Self::Database(error),
+            other => Self::AdminCheck(Box::new(other)),
+        }
+    }
 }
 
 impl From<sqlx::Error> for Error {
@@ -377,14 +403,24 @@ pub async fn update(
 }
 
 /// Set the status of the user `id` of the scope's organization and set `updated_at` to `now`.
-pub async fn set_status(
-    db: impl PgExecutor<'_>,
+///
+/// Suspending keeps the organization's last active organization-scope Organization admin
+/// ([`Error::LastOrgAdmin`], spec 09 B14): it takes the lock assignment removals take, so a
+/// suspension and a removal cannot both pass the count, and refuses an isolation level above
+/// `READ COMMITTED` ([`Error::IsolationLevel`]). Runs in one transaction (a savepoint when `db`
+/// is already one).
+pub async fn set_status<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
     scope: OrgScope,
     id: Uuid,
     status: Status,
     now: SystemTime,
 ) -> Result<User, Error> {
     let now = epoch_micros(now)?;
+    let mut tx = db.begin().await?;
+    if status == Status::Suspended {
+        role_assignments::refuse_suspending_last_org_admin(&mut tx, scope, id).await?;
+    }
     let row = sqlx::query_as!(
         Row,
         r#"UPDATE users
@@ -400,9 +436,10 @@ pub async fn set_status(
         status.as_str(),
         now,
     )
-    .fetch_optional(db)
+    .fetch_optional(&mut *tx)
     .await?
     .ok_or(Error::NotFound)?;
+    tx.commit().await?;
     User::try_from(row)
 }
 

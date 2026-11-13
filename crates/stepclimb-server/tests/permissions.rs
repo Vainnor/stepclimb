@@ -154,6 +154,33 @@ const TABLE: &[Entry] = &[
         operation_id: "deleteRole",
         access: permission(RoleManage::KEY, ROLE_NOT_FOUND, custom_role_in_path),
     },
+    Entry {
+        operation_id: "listRoleAssignments",
+        access: permission(RoleView::KEY, Target::AnyScope, at_org),
+    },
+    Entry {
+        operation_id: "createRoleAssignment",
+        // The user is checked first, so another organization's request ends at its user.
+        access: permission(
+            RoleAssign::KEY,
+            Target::Scoped {
+                not_found: "account.not_found",
+                cross_org: "user.not_found",
+            },
+            assignment_at_tower_in_body,
+        ),
+    },
+    Entry {
+        operation_id: "deleteRoleAssignment",
+        access: permission(
+            RoleAssign::KEY,
+            Target::Scoped {
+                not_found: "role_assignment.not_found",
+                cross_org: "role_assignment.not_found",
+            },
+            assignment_at_tower_in_path,
+        ),
+    },
 ];
 
 /// A new name for the caller's organization.
@@ -174,6 +201,38 @@ fn empty_settings_patch(_: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '
             params: Vec::new(),
             body: Some(serde_json::json!({})),
             at: At::Org,
+        }
+    })
+}
+
+/// A new user and an unassigned custom role with no permissions, to assign at Tower: any
+/// `role.assign` holder at Tower may grant it.
+fn assignment_at_tower_in_body(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let (_, user) = org.user().await;
+        let role = org.custom_role().await;
+        Call {
+            params: Vec::new(),
+            body: Some(serde_json::json!({
+                "user_id": user,
+                "role_id": role,
+                "scope": { "type": "account", "id": org.tower },
+            })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A new user's assignment of a custom role with no permissions at Tower, named in the path.
+fn assignment_at_tower_in_path(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let (_, user) = org.user().await;
+        let role = org.custom_role().await;
+        let assignment = org.assign(user, role, At::Account(org.tower)).await;
+        Call {
+            params: vec![("assignment_id", assignment)],
+            body: None,
+            at: At::Account(org.tower),
         }
     })
 }
@@ -215,6 +274,7 @@ fn move_ground_within_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Se
 /// so a role route's scope is the organization and it has no wrong-account 404 case.
 const ROLE_NOT_FOUND: Target = Target::Scoped {
     not_found: "role.not_found",
+    cross_org: "role.not_found",
 };
 
 /// A new unassigned custom role of `org`, named in the path; the caller acts at organization
@@ -288,8 +348,13 @@ enum Target {
     /// 2xx.
     AnyScope,
     /// A target the setup builds, in the path (`AccountTarget`, `AccountParentTarget`) or the
-    /// body (`AnyScope` with `require_at`). Hidden, it answers 404 with `not_found`.
-    Scoped { not_found: &'static str },
+    /// body (`AnyScope` with `require_at`). Hidden, it answers 404 with `not_found`; built in
+    /// another organization, 404 with `cross_org`, which differs when the route checks another
+    /// id of the request first (a role assignment's user, B12).
+    Scoped {
+        not_found: &'static str,
+        cross_org: &'static str,
+    },
 }
 
 /// Builds what one case calls in a fresh organization.
@@ -506,7 +571,7 @@ async fn run(world: &World, app: &Router, op: &Operation, access: &Access) -> Re
             };
             report.record(op, "401", anonymous(world, app, op, *setup).await);
             report.record(op, "403", denied(world, app, op, key, *setup).await);
-            if let Target::Scoped { not_found } = target
+            if let Target::Scoped { not_found, .. } = target
                 && info.grantable().contains(&ScopeType::Account)
                 && let Some(result) = hidden(world, app, op, not_found, *setup).await
             {
@@ -515,7 +580,7 @@ async fn run(world: &World, app: &Router, op: &Operation, access: &Access) -> Re
             let keys: Vec<&str> = [*key].iter().chain(*extra).copied().collect();
             report.record(op, "2xx", allowed(world, app, op, &keys, *setup).await);
             let not_found = match target {
-                Target::Scoped { not_found } => Some(*not_found),
+                Target::Scoped { cross_org, .. } => Some(*cross_org),
                 Target::Org | Target::AnyScope => None,
             };
             let result = cross_organization(world, app, op, not_found, *setup).await;
@@ -951,7 +1016,7 @@ impl Org {
         (cookie.split(';').next().expect("a pair").to_owned(), id)
     }
 
-    async fn assign(&self, user: Uuid, role: Uuid, at: At) {
+    async fn assign(&self, user: Uuid, role: Uuid, at: At) -> Uuid {
         let assignment = NewAssignment {
             user_id: user,
             role_id: role,
@@ -964,7 +1029,8 @@ impl Org {
         };
         role_assignments::create(&self.pool, scope(self.id), &assignment, now())
             .await
-            .expect("create assignment");
+            .expect("create assignment")
+            .id
     }
 
     /// A signed-in user holding a new custom role with exactly `permissions` at `at`.
@@ -1164,6 +1230,7 @@ fn tower_in_body(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
 
 const ACCOUNT_NOT_FOUND: Target = Target::Scoped {
     not_found: "account.not_found",
+    cross_org: "account.not_found",
 };
 
 const fn permission(key: &'static str, target: Target, setup: Setup) -> Access {

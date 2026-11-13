@@ -5,7 +5,7 @@
 //! TypeScript client (`packages/api-client`) and fails when either differs from what is
 //! committed. Today it lists the operations probes, which the web app's skeleton route calls
 //! through the generated client, sign-out, `GET /api/v1/me`, the caller's organization and its
-//! settings, the account tree, the permission catalog and roles routes under `/api/v1/admin`,
+//! settings, the account tree, the permission catalog, roles and role assignment routes under `/api/v1/admin`,
 //! and the shared error schemas and responses below. The other M0 specs add their endpoints under `/api/v1`.
 //!
 //! Every `/api/v1` operation lists its errors in `#[utoipa::path]` (spec 02 B6). The errors
@@ -24,7 +24,7 @@ use utoipa::{
 use crate::{
     accounts, auth,
     error::{FieldError, PROBLEM_JSON, Problem},
-    health, me, organization, roles,
+    health, me, organization, role_assignments, roles,
 };
 
 /// The operation extension that marks a handler as changing state (spec 08 B12, T17). Every
@@ -61,7 +61,10 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         roles::get_role,
         roles::create_role,
         roles::update_role,
-        roles::delete_role
+        roles::delete_role,
+        role_assignments::list_role_assignments,
+        role_assignments::create_role_assignment,
+        role_assignments::delete_role_assignment
     ),
     components(
         schemas(
@@ -87,7 +90,11 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             roles::PermissionInfo,
             roles::Role,
             roles::NewRole,
-            roles::RolePatch
+            roles::RolePatch,
+            role_assignments::RoleAssignment,
+            role_assignments::AssignmentSource,
+            role_assignments::NewRoleAssignment,
+            role_assignments::ScopeRef
         ),
         responses(
             BadRequest,
@@ -120,7 +127,14 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             roles::DeleteForbidden,
             roles::CreateConflict,
             roles::UpdateConflict,
-            roles::DeleteConflict
+            roles::DeleteConflict,
+            role_assignments::AssignmentListNotFound,
+            role_assignments::AssignmentCreateForbidden,
+            role_assignments::AssignmentCreateNotFound,
+            role_assignments::AssignmentCreateConflict,
+            role_assignments::AssignmentDeleteForbidden,
+            role_assignments::AssignmentDeleteNotFound,
+            role_assignments::AssignmentDeleteConflict
         )
     ),
     tags(
@@ -129,7 +143,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         (name = "me", description = "The signed-in user"),
         (name = "organization", description = "The caller's organization and its settings"),
         (name = "accounts", description = "The account tree inside the organization"),
-        (name = "roles", description = "The permission catalog and roles")
+        (name = "roles", description = "The permission catalog, roles and role assignments")
     )
 )]
 struct ApiDoc;

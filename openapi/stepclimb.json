@@ -426,6 +426,213 @@
         }
       }
     },
+    "/api/v1/admin/role-assignments": {
+      "get": {
+        "tags": [
+          "roles"
+        ],
+        "summary": "List the role assignments at scopes where the caller holds `role.view`, by id.",
+        "operationId": "listRoleAssignments",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "description": "Only this user's assignments.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "scope_type",
+            "in": "query",
+            "description": "Only assignments at this exact scope; needs `scope_id`.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ScopeType"
+            }
+          },
+          {
+            "name": "scope_id",
+            "in": "query",
+            "description": "The scope's id (the organization's own id for `organization`); needs `scope_type`.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page; omit it for the first page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many items to return, 1 to 200; 50 when omitted.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 200,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of assignments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_RoleAssignment"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/PermissionDenied"
+          },
+          "404": {
+            "$ref": "#/components/responses/AssignmentListNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "roles"
+        ],
+        "summary": "Grant a role to a user at a scope.",
+        "operationId": "createRoleAssignment",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewRoleAssignment"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The assignment is created",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The assignment's path"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleAssignment"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/AssignmentCreateForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/AssignmentCreateNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/AssignmentCreateConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/admin/role-assignments/{assignment_id}": {
+      "delete": {
+        "tags": [
+          "roles"
+        ],
+        "summary": "Remove a role assignment.",
+        "operationId": "deleteRoleAssignment",
+        "parameters": [
+          {
+            "name": "assignment_id",
+            "in": "path",
+            "description": "The assignment's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The assignment is removed"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/AssignmentDeleteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/AssignmentDeleteNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/AssignmentDeleteConflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/api/v1/admin/roles": {
       "get": {
         "tags": [
@@ -1106,6 +1313,17 @@
         },
         "additionalProperties": false
       },
+      "AssignmentSource": {
+        "type": "string",
+        "description": "Who owns an assignment: an admin of this organization (`local`), or the identity provider,\nsync API, SCIM or connector that wrote it, in which case it cannot be removed here.",
+        "enum": [
+          "local",
+          "idp",
+          "sync",
+          "scim",
+          "connector"
+        ]
+      },
       "FieldError": {
         "type": "object",
         "description": "One rule a request body broke, in a 422's `errors`.",
@@ -1126,7 +1344,7 @@
       },
       "GrantScope": {
         "type": "object",
-        "description": "A scope a grant applies at: the organization, an account or a course, by id.",
+        "description": "A scope a grant or a role assignment applies at: the organization, an account or a course,\nby id. An organization scope's `id` is the organization's id.",
         "required": [
           "type",
           "id"
@@ -1183,7 +1401,7 @@
             "items": {
               "$ref": "#/components/schemas/MeGrant"
             },
-            "description": "Each scope where the caller holds at least one effective permission, with those\npermissions sorted. Always empty until the server computes grants for this route."
+            "description": "Each scope where the caller holds at least one effective permission, with those\npermissions sorted: the organization first, then accounts by id. A permission held at a\nscope also takes effect in every account inside it, which are not listed again."
           },
           "organization": {
             "$ref": "#/components/schemas/Organization"
@@ -1308,6 +1526,31 @@
               "type": "string"
             },
             "description": "Catalog keys (`GET /api/v1/admin/permissions`), each at most once and each held by the\ncaller at organization scope."
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewRoleAssignment": {
+        "type": "object",
+        "description": "An assignment to create.",
+        "required": [
+          "user_id",
+          "role_id",
+          "scope"
+        ],
+        "properties": {
+          "role_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "A built-in role other than `manager` and `observer`, or a custom role of the\norganization."
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ScopeRef",
+            "description": "The organization (its own id) or an account of it. `course` is not available yet."
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "additionalProperties": false
@@ -1490,6 +1733,72 @@
           }
         }
       },
+      "Page_RoleAssignment": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A role granted to a user at a scope.",
+              "required": [
+                "id",
+                "user_id",
+                "role_id",
+                "scope",
+                "source",
+                "external_id",
+                "created_at"
+              ],
+              "properties": {
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "RFC 3339, UTC."
+                },
+                "external_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The owning system's id for the assignment; `null` for a `local` one."
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "role_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "scope": {
+                  "$ref": "#/components/schemas/GrantScope"
+                },
+                "source": {
+                  "$ref": "#/components/schemas/AssignmentSource"
+                },
+                "user_id": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "description": "The items, in the list's sort order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass this as `cursor` to get the next page; `null` on the last page."
+          }
+        }
+      },
       "PermissionInfo": {
         "type": "object",
         "description": "One permission of the catalog.",
@@ -1615,6 +1924,51 @@
           }
         }
       },
+      "RoleAssignment": {
+        "type": "object",
+        "description": "A role granted to a user at a scope.",
+        "required": [
+          "id",
+          "user_id",
+          "role_id",
+          "scope",
+          "source",
+          "external_id",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          },
+          "external_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The owning system's id for the assignment; `null` for a `local` one."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "role_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/GrantScope"
+          },
+          "source": {
+            "$ref": "#/components/schemas/AssignmentSource"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "RolePatch": {
         "type": "object",
         "description": "A change to a custom role; an omitted member is left as it is.",
@@ -1635,6 +1989,25 @@
               "type": "string"
             },
             "description": "The role's whole new list, each catalog key at most once. The caller must hold at\norganization scope every key it adds and every key it drops."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ScopeRef": {
+        "type": "object",
+        "description": "The scope a new assignment takes effect at.",
+        "required": [
+          "type",
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The organization's own id for `organization`."
+          },
+          "type": {
+            "$ref": "#/components/schemas/ScopeType"
           }
         },
         "additionalProperties": false
@@ -1671,6 +2044,76 @@
     "responses": {
       "AccountNotFound": {
         "description": "`account.not_found`: no account with this id exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "AssignmentCreateConflict": {
+        "description": "`role_assignment.exists`: the user already holds the role at the scope. `role.unknown_builtin`: the role is a built-in role of another Stepclimb release.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "AssignmentCreateForbidden": {
+        "description": "`permission.denied`: the caller does not hold `role.assign` at the scope. `permission.escalation`: the role has a catalog permission the caller does not hold at the scope, counting permissions that take no effect there. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "AssignmentCreateNotFound": {
+        "description": "`user.not_found`: no user of the organization has this id. `role.not_found`: no built-in role and no custom role of the organization has this id. `account.not_found`: the scope names no account of the organization, or one you cannot see. `org.not_found`: the scope names another organization, or the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "AssignmentDeleteConflict": {
+        "description": "`role.unknown_builtin`: the assignment's role is a built-in role of another Stepclimb release. `role_assignment.externally_managed`: an identity provider, the sync API, SCIM or a connector owns the assignment. `role_assignment.last_org_admin`: it is the organization's last organization-scope Organization admin assignment held by an active user.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "AssignmentDeleteForbidden": {
+        "description": "`permission.denied`: the caller does not hold `role.assign` at the assignment's scope. `permission.escalation`: the role has a catalog permission the caller does not hold at the scope, counting permissions that take no effect there. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "AssignmentDeleteNotFound": {
+        "description": "`role_assignment.not_found`: no assignment of the organization has this id, or its scope is hidden from you. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "AssignmentListNotFound": {
+        "description": "`account.not_found`: the scope filter names no account of the organization, or one you cannot see. `org.not_found`: the scope filter names another organization, or the request's organization cannot be determined.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -1992,7 +2435,7 @@
     },
     {
       "name": "roles",
-      "description": "The permission catalog and roles"
+      "description": "The permission catalog, roles and role assignments"
     }
   ]
 }

@@ -126,9 +126,33 @@ organizations' ids.
      `account` an account of the organization (else 404 `account.not_found`); `course` answers 422
      `role_assignment.scope_unavailable` until the M1 courses spec enables it;
   4. the caller holds `RoleAssign` at that scope, mapped to 404 or 403 as in B17;
-  5. the caller holds, at that scope, every permission of the role that is grantable there (403
-     `permission.escalation`); an account admin cannot hand out Organization admin at its account;
+  5. the caller holds, at that scope, every catalog permission of the role, including those not
+     grantable at the scope's type, each as B3 evaluates it (403 `permission.escalation`); a key
+     the catalog does not define grants nothing and is not checked. An account admin cannot hand
+     out Organization admin at its account (decided by the owner, 13 Nov 2026);
   6. the same `(user, role, scope)` does not already exist (409 `role_assignment.exists`).
+
+  Coordinator decision (2026-11-13), for issue 6. B13's refusal runs between steps 2 and 3. A 422
+  here follows `02` B1 and B2: `request.invalid` with `errors[].code =
+  "role_assignment.scope_unavailable"` at `/scope/type` (a course) or `/role_id` (Manager,
+  Observer). An `organization` scope naming another id answers 404 `org.not_found`, as
+  `Grants::require_at` does. The 201's `Location` is the assignment's
+  `DELETE /api/v1/admin/role-assignments/{assignment_id}` path.
+
+  Coordinator decision (2026-11-13), from the security review of issue 6. A built-in role row
+  this binary does not define (a newer release's, during a rolling deploy, B6) grants nothing
+  here, so the escalation check cannot see what it grants on the release that defines it. Both
+  `POST` (after step 2) and `DELETE` (before the escalation check) refuse it fail-closed with
+  409 `role.unknown_builtin`. The route reads the role `FOR KEY SHARE` in the transaction that
+  inserts or deletes, so a concurrent `PATCH` of the role (which locks it `FOR UPDATE`, B9) waits,
+  and the permissions the escalation check read are the role's when the change commits.
+
+  Coordinator decision (2026-11-13), from the sweep after `02` issue 13's review. `POST` and
+  `DELETE` begin their transaction by taking the organization's account tree lock
+  (`accounts::lock_tree`, `02` B22), then read the scope's path, run steps 4 and 5 and write in
+  that transaction. An account move or delete therefore cannot carry the scope out of the
+  caller's reach between the check and the write: a request that waits on a move checks the
+  account's new path (404 when it left the caller's subtree, nothing written).
 - **B13.** Manager and Observer cannot be assigned in M0 (422 `role_assignment.scope_unavailable`):
   their scopes (reports, named students) do not exist yet, and assigning them at organization or
   account scope would mean something the plan does not say.
@@ -137,6 +161,18 @@ organizations' ids.
   `role_assignment.externally_managed`). Removing the last organization-scope Organization admin
   assignment held by an `active` user answers 409 `role_assignment.last_org_admin`; recovery from a
   lost admin is `stepclimb admin create` (`02-organizations-and-accounts.md` B27).
+
+  Coordinator decision (2026-11-13), for issue 6. The checks run in this order: the assignment
+  exists in the organization (404 `role_assignment.not_found`), step 4 at its scope (a scope
+  hidden from the caller answers the same 404), `role.unknown_builtin` (409), step 5, `source`
+  (409), the last-admin rule (409).
+  The last-admin rule is race-safe: `role_assignments::delete` locks the organization's row
+  (`FOR NO KEY UPDATE`) before it reads the assignment, so removals in one organization take
+  turns and each counts what the previous one committed, and it refuses a transaction above
+  `READ COMMITTED` as `accounts` does. Suspending a user also lowers the count, so
+  `users::set_status` takes the same lock and refuses to suspend the last active admin with the
+  same code (`03-users-and-identities.md` B7). A course-scope assignment, which M0 cannot create,
+  is reached only by organization-scope grants.
 - **B15.** An account that assignments are scoped to cannot be deleted (409
   `account.has_assignments`, `02-organizations-and-accounts.md` B21); they are removed first
   through the assignment routes, which apply B14 and the externally-managed rules. This replaces
@@ -233,8 +269,8 @@ Common errors as in `02-organizations-and-accounts.md` -> API.
 | `PATCH /api/v1/admin/roles/{role_id}` | `{ name?, permissions? }` | 200 `Role` | 403 `permission.escalation`, 404 `role.not_found`, 409 `role.builtin_immutable`, 422 `request.invalid` | `perm::RoleManage` (organization) |
 | `DELETE /api/v1/admin/roles/{role_id}` | | 204 | 404 `role.not_found`, 409 `role.builtin_immutable`, 409 `role.in_use` | `perm::RoleManage` (organization) |
 | `GET /api/v1/admin/role-assignments` | `?user_id&scope_type&scope_id&cursor&limit` | 200 `Page<RoleAssignment>` | 400 `pagination.invalid_cursor`, 404 `account.not_found` (scope filter) | `perm::RoleView` (any scope; filtered to visible scopes) |
-| `POST /api/v1/admin/role-assignments` | `{ user_id, role_id, scope: { type, id } }` | 201 `RoleAssignment`, `Location` | 403 `permission.escalation`, 404 `user.not_found`/`role.not_found`/`account.not_found`, 409 `role_assignment.exists`, 422 `role_assignment.scope_unavailable` | `perm::RoleAssign` (the scope in the body, B12) |
-| `DELETE /api/v1/admin/role-assignments/{assignment_id}` | | 204 | 403 `permission.escalation`, 404 `role_assignment.not_found`, 409 `role_assignment.externally_managed`, 409 `role_assignment.last_org_admin` | `perm::RoleAssign` (the assignment's scope) |
+| `POST /api/v1/admin/role-assignments` | `{ user_id, role_id, scope: { type, id } }` | 201 `RoleAssignment`, `Location` | 403 `permission.escalation`, 404 `user.not_found`/`role.not_found`/`account.not_found`, 409 `role_assignment.exists`, 409 `role.unknown_builtin`, 422 `role_assignment.scope_unavailable` | `perm::RoleAssign` (the scope in the body, B12) |
+| `DELETE /api/v1/admin/role-assignments/{assignment_id}` | | 204 | 403 `permission.escalation`, 404 `role_assignment.not_found`, 409 `role.unknown_builtin`, 409 `role_assignment.externally_managed`, 409 `role_assignment.last_org_admin` | `perm::RoleAssign` (the assignment's scope) |
 
 The roles routes check, in order: `Require` (401, 403 `permission.denied`); the role exists and is
 custom (404 `role.not_found`, 409 `role.builtin_immutable`); the escalation rule (403
@@ -252,6 +288,14 @@ permissions: string[], created_at, updated_at }` (built-in roles report their co
 `RoleAssignment { id, user_id, role_id, scope: { type, id }, source, external_id, created_at }`;
 `ScopeType = "organization" | "account" | "course"`. The `role.view` filter on assignments shows
 an assignment when its scope is visible to the caller and `RoleView` is effective there.
+
+Coordinator decision (2026-11-13), for issue 6: the list's `scope_type` and `scope_id` come
+together (400 `request.malformed` otherwise) and are checked as a target with `RoleView`: an
+account that does not exist or is hidden answers 404 `account.not_found`, a visible scope where
+`RoleView` is not effective 403 `permission.denied`, another organization's id 404
+`org.not_found`. The request body's scope is `ScopeRef { type, id }`. `/me`'s `grants` lists the
+organization first, then accounts by id, each scope with the permissions effective there through
+its own assignments; an account inside a granted scope is not listed again.
 
 `GET /api/v1/me` carries the caller's grants (`03-users-and-identities.md` B22).
 
@@ -422,7 +466,8 @@ overrule one, which then updates this spec.
   to grant, define or remove a role you must hold its permissions at that scope; B, `RoleAssign`
   alone suffices, relying on who is given `RoleAssign`. Recommendation: A; without it an account
   admin can make anyone Organization admin of their subtree with more rights than their own.
-  **Decided:** the recommendation (owner, 13 Nov 2026).
+  **Decided:** the recommendation (owner, 13 Nov 2026). The check covers every catalog
+  permission of the role, not only those grantable at the scope (owner, 13 Nov 2026; B12 step 5).
 - **Q5. Audit entries in M0.** `audit_events` is in the data model and the plan audits grants and
   grade changes, but M0's milestone does not list auditing. Options: A, add `audit_events` in M0
   and write one entry per role, assignment, account, user status and organization settings change;

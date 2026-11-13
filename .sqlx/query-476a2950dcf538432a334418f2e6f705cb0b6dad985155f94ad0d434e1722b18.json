@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n               SELECT 1\n               FROM role_assignments ra\n               JOIN roles r ON r.id = ra.role_id\n               JOIN users u ON u.org_id = ra.org_id AND u.id = ra.user_id\n               WHERE ra.org_id = $1 AND ra.user_id = $2 AND ra.scope_type = 'organization'\n                 AND r.org_id IS NULL AND r.key = 'org_admin' AND u.status = $3\n           ) AS \"counted!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "counted!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "476a2950dcf538432a334418f2e6f705cb0b6dad985155f94ad0d434e1722b18"
+}

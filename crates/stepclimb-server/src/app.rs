@@ -7,7 +7,7 @@ use axum::{
     http::{HeaderValue, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{MethodRouter, get, post},
+    routing::{MethodRouter, delete, get, post},
 };
 use sqlx::PgPool;
 use stepclimb_auth::encryption::KeyRing;
@@ -21,7 +21,7 @@ use crate::{
     error::ApiError,
     health, me, openapi, organization,
     rate_limit::RateLimiter,
-    roles, spa,
+    role_assignments, roles, spa,
     web_origin::WebOrigin,
 };
 
@@ -127,6 +127,15 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
             get(roles::get_role)
                 .patch(roles::update_role)
                 .delete(roles::delete_role),
+        ),
+        (
+            role_assignments::ROLE_ASSIGNMENTS_PATH,
+            get(role_assignments::list_role_assignments)
+                .post(role_assignments::create_role_assignment),
+        ),
+        (
+            "/api/v1/admin/role-assignments/{assignment_id}",
+            delete(role_assignments::delete_role_assignment),
         ),
     ]
 }

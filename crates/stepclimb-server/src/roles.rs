@@ -79,7 +79,7 @@ problem_responses! {
 }
 
 /// The kind of scope a permission can take effect at.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ScopeType {
     Organization,
@@ -439,7 +439,7 @@ fn changed_keys(from: &[String], to: &[String]) -> Vec<String> {
         .collect()
 }
 
-fn role_not_found() -> ApiError {
+pub(crate) fn role_not_found() -> ApiError {
     ApiError::new(
         StatusCode::NOT_FOUND,
         code::ROLE_NOT_FOUND,

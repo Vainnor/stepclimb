@@ -6,7 +6,8 @@
 //! (`POST /auth/sign-out`, [`auth`]), the caller's organization and its settings under
 //! `/api/v1/organization` ([`organization`]), the account tree under `/api/v1/accounts`
 //! ([`accounts`]), the permission catalog and roles routes under
-//! `/api/v1/admin` ([`roles`], with timestamps from [`timestamp`]), the signed-in user at
+//! `/api/v1/admin` ([`roles`], with timestamps from [`timestamp`]), the role assignment
+//! routes ([`role_assignments`]), the signed-in user at
 //! `GET /api/v1/me` ([`me`]), the OpenAPI document (`/api/openapi.json`) and its Scalar UI
 //! (`/docs`), and the built web SPA for every other path. Every `/api/v1` response carries
 //! `Cache-Control: no-store` ([`app`]). The other M0 specs in `docs/specs/m0/` add their
@@ -42,6 +43,7 @@ pub mod pagination;
 pub mod rate_limit;
 pub mod request_org;
 pub mod require;
+pub mod role_assignments;
 pub mod roles;
 pub mod session;
 pub mod spa;

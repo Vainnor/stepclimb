@@ -275,7 +275,7 @@ async fn list_filters_by_user_and_scope_and_pages_by_id(pool: PgPool) {
             .id,
     ];
     assign(&pool, b.org, new(b.user, b.mentor, Scope::Account(b.tower))).await;
-    let list = |filter: ListFilter, after: Option<Uuid>, limit: i64| {
+    let list = |filter: ListFilter<'static>, after: Option<Uuid>, limit: i64| {
         let pool = pool.clone();
         async move {
             role_assignments::list(&pool, scope(a.org), filter, after, limit)
@@ -293,18 +293,22 @@ async fn list_filters_by_user_and_scope_and_pages_by_id(pool: PgPool) {
     let by_user = ListFilter {
         user_id: Some(a.user),
         scope: None,
+        within: None,
     };
     let at_tower = ListFilter {
         user_id: None,
         scope: Some(Scope::Account(a.tower)),
+        within: None,
     };
     let at_org = ListFilter {
         user_id: None,
         scope: Some(Scope::Organization),
+        within: None,
     };
     let other_org_user = ListFilter {
         user_id: Some(b.user),
         scope: None,
+        within: None,
     };
 
     assert_eq!(everything, ids);
@@ -314,6 +318,39 @@ async fn list_filters_by_user_and_scope_and_pages_by_id(pool: PgPool) {
     assert_eq!(list(at_tower, None, 10).await, ids[..2]);
     assert_eq!(list(at_org, None, 10).await, [ids[3]]);
     assert_eq!(list(other_org_user, None, 10).await, Vec::<Uuid>::new());
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn list_within_accounts_keeps_assignments_in_their_subtrees_only(pool: PgPool) {
+    let a = facility(&pool, "org-a").await;
+    let b = facility(&pool, "org-b").await;
+    let at = |scope| assign(&pool, a.org, new(a.user, a.mentor, scope));
+    let tower = at(Scope::Account(a.tower)).await.id;
+    let ramp = at(Scope::Account(a.ramp)).await.id;
+    at(Scope::Account(a.enroute)).await;
+    at(Scope::Account(a.root)).await;
+    at(Scope::Organization).await;
+    assign(&pool, b.org, new(b.user, b.mentor, Scope::Account(b.tower))).await;
+    let list = |within: Vec<Uuid>| {
+        let pool = pool.clone();
+        async move {
+            let filter = ListFilter {
+                within: Some(&within),
+                ..ListFilter::default()
+            };
+            role_assignments::list(&pool, scope(a.org), filter, None, 10)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|r| r.id)
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(list(vec![a.tower]).await, [tower, ramp]);
+    assert_eq!(list(vec![a.tower, a.ground]).await, [tower, ramp]);
+    assert_eq!(list(Vec::new()).await, Vec::<Uuid>::new());
+    // Org B's Tower is no account of org A, so it lets nothing through.
+    assert_eq!(list(vec![b.tower]).await, Vec::<Uuid>::new());
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
@@ -412,6 +449,121 @@ async fn active_org_admins_count_organization_scope_admins_who_are_active(pool: 
     let count = role_assignments::count_active_org_admins(&pool, scope(a.org)).await;
 
     assert_eq!(count.unwrap(), 1);
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn delete_keeps_the_last_active_org_admin(pool: PgPool) {
+    let a = facility(&pool, "org-a").await;
+    let admin = builtin_id(&pool, "org_admin").await;
+    let suspended = user(&pool, a.org, "Sam Example").await;
+    let only = assign(&pool, a.org, new(a.user, admin, Scope::Organization)).await;
+    let of_suspended = assign(&pool, a.org, new(suspended, admin, Scope::Organization)).await;
+    let at_tower = assign(&pool, a.org, new(suspended, admin, Scope::Account(a.tower))).await;
+    users::set_status(
+        &pool,
+        scope(a.org),
+        suspended,
+        Status::Suspended,
+        request_time(),
+    )
+    .await
+    .unwrap();
+
+    let last = role_assignments::delete(&pool, scope(a.org), only.id).await;
+    // Neither counts: one is held by a suspended user, the other is at an account.
+    role_assignments::delete(&pool, scope(a.org), of_suspended.id)
+        .await
+        .unwrap();
+    role_assignments::delete(&pool, scope(a.org), at_tower.id)
+        .await
+        .unwrap();
+    let still_last = role_assignments::delete(&pool, scope(a.org), only.id).await;
+
+    assert_eq!(kind(&last), "LastOrgAdmin");
+    assert_eq!(kind(&still_last), "LastOrgAdmin");
+    let kept = role_assignments::get(&pool, scope(a.org), only.id).await;
+    assert_eq!(kept.unwrap(), Some(only));
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn delete_of_one_of_two_admins_succeeds_and_other_organizations_do_not_count(pool: PgPool) {
+    let a = facility(&pool, "org-a").await;
+    let b = facility(&pool, "org-b").await;
+    let admin = builtin_id(&pool, "org_admin").await;
+    let second = user(&pool, a.org, "Kim Example").await;
+    let first = assign(&pool, a.org, new(a.user, admin, Scope::Organization)).await;
+    assign(&pool, a.org, new(second, admin, Scope::Organization)).await;
+    let only_b = assign(&pool, b.org, new(b.user, admin, Scope::Organization)).await;
+
+    role_assignments::delete(&pool, scope(a.org), first.id)
+        .await
+        .unwrap();
+    let last_b = role_assignments::delete(&pool, scope(b.org), only_b.id).await;
+
+    assert_eq!(
+        role_assignments::count_active_org_admins(&pool, scope(a.org))
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(kind(&last_b), "LastOrgAdmin");
+}
+
+/// Two removals of the last two admins at once: the second waits for the first's lock, then
+/// counts one admin and is refused.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn concurrent_removals_of_the_last_two_admins_keep_one(pool: PgPool) {
+    let a = facility(&pool, "org-a").await;
+    let admin = builtin_id(&pool, "org_admin").await;
+    let second = user(&pool, a.org, "Kim Example").await;
+    let first = assign(&pool, a.org, new(a.user, admin, Scope::Organization)).await;
+    let other = assign(&pool, a.org, new(second, admin, Scope::Organization)).await;
+    let mut removing = begin(&pool).await;
+    role_assignments::delete(&mut *removing, scope(a.org), first.id)
+        .await
+        .unwrap();
+    let racing = tokio::spawn({
+        let pool = pool.clone();
+        async move { role_assignments::delete(&pool, scope(a.org), other.id).await }
+    });
+    until_a_call_waits_on_a_lock(&pool).await;
+    removing.commit().await.unwrap();
+
+    let raced = racing.await.expect("the second removal ran");
+
+    assert_eq!(kind(&raced), "LastOrgAdmin");
+    assert_eq!(
+        role_assignments::count_active_org_admins(&pool, scope(a.org))
+            .await
+            .unwrap(),
+        1
+    );
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn delete_refuses_an_isolation_level_above_read_committed(pool: PgPool) {
+    let a = facility(&pool, "org-a").await;
+    let assignment = assign(&pool, a.org, new(a.user, a.mentor, Scope::Organization)).await;
+    let mut conn = pool.acquire().await.unwrap();
+    for level in ["repeatable read", "serializable"] {
+        let set = format!(
+            "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL {}",
+            level.to_uppercase()
+        );
+        sqlx::raw_sql(sqlx::AssertSqlSafe(set))
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+
+        let deleted = role_assignments::delete(&mut *conn, scope(a.org), assignment.id).await;
+
+        assert!(
+            matches!(&deleted, Err(Error::IsolationLevel { found }) if found == level),
+            "{deleted:?}"
+        );
+    }
+    let kept = role_assignments::get(&pool, scope(a.org), assignment.id).await;
+    assert_eq!(kept.unwrap(), Some(assignment));
 }
 
 /// The SQLSTATE and constraint of a refused statement.
@@ -665,4 +817,114 @@ async fn grants_ignore_another_organizations_role_even_without_the_trigger(pool:
         .unwrap();
 
     assert!(grants.is_empty(), "{grants:?}");
+}
+
+/// The users error variant's name, for the suspension tests.
+fn user_kind<T: std::fmt::Debug>(result: &Result<T, users::Error>) -> String {
+    match result {
+        Ok(_) => "Ok".to_owned(),
+        Err(error) => format!("{error:?}")
+            .split([' ', '(', '{'])
+            .next()
+            .unwrap_or_default()
+            .to_owned(),
+    }
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn suspending_keeps_the_last_active_org_admin(pool: PgPool) {
+    let a = facility(&pool, "org-a").await;
+    let admin = builtin_id(&pool, "org_admin").await;
+    let second = user(&pool, a.org, "Kim Example").await;
+    let at_tower = user(&pool, a.org, "Sam Example").await;
+    assign(&pool, a.org, new(a.user, admin, Scope::Organization)).await;
+    assign(&pool, a.org, new(second, admin, Scope::Organization)).await;
+    assign(&pool, a.org, new(at_tower, admin, Scope::Account(a.tower))).await;
+    let suspend =
+        |id| users::set_status(&pool, scope(a.org), id, Status::Suspended, request_time());
+
+    let one_of_two = suspend(second).await;
+    let last = suspend(a.user).await;
+    // An admin at an account only is not counted, and suspending an already suspended user
+    // changes nothing about the count.
+    let account_only = suspend(at_tower).await;
+    let again = suspend(second).await;
+    let restored =
+        users::set_status(&pool, scope(a.org), second, Status::Active, request_time()).await;
+
+    assert_eq!(user_kind(&one_of_two), "Ok");
+    assert_eq!(user_kind(&last), "LastOrgAdmin");
+    assert_eq!(user_kind(&account_only), "Ok");
+    assert_eq!(user_kind(&again), "Ok");
+    assert_eq!(user_kind(&restored), "Ok");
+    assert_eq!(
+        role_assignments::count_active_org_admins(&pool, scope(a.org))
+            .await
+            .unwrap(),
+        2
+    );
+}
+
+/// A removal of one admin's assignment and a suspension of the other at once: the second waits
+/// for the first's lock, then counts one admin and is refused.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_suspension_racing_a_removal_of_the_last_two_admins_is_refused(pool: PgPool) {
+    let a = facility(&pool, "org-a").await;
+    let admin = builtin_id(&pool, "org_admin").await;
+    let second = user(&pool, a.org, "Kim Example").await;
+    let first = assign(&pool, a.org, new(a.user, admin, Scope::Organization)).await;
+    assign(&pool, a.org, new(second, admin, Scope::Organization)).await;
+    let mut removing = begin(&pool).await;
+    role_assignments::delete(&mut *removing, scope(a.org), first.id)
+        .await
+        .unwrap();
+    let suspending = tokio::spawn({
+        let pool = pool.clone();
+        async move {
+            users::set_status(
+                &pool,
+                scope(a.org),
+                second,
+                Status::Suspended,
+                request_time(),
+            )
+            .await
+        }
+    });
+    until_a_call_waits_on_a_lock(&pool).await;
+    removing.commit().await.unwrap();
+
+    let suspended = suspending.await.expect("the suspension ran");
+
+    assert_eq!(user_kind(&suspended), "LastOrgAdmin");
+    assert_eq!(
+        role_assignments::count_active_org_admins(&pool, scope(a.org))
+            .await
+            .unwrap(),
+        1
+    );
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn suspending_refuses_an_isolation_level_above_read_committed(pool: PgPool) {
+    let a = facility(&pool, "org-a").await;
+    let mut conn = pool.acquire().await.unwrap();
+    sqlx::raw_sql("SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+
+    let suspended = users::set_status(
+        &mut *conn,
+        scope(a.org),
+        a.user,
+        Status::Suspended,
+        request_time(),
+    )
+    .await;
+
+    assert!(
+        matches!(&suspended, Err(users::Error::IsolationLevel { found }) if found == "repeatable read"),
+        "{suspended:?}"
+    );
 }

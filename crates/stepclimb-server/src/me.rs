@@ -2,20 +2,25 @@
 //! `GET /api/v1/me`: the signed-in user, their organization, their grants and the
 //! organization's features (docs/specs/m0/03-users-and-identities.md B21, B22).
 //!
-//! The route needs a principal that is a user and no permission. Today the only such principal
-//! is a browser session ([`Authenticated`]); the user and the organization are read with the
-//! session's scope, so the answer can only be the caller's own rows. `grants` and `features` are
-//! part of the schema and answered empty: spec 09 issue 6 fills `grants`, spec 10 issue 3 fills
-//! `features`. The web app reads both only to show or hide UI; every route checks its own
-//! permission and feature on the server.
+//! The route needs a principal that is a user and no permission ([`AuthOnly`]). Today the only
+//! such principal is a browser session; the user and the organization are read with the
+//! session's scope, so the answer can only be the caller's own rows. `grants` are the grants
+//! every `Require` of the request checks (spec 09 B16). `features` is part of the schema and
+//! answered empty until spec 10 issue 3 fills it. The web app reads both only to show or hide
+//! UI; every route checks its own permission and feature on the server.
 
 use axum::{Json, extract::State};
 use serde::Serialize;
-use stepclimb_core::{Source, id::Uuid, organizations, users};
+use stepclimb_core::{
+    Source,
+    grants::{Grants, ScopeId},
+    id::Uuid,
+    organizations, users,
+};
 use utoipa::ToSchema;
 
 use crate::{
-    AppState, error::ApiError, organization::Organization, roles::ScopeType, session::Authenticated,
+    AppState, error::ApiError, organization::Organization, require::AuthOnly, roles::ScopeType,
 };
 
 /// The path of the route.
@@ -27,7 +32,8 @@ pub struct Me {
     pub user: MeUser,
     pub organization: Organization,
     /// Each scope where the caller holds at least one effective permission, with those
-    /// permissions sorted. Always empty until the server computes grants for this route.
+    /// permissions sorted: the organization first, then accounts by id. A permission held at a
+    /// scope also takes effect in every account inside it, which are not listed again.
     pub grants: Vec<MeGrant>,
     /// The keys of the organization's enabled features. Always empty until the server computes
     /// features for this route.
@@ -62,8 +68,9 @@ pub struct MeGrant {
     pub permissions: Vec<String>,
 }
 
-/// A scope a grant applies at: the organization, an account or a course, by id.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, ToSchema)]
+/// A scope a grant or a role assignment applies at: the organization, an account or a course,
+/// by id. An organization scope's `id` is the organization's id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
 pub struct GrantScope {
     #[serde(rename = "type")]
     pub scope_type: ScopeType,
@@ -149,10 +156,8 @@ struct UserMissing;
         (status = 503, response = crate::openapi::NoOrganization),
     )
 )]
-pub async fn get_me(
-    principal: Authenticated,
-    State(state): State<AppState>,
-) -> Result<Json<Me>, ApiError> {
+pub async fn get_me(auth: AuthOnly, State(state): State<AppState>) -> Result<Json<Me>, ApiError> {
+    let principal = auth.principal();
     let scope = principal.scope();
     let user = users::get(&state.db, scope, principal.user_id)
         .await
@@ -164,9 +169,26 @@ pub async fn get_me(
     Ok(Json(Me {
         user: user.into(),
         organization: organization.into(),
-        grants: Vec::new(),
+        grants: me_grants(auth.grants()),
         features: Vec::new(),
     }))
+}
+
+/// The grants as `GET /api/v1/me` lists them.
+fn me_grants(grants: &Grants) -> Vec<MeGrant> {
+    grants
+        .by_scope()
+        .map(|(scope, keys)| {
+            let (scope_type, id) = match scope {
+                ScopeId::Organization(id) => (ScopeType::Organization, id),
+                ScopeId::Account(id) => (ScopeType::Account, id),
+            };
+            MeGrant {
+                scope: GrantScope { scope_type, id },
+                permissions: keys.into_iter().map(str::to_owned).collect(),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -18,10 +18,12 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{
-    OrgScope, Source,
+    OrgScope, Source, accounts,
     clock::ManualClock,
     id::Uuid,
     organizations,
+    role_assignments::{self, NewAssignment, Scope},
+    roles,
     users::{self, NewUser, Status},
 };
 use stepclimb_server::{AppState, openapi, router, session, web_origin::WebOrigin};
@@ -325,4 +327,89 @@ async fn each_session_answers_its_own_user(pool: PgPool) {
     assert_eq!(for_sam.body["user"]["id"], sam.to_string());
     assert_eq!(for_robin.body["user"]["id"], robin.to_string());
     assert_eq!(for_robin.body["user"]["display_name"], "Robin Example");
+}
+
+/// Assign the built-in role `key` to `user` at `scope`.
+async fn assign_builtin(fixture: &Fixture, user: Uuid, key: &str, at: Scope) {
+    let role = sqlx::query_scalar("SELECT id FROM roles WHERE org_id IS NULL AND key = $1")
+        .bind(key)
+        .fetch_one(&fixture.pool)
+        .await
+        .expect("a built-in role");
+    let assignment = NewAssignment {
+        user_id: user,
+        role_id: role,
+        scope: at,
+        source: Source::Local,
+        external_id: None,
+    };
+    role_assignments::create(&fixture.pool, scope(fixture.org), &assignment, now())
+        .await
+        .expect("create assignment");
+}
+
+/// Spec 09 T17: an account admin of Tower has one grant, at Tower, with B5's list sorted.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t17_an_account_admin_of_tower_gets_one_sorted_grant(pool: PgPool) {
+    roles::sync_builtin(&pool, now()).await.expect("sync roles");
+    let fixture = Fixture::new(pool).await;
+    let root: Uuid = sqlx::query_scalar("SELECT id FROM accounts WHERE org_id = $1")
+        .bind(fixture.org)
+        .fetch_one(&fixture.pool)
+        .await
+        .expect("the root");
+    let tower = accounts::create(&fixture.pool, scope(fixture.org), root, "Tower", now())
+        .await
+        .expect("create Tower")
+        .id;
+    let sam = fixture.sam().await;
+    assign_builtin(&fixture, sam, "account_admin", Scope::Account(tower)).await;
+    // Organization admin at Tower adds only its account-grantable permissions, which are
+    // Account admin's: organization-only ones take no effect there, so no organization grant.
+    assign_builtin(&fixture, sam, "org_admin", Scope::Account(tower)).await;
+    // A role with no permissions adds no grant.
+    assign_builtin(&fixture, sam, "student", Scope::Organization).await;
+
+    let answer = fixture.me_with_cookie(&fixture.sign_in(sam).await).await;
+
+    assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    assert_eq!(
+        answer.body["grants"],
+        json!([{
+            "scope": { "type": "account", "id": tower.to_string() },
+            "permissions": [
+                "account.manage", "account.view", "role.assign", "role.view", "user.view"
+            ],
+        }])
+    );
+    let errors = common::schema_errors(&document(), "Me", &answer.body);
+    assert!(errors.is_empty(), "{errors:#?}");
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_organization_grant_comes_first_and_a_removed_assignment_is_gone(pool: PgPool) {
+    roles::sync_builtin(&pool, now()).await.expect("sync roles");
+    let fixture = Fixture::new(pool).await;
+    let sam = fixture.sam().await;
+    assign_builtin(&fixture, sam, "org_admin", Scope::Organization).await;
+    let cookie = fixture.sign_in(sam).await;
+
+    let admin = fixture.me_with_cookie(&cookie).await;
+    sqlx::query("DELETE FROM role_assignments WHERE user_id = $1")
+        .bind(sam)
+        .execute(&fixture.pool)
+        .await
+        .unwrap();
+    let removed = fixture.me_with_cookie(&cookie).await;
+
+    let grants = admin.body["grants"].as_array().expect("grants");
+    assert_eq!(grants.len(), 1, "{grants:?}");
+    assert_eq!(
+        grants[0]["scope"],
+        json!({ "type": "organization", "id": fixture.org.to_string() })
+    );
+    let mut every: Vec<&str> = stepclimb_core::perm::ALL.iter().map(|p| p.key()).collect();
+    every.sort_unstable();
+    assert_eq!(grants[0]["permissions"], json!(every));
+    assert_eq!(removed.body["grants"], json!([]));
 }

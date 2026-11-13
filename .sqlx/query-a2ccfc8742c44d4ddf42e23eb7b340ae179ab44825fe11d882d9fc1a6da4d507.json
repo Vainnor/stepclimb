@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT (r.org_id IS NULL AND r.key = 'org_admin'\n                   AND ra.scope_type = 'organization' AND u.status = $3) AS \"counted!\"\n           FROM role_assignments ra\n           JOIN roles r ON r.id = ra.role_id\n           JOIN users u ON u.org_id = ra.org_id AND u.id = ra.user_id\n           WHERE ra.org_id = $1 AND ra.id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "counted!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "a2ccfc8742c44d4ddf42e23eb7b340ae179ab44825fe11d882d9fc1a6da4d507"
+}

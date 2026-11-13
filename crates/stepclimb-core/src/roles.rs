@@ -401,6 +401,31 @@ pub async fn builtin_id(db: impl PgExecutor<'_>, key: &str) -> Result<Option<Uui
     Ok(id)
 }
 
+/// [`get`], with the role's row locked `FOR KEY SHARE` until the caller's transaction ends: a
+/// change of the role through [`lock_custom`] waits for it, so a check on the permissions read
+/// here holds until the caller commits (spec 09 B12 step 5, B14).
+pub async fn get_for_key_share(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    id: Uuid,
+) -> Result<Option<Role>, Error> {
+    sqlx::query_as!(
+        Row,
+        r#"SELECT id, key, name, builtin, permissions,
+                  (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM roles
+           WHERE (org_id IS NULL OR org_id = $1) AND id = $2
+           FOR KEY SHARE"#,
+        scope.org_id(),
+        id,
+    )
+    .fetch_optional(conn)
+    .await?
+    .map(Role::try_from)
+    .transpose()
+}
+
 /// The built-in roles, then the scope's custom roles, each group sorted by key, starting after
 /// `after` (the sort key of the previous page's last role) and at most `limit` of them.
 ///

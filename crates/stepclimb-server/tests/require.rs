@@ -390,6 +390,9 @@ async fn the_session_extractor_keeps_its_specific_code(pool: PgPool) {
     let f = Fixture::new(pool).await;
     let (cookie, user) = f.user().await;
     f.assign(user, f.builtin("org_admin").await, At::Org).await;
+    // A second active admin, so suspending the first does not remove the last one (B14).
+    let (_, other) = f.user().await;
+    f.assign(other, f.builtin("org_admin").await, At::Org).await;
     users::set_status(&f.pool, scope(f.org), user, users::Status::Suspended, now())
         .await
         .expect("suspend");

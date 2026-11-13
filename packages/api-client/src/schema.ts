@@ -77,6 +77,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/role-assignments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the role assignments at scopes where the caller holds `role.view`, by id. */
+        get: operations["listRoleAssignments"];
+        put?: never;
+        /** Grant a role to a user at a scope. */
+        post: operations["createRoleAssignment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/role-assignments/{assignment_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove a role assignment. */
+        delete: operations["deleteRoleAssignment"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/roles": {
         parameters: {
             query?: never;
@@ -273,6 +308,12 @@ export interface components {
             /** @description Trimmed; 1 to 200 characters. */
             name?: string;
         };
+        /**
+         * @description Who owns an assignment: an admin of this organization (`local`), or the identity provider,
+         *     sync API, SCIM or connector that wrote it, in which case it cannot be removed here.
+         * @enum {string}
+         */
+        AssignmentSource: "local" | "idp" | "sync" | "scim" | "connector";
         /** @description One rule a request body broke, in a 422's `errors`. */
         FieldError: {
             /** @description The stable code of the rule, such as `settings.unknown_key`. */
@@ -280,7 +321,10 @@ export interface components {
             /** @description A JSON Pointer (RFC 6901) to the member that broke the rule, such as `/name`. */
             field: string;
         };
-        /** @description A scope a grant applies at: the organization, an account or a course, by id. */
+        /**
+         * @description A scope a grant or a role assignment applies at: the organization, an account or a course,
+         *     by id. An organization scope's `id` is the organization's id.
+         */
         GrantScope: {
             /** Format: uuid */
             id: string;
@@ -304,7 +348,8 @@ export interface components {
             features: string[];
             /**
              * @description Each scope where the caller holds at least one effective permission, with those
-             *     permissions sorted. Always empty until the server computes grants for this route.
+             *     permissions sorted: the organization first, then accounts by id. A permission held at a
+             *     scope also takes effect in every account inside it, which are not listed again.
              */
             grants: components["schemas"]["MeGrant"][];
             organization: components["schemas"]["Organization"];
@@ -357,6 +402,19 @@ export interface components {
              *     caller at organization scope.
              */
             permissions: string[];
+        };
+        /** @description An assignment to create. */
+        NewRoleAssignment: {
+            /**
+             * Format: uuid
+             * @description A built-in role other than `manager` and `observer`, or a custom role of the
+             *     organization.
+             */
+            role_id: string;
+            /** @description The organization (its own id) or an account of it. `course` is not available yet. */
+            scope: components["schemas"]["ScopeRef"];
+            /** Format: uuid */
+            user_id: string;
         };
         /**
          * @description Every organization setting with its effective value: the stored one, or the setting's
@@ -442,6 +500,29 @@ export interface components {
             /** @description Pass this as `cursor` to get the next page; `null` on the last page. */
             next_cursor: string | null;
         };
+        /** @description One page of a list. */
+        Page_RoleAssignment: {
+            /** @description The items, in the list's sort order. */
+            items: {
+                /**
+                 * Format: date-time
+                 * @description RFC 3339, UTC.
+                 */
+                created_at: string;
+                /** @description The owning system's id for the assignment; `null` for a `local` one. */
+                external_id: string | null;
+                /** Format: uuid */
+                id: string;
+                /** Format: uuid */
+                role_id: string;
+                scope: components["schemas"]["GrantScope"];
+                source: components["schemas"]["AssignmentSource"];
+                /** Format: uuid */
+                user_id: string;
+            }[];
+            /** @description Pass this as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
+        };
         /** @description One permission of the catalog. */
         PermissionInfo: {
             /** @description The scope types at which a role assignment grants it. */
@@ -498,6 +579,24 @@ export interface components {
              */
             updated_at: string;
         };
+        /** @description A role granted to a user at a scope. */
+        RoleAssignment: {
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            created_at: string;
+            /** @description The owning system's id for the assignment; `null` for a `local` one. */
+            external_id: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            role_id: string;
+            scope: components["schemas"]["GrantScope"];
+            source: components["schemas"]["AssignmentSource"];
+            /** Format: uuid */
+            user_id: string;
+        };
         /** @description A change to a custom role; an omitted member is left as it is. */
         RolePatch: {
             /** @description Trimmed; 1 to 200 characters. */
@@ -507,6 +606,15 @@ export interface components {
              *     organization scope every key it adds and every key it drops.
              */
             permissions?: string[] | null;
+        };
+        /** @description The scope a new assignment takes effect at. */
+        ScopeRef: {
+            /**
+             * Format: uuid
+             * @description The organization's own id for `organization`.
+             */
+            id: string;
+            type: components["schemas"]["ScopeType"];
         };
         /**
          * @description The kind of scope a permission can take effect at.
@@ -528,6 +636,69 @@ export interface components {
     responses: {
         /** @description `account.not_found`: no account with this id exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined. */
         AccountNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `role_assignment.exists`: the user already holds the role at the scope. `role.unknown_builtin`: the role is a built-in role of another Stepclimb release. */
+        AssignmentCreateConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: the caller does not hold `role.assign` at the scope. `permission.escalation`: the role has a catalog permission the caller does not hold at the scope, counting permissions that take no effect there. `auth.csrf_refused`: the request did not come from this site. */
+        AssignmentCreateForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `user.not_found`: no user of the organization has this id. `role.not_found`: no built-in role and no custom role of the organization has this id. `account.not_found`: the scope names no account of the organization, or one you cannot see. `org.not_found`: the scope names another organization, or the request's organization cannot be determined. */
+        AssignmentCreateNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `role.unknown_builtin`: the assignment's role is a built-in role of another Stepclimb release. `role_assignment.externally_managed`: an identity provider, the sync API, SCIM or a connector owns the assignment. `role_assignment.last_org_admin`: it is the organization's last organization-scope Organization admin assignment held by an active user. */
+        AssignmentDeleteConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: the caller does not hold `role.assign` at the assignment's scope. `permission.escalation`: the role has a catalog permission the caller does not hold at the scope, counting permissions that take no effect there. `auth.csrf_refused`: the request did not come from this site. */
+        AssignmentDeleteForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `role_assignment.not_found`: no assignment of the organization has this id, or its scope is hidden from you. `org.not_found`: the request's organization cannot be determined. */
+        AssignmentDeleteNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `account.not_found`: the scope filter names no account of the organization, or one you cannot see. `org.not_found`: the scope filter names another organization, or the request's organization cannot be determined. */
+        AssignmentListNotFound: {
             headers: {
                 [name: string]: unknown;
             };
@@ -1019,6 +1190,107 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["PermissionDenied"];
             404: components["responses"]["OrganizationNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    listRoleAssignments: {
+        parameters: {
+            query?: {
+                /** @description Only this user's assignments. */
+                user_id?: string;
+                /** @description Only assignments at this exact scope; needs `scope_id`. */
+                scope_type?: components["schemas"]["ScopeType"];
+                /** @description The scope's id (the organization's own id for `organization`); needs `scope_type`. */
+                scope_id?: string;
+                /** @description The `next_cursor` of the previous page; omit it for the first page. */
+                cursor?: string;
+                /** @description How many items to return, 1 to 200; 50 when omitted. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of assignments */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_RoleAssignment"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["PermissionDenied"];
+            404: components["responses"]["AssignmentListNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    createRoleAssignment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewRoleAssignment"];
+            };
+        };
+        responses: {
+            /** @description The assignment is created */
+            201: {
+                headers: {
+                    /** @description The assignment's path */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleAssignment"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AssignmentCreateForbidden"];
+            404: components["responses"]["AssignmentCreateNotFound"];
+            409: components["responses"]["AssignmentCreateConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["UnprocessableEntity"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    deleteRoleAssignment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The assignment's id. */
+                assignment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The assignment is removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AssignmentDeleteForbidden"];
+            404: components["responses"]["AssignmentDeleteNotFound"];
+            409: components["responses"]["AssignmentDeleteConflict"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };

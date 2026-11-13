@@ -375,6 +375,38 @@ where
     }
 }
 
+/// The authenticated principal and its grants, for a route that needs a principal and no
+/// permission (`GET /api/v1/me`, spec 09 B21's `AuthOnly`). The grants are the ones a
+/// [`Require`] of the same request would check, loaded the same way.
+pub struct AuthOnly {
+    principal: Authenticated,
+    grants: Arc<Grants>,
+}
+
+impl AuthOnly {
+    /// The authenticated principal.
+    pub fn principal(&self) -> Authenticated {
+        self.principal
+    }
+
+    /// The principal's grants for this request.
+    pub fn grants(&self) -> &Grants {
+        &self.grants
+    }
+}
+
+impl FromRequestParts<AppState> for AuthOnly {
+    type Rejection = Rejection;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let Evaluated { principal, grants } = evaluate(parts, state).await?;
+        Ok(Self { principal, grants })
+    }
+}
+
 /// The request's authenticated principal, as [`Require`] finds it: loading the request's grants
 /// with it on first use, so a later `Require` reuses both. No principal answers the session
 /// extractor's 401.
