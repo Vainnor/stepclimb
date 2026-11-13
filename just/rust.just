@@ -61,6 +61,20 @@ openapi-diff: web-install
 
 # Run the server against the local database, with the web build embedded. Without
 # STEPCLIMB_ENCRYPTION_KEYS(_FILE) it uses the published development key ring,
-# deploy/compose/development-encryption-keys, and says so; never use it for real data.
+# deploy/compose/development-encryption-keys, and says so; never use it for real data. With
+# STEPCLIMB_CONFIG set it supplies neither default, since a variable would override the file.
 serve: web-build
-    if [[ -z "${STEPCLIMB_ENCRYPTION_KEYS:-}${STEPCLIMB_ENCRYPTION_KEYS_FILE:-}" ]]; then echo "just serve: using the development encryption key (deploy/compose/development-encryption-keys); never use it for real data" >&2; export STEPCLIMB_ENCRYPTION_KEYS_FILE="{{ justfile_directory() }}/deploy/compose/development-encryption-keys"; fi; STEPCLIMB_DATABASE_URL="${STEPCLIMB_DATABASE_URL:-$DATABASE_URL}" cargo run --locked -p stepclimb-server --bin stepclimb -- serve
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -n "${STEPCLIMB_CONFIG:-}" ]]; then
+      echo "just serve: STEPCLIMB_CONFIG is set; the database URL and encryption keys come from it or from your STEPCLIMB_* variables, with no development defaults" >&2
+    else
+      if [[ -z "${STEPCLIMB_ENCRYPTION_KEYS:-}${STEPCLIMB_ENCRYPTION_KEYS_FILE:-}" ]]; then
+        echo "just serve: using the development encryption key (deploy/compose/development-encryption-keys); never use it for real data" >&2
+        export STEPCLIMB_ENCRYPTION_KEYS_FILE="{{ justfile_directory() }}/deploy/compose/development-encryption-keys"
+      fi
+      if [[ -z "${STEPCLIMB_DATABASE_URL:-}${STEPCLIMB_DATABASE_URL_FILE:-}" ]]; then
+        export STEPCLIMB_DATABASE_URL="$DATABASE_URL"
+      fi
+    fi
+    exec cargo run --locked -p stepclimb-server --bin stepclimb -- serve
