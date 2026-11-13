@@ -6,7 +6,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::http::{HeaderMap, HeaderValue, header};
-use sqlx::PgPool;
+use sqlx::{PgPool, postgres::PgPoolOptions};
 use stepclimb_auth::{encryption::KeyRing, token::TokenHash};
 use stepclimb_core::{
     OrgScope,
@@ -108,11 +108,15 @@ impl Fixture {
     }
 
     async fn flow_count(&self) -> i64 {
-        sqlx::query_scalar("SELECT count(*) FROM auth_flows")
-            .fetch_one(&self.pool)
-            .await
-            .expect("count flows")
+        flow_count(&self.pool).await
     }
+}
+
+async fn flow_count(pool: &PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM auth_flows")
+        .fetch_one(pool)
+        .await
+        .expect("count flows")
 }
 
 fn headers(cookie: Option<&str>) -> HeaderMap {
@@ -135,6 +139,18 @@ fn cookie_pair(started: &Started) -> String {
     pair.to_owned()
 }
 
+/// The `Max-Age` the `Set-Cookie` gives the browser.
+fn max_age(started: &Started) -> Duration {
+    let set_cookie = started.set_cookie.to_str().expect("an ASCII Set-Cookie");
+    let seconds = set_cookie
+        .split("; ")
+        .find_map(|attribute| attribute.strip_prefix("Max-Age="))
+        .expect("a Max-Age attribute")
+        .parse()
+        .expect("whole seconds");
+    Duration::from_secs(seconds)
+}
+
 fn token(started: &Started) -> String {
     cookie_pair(started)
         .strip_prefix("__Host-sc_flow=")
@@ -149,7 +165,7 @@ async fn a_flow_started_in_a_browser_finishes_there_once(pool: PgPool) {
     assert_eq!(started.expires_at, start_time() + LIFETIME);
     let set_cookie = started.set_cookie.to_str().unwrap();
     assert!(
-        set_cookie.ends_with("; Max-Age=600; Path=/; Secure; HttpOnly; SameSite=Lax"),
+        set_cookie.ends_with("; Max-Age=1200; Path=/; Secure; HttpOnly; SameSite=Lax"),
         "{set_cookie}"
     );
     let cookie = format!("theme=dark; {}", cookie_pair(&started));
@@ -173,7 +189,11 @@ async fn a_flow_used_after_its_lifetime_has_expired(pool: PgPool) {
     let fixture = Fixture::new(pool).await;
     let started = fixture.start(Kind::PasskeySignIn, None).await;
     let cookie = cookie_pair(&started);
-    fixture.clock.advance(LIFETIME);
+    // The browser still holds the cookie one second before its Max-Age runs out, which is past
+    // the flow's lifetime, so the late user reaches the server's expiry check.
+    let late_but_held = max_age(&started) - Duration::from_secs(1);
+    assert!(late_but_held >= LIFETIME, "the cookie outlives the flow");
+    fixture.clock.advance(late_but_held);
 
     let late = fixture.finish(Some(&cookie), Kind::PasskeySignIn).await;
 
@@ -367,4 +387,56 @@ async fn cleanup_deletes_expired_flows_in_every_organization(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(left, [live.id]);
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_flow_moved_to_another_organization_does_not_open_there(pool: PgPool) {
+    let fixture = Fixture::new(pool).await;
+    let other_org = insert_org(&fixture.pool, "org-b").await;
+    let started = fixture.start(Kind::Oidc, None).await;
+    sqlx::query("UPDATE auth_flows SET org_id = $1 WHERE id = $2")
+        .bind(other_org)
+        .bind(started.id)
+        .execute(&fixture.pool)
+        .await
+        .unwrap();
+
+    let result = fixture
+        .finish_in(other_org, Some(&cookie_pair(&started)), Kind::Oidc)
+        .await;
+
+    assert!(matches!(result, Err(FinishError::Decrypt(_))), "{result:?}");
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_cleanup_timer_deletes_an_expired_flow(pool: PgPool) {
+    let fixture = Fixture::new(pool).await;
+    let started = fixture.start(Kind::Oidc, None).await;
+    fixture.clock.advance(LIFETIME);
+    // Paused time jumps to the next timer whenever the runtime waits, database I/O included, so
+    // this pool has no client-side timeouts for the jump to fire; the jump only brings the
+    // cleanup timer's ticks sooner.
+    let untimed = PgPoolOptions::new()
+        .acquire_timeout(Duration::from_secs(365 * 24 * 60 * 60))
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect_with(fixture.pool.connect_options().as_ref().clone())
+        .await
+        .expect("a second pool on the test database");
+    tokio::time::pause();
+
+    let cleanup = tokio::spawn(flow::run_cleanup(untimed.clone(), fixture.clock.clock()));
+    // Virtual time is free, so wait many intervals: a pass can still be on its way to the
+    // database when the test's sleep returns. A cleanup that never deletes fails after them all.
+    let mut left = flow_count(&untimed).await;
+    for _ in 0..1000 {
+        if left == 0 {
+            break;
+        }
+        tokio::time::sleep(flow::CLEANUP_INTERVAL).await;
+        left = flow_count(&untimed).await;
+    }
+    cleanup.abort();
+
+    assert_eq!(left, 0, "flow {} is still stored", started.id);
 }

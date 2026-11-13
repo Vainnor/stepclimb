@@ -125,7 +125,7 @@ pub async fn end(state: &AppState, request_headers: &HeaderMap) -> Result<(), Ap
 
 /// `__Host-sc_session=<token>` with the B7 attributes and `Expires` at the session's absolute
 /// expiry (Q5), so the cookie survives a browser restart and the server still enforces both
-/// limits.
+/// limits. The value is marked sensitive so its `Debug` output hides the token.
 fn set_cookie(token: &Token, expires_at: SystemTime) -> HeaderValue {
     let cookie = format!(
         "{COOKIE_NAME}={}; Expires={}; {ATTRIBUTES}",
@@ -134,7 +134,10 @@ fn set_cookie(token: &Token, expires_at: SystemTime) -> HeaderValue {
     );
     // A token is base64url and an HTTP date is ASCII letters, digits, spaces, `,` and `:`, all
     // valid in a header value.
-    HeaderValue::from_str(&cookie).expect("a session cookie is a valid header value")
+    let mut value =
+        HeaderValue::from_str(&cookie).expect("a session cookie is a valid header value");
+    value.set_sensitive(true);
+    value
 }
 
 /// The `Set-Cookie` value that removes the session cookie (B10). It repeats `Secure` and
@@ -341,5 +344,24 @@ mod tests {
                 token.expose_secret()
             )
         );
+    }
+
+    #[test]
+    fn debug_output_of_a_started_session_never_contains_the_token() {
+        let token = Token::generate().unwrap();
+        let at = UNIX_EPOCH + Duration::from_secs(1_765_592_000);
+        let started = Started {
+            session: Session {
+                id: Uuid::nil(),
+                user_id: Uuid::nil(),
+                last_seen_at: at,
+                expires_at: at,
+                created_at: at,
+            },
+            set_cookie: set_cookie(&token, at),
+        };
+        let printed = format!("{started:?}");
+        assert!(!printed.contains(token.expose_secret()), "{printed}");
+        assert!(started.set_cookie.is_sensitive());
     }
 }

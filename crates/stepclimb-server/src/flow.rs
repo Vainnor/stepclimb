@@ -10,6 +10,8 @@
 //! The response that completes the flow clears the cookie with [`clear_cookie`].
 //!
 //! [`spawn_cleanup`] deletes expired flows on a `tokio` interval until the jobs runner exists.
+//! A flow never nests inside another: there is one flow cookie, and the OAuth 2.1 authorization
+//! endpoint (spec 08 I7) carries its request in the sign-in flow's `return_to` instead.
 //! The cookie's value is the flow token and never reaches a log line or an error body.
 
 use std::time::{Duration, SystemTime};
@@ -227,17 +229,24 @@ fn payload_context<'a>(org_id: &'a Uuid, id: &'a Uuid) -> [&'a [u8]; 4] {
     ]
 }
 
-/// `__Host-sc_flow=<token>` with `Max-Age` of the flow's lifetime. A relative lifetime does not
-/// depend on the browser's clock agreeing with the server's; the server enforces the expiry
-/// anyway.
+/// How long the browser keeps the flow cookie: twice the flow's lifetime. The server decides
+/// expiry, so a user who comes back late still presents the cookie and gets
+/// `auth.flow_expired` rather than `auth.flow_invalid`. A relative lifetime does not depend on
+/// the browser's clock agreeing with the server's.
+pub const COOKIE_MAX_AGE: Duration = Duration::from_secs(2 * LIFETIME.as_secs());
+
+/// `__Host-sc_flow=<token>` with `Max-Age` of [`COOKIE_MAX_AGE`], marked sensitive so its
+/// `Debug` output hides the token.
 fn set_cookie(token: &Token) -> HeaderValue {
     let cookie = format!(
         "{COOKIE_NAME}={}; Max-Age={}; {ATTRIBUTES}",
         token.expose_secret(),
-        LIFETIME.as_secs(),
+        COOKIE_MAX_AGE.as_secs(),
     );
     // A token is base64url and the rest is fixed ASCII, all valid in a header value.
-    HeaderValue::from_str(&cookie).expect("a flow cookie is a valid header value")
+    let mut value = HeaderValue::from_str(&cookie).expect("a flow cookie is a valid header value");
+    value.set_sensitive(true);
+    value
 }
 
 /// The `Set-Cookie` value that removes the flow cookie, for the response that completes or
@@ -247,21 +256,20 @@ pub fn clear_cookie() -> HeaderValue {
     HeaderValue::from_static("__Host-sc_flow=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax")
 }
 
-/// Why a cleanup pass stopped.
-#[derive(Debug, thiserror::Error)]
-pub enum CleanupError {
-    #[error("could not list the organizations: {0}")]
-    Organizations(#[from] organizations::Error),
-    #[error("could not delete expired sign-in flows: {0}")]
-    Flows(#[from] auth_flows::Error),
-}
-
 /// Delete every flow that has expired at `now`, organization by organization (B21). Returns how
-/// many were deleted.
-pub async fn delete_expired(db: &PgPool, now: SystemTime) -> Result<u64, CleanupError> {
+/// many were deleted. A failure in one organization is logged and the others still run; only
+/// failing to list the organizations stops the pass.
+pub async fn delete_expired(db: &PgPool, now: SystemTime) -> Result<u64, organizations::Error> {
     let mut deleted = 0;
     for org_id in organizations::ids(db).await? {
-        deleted += auth_flows::delete_expired(db, job_scope(org_id), now).await?;
+        match auth_flows::delete_expired(db, job_scope(org_id), now).await {
+            Ok(count) => deleted += count,
+            Err(error) => tracing::error!(
+                %org_id,
+                %error,
+                "could not delete the organization's expired sign-in flows"
+            ),
+        }
     }
     Ok(deleted)
 }
@@ -274,21 +282,31 @@ fn job_scope(org_id: Uuid) -> OrgScope {
     OrgScope::instance(org_id)
 }
 
-/// Run [`delete_expired`] every [`CLEANUP_INTERVAL`] at the clock's time, for as long as the
-/// server runs. A failed pass is logged and the next one runs on schedule.
-pub fn spawn_cleanup(db: PgPool, clock: Clock) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(CLEANUP_INTERVAL);
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        loop {
-            interval.tick().await;
-            match delete_expired(&db, clock.now()).await {
-                Ok(0) => {}
-                Ok(deleted) => tracing::debug!(deleted, "deleted expired sign-in flows"),
-                Err(error) => tracing::error!(%error, "sign-in flow cleanup failed"),
-            }
+/// Run [`delete_expired`] every [`CLEANUP_INTERVAL`] at the clock's time, the first pass at once.
+/// It never returns; a failed pass is logged and the next one runs on schedule.
+pub async fn run_cleanup(db: PgPool, clock: Clock) {
+    let mut interval = tokio::time::interval(CLEANUP_INTERVAL);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        interval.tick().await;
+        match delete_expired(&db, clock.now()).await {
+            Ok(0) => {}
+            Ok(deleted) => tracing::debug!(deleted, "deleted expired sign-in flows"),
+            Err(error) => tracing::error!(%error, "sign-in flow cleanup pass failed"),
         }
-    })
+    }
+}
+
+/// Start [`run_cleanup`] for as long as the server runs, and log if it ever stops (a panic in a
+/// pass), since expired flows would then wait for the request that finds them.
+pub fn spawn_cleanup(db: PgPool, clock: Clock) {
+    let cleanup = tokio::spawn(run_cleanup(db, clock));
+    tokio::spawn(async move {
+        match cleanup.await {
+            Ok(()) => tracing::error!("the sign-in flow cleanup stopped"),
+            Err(error) => tracing::error!(%error, "the sign-in flow cleanup stopped"),
+        }
+    });
 }
 
 #[cfg(test)]
@@ -301,10 +319,29 @@ mod tests {
         assert_eq!(
             set_cookie(&token).to_str().unwrap(),
             format!(
-                "__Host-sc_flow={}; Max-Age=600; Path=/; Secure; HttpOnly; SameSite=Lax",
+                "__Host-sc_flow={}; Max-Age=1200; Path=/; Secure; HttpOnly; SameSite=Lax",
                 token.expose_secret()
             )
         );
+    }
+
+    #[test]
+    fn the_cookie_outlives_the_flow_so_a_late_user_hears_expired() {
+        assert_eq!(COOKIE_MAX_AGE, 2 * LIFETIME);
+    }
+
+    #[test]
+    fn debug_output_of_a_started_flow_never_contains_the_token() {
+        let token = Token::generate().unwrap();
+        let started = Started {
+            id: new_id(),
+            return_to: ReturnTo::root(),
+            expires_at: SystemTime::UNIX_EPOCH,
+            set_cookie: set_cookie(&token),
+        };
+        let printed = format!("{started:?}");
+        assert!(!printed.contains(token.expose_secret()), "{printed}");
+        assert!(started.set_cookie.is_sensitive());
     }
 
     #[test]

@@ -157,7 +157,11 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   are encrypted per B3.
 - **B21.** Expired flows are deleted by the request that finds them and by a periodic cleanup;
   the cleanup's schedule rides on the jobs runner when it exists (M1), and until then on a
-  `tokio` interval in the server. Pending Q8.
+  `tokio` interval in the server. Pending Q8. The server's interval is 10 minutes; a failure in
+  one organization is logged and the pass continues with the next, and the server logs an error
+  if the cleanup task ever stops. The flow cookie's `Max-Age` is twice the flow's lifetime, so a
+  user who comes back late still presents it and hears `auth.flow_expired` rather than
+  `auth.flow_invalid`; the server alone decides expiry (coordinator decision, 13 Nov 2026).
 
 ### Rate limits
 
@@ -202,7 +206,10 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   request in a sign-in flow (B17) and sends the browser through normal web sign-in, then back.
   With a session, it issues a single-use authorization code bound to the client, redirect URI,
   user and code challenge, and redirects to `redirect_uri` with `code` and `state`. Endpoint
-  path, consent and code storage: pending Q10.
+  path, consent and code storage: pending Q10. Without a session, I7 carries the authorization
+  request in the `return_to` of the sign-in flow the browser then starts (a path back to the
+  authorization endpoint with its query), so flows never nest under the one `__Host-sc_flow`
+  cookie name (coordinator decision, 13 Nov 2026).
 - **B32.** `POST /oauth/token` with `grant_type=authorization_code` exchanges a code once, when
   `client_id` and `redirect_uri` match the code and the S256 challenge computed from
   `code_verifier` (RFC 7636) equals the stored challenge. It returns an access token valid for
