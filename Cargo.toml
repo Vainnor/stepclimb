@@ -14,7 +14,7 @@ members = [
     "crates/stepclimb-jobs",
 ]
 # The Tauri shell is its own workspace with its own lockfile: it needs WebKitGTK on Linux to
-# build, which the server's gates do not, and it builds only in the Tauri CI matrix.
+# build, which the server's gates do not; `just app-build` builds it.
 exclude = ["apps/app/src-tauri"]
 
 [workspace.package]

@@ -1,5 +1,5 @@
 # Stepclimb task runner. `just ci` is the merge gate: it must pass on the committed HEAD before a
-# merge, locally and in GitHub Actions (.github/workflows/ci.yml runs the same recipe).
+# merge, on the machine the change was made on. There is no hosted CI (docs/adr/0021).
 set shell := ["bash", "-cu"]
 
 import 'just/secrets.just'

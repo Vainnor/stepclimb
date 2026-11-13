@@ -16,7 +16,7 @@
 - { name: "area: ui", color: "bfd4f2", description: "packages/ui, packages/tokens, apps/ui-docs" }
 - { name: "area: app", color: "bfd4f2", description: "apps/app (Tauri)" }
 - { name: "area: deploy", color: "fef2c0", description: "deploy/, docs-site/" }
-- { name: "area: ci", color: "fef2c0", description: "justfile, workflows, hooks" }
+- { name: "area: ci", color: "fef2c0", description: "justfile, gates, hooks" }
 - {
     name: "blocked: owner decision",
     color: "fbca04",

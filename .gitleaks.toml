@@ -1,5 +1,5 @@
-# Secret scanning config for Stepclimb. Used by `just secrets-scan`, the pre-commit hook and the
-# CI workflow, so all three agree. Docs: https://github.com/gitleaks/gitleaks
+# Secret scanning config for Stepclimb. Used by `just secrets-scan` (part of `just ci`) and the
+# pre-commit hook, so both agree. Docs: https://github.com/gitleaks/gitleaks
 [extend]
 useDefault = true
 

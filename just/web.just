@@ -30,3 +30,10 @@ dev: web-install
 # Storybook on :6006
 storybook: web-build
     pnpm --filter @stepclimb/ui-docs dev
+
+# The Tauri shell for this machine's OS: release build, unbundled and unsigned, after a
+# cargo-deny check of its own workspace. Not part of `just ci`; required for changes to apps/app
+# (.claude/rules/cross-platform.md). macOS and Windows builds run on those machines.
+app-build: web-build
+    cargo deny --manifest-path apps/app/src-tauri/Cargo.toml check
+    pnpm --filter @stepclimb/app build
