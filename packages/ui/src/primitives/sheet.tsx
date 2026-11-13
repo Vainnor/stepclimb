@@ -32,7 +32,12 @@ export const sheet = tv({
     header: "flex items-start gap-4 px-6 pt-5 pb-3",
     title: "min-w-0 flex-1",
     close: "-me-2 -mt-1 shrink-0",
-    body: "min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-6 text-sm",
+    // No overscroll-behavior of its own: while the sheet is open, React Aria's ModalOverlay stops
+    // the page from scrolling (and sets overscroll-behavior on every element in iOS WebKit), and
+    // base.css keeps the document from bouncing. With one set, Chromium composites the body as a
+    // scroller even when nothing overflows, and the fields in it render a pixel differently
+    // depending on when the layer is rastered.
+    body: "min-h-0 flex-1 overflow-y-auto px-6 pb-6 text-sm",
     footer: "flex flex-wrap justify-end gap-2 border-t border-line px-6 py-4",
   },
   variants: {
