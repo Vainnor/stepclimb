@@ -5,13 +5,15 @@
 //! and `bind` (ADR 0022). The file is read only when `--config` or `STEPCLIMB_CONFIG` names it,
 //! and a variable overrides the file setting by setting. A secret also has a `_FILE` variant in
 //! both places (`STEPCLIMB_DATABASE_URL_FILE`, `database_url_file`) naming a file whose trimmed
-//! contents are the value. An unknown `STEPCLIMB_*` variable or TOML key is an error, so a
-//! misspelled secret cannot start the server without it. No error repeats a secret's value or a
-//! `_FILE` path, since an operator may have pasted the secret itself there.
+//! contents are the value; a relative path in a variable is relative to the working directory,
+//! and in the file to the file's directory. An empty value counts as unset. An unknown
+//! `STEPCLIMB_*` variable or TOML key is an error, so a misspelled secret cannot start the server
+//! without it. No error repeats a secret's value or a `_FILE` path, since an operator may have
+//! pasted the secret itself there.
 //!
 //! A spec that adds configuration adds a [`Setting`] to [`SETTINGS`], its field to [`Config`] and
-//! [`file::FileKeys`], and its validation to [`Config::load`] (`docs/specs/m0/14-compose-deploy.md`
-//! B11).
+//! to `FileKeys` in `file.rs`, and its validation to [`Config::load`]
+//! (`docs/specs/m0/14-compose-deploy.md` B11).
 
 mod file;
 
@@ -314,6 +316,15 @@ impl Sources<'_> {
         }
     }
 
+    /// The file a `_FILE` variable or `_file` key names. A relative path in a variable is
+    /// relative to the working directory; in the configuration file, to that file's directory.
+    fn path_of(&self, path: &str, origin: &Origin) -> PathBuf {
+        match (origin, self.file) {
+            (Origin::Key { .. }, Some(file)) => file.resolve(path),
+            _ => PathBuf::from(path),
+        }
+    }
+
     /// A setting's value and where it was set, or `None` when neither source sets it.
     fn plain(&self, setting: &Setting) -> Result<Option<(String, Origin)>, ConfigError> {
         match self.var(setting.var) {
@@ -338,13 +349,15 @@ impl Sources<'_> {
         match pair {
             (Some((_, value)), Some((_, file))) => Err(ConfigError::Twice { value, file }),
             (Some(found), None) => Ok(found),
-            (None, Some((path, origin))) => match std::fs::read_to_string(&path) {
-                Ok(contents) => Ok((contents.trim().to_owned(), origin)),
-                Err(e) => Err(ConfigError::File {
-                    origin,
-                    reason: e.kind().to_string(),
-                }),
-            },
+            (None, Some((path, origin))) => {
+                match std::fs::read_to_string(self.path_of(&path, &origin)) {
+                    Ok(contents) => Ok((contents.trim().to_owned(), origin)),
+                    Err(e) => Err(ConfigError::File {
+                        origin,
+                        reason: e.kind().to_string(),
+                    }),
+                }
+            }
             (None, None) => Err(ConfigError::Missing(*setting)),
         }
     }

@@ -6,7 +6,7 @@
   on 2026-11-13
 - **Related:** `docs/plan/technical.md` -> Hosting and operations (Configuration);
   `docs/specs/m0/14-compose-deploy.md` B8 to B11, Q2; `docs/specs/m0/03-users-and-identities.md`
-  Q5 (names); `docs/specs/m0/08-sessions-and-csrf.md` (`STEPCLIMB_PUBLIC_URL`)
+  Q5 (the naming half); `docs/specs/m0/08-sessions-and-csrf.md` (`STEPCLIMB_PUBLIC_URL`)
 
 ## Context
 
@@ -15,8 +15,10 @@ The plan puts `STEPCLIMB_*` environment variables over an optional `stepclimb.to
 variable maps to a TOML key, where the file is found, or what an unrecognized variable does.
 Before this decision the server read four flat variables: `STEPCLIMB_BIND`,
 `STEPCLIMB_DATABASE_URL(_FILE)`, `STEPCLIMB_ENCRYPTION_KEYS(_FILE)` and `STEPCLIMB_LOG`. Spec 14
-Q2, spec 03 Q5 and spec 08's public-URL question asked the same thing; this record answers all
-three.
+Q2, the naming half of spec 03 Q5 and spec 08's public-URL question asked the same thing; this
+record answers the naming for all three. How `[[providers]]` in the file relates to the
+`identity_providers` table (spec 03 Q5's other half) is decided in spec 03 and is not recorded
+here.
 
 ## Options
 
@@ -47,7 +49,10 @@ because a misspelled secret's name would otherwise start the server without it.
 ## Consequences
 
 New settings keep the flat shape (`STEPCLIMB_PUBLIC_URL` and `public_url`). Settings that are
-lists of records, such as `[[providers]]`, are TOML only and have no variable. Any other program
-reading a `STEPCLIMB_*` variable from the same environment (the Compose file's port variables,
-`STEPCLIMB_DEV_SERVER` for Vite) must not export it into the server's environment, or the server
-refuses to start.
+lists of records, such as `[[providers]]`, are TOML only and have no variable.
+
+The `STEPCLIMB_` prefix belongs to the server. Development tooling that reads its own variables
+uses the `SC_DEV_` prefix (`SC_DEV_PG_PORT`, `SC_DEV_PORT`, `SC_DEV_MINIO_PORT`,
+`SC_DEV_MINIO_CONSOLE_PORT` in the development Compose file, `SC_DEV_SERVER` for Vite) or `SC_`
+(`SC_E2E_URL` for Playwright), so a developer's shell never holds a `STEPCLIMB_*` variable the
+server would refuse.

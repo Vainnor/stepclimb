@@ -213,3 +213,23 @@ fn an_unknown_stepclimb_variable_exits_2_naming_it() {
     );
     assert!(!stderr.contains("AAEC"), "stderr: {stderr}");
 }
+
+#[test]
+fn a_wrong_type_in_the_file_exits_2_even_when_a_variable_overrides_it() {
+    let file = TomlFile::new("overridden", "bind = 8080\n");
+    let output = stepclimb()
+        .args(["serve", "--config"])
+        .arg(&file.0)
+        .env("STEPCLIMB_BIND", "127.0.0.1:0")
+        .output()
+        .expect("the binary runs");
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = stderr_of(&output);
+    assert!(
+        stderr.contains(&format!(
+            "`bind` ({} line 1): must be a string",
+            file.0.display()
+        )),
+        "stderr: {stderr}"
+    );
+}

@@ -1,19 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! `stepclimb.toml`: flat top-level keys, one per setting, with a `_file` key beside each secret.
 //!
-//! Each value is kept as an untyped [`toml::Value`] with its span, so a wrong type is reported by
-//! [`ConfigFile::string`] without the value in the message, and every error names the line. An
-//! array of tables such as the plan's `[[providers]]` is a typed field of [`FileKeys`].
+//! Each value is kept as an untyped [`toml::Value`] with its span, so a wrong type is reported
+//! without the value in the message, and every error names the line. The whole file is checked
+//! when it is parsed, including keys a variable overrides. A relative `_file` path resolves
+//! against the directory holding `stepclimb.toml`.
+//!
+//! A record added later, such as the plan's `[[providers]]`, is a typed field of `FileKeys`. Its
+//! secret fields must be `Spanned<toml::Value>` or a secret newtype whose `Deserialize` error is
+//! fixed text: serde's own type errors quote the value they refused, which would print the secret.
 
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use toml::Spanned;
 
-use super::{ConfigError, Origin};
+use super::{ConfigError, Origin, SETTINGS};
 
-/// The keys `stepclimb.toml` may hold. An unknown key is a parse error naming its line.
-#[derive(Debug, Default, Deserialize)]
+/// The keys `stepclimb.toml` may hold. An unknown key is a parse error naming its line. No
+/// `Debug`: the values may be secrets; [`ConfigFile`]'s `Debug` lists the keys present.
+#[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct FileKeys {
     bind: Option<Spanned<toml::Value>>,
@@ -38,8 +44,20 @@ impl FileKeys {
     }
 }
 
-/// A parsed `stepclimb.toml`, not yet resolved against the environment.
-#[derive(Debug)]
+/// Every key `FileKeys` holds, a secret's `_file` key after its value.
+fn all_keys() -> Vec<String> {
+    let mut keys = Vec::new();
+    for setting in SETTINGS {
+        keys.push(setting.key.to_owned());
+        if setting.secret {
+            keys.push(format!("{}_file", setting.key));
+        }
+    }
+    keys
+}
+
+/// A parsed and checked `stepclimb.toml`, not yet resolved against the environment. `Debug`
+/// shows the path and the names of the keys present, never a value.
 pub struct ConfigFile {
     path: PathBuf,
     text: String,
@@ -59,13 +77,42 @@ impl ConfigFile {
     /// Parse `text` as the file at `path`. The error carries the parser's description and the
     /// line, never the source text, which may hold a secret.
     pub fn parse(path: PathBuf, text: String) -> Result<Self, ConfigError> {
-        match toml::from_str::<FileKeys>(&text) {
-            Ok(keys) => Ok(Self { path, text, keys }),
-            Err(error) => Err(ConfigError::Toml {
-                line: error.span().map(|span| line_of(&text, span.start)),
-                message: error.message().to_owned(),
-                path,
-            }),
+        let file = match toml::from_str::<FileKeys>(&text) {
+            Ok(keys) => Self { path, text, keys },
+            Err(error) => {
+                return Err(ConfigError::Toml {
+                    line: error.span().map(|span| line_of(&text, span.start)),
+                    message: error.message().to_owned(),
+                    path,
+                });
+            }
+        };
+        file.check()?;
+        Ok(file)
+    }
+
+    /// Every value is a string, and no secret has both its value and its `_file`, whether or not
+    /// a variable overrides the setting.
+    fn check(&self) -> Result<(), ConfigError> {
+        for setting in SETTINGS.iter().filter(|s| s.secret) {
+            let file_key = format!("{}_file", setting.key);
+            if let (Some((_, value)), Some((_, file))) =
+                (self.string(setting.key)?, self.string(&file_key)?)
+            {
+                return Err(ConfigError::Twice { value, file });
+            }
+        }
+        for key in all_keys() {
+            self.string(&key)?;
+        }
+        Ok(())
+    }
+
+    /// The path a `_file` key names: relative paths resolve against this file's directory.
+    pub(super) fn resolve(&self, path: &str) -> PathBuf {
+        match self.path.parent() {
+            Some(dir) => dir.join(path),
+            None => PathBuf::from(path),
         }
     }
 
@@ -91,6 +138,19 @@ impl ConfigFile {
                 problem: "must be a string in quotes".to_owned(),
             }),
         }
+    }
+}
+
+impl std::fmt::Debug for ConfigFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let present: Vec<String> = all_keys()
+            .into_iter()
+            .filter(|key| self.keys.get(key).is_some())
+            .collect();
+        f.debug_struct("ConfigFile")
+            .field("path", &self.path)
+            .field("keys", &present)
+            .finish_non_exhaustive()
     }
 }
 

@@ -283,9 +283,7 @@ fn a_bad_value_in_the_file_names_the_key_file_and_line() {
 
 #[test]
 fn a_value_that_is_not_a_string_is_refused_without_repeating_it() {
-    let file = toml("database_url = 31337\n");
-    let error =
-        Config::load(&env(&[("STEPCLIMB_ENCRYPTION_KEYS", KEYS)]), Some(&file)).unwrap_err();
+    let error = toml_error("database_url = 31337\n");
     assert_eq!(
         error,
         ConfigError::Invalid {
@@ -294,6 +292,78 @@ fn a_value_that_is_not_a_string_is_refused_without_repeating_it() {
         }
     );
     assert!(!error.to_string().contains("31337"), "{error}");
+}
+
+#[test]
+fn the_whole_file_is_checked_even_where_a_variable_overrides_it() {
+    let error = toml_error("log = \"info\"\nbind = 8080\n");
+    assert_eq!(
+        error,
+        ConfigError::Invalid {
+            origin: key_origin("bind", 2),
+            problem: "must be a string in quotes".to_owned(),
+        }
+    );
+    let error = toml_error(&format!(
+        "database_url = \"{URL}\"\ndatabase_url_file = \"/run/secrets/db\"\n"
+    ));
+    assert_eq!(
+        error,
+        ConfigError::Twice {
+            value: key_origin("database_url", 1),
+            file: key_origin("database_url_file", 2),
+        }
+    );
+}
+
+#[test]
+fn an_empty_string_in_the_file_counts_as_unset() {
+    let file = toml("bind = \"\"\nlog = \"\"\n");
+    let config = Config::load(&with_required(&[]), Some(&file)).unwrap();
+    assert_eq!(config.bind, DEFAULT_BIND.parse::<SocketAddr>().unwrap());
+    assert_eq!(config.log, DEFAULT_LOG);
+    let file = toml("database_url = \"\"\n");
+    let error =
+        Config::load(&env(&[("STEPCLIMB_ENCRYPTION_KEYS", KEYS)]), Some(&file)).unwrap_err();
+    assert_eq!(error, ConfigError::Missing(DATABASE_URL));
+}
+
+#[test]
+fn debug_of_the_file_shows_its_path_and_key_names_only() {
+    let (_, value, hidden) = SECRET_SAMPLES[0];
+    let file = toml(&format!(
+        "bind = \"0.0.0.0:7000\"\ndatabase_url = \"{value}\"\n"
+    ));
+    let printed = format!("{file:?}");
+    assert_eq!(
+        printed,
+        r#"ConfigFile { path: "/etc/stepclimb/stepclimb.toml", keys: ["bind", "database_url"], .. }"#
+    );
+    assert!(!printed.contains(hidden), "{printed}");
+}
+
+#[test]
+fn a_relative_file_key_resolves_against_the_config_files_directory() {
+    let secret = TempFile::new("relative", &format!("{URL}\n"));
+    let dir = secret.0.parent().unwrap();
+    let text = "database_url_file = \"relative\"\n".to_owned();
+    let file = ConfigFile::parse(dir.join("stepclimb.toml"), text).unwrap();
+    let config = Config::load(&env(&[("STEPCLIMB_ENCRYPTION_KEYS", KEYS)]), Some(&file)).unwrap();
+    assert_eq!(config.database_url, URL);
+
+    // A variable's relative path is relative to the working directory, not the file's.
+    let error = Config::load(
+        &env(&[
+            ("STEPCLIMB_ENCRYPTION_KEYS", KEYS),
+            ("STEPCLIMB_DATABASE_URL_FILE", "relative"),
+        ]),
+        Some(&file),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&error, ConfigError::File { origin: Origin::Var(name), .. } if name == "STEPCLIMB_DATABASE_URL_FILE"),
+        "{error}"
+    );
 }
 
 // T2: every secret has a `_FILE` variant, in the environment and in the file.
@@ -386,11 +456,10 @@ fn every_secret_set_twice_is_refused_by_name() {
             format!("set only one of {} and {}_FILE", setting.var, setting.var)
         );
 
-        let file = toml(&format!(
+        let error = toml_error(&format!(
             "{} = \"{value}\"\n{}_file = \"/run/secrets/x\"\n",
             setting.key, setting.key
         ));
-        let error = Config::load(&other_secrets(*setting), Some(&file)).unwrap_err();
         assert_eq!(
             error,
             ConfigError::Twice {

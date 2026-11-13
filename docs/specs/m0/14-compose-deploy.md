@@ -99,22 +99,29 @@ Read on 2026-11-12.
 
 - **B8.** `STEPCLIMB_*` environment variables override an optional `stepclimb.toml`, key by key
   (`docs/plan/technical.md` -> Hosting: Configuration). With no file, the environment alone
-  configures the server, as today.
+  configures the server, as today. An empty value, in a variable or in the file, counts as unset:
+  `STEPCLIMB_BIND=""` or `bind = ""` means the default, and an empty required secret is missing.
 - **B9.** Every secret value has a `*_FILE` variant naming a file whose trimmed contents are the
   value (today only the database URL has one). Setting both the value and its `_FILE` variant is
-  an error, as `ConfigError::DatabaseUrlTwice` already is. A secret may also be in the TOML file;
-  the self-hosting guide says the file then needs owner-only permissions.
+  an error. A secret may also be in the TOML file, with a `_file` key beside it; a relative
+  `_file` path resolves against the directory holding `stepclimb.toml`, while a variable's
+  relative `_FILE` path is relative to the working directory. The self-hosting guide says a file
+  holding a secret needs owner-only permissions.
 - **B10.** Bad configuration stops startup before the server connects to anything, with a message
   that names the variable or the TOML key (with its file and line), says what is wrong and, where
   there is one, gives an example of a valid value. Bad configuration includes: a missing required
   value, an unparsable value, a value and its `_FILE` both set, an unreadable `_FILE`, a TOML
-  syntax error, and an unknown TOML key. The exit code stays 2.
+  syntax error, and an unknown TOML key. The whole file is checked even where a variable overrides
+  a key: a value of the wrong type, or a value and its `_file` both set, is an error either way.
+  An error about the configuration file itself (unreadable, or not valid TOML) names that file's
+  path; an error about a `_FILE` variable or `_file` key names the variable or key, never the
+  path it holds, since an operator may have pasted the secret there. The exit code stays 2.
 - **B11.** The loader is shared: each M0 spec that needs configuration (02's organization mode,
   05's and 06's `[[providers]]` in the plan's TOML shape, 07's admission webhook, 08's public
   origin and allowlist) adds its keys to the one typed `Config` and its validation, with tests in
-  `config.rs`'s style (a lookup function, not the process environment). This spec owns the
-  loader, the precedence and the error format; each spec owns its keys. Names and layout are Open
-  question Q2.
+  the style of `crates/stepclimb-server/src/config/tests.rs` (an `Env` map and fixture text, not
+  the process environment). This spec owns the loader, the precedence and the error format; each
+  spec owns its keys. Names and layout are Q2's answer, recorded in ADR 0022.
 - **B12.** A configuration reference in the self-hosting guide lists every key with its
   variable name, TOML path, type, default and whether it is secret, and a test fails when a key
   exists in `Config` but not in the reference.
@@ -181,13 +188,15 @@ None. The probes are public and return no data beyond their status.
 
 ## Test cases
 
-Configuration (unit tests in `config.rs`, through a lookup function and fixture files):
+Configuration (unit tests in `crates/stepclimb-server/src/config/tests.rs`, through an `Env` map
+and fixture text):
 
 - **T1.** (B8) A key in the TOML file and the same key in the environment: the environment wins;
   a key only in the file is used.
 - **T2.** (B9) For every secret key, the `_FILE` variant is read and trimmed; both set is refused
-  by name; an unreadable file names its path. A test walks `Config`'s secret fields so a new
-  secret without a `_FILE` variant fails.
+  by name; an unreadable `_FILE` or `_file` names the variable or key and not the path, while an
+  unreadable or invalid configuration file names its own path. A test walks `Config`'s secret
+  fields so a new secret without a `_FILE` variant fails.
 - **T3.** (B10) A TOML syntax error and an unknown key each name the file and line; the binary
   exits with code 2 (an integration test runs the binary).
 - **T4.** (B12) A key missing from the configuration reference fails the reference test.
