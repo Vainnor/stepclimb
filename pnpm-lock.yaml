@@ -269,6 +269,9 @@ importers:
       '@types/node':
         specifier: 26.6.6
         version: 26.6.6
+      colorjs.io:
+        specifier: 0.7.1
+        version: 0.7.1
       tailwindcss:
         specifier: 4.3.3
         version: 4.3.3
