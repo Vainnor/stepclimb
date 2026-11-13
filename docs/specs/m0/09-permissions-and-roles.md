@@ -93,11 +93,21 @@ organizations' ids.
   built-in key (409 `role.key_taken`); the key format is pending Q7. Its name is trimmed, not
   empty and at most 200 characters, the rule `02-organizations-and-accounts.md` Q6 sets for
   organization and account names (coordinator decision, 13 Nov 2026). Every permission must be in
-  `perm::ALL` (422, `errors[].code = "role.unknown_permission"`, field `/permissions/<i>`). The
+  `perm::ALL` (422, `errors[].code = "role.unknown_permission"`, field `/permissions/<i>`) and
+  appear at most once (422, `errors[].code = "role.duplicate_permission"`, field
+  `/permissions/<i>` of the repeat), which bounds a list at the catalog's length (coordinator
+  decision, 13 Nov 2026). The
   creator must hold every permission they put in the role at organization scope (403
   `permission.escalation`), so `RoleManage` alone does not let anyone mint a stronger role.
 - **B9.** Changing a custom role's `name` or `permissions` follows B8's checks and takes effect
-  for every holder on their next request. A stored permission key that a later release removed
+  for every holder on their next request. On a change of `permissions`, the escalation check
+  covers every permission the role gains and every permission it loses; a permission the new list
+  keeps is not checked, and a change of `name` alone checks none. The route locks the role's row
+  for the check and the write, so the list it checks is the list it replaces (coordinator
+  decision, 13 Nov 2026). A consequence: a `role.manage` holder who holds a permission K at
+  organization scope can add K to a custom role that is already assigned, which gives K to every
+  current holder at their assignment's scope (accounts included), without holding
+  `role.assign`. A stored permission key that a later release removed
   from the catalog is ignored when evaluating and logged once per startup at `warn`.
 - **B10.** A custom role with any assignment cannot be deleted (409 `role.in_use`); the caller
   removes the assignments first.
@@ -223,6 +233,17 @@ Common errors as in `02-organizations-and-accounts.md` -> API.
 | `GET /api/v1/admin/role-assignments` | `?user_id&scope_type&scope_id&cursor&limit` | 200 `Page<RoleAssignment>` | 400 `pagination.invalid_cursor`, 404 `account.not_found` (scope filter) | `perm::RoleView` (any scope; filtered to visible scopes) |
 | `POST /api/v1/admin/role-assignments` | `{ user_id, role_id, scope: { type, id } }` | 201 `RoleAssignment`, `Location` | 403 `permission.escalation`, 404 `user.not_found`/`role.not_found`/`account.not_found`, 409 `role_assignment.exists`, 422 `role_assignment.scope_unavailable` | `perm::RoleAssign` (the scope in the body, B12) |
 | `DELETE /api/v1/admin/role-assignments/{assignment_id}` | | 204 | 403 `permission.escalation`, 404 `role_assignment.not_found`, 409 `role_assignment.externally_managed`, 409 `role_assignment.last_org_admin` | `perm::RoleAssign` (the assignment's scope) |
+
+The roles routes check, in order: `Require` (401, 403 `permission.denied`); the role exists and is
+custom (404 `role.not_found`, 409 `role.builtin_immutable`); the escalation rule (403
+`permission.escalation`, which skips a key outside the catalog); then the role's own rules (422
+`request.invalid`, 409 `role.key_taken`, 409 `role.in_use`). A body member the schema does not
+name answers 400 `request.malformed`. A 422 lists the first rule the body breaks, with the field
+codes `role.key_invalid` (`/key`), `role.unknown_permission` and `role.duplicate_permission`
+(`/permissions/<i>`), `name.empty`
+and `name.too_long` (`/name`), and `text.contains_nul` (the member holding NUL). `created_at` and
+`updated_at` are RFC 3339 in UTC with six fractional digits (`2025-11-13T02:13:20.000000Z`)
+(coordinator decision, 13 Nov 2026).
 
 Schemas: `PermissionInfo { key, grantable: ScopeType[] }`; `Role { id, key, name, builtin,
 permissions: string[], created_at, updated_at }` (built-in roles report their code lists, B6);
@@ -364,7 +385,8 @@ entitlement feature (a `Require<Feature>` on the role-writing routes) is
 - Entitlement checks: `10-entitlements-framework.md`.
 - The role and assignment admin screens: a later UI spec on `11-app-shell.md` and
   `13-base-ui-components.md`.
-- Audit entries for role and assignment changes: pending Q5.
+- Audit entries for role and assignment changes: Q5's entries are delivered by #136 (the issue
+  that adds `audit_events`), which also adds the entries to the roles routes.
 
 ## Open questions
 

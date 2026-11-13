@@ -586,3 +586,50 @@ async fn the_table_refuses_changing_a_roles_organization_key_or_kind(pool: PgPoo
     }
     assert!(renamed.is_ok(), "name and permissions may change");
 }
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn lock_custom_reads_the_scopes_custom_role_and_refuses_the_rest(pool: PgPool) {
+    roles::sync_builtin(&pool, request_time())
+        .await
+        .expect("sync");
+    let a = org(&pool, "org-a").await;
+    let b = org(&pool, "org-b").await;
+    let mine = create(&pool, a, "tower_mentor", &["role.view"]).await;
+    let theirs = create(&pool, b, "tower_mentor", &["role.view"]).await;
+    let mut conn = pool.acquire().await.expect("a connection");
+    let locked = roles::lock_custom(&mut conn, scope(a), mine.id)
+        .await
+        .expect("lock");
+    assert_eq!(locked, mine);
+    let builtin = builtin_id(&pool, "org_admin").await;
+    let refused = roles::lock_custom(&mut conn, scope(a), builtin).await;
+    assert!(
+        matches!(refused, Err(Error::BuiltinImmutable)),
+        "{refused:?}"
+    );
+    for id in [theirs.id, new_id()] {
+        let refused = roles::lock_custom(&mut conn, scope(a), id).await;
+        assert!(matches!(refused, Err(Error::NotFound)), "{id}: {refused:?}");
+    }
+}
+
+/// The lock holds until the transaction ends: a second transaction's `FOR UPDATE NOWAIT` on
+/// the same row fails while the first is open, and succeeds after it commits.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn lock_custom_holds_the_row_until_the_transaction_ends(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    let role = create(&pool, a, "tower_mentor", &["role.view"]).await;
+    let try_lock = |pool: PgPool| async move {
+        sqlx::query("SELECT 1 FROM roles WHERE id = $1 FOR UPDATE NOWAIT")
+            .bind(role.id)
+            .execute(&pool)
+            .await
+    };
+    let mut tx = pool.begin().await.expect("begin");
+    roles::lock_custom(&mut tx, scope(a), role.id)
+        .await
+        .expect("lock");
+    assert!(try_lock(pool.clone()).await.is_err(), "the row is locked");
+    tx.commit().await.expect("commit");
+    assert!(try_lock(pool.clone()).await.is_ok(), "the lock is released");
+}

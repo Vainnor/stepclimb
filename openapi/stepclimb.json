@@ -10,6 +10,344 @@
     "version": "0.0.0"
   },
   "paths": {
+    "/api/v1/admin/permissions": {
+      "get": {
+        "tags": [
+          "roles"
+        ],
+        "summary": "List the permission catalog.",
+        "operationId": "listPermissions",
+        "responses": {
+          "200": {
+            "description": "Every permission, in catalog order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PermissionInfo"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/PermissionDenied"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/roles": {
+      "get": {
+        "tags": [
+          "roles"
+        ],
+        "summary": "List the roles: the built-in roles, then the organization's custom roles, each by key.",
+        "operationId": "listRoles",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page; omit it for the first page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many items to return, 1 to 200; 50 when omitted.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 200,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Role"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/PermissionDenied"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "roles"
+        ],
+        "summary": "Create a custom role.",
+        "operationId": "createRole",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewRole"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The role is created",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The role's path"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Role"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/WriteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/CreateConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/admin/roles/{role_id}": {
+      "get": {
+        "tags": [
+          "roles"
+        ],
+        "summary": "Read one role.",
+        "operationId": "getRole",
+        "parameters": [
+          {
+            "name": "role_id",
+            "in": "path",
+            "description": "The role's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Role"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/PermissionDenied"
+          },
+          "404": {
+            "$ref": "#/components/responses/RoleNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "roles"
+        ],
+        "summary": "Delete a custom role that has no assignments.",
+        "operationId": "deleteRole",
+        "parameters": [
+          {
+            "name": "role_id",
+            "in": "path",
+            "description": "The role's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The role is deleted"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/DeleteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/RoleNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/DeleteConflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      },
+      "patch": {
+        "tags": [
+          "roles"
+        ],
+        "summary": "Change a custom role's name or permissions; holders see the change on their next request.",
+        "operationId": "updateRole",
+        "parameters": [
+          {
+            "name": "role_id",
+            "in": "path",
+            "description": "The role's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RolePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The changed role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Role"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/WriteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/RoleNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/UpdateConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/auth/sign-out": {
       "post": {
         "tags": [
@@ -139,6 +477,121 @@
           "unavailable"
         ]
       },
+      "NewRole": {
+        "type": "object",
+        "description": "A custom role to create.",
+        "required": [
+          "key",
+          "name",
+          "permissions"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "A lowercase letter, then up to 62 lowercase letters, digits or underscores; not the key\nof a built-in role or another custom role of the organization."
+          },
+          "name": {
+            "type": "string",
+            "description": "Trimmed; 1 to 200 characters."
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Catalog keys (`GET /api/v1/admin/permissions`), each at most once and each held by the\ncaller at organization scope."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Page_Role": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A built-in role or a custom role of the organization.",
+              "required": [
+                "id",
+                "key",
+                "name",
+                "builtin",
+                "permissions",
+                "created_at",
+                "updated_at"
+              ],
+              "properties": {
+                "builtin": {
+                  "type": "boolean",
+                  "description": "Built-in roles are the same in every organization and cannot be changed or deleted."
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "RFC 3339, UTC."
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "key": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "permissions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The permission keys the role grants. A built-in role's are this server's list for it."
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "RFC 3339, UTC."
+                }
+              }
+            },
+            "description": "The items, in the list's sort order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass this as `cursor` to get the next page; `null` on the last page."
+          }
+        }
+      },
+      "PermissionInfo": {
+        "type": "object",
+        "description": "One permission of the catalog.",
+        "required": [
+          "key",
+          "grantable"
+        ],
+        "properties": {
+          "grantable": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScopeType"
+            },
+            "description": "The scope types at which a role assignment grants it."
+          },
+          "key": {
+            "type": "string",
+            "description": "The key roles list, `area.action`."
+          }
+        }
+      },
       "Problem": {
         "type": "object",
         "description": "The body of every error response (RFC 9457).",
@@ -180,6 +633,85 @@
             "description": "`about:blank` until the docs site documents each code."
           }
         }
+      },
+      "Role": {
+        "type": "object",
+        "description": "A built-in role or a custom role of the organization.",
+        "required": [
+          "id",
+          "key",
+          "name",
+          "builtin",
+          "permissions",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "builtin": {
+            "type": "boolean",
+            "description": "Built-in roles are the same in every organization and cannot be changed or deleted."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The permission keys the role grants. A built-in role's are this server's list for it."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          }
+        }
+      },
+      "RolePatch": {
+        "type": "object",
+        "description": "A change to a custom role; an omitted member is left as it is.",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Trimmed; 1 to 200 characters."
+          },
+          "permissions": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The role's whole new list, each catalog key at most once. The caller must hold at\norganization scope every key it adds and every key it drops."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ScopeType": {
+        "type": "string",
+        "description": "The kind of scope a permission can take effect at.",
+        "enum": [
+          "organization",
+          "account",
+          "course"
+        ]
       }
     },
     "responses": {
@@ -193,8 +725,38 @@
           }
         }
       },
+      "CreateConflict": {
+        "description": "`role.key_taken`: a built-in role or another custom role of the organization has the key.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "CsrfRefused": {
         "description": "`auth.csrf_refused`: an unsafe request without a bearer credential did not come from this site: `Sec-Fetch-Site` is not `same-origin`, `Origin` is sent but is not an allowed origin, or neither header is sent.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "DeleteConflict": {
+        "description": "`role.builtin_immutable`: built-in roles cannot be deleted. `role.in_use`: the role still has assignments; remove them first.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "DeleteForbidden": {
+        "description": "`permission.denied`: the caller does not hold `role.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -253,6 +815,16 @@
           }
         }
       },
+      "PermissionDenied": {
+        "description": "`permission.denied`: the caller does not hold the operation's permission at a scope containing its target.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "RateLimited": {
         "description": "`auth.rate_limited`: too many sign-in or token requests from this client address, or too many failed password or TOTP checks for this account; `Retry-After` gives the seconds until the limit's window closes.",
         "headers": {
@@ -271,8 +843,28 @@
           }
         }
       },
+      "RoleNotFound": {
+        "description": "`role.not_found`: no built-in role and no custom role of the organization has this id. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "RouteNotFound": {
         "description": "`request.not_found`: no API operation has this path.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Unauthenticated": {
+        "description": "`auth.unauthenticated`: no credential, or one that names no session of the organization. `auth.session_expired`: the session passed its idle or absolute expiry. `auth.suspended`: the user is suspended.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -300,6 +892,26 @@
             }
           }
         }
+      },
+      "UpdateConflict": {
+        "description": "`role.builtin_immutable`: built-in roles cannot be changed.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "WriteForbidden": {
+        "description": "`permission.denied`: the caller does not hold `role.manage` at organization scope. `permission.escalation`: the caller does not hold, at organization scope, a permission the role gains or loses. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
       }
     }
   },
@@ -311,6 +923,10 @@
     {
       "name": "auth",
       "description": "Browser sessions"
+    },
+    {
+      "name": "roles",
+      "description": "The permission catalog and roles"
     }
   ]
 }

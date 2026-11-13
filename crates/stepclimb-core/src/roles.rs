@@ -15,7 +15,7 @@
 //! Who may define a role with which permissions (B8's escalation rule) is the routes' to
 //! decide; this module checks the role itself: the key format, a key no other role of the
 //! organization or built-in role has, a non-blank name of at most [`MAX_NAME_CHARS`]
-//! characters, and permissions in [`perm::ALL`].
+//! characters, and permissions in [`perm::ALL`], each at most once.
 
 use std::time::SystemTime;
 
@@ -192,7 +192,7 @@ pub struct NewRole {
     pub key: String,
     /// Trimmed before it is stored; blank or longer than [`MAX_NAME_CHARS`] is refused.
     pub name: String,
-    /// Every entry must be a key in [`perm::ALL`]. Stored in the given order.
+    /// Every entry must be a key in [`perm::ALL`], each at most once. Stored in the given order.
     pub permissions: Vec<String>,
 }
 
@@ -233,6 +233,10 @@ pub enum Error {
     /// The permission at `index` is not a key in [`perm::ALL`].
     #[error("permission {index} is not in the catalog")]
     UnknownPermission { index: usize },
+    /// The permission at `index` repeats an earlier entry of the list. Refusing repeats bounds a
+    /// valid list at [`perm::ALL`]'s length.
+    #[error("permission {index} repeats an earlier entry")]
+    DuplicatePermission { index: usize },
     /// A built-in role [`sync_builtin`] would add has the key of a custom role of `org_id`.
     #[error(
         "the built-in role key {key:?} is already a custom role's key in organization {org_id}"
@@ -515,6 +519,33 @@ pub async fn delete_custom<'c>(
     Ok(())
 }
 
+/// The custom role `id` of the scope's organization, with its row locked until the end of the
+/// caller's transaction, so a check on its current permissions holds until the caller's
+/// [`update_custom`] in the same transaction writes. A built-in role is refused with
+/// [`Error::BuiltinImmutable`] without locking its instance-wide row.
+pub async fn lock_custom(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    id: Uuid,
+) -> Result<Role, Error> {
+    refuse_builtin(&mut *conn, scope, id).await?;
+    sqlx::query_as!(
+        Row,
+        r#"SELECT id, key, name, builtin, permissions,
+                  (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM roles
+           WHERE org_id = $1 AND id = $2
+           FOR UPDATE"#,
+        scope.org_id(),
+        id,
+    )
+    .fetch_optional(conn)
+    .await?
+    .ok_or(Error::NotFound)
+    .and_then(Role::try_from)
+}
+
 /// [`Error::BuiltinImmutable`] when `id` is a built-in role, [`Error::NotFound`] when it is
 /// neither built-in nor a custom role of the scope's organization.
 async fn refuse_builtin(db: impl PgExecutor<'_>, scope: OrgScope, id: Uuid) -> Result<(), Error> {
@@ -557,14 +588,20 @@ fn valid_name(name: &str) -> Result<&str, Error> {
     })
 }
 
+/// Every entry is a catalog key and none repeats; the first entry that breaks either rule is
+/// named. It stops there, so a long list costs at most [`perm::ALL`]'s length plus one checks.
 fn valid_permissions(permissions: &[String]) -> Result<(), Error> {
-    match permissions
-        .iter()
-        .position(|key| !perm::ALL.iter().any(|p| p.key() == key))
-    {
-        Some(index) => Err(Error::UnknownPermission { index }),
-        None => Ok(()),
+    let mut seen = Vec::with_capacity(perm::ALL.len());
+    for (index, key) in permissions.iter().enumerate() {
+        if !perm::ALL.iter().any(|p| p.key() == key) {
+            return Err(Error::UnknownPermission { index });
+        }
+        if seen.contains(&key) {
+            return Err(Error::DuplicatePermission { index });
+        }
+        seen.push(key);
     }
+    Ok(())
 }
 
 /// `value` unchanged, or [`Error::ContainsNul`] naming `field`.
@@ -787,6 +824,26 @@ mod tests {
             valid_permissions(&keys(&["Account.View"])),
             Err(Error::UnknownPermission { index: 0 })
         ));
+    }
+
+    #[test]
+    fn the_first_repeated_permission_is_named_by_index() {
+        let keys = |ks: &[&str]| ks.iter().map(|k| (*k).to_owned()).collect::<Vec<_>>();
+        assert!(matches!(
+            valid_permissions(&keys(&["user.view", "role.view", "user.view"])),
+            Err(Error::DuplicatePermission { index: 2 })
+        ));
+        // The first broken rule wins, in list order.
+        assert!(matches!(
+            valid_permissions(&keys(&["user.view", "user.view", "nope"])),
+            Err(Error::DuplicatePermission { index: 1 })
+        ));
+        assert!(matches!(
+            valid_permissions(&keys(&["user.view", "nope", "user.view"])),
+            Err(Error::UnknownPermission { index: 1 })
+        ));
+        let every: Vec<String> = perm::ALL.iter().map(|p| p.key().to_owned()).collect();
+        assert!(valid_permissions(&every).is_ok());
     }
 
     #[test]

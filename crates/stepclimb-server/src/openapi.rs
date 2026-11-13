@@ -4,8 +4,9 @@
 //! It is committed as `openapi/stepclimb.json`; `just openapi-diff` regenerates it and the
 //! TypeScript client (`packages/api-client`) and fails when either differs from what is
 //! committed. Today it lists the operations probes, which the web app's skeleton route calls
-//! through the generated client, sign-out, and the shared error schemas and responses below.
-//! Product endpoints are added under `/api/v1` by the M0 specs.
+//! through the generated client, sign-out, the permission catalog and roles routes under
+//! `/api/v1/admin`, and the shared error schemas and responses below. The other M0 specs add
+//! their endpoints under `/api/v1`.
 //!
 //! Every `/api/v1` operation lists its errors in `#[utoipa::path]` (spec 02 B6). The errors
 //! common to every operation reference the responses here, such as
@@ -23,7 +24,7 @@ use utoipa::{
 use crate::{
     auth,
     error::{FieldError, PROBLEM_JSON, Problem},
-    health,
+    health, roles,
 };
 
 /// The operation extension that marks a handler as changing state (spec 08 B12, T17). Every
@@ -40,9 +41,29 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         description = "The public API every Stepclimb client uses. There are no private endpoints.",
         license(name = "AGPL-3.0-or-later", identifier = "AGPL-3.0-or-later")
     ),
-    paths(health::healthz, health::readyz, auth::sign_out),
+    paths(
+        health::healthz,
+        health::readyz,
+        auth::sign_out,
+        roles::list_permissions,
+        roles::list_roles,
+        roles::get_role,
+        roles::create_role,
+        roles::update_role,
+        roles::delete_role
+    ),
     components(
-        schemas(health::Health, health::HealthStatus, Problem, FieldError),
+        schemas(
+            health::Health,
+            health::HealthStatus,
+            Problem,
+            FieldError,
+            roles::ScopeType,
+            roles::PermissionInfo,
+            roles::Role,
+            roles::NewRole,
+            roles::RolePatch
+        ),
         responses(
             BadRequest,
             RouteNotFound,
@@ -54,17 +75,27 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             CsrfRefused,
             OrganizationNotFound,
             NoOrganization,
-            RateLimited
+            RateLimited,
+            Unauthenticated,
+            PermissionDenied,
+            roles::RoleNotFound,
+            roles::WriteForbidden,
+            roles::DeleteForbidden,
+            roles::CreateConflict,
+            roles::UpdateConflict,
+            roles::DeleteConflict
         )
     ),
     tags(
         (name = "operations", description = "Liveness and readiness probes"),
-        (name = "auth", description = "Browser sessions")
+        (name = "auth", description = "Browser sessions"),
+        (name = "roles", description = "The permission catalog and roles")
     )
 )]
 struct ApiDoc;
 
-fn problem_response(description: &str) -> RefOr<Response> {
+/// A problem details response with this description, for [`problem_responses!`].
+pub(crate) fn problem_response(description: &str) -> RefOr<Response> {
     problem_builder(description).build().into()
 }
 
@@ -80,19 +111,24 @@ fn problem_builder(description: &str) -> ResponseBuilder {
 // BadRequest's description repeats pagination::MAX_LIMIT, since it is a literal; a test in
 // tests/http.rs checks the two agree.
 
-/// Declares a shared problem response: its component name is the type's name.
+/// Declares a problem response: its component name is the type's name. Each type must also be
+/// listed in `components(responses(..))` of [`ApiDoc`], or its reference dangles.
 macro_rules! problem_responses {
     ($($name:ident => $description:literal,)+) => {$(
         #[doc = $description]
         pub struct $name;
 
-        impl<'r> ToResponse<'r> for $name {
-            fn response() -> (&'r str, RefOr<Response>) {
-                (stringify!($name), problem_response($description))
+        impl<'r> utoipa::ToResponse<'r> for $name {
+            fn response() -> (
+                &'r str,
+                utoipa::openapi::RefOr<utoipa::openapi::Response>,
+            ) {
+                (stringify!($name), $crate::openapi::problem_response($description))
             }
         }
     )+};
 }
+pub(crate) use problem_responses;
 
 problem_responses! {
     BadRequest => "`request.malformed`: the body, a path parameter or a query parameter does not parse or does not match the schema, or `limit` is outside 1 to 200. `pagination.invalid_cursor`: the cursor does not decode.",
@@ -105,6 +141,8 @@ problem_responses! {
     CsrfRefused => "`auth.csrf_refused`: an unsafe request without a bearer credential did not come from this site: `Sec-Fetch-Site` is not `same-origin`, `Origin` is sent but is not an allowed origin, or neither header is sent.",
     OrganizationNotFound => "`org.not_found`: the request's organization cannot be determined.",
     NoOrganization => "`org.none`: the instance has no organization yet.",
+    Unauthenticated => "`auth.unauthenticated`: no credential, or one that names no session of the organization. `auth.session_expired`: the session passed its idle or absolute expiry. `auth.suspended`: the user is suspended.",
+    PermissionDenied => "`permission.denied`: the caller does not hold the operation's permission at a scope containing its target.",
 }
 
 /// 429 `auth.rate_limited`, with `Retry-After`. A sign-in or token route that takes
