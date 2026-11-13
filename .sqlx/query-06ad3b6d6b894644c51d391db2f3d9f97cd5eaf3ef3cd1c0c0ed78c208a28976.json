@@ -1,0 +1,122 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO role_assignments (id, org_id, user_id, role_id, scope_type, scope_id,\n                                         source, external_id, created_at, updated_at)\n           VALUES ($1, $2, $3, $4, $5, $6, $7, $8,\n                   timestamptz 'epoch' + $9::bigint * interval '1 microsecond',\n                   timestamptz 'epoch' + $9::bigint * interval '1 microsecond')\n           RETURNING id, user_id, role_id, scope_type, scope_id, source, external_id,\n                     (extract(epoch FROM created_at) * 1000000)::bigint AS \"created_at_us!\",\n                     (extract(epoch FROM updated_at) * 1000000)::bigint AS \"updated_at_us!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "role_assignments",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "role_assignments",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "role_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "role_assignments",
+            "name": "role_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "scope_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "role_assignments",
+            "name": "scope_type"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "scope_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "role_assignments",
+            "name": "scope_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "source",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "role_assignments",
+            "name": "source"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "external_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "role_assignments",
+            "name": "external_id"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "created_at_us!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "updated_at_us!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "06ad3b6d6b894644c51d391db2f3d9f97cd5eaf3ef3cd1c0c0ed78c208a28976"
+}

@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! `stepclimb serve` (connect, migrate, listen) and `stepclimb migrate` (connect, migrate, exit).
+//! `stepclimb serve` (connect, migrate, sync the built-in roles, listen) and `stepclimb migrate`
+//! (connect, migrate, exit).
 
 use std::time::Duration;
 
 use sqlx::{PgPool, migrate::Migrator, postgres::PgPoolOptions};
 use stepclimb_auth::encryption::KeyRing;
-use stepclimb_core::{clock::Clock, db::MIGRATOR};
+use stepclimb_core::{clock::Clock, db::MIGRATOR, roles};
 use tokio::net::TcpListener;
 
 use crate::{AppState, Config, router};
@@ -20,6 +21,8 @@ pub enum StartupError {
     Connect(#[source] sqlx::Error),
     #[error("could not apply the database migrations: {0}")]
     Migrate(#[source] sqlx::migrate::MigrateError),
+    #[error("could not write the built-in roles: {0}")]
+    SyncRoles(#[source] roles::Error),
     #[error("could not listen on {addr}: {source}")]
     Bind {
         addr: std::net::SocketAddr,
@@ -51,6 +54,18 @@ pub async fn migrate(pool: &PgPool) -> Result<(), StartupError> {
 /// names its version.
 pub async fn run_migrations(migrator: &Migrator, pool: &PgPool) -> Result<(), StartupError> {
     migrator.run(pool).await.map_err(StartupError::Migrate)
+}
+
+/// Bring the database to what this binary serves: apply the pending migrations, then write the
+/// built-in role rows from code (spec 09 B6). `now` stamps the rows the sync changes.
+pub async fn prepare(pool: &PgPool, clock: &Clock) -> Result<(), StartupError> {
+    migrate(pool).await?;
+    tracing::info!("database migrations are up to date");
+    roles::sync_builtin(pool, clock.now())
+        .await
+        .map_err(StartupError::SyncRoles)?;
+    tracing::info!("built-in roles are up to date");
+    Ok(())
 }
 
 /// Log a warning for each key in `keys` whose bytes are the published development key, so a
@@ -86,13 +101,13 @@ pub async fn migrate_only(config: &Config) -> Result<(), StartupError> {
     Ok(())
 }
 
-/// Connect, migrate, then serve HTTP on `config.bind` until SIGINT or SIGTERM.
+/// Connect, [`prepare`] the database, then serve HTTP on `config.bind` until SIGINT or SIGTERM.
 pub async fn serve(config: Config) -> Result<(), StartupError> {
     log_configuration(&config);
     warn_about_development_keys(&config.encryption_keys);
     let pool = connect(&config.database_url).await?;
-    migrate(&pool).await?;
-    tracing::info!("database migrations are up to date");
+    let clock = Clock::system();
+    prepare(&pool, &clock).await?;
     let listener = TcpListener::bind(config.bind)
         .await
         .map_err(|source| StartupError::Bind {
@@ -102,7 +117,7 @@ pub async fn serve(config: Config) -> Result<(), StartupError> {
     tracing::info!(addr = %config.bind, "listening");
     let state = AppState {
         db: pool,
-        clock: Clock::system(),
+        clock,
         keys: config.encryption_keys,
     };
     axum::serve(listener, router(state))

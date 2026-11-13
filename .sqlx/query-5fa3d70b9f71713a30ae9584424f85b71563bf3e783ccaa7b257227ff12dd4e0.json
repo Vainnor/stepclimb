@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"count!\"\n           FROM role_assignments ra\n           JOIN roles r ON r.id = ra.role_id AND r.org_id IS NULL AND r.key = 'org_admin'\n           JOIN users u ON u.org_id = ra.org_id AND u.id = ra.user_id\n           WHERE ra.org_id = $1 AND ra.scope_type = 'organization' AND u.status = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "5fa3d70b9f71713a30ae9584424f85b71563bf3e783ccaa7b257227ff12dd4e0"
+}
