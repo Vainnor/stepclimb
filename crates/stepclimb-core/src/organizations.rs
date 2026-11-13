@@ -246,6 +246,17 @@ pub async fn count(db: impl PgExecutor<'_>) -> Result<i64, Error> {
     Ok(count)
 }
 
+/// The id of every organization, for instance-wide jobs that then act in each organization
+/// with an instance scope (the sign-in flow cleanup, spec 08 B21).
+pub async fn ids(db: impl PgExecutor<'_>) -> Result<Vec<Uuid>, Error> {
+    // Instance-wide on purpose, so it takes no `OrgScope`: a job has no request to take an
+    // organization from and must visit each one. It returns ids only, never a row's contents.
+    let ids = sqlx::query_scalar!("SELECT id FROM organizations ORDER BY id")
+        .fetch_all(db)
+        .await?;
+    Ok(ids)
+}
+
 /// How many organizations the instance has, as the request-organization resolver needs to
 /// know it (spec 02 B11, spec 08 B5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

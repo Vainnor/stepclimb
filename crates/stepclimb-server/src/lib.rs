@@ -9,15 +9,17 @@
 //! [`extract`] (extractors that reject with them) and [`pagination`] (cursor pages),
 //! authenticate them with [`session`] (the browser session cookie and the `Authenticated`
 //! extractor) within the organization [`request_org`] resolves, and protect them with
-//! [`require`] (`Require<P, T>`, the permission check). Every unsafe request passes [`csrf`]
-//! first.
+//! [`require`] (`Require<P, T>`, the permission check). A sign-in that spans several requests
+//! keeps its state in a [`flow`]. Every unsafe request passes [`csrf`] first.
 
 pub mod app;
 pub mod auth;
 pub mod config;
+mod cookie;
 pub mod csrf;
 pub mod error;
 pub mod extract;
+pub mod flow;
 pub mod health;
 pub mod healthcheck;
 pub mod openapi;
