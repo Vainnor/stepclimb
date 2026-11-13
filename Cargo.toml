@@ -1,0 +1,85 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/stepclimb-server",
+    "crates/stepclimb-core",
+    "crates/stepclimb-auth",
+    "crates/stepclimb-assess",
+    "crates/stepclimb-activities",
+    "crates/stepclimb-activities-atc",
+    "crates/stepclimb-interop",
+    "crates/stepclimb-integrations",
+    "crates/stepclimb-connectors",
+    "crates/stepclimb-media",
+    "crates/stepclimb-jobs",
+]
+# The Tauri shell is its own workspace with its own lockfile: it needs WebKitGTK on Linux to
+# build, which the server's gates do not, and it builds only in the Tauri CI matrix.
+exclude = ["apps/app/src-tauri"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.98"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/Vainnor/stepclimb"
+publish = false
+
+# Versions are pinned once here and referenced by members with `<dep>.workspace = true`
+# (.claude/rules/architecture.md -> Dependencies). The layering rules are in
+# bin/check-layering.sh.
+[workspace.dependencies]
+stepclimb-core = { path = "crates/stepclimb-core" }
+stepclimb-auth = { path = "crates/stepclimb-auth" }
+stepclimb-assess = { path = "crates/stepclimb-assess" }
+stepclimb-activities = { path = "crates/stepclimb-activities" }
+stepclimb-activities-atc = { path = "crates/stepclimb-activities-atc" }
+stepclimb-interop = { path = "crates/stepclimb-interop" }
+stepclimb-integrations = { path = "crates/stepclimb-integrations" }
+stepclimb-connectors = { path = "crates/stepclimb-connectors" }
+stepclimb-media = { path = "crates/stepclimb-media" }
+stepclimb-jobs = { path = "crates/stepclimb-jobs" }
+
+# HTTP (plan, Technical -> Architecture and stack: axum 0.8, tower-http, tokio).
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "tracing"] }
+tower = { version = "=0.5.3", default-features = false, features = ["util"] }
+tower-http = { version = "=0.7.1", default-features = false, features = ["trace"] }
+tokio = { version = "=1.54.1", default-features = false, features = ["macros", "rt-multi-thread", "net", "signal", "time"] }
+http-body-util = "=0.1.5"
+
+# Database (plan: PostgreSQL 16+ via sqlx 0.9, compile-checked queries, committed .sqlx/,
+# embedded migrations run at startup).
+sqlx = { version = "=0.9.0", default-features = false, features = ["postgres", "runtime-tokio", "macros", "migrate"] }
+
+# API docs (plan: utoipa 5 -> OpenAPI 3.1, Scalar UI at /docs). utoipa 6.0.0 exists; the plan
+# names 5, so this stays on the 5.x line, and utoipa-scalar 0.3 is the release for utoipa 5 and
+# axum 0.8.
+utoipa = { version = "=5.5.0", default-features = false, features = ["macros"] }
+utoipa-scalar = { version = "=0.3.0", default-features = false, features = ["axum"] }
+
+# The built web SPA, embedded into the binary (plan: web/ is embedded at build time).
+rust-embed = { version = "=8.13.0", default-features = false, features = ["mime-guess"] }
+
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+thiserror = "=2.0.21"
+clap = { version = "=4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["fmt", "env-filter", "json", "ansi"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+print_stdout = "warn"
+unwrap_used = "warn"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

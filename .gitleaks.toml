@@ -1,0 +1,15 @@
+# Secret scanning config for Stepclimb. Used by `just secrets-scan`, the pre-commit hook and the
+# CI workflow, so all three agree. Docs: https://github.com/gitleaks/gitleaks
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Paths that never hold real secrets"
+paths = [
+  '''(^|/)target/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)Cargo\.lock$''',
+  '''(^|/)pnpm-lock\.yaml$''',
+  '''(^|/)\.sqlx/''',
+  '''(^|/)\.gitleaks\.toml$''',
+]

@@ -1,0 +1,11 @@
+# nextest configuration. The default profile is local `cargo nextest run`; CI uses
+# `--profile ci`. A test that hangs is ended and counted as failed, so a change that makes a
+# request or a loop never return turns the suite red instead of stalling it.
+[profile.default]
+fail-fast = false
+slow-timeout = { period = "30s", terminate-after = 4 }
+
+[profile.ci]
+# No retries: a flaky test is a bug to find.
+fail-fast = false
+slow-timeout = { period = "30s", terminate-after = 6 }

@@ -1,0 +1,6 @@
+# Builds read the committed query metadata in `.sqlx/`, so no database is needed to compile.
+# `just sqlx-check` and `just sqlx-prepare` run against the Compose database instead
+# (`cargo sqlx prepare` sets SQLX_OFFLINE=false itself; a variable already in the environment
+# also wins over this file).
+[env]
+SQLX_OFFLINE = "true"

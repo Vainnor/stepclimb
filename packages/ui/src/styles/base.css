@@ -1,0 +1,25 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* Browser surfaces themed from the tokens (plan, UI tab -> Pitfalls: browser defaults left in).
+   Scrollbars, prose, safe areas and reduced motion are specified in docs/specs/m0/13-base-ui-components.md. */
+@layer base {
+  html {
+    color-scheme: light;
+    font-family: var(--sc-font-ui);
+    background: var(--sc-bg-canvas);
+    color: var(--sc-fg-default);
+    caret-color: var(--sc-brand);
+    font-variant-numeric: tabular-nums;
+  }
+  [data-sc-theme="dark"] {
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-sc-theme="light"]) {
+      color-scheme: dark;
+    }
+  }
+  ::selection {
+    background: var(--sc-brand-soft);
+    color: var(--sc-fg-strong);
+  }
+}

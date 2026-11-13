@@ -1,0 +1,13 @@
+packages:
+  - web
+  - apps/app
+  - apps/ui-docs
+  - packages/*
+# Every version is exact (.claude/rules/architecture.md -> Dependencies).
+saveExact: true
+# Supply chain: nothing published less than 14 days ago (in minutes) is installed, so a
+# compromised release has time to be found and pulled first.
+minimumReleaseAge: 20160
+# Install scripts run only for these packages (esbuild checks its platform binary).
+allowBuilds:
+  esbuild: true

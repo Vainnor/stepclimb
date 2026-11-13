@@ -1,0 +1,54 @@
+# cargo-deny: advisories, licenses, bans and sources for the whole workspace. Run by `just deny`.
+# Stepclimb is AGPL-3.0-or-later (LICENSE); the workspace crates are unpublished, so their own
+# license is skipped here. The Tauri shell has its own workspace and is checked by the Tauri CI
+# job with `--manifest-path apps/app/src-tauri/Cargo.toml`.
+[graph]
+all-features = true
+
+[advisories]
+yanked = "deny"
+unmaintained = "workspace"
+ignore = []
+
+[licenses]
+confidence-threshold = 0.9
+unused-allowed-license = "allow"
+# Licenses compatible with distributing the whole as AGPL-3.0-or-later. Permissive licenses,
+# MPL-2.0 (file-level copyleft, compatible with the GPL family), and the AGPL/GPL-3.0 family
+# itself. GPL-2.0-only is not compatible with AGPL-3.0 and is refused, as is anything not listed.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+    "LGPL-3.0-or-later",
+    "GPL-3.0-or-later",
+    "AGPL-3.0-or-later",
+]
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+# The server's TLS, when it needs one, is rustls; OpenSSL needs system libraries the images do
+# not carry.
+deny = [
+    { crate = "openssl-sys", reason = "use rustls" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

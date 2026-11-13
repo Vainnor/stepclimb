@@ -1,0 +1,12 @@
+[package]
+name = "stepclimb-interop"
+description = "Course archive import and export, CSV; later GIFT, QTI, LTI and Common Cartridge."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

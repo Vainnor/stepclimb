@@ -1,0 +1,158 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//! The HTTP application end to end, through the router (no socket). Tests marked
+//! `#[sqlx::test]` get a fresh database each and need `DATABASE_URL` (`just up`). The SPA tests
+//! need the web build in `web/dist` (`just web-build`, which `just test-rust` runs first).
+
+use axum::{
+    Router,
+    body::Body,
+    http::{Request, StatusCode, header},
+};
+use http_body_util::BodyExt;
+use sqlx::{PgPool, postgres::PgPoolOptions};
+use stepclimb_server::{AppState, router, startup};
+use tower::ServiceExt;
+
+async fn get(app: Router, path: &str) -> (StatusCode, Option<String>, String) {
+    let response = app
+        .oneshot(
+            Request::get(path)
+                .body(Body::empty())
+                .expect("a valid request"),
+        )
+        .await
+        .expect("the router never fails");
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .map(|v| v.to_str().expect("an ASCII content type").to_owned());
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body is readable")
+        .to_bytes();
+    (
+        status,
+        content_type,
+        String::from_utf8_lossy(&bytes).into_owned(),
+    )
+}
+
+/// A router whose pool points at a port nothing listens on, for routes that must not need the
+/// database and for the readiness failure.
+fn app_without_database() -> Router {
+    let pool = PgPoolOptions::new()
+        .acquire_timeout(std::time::Duration::from_millis(500))
+        .connect_lazy("postgres://stepclimb@127.0.0.1:1/none")
+        .expect("a lazy pool parses its URL");
+    router(AppState { db: pool })
+}
+
+#[tokio::test]
+async fn healthz_answers_without_a_database() {
+    let (status, content_type, body) = get(app_without_database(), "/healthz").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(content_type.as_deref(), Some("application/json"));
+    assert_eq!(body, r#"{"status":"ok"}"#);
+}
+
+#[tokio::test]
+async fn readyz_is_503_when_the_database_is_unreachable() {
+    let (status, _, body) = get(app_without_database(), "/readyz").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body, r#"{"status":"unavailable"}"#);
+}
+
+#[sqlx::test(migrations = false)]
+async fn readyz_is_200_when_the_database_answers(pool: PgPool) {
+    let (status, _, body) = get(router(AppState { db: pool }), "/readyz").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, r#"{"status":"ok"}"#);
+}
+
+#[sqlx::test(migrations = false)]
+async fn startup_migrations_create_the_schema_on_an_empty_database(pool: PgPool) {
+    startup::migrate(&pool)
+        .await
+        .expect("serve's migration step applies");
+    let tables: Vec<String> = sqlx::query_scalar(
+        "SELECT table_name::text FROM information_schema.tables
+         WHERE table_schema = 'public' AND table_name <> '_sqlx_migrations' ORDER BY 1",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(tables, ["organizations"]);
+}
+
+#[tokio::test]
+async fn the_openapi_document_is_3_1_and_lists_only_the_probes() {
+    let (status, content_type, body) = get(app_without_database(), "/api/openapi.json").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(content_type.as_deref(), Some("application/json"));
+    let doc: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
+    assert_eq!(doc["openapi"], "3.1.0");
+    let mut paths: Vec<&str> = doc["paths"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    paths.sort_unstable();
+    assert_eq!(paths, ["/healthz", "/readyz"]);
+}
+
+#[tokio::test]
+async fn docs_serves_the_scalar_ui() {
+    let (status, content_type, body) = get(app_without_database(), "/docs").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(content_type.unwrap().starts_with("text/html"));
+    assert!(
+        body.contains("api-reference"),
+        "the Scalar page mounts its element"
+    );
+}
+
+#[tokio::test]
+async fn the_committed_openapi_document_matches_the_code() {
+    let committed = include_str!("../../../openapi/stepclimb.json");
+    assert_eq!(
+        committed,
+        stepclimb_server::openapi::document_json(),
+        "openapi/stepclimb.json is stale: run `just openapi` and commit the result"
+    );
+}
+
+#[tokio::test]
+async fn the_root_serves_the_built_spa() {
+    let (status, content_type, body) = get(app_without_database(), "/").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "is web/dist built? `just web-build`. Body: {body}"
+    );
+    assert_eq!(content_type.as_deref(), Some("text/html"));
+    assert!(body.contains(r#"<div id="root">"#));
+}
+
+#[tokio::test]
+async fn a_client_route_falls_back_to_index_html() {
+    let (status, content_type, body) = get(app_without_database(), "/c/s1/m/2/i/7").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(content_type.as_deref(), Some("text/html"));
+    assert!(body.contains(r#"<div id="root">"#));
+}
+
+#[tokio::test]
+async fn a_missing_file_is_404_not_the_spa() {
+    let (status, _, _) = get(app_without_database(), "/assets/missing-0000.js").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn an_unknown_api_path_is_404_not_the_spa() {
+    let (status, _, _) = get(app_without_database(), "/api/v1/nothing-here").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

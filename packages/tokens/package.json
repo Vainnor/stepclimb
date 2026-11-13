@@ -1,0 +1,24 @@
+{
+  "name": "@stepclimb/tokens",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "exports": {
+    "./variables.css": "./build/css/variables.css",
+    "./tailwind-theme.css": "./build/css/tailwind-theme.css"
+  },
+  "scripts": {
+    "build": "tz build",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@terrazzo/cli": "2.10.0",
+    "@terrazzo/parser": "2.10.0",
+    "@terrazzo/plugin-css": "2.10.0",
+    "@types/node": "26.6.6",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3",
+    "vitest": "5.0.5"
+  }
+}

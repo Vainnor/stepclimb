@@ -1,0 +1,55 @@
+# Rust
+/target
+**/target
+
+# Node and the web builds. web/dist is embedded into the server binary at build time and built
+# by `just web-build`; it is never committed.
+node_modules/
+/web/dist/
+/apps/ui-docs/storybook-static/
+/packages/tokens/build/
+/apps/app/src-tauri/gen/schemas/
+*.tsbuildinfo
+/test-results/
+/playwright-report/
+/web/test-results/
+/web/playwright-report/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# direnv: a local .envrc (`use flake`) is each developer's own.
+.envrc
+.direnv/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea
+.vscode/*
+!.vscode/extensions.json
+
+# Local-only material (.claude/rules/content-and-ip.md). Only the READMEs (and the reference
+# INDEX) are committed; content-guard and git-guard refuse the rest.
+/references/*
+!/references/README.md
+!/references/INDEX.md
+/private/*
+!/private/README.md
+
+# Claude Code: share the team workflow, ignore personal and ephemeral state
+.claude/*
+!.claude/commands/
+!.claude/rules/
+!.claude/agents/
+!.claude/skills/
+!.claude/hooks/
+!.claude/scripts/
+!.claude/goals/
+!.claude/settings.json

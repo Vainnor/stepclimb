@@ -1,0 +1,12 @@
+[package]
+name = "stepclimb-activities-atc"
+description = "Optional ATC pack: flight plan editor, ERAM/CRC command drills, nav-data loader."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
