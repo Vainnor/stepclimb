@@ -21,7 +21,7 @@ the first deployment. The plan is `docs/plan/` (source: the plan artifact, linke
 **Status: M0 Foundations in progress. The repository skeleton is in place; most product code is
 not.** `stepclimb serve` reads `STEPCLIMB_*` variables over an optional `stepclimb.toml` (ADR
 0022; `STEPCLIMB_ENCRYPTION_KEYS` or its `_FILE` variant is required), runs the embedded
-migrations (three: `organizations`, `users`, `accounts`), and serves `/healthz`, `/readyz`, `/docs` (Scalar over a
+migrations (four: `organizations`, `users`, `accounts`, `sessions`), and serves `/healthz`, `/readyz`, `/docs` (Scalar over a
 utoipa OpenAPI 3.1 document with only those probes) and the built web SPA. `stepclimb migrate`
 applies the migrations and exits; `stepclimb check-config` validates the configuration without
 connecting and prints its non-secret values (exit 2 on bad configuration, 1 on a database
@@ -31,7 +31,8 @@ themes with Terrazzo; `packages/ui` has `Button` and `useStepclimbStrings()`, th
 lookup every `web/` string goes through (spec 11 I1). `apps/app` is a Tauri 2 shell that loads
 `web/`. `stepclimb-core` has UUID v7 ids, the permission catalog, the built-in role lists and the
 controllable clock; `stepclimb-auth` has tokens, token hashes and the encryption key ring (spec 08
-I1). Every other crate and package is a documented placeholder. M0's work is specified in
+I1); the browser session (`stepclimb-core` `sessions`, `stepclimb-server` `session`) and the
+request-organization resolver exist, but no route uses them until the sign-in specs (spec 08 I2). Every other crate and package is a documented placeholder. M0's work is specified in
 `docs/specs/m0/` and broken into issues on the GitHub Project.
 
 ## Workspace layout
@@ -40,8 +41,8 @@ The plan's layout (`docs/plan/technical.md` -> Architecture and stack).
 
 | Path | Kind | What it is |
 | --- | --- | --- |
-| `crates/stepclimb-server` | lib + bin | The axum app, handlers, config and the `stepclimb` binary. Today: config, startup and migrations, probes, OpenAPI and Scalar, the embedded SPA. |
-| `crates/stepclimb-core` | lib | Domain types, repositories (SQL), the permission catalog. Today: the embedded migrations (`db::MIGRATOR`), UUID v7 keys (`id`), the permission catalog (`perm`), the built-in role lists (`roles::BUILTIN`), the controllable clock (`clock::Clock`), `OrgScope`, the `organizations` repository with `OrgSettings`, the `accounts` repository (the tree inside an organization), the `users` repository and `Source`. |
+| `crates/stepclimb-server` | lib + bin | The axum app, handlers, config and the `stepclimb` binary. Today: config, startup and migrations, probes, OpenAPI and Scalar, the embedded SPA, the session cookie and `Authenticated` extractor (`session`), the request-organization resolver (`request_org`). |
+| `crates/stepclimb-core` | lib | Domain types, repositories (SQL), the permission catalog. Today: the embedded migrations (`db::MIGRATOR`), UUID v7 keys (`id`), the permission catalog (`perm`), the built-in role lists (`roles::BUILTIN`), the controllable clock (`clock::Clock`), `OrgScope`, the `organizations` repository with `OrgSettings`, the `accounts` repository (the tree inside an organization), the `users` repository and `Source`, the `sessions` repository with the browser-session credential resolver. |
 | `crates/stepclimb-auth` | lib | Providers, sessions, API keys, the OAuth 2.1 server for Stepclimb's own apps. Today: tokens, API keys and their hashes (`token`), the AES-256-GCM key ring (`encryption`). |
 | `crates/stepclimb-assess` | lib | Question types, selection, grading; pure, also wasm32. Placeholder (M2). |
 | `crates/stepclimb-activities` | lib | Activity engine: trait, sessions, event log, mastery rules. Placeholder (M3). |

@@ -7,8 +7,9 @@
 //! ([`roles::BUILTIN`]); [`clock::Clock`], the controllable clock every time rule reads;
 //! [`OrgScope`], the organization every repository function acts in; the [`organizations`]
 //! repository with its typed [`OrgSettings`]; the [`accounts`] repository, the tree inside an
-//! organization; and the [`users`] repository and [`Source`], where a record came from. The
-//! other repositories arrive with the M0 specs in `docs/specs/m0/` (identities, roles).
+//! organization; the [`users`] repository and [`Source`], where a record came from; and the
+//! [`sessions`] repository with the browser-session credential resolver. The other repositories
+//! arrive with the M0 specs in `docs/specs/m0/` (identities, roles).
 
 pub mod accounts;
 pub mod clock;
@@ -19,6 +20,7 @@ pub mod organizations;
 pub mod perm;
 pub mod roles;
 mod scope;
+pub mod sessions;
 mod settings;
 mod source;
 pub mod users;

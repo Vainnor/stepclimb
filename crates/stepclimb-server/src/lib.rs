@@ -6,7 +6,8 @@
 //! (`/api/openapi.json`) and its Scalar UI (`/docs`), and the built web SPA for every other
 //! path. No product endpoint exists yet; the M0 specs in `docs/specs/m0/` add them on the
 //! conventions in [`error`] (problem details), [`extract`] (extractors that reject with them) and
-//! [`pagination`] (cursor pages).
+//! [`pagination`] (cursor pages), and authenticate them with [`session`] (the browser session
+//! cookie and the `Authenticated` extractor) within the organization [`request_org`] resolves.
 
 pub mod app;
 pub mod config;
@@ -16,6 +17,8 @@ pub mod health;
 pub mod healthcheck;
 pub mod openapi;
 pub mod pagination;
+pub mod request_org;
+pub mod session;
 pub mod spa;
 pub mod startup;
 

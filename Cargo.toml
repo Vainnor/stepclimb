@@ -46,6 +46,9 @@ tower = { version = "=0.5.3", default-features = false, features = ["util"] }
 tower-http = { version = "=0.7.1", default-features = false, features = ["trace"] }
 tokio = { version = "=1.54.1", default-features = false, features = ["macros", "rt-multi-thread", "net", "signal", "time"] }
 http-body-util = "=0.1.5"
+# The `Expires` attribute of the session cookie (docs/specs/m0/08-sessions-and-csrf.md B7, Q5);
+# the version hyper already brings.
+httpdate = "=1.0.3"
 
 # Database (plan: PostgreSQL 16+ via sqlx 0.9, compile-checked queries, committed .sqlx/,
 # embedded migrations run at startup).

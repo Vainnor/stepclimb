@@ -1,0 +1,67 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO sessions (id, user_id, token_hash, kind, last_seen_at, expires_at,\n                                 created_at, updated_at)\n           SELECT $1, u.id, $4, $5,\n                  timestamptz 'epoch' + $6::bigint * interval '1 microsecond',\n                  timestamptz 'epoch' + $7::bigint * interval '1 microsecond',\n                  timestamptz 'epoch' + $6::bigint * interval '1 microsecond',\n                  timestamptz 'epoch' + $6::bigint * interval '1 microsecond'\n           FROM users u\n           WHERE u.org_id = $2 AND u.id = $3\n           RETURNING id, user_id,\n                     (extract(epoch FROM last_seen_at) * 1000000)::bigint AS \"last_seen_at_us!\",\n                     (extract(epoch FROM expires_at) * 1000000)::bigint AS \"expires_at_us!\",\n                     (extract(epoch FROM created_at) * 1000000)::bigint AS \"created_at_us!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "last_seen_at_us!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "expires_at_us!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at_us!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Bytea",
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "0f0730bcb2a2634921114e7ec66cca4c729d6b2aea75cbf4a83a061cf9a4be44"
+}

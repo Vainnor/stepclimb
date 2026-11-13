@@ -95,7 +95,10 @@ pub enum ScopeOrigin {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "the credential resolvers of spec 08 build these")
+    expect(
+        dead_code,
+        reason = "the API-key and app-token resolvers of spec 08 build the other two"
+    )
 )]
 pub(crate) enum Credential {
     Session,
@@ -106,10 +109,6 @@ pub(crate) enum Credential {
 impl OrgScope {
     /// The scope of an authenticated request, for the credential resolvers in this crate. The
     /// resolver read `org_id` from the credential's own user or service account row.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the credential resolvers of spec 08 call it")
-    )]
     pub(crate) fn from_credential(org_id: Uuid, credential: Credential) -> Self {
         let origin = match credential {
             Credential::Session => ScopeOrigin::Session,
