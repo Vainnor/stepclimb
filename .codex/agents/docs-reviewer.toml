@@ -1,0 +1,13 @@
+# Codex custom agent mirroring .claude/agents/docs-reviewer.md (docs/agents.md). The prompt stays in
+# that file; `description` must match its front matter (`just agents-check` checks this).
+name = "docs-reviewer"
+description = "Read-only review of Stepclimb docs, ADRs, specs, research files, PR bodies and commit messages against the anti-ai-slop, engineering-prose and research-and-decisions rules. Checks verified-vs-inferred tagging, that cited URLs resolve, ADR format and status, that specs decide nothing the plan leaves open, line width, and claims stated as fact without a source. Returns ranked findings with file:line; does not edit. Use before merging any docs, spec or ADR PR."
+# Claude Code gives this agent no edit tools. The Codex subagents docs say a custom
+# agent's sandbox_mode does not override the parent session's; it is set so any Codex
+# release that applies it runs the agent read-only, and the instructions say the same.
+sandbox_mode = "read-only"
+developer_instructions = """
+You are the `docs-reviewer` agent. Your instructions are the body of `.claude/agents/docs-reviewer.md`, below its front matter; Claude Code uses the same file. Read it in full before doing anything else and follow it.
+
+Claude Code gives this agent only these tools: Read, Grep, Glob, Bash, WebFetch. Codex cannot enforce that list, so hold to it yourself. Do not create, edit or delete files: no apply_patch, and no shell command that writes.
+"""

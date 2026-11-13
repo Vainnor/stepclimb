@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Rejects AI attribution in a commit message (AGENTS.md, non-negotiable 1). Installed by
+# `just install-hooks`. Shares its patterns with .claude/hooks/attribution-gate.sh.
+set -uo pipefail
+lib="$(cd "$(dirname "$0")/.." && pwd)/.claude/hooks/lib/attribution.sh"
+if [[ ! -f "$lib" ]]; then
+    echo "commit-msg: cannot find $lib, so the message was not checked for attribution." >&2
+    exit 1
+fi
+# shellcheck source=../.claude/hooks/lib/attribution.sh
+. "$lib"
+hits="$(attribution_hits <"$1")"
+if [[ $? -ne 1 ]]; then
+    echo "commit-msg: the message carries AI attribution or could not be checked:" >&2
+    printf '  %s\n' "$hits" >&2
+    echo "Commits in this repo are authored solely as the user; remove the trailer, link or credit line." >&2
+    exit 1
+fi
+exit 0

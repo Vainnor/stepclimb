@@ -1,0 +1,144 @@
+# Codex project config for Stepclimb. Loaded only after the project is trusted, and each hook
+# runs only after it is reviewed in /hooks. Layout and how to extend it: docs/agents.md.
+# The hook scripts are the Claude Code ones in .claude/hooks/; .claude/settings.json runs them
+# for Claude Code. Codex runs hook commands through the user's login shell ($SHELL -lc), so each
+# command hands its work to /bin/sh with a single-quoted script that fish, zsh and bash all pass
+# through unchanged, and resolves the repo root with git so a session started in a subdirectory
+# still finds the scripts.
+
+# Least privilege: edits stay inside the workspace, and leaving the sandbox asks first.
+# .codex/rules/stepclimb.rules allows only read-only git inspection outside the sandbox.
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+# --- Path-scoped rules: codex-path-rules 0.5.0 (README block at tag v0.5.0) -----------------
+# Injects .claude/rules/*.md when a tool call touches a path matching the rule's `paths:`.
+# Differences from the README block, both from the Codex hooks docs:
+# - additionalContextLimit = 4000 on PreToolUse. Codex spills hook context over ~2,500 tokens
+#   (bytes / 4) to a file and shows the model a preview; the hook's own batch cap is 12,000
+#   characters, about 3,000 tokens, so the default would cut full batches.
+# - SessionEnd timeout = 3. Codex clamps SessionEnd hooks to 3 s and warns on more.
+
+[[hooks.PreToolUse]]
+matcher = "^(Bash|apply_patch|Edit|Write|MultiEdit)$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "codex-path-rules"
+timeout = 10
+additionalContextLimit = 4000
+
+# `resume` is deliberately excluded: a resumed session keeps its context, so
+# rules already injected must stay de-duplicated.
+[[hooks.SessionStart]]
+matcher = "startup|clear"
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "codex-path-rules"
+timeout = 10
+statusMessage = "Resetting path rules"
+
+[[hooks.SessionEnd]]
+
+[[hooks.SessionEnd.hooks]]
+type = "command"
+command = "codex-path-rules"
+timeout = 3
+statusMessage = "Cleaning path rules state"
+
+# Compaction rewrites the context, so previously injected rules may be gone.
+[[hooks.PostCompact]]
+matcher = "manual|auto"
+
+[[hooks.PostCompact.hooks]]
+type = "command"
+command = "codex-path-rules"
+timeout = 10
+statusMessage = "Resetting path rules"
+
+# --- Ports of the Claude Code hooks in .claude/settings.json --------------------------------
+
+# attribution-gate and git-guard read tool_input.command, which Codex sends for Bash too, and
+# block with exit 2 and a reason on stderr, which Codex honors the same way.
+[[hooks.PreToolUse]]
+matcher = "^Bash$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/bin/sh -c 'r=$(git rev-parse --show-toplevel 2>/dev/null) || r=.; f=\"$r/.claude/hooks/attribution-gate.sh\"; [ -f \"$f\" ] || { echo \"hook missing: $f\" >&2; exit 2; }; CLAUDE_PROJECT_DIR=\"$r\" exec bash \"$f\"'"
+timeout = 30
+statusMessage = "Checking for AI attribution"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/bin/sh -c 'r=$(git rev-parse --show-toplevel 2>/dev/null) || r=.; f=\"$r/.claude/hooks/git-guard.sh\"; [ -f \"$f\" ] || { echo \"hook missing: $f\" >&2; exit 2; }; CLAUDE_PROJECT_DIR=\"$r\" exec bash \"$f\"'"
+timeout = 30
+statusMessage = "Checking git command"
+
+# pr-gate refuses `gh pr create` until `just ci` passed on the committed HEAD (bin/ci-stamp.sh).
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/bin/sh -c 'r=$(git rev-parse --show-toplevel 2>/dev/null) || r=.; f=\"$r/.claude/hooks/pr-gate.sh\"; [ -f \"$f\" ] || { echo \"hook missing: $f\" >&2; exit 2; }; CLAUDE_PROJECT_DIR=\"$r\" exec bash \"$f\"'"
+timeout = 30
+statusMessage = "Checking that just ci passed on HEAD"
+
+# content-guard reads tool_input.file_path; Codex sends an apply_patch body instead, either as
+# the apply_patch tool or as a shell command (`apply_patch <<'EOF'`) that Codex intercepts and
+# reports as Bash. codex-adapter.sh runs content-guard once per file named in a tool patch, and
+# refuses any shell command carrying a patch, whose directory the hook cannot see.
+[[hooks.PreToolUse]]
+matcher = "^(Bash|apply_patch)$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/bin/sh -c 'r=$(git rev-parse --show-toplevel 2>/dev/null) || r=.; f=\"$r/.claude/hooks/codex-adapter.sh\"; [ -f \"$f\" ] || { echo \"hook missing: $f\" >&2; exit 2; }; CLAUDE_PROJECT_DIR=\"$r\" exec bash \"$f\" content-guard.sh'"
+timeout = 30
+statusMessage = "Checking edited paths"
+
+# format-on-edit never blocks, as in Claude Code. Shell patches never run (see content-guard).
+[[hooks.PostToolUse]]
+matcher = "^apply_patch$"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "/bin/sh -c 'r=$(git rev-parse --show-toplevel 2>/dev/null) || r=.; f=\"$r/.claude/hooks/codex-adapter.sh\"; [ -f \"$f\" ] && CLAUDE_PROJECT_DIR=\"$r\" bash \"$f\" format-on-edit.sh; exit 0'"
+timeout = 60
+statusMessage = "Formatting edited files"
+
+# post-merge-cleanup starts the cleanup in the background after a `gh pr merge` and never
+# blocks. Codex also runs PostToolUse after a failed command; the cleanup checks the PR is merged
+# before touching its remote branch.
+[[hooks.PostToolUse]]
+matcher = "^Bash$"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "/bin/sh -c 'r=$(git rev-parse --show-toplevel 2>/dev/null) || r=.; f=\"$r/.claude/hooks/post-merge-cleanup.sh\"; [ -f \"$f\" ] && CLAUDE_PROJECT_DIR=\"$r\" bash \"$f\"; exit 0'"
+timeout = 30
+
+# session-context prints branch, PRs and worktrees; Claude Code runs it on every SessionStart.
+[[hooks.SessionStart]]
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "/bin/sh -c 'r=$(git rev-parse --show-toplevel 2>/dev/null) || r=.; f=\"$r/.claude/hooks/session-context.sh\"; [ -f \"$f\" ] && CLAUDE_PROJECT_DIR=\"$r\" bash \"$f\"; exit 0'"
+timeout = 30
+statusMessage = "Loading session context"
+
+# Codex never reads CLAUDE.md, and gets the rules without `paths:` only on its first tool calls.
+# Print CLAUDE.md and those rules, read in place, at session start and again after compaction
+# (the docs' SessionStart example matches `compact` to restore context). codex-path-rules 0.5.0
+# has no option to skip rules without `paths:`, so it injects those rules a second time on the
+# first tool calls of each session (docs/agents.md, Known limits in Codex). The output is about
+# 27 KB, about 6,700 Codex tokens (bytes / 4), so the spill threshold is raised from 2,500 to
+# 8,000.
+[[hooks.SessionStart]]
+matcher = "^(startup|clear|compact)$"
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "/bin/sh -c 'r=$(git rev-parse --show-toplevel 2>/dev/null) || r=.; f=\"$r/.claude/hooks/codex-instructions.sh\"; [ -f \"$f\" ] || { echo \"hook missing: $f\" >&2; exit 1; }; CLAUDE_PROJECT_DIR=\"$r\" exec bash \"$f\"'"
+timeout = 10
+additionalContextLimit = 8000
+statusMessage = "Loading CLAUDE.md and the always-loaded rules"

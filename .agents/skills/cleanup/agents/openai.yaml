@@ -1,0 +1,4 @@
+# Run only when the user names $cleanup: the repo's command skills write files,
+# commit, push, delete branches or spawn agents.
+policy:
+  allow_implicit_invocation: false
