@@ -684,3 +684,31 @@ fn redaction_never_shows_a_password_with_odd_characters() {
         assert!(!printed.contains("zq"), "{url} -> {printed}");
     }
 }
+
+/// `stepclimb check-config` prints these; a new non-secret setting must be listed, and no secret
+/// may be.
+#[test]
+fn non_secret_values_list_every_non_secret_setting_and_no_secret() {
+    let mut pairs: Vec<(&str, &str)> = vec![("STEPCLIMB_BIND", "0.0.0.0:9000")];
+    pairs.extend(SECRET_SAMPLES.iter().map(|(s, value, _)| (s.var, *value)));
+    let config = Config::load(&env(&pairs), None).unwrap();
+    let values = config.non_secret_values();
+    let keys: Vec<&str> = values.iter().map(|(key, _)| *key).collect();
+    let expected: Vec<&str> = SETTINGS
+        .iter()
+        .filter(|s| !s.secret)
+        .map(|s| s.key)
+        .collect();
+    assert_eq!(keys, expected);
+    assert_eq!(
+        values,
+        [
+            ("bind", "0.0.0.0:9000".to_owned()),
+            ("log", "info".to_owned())
+        ]
+    );
+    let printed = format!("{values:?}");
+    for (setting, _, hidden) in SECRET_SAMPLES {
+        assert!(!printed.contains(hidden), "{}: {printed}", setting.var);
+    }
+}

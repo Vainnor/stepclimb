@@ -243,6 +243,17 @@ impl Config {
     }
 }
 
+impl Config {
+    /// Each non-secret setting's key and value, in [`SETTINGS`] order. `stepclimb check-config`
+    /// prints these; the secret settings never appear.
+    pub fn non_secret_values(&self) -> Vec<(&'static str, String)> {
+        vec![
+            (BIND.key, self.bind.to_string()),
+            (LOG.key, self.log.clone()),
+        ]
+    }
+}
+
 /// The `STEPCLIMB_*` variables of this process. Other variables are not read.
 fn process_env() -> Result<Env, ConfigError> {
     let mut env = Env::new();

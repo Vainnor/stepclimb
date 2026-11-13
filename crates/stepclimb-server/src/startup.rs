@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! `stepclimb serve`: connect, migrate, listen.
+//! `stepclimb serve` (connect, migrate, listen) and `stepclimb migrate` (connect, migrate, exit).
 
 use std::time::Duration;
 
@@ -64,6 +64,16 @@ pub fn log_configuration(config: &Config) {
         log = %config.log,
         "configuration loaded"
     );
+}
+
+/// `stepclimb migrate`: connect, apply every pending migration, then close the pool.
+pub async fn migrate_only(config: &Config) -> Result<(), StartupError> {
+    log_configuration(config);
+    let pool = connect(&config.database_url).await?;
+    migrate(&pool).await?;
+    tracing::info!("database migrations are up to date");
+    pool.close().await;
+    Ok(())
 }
 
 /// Connect, migrate, then serve HTTP on `config.bind` until SIGINT or SIGTERM.
