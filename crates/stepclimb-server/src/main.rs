@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The `stepclimb` binary. The plan's full CLI is `serve | migrate | admin create |
-//! export-course | import-course | check-config | backup-verify`; only `serve` exists so far.
+//! export-course | import-course | check-config | backup-verify`; `serve`, `migrate` and
+//! `check-config` exist so far.
+//!
+//! Exit codes: 0 on success; 2 when the command line or the configuration is refused, before
+//! anything connects; 1 when the database, the migrations or the HTTP server fail, or when
+//! `check-config` cannot write its report.
 
+use std::future::Future;
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -28,6 +35,11 @@ struct Cli {
 enum Command {
     /// Apply database migrations, then serve HTTP.
     Serve,
+    /// Apply database migrations, then exit.
+    Migrate,
+    /// Validate the configuration without connecting to anything, print its non-secret values,
+    /// and exit 0; 2 when it is refused, 1 when the report cannot be written.
+    CheckConfig,
 }
 
 fn main() -> ExitCode {
@@ -39,13 +51,42 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    init_logging(&config.log);
     match cli.command {
-        Command::Serve => serve(config),
+        Command::Serve => {
+            init_logging(&config.log);
+            run(startup::serve(config))
+        }
+        Command::Migrate => {
+            init_logging(&config.log);
+            run(async move { startup::migrate_only(&config).await })
+        }
+        Command::CheckConfig => check_config(&config),
     }
 }
 
-fn serve(config: Config) -> ExitCode {
+/// Print the configuration's non-secret values to stdout. The configuration was valid to get
+/// here.
+fn check_config(config: &Config) -> ExitCode {
+    let file = config
+        .file
+        .as_ref()
+        .map_or_else(|| "(none)".to_owned(), |path| path.display().to_string());
+    let mut report = format!("stepclimb: the configuration is valid\nfile: {file}\n");
+    for (key, value) in config.non_secret_values() {
+        report.push_str(&format!("{key}: {value}\n"));
+    }
+    // `write_all` rather than `println!`, which panics on a closed stdout instead of failing.
+    match std::io::stdout().write_all(report.as_bytes()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("stepclimb: could not write to stdout: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Run `work` on a multi-threaded runtime; any error is logged and printed, and exits 1.
+fn run(work: impl Future<Output = Result<(), startup::StartupError>>) -> ExitCode {
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -56,7 +97,7 @@ fn serve(config: Config) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match runtime.block_on(startup::serve(config)) {
+    match runtime.block_on(work) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             tracing::error!(%error, "stopped");

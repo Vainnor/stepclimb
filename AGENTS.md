@@ -22,7 +22,10 @@ the first deployment. The plan is `docs/plan/` (source: the plan artifact, linke
 not.** `stepclimb serve` reads `STEPCLIMB_*` variables over an optional `stepclimb.toml` (ADR
 0022; `STEPCLIMB_ENCRYPTION_KEYS` or its `_FILE` variant is required), runs the embedded
 migrations (one: `organizations`), and serves `/healthz`, `/readyz`, `/docs` (Scalar over a
-utoipa OpenAPI 3.1 document with only those probes) and the built web SPA. `web/` has one route that reads
+utoipa OpenAPI 3.1 document with only those probes) and the built web SPA. `stepclimb migrate`
+applies the migrations and exits; `stepclimb check-config` validates the configuration without
+connecting and prints its non-secret values (exit 2 on bad configuration, 1 on a database
+failure). `web/` has one route that reads
 `/healthz` through `packages/api-client`. `packages/tokens` builds the default and vZDC example
 themes with Terrazzo; `packages/ui` has `Button` and `useStepclimbStrings()`, the ICU message
 lookup every `web/` string goes through (spec 11 I1). `apps/app` is a Tauri 2 shell that loads

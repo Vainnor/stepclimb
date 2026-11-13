@@ -112,18 +112,77 @@ impl fmt::Debug for Config {
 
 /// The parts of the database URL that are safe to print: user, host, port and database, read with
 /// sqlx's own parser. The password and every query parameter (which can carry `password=`) are
-/// left out.
+/// left out, and so is a database name of other than letters, digits, `_` and `-`, since a
+/// password with an unencoded `/` can end up there.
 fn redacted_database_url(url: &str) -> String {
-    match url.parse::<PgConnectOptions>() {
+    match parse_database_url(url) {
         Ok(options) => format!(
             "postgres://{}@{}:{}/{} (password and parameters hidden)",
             options.get_username(),
             options.get_host(),
             options.get_port(),
-            options.get_database().unwrap_or_default(),
+            printable_database(options.get_database().unwrap_or_default()),
         ),
         Err(_) => "<not a parseable PostgreSQL URL>".to_owned(),
     }
+}
+
+fn printable_database(name: &str) -> &str {
+    let plain = name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if plain { name } else { "<hidden>" }
+}
+
+/// The query parameters sqlx 0.9 reads from a PostgreSQL URL (`PgConnectOptions::parse_from_url`),
+/// plus `options[<name>]`. sqlx logs any other parameter with its value and ignores it, so the
+/// loader refuses it instead; `database_url_parameters_sqlx_accepts` keeps this list honest.
+const DATABASE_URL_PARAMETERS: &[&str] = &[
+    "sslmode",
+    "ssl-mode",
+    "sslrootcert",
+    "ssl-root-cert",
+    "ssl-ca",
+    "sslcert",
+    "ssl-cert",
+    "sslkey",
+    "ssl-key",
+    "statement-cache-capacity",
+    "host",
+    "hostaddr",
+    "port",
+    "dbname",
+    "user",
+    "password",
+    "application_name",
+    "options",
+];
+
+/// Why a database URL was refused. No variant carries any part of the URL: a parameter's name
+/// can be the tail of a password with an unencoded `&` or `?`, so it is reported by position.
+#[derive(Debug, PartialEq, Eq)]
+enum DatabaseUrlProblem {
+    Unparsable,
+    /// The database part holds an `@`: a password with an unencoded `/` or `#` before it.
+    AtInPath,
+    /// The 1-based position of a query parameter sqlx does not read.
+    UnknownParameter(usize),
+}
+
+/// Parse `url` as sqlx will, after checking that sqlx will not log any of its parameters.
+fn parse_database_url(url: &str) -> Result<PgConnectOptions, DatabaseUrlProblem> {
+    let parsed = url::Url::parse(url).map_err(|_| DatabaseUrlProblem::Unparsable)?;
+    if parsed.path().contains('@') {
+        return Err(DatabaseUrlProblem::AtInPath);
+    }
+    for (position, (name, _)) in parsed.query_pairs().enumerate() {
+        let known = DATABASE_URL_PARAMETERS.contains(&&*name)
+            || (name.starts_with("options[") && name.ends_with(']'));
+        if !known {
+            return Err(DatabaseUrlProblem::UnknownParameter(position + 1));
+        }
+    }
+    url.parse().map_err(|_| DatabaseUrlProblem::Unparsable)
 }
 
 /// Where a value was set: a variable, or a key in the configuration file and its line.
@@ -243,6 +302,17 @@ impl Config {
     }
 }
 
+impl Config {
+    /// Each non-secret setting's key and value, in [`SETTINGS`] order. `stepclimb check-config`
+    /// prints these; the secret settings never appear.
+    pub fn non_secret_values(&self) -> Vec<(&'static str, String)> {
+        vec![
+            (BIND.key, self.bind.to_string()),
+            (LOG.key, self.log.clone()),
+        ]
+    }
+}
+
 /// The `STEPCLIMB_*` variables of this process. Other variables are not read.
 fn process_env() -> Result<Env, ConfigError> {
     let mut env = Env::new();
@@ -281,17 +351,28 @@ fn log_filter(value: String, origin: Origin) -> Result<String, ConfigError> {
 }
 
 fn check_database_url(url: &str, origin: Origin) -> Result<(), ConfigError> {
-    if url.starts_with("postgres://") || url.starts_with("postgresql://") {
-        Ok(())
+    let problem = if !(url.starts_with("postgres://") || url.starts_with("postgresql://")) {
+        "the URL must start with postgres:// or postgresql://".to_owned()
     } else {
-        Err(ConfigError::Invalid {
-            origin,
-            problem: format!(
-                "the URL must start with postgres:// or postgresql://; for example {}",
-                DATABASE_URL.example
+        match parse_database_url(url) {
+            Ok(_) => return Ok(()),
+            Err(DatabaseUrlProblem::Unparsable) => "is not a valid PostgreSQL URL".to_owned(),
+            Err(DatabaseUrlProblem::AtInPath) => {
+                "has an @ after the host; percent-encode @, /, ?, & and # in the password \
+                 (@ as %40)"
+                    .to_owned()
+            }
+            Err(DatabaseUrlProblem::UnknownParameter(position)) => format!(
+                "query parameter {position} of the URL is not one the server reads (it reads {}; \
+                 percent-encode & and ? in the password)",
+                DATABASE_URL_PARAMETERS.join(", ")
             ),
-        })
-    }
+        }
+    };
+    Err(ConfigError::Invalid {
+        origin,
+        problem: format!("{problem}; for example {}", DATABASE_URL.example),
+    })
 }
 
 /// The variables and the file, resolved setting by setting: a variable wins over the file, and
