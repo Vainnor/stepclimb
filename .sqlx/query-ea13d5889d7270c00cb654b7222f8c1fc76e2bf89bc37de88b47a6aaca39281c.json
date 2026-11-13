@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO org_plans (org_id, plan_id, source, created_at, updated_at)\n         VALUES ($1, $2, $3,\n                 timestamptz 'epoch' + $4::bigint * interval '1 microsecond',\n                 timestamptz 'epoch' + $4::bigint * interval '1 microsecond')\n         ON CONFLICT (org_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ea13d5889d7270c00cb654b7222f8c1fc76e2bf89bc37de88b47a6aaca39281c"
+}

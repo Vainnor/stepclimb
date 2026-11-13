@@ -1551,6 +1551,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "stepclimb-core",
  "thiserror",
  "tokio",
  "uuid",

@@ -44,6 +44,7 @@ tracing-subscriber.workspace = true
 # `test-util` for `tokio::time::pause` in the sign-in flow cleanup timer test.
 tokio = { workspace = true, features = ["test-util"] }
 stepclimb-server = { path = ".", features = ["test-support"] }
+stepclimb-core = { workspace = true, features = ["test-support"] }
 base64.workspace = true
 tower.workspace = true
 http-body-util.workspace = true

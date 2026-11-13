@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO plans (id, key, features, limits, created_at, updated_at)\n         VALUES ($1, $2, $3::text::jsonb, $4::text::jsonb,\n                 timestamptz 'epoch' + $5::bigint * interval '1 microsecond',\n                 timestamptz 'epoch' + $5::bigint * interval '1 microsecond')\n         ON CONFLICT (key) DO UPDATE\n         SET features = EXCLUDED.features, limits = EXCLUDED.limits,\n             updated_at = EXCLUDED.updated_at\n         WHERE (plans.features, plans.limits)\n               IS DISTINCT FROM (EXCLUDED.features, EXCLUDED.limits)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "987a85637270d69a4794677cb4b50aa796b7c8b24b46cab10c69514d784b39d1"
+}

@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT key,\n                  ARRAY(SELECT jsonb_object_keys(features) ORDER BY 1) AS \"features!\",\n                  ARRAY(SELECT jsonb_object_keys(limits) ORDER BY 1) AS \"limits!\"\n           FROM plans WHERE key <> $1 ORDER BY key",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "plans",
+            "name": "key"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "features!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "limits!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "fc488f3750cef3424be751605ccbb2ef02a0579f7cd4bb6f0442721c07632434"
+}

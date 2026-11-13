@@ -8,6 +8,12 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[features]
+# `feature::TestSeal`, so a test crate can define a feature outside the catalog (spec 10 B4).
+# Enabled by the dev-dependencies on this crate (its own below, the server's), so a build
+# without dev-dependencies (`cargo build`, the release image) never has it.
+test-support = []
+
 [dependencies]
 sqlx.workspace = true
 uuid.workspace = true
@@ -16,6 +22,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+stepclimb-core = { path = ".", features = ["test-support"] }
 sqlx.workspace = true
 tokio.workspace = true
 

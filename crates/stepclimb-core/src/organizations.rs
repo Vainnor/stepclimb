@@ -4,7 +4,8 @@
 //! An organization is one row in `organizations`, the tenant every other row is scoped to. The
 //! table is the scope itself, so its queries filter by `id = scope.org_id()` where every other
 //! table's filter by `org_id`. [`create`] is the one function that makes an organization, with
-//! its root account (B26). `branding` belongs to spec 12 and is neither read nor written here.
+//! its root account (B26) and its `org_plans` row (spec 10 B5). `branding` belongs to spec 12
+//! and is neither read nor written here.
 
 use std::time::SystemTime;
 
@@ -15,7 +16,7 @@ use crate::{
     OrgScope, accounts,
     db::{TimeOutOfRange, epoch_micros},
     id::new_id,
-    name,
+    name, org_plans, plans,
     settings::{OrgSettings, OrgSettingsPatch},
 };
 
@@ -83,6 +84,12 @@ pub enum Error {
     /// The stored settings object does not parse as [`OrgSettings`].
     #[error("the stored organization settings do not parse")]
     StoredSettings(#[source] serde_json::Error),
+    /// Writing the `unlimited` plan failed.
+    #[error("could not write the unlimited plan")]
+    Plan(#[from] plans::Error),
+    /// Giving the organization its plan failed.
+    #[error("could not give the organization its plan")]
+    OrgPlan(#[from] org_plans::Error),
     /// The update time cannot be stored.
     #[error(transparent)]
     Time(#[from] TimeOutOfRange),
@@ -100,9 +107,12 @@ impl From<sqlx::Error> for Error {
     }
 }
 
-/// Create an organization named `name`, trimmed, with the slug `slug`, and its root account,
-/// named after it (B16, B26), in one transaction (a savepoint when `db` is already one).
-/// `created_at` and `updated_at` of both rows are `now`.
+/// Create an organization named `name`, trimmed, with the slug `slug`, its root account, named
+/// after it (B16, B26), and its `org_plans` row, plan `unlimited` with source `selfhost` (spec
+/// 10 B5), in one transaction (a savepoint when `db` is already one). It inserts the
+/// `unlimited` plan first when it does not exist yet, so it works before `stepclimb serve` has
+/// ever started; it never rewrites an existing one, which is startup's job. `created_at` and
+/// `updated_at` of the new rows are `now`.
 ///
 /// Only instance contexts call this: the `stepclimb admin` CLI in M0, the operator console in
 /// M6 (B9, B26). It takes no `OrgScope` because the organization it acts in does not exist
@@ -115,7 +125,7 @@ pub async fn create<'c>(
 ) -> Result<Organization, Error> {
     valid_slug(slug)?;
     let name = valid_name(name)?;
-    let now = epoch_micros(now)?;
+    let now_micros = epoch_micros(now)?;
     let mut tx = db.begin().await?;
     // Instance-wide on purpose: this inserts the scope row itself, so there is no `org_id` to
     // filter by. The id is new, so the row is the only one it can touch.
@@ -129,11 +139,14 @@ pub async fn create<'c>(
         new_id(),
         slug,
         name,
-        now,
+        now_micros,
     )
     .fetch_one(&mut *tx)
     .await?;
-    accounts::create_root(&mut tx, new_org_scope(organization.id), name, now).await?;
+    let scope = new_org_scope(organization.id);
+    accounts::create_root(&mut tx, scope, name, now_micros).await?;
+    plans::insert_unlimited_if_missing(&mut tx, now_micros).await?;
+    org_plans::ensure_selfhost(&mut *tx, scope, now).await?;
     tx.commit().await?;
     Ok(organization)
 }
