@@ -324,18 +324,35 @@ async fn each_change_through_a_route_writes_one_entry_by_its_user(pool: PgPool) 
     run(&f, &admin, step.writes("organization.rename", Some(f.org))).await;
 }
 
-/// A patch that names nothing changes nothing and writes nothing; neither does a move to the
-/// current parent.
+/// A patch that names nothing, or only the values the row already has, changes nothing and
+/// writes nothing; neither does a move to the current parent.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn a_request_that_changes_nothing_writes_no_entry(pool: PgPool) {
     let f = Fixture::new(pool, TrustedProxies::none()).await;
     let (cookie, _) = f.holder_of(f.builtin("org_admin").await).await;
     let tower = organizations_child(&f, &cookie, "Tower").await;
+    let role = f
+        .custom_role("mentor", &["account.view", "user.view"])
+        .await;
     let before = f.entries().await.len();
 
     let tower_uri = format!("/api/v1/accounts/{tower}");
     let move_uri = format!("{tower_uri}/move");
+    let role_uri = format!("/api/v1/admin/roles/{role}");
+    let same_role = json!({ "name": "Role mentor", "permissions": ["user.view", "account.view"] });
     let calls = [
+        (Method::PATCH, role_uri.clone(), json!({})),
+        (Method::PATCH, role_uri, same_role),
+        (
+            Method::PATCH,
+            tower_uri.clone(),
+            json!({ "name": " Tower " }),
+        ),
+        (
+            Method::PATCH,
+            "/api/v1/organization".to_owned(),
+            json!({ "name": "Org A" }),
+        ),
         (Method::PATCH, "/api/v1/organization".to_owned(), json!({})),
         (
             Method::PATCH,

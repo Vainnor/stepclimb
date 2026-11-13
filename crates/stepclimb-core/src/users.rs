@@ -405,7 +405,8 @@ pub async fn update(
 }
 
 /// Set the status of the user `id` of the scope's organization, set `updated_at` to `now`, and
-/// write the `user.set_status` audit entry by `actor` with the status before and after.
+/// write the `user.set_status` audit entry by `actor` with the status before and after. The
+/// status the user already has writes nothing and returns the user as they are (spec 09 B22).
 ///
 /// Suspending keeps the organization's last active organization-scope Organization admin
 /// ([`Error::LastOrgAdmin`], spec 09 B14): it takes the lock assignment removals take, so a
@@ -433,6 +434,9 @@ pub async fn set_status<'c>(
     .fetch_optional(&mut *tx)
     .await?
     .ok_or(Error::NotFound)?;
+    if before == status.as_str() {
+        return get(&mut *tx, scope, id).await?.ok_or(Error::NotFound);
+    }
     let row = sqlx::query_as!(
         Row,
         r#"UPDATE users

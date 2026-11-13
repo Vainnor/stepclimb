@@ -181,7 +181,8 @@ pub async fn get(db: impl PgExecutor<'_>, scope: OrgScope) -> Result<Organizatio
 
 /// Rename the scope's organization to `name`, trimmed, set `updated_at` to `now`, the request's
 /// clock reading, and write the `organization.rename` audit entry by `actor` with the name
-/// before and after. The slug never changes (spec 02 Q3).
+/// before and after. The slug never changes (spec 02 Q3). A name equal to the current one
+/// writes nothing and returns the organization as it is (spec 09 B22).
 ///
 /// Runs in one transaction (a savepoint when `db` is already one).
 pub async fn rename<'c>(
@@ -201,6 +202,9 @@ pub async fn rename<'c>(
     .fetch_optional(&mut *tx)
     .await?
     .ok_or(Error::NotFound)?;
+    if before == name {
+        return get(&mut *tx, scope).await;
+    }
     let organization = sqlx::query_as!(
         Organization,
         "UPDATE organizations
@@ -240,7 +244,9 @@ pub async fn settings(db: impl PgExecutor<'_>, scope: OrgScope) -> Result<OrgSet
 /// Returns the settings after the merge.
 ///
 /// It writes the `organization.update_settings` audit entry by `actor` with the effective
-/// value of each key the patch names, before and after.
+/// value of each key the patch names, before and after. A patch that names no key, or only keys
+/// whose effective value already equals the patched one, writes nothing and returns the
+/// settings as they are (spec 09 B22).
 ///
 /// The reads, the `UPDATE`, the parse of its result and the entry run in one transaction, a
 /// savepoint when `db` is already one: if the merged object does not parse, the call returns
@@ -266,6 +272,9 @@ pub async fn update_settings<'c>(
     .await?
     .ok_or(Error::NotFound)?;
     let before = parse_settings(&before)?;
+    if !settings_change(&patch, &before) {
+        return Ok(before);
+    }
     let stored = sqlx::query_scalar!(
         r#"UPDATE organizations
            SET settings = settings || $2::text::jsonb,
@@ -286,6 +295,14 @@ pub async fn update_settings<'c>(
     audit::record(&mut tx, scope, actor, update, scope.org_id(), &data, now).await?;
     tx.commit().await?;
     Ok(settings)
+}
+
+/// Whether `patch` names a key whose value differs from its effective value in `before`.
+fn settings_change(patch: &Value, before: &OrgSettings) -> bool {
+    // Invariant: `OrgSettings` is a struct of plain, string-keyed fields (see above).
+    let current = serde_json::to_value(before).expect("settings serialize to JSON");
+    let mut named = patch.as_object().into_iter().flatten();
+    named.any(|(key, value)| current.get(key) != Some(value))
 }
 
 /// The `organization.update_settings` entry's data: the effective value of each key `patch`

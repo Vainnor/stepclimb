@@ -17,7 +17,7 @@
 //! organization or built-in role has, a non-blank name of at most [`MAX_NAME_CHARS`]
 //! characters, and permissions in [`perm::ALL`], each at most once.
 
-use std::time::SystemTime;
+use std::{collections::BTreeSet, time::SystemTime};
 
 use serde_json::{Map, Value, json};
 use sqlx::{Acquire, PgConnection, PgExecutor, Postgres};
@@ -516,8 +516,10 @@ pub async fn create_custom<'c>(
 
 /// Change the `name` or `permissions` of the custom role `id` of the scope's organization, set
 /// `updated_at` to `now` (B9), and write the `role.update` audit entry by `actor` with the
-/// patched members before and after. A built-in role is refused with
-/// [`Error::BuiltinImmutable`].
+/// changed members before and after. A built-in role is refused with
+/// [`Error::BuiltinImmutable`]. A patch that names nothing, or only values the role already has
+/// (its trimmed name, the same set of permissions), writes nothing and returns the role as it
+/// is (B22).
 ///
 /// Runs in one transaction (a savepoint when `db` is already one).
 pub async fn update_custom<'c>(
@@ -535,6 +537,9 @@ pub async fn update_custom<'c>(
     let now = epoch_micros(now)?;
     let mut tx = db.begin().await?;
     let before = lock_custom(&mut tx, scope, id).await?;
+    if !changes(&before, name, patch.permissions.as_deref()) {
+        return Ok(before);
+    }
     let row = sqlx::query_as!(
         Row,
         r#"UPDATE roles
@@ -553,20 +558,32 @@ pub async fn update_custom<'c>(
     .fetch_optional(&mut *tx)
     .await?
     .ok_or(Error::NotFound)?;
-    let data = update_data(patch, &before, &row);
+    let data = update_data(&before, &row);
     audit::record(&mut tx, scope, actor, Action::RoleUpdate, id, &data, now).await?;
     tx.commit().await?;
     Role::try_from(row)
 }
 
-/// The `role.update` entry's data: each member `patch` names, before and after.
-fn update_data(patch: &RolePatch, before: &Role, after: &Row) -> Value {
+/// Whether a patch to `role` with the valid `name` and `permissions` changes anything. The
+/// permissions compare as sets: [`valid_permissions`] refused repeats, and an order change
+/// grants nothing new.
+fn changes(role: &Role, name: Option<&str>, permissions: Option<&[String]>) -> bool {
+    let renamed = name.is_some_and(|name| name != role.name);
+    let regranted = permissions.is_some_and(|keys| {
+        let new: BTreeSet<&String> = keys.iter().collect();
+        new != role.permissions.iter().collect()
+    });
+    renamed || regranted
+}
+
+/// The `role.update` entry's data: each member the update changed, before and after.
+fn update_data(before: &Role, after: &Row) -> Value {
     let (mut old, mut new) = (Map::new(), Map::new());
-    if patch.name.is_some() {
+    if before.name != after.name {
         old.insert("name".into(), json!(before.name));
         new.insert("name".into(), json!(after.name));
     }
-    if patch.permissions.is_some() {
+    if before.permissions != after.permissions {
         old.insert("permissions".into(), json!(before.permissions));
         new.insert("permissions".into(), json!(after.permissions));
     }

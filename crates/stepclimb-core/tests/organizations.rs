@@ -192,11 +192,15 @@ async fn a_stored_setting_the_code_does_not_know_is_ignored_on_read(pool: PgPool
     assert_eq!(read, OrgSettings::default());
 }
 
+/// `OrgSettingsPatch` has no key yet, so every patch names nothing and writes nothing (spec 09
+/// B22): the stored object, unknown keys included, and `updated_at` stay. The merge of a named
+/// key is tested with the first setting.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn update_settings_merges_into_the_stored_object_of_one_organization(pool: PgPool) {
+async fn update_settings_with_no_key_writes_nothing_in_either_organization(pool: PgPool) {
     let a = insert_org(&pool, "org-a", "Org A").await;
     let b = insert_org(&pool, "org-b", "Org B").await;
     store_settings(&pool, a, r#"{"newer_key": {"kept": true}}"#).await;
+    let a_before = stored(&pool, a).await;
     let b_before = stored(&pool, b).await;
 
     let patch = OrgSettingsPatch::default();
@@ -206,22 +210,14 @@ async fn update_settings_merges_into_the_stored_object_of_one_organization(pool:
             .unwrap();
 
     assert_eq!(settings, OrgSettings::default());
-    let (_, stored_settings, updated_at) = stored(&pool, a).await;
-    assert_eq!(
-        stored_settings, r#"{"newer_key": {"kept": true}}"#,
-        "a stored key the patch does not name survives the merge"
-    );
-    assert_eq!(
-        updated_at, 1_763_000_000_123_456,
-        "updated_at is the clock's reading"
-    );
+    assert_eq!(stored(&pool, a).await, a_before, "org A is unchanged");
     assert_eq!(stored(&pool, b).await, b_before, "org B is unchanged");
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn update_settings_keeps_nothing_when_the_merged_object_does_not_parse(pool: PgPool) {
+async fn update_settings_keeps_nothing_when_the_stored_object_does_not_parse(pool: PgPool) {
     let a = insert_org(&pool, "org-a", "Org A").await;
-    // Not an object: `"oops" || {}` is the array `["oops", {}]`, which is no `OrgSettings`.
+    // Not an object, so no `OrgSettings`: the read of the current values fails before any write.
     store_settings(&pool, a, r#""oops""#).await;
     let before = stored(&pool, a).await;
 
@@ -237,7 +233,7 @@ async fn update_settings_keeps_nothing_when_the_merged_object_does_not_parse(poo
     assert_eq!(
         stored(&pool, a).await,
         before,
-        "the failed update was rolled back"
+        "the failed update wrote nothing"
     );
 }
 

@@ -390,7 +390,8 @@ pub(crate) async fn create_root(
 
 /// Rename the account `id` of the scope's organization to `name`, trimmed, set `updated_at` to
 /// `now` (B19), and write the `account.rename` audit entry by `actor` with the name before and
-/// after. Changes nothing else, so it takes no tree lock.
+/// after. Changes nothing else, so it takes no tree lock. A name equal to the current one
+/// writes nothing and returns the account as it is (spec 09 B22).
 ///
 /// Runs in one transaction (a savepoint when `db` is already one).
 pub async fn rename<'c>(
@@ -412,6 +413,9 @@ pub async fn rename<'c>(
     .fetch_optional(&mut *tx)
     .await?
     .ok_or(Error::NotFound)?;
+    if before == name {
+        return get(&mut *tx, scope, id).await?.ok_or(Error::NotFound);
+    }
     let row = sqlx::query_as!(
         Row,
         r#"UPDATE accounts a

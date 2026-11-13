@@ -278,14 +278,6 @@ async fn each_organization_and_user_status_change_writes_one_entry(pool: PgPool)
     let data = json!({ "before": { "name": "org-a" }, "after": { "name": "Renamed" } });
     only_new_entry(&pool, &a, n, Action::OrganizationRename, a.id, data).await;
 
-    let n = count(&pool, a.id).await;
-    let patch = OrgSettingsPatch::default();
-    organizations::update_settings(&pool, s, &patch, now(), a.actor())
-        .await
-        .unwrap();
-    let data = json!({ "before": {}, "after": {} });
-    only_new_entry(&pool, &a, n, Action::OrganizationUpdateSettings, a.id, data).await;
-
     let member = user(&pool, a.id, "Member").await;
     let n = count(&pool, a.id).await;
     users::set_status(&pool, s, member, Status::Suspended, now(), a.actor())
@@ -536,4 +528,108 @@ async fn the_table_refuses_an_actor_without_its_id_or_address(pool: PgPool) {
             id: a.admin,
             ip: ipv4
         }));
+}
+
+/// 2025-11-13T02:13:21.123456Z, one second after [`now`]: a no-op that wrote would move
+/// `updated_at` here.
+fn later() -> SystemTime {
+    now() + Duration::from_secs(1)
+}
+
+async fn updated_at(pool: &PgPool, table: &str, id: Uuid) -> SystemTime {
+    let sql = format!(
+        "SELECT (extract(epoch FROM updated_at) * 1000000)::bigint FROM {table} WHERE id = $1"
+    );
+    let micros: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .expect("read updated_at");
+    UNIX_EPOCH + Duration::from_micros(u64::try_from(micros).expect("after the epoch"))
+}
+
+/// A patch that names nothing, or only the values the row already has, writes neither the row
+/// (`updated_at` stays) nor an entry, and answers the row as it is.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_change_to_the_current_values_writes_nothing(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    let s = scope(a.id);
+    let new = NewRole {
+        key: "mentor".into(),
+        name: "Mentor".into(),
+        permissions: vec!["account.view".into(), "user.view".into()],
+    };
+    let role = roles::create_custom(&pool, s, &new, now(), Actor::Instance)
+        .await
+        .unwrap();
+    let tower = accounts::create(&pool, s, a.root, "Tower", now(), Actor::Instance)
+        .await
+        .unwrap();
+    let member = user(&pool, a.id, "Member").await;
+    let before = count(&pool, a.id).await;
+    let (actor, at) = (a.actor(), later());
+
+    let patches = [
+        RolePatch::default(),
+        RolePatch {
+            name: Some(" Mentor ".into()),
+            permissions: Some(vec!["user.view".into(), "account.view".into()]),
+        },
+    ];
+    for patch in &patches {
+        let same = roles::update_custom(&pool, s, role.id, patch, at, actor).await;
+        assert_eq!(same.unwrap(), role, "{patch:?}");
+    }
+    let same = accounts::rename(&pool, s, tower.id, "  Tower ", at, actor).await;
+    assert_eq!(same.unwrap(), tower);
+    let same = organizations::rename(&pool, s, "org-a", at, actor).await;
+    assert_eq!(same.unwrap().name, "org-a");
+    let patch = OrgSettingsPatch::default();
+    let same = organizations::update_settings(&pool, s, &patch, at, actor).await;
+    assert_eq!(
+        same.unwrap(),
+        organizations::settings(&pool, s).await.unwrap()
+    );
+    let same = users::set_status(&pool, s, member, Status::Active, at, actor).await;
+    assert_eq!(same.unwrap().status, Status::Active);
+
+    assert_eq!(count(&pool, a.id).await, before);
+    for (table, id) in [
+        ("roles", role.id),
+        ("accounts", tower.id),
+        ("organizations", a.id),
+        ("users", member),
+    ] {
+        assert_eq!(updated_at(&pool, table, id).await, now(), "{table}");
+    }
+}
+
+/// Entries are append-only: UPDATE and TRUNCATE are refused, DELETE is not.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_entry_cannot_be_updated_or_truncated(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    let before = entries(&pool, a.id).await;
+
+    let update = sqlx::query("UPDATE audit_events SET action = 'role.delete' WHERE org_id = $1")
+        .bind(a.id)
+        .execute(&pool)
+        .await;
+    let truncate = sqlx::query("TRUNCATE audit_events").execute(&pool).await;
+
+    for refused in [update, truncate] {
+        let error = refused.expect_err("refused");
+        let code = error.as_database_error().and_then(|e| e.code());
+        assert_eq!(
+            code.as_deref(),
+            Some("23001"),
+            "restrict_violation: {error}"
+        );
+    }
+    assert_eq!(entries(&pool, a.id).await, before);
+    sqlx::query("DELETE FROM audit_events WHERE org_id = $1")
+        .bind(a.id)
+        .execute(&pool)
+        .await
+        .expect("DELETE stays allowed");
+    assert!(entries(&pool, a.id).await.is_empty());
 }

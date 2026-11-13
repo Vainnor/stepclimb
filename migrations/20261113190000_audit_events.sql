@@ -9,7 +9,8 @@
 -- actor always has the client address the server derived for the request; the instance never
 -- has one. `actor_id` and `target_id` have no foreign key: an entry outlives the user, role or
 -- account it names. `at` is the server clock's reading of the change; `created_at` and
--- `updated_at` are spec 02 B5's, and an entry is never updated.
+-- `updated_at` are spec 02 B5's. Triggers refuse every UPDATE and TRUNCATE, so an entry cannot
+-- be rewritten; DELETE stays allowed for removing an organization's data.
 CREATE TABLE audit_events (
     id           uuid        PRIMARY KEY,
     org_id       uuid        NOT NULL REFERENCES organizations (id),
@@ -23,8 +24,27 @@ CREATE TABLE audit_events (
     ip           inet,
     created_at   timestamptz NOT NULL DEFAULT now(),
     updated_at   timestamptz NOT NULL DEFAULT now(),
-    CHECK ((actor_type = 'user') = (actor_id IS NOT NULL AND ip IS NOT NULL)),
-    CHECK (actor_type <> 'instance' OR (actor_id IS NULL AND ip IS NULL))
+    CONSTRAINT audit_events_user_actor
+        CHECK ((actor_type = 'user') = (actor_id IS NOT NULL AND ip IS NOT NULL)),
+    CONSTRAINT audit_events_instance_actor
+        CHECK (actor_type <> 'instance' OR (actor_id IS NULL AND ip IS NULL))
 );
 CREATE INDEX audit_events_by_time ON audit_events (org_id, at, id);
 CREATE INDEX audit_events_by_target ON audit_events (org_id, target_type, target_id);
+
+CREATE FUNCTION audit_events_append_only() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'audit entries cannot be changed (%)', TG_OP
+        USING ERRCODE = 'restrict_violation',
+              TABLE = 'audit_events';
+END;
+$$;
+
+CREATE TRIGGER audit_events_no_update
+    BEFORE UPDATE ON audit_events
+    FOR EACH ROW EXECUTE FUNCTION audit_events_append_only();
+
+CREATE TRIGGER audit_events_no_truncate
+    BEFORE TRUNCATE ON audit_events
+    FOR EACH STATEMENT EXECUTE FUNCTION audit_events_append_only();
