@@ -198,6 +198,36 @@ These apply to every endpoint in M0, including the ones other specs define.
   the user (`03-users-and-identities.md`) and assigns the built-in Organization admin role at
   organization scope (`09-permissions-and-roles.md`), all in one transaction, and exits non-zero
   with a message naming the problem if any step fails.
+  Decided by the owner (13 Nov 2026):
+  - While any organization exists, the command refuses with exit 2 and a message naming Q2,
+    and writes nothing: a second organization would make `RequestOrg` answer 404 to every
+    unauthenticated request (B11) until Q2's resolution by host exists. It counts the
+    organizations under a lock on the table that holds until its commit, so two runs at once
+    cannot both create one. This replaces Q1's "run again with a new slug, it adds another
+    organization" until Q2 is built.
+  - The command ships without Q1's one-time setup link. That link is an enrollment link
+    (`04-local-accounts.md` B6, B10, Q7), whose table and function `04-local-accounts.md` issue
+    I2 delivers, and I2 adds the printed link to this command. Until then, on success the
+    command prints one line to stderr saying the admin has no sign-in method yet and that the
+    setup link arrives with local accounts.
+
+  Coordinator decisions (2026-11-13), on the owner's delegation:
+  - Before creating anything the command applies the pending migrations and writes the built-in
+    roles and the `unlimited` plan, as `stepclimb serve`'s startup does, so the Organization
+    admin role exists on an instance where `serve` has never run.
+  - The arguments are Q1's: `--org-slug`, `--org-name`, `--email` (the admin's email, which
+    local sign-in finds the user by) and `--name` (the admin's display name). The user is
+    `local`, `active`, with locale `en` and time zone `UTC` (the default of the organization's
+    default time zone, `03-users-and-identities.md` Q4).
+  - Exit codes follow `check-config`: 0 on success; 2 when an organization exists or a value is
+    refused (an invalid or reserved slug, a blank or too long organization name, an email that
+    is blank or contains control or invisible characters, a blank name, or a missing argument),
+    naming the flag; 1 when the database fails. On success it prints the organization's slug
+    and id and the user's email and id to stdout, and no secret.
+  - A failure before the commit says nothing was created. A failed commit says the outcome is
+    unknown and to check whether the organization exists. A failure while preparing the
+    database says no organization was created but the migrations or the role and plan sync may
+    have run.
 
 ## API
 

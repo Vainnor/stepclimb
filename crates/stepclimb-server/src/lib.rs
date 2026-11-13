@@ -22,6 +22,7 @@
 //! as [`client_ip`] finds it.
 
 pub mod accounts;
+pub mod admin;
 pub mod app;
 pub mod auth;
 pub mod client_ip;

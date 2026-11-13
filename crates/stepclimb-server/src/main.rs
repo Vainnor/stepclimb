@@ -1,18 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The `stepclimb` binary. The plan's full CLI is `serve | migrate | admin create |
-//! export-course | import-course | check-config | backup-verify`; `serve`, `migrate` and
-//! `check-config` exist so far, beside `healthcheck` for containers (ADR 0023).
+//! export-course | import-course | check-config | backup-verify`; `serve`, `migrate`,
+//! `admin create` and `check-config` exist so far, beside `healthcheck` for containers (ADR
+//! 0023).
 //!
 //! Exit codes: 0 on success; 2 when the command line or the configuration is refused, before
-//! anything connects; 1 when the database, the migrations or the HTTP server fail, when
-//! `check-config` cannot write its report, or when `healthcheck` finds the server not ready.
+//! anything connects, or when `admin create` refuses an argument's value or finds an
+//! organization already there; 1 when the database, the migrations or the HTTP server fail, when
+//! `check-config` or `admin create` cannot write its report, or when `healthcheck` finds the
+//! server not ready.
 
 use std::future::Future;
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
+use stepclimb_server::admin::{self, NewOrganizationAdmin};
 use stepclimb_server::{Config, healthcheck, startup};
 use tracing_subscriber::EnvFilter;
 
@@ -43,6 +47,36 @@ enum Command {
     /// Exit 0 when the server on STEPCLIMB_BIND answers 200 from /readyz, else 1. The container
     /// health check, for images without a shell or curl.
     Healthcheck,
+    /// Administer the instance from the host.
+    Admin {
+        #[command(subcommand)]
+        command: AdminCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum AdminCommand {
+    /// Apply database migrations and write the built-in roles, then create the instance's
+    /// organization with its first Organization admin in one transaction. Exit 0 on success; 2
+    /// when a value is refused or an organization already exists; 1 when the database fails.
+    Create(CreateArgs),
+}
+
+#[derive(Args)]
+struct CreateArgs {
+    /// The organization's slug: 1 to 32 lowercase letters, digits and inner hyphens. It cannot
+    /// be changed later.
+    #[arg(long, value_name = "SLUG")]
+    org_slug: String,
+    /// The organization's name.
+    #[arg(long, value_name = "NAME")]
+    org_name: String,
+    /// The first admin's email address.
+    #[arg(long, value_name = "EMAIL")]
+    email: String,
+    /// The first admin's display name.
+    #[arg(long, value_name = "NAME")]
+    name: String,
 }
 
 fn main() -> ExitCode {
@@ -64,6 +98,12 @@ fn main() -> ExitCode {
             run(async move { startup::migrate_only(&config).await })
         }
         Command::CheckConfig => check_config(&config),
+        Command::Admin {
+            command: AdminCommand::Create(args),
+        } => {
+            init_logging(&config.log);
+            admin_create(&config, args)
+        }
         Command::Healthcheck => match healthcheck::check(config.bind) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
@@ -85,8 +125,41 @@ fn check_config(config: &Config) -> ExitCode {
     for (key, value) in config.non_secret_values() {
         report.push_str(&format!("{key}: {value}\n"));
     }
+    write_stdout(&report)
+}
+
+/// `stepclimb admin create`: print what was created to stdout, or the problem to stderr with
+/// exit 2 for a refused value and 1 for anything else.
+fn admin_create(config: &Config, args: CreateArgs) -> ExitCode {
+    let input = NewOrganizationAdmin {
+        org_slug: args.org_slug,
+        org_name: args.org_name,
+        email: args.email,
+        name: args.name,
+    };
+    let Some(runtime) = runtime() else {
+        return ExitCode::FAILURE;
+    };
+    match runtime.block_on(admin::create_command(config, &input)) {
+        Ok(created) => {
+            eprint!("{}", admin::NO_SIGN_IN_NOTICE);
+            write_stdout(&admin::report(&created))
+        }
+        Err(error) => {
+            let (code, message) = admin::failure_report(&error, &input.org_slug);
+            if code != 2 {
+                tracing::error!(%error, "admin create failed");
+            }
+            eprint!("{message}");
+            ExitCode::from(code)
+        }
+    }
+}
+
+/// Write `text` to stdout; exit 1 when it cannot be written.
+fn write_stdout(text: &str) -> ExitCode {
     // `write_all` rather than `println!`, which panics on a closed stdout instead of failing.
-    match std::io::stdout().write_all(report.as_bytes()) {
+    match std::io::stdout().write_all(text.as_bytes()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("stepclimb: could not write to stdout: {error}");
@@ -95,17 +168,24 @@ fn check_config(config: &Config) -> ExitCode {
     }
 }
 
-/// Run `work` on a multi-threaded runtime; any error is logged and printed, and exits 1.
-fn run(work: impl Future<Output = Result<(), startup::StartupError>>) -> ExitCode {
-    let runtime = match tokio::runtime::Builder::new_multi_thread()
+/// A multi-threaded runtime, or `None` after printing why there is none.
+fn runtime() -> Option<tokio::runtime::Runtime> {
+    match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
     {
-        Ok(runtime) => runtime,
+        Ok(runtime) => Some(runtime),
         Err(error) => {
             eprintln!("stepclimb: could not start the async runtime: {error}");
-            return ExitCode::FAILURE;
+            None
         }
+    }
+}
+
+/// Run `work` on a multi-threaded runtime; any error is logged and printed, and exits 1.
+fn run(work: impl Future<Output = Result<(), startup::StartupError>>) -> ExitCode {
+    let Some(runtime) = runtime() else {
+        return ExitCode::FAILURE;
     };
     match runtime.block_on(work) {
         Ok(()) => ExitCode::SUCCESS,

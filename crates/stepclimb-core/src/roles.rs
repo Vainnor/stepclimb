@@ -386,6 +386,21 @@ pub async fn get(
     .transpose()
 }
 
+/// The id of the built-in role row with `key`, or `None` when [`sync_builtin`] has not written
+/// one. `stepclimb admin create` reads the Organization admin role's id with it to assign it to
+/// a new organization's first user (spec 02 B27).
+pub async fn builtin_id(db: impl PgExecutor<'_>, key: &str) -> Result<Option<Uuid>, Error> {
+    // Instance-wide on purpose, so it takes no `OrgScope`: built-in roles belong to no
+    // organization (`org_id` null), and this returns only the id of such a row.
+    let id = sqlx::query_scalar!(
+        "SELECT id FROM roles WHERE org_id IS NULL AND key = $1",
+        no_nul("key", key)?,
+    )
+    .fetch_optional(db)
+    .await?;
+    Ok(id)
+}
+
 /// The built-in roles, then the scope's custom roles, each group sorted by key, starting after
 /// `after` (the sort key of the previous page's last role) and at most `limit` of them.
 ///
