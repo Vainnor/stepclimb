@@ -56,7 +56,11 @@ export const Copied: Story = {
   args: { resetAfterMs: 600_000 },
   beforeEach: clipboard(async () => undefined),
   play: async ({ canvasElement }) => {
-    await userEvent.click(within(canvasElement).getByRole("button", { name: "Copy" }));
+    const button = within(canvasElement).getByRole("button", { name: "Copy" });
+    await userEvent.click(button);
+    // Leave no hover behind, so the screenshot does not depend on where the pointer rests.
+    await userEvent.unhover(button);
+    await expect(button).not.toHaveAttribute("data-hovered");
     await expect(within(canvasElement).getByRole("status")).toHaveTextContent("Copied");
   },
 };
@@ -69,7 +73,11 @@ export const Failed: Story = {
     throw new DOMException("Write permission denied.", "NotAllowedError");
   }),
   play: async ({ canvasElement }) => {
-    await userEvent.click(within(canvasElement).getByRole("button", { name: "Copy" }));
+    const button = within(canvasElement).getByRole("button", { name: "Copy" });
+    await userEvent.click(button);
+    // Leave no hover behind, so the screenshot does not depend on where the pointer rests.
+    await userEvent.unhover(button);
+    await expect(button).not.toHaveAttribute("data-hovered");
     await expect(within(canvasElement).getByRole("status")).toHaveTextContent(/^Could not copy/);
   },
 };
