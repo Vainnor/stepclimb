@@ -50,13 +50,22 @@ export const sideNav = tv({
   variants: {
     collapsed: {
       true: {
-        root: "w-16 items-center",
+        // Wider by the inline-start safe area (a phone in landscape), which the padding fills.
+        root: [
+          "w-[calc(4rem+env(safe-area-inset-left))] items-center",
+          "rtl:w-[calc(4rem+env(safe-area-inset-right))]",
+        ],
         logo: "justify-center px-2",
         list: "w-full items-center",
         link: "size-11 justify-center px-0",
         footer: "px-2",
       },
-      false: { root: "w-60" },
+      false: {
+        root: [
+          "w-[calc(15rem+env(safe-area-inset-left))]",
+          "rtl:w-[calc(15rem+env(safe-area-inset-right))]",
+        ],
+      },
     },
   },
 });

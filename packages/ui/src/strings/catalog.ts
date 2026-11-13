@@ -30,6 +30,8 @@ export const uiMessages: Catalog = {
     "numberField.decrement": "Decrease",
     "numberField.increment": "Increase",
     "orgSwitcher.label": "{name}: switch organization",
+    "pagination.arrived":
+      "{direction, select, next {Showing the next page} other {Showing the previous page}}",
     "pagination.count": "{count, plural, one {# result} other {# results}}",
     "pagination.label": "Pagination",
     "pagination.next": "Next",

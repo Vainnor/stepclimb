@@ -32,7 +32,9 @@ describe("OrgSwitcher", () => {
     );
   });
 
-  it("calls onChange with another organization, and not with the current one", async () => {
+  // Pins React Aria's behavior: with `disallowEmptySelection`, choosing the selected item reports
+  // no change, so OrgSwitcher needs no check of its own.
+  it("calls onChange with another organization; React Aria reports no change for the current one", async () => {
     stubMatchMedia(() => true);
     const user = userEvent.setup();
     const onChange = vi.fn();

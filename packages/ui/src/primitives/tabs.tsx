@@ -19,8 +19,9 @@ export const tabs = tv({
   slots: {
     root: "flex flex-col gap-4 font-ui",
     list: [
-      "flex overflow-x-auto overscroll-x-contain border-b border-line",
-      "[scrollbar-width:none]",
+      // A thin scrollbar, themed by base.css, shows there is more when the row is wider than the
+      // screen.
+      "flex overflow-x-auto overscroll-x-contain border-b border-line [scrollbar-width:thin]",
     ],
     tab: [
       "relative -mb-px flex h-(--sc-control-h) shrink-0 cursor-default items-center whitespace-nowrap",

@@ -28,7 +28,11 @@ describe("AlertDialog", () => {
     const user = userEvent.setup();
     renderWithStrings(<Example onConfirm={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "Delete" }));
-    expect(screen.getByRole("alertdialog", { name: "Delete Ground control?" })).toBeVisible();
+    const dialog = screen.getByRole("alertdialog", { name: "Delete Ground control?" });
+    expect(dialog).toBeVisible();
+    expect(dialog).toHaveAccessibleDescription(
+      "Its four pages and their progress are deleted. This cannot be undone.",
+    );
     const confirm = screen.getByRole("button", { name: "Delete module" });
     expect(confirm).toHaveAttribute("data-slot", "alert-dialog-confirm");
     expect(confirm).toHaveClass("text-danger-fg");

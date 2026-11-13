@@ -23,8 +23,11 @@ import { IconButton } from "./icon-button";
 
 export const dialog = tv({
   slots: {
+    // Top-anchored and as tall as the visual viewport, which React Aria's ModalOverlay sets as
+    // --visual-viewport-height: iOS does not shrink the layout viewport for the on-screen
+    // keyboard, so a panel sized to it would sit under the keyboard.
     overlay: [
-      "fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-overlay backdrop-blur-sm",
+      "fixed inset-x-0 top-0 z-50 flex h-(--visual-viewport-height) items-center justify-center overflow-y-auto bg-overlay backdrop-blur-sm",
       "px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]",
     ],
     modal: [

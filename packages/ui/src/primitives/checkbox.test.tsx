@@ -59,6 +59,18 @@ describe("Checkbox", () => {
     expect(mark("All modules")).toBeTruthy();
   });
 
+  it("without a label, is named by aria-label and is a 44 px target on touch", () => {
+    renderWithStrings(<Checkbox aria-label="Select Ground control" />);
+    const box = screen.getByRole("checkbox", { name: "Select Ground control" });
+    expect(box.closest('[data-slot="checkbox-button"]')).toHaveClass(
+      "pointer-coarse:min-w-(--sc-control-touch)",
+      "pointer-coarse:min-h-(--sc-control-touch)",
+    );
+    expect(
+      box.closest('[data-slot="checkbox-button"]')?.querySelector('[data-slot="checkbox-label"]'),
+    ).toBeNull();
+  });
+
   it("shows its error when invalid", () => {
     renderWithStrings(
       <Checkbox isInvalid errorMessage="Accept the honor code to start.">

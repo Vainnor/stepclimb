@@ -27,7 +27,11 @@ export const listBox = tv({
   slots: {
     list: "max-h-[inherit] overflow-auto p-1 outline-none",
     // The Menu's sheet scrim: dimmed, not blurred, since the list is a quick pick, not a modal task.
-    sheetOverlay: "fixed inset-0 z-50 flex items-end bg-overlay",
+    // Top-anchored and as tall as the visual viewport, which React Aria's ModalOverlay sets as
+    // --visual-viewport-height: iOS does not shrink the layout viewport for the on-screen
+    // keyboard, so a panel sized to it would sit under the keyboard.
+    sheetOverlay:
+      "fixed inset-x-0 top-0 z-50 flex h-(--visual-viewport-height) items-end bg-overlay",
     sheetList: "overflow-auto p-1 outline-none",
     item: [
       "flex min-h-(--sc-control-h) cursor-default items-center gap-2 rounded-xs px-3 py-1.5",

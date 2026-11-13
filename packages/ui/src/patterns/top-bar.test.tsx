@@ -17,6 +17,18 @@ describe("TopBar", () => {
     );
   });
 
+  it("keeps clear of the safe areas at every width", () => {
+    render(<TopBar title="Grades" />);
+    const header = screen.getByRole("banner");
+    expect(header).toHaveClass(
+      "pt-[env(safe-area-inset-top)]",
+      "md:ps-[max(1.5rem,env(safe-area-inset-left))]",
+      "md:pe-[max(1.5rem,env(safe-area-inset-right))]",
+      "rtl:md:ps-[max(1.5rem,env(safe-area-inset-right))]",
+    );
+    expect(header).not.toHaveClass("md:pt-0");
+  });
+
   it("takes another heading level, and sticks inside the top safe area on phones", () => {
     render(<TopBar title="Grades" titleLevel={2} />);
     expect(screen.getByRole("heading", { level: 2, name: "Grades" })).toBeInTheDocument();

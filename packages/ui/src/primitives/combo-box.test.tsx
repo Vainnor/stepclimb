@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WIDE_QUERY } from "../lib/breakpoints";
@@ -70,9 +70,14 @@ describe("ComboBox", () => {
     expect(screen.getByText("No matches")).toHaveAttribute("data-slot", "combo-box-empty");
     rerender(<Example isLoading />);
     expect(screen.getByRole("listbox")).toHaveTextContent("Loading");
-    expect(screen.getByRole("progressbar", { name: "Loading" })).toHaveAttribute(
-      "data-slot",
-      "combo-box-loading",
+    // The spinner waits 300 ms, like Button's, so a fast answer never flashes it.
+    expect(document.querySelector('[data-slot="combo-box-loading"]')).toBeNull();
+    // The open list hides the rest of the page from screen readers, the spinner too.
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="combo-box-loading"]')).toHaveAttribute(
+        "aria-label",
+        "Loading",
+      ),
     );
   });
 
@@ -110,5 +115,69 @@ describe("ComboBox", () => {
     expect(onChange).toHaveBeenCalledWith("tower");
     rerender(<Example value="tower" onChange={onChange} />);
     expect(screen.getByRole("combobox")).toHaveValue("Local control");
+  });
+
+  describe("under 768 px", () => {
+    it("puts the field's description, error and invalid state on the trigger", () => {
+      wide(false);
+      renderWithStrings(
+        <ComboBox
+          label="Position"
+          description="Where you train."
+          errorMessage="Choose a position."
+          isInvalid
+          isRequired
+        >
+          <ComboBoxItem id="gnd">Ground control</ComboBoxItem>
+        </ComboBox>,
+      );
+      const trigger = screen.getByRole("button", { name: /^Position/ });
+      expect(trigger).toHaveAttribute("aria-invalid", "true");
+      // aria-required is not allowed on a button; the hidden input carries `required`.
+      expect(trigger).not.toHaveAttribute("aria-required");
+      expect(document.querySelector('[data-slot="combo-box-form-input"]')).toBeRequired();
+      expect(trigger).toHaveAccessibleDescription("Where you train. Choose a position.");
+    });
+
+    it("moves focus to the trigger when its label is pressed", async () => {
+      wide(false);
+      const user = userEvent.setup();
+      renderWithStrings(<Example />);
+      await user.click(screen.getByText("Position"));
+      expect(screen.getByRole("button", { name: /^Position/ })).toHaveFocus();
+    });
+
+    it("submits its text under its name in a form", () => {
+      wide(false);
+      const { container } = renderWithStrings(
+        <form>
+          <ComboBox label="Position" name="position" allowsCustomValue defaultInputValue="Oceanic">
+            <ComboBoxItem id="gnd">Ground control</ComboBoxItem>
+          </ComboBox>
+        </form>,
+      );
+      const form = container.querySelector("form") as HTMLFormElement;
+      expect(new FormData(form).get("position")).toBe("Oceanic");
+    });
+
+    it("blocks the form while required and empty, and focuses the trigger", async () => {
+      wide(false);
+      const onSubmit = vi.fn((e: React.FormEvent) => e.preventDefault());
+      const { container } = renderWithStrings(
+        <form onSubmit={onSubmit}>
+          <ComboBox label="Position" name="position" isRequired>
+            <ComboBoxItem id="gnd">Ground control</ComboBoxItem>
+          </ComboBox>
+          <button type="submit">Save</button>
+        </form>,
+      );
+      const form = container.querySelector("form") as HTMLFormElement;
+      expect(form.checkValidity()).toBe(false);
+      await userEvent.setup().click(screen.getByRole("button", { name: "Save" }));
+      expect(onSubmit).not.toHaveBeenCalled();
+      // The browser focuses the first invalid control; the hidden input hands focus on.
+      (container.querySelector('[data-slot="combo-box-form-input"]') as HTMLElement).focus();
+      expect(screen.getByRole("button", { name: /^Position/ })).toHaveFocus();
+    });
   });
 });

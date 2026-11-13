@@ -25,11 +25,13 @@ export const switchField = tv({
       "group-data-[focus-visible]:ring-2 group-data-[focus-visible]:ring-ring group-data-[focus-visible]:ring-offset-2 ring-offset-canvas",
       "group-data-[disabled]:border-line group-data-[disabled]:bg-sunken",
     ],
+    // Drawn as a border, which forced-colors mode keeps and paints in a system color; it drops
+    // backgrounds.
     thumb: [
-      "size-3.5 rounded-full bg-fg-sub transition-transform duration-fast ease-out-expo",
-      "group-data-[selected]:translate-x-4 group-data-[selected]:bg-on-brand",
+      "size-3.5 rounded-full border-7 border-fg-sub transition-transform duration-fast ease-out-expo",
+      "group-data-[selected]:translate-x-4 group-data-[selected]:border-on-brand",
       "rtl:group-data-[selected]:-translate-x-4",
-      "group-data-[disabled]:bg-fg-disabled",
+      "group-data-[disabled]:border-fg-disabled",
     ],
     label: "min-w-0",
     description: "ps-11.5",

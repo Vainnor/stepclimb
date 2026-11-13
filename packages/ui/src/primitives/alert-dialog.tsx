@@ -4,7 +4,7 @@
 // ("Delete course"), never "OK"; a destructive confirm uses the danger intent. It has no close
 // button and a press on the scrim does not close it: it ends through Cancel, Escape or the action.
 // Focus starts on Cancel, so Enter on arrival never runs the action.
-import type { ReactNode } from "react";
+import { type ReactNode, useId } from "react";
 import type { DialogTriggerProps } from "react-aria-components";
 import { useStepclimbStrings } from "../strings/strings";
 import { Button } from "./button";
@@ -38,9 +38,12 @@ export function AlertDialog({
   ...props
 }: AlertDialogProps) {
   const { t } = useStepclimbStrings();
+  // The body says what the action does: screen readers read it with the dialog's name.
+  const bodyId = useId();
   return (
     <Dialog
       role="alertdialog"
+      aria-describedby={bodyId}
       title={title}
       hideCloseButton
       isDismissable={false}
@@ -49,7 +52,7 @@ export function AlertDialog({
     >
       {({ close }) => (
         <>
-          <DialogBody>{children}</DialogBody>
+          <DialogBody id={bodyId}>{children}</DialogBody>
           <DialogFooter>
             <Button data-slot="alert-dialog-cancel" autoFocus onPress={close}>
               {t("alertDialog.cancel")}

@@ -34,7 +34,9 @@ export const radioGroup = tv({
       "group-data-[invalid]:border-danger",
       "group-data-[disabled]:border-line",
     ],
-    dot: "size-2.5 rounded-full bg-brand group-data-[disabled]:bg-fg-disabled",
+    // Drawn as a border, which forced-colors mode keeps and paints in a system color; it drops
+    // backgrounds.
+    dot: "size-2.5 rounded-full border-5 border-brand group-data-[disabled]:border-fg-disabled",
     label: "min-w-0",
     description: "ps-7.5",
   },

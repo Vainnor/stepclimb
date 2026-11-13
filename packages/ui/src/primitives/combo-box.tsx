@@ -2,20 +2,22 @@
 // ComboBox: a text field that filters a list of options as the person types
 // (docs/specs/m0/13-base-ui-components.md M0 inventory). At 768 px and wider the options open in a
 // Popover under the input. Under 768 px (Q10) the field is a button that opens a bottom sheet
-// holding the input and the options, so the list sits with the input above the phone's keyboard
-// instead of in a popover the keyboard covers. With `isLoading` it shows a spinner, and an empty
-// list says it is loading rather than that nothing matched.
+// holding the input and the options; a sheet that left the input in the page would trap focus
+// away from it. With `isLoading` it shows a spinner, and an empty list says it is loading rather
+// than that nothing matched.
 import { CaretDownIcon, CircleNotchIcon } from "@phosphor-icons/react";
-import { type ReactNode, use, useId } from "react";
+import { type ReactNode, use, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import {
   ComboBox as AriaComboBox,
   type ComboBoxProps as AriaComboBoxProps,
   Button,
   ComboBoxStateContext,
+  FieldErrorContext,
   Group,
   Input,
   LabelContext,
   ProgressBar,
+  TextContext,
 } from "react-aria-components";
 import { WIDE_QUERY } from "../lib/breakpoints";
 import { tv } from "../lib/tv";
@@ -29,6 +31,7 @@ import {
   type ListBoxItemProps,
   ListBoxOverlay,
 } from "./list-box";
+import { SKELETON_DELAY_MS } from "./skeleton";
 
 const parts = field();
 
@@ -51,6 +54,7 @@ export const comboBox = tv({
     sheetPlaceholder: "min-w-0 flex-1 truncate text-fg-sub",
     sheetInput: [parts.control(), parts.input()],
     sheetHeader: "px-4 pt-4 pb-2",
+    formInput: "sr-only",
     caret: "shrink-0 text-fg-sub",
     spinner: "flex shrink-0 items-center text-fg-sub",
     empty: "px-3 py-2 text-sm text-fg-sub",
@@ -93,16 +97,7 @@ export function ComboBox<T extends object>({
 }: ComboBoxProps<T>) {
   const { t } = useStepclimbStrings();
   const wide = useMediaQuery(WIDE_QUERY);
-  const spinner = isLoading ? (
-    <ProgressBar
-      data-slot="combo-box-loading"
-      isIndeterminate
-      aria-label={t("comboBox.loading")}
-      className={styles.spinner()}
-    >
-      <Icon icon={CircleNotchIcon} size="sm" className="animate-spin" />
-    </ProgressBar>
-  ) : null;
+  const spinner = isLoading ? <LoadingSpinner /> : null;
   const renderEmptyState = () => (
     <div data-slot="combo-box-empty" className={styles.empty()}>
       {isLoading ? t("comboBox.loading") : t("comboBox.empty")}
@@ -138,7 +133,7 @@ export function ComboBox<T extends object>({
             </Button>
           </Group>
         ) : (
-          <SheetTrigger placeholder={placeholder}>{spinner}</SheetTrigger>
+          <PhoneField placeholder={placeholder}>{spinner}</PhoneField>
         )}
       </FieldParts>
       <ListBoxOverlay<T>
@@ -152,35 +147,102 @@ export function ComboBox<T extends object>({
 }
 
 /**
- * The field under 768 px: a button showing the input's text, or the placeholder while it is
- * empty. It is named by the field's label and that text, so what it shows is in its name.
+ * The loading spinner, shown once the wait has lasted SKELETON_DELAY_MS (300 ms), like Button's,
+ * so a fast answer never flashes it. The empty list says "Loading" from the start.
  */
-function SheetTrigger({ placeholder, children }: { placeholder?: string; children: ReactNode }) {
-  const text = use(ComboBoxStateContext)?.inputValue ?? "";
+function LoadingSpinner() {
+  const { t } = useStepclimbStrings();
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setShown(true), SKELETON_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, []);
+  if (!shown) return null;
+  return (
+    <ProgressBar
+      data-slot="combo-box-loading"
+      isIndeterminate
+      aria-label={t("comboBox.loading")}
+      className={styles.spinner()}
+    >
+      <Icon icon={CircleNotchIcon} size="sm" className="animate-spin" />
+    </ProgressBar>
+  );
+}
+
+/** The `id` React Aria gives a slot of the field's Text context: its description or error. */
+function useTextSlotId(slot: "description" | "errorMessage"): string | undefined {
+  const context = use(TextContext);
+  if (!context || !("slots" in context) || !context.slots) return undefined;
+  const props = (context.slots as Record<string, { id?: string } | undefined>)[slot];
+  return props?.id;
+}
+
+/**
+ * The field under 768 px: a button showing the input's text, or the placeholder while it is
+ * empty, named by the field's label and that text so what it shows is in its name. It carries the
+ * field's description, error and invalid state, which React Aria puts on the input.
+ *
+ * While the sheet is closed the input stays in the page, visually hidden and out of the tab order,
+ * so the form still submits its `name` and the browser still checks `isRequired`. When the label
+ * is pressed, or the browser focuses the input to report it invalid, focus moves to the button.
+ */
+function PhoneField({ placeholder, children }: { placeholder?: string; children: ReactNode }) {
+  const { t } = useStepclimbStrings();
+  const state = use(ComboBoxStateContext);
+  const validation = use(FieldErrorContext);
   const label = use(LabelContext);
   const labelId = label && "id" in label ? label.id : undefined;
+  const descriptionId = useTextSlotId("description");
+  const errorId = useTextSlotId("errorMessage");
+  const isInvalid = validation?.isInvalid ?? false;
   const valueId = useId();
-  const { t } = useStepclimbStrings();
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const text = state?.inputValue ?? "";
+  // React Aria's Button passes only labeling ARIA props to the DOM, so the invalid state is set
+  // here. `aria-required` is not allowed on a button; the required state shows through the
+  // browser's check of the hidden input and the error message.
+  useLayoutEffect(() => {
+    const button = buttonRef.current;
+    if (!button) return;
+    if (isInvalid) button.setAttribute("aria-invalid", "true");
+    else button.removeAttribute("aria-invalid");
+  }, [isInvalid]);
   return (
-    <Button
-      data-slot="combo-box-sheet-trigger"
-      // React Aria labels this button with its own "Show suggestions" translation; the strings
-      // catalog's replaces it, though the label and value below are what name the button.
-      aria-label={t("comboBox.showSuggestions")}
-      aria-labelledby={[labelId, valueId].filter(Boolean).join(" ")}
-      className={styles.sheetTrigger()}
-    >
-      <span
-        id={valueId}
-        data-slot="combo-box-value"
-        data-placeholder={text === "" || undefined}
-        className={text === "" ? styles.sheetPlaceholder() : styles.sheetValue()}
+    <>
+      <Button
+        ref={buttonRef}
+        data-slot="combo-box-sheet-trigger"
+        // React Aria labels this button with its own "Show suggestions" translation; the strings
+        // catalog's replaces it, though the label and value below are what name the button.
+        aria-label={t("comboBox.showSuggestions")}
+        aria-labelledby={[labelId, valueId].filter(Boolean).join(" ")}
+        aria-describedby={
+          [descriptionId, isInvalid ? errorId : undefined].filter(Boolean).join(" ") || undefined
+        }
+        className={styles.sheetTrigger()}
       >
-        {text === "" ? placeholder : text}
-      </span>
-      {children}
-      <Icon icon={CaretDownIcon} size="sm" className={styles.caret()} />
-    </Button>
+        <span
+          id={valueId}
+          data-slot="combo-box-value"
+          data-placeholder={text === "" || undefined}
+          className={text === "" ? styles.sheetPlaceholder() : styles.sheetValue()}
+        >
+          {text === "" ? placeholder : text}
+        </span>
+        {children}
+        <Icon icon={CaretDownIcon} size="sm" className={styles.caret()} />
+      </Button>
+      {state?.isOpen ? null : (
+        <Input
+          data-slot="combo-box-form-input"
+          aria-hidden
+          tabIndex={-1}
+          onFocus={() => buttonRef.current?.focus()}
+          className={styles.formInput()}
+        />
+      )}
+    </>
   );
 }
 

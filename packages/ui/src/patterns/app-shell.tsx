@@ -19,12 +19,19 @@ export const appShell = tv({
     ],
     side: "hidden shrink-0 md:block",
     column: "flex min-w-0 flex-1 flex-col",
-    main: "min-w-0 flex-1 outline-none pb-[calc(3.5rem+env(safe-area-inset-bottom))] md:pb-0",
+    // Clear of the inline-end safe area (a phone in landscape); the SideNav and TopBar keep clear
+    // of the others themselves.
+    main: [
+      "min-w-0 flex-1 outline-none",
+      "pe-[env(safe-area-inset-right)] rtl:pe-[env(safe-area-inset-left)]",
+    ],
     bottom: "md:hidden",
   },
+  variants: {
+    /** Room under the content for the BottomTabs and the bottom safe area, under 768 px. */
+    hasBottomTabs: { true: { main: "pb-[calc(3.5rem+env(safe-area-inset-bottom))] md:pb-0" } },
+  },
 });
-
-const styles = appShell();
 
 export interface AppShellProps {
   /** The SideNav, shown at 768 px and wider. */
@@ -50,6 +57,7 @@ export function AppShell({
   className,
 }: AppShellProps) {
   const { t } = useStepclimbStrings();
+  const styles = appShell({ hasBottomTabs: bottomTabs !== undefined });
   // Focus moves to `main` itself, so the next Tab goes into the view rather than back to the top.
   const skip = (event: MouseEvent<HTMLAnchorElement>) => {
     event.preventDefault();

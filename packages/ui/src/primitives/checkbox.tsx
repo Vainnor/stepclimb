@@ -22,7 +22,7 @@ export const checkbox = tv({
     root: "flex flex-col gap-1 font-ui",
     button: [
       "group flex w-fit min-h-(--sc-control-h) cursor-default items-center gap-2.5 text-sm text-fg-default",
-      "pointer-coarse:min-h-(--sc-control-touch)",
+      "pointer-coarse:min-h-(--sc-control-touch) pointer-coarse:min-w-(--sc-control-touch)",
       "data-[disabled]:cursor-not-allowed data-[disabled]:text-fg-disabled",
     ],
     box: [

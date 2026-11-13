@@ -15,6 +15,8 @@ describe("Breadcrumbs", () => {
     );
     const nav = screen.getByRole("navigation", { name: "Breadcrumbs" });
     expect(nav).toHaveAttribute("data-slot", "breadcrumbs");
+    // Only the nav is named; React Aria's own name on the list is removed.
+    expect(nav.querySelector("ol")).not.toHaveAttribute("aria-label");
     const links = within(nav).getAllByRole("link");
     expect(links.map((l) => l.textContent)).toEqual([
       "Courses",

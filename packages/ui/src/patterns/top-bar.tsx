@@ -12,8 +12,12 @@ export const topBar = tv({
     root: [
       "z-30 border-b border-line bg-canvas font-ui",
       "max-md:sticky max-md:top-0 max-md:bg-canvas/85 max-md:backdrop-blur-md",
-      "pt-[env(safe-area-inset-top)] md:pt-0",
-      "ps-[max(1rem,env(safe-area-inset-left))] pe-[max(1rem,env(safe-area-inset-right))] md:ps-6 md:pe-6",
+      // Clear of the safe areas at every width: a phone in landscape is wider than 768 px.
+      "pt-[env(safe-area-inset-top)]",
+      "ps-[max(1rem,env(safe-area-inset-left))] pe-[max(1rem,env(safe-area-inset-right))]",
+      "md:ps-[max(1.5rem,env(safe-area-inset-left))] md:pe-[max(1.5rem,env(safe-area-inset-right))]",
+      "rtl:ps-[max(1rem,env(safe-area-inset-right))] rtl:pe-[max(1rem,env(safe-area-inset-left))]",
+      "rtl:md:ps-[max(1.5rem,env(safe-area-inset-right))] rtl:md:pe-[max(1.5rem,env(safe-area-inset-left))]",
     ],
     row: "flex min-h-14 items-center gap-3",
     title: "min-w-0 flex-1 truncate",

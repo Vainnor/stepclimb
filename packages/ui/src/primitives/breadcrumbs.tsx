@@ -4,7 +4,7 @@
 // catalog holds React Aria's Breadcrumbs list; the last crumb is the current page, marked with
 // `aria-current="page"` and not a link. Links navigate through the app's RouterProvider.
 import { CaretRightIcon } from "@phosphor-icons/react";
-import type { ReactNode } from "react";
+import { type ReactNode, useLayoutEffect, useRef } from "react";
 import {
   Breadcrumb as AriaBreadcrumb,
   Breadcrumbs as AriaBreadcrumbs,
@@ -42,18 +42,31 @@ export interface BreadcrumbsProps
   className?: string;
 }
 
+/**
+ * The `nav` carries the name. React Aria always names its list as well, with its own translation of
+ * "Breadcrumbs", which a screen reader would read a second time; this removes that name after
+ * every render. React leaves the attribute removed, since its value never changes.
+ */
+function useUnnamedList() {
+  const ref = useRef<HTMLOListElement>(null);
+  useLayoutEffect(() => {
+    ref.current?.removeAttribute("aria-label");
+  });
+  return ref;
+}
+
 export function Breadcrumbs({ children, className, ...props }: BreadcrumbsProps) {
   const { t } = useStepclimbStrings();
+  const listRef = useUnnamedList();
   return (
     <nav
       data-slot="breadcrumbs"
       aria-label={t("breadcrumbs.label")}
       className={styles.root({ className })}
     >
-      {/* React Aria names the list too, with its own translation unless given one. */}
       <AriaBreadcrumbs
+        ref={listRef}
         data-slot="breadcrumbs-list"
-        aria-label={t("breadcrumbs.label")}
         {...props}
         className={styles.list()}
       >

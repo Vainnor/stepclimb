@@ -49,6 +49,12 @@ export const Invalid: Story = {
   },
 };
 
+/** No visible label, as in a table's selection column: named by `aria-label`, and still a
+ * 44 px target on touch screens. */
+export const WithoutLabel: Story = {
+  args: { children: undefined, "aria-label": "Select Ground control" },
+};
+
 export const Disabled: Story = { args: { isDisabled: true, defaultSelected: true } };
 
 export const Group: Story = {

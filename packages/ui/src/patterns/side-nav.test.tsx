@@ -40,13 +40,21 @@ describe("SideNav", () => {
     width(true);
     const { unmount } = renderWithStrings(<SideNav entries={entries} />);
     expect(screen.getByRole("navigation")).not.toHaveAttribute("data-collapsed");
-    expect(screen.getByRole("navigation")).toHaveClass("w-60");
+    expect(screen.getByRole("navigation")).toHaveClass(
+      "w-[calc(15rem+env(safe-area-inset-left))]",
+      "rtl:w-[calc(15rem+env(safe-area-inset-right))]",
+    );
     unmount();
     width(false);
     renderWithStrings(<SideNav entries={entries} />);
     const nav = screen.getByRole("navigation");
     expect(nav).toHaveAttribute("data-collapsed", "true");
-    expect(nav).toHaveClass("w-16");
+    // Widened by the inline-start safe area, mirrored for right-to-left.
+    expect(nav).toHaveClass(
+      "w-[calc(4rem+env(safe-area-inset-left))]",
+      "rtl:w-[calc(4rem+env(safe-area-inset-right))]",
+      "ps-[env(safe-area-inset-left)]",
+    );
     // The label stays the link's name.
     expect(within(nav).getByRole("link", { name: "Courses" })).toBeInTheDocument();
   });

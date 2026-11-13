@@ -45,3 +45,30 @@ describe("Pagination", () => {
     expect(screen.getByText("1,204 results")).toBeInTheDocument();
   });
 });
+
+describe("Pagination after a page arrives", () => {
+  it("announces the page and, on the last page, moves focus to Previous", async () => {
+    const user = userEvent.setup();
+    const onPageChange = vi.fn();
+    const { rerender } = renderWithStrings(
+      <Pagination previousCursor="c1" nextCursor="c3" onPageChange={onPageChange} />,
+    );
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    // The last page: no next cursor, so Next is disabled under the person's focus.
+    rerender(<Pagination previousCursor="c2" nextCursor={null} onPageChange={onPageChange} />);
+    expect(status).toHaveTextContent("Showing the next page");
+    expect(screen.getByRole("button", { name: "Previous" })).toHaveFocus();
+  });
+
+  it("leaves focus alone when the pressed button stays enabled", async () => {
+    const user = userEvent.setup();
+    const { rerender } = renderWithStrings(
+      <Pagination previousCursor="c1" nextCursor="c3" onPageChange={vi.fn()} />,
+    );
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    rerender(<Pagination previousCursor="c2" nextCursor="c4" onPageChange={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Next" })).toHaveFocus();
+  });
+});

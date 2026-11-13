@@ -17,7 +17,11 @@ import { IconButton } from "./icon-button";
 
 export const sheet = tv({
   slots: {
-    overlay: "fixed inset-0 z-50 flex bg-overlay backdrop-blur-sm",
+    // Top-anchored and as tall as the visual viewport, which React Aria's ModalOverlay sets as
+    // --visual-viewport-height: iOS does not shrink the layout viewport for the on-screen
+    // keyboard, so a panel sized to it would sit under the keyboard.
+    overlay:
+      "fixed inset-x-0 top-0 z-50 flex h-(--visual-viewport-height) bg-overlay backdrop-blur-sm",
     panel: [
       "flex flex-col border-line bg-raised font-ui text-fg-default shadow-float outline-none",
       "ps-[env(safe-area-inset-left)] pe-[env(safe-area-inset-right)]",
@@ -42,7 +46,8 @@ export const sheet = tv({
       },
       bottom: {
         overlay: "items-end",
-        panel: "max-h-[85dvh] w-full rounded-t-md border-t pb-[env(safe-area-inset-bottom)]",
+        panel:
+          "max-h-[calc(var(--visual-viewport-height)*0.85)] w-full rounded-t-md border-t pb-[env(safe-area-inset-bottom)]",
       },
     },
   },

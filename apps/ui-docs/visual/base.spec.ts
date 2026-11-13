@@ -189,6 +189,24 @@ test.describe("at 1280 px @desktop", () => {
     });
   });
 
+  test.describe("with forced colors, a selected radio and switch stay visible", () => {
+    for (const [id, selector, width] of [
+      ["forms-radiogroup--default", "[data-slot=radio-dot]", "5px"],
+      ["forms-switch--on", "[data-slot=switch-thumb]", "7px"],
+    ] as const) {
+      test(`${selector} in ${id}`, async ({ page }) => {
+        await openStory(page, story(id), "light");
+        await page.emulateMedia({ forcedColors: "active" });
+        // Forced colors drop backgrounds; the mark is a border, which they keep.
+        const border = await page.locator(selector).evaluate((el) => {
+          const style = getComputedStyle(el);
+          return { style: style.borderTopStyle, width: style.borderTopWidth };
+        });
+        expect(border).toEqual({ style: "solid", width });
+      });
+    }
+  });
+
   test.describe("with forced colors, rules stay visible", () => {
     for (const [id, selector] of [
       ["foundations-separator--horizontal", "[data-slot=separator]"],

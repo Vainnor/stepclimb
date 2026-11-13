@@ -33,13 +33,26 @@ describe("AppShell", () => {
     expect(screen.getByRole("banner")).toBeInTheDocument();
     const main = screen.getByRole("main");
     expect(main).toHaveAttribute("id", "main");
-    expect(main).toHaveClass("pb-[calc(3.5rem+env(safe-area-inset-bottom))]", "md:pb-0");
+    expect(main).toHaveClass(
+      "pb-[calc(3.5rem+env(safe-area-inset-bottom))]",
+      "md:pb-0",
+      "pe-[env(safe-area-inset-right)]",
+      "rtl:pe-[env(safe-area-inset-left)]",
+    );
     const side = document.querySelector('[data-slot="app-shell-side"]');
     const bottom = document.querySelector('[data-slot="app-shell-bottom"]');
     expect(side).toHaveClass("hidden", "md:block");
     expect(bottom).toHaveClass("md:hidden");
     expect(side?.querySelector('[data-slot="side-nav"]')).not.toBeNull();
     expect(bottom?.querySelector('[data-slot="bottom-tabs"]')).not.toBeNull();
+  });
+
+  it("leaves room for BottomTabs only when it has them", () => {
+    stubMatchMedia(() => true);
+    renderWithStrings(<AppShell topBar={<TopBar title="Home" />}>Content</AppShell>);
+    expect(screen.getByRole("main")).not.toHaveClass(
+      "pb-[calc(3.5rem+env(safe-area-inset-bottom))]",
+    );
   });
 
   it("starts with a skip link that moves focus to main (spec 11 B6)", async () => {

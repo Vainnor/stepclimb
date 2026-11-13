@@ -12,7 +12,7 @@ const meta = {
     status: { missing: ["States", "Themes", "Accessibility", "Responsive and touch"] },
     docs: {
       description: {
-        component: `A text field that narrows a list of options as you type. At 768 px and wider the options open in a popover under the input. On phones the field is a button that opens a sheet from the bottom with the input at its top, so the options sit above the keyboard instead of under it. While options load from the server it shows a spinner, and an empty list says it is loading instead of that nothing matched.
+        component: `A text field that narrows a list of options as you type. At 768 px and wider the options open in a popover under the input. On phones the field is a button that opens a sheet from the bottom with the input at its top and the options under it. While options load from the server it shows a spinner, and an empty list says it is loading instead of that nothing matched.
 
 **Usage.** \`<ComboBox label="Position" placeholder="Type a position"><ComboBoxItem id="gnd">Ground control</ComboBoxItem>…</ComboBox>\` filters its items itself. For options from the server, pass \`items\`, a render function, \`inputValue\` and \`onInputChange\`, and set \`isLoading\` while the request runs. \`value\` and \`onChange\` control the chosen option.
 
