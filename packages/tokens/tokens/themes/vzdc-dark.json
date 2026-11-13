@@ -1,0 +1,186 @@
+{
+  "$description": "Theme vzdc-dark: every color token, and the UI font. Values from the plan's UI tab.",
+  "color": {
+    "bg-canvas": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.17, 0.007, 20]
+      }
+    },
+    "bg-raised": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.21, 0.009, 20]
+      }
+    },
+    "bg-sunken": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.145, 0.007, 20]
+      }
+    },
+    "fg-strong": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.96, 0.005, 20]
+      }
+    },
+    "fg-default": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.89, 0.008, 20]
+      }
+    },
+    "fg-sub": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.75, 0.01, 20]
+      }
+    },
+    "fg-soft": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.64, 0.01, 20]
+      }
+    },
+    "line-strong": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.42, 0.012, 20]
+      }
+    },
+    "line": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.31, 0.011, 20]
+      }
+    },
+    "line-soft": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.26, 0.01, 20]
+      }
+    },
+    "brand": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.72, 0.11, 20]
+      }
+    },
+    "brand-hover": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.78, 0.1, 20]
+      }
+    },
+    "brand-soft": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.29, 0.05, 20]
+      }
+    },
+    "brand-fg": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.82, 0.08, 20]
+      }
+    },
+    "on-brand": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.18, 0.03, 20]
+      }
+    },
+    "success": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.74, 0.13, 150]
+      }
+    },
+    "success-soft": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.27, 0.04, 150]
+      }
+    },
+    "success-fg": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.82, 0.11, 150]
+      }
+    },
+    "warning": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.8, 0.13, 80]
+      }
+    },
+    "warning-soft": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.29, 0.05, 80]
+      }
+    },
+    "warning-fg": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.86, 0.11, 80]
+      }
+    },
+    "danger": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.7, 0.16, 25]
+      }
+    },
+    "danger-soft": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.28, 0.05, 25]
+      }
+    },
+    "danger-fg": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.82, 0.11, 25]
+      }
+    },
+    "ring": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.72, 0.11, 20]
+      }
+    }
+  },
+  "font": {
+    "ui": {
+      "$type": "fontFamily",
+      "$value": ["Roboto", "Segoe UI", "system-ui", "sans-serif"]
+    }
+  }
+}

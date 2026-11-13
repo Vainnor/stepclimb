@@ -1,0 +1,25 @@
+# Labels for the GitHub repository, applied with `gh label create --force` once the owner approves
+# the GitHub setup (AGENTS.md -> Git workflow).
+- { name: "type: task", color: "1d76db", description: "PR-sized work from a spec" }
+- { name: "type: bug", color: "d73a4a", description: "Does not work as the plan or a spec says" }
+- { name: "type: regression", color: "b60205", description: "A gate green on main is now red" }
+- { name: "type: docs", color: "0075ca", description: "Docs, specs, ADRs" }
+- { name: "type: chore", color: "cfd3d7", description: "Tooling, CI, dependencies" }
+- {
+    name: "review: line-by-line",
+    color: "5319e7",
+    description: "Auth, sessions, permissions, grading, feedback visibility, billing or deletion",
+  }
+- { name: "area: server", color: "c2e0c6", description: "crates/stepclimb-server, -core" }
+- { name: "area: auth", color: "c2e0c6", description: "crates/stepclimb-auth" }
+- { name: "area: web", color: "bfd4f2", description: "web/" }
+- { name: "area: ui", color: "bfd4f2", description: "packages/ui, packages/tokens, apps/ui-docs" }
+- { name: "area: app", color: "bfd4f2", description: "apps/app (Tauri)" }
+- { name: "area: deploy", color: "fef2c0", description: "deploy/, docs-site/" }
+- { name: "area: ci", color: "fef2c0", description: "justfile, gates, hooks" }
+- {
+    name: "blocked: owner decision",
+    color: "fbca04",
+    description: "Waits on an open question or ADR",
+  }
+- { name: "dependencies", color: "0366d6", description: "Monthly dependency updates" }

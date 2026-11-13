@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Stepclimb on Docker Compose: the server, PostgreSQL 16 and MinIO (plan, Technical -> Hosting:
+# "stepclimb and postgres, with optional Caddy and MinIO").
+#
+# Local development runs only the dependencies: `just up` (postgres and minio). The full stack,
+# with the server built from deploy/Dockerfile, is `just up-stack`; the Playwright smoke test
+# runs against it (`just e2e`). The credentials below are for a local machine only.
+#
+# Images are pinned by digest. MinIO's own image is no longer on Docker Hub, so this uses
+# Chainguard's build, which publishes only `latest`: the digest is the pin
+# (docs/specs/m0/14-compose-deploy.md).
+name: stepclimb
+
+services:
+  postgres:
+    image: postgres:16.16-alpine@sha256:0adbf25a9e96d38823bb813f3ac0ed41fadb665c88f1df7fe6dbfb060cbdc106
+    environment:
+      POSTGRES_USER: stepclimb
+      POSTGRES_PASSWORD: stepclimb-local
+      POSTGRES_DB: stepclimb
+    ports:
+      - "127.0.0.1:${STEPCLIMB_PG_PORT:-55432}:5432"
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stepclimb -d stepclimb"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  minio:
+    image: cgr.dev/chainguard/minio:latest@sha256:96b6cf3e14084d3427ec46de10c2873af61b945ad9272eec266cfc8df551cba5
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: stepclimb
+      MINIO_ROOT_PASSWORD: stepclimb-local
+    ports:
+      - "127.0.0.1:${STEPCLIMB_MINIO_PORT:-59000}:9000"
+      - "127.0.0.1:${STEPCLIMB_MINIO_CONSOLE_PORT:-59001}:9001"
+    volumes:
+      - minio:/data
+
+  stepclimb:
+    profiles: ["stack"]
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile
+    image: stepclimb:local
+    environment:
+      STEPCLIMB_DATABASE_URL: postgres://stepclimb:stepclimb-local@postgres:5432/stepclimb
+      STEPCLIMB_BIND: 0.0.0.0:8080
+    ports:
+      - "127.0.0.1:${STEPCLIMB_PORT:-58080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres:
+  minio:

@@ -1,0 +1,14 @@
+* text=auto eol=lf
+*.sh text eol=lf
+.githooks/* text eol=lf
+# Generated files: collapsed in diffs, still reviewed through the gates that regenerate them.
+.sqlx/** linguist-generated=true
+openapi/*.json linguist-generated=true
+packages/api-client/src/schema.ts linguist-generated=true
+pnpm-lock.yaml linguist-generated=true
+*.png binary
+*.jpg binary
+*.woff2 binary
+*.ico binary
+*.icns binary
+*.pdf binary

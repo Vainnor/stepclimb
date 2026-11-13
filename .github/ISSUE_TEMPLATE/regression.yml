@@ -1,0 +1,34 @@
+name: Regression on main
+description: A gate that was green on main and is now red (opened by the regression checker or a person)
+labels: ["type: regression"]
+body:
+  - type: input
+    id: check
+    attributes:
+      label: Failing check
+      description: The recipe or job, e.g. just test-rust, tauri (macos-15)
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: First error line
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: First bad commit and its PR
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: unchecked
+    attributes:
+      label: Not checked

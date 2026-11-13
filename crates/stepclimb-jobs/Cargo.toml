@@ -1,0 +1,12 @@
+[package]
+name = "stepclimb-jobs"
+description = "Postgres job queue, transactional outbox, email, webhooks, push, auto-submit."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

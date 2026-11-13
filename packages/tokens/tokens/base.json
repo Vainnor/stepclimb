@@ -1,0 +1,247 @@
+{
+  "$description": "Scales shared by every theme (plan, UI tab -> Tokens). Pixel values in rem at 16px.",
+  "space": {
+    "$type": "dimension",
+    "0-5": {
+      "$value": {
+        "value": 0.125,
+        "unit": "rem"
+      }
+    },
+    "1": {
+      "$value": {
+        "value": 0.25,
+        "unit": "rem"
+      }
+    },
+    "1-5": {
+      "$value": {
+        "value": 0.375,
+        "unit": "rem"
+      }
+    },
+    "2": {
+      "$value": {
+        "value": 0.5,
+        "unit": "rem"
+      }
+    },
+    "3": {
+      "$value": {
+        "value": 0.75,
+        "unit": "rem"
+      }
+    },
+    "4": {
+      "$value": {
+        "value": 1,
+        "unit": "rem"
+      }
+    },
+    "5": {
+      "$value": {
+        "value": 1.25,
+        "unit": "rem"
+      }
+    },
+    "6": {
+      "$value": {
+        "value": 1.5,
+        "unit": "rem"
+      }
+    },
+    "8": {
+      "$value": {
+        "value": 2,
+        "unit": "rem"
+      }
+    },
+    "10": {
+      "$value": {
+        "value": 2.5,
+        "unit": "rem"
+      }
+    },
+    "14": {
+      "$value": {
+        "value": 3.5,
+        "unit": "rem"
+      }
+    },
+    "18": {
+      "$value": {
+        "value": 4.5,
+        "unit": "rem"
+      }
+    }
+  },
+  "radius": {
+    "$type": "dimension",
+    "xs": {
+      "$value": {
+        "value": 3,
+        "unit": "px"
+      }
+    },
+    "sm": {
+      "$value": {
+        "value": 5,
+        "unit": "px"
+      },
+      "$description": "Controls"
+    },
+    "md": {
+      "$value": {
+        "value": 8,
+        "unit": "px"
+      },
+      "$description": "Panels"
+    },
+    "pill": {
+      "$value": {
+        "value": 9999,
+        "unit": "px"
+      },
+      "$description": "Chips and avatars only"
+    }
+  },
+  "text": {
+    "$type": "dimension",
+    "xs": {
+      "$value": {
+        "value": 0.75,
+        "unit": "rem"
+      },
+      "$description": "12px"
+    },
+    "caption": {
+      "$value": {
+        "value": 0.8125,
+        "unit": "rem"
+      },
+      "$description": "13px"
+    },
+    "sm": {
+      "$value": {
+        "value": 0.875,
+        "unit": "rem"
+      },
+      "$description": "14px"
+    },
+    "base": {
+      "$value": {
+        "value": 1,
+        "unit": "rem"
+      },
+      "$description": "16px"
+    },
+    "lg": {
+      "$value": {
+        "value": 1.125,
+        "unit": "rem"
+      },
+      "$description": "18px"
+    },
+    "xl": {
+      "$value": {
+        "value": 1.25,
+        "unit": "rem"
+      },
+      "$description": "20px"
+    },
+    "2xl": {
+      "$value": {
+        "value": 1.5,
+        "unit": "rem"
+      },
+      "$description": "24px"
+    },
+    "3xl": {
+      "$value": {
+        "value": 1.875,
+        "unit": "rem"
+      },
+      "$description": "30px"
+    },
+    "4xl": {
+      "$value": {
+        "value": 2.375,
+        "unit": "rem"
+      },
+      "$description": "38px"
+    }
+  },
+  "weight": {
+    "$type": "fontWeight",
+    "body": {
+      "$value": 400
+    },
+    "control": {
+      "$value": 500
+    },
+    "heading": {
+      "$value": 700
+    }
+  },
+  "control": {
+    "$type": "dimension",
+    "h": {
+      "$value": {
+        "value": 2.5,
+        "unit": "rem"
+      },
+      "$description": "Comfortable density: 40px"
+    },
+    "h-sm": {
+      "$value": {
+        "value": 2,
+        "unit": "rem"
+      },
+      "$description": "Comfortable density: 32px"
+    },
+    "touch": {
+      "$value": {
+        "value": 2.75,
+        "unit": "rem"
+      },
+      "$description": "Minimum on touch: 44px"
+    }
+  },
+  "motion": {
+    "$type": "duration",
+    "fast": {
+      "$value": {
+        "value": 120,
+        "unit": "ms"
+      }
+    },
+    "base": {
+      "$value": {
+        "value": 180,
+        "unit": "ms"
+      }
+    },
+    "slow": {
+      "$value": {
+        "value": 320,
+        "unit": "ms"
+      }
+    }
+  },
+  "ease": {
+    "$type": "cubicBezier",
+    "out-expo": {
+      "$value": [0.16, 1, 0.3, 1],
+      "$description": "Exponential ease-out (easings.net easeOutExpo)"
+    }
+  },
+  "font": {
+    "$type": "fontFamily",
+    "read": {
+      "$value": ["Source Serif 4", "Georgia", "Times New Roman", "serif"]
+    },
+    "mono": {
+      "$value": ["Atkinson Hyperlegible Mono", "ui-monospace", "Menlo", "Consolas", "monospace"]
+    }
+  }
+}

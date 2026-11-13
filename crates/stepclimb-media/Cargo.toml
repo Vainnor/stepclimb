@@ -1,0 +1,12 @@
+[package]
+name = "stepclimb-media"
+description = "tus uploads, ffmpeg transcode to HLS/MP4, posters, captions, signed delivery."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

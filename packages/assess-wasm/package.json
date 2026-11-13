@@ -1,0 +1,6 @@
+{
+  "name": "@stepclimb/assess-wasm",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "description": "Placeholder: stepclimb-assess compiled to WebAssembly for authoring previews and ungraded practice (M2)."
+}

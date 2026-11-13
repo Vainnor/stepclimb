@@ -1,0 +1,186 @@
+{
+  "$description": "Theme default-light: every color token, and the UI font. Values from the plan's UI tab.",
+  "color": {
+    "bg-canvas": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.985, 0.004, 195]
+      }
+    },
+    "bg-raised": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [1, 0, 0]
+      }
+    },
+    "bg-sunken": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.955, 0.007, 195]
+      }
+    },
+    "fg-strong": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.22, 0.014, 195]
+      }
+    },
+    "fg-default": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.31, 0.013, 195]
+      }
+    },
+    "fg-sub": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.46, 0.012, 195]
+      }
+    },
+    "fg-soft": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.55, 0.01, 195]
+      }
+    },
+    "line-strong": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.78, 0.012, 195]
+      }
+    },
+    "line": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.885, 0.009, 195]
+      }
+    },
+    "line-soft": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.93, 0.006, 195]
+      }
+    },
+    "brand": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.5, 0.09, 195]
+      }
+    },
+    "brand-hover": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.45, 0.09, 195]
+      }
+    },
+    "brand-soft": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.95, 0.025, 195]
+      }
+    },
+    "brand-fg": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.4, 0.08, 195]
+      }
+    },
+    "on-brand": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.99, 0.005, 195]
+      }
+    },
+    "success": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.55, 0.12, 150]
+      }
+    },
+    "success-soft": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.95, 0.03, 150]
+      }
+    },
+    "success-fg": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.42, 0.1, 150]
+      }
+    },
+    "warning": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.72, 0.14, 75]
+      }
+    },
+    "warning-soft": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.96, 0.04, 85]
+      }
+    },
+    "warning-fg": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.47, 0.1, 65]
+      }
+    },
+    "danger": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.55, 0.18, 27]
+      }
+    },
+    "danger-soft": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.95, 0.03, 25]
+      }
+    },
+    "danger-fg": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.47, 0.16, 27]
+      }
+    },
+    "ring": {
+      "$type": "color",
+      "$value": {
+        "colorSpace": "oklch",
+        "components": [0.5, 0.09, 195]
+      }
+    }
+  },
+  "font": {
+    "ui": {
+      "$type": "fontFamily",
+      "$value": ["Atkinson Hyperlegible Next", "Segoe UI", "system-ui", "sans-serif"]
+    }
+  }
+}

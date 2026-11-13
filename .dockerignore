@@ -1,0 +1,15 @@
+target
+**/target
+node_modules
+**/node_modules
+web/dist
+apps/ui-docs/storybook-static
+packages/tokens/build
+.git
+.env
+.env.*
+references
+private
+.claude
+.codex
+.direnv

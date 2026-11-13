@@ -1,0 +1,39 @@
+name: Spec task
+description: One PR-sized piece of work from a spec in docs/specs/
+labels: ["type: task"]
+body:
+  - type: input
+    id: spec
+    attributes:
+      label: Spec
+      description: The spec file and issue id, e.g. docs/specs/m0/08-sessions-and-csrf.md I2
+    validations:
+      required: true
+  - type: textarea
+    id: deliverable
+    attributes:
+      label: Deliverable
+      description: What the pull request delivers, in one or two sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: covers
+    attributes:
+      label: Behaviors and tests
+      description: The behaviors (B) and test cases (T) from the spec this covers.
+    validations:
+      required: true
+  - type: input
+    id: depends
+    attributes:
+      label: Depends on
+      description: Issues that must be merged first, e.g. #12, #14
+  - type: dropdown
+    id: review
+    attributes:
+      label: Review
+      options:
+        - standard
+        - maintainer line-by-line (auth, sessions, permissions, grading, feedback visibility, billing, deletion)
+    validations:
+      required: true

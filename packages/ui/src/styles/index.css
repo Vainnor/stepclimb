@@ -1,0 +1,9 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* Stepclimb UI's styles: Tailwind 4 with the token theme. Apps import this one file. */
+@import "tailwindcss";
+@import "@stepclimb/tokens/variables.css";
+@import "@stepclimb/tokens/tailwind-theme.css";
+@import "./base.css";
+
+/* Scan the library's own sources, wherever the importing app lives. */
+@source "../";
