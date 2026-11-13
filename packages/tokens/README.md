@@ -29,7 +29,16 @@ any other token described in both places.
 
 `pnpm --filter @stepclimb/tokens build` (part of `just web-build`); `pnpm --filter
 @stepclimb/tokens test` checks the output. The values are the plan's (UI tab) and those decided in
-`docs/specs/m0/12-tokens-and-theme-generator.md`. The theme generator (`src/generate.ts`: brand
-color to light, dark and high-contrast palettes) is not built yet; see that spec.
+`docs/specs/m0/12-tokens-and-theme-generator.md`.
+
+The theme generator, `src/generate.ts` with its color math in `src/color.ts`, takes an
+organization's primary color (hex or `oklch()`) and UI font and returns a theme: every color token
+and `font.ui`, written as DTCG JSON (`themeToDtcg`, the shape of `themes/*.json`) or as one CSS
+rule with `variables.css`'s names (`themeToCss`). It builds 12-step OKLCH brand and neutral scales
+at the brand's hue, gamut-maps every color into sRGB (CSS Color 4) and picks `brand`, `brand-fg`
+and `ring` by WCAG contrast. The default brand's input, `oklch(0.5 0.09 195)`, reproduces
+`default-light.json`. It has no DOM or Node dependency (`tsconfig.generate.json`, part of
+`typecheck`). Only the light appearance is generated so far, and the build does not use it yet;
+dark and high contrast, the contrast report and the build wiring are the spec's I3 to I5.
 
 This package stays in the repository and is never published (`docs/adr/`).
