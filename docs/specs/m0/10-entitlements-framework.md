@@ -34,15 +34,13 @@ only bites on managed hosting (M6); self-hosted gets everything, which fits the 
   `feature::TestSeal` so a test crate can define a feature outside `ALL` (B4) (coordinator
   decision, 13 Nov 2026). Plan tiers (which plan includes which feature) are
   deferred to M6 (`docs/plan/technical.md` -> Deferred decisions) and are not decided here.
-- **B1a. Key format. Coordinator decision (2026-11-13), for the owner's sign-off before issue 3
-  exposes the keys in the API.** Feature and limit keys are one lowercase snake case word
-  (`^[a-z][a-z0-9_]*$`: `custom_roles`, `users`), not the `area.action` format that
+- **B1a. Key format. Decided by the owner (2026-11-13).** Feature and limit keys are one
+  lowercase snake case word (`^[a-z][a-z0-9_]*$`: `custom_roles`, `users`), not the `area.action` format that
   `09-permissions-and-roles.md` Q1 chose for permission keys. Permission keys name an action on
   an area; a feature or limit names one thing, and this spec already writes the limit keys
   (`users`, `video_storage`) and Q1's feature names as single words, as the API example below
   shows them. The rule is Q1's for each part (lowercase snake case starting with a letter),
-  without the dot. Once issue 3 publishes the keys in `GET /api/v1/organization/entitlements`
-  and `/me` they are hard to change, so the owner confirms or overrules this before then.
+  without the dot.
 - **B2.** Every limit is a variant of `stepclimb_core::feature::Limit` with a stable key. The
   plan names the limits: `users`, `storage`, `video_storage`, `transcode_minutes`, `api_rate` and
   `connectors`. M0 adds only `Limit::Users`, because user creation is the only M0 action one
