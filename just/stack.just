@@ -15,3 +15,7 @@ up-stack:
 # Playwright smoke test against the Compose stack (rebuilds the server image)
 e2e: up-stack
     pnpm --filter web e2e
+
+# Boot the production Compose example with generated secrets on :58180 and check it, then remove it
+compose-check:
+    bash bin/check-production-compose.sh
