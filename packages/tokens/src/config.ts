@@ -33,7 +33,11 @@ const osDark = ':not([data-sc-theme="light"]):not([data-sc-theme="high-contrast"
  */
 const themed = ["color.*", "font.ui"];
 
-/** One brand's light, dark (by attribute, then by OS setting) and high-contrast permutations. */
+/**
+ * One brand's light, dark (by attribute, then by OS setting) and high-contrast permutations.
+ * A brand's selectors compound `data-sc-brand` with `data-sc-theme`, so both attributes must be
+ * on the same element; a `data-sc-theme` alone on an inner element selects the default brand.
+ */
 function brandPermutations(brand: string, attr: string) {
   const light = attr ? [attr, `${attr}[data-sc-theme="light"]`] : ['[data-sc-theme="light"]'];
   return [

@@ -6,7 +6,9 @@ Stepclimb UI's design tokens: W3C design-token (DTCG 2025.10) JSON in `src/token
 - `build/css/variables.css`: every theme as `--sc-*` CSS variables. The default brand is on
   `:root` and `[data-sc-theme="light"]`, dark mode follows `[data-sc-theme="dark"]` and then
   `prefers-color-scheme`, high contrast is `[data-sc-theme="high-contrast"]`, and the vZDC
-  example brand is on `[data-sc-brand="vzdc"]`. `[data-sc-density="compact"]` on any element
+  example brand is on `[data-sc-brand="vzdc"]`. A brand's dark and high-contrast themes match only
+  when `data-sc-brand` and `data-sc-theme` sit on the same element: a `data-sc-theme` on an inner
+  element without `data-sc-brand` gets the default brand's theme. `[data-sc-density="compact"]` on any element
   sets the compact control heights for that element and its children.
 - `build/css/tailwind-theme.css`: Tailwind 4's `@theme inline` mapped onto those variables, with
   Tailwind's own palette removed.
