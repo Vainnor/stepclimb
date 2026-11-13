@@ -40,6 +40,9 @@ pub enum Error {
     /// The name is longer than [`MAX_NAME_CHARS`] once trimmed.
     #[error("an organization name is longer than {MAX_NAME_CHARS} characters")]
     NameTooLong,
+    /// The name holds NUL, which PostgreSQL `text` cannot store.
+    #[error("an organization name cannot contain the NUL character")]
+    NameContainsNul,
     /// The stored settings object does not parse as [`OrgSettings`].
     #[error("the stored organization settings do not parse")]
     StoredSettings(#[source] serde_json::Error),
@@ -151,6 +154,9 @@ pub async fn count(db: impl PgExecutor<'_>) -> Result<i64, Error> {
 }
 
 fn valid_name(name: &str) -> Result<&str, Error> {
+    if name.contains('\0') {
+        return Err(Error::NameContainsNul);
+    }
     let name = name.trim();
     if name.is_empty() {
         return Err(Error::NameEmpty);
@@ -182,6 +188,14 @@ mod tests {
                 "{name:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_name_with_nul_is_refused() {
+        assert!(matches!(
+            valid_name("Tower\0Cab"),
+            Err(Error::NameContainsNul)
+        ));
     }
 
     #[test]

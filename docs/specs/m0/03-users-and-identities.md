@@ -28,11 +28,17 @@ these rows are in `04` to `07`.
 - **B2.** A user has `display_name` (required, trimmed, not empty), `given_name` and
   `family_name` (required columns, may be empty strings: some providers send neither), `email`
   (optional), `locale`, `tz`, `profile` (a JSON object; M0 defines no profile fields) and
-  `status`. Length limits are pending `02-organizations-and-accounts.md` Q6.
+  `status`. Length limits are pending `02-organizations-and-accounts.md` Q6. Every string field,
+  and the list's `q` and cursor (B10), refuses the NUL character, which PostgreSQL `text` cannot
+  store; `email` also refuses control characters and Unicode format characters (general category
+  Cf, such as U+200B) (B12). The repository refuses them with typed errors; issue 3 maps them to
+  the API's validation errors.
 - **B3.** `locale` defaults to `en`: Stepclimb is English-only at 1.0 with every string through
   ICU messages (`docs/plan/technical.md` -> Decided). Any other value is refused in M0 (422,
-  `errors[].code = "user.locale_unsupported"`). The default `tz` and how it is validated are
-  pending Q4.
+  `errors[].code = "user.locale_unsupported"`). A user created without a `tz` gets the
+  organization's default time zone, an `OrgSettings` key that itself defaults to `UTC`, and every
+  `tz` is validated as an IANA time zone with `jiff` (Q4). The column has no default; the caller
+  resolves the setting before inserting.
 - **B4.** Every user records its `source`: `local`, `idp` (identity provider), `sync` (sync API),
   `scim` or `connector`, with an optional `external_id`. The plan names these five sources
   (Identity and access -> Provisioning); the stored spellings are this spec's. A user created by
@@ -63,9 +69,12 @@ these rows are in `04` to `07`.
   `display_name` or `email`).
 - **B11.** Users are not deleted in M0. Per-user export and deletion are M4
   (`docs/plan/technical.md` -> Milestones).
-- **B12.** Whether `email` is unique within an organization, and case-insensitively, is pending
-  Q1. Until Q1 is decided, `email` is stored as given (trimmed) and not unique, and nothing in M0
-  looks a user up by email except `04-local-accounts.md`, which depends on Q1.
+- **B12.** `email` is unique within an organization, compared case-insensitively (Q1): two
+  users of one organization cannot have addresses equal under `lower()`, while two organizations
+  may each have a user with the same address. It is stored as given (trimmed), keeping its case,
+  and is refused if it holds a NUL, a control character or a Unicode format character (B2), so
+  an invisible character cannot make a second address that looks like the first.
+  Nothing in M0 looks a user up by email except `04-local-accounts.md`.
 
 ### Identity providers and identities
 
@@ -190,7 +199,7 @@ CREATE TABLE users (
     status        text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended')),
     profile       jsonb       NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(profile) = 'object'),
     locale        text        NOT NULL DEFAULT 'en',
-    tz            text        NOT NULL,                    -- default pending Q4
+    tz            text        NOT NULL,                    -- no default: the org setting (Q4)
     created_at    timestamptz NOT NULL DEFAULT now(),
     updated_at    timestamptz NOT NULL DEFAULT now(),
     UNIQUE (org_id, id),
@@ -199,7 +208,7 @@ CREATE TABLE users (
 );
 CREATE UNIQUE INDEX users_external_id ON users (org_id, external_id) WHERE external_id IS NOT NULL;
 CREATE INDEX users_by_name ON users (org_id, display_name, id);
--- the email index (unique or not, lower() or not) comes with Q1
+CREATE UNIQUE INDEX users_email ON users (org_id, lower(email)) WHERE email IS NOT NULL;  -- Q1
 ```
 
 Migration `migrations/<timestamp>_identities.sql`:
@@ -375,16 +384,19 @@ overrule one, which then updates this spec.
 
 1. **Users table and repository.** Deliver `migrations/<timestamp>_users.sql`, the shared
    `Source` enum and `stepclimb_core::users` (`get`, `list`, `create`, `update`, `set_status`,
-   `count_for_limit`) with `#[sqlx::test]` tests. Covers B1 to B8, B12 (no unique index), T1, T3,
-   T4 (database part), T8. Depends on: `02-organizations-and-accounts.md` issue 2. The `tz`
-   default waits for Q4; the migration lands with Q4's answer.
+   `count_for_limit`) with `#[sqlx::test]` tests. Covers B1 to B8, B12 (the unique `lower(email)`
+   index, Q1), T1, T3, T4 (database part), T8. Depends on: `02-organizations-and-accounts.md`
+   issue 2. The `tz` column has no default (Q4 makes the default an organization setting); that
+   setting and the validation of `tz` come with issue 3.
 2. **Identity providers and identities.** Deliver `migrations/<timestamp>_identities.sql` and
    `stepclimb_core::{identity_providers, identities}` (`find_user`, `link`, `unlink`,
    `list_for_user`, `update_attributes`, `get_by_key`, `list_enabled`). Covers B13 to B16, T11 to
    T13. Depends on: issue 1.
 3. **User admin routes.** Deliver `GET`/`POST /api/v1/users`, `GET`/`PATCH
    /api/v1/users/{user_id}` with the external-source and self-suspension guards and the users
-   limit check. Covers B6, B7, B9, B10, T2, T4, T5, T7, T9, T10, T19, T20 (users part). Depends on:
+   limit check, and the `OrgSettings` time zone key (default `UTC`) with `tz` validation through
+   `jiff` (Q4). Covers B3 (the `tz` default and validation), B6, B7, B9, B10, T2, T4, T5, T7, T9,
+   T10, T19, T20 (users part). Depends on:
    issue 1; `09-permissions-and-roles.md` issue 4; `10-entitlements-framework.md` issue 2.
 4. **Identity admin routes and `/me/identities`.** Deliver the three
    `/api/v1/users/{user_id}/identities` routes and `GET`/`DELETE /api/v1/me/identities`. Covers

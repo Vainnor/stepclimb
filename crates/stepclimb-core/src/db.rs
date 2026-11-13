@@ -28,6 +28,15 @@ pub(crate) fn epoch_micros(time: SystemTime) -> Result<i64, TimeOutOfRange> {
     i64::try_from(since.as_micros()).map_err(|_| TimeOutOfRange)
 }
 
+/// The time `micros` microseconds after the Unix epoch, for reading a `timestamptz` selected as
+/// `(extract(epoch FROM column) * 1000000)::bigint`. The inverse of [`epoch_micros`].
+pub(crate) fn from_epoch_micros(micros: i64) -> Result<SystemTime, TimeOutOfRange> {
+    let micros = u64::try_from(micros).map_err(|_| TimeOutOfRange)?;
+    UNIX_EPOCH
+        .checked_add(std::time::Duration::from_micros(micros))
+        .ok_or(TimeOutOfRange)
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -39,6 +48,21 @@ mod tests {
         let time = UNIX_EPOCH + Duration::new(1_763_000_000, 123_456_789);
         assert_eq!(epoch_micros(time).unwrap(), 1_763_000_000_123_456);
         assert_eq!(epoch_micros(UNIX_EPOCH).unwrap(), 0);
+    }
+
+    #[test]
+    fn microseconds_convert_back_to_the_same_time() {
+        let time = UNIX_EPOCH + Duration::from_micros(1_763_000_000_123_456);
+        assert_eq!(
+            from_epoch_micros(epoch_micros(time).unwrap()).unwrap(),
+            time
+        );
+        assert_eq!(from_epoch_micros(0).unwrap(), UNIX_EPOCH);
+    }
+
+    #[test]
+    fn a_negative_microsecond_count_is_refused() {
+        assert!(from_epoch_micros(-1).is_err());
     }
 
     #[test]
