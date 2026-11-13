@@ -381,6 +381,189 @@
         }
       }
     },
+    "/api/v1/organization": {
+      "get": {
+        "tags": [
+          "organization"
+        ],
+        "summary": "Read the caller's organization.",
+        "operationId": "getOrganization",
+        "responses": {
+          "200": {
+            "description": "The caller's organization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Organization"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "organization"
+        ],
+        "summary": "Rename the caller's organization. A patch without `name` changes nothing.",
+        "operationId": "updateOrganization",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The organization after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Organization"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/OrgWriteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/organization/settings": {
+      "get": {
+        "tags": [
+          "organization"
+        ],
+        "summary": "Read the organization settings, every key with its effective value.",
+        "operationId": "getOrganizationSettings",
+        "responses": {
+          "200": {
+            "description": "Every setting with its effective value",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/PermissionDenied"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "organization"
+        ],
+        "summary": "Change the settings the patch names; the others keep their value. A patch naming no setting\nwrites nothing.",
+        "operationId": "updateOrganizationSettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrgSettingsPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Every setting after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgSettings"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/OrgWriteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/SettingsInvalid"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/auth/sign-out": {
       "post": {
         "tags": [
@@ -552,7 +735,7 @@
             "description": "Each scope where the caller holds at least one effective permission, with those\npermissions sorted. Always empty until the server computes grants for this route."
           },
           "organization": {
-            "$ref": "#/components/schemas/MeOrganization"
+            "$ref": "#/components/schemas/Organization"
           },
           "user": {
             "$ref": "#/components/schemas/MeUser"
@@ -576,27 +759,6 @@
           },
           "scope": {
             "$ref": "#/components/schemas/GrantScope"
-          }
-        }
-      },
-      "MeOrganization": {
-        "type": "object",
-        "description": "The signed-in user's organization.",
-        "required": [
-          "id",
-          "slug",
-          "name"
-        ],
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "name": {
-            "type": "string"
-          },
-          "slug": {
-            "type": "string"
           }
         }
       },
@@ -675,6 +837,48 @@
               "type": "string"
             },
             "description": "Catalog keys (`GET /api/v1/admin/permissions`), each at most once and each held by the\ncaller at organization scope."
+          }
+        },
+        "additionalProperties": false
+      },
+      "OrgSettings": {
+        "type": "object",
+        "description": "Every organization setting with its effective value: the stored one, or the setting's\ndefault when none is stored."
+      },
+      "OrgSettingsPatch": {
+        "type": "object",
+        "description": "A partial change to the organization settings: one optional member per setting; only the\nmembers present change. A member that is no setting is refused.",
+        "additionalProperties": false
+      },
+      "Organization": {
+        "type": "object",
+        "description": "The caller's organization.",
+        "required": [
+          "id",
+          "slug",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string",
+            "description": "Fixed when the organization is created."
+          }
+        }
+      },
+      "OrganizationPatch": {
+        "type": "object",
+        "description": "A change to the organization; an omitted member is left as it is. A member sent as `null`\nis malformed: omit it instead.",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Trimmed; 1 to 200 characters."
           }
         },
         "additionalProperties": false
@@ -1005,6 +1209,16 @@
           }
         }
       },
+      "OrgWriteForbidden": {
+        "description": "`permission.denied`: the caller does not hold `organization.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "OrganizationNotFound": {
         "description": "`org.not_found`: the request's organization cannot be determined.",
         "content": {
@@ -1065,6 +1279,16 @@
       },
       "RouteNotFound": {
         "description": "`request.not_found`: no API operation has this path.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "SettingsInvalid": {
+        "description": "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -1137,6 +1361,10 @@
     {
       "name": "me",
       "description": "The signed-in user"
+    },
+    {
+      "name": "organization",
+      "description": "The caller's organization and its settings"
     },
     {
       "name": "roles",

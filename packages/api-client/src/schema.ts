@@ -73,6 +73,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/organization": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the caller's organization. */
+        get: operations["getOrganization"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Rename the caller's organization. A patch without `name` changes nothing. */
+        patch: operations["updateOrganization"];
+        trace?: never;
+    };
+    "/api/v1/organization/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the organization settings, every key with its effective value. */
+        get: operations["getOrganizationSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change the settings the patch names; the others keep their value. A patch naming no setting
+         *     writes nothing.
+         */
+        patch: operations["updateOrganizationSettings"];
+        trace?: never;
+    };
     "/auth/sign-out": {
         parameters: {
             query?: never;
@@ -166,7 +205,7 @@ export interface components {
              *     permissions sorted. Always empty until the server computes grants for this route.
              */
             grants: components["schemas"]["MeGrant"][];
-            organization: components["schemas"]["MeOrganization"];
+            organization: components["schemas"]["Organization"];
             user: components["schemas"]["MeUser"];
         };
         /** @description The permissions the caller holds at one scope. */
@@ -174,13 +213,6 @@ export interface components {
             /** @description Catalog keys, sorted. */
             permissions: string[];
             scope: components["schemas"]["GrantScope"];
-        };
-        /** @description The signed-in user's organization. */
-        MeOrganization: {
-            /** Format: uuid */
-            id: string;
-            name: string;
-            slug: string;
         };
         /** @description The signed-in user. */
         MeUser: {
@@ -213,6 +245,32 @@ export interface components {
              *     caller at organization scope.
              */
             permissions: string[];
+        };
+        /**
+         * @description Every organization setting with its effective value: the stored one, or the setting's
+         *     default when none is stored.
+         */
+        OrgSettings: Record<string, never>;
+        /**
+         * @description A partial change to the organization settings: one optional member per setting; only the
+         *     members present change. A member that is no setting is refused.
+         */
+        OrgSettingsPatch: Record<string, never>;
+        /** @description The caller's organization. */
+        Organization: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @description Fixed when the organization is created. */
+            slug: string;
+        };
+        /**
+         * @description A change to the organization; an omitted member is left as it is. A member sent as `null`
+         *     is malformed: omit it instead.
+         */
+        OrganizationPatch: {
+            /** @description Trimmed; 1 to 200 characters. */
+            name?: string;
         };
         /** @description One page of a list. */
         Page_Role: {
@@ -396,6 +454,15 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `permission.denied`: the caller does not hold `organization.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site. */
+        OrgWriteForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `org.not_found`: the request's organization cannot be determined. */
         OrganizationNotFound: {
             headers: {
@@ -445,6 +512,15 @@ export interface components {
         };
         /** @description `request.not_found`: no API operation has this path. */
         RouteNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting. */
+        SettingsInvalid: {
             headers: {
                 [name: string]: unknown;
             };
@@ -711,6 +787,121 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             404: components["responses"]["OrganizationNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    getOrganization: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's organization */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Organization"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["OrganizationNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    updateOrganization: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationPatch"];
+            };
+        };
+        responses: {
+            /** @description The organization after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Organization"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["OrgWriteForbidden"];
+            404: components["responses"]["OrganizationNotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["UnprocessableEntity"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    getOrganizationSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every setting with its effective value */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgSettings"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["PermissionDenied"];
+            404: components["responses"]["OrganizationNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    updateOrganizationSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrgSettingsPatch"];
+            };
+        };
+        responses: {
+            /** @description Every setting after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["OrgWriteForbidden"];
+            404: components["responses"]["OrganizationNotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["SettingsInvalid"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };

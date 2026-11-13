@@ -83,6 +83,22 @@ const TABLE: &[Entry] = &[
         access: Access::AuthOnly(at_org),
     },
     Entry {
+        operation_id: "getOrganization",
+        access: Access::AuthOnly(at_org),
+    },
+    Entry {
+        operation_id: "updateOrganization",
+        access: permission(OrgManage::KEY, Target::Org, rename_organization),
+    },
+    Entry {
+        operation_id: "getOrganizationSettings",
+        access: permission(OrgManage::KEY, Target::Org, at_org),
+    },
+    Entry {
+        operation_id: "updateOrganizationSettings",
+        access: permission(OrgManage::KEY, Target::Org, empty_settings_patch),
+    },
+    Entry {
         operation_id: "listPermissions",
         access: permission(RoleView::KEY, Target::AnyScope, at_org),
     },
@@ -107,6 +123,28 @@ const TABLE: &[Entry] = &[
         access: permission(RoleManage::KEY, ROLE_NOT_FOUND, custom_role_in_path),
     },
 ];
+
+/// A new name for the caller's organization.
+fn rename_organization(_: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: Vec::new(),
+            body: Some(serde_json::json!({ "name": "Renamed organization" })),
+            at: At::Org,
+        }
+    })
+}
+
+/// A settings patch naming no key, the only valid one while no setting exists.
+fn empty_settings_patch(_: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: Vec::new(),
+            body: Some(serde_json::json!({})),
+            at: At::Org,
+        }
+    })
+}
 
 /// A role that is not the organization's: 404 `role.not_found`. Roles are organization-wide,
 /// so a role route's scope is the organization and it has no wrong-account 404 case.
