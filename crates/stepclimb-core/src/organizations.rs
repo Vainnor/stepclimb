@@ -235,8 +235,7 @@ pub async fn update_settings<'c>(
     Ok(settings)
 }
 
-/// How many organizations the instance has, for the request-organization resolver of
-/// unauthenticated routes (spec 02 B11).
+/// How many organizations the instance has.
 pub async fn count(db: impl PgExecutor<'_>) -> Result<i64, Error> {
     // Instance-wide on purpose, so it takes no `OrgScope`: the resolver needs the count to
     // decide which organization, if any, a request without a credential belongs to. It returns
@@ -245,6 +244,33 @@ pub async fn count(db: impl PgExecutor<'_>) -> Result<i64, Error> {
         .fetch_one(db)
         .await?;
     Ok(count)
+}
+
+/// How many organizations the instance has, as the request-organization resolver needs to
+/// know it (spec 02 B11, spec 08 B5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tenancy {
+    /// No organization yet (a fresh install).
+    Empty,
+    /// Exactly one organization, which every request belongs to.
+    Single(Uuid),
+    /// Two or more.
+    Multiple,
+}
+
+/// Whether the instance has no organization, exactly one (and which), or several.
+pub async fn tenancy(db: impl PgExecutor<'_>) -> Result<Tenancy, Error> {
+    // Instance-wide on purpose, so it takes no `OrgScope`: this decides which organization a
+    // request belongs to before any scope exists. It returns an id only when the instance has
+    // exactly one organization, which is then every request's organization.
+    let ids = sqlx::query_scalar!("SELECT id FROM organizations ORDER BY id LIMIT 2")
+        .fetch_all(db)
+        .await?;
+    Ok(match ids.as_slice() {
+        [] => Tenancy::Empty,
+        [only] => Tenancy::Single(*only),
+        _ => Tenancy::Multiple,
+    })
 }
 
 fn valid_name(name: &str) -> Result<&str, Error> {

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE sessions s\n           SET last_seen_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond',\n               updated_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond'\n           FROM users u\n           WHERE u.id = s.user_id AND u.org_id = $1 AND s.id = $2\n             AND s.last_seen_at < timestamptz 'epoch' + $3::bigint * interval '1 microsecond'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4e50cabfce6deb3db169c8545113cc9db5b9c092bb40ce59b957f7e0a8570d95"
+}
