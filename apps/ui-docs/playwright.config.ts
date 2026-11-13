@@ -25,14 +25,17 @@ export default defineConfig({
     baseURL: `http://127.0.0.1:${port}`,
     trace: "retain-on-failure",
   },
+  // A test tagged @phone runs only in the 375 px project, one tagged @desktop only at 1280 px.
   projects: [
     {
       name: "1280",
+      grepInvert: /@phone/,
       use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 800 } },
     },
     {
       // A phone: 375 px wide with touch, so `pointer: coarse` matches as it does on a device.
       name: "375",
+      grepInvert: /@desktop/,
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 375, height: 812 },

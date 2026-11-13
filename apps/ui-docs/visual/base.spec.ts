@@ -48,9 +48,7 @@ function smallTargets(page: Page): Promise<string[]> {
   }, INTERACTIVE);
 }
 
-test.describe("on a phone (375 px, coarse pointer)", () => {
-  test.beforeEach(() => test.skip(test.info().project.name !== "375", "touch runs at 375 px"));
-
+test.describe("on a phone (375 px, coarse pointer) @phone", () => {
   for (const s of all) {
     test(`T4: ${s.title} / ${s.name} has targets of at least 44 px`, async ({ page }) => {
       await openStory(page, s, "light");
@@ -70,9 +68,7 @@ test.describe("on a phone (375 px, coarse pointer)", () => {
   });
 });
 
-test.describe("at 1280 px", () => {
-  test.beforeEach(() => test.skip(test.info().project.name !== "1280", "runs once"));
-
+test.describe("at 1280 px @desktop", () => {
   test.describe("with reduced motion", () => {
     test.use({ reducedMotion: "reduce" });
     for (const s of all) {

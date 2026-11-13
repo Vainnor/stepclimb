@@ -7,5 +7,9 @@ copied from that source. The PR that adapts the code adds the row.
 
 None has been adapted yet: `Button` is the plan's own convention example.
 
+Packages installed as dependencies are not adapted code and are not listed: their license travels
+with the package in `node_modules`. Stepclimb UI's are `@phosphor-icons/react` (MIT), drawn
+through `Icon`, and the `@fontsource` fonts the apps load (OFL-1.1).
+
 | File | Adapted from (URL) | License | Notice |
 | --- | --- | --- | --- |

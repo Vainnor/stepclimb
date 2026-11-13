@@ -76,6 +76,122 @@
   }
 }
 
+/* Prose content (the Prose component sets the reading face, size, line height and measure): the
+   elements of server-sanitized HTML, which carry no classes. Mono is for code only. */
+@layer base {
+  [data-slot="prose"] > * + * {
+    margin-block-start: 1em;
+  }
+  [data-slot="prose"] :is(h1, h2, h3, h4, h5, h6) {
+    font-family: var(--sc-font-ui);
+    font-weight: var(--sc-weight-heading);
+    color: var(--sc-fg-strong);
+    line-height: 1.25;
+    text-wrap: balance;
+  }
+  [data-slot="prose"] > :is(h1, h2, h3, h4, h5, h6):not(:first-child) {
+    margin-block-start: 1.6em;
+  }
+  [data-slot="prose"] h1 {
+    font-size: var(--sc-text-3xl);
+  }
+  [data-slot="prose"] h2 {
+    font-size: var(--sc-text-2xl);
+  }
+  [data-slot="prose"] h3 {
+    font-size: var(--sc-text-xl);
+  }
+  [data-slot="prose"] :is(h4, h5, h6) {
+    font-size: var(--sc-text-lg);
+  }
+  [data-slot="prose"] :is(h1, h2, h3, h4, h5, h6) + * {
+    margin-block-start: 0.5em;
+  }
+  [data-slot="prose"] strong {
+    font-weight: var(--sc-weight-heading);
+    color: var(--sc-fg-strong);
+  }
+  [data-slot="prose"] a {
+    color: var(--sc-brand-fg);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  [data-slot="prose"] a:hover {
+    text-decoration-thickness: 2px;
+  }
+  [data-slot="prose"] :is(ul, ol) {
+    padding-inline-start: 1.5em;
+  }
+  [data-slot="prose"] ul {
+    list-style-type: disc;
+  }
+  [data-slot="prose"] ol {
+    list-style-type: decimal;
+  }
+  [data-slot="prose"] li + li {
+    margin-block-start: 0.25em;
+  }
+  [data-slot="prose"] li::marker {
+    color: var(--sc-fg-sub);
+  }
+  [data-slot="prose"] blockquote {
+    padding-inline-start: 1.5em;
+    color: var(--sc-fg-sub);
+    font-style: italic;
+  }
+  [data-slot="prose"] code {
+    font-family: var(--sc-font-mono);
+    font-size: 0.875em;
+    background: var(--sc-bg-sunken);
+    border-radius: var(--sc-radius-xs);
+    padding: 0.1em 0.3em;
+  }
+  [data-slot="prose"] pre {
+    overflow-x: auto;
+    background: var(--sc-bg-sunken);
+    border: 1px solid var(--sc-line);
+    border-radius: var(--sc-radius-md);
+    padding: 1em;
+    line-height: 1.5;
+  }
+  [data-slot="prose"] pre code {
+    background: none;
+    padding: 0;
+  }
+  [data-slot="prose"] hr {
+    border: 0;
+    block-size: 1px;
+    background: var(--sc-line);
+    margin-block: 2em;
+  }
+  [data-slot="prose"] :is(img, video) {
+    max-inline-size: 100%;
+    block-size: auto;
+  }
+  /* A wide table scrolls on its own instead of widening the page. */
+  [data-slot="prose"] table {
+    display: block;
+    max-inline-size: 100%;
+    overflow-x: auto;
+    border-collapse: collapse;
+    font-size: var(--sc-text-base);
+    line-height: 1.5;
+  }
+  [data-slot="prose"] :is(th, td) {
+    padding-block: 0.5em;
+    padding-inline: 0.75em;
+    border-block-end: 1px solid var(--sc-line-soft);
+    text-align: start;
+    vertical-align: top;
+  }
+  [data-slot="prose"] th {
+    font-family: var(--sc-font-ui);
+    font-weight: var(--sc-weight-control);
+    color: var(--sc-fg-strong);
+    border-block-end-color: var(--sc-line);
+  }
+}
+
 /* Touch (B9): targets at least `--sc-control-touch` (44 px) and text inputs at 16 px, so iOS
    does not zoom on focus. This and the next two blocks are unlayered: an unlayered declaration
    outranks every layered one, so no component utility undoes them. */
