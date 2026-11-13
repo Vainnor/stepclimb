@@ -36,7 +36,7 @@ organizations' ids.
   | `perm::OrgManage` | `organization.manage` | organization | `02` (organization, settings), `10` (entitlements view) |
   | `perm::AccountView` | `account.view` | organization, account | `02` |
   | `perm::AccountManage` | `account.manage` | organization, account | `02` |
-  | `perm::UserView` | `user.view` | organization | `03` |
+  | `perm::UserView` | `user.view` | organization, account | `03` |
   | `perm::UserManage` | `user.manage` | organization | `03` |
   | `perm::RoleView` | `role.view` | organization, account | this spec |
   | `perm::RoleManage` | `role.manage` | organization | this spec (custom roles) |
@@ -46,8 +46,9 @@ organizations' ids.
   | `perm::ServiceAccountManage` | `service_account.manage` | organization | `08` |
   | `perm::BrandingManage` | `branding.manage` | organization | `12` |
 
-  `UserView` and `UserManage` become grantable at account scope only if Q2 says so. Later
-  milestones add entries (course content, grading, enrollments, reports) and widen grantable
+  `UserView` is grantable at account scope, where it covers the users who hold a role
+  assignment (from M1, also an enrollment) inside the account's subtree; `UserManage` stays
+  organization-only (Q2). Later milestones add entries (course content, grading, enrollments, reports) and widen grantable
   scopes to `course` where they apply.
 - **B3.** A scope is `Organization` (the caller's organization), `Account(id)` (that account and
   its whole subtree) or `Course(id)` (one course). The scopes nest: a grant at organization scope
@@ -65,7 +66,7 @@ organizations' ids.
   | Role | Key | M0 permissions | Plan: "Can" |
   | --- | --- | --- | --- |
   | Organization admin | `org_admin` | every entry in `perm::ALL` | Everything, including providers, branding and integrations |
-  | Account admin | `account_admin` | `account.view`, `account.manage`, `role.view`, `role.assign` (users pending Q2, roles reading pending Q3) | Courses, users, roles and reports within an account subtree |
+  | Account admin | `account_admin` | `account.view`, `account.manage`, `user.view`, `role.view`, `role.assign` (Q2, Q3) | Courses, users, roles and reports within an account subtree |
   | Course designer | `course_designer` | none until M1 | Edit content, banks and quizzes |
   | Instructor | `instructor` | Course designer's, plus none of its own until M1 | Designer permissions plus grading, overrides, accommodations and enrollments |
   | Grader | `grader` | none until M2 | Grade submissions and give feedback |
@@ -277,8 +278,10 @@ entitlement feature (a `Require<Feature>` on the role-writing routes) is
 - **T2** (B3). Unit, on the evaluator with in-memory assignments: an organization grant covers
   every account; a grant at Tower covers Ground (Tower's child) but not Enroute or the root; a
   grant of Organization admin at Tower does not yield `organization.manage`.
-- **T3** (B5). Unit: `org_admin` holds every key in `perm::ALL`; `instructor` holds every key of
-  `course_designer`; `account_admin` holds exactly the B5 list.
+- **T3** (B5). Unit: `org_admin` is defined as `perm::ALL` and holds every key in it;
+  `instructor` is defined as extending `course_designer` and holds every key of it;
+  `account_admin` holds exactly `account.view`, `account.manage`, `user.view`, `role.view` and
+  `role.assign`.
 - **T4** (B6). After startup on an empty database there are eight built-in rows; editing a
   built-in row's `permissions` by SQL and calling the evaluator still yields the code list;
   restarting rewrites the row.

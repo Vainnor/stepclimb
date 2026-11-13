@@ -34,7 +34,7 @@ The plan's layout (`docs/plan/technical.md` -> Architecture and stack).
 | Path | Kind | What it is |
 | --- | --- | --- |
 | `crates/stepclimb-server` | lib + bin | The axum app, handlers, config and the `stepclimb` binary. Today: config, startup and migrations, probes, OpenAPI and Scalar, the embedded SPA. |
-| `crates/stepclimb-core` | lib | Domain types, repositories (SQL), the permission catalog. Today: the embedded migrations (`db::MIGRATOR`) only. |
+| `crates/stepclimb-core` | lib | Domain types, repositories (SQL), the permission catalog. Today: the embedded migrations (`db::MIGRATOR`), the permission catalog (`perm`) and the built-in role lists (`roles::BUILTIN`). |
 | `crates/stepclimb-auth` | lib | Providers, sessions, API keys, the OAuth 2.1 server for Stepclimb's own apps. Placeholder (M0). |
 | `crates/stepclimb-assess` | lib | Question types, selection, grading; pure, also wasm32. Placeholder (M2). |
 | `crates/stepclimb-activities` | lib | Activity engine: trait, sessions, event log, mastery rules. Placeholder (M3). |
