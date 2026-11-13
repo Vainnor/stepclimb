@@ -10,10 +10,15 @@ web-build: web-install
 # Biome: format and lint check of every TS, TSX, JSON and CSS file, with Stepclimb UI's icon and
 # className rules; then the UI pattern lint (raw colors, palette, physical directions, emoji) and
 # its fixture tests
-web-lint: web-install
+web-lint: web-install changeset-check
     pnpm biome check --error-on-warnings .
     node --test bin/check-ui-lint.test.mjs
     node bin/check-ui-lint.mjs
+
+# Fails when packages/ui or packages/tokens changed since origin/next without a changeset
+# (.changeset/README.md). A change that needs no version note adds `pnpm changeset --empty`.
+changeset-check: web-install
+    pnpm changeset status --since=origin/next
 
 # Biome: apply formatting and safe fixes
 web-fmt: web-install
