@@ -19,8 +19,9 @@
 # SC_OPS_CHECK_PROJECT, SC_OPS_CHECK_PORT (the server), SC_OPS_CHECK_HTTP_PORT and
 # SC_OPS_CHECK_HTTPS_PORT (Caddy) and SC_OPS_CHECK_NETWORK (the proxy network's first three
 # octets) override the project name, ports and subnet; the fresh stack of T12 is the project
-# name with `-restore`. Like check-production-compose.sh, it never touches the
-# development stack and removes its containers, volumes and secrets on exit.
+# name with `-restore`. `just ci` sets all of them per run (bin/ci_gate.py). Like
+# check-production-compose.sh, it never touches the development stack and removes its
+# containers, volumes and secrets on exit.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -28,7 +29,8 @@ cd "$(dirname "$0")/.."
 project=${SC_OPS_CHECK_PROJECT:-stepclimb-opscheck}
 restored=$project-restore
 # Below Linux's ephemeral range (32768 and up by default): an outgoing connection that took one
-# of these as its source port would block the bind while it sits in TIME-WAIT.
+# of these as its source port would block the bind while it sits in TIME-WAIT. Rootless Docker
+# cannot see such a socket, so a port it picks there can fail the same way.
 port=${SC_OPS_CHECK_PORT:-28280}
 http_port=${SC_OPS_CHECK_HTTP_PORT:-28281}
 https_port=${SC_OPS_CHECK_HTTPS_PORT:-28443}

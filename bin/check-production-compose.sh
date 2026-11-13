@@ -8,8 +8,9 @@
 #   T9   `up` with generated secrets turns healthy, /readyz answers 200 on the published port,
 #        the server is published on 127.0.0.1 only (the default), and PostgreSQL publishes no
 #        port and sits only on internal networks.
-# SC_PROD_CHECK_PROJECT, SC_PROD_CHECK_PORT and SC_PROD_CHECK_NETWORK (the proxy network's first
-# three octets) override the project name, the port and the subnet.
+# SC_PROD_CHECK_PROJECT, SC_PROD_CHECK_PORT, SC_PROD_CHECK_NETWORK (the proxy network's first
+# three octets) and SC_IMAGE override the project name, the port, the subnet and the server image
+# tag; `just ci` sets all four per run (bin/ci_gate.py).
 # It runs as its own Compose project on its own port, so it never touches the development stack
 # (project `stepclimb`, :55432, :58080), and removes its containers, volumes and secrets on exit.
 # Needs the server image to build (deploy/Dockerfile); `just e2e` before it leaves it cached.
@@ -18,7 +19,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 project=${SC_PROD_CHECK_PROJECT:-stepclimb-prodcheck}
-port=${SC_PROD_CHECK_PORT:-58180}
+port=${SC_PROD_CHECK_PORT:-28180}  # below the ephemeral range, as in check-compose-ops.sh
 production=deploy/compose/compose.production.yaml
 work=$(mktemp -d "${TMPDIR:-/tmp}/stepclimb-prodcheck.XXXXXX")
 export SC_HTTP_PORT=$port SC_SECRETS_DIR="$work/secrets" SC_PUBLIC_URL="http://127.0.0.1:$port" \

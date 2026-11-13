@@ -141,9 +141,9 @@ The Nix dev shell (`flake.nix`) provides every tool below.
 ## Commands (via `just`)
 
 ```bash
-just ci            # the merge gate, run locally: secrets, fmt, clippy, layering, lint escapes, spdx, tests, deny, sqlx, openapi, biome, tsc, vitest, story screenshots, playwright, compose, agents
+just ci            # the merge gate, run locally: secrets, fmt, clippy, layering, lint escapes, spdx, tests, deny, sqlx, openapi, biome, tsc, vitest, story screenshots, playwright, compose, agents; several worktrees may run it at once
 just app-build     # the Tauri shell for this OS, unbundled and unsigned, after cargo-deny on its workspace
-just up / down     # PostgreSQL 16 and MinIO in Compose (deploy/compose/compose.yaml)
+just up / down     # PostgreSQL 16 and MinIO in Compose (deploy/compose/compose.yaml), one stack shared by every worktree
 just serve         # the server on :8080 against the Compose database, web build embedded
 just dev           # Vite on :5173, proxying the API to `just serve`
 just storybook     # Storybook on :6006
@@ -156,8 +156,8 @@ just lint-escapes  # bin/check-lint-escapes.py: no way around the OrgScope lint 
 just spdx-check    # bin/check-spdx.sh: SPDX headers on every source file
 just deny          # cargo deny check
 just migrate       # apply migrations to the local database
-just sqlx-prepare  # regenerate .sqlx/ after changing a query
-just sqlx-check    # fail if .sqlx/ is stale
+just sqlx-prepare  # regenerate .sqlx/ after changing a query (against a database of its own)
+just sqlx-check    # fail if .sqlx/ is stale (against a database of its own)
 just openapi       # regenerate openapi/stepclimb.json and the TypeScript client
 just openapi-diff  # fail if either is stale
 just web-build     # tokens, then web/dist
@@ -165,10 +165,10 @@ just web-lint / web-fmt  # Biome, its UI rules and bin/check-ui-lint.mjs (raw co
 just changeset-check  # a changeset for any change to packages/ui or packages/tokens (in web-lint)
 just typecheck     # tsc in every package
 just test-web      # Vitest in every package
-just e2e           # Playwright smoke test against the Compose stack (builds the image)
+just e2e           # Playwright smoke test against this worktree's own Compose stack (builds the image)
 just ui-visual     # Storybook story screenshots and axe in Playwright's pinned image (--update-snapshots)
-just compose-check # the production Compose example booted with generated secrets on :58180, then removed
-just compose-ops-check  # the same with Caddy (internal CA) on :28281/:28443: TLS, forwarded headers, dumps, a restore
+just compose-check # the production Compose example booted with generated secrets on the slot's port, then removed
+just compose-ops-check  # the same with Caddy (internal CA) on the slot's ports: TLS, forwarded headers, dumps, a restore
 just agents-check  # agent hook tests and Codex mirrors of .claude/ (docs/agents.md)
 just secrets-scan  # gitleaks over the tree (staged | history also accepted)
 just clean-stale [--dry-run] [--days N]  # stale build output in every worktree's target/
@@ -183,15 +183,48 @@ Compose, and on Linux WebKitGTK 4.1 for the Tauri app.
 There is no hosted CI and no GitHub Actions (ADR 0021): Actions minutes on a private repository
 run out too fast. `just ci` on the committed HEAD, on the machine the change was made on, is the
 merge gate, and every "done" names that machine's OS. `bin/ci-stamp.sh` records the pass and the
-`pr-gate` hook refuses `gh pr create` without it. `just app-build` builds the Tauri shell for the
-local OS; macOS and Windows builds, and jobs of about an hour or more, run on a machine or VM the
-owner provides when a change needs them, and the PR names the OSes it ran on.
+`pr-gate` hook refuses `gh pr create` without it.
+
+Run the gate as plain `just ci` (`nix develop -c just ci`), from as many worktrees as you like:
+no `flock` wrapper. `bin/ci_gate.py` holds one of `SC_CI_SLOTS` (default 3) slots in `/tmp`, so
+the rest wait their turn, and one run per worktree. Each run gets its own PostgreSQL and Compose
+projects (`stepclimb-ci-<id>`, `stepclimb-prodcheck-<id>`, `stepclimb-opscheck-<id>`, image
+`stepclimb:ci-<id>`, `<id>` from the worktree path) and its slot's ports (`20000 + 10 * slot`
+and up) and proxy subnets (`10.201.(100 + slot)`, `10.201.(150 + slot)`), so checkouts with
+different migrations never share a database and runs never share a port or subnet.
+
+`just e2e`, `just compose-check` and `just compose-ops-check` always run inside the gate, alone
+or not, and use the slot's ports. The fixed ports in `bin/check-production-compose.sh` (28180)
+and `bin/check-compose-ops.sh` (28280, 28281, 28443) are only their defaults when run directly
+with `bash`. All of these sit below Linux's ephemeral range (32768 to 60999), where a host socket
+such as an outgoing connection's source port in TIME-WAIT can hold a port, and rootless Docker
+cannot see that when it picks one. The shared `just up` stack's fixed ports (55432, 58080,
+59000, 59001) are inside that range, so `just up` can occasionally hit it; no gate binds them.
+
+The run removes its projects and image when it ends, whether it passed, failed or was stopped by
+SIGTERM, SIGHUP or SIGINT. At its start it removes what a killed run of the worktree left, any
+such project whose worktree no longer exists, and any gate project labelled with its slot or on
+its slot's subnets (a killed run's, since the slot is exclusive); a project that is not a gate's
+on those subnets stops the run instead. It never uses or stops the shared `just up` stack.
+
+A gate under the old `flock /tmp/stepclimb-ci.lock <command>` wrapper still works: the wrapper
+waits for running gates and runs alone, and the gate inside it skips the lock its wrapper holds.
+The descriptor form (`exec 9>/tmp/stepclimb-ci.lock; flock 9`) is not recognized, and a gate
+inside it waits forever. Every gate takes the old lock first, then the worktree's, then a slot,
+so no two can wait on each other. The stamp records the commit the run started on, and nothing
+if HEAD moved during the run or the tree had changes when it started.
+
+`just app-build` builds the Tauri shell for the local OS; macOS and Windows builds, and jobs of
+about an hour or more, run on a machine or VM the owner provides when a change needs them, and the
+PR names the OSes it ran on.
 
 ## Testing and verification
 
 - Tests live next to the code (`#[cfg(test)] mod tests`, `*.test.ts(x)`) for units and in
   crate `tests/` for behavior across modules. Database tests use `#[sqlx::test]` with
-  `DATABASE_URL` (the justfile defaults it to the Compose database).
+  `DATABASE_URL`: the gate run's own database inside `just ci`, otherwise the justfile's default,
+  the shared `just up` database. `#[sqlx::test]` names a test's database after the test's path,
+  so the same test run from two worktrees against the shared database can drop the other's.
 - Read the summary line (nextest `Summary`, Vitest `Tests`, Playwright `passed`), not the exit
   code.
 - Never hit the network in a test outside the Compose stack.

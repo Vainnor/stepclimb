@@ -66,8 +66,9 @@ Read on 2026-11-12.
 ### Two Compose files, two purposes
 
 - **B1.** The development stack stays as it is: local credentials, ports on `127.0.0.1`, MinIO
-  for the M1 media work, the server in the `stack` profile, used by `just up`, `just up-stack`
-  and `just e2e`.
+  for the M1 media work, the server in the `stack` profile, used by `just up` and `just up-stack`.
+  `just e2e` starts the same file, with `deploy/compose/ci.yaml` over it, as a project of its own
+  per worktree (`bin/ci_gate.py`).
 - **B2.** A production example sits beside it for self-hosters: `stepclimb` and `postgres`, with
   Caddy and MinIO as options (`docs/plan/technical.md` -> Hosting: "stepclimb and postgres, with
   optional Caddy (automatic TLS) and MinIO"). It contains no default password: every secret is
@@ -233,7 +234,7 @@ Compose and image (CI, Linux):
   amd64 and arm64 images.
 - **T12.** (B19) A dump taken from a stack with data restores into a fresh stack, and the server
   starts against it with `/readyz` 200.
-- **T13.** (B1) `just e2e` keeps passing against the development stack.
+- **T13.** (B1) `just e2e` keeps passing against the development Compose file.
 
 Caddy's certificate issuance is not tested in CI (it needs a public domain); T9 runs with Caddy
 using its internal CA, which proves the proxy path.

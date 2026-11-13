@@ -15,7 +15,8 @@ lint:
     cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
 # Rust tests: nextest for unit and integration tests, cargo test for doctests. The server's SPA
-# tests read the web build, and the database tests need `just up`.
+# tests read the web build, and the database tests need DATABASE_URL: `just up`, or the run's own
+# database inside `just ci`.
 test-rust: web-build
     cargo nextest run --workspace --locked --no-tests=pass --profile {{ env('NEXTEST_PROFILE', 'default') }}
     cargo test --workspace --doc --locked
@@ -38,12 +39,25 @@ deny:
 migrate:
     cargo sqlx migrate run --source migrations
 
-# Regenerate .sqlx/ from the local database after changing a query; commit the result
-sqlx-prepare: migrate
+# Regenerate .sqlx/ after changing a query; commit the result. Like sqlx-check, it runs against a
+# database of its own with this checkout's migrations (bin/ci_gate.py), never the shared one
+sqlx-prepare:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -z "${SC_CI_PROJECT:-}" ]]; then
+      exec python3 -X utf8 -B bin/ci_gate.py run -- "{{ just_executable() }}" sqlx-prepare
+    fi
+    cargo sqlx migrate run --source migrations
     cargo sqlx prepare --workspace -- --all-targets
 
-# Fail if .sqlx/ does not match the queries in the code (needs the database: `just up`)
-sqlx-check: migrate
+# Fail if .sqlx/ does not match the queries in the code
+sqlx-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -z "${SC_CI_PROJECT:-}" ]]; then
+      exec python3 -X utf8 -B bin/ci_gate.py run -- "{{ just_executable() }}" sqlx-check
+    fi
+    cargo sqlx migrate run --source migrations
     cargo sqlx prepare --workspace --check -- --all-targets
 
 # Regenerate openapi/stepclimb.json and the TypeScript client from the code; commit both

@@ -76,9 +76,10 @@
 # no downgrade, so going back means restoring that dump.
 #
 # Until release images are published, the server image is built from this checkout with
-# deploy/Dockerfile. The other images are pinned by digest; MinIO's is Chainguard's build, which
-# publishes only `latest` (docs/adr/0019-minio-image.md). Nothing reads object storage before
-# M1, so MinIO is off unless the minio profile is named.
+# deploy/Dockerfile and tagged stepclimb:local (SC_IMAGE changes the tag). The other images are
+# pinned by digest; MinIO's is Chainguard's build, which publishes only `latest`
+# (docs/adr/0019-minio-image.md). Nothing reads object storage before M1, so MinIO is off unless
+# the minio profile is named.
 name: stepclimb-production
 
 services:
@@ -107,7 +108,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/Dockerfile
-    image: stepclimb:local
+    image: ${SC_IMAGE:-stepclimb:local}
     restart: unless-stopped
     environment:
       STEPCLIMB_DATABASE_URL_FILE: /run/secrets/database_url
