@@ -10,6 +10,8 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use sqlx::{PgPool, postgres::PgPoolOptions};
+use stepclimb_auth::encryption::KeyRing;
+use stepclimb_core::clock::ManualClock;
 use stepclimb_server::{AppState, router, startup};
 use tower::ServiceExt;
 
@@ -70,6 +72,16 @@ async fn get(app: Router, path: &str) -> (StatusCode, Option<String>, String) {
     )
 }
 
+/// Application state over `db`, with a stopped clock and a test-only key.
+fn state(db: PgPool) -> AppState {
+    AppState {
+        db,
+        clock: ManualClock::new(std::time::SystemTime::UNIX_EPOCH).clock(),
+        keys: KeyRing::parse("test:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
+            .expect("a valid test key"),
+    }
+}
+
 /// A router whose pool points at a port nothing listens on, for routes that must not need the
 /// database and for the readiness failure.
 fn app_without_database() -> Router {
@@ -77,7 +89,7 @@ fn app_without_database() -> Router {
         .acquire_timeout(std::time::Duration::from_millis(500))
         .connect_lazy("postgres://stepclimb@127.0.0.1:1/none")
         .expect("a lazy pool parses its URL");
-    router(AppState { db: pool })
+    router(state(pool))
 }
 
 #[tokio::test]
@@ -97,7 +109,7 @@ async fn readyz_is_503_when_the_database_is_unreachable() {
 
 #[sqlx::test(migrations = false)]
 async fn readyz_is_200_when_the_database_answers(pool: PgPool) {
-    let (status, _, body) = get(router(AppState { db: pool }), "/readyz").await;
+    let (status, _, body) = get(router(state(pool)), "/readyz").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, r#"{"status":"ok"}"#);
 }

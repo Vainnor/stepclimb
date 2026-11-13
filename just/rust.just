@@ -59,6 +59,8 @@ openapi-diff: web-install
       || { echo "openapi-diff: packages/api-client/src/schema.ts is stale; run just openapi" >&2; exit 1; }
     echo "openapi-diff: ok (document and client match the code)"
 
-# Run the server against the local database, with the web build embedded
+# Run the server against the local database, with the web build embedded. Without
+# STEPCLIMB_ENCRYPTION_KEYS(_FILE) it uses the local development key from compose.yaml, whose
+# bytes spell "stepclimb-local-development-key!"; never use it for real data.
 serve: web-build
-    STEPCLIMB_DATABASE_URL="${STEPCLIMB_DATABASE_URL:-$DATABASE_URL}" cargo run --locked -p stepclimb-server --bin stepclimb -- serve
+    if [[ -z "${STEPCLIMB_ENCRYPTION_KEYS:-}${STEPCLIMB_ENCRYPTION_KEYS_FILE:-}" ]]; then export STEPCLIMB_ENCRYPTION_KEYS="local:c3RlcGNsaW1iLWxvY2FsLWRldmVsb3BtZW50LWtleSE="; fi; STEPCLIMB_DATABASE_URL="${STEPCLIMB_DATABASE_URL:-$DATABASE_URL}" cargo run --locked -p stepclimb-server --bin stepclimb -- serve

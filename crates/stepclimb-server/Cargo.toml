@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 stepclimb-core.workspace = true
+stepclimb-auth.workspace = true
 axum.workspace = true
 tokio.workspace = true
 tower-http.workspace = true

@@ -49,6 +49,9 @@ services:
     environment:
       STEPCLIMB_DATABASE_URL: postgres://stepclimb:stepclimb-local@postgres:5432/stepclimb
       STEPCLIMB_BIND: 0.0.0.0:8080
+      # The local development key ring: one key whose 32 bytes spell
+      # "stepclimb-local-development-key!". Never use it for real data.
+      STEPCLIMB_ENCRYPTION_KEYS: local:c3RlcGNsaW1iLWxvY2FsLWRldmVsb3BtZW50LWtleSE=
     ports:
       - "127.0.0.1:${STEPCLIMB_PORT:-58080}:8080"
     depends_on:

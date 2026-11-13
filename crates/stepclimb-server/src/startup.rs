@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use sqlx::{PgPool, postgres::PgPoolOptions};
-use stepclimb_core::db::MIGRATOR;
+use stepclimb_core::{clock::Clock, db::MIGRATOR};
 use tokio::net::TcpListener;
 
 use crate::{AppState, Config, router};
@@ -54,7 +54,12 @@ pub async fn serve(config: Config) -> Result<(), StartupError> {
             source,
         })?;
     tracing::info!(addr = %config.bind, "listening");
-    axum::serve(listener, router(AppState { db: pool }))
+    let state = AppState {
+        db: pool,
+        clock: Clock::system(),
+        keys: config.encryption_keys,
+    };
+    axum::serve(listener, router(state))
         .with_graceful_shutdown(shutdown_signal())
         .await
         .map_err(StartupError::Serve)
