@@ -6,8 +6,8 @@
 //!
 //! The production request-organization resolver serves these tests: no request carries the
 //! `test-support` organization header, except the cross-organization reads. A test plan is
-//! written by SQL and an organization pointed at it, since M0 has no API that changes a plan. `session::start`
-//! stands in for the sign-in specs. Needs `DATABASE_URL` (`just up`).
+//! written by SQL and an organization pointed at it, since M0 has no API that changes a plan.
+//! `session::start` stands in for the sign-in specs. Needs `DATABASE_URL` (`just up`).
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -906,4 +906,23 @@ async fn t8_an_admin_of_org_b_sees_org_bs_plan(pool: PgPool) {
     // A's session names org B: the session belongs to A, so B's plan is never answered.
     let crossed = entitlements_of(&f, b, &admin_a).await;
     assert_eq!(crossed.status, StatusCode::UNAUTHORIZED, "{crossed:?}");
+}
+
+/// An organization without its `org_plans` row fails closed: no plan is guessed.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t8_an_organization_without_a_plan_row_answers_500(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let admin = f.admin().await;
+    sqlx::query("DELETE FROM org_plans WHERE org_id = $1")
+        .bind(f.org)
+        .execute(&f.pool)
+        .await
+        .expect("delete the plan row");
+    let answer = f.send(Method::GET, ENTITLEMENTS, Some(&admin), "").await;
+    assert_eq!(
+        answer.status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "{answer:?}"
+    );
+    assert_eq!(answer.code(), "internal.error");
 }

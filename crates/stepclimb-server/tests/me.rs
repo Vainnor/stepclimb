@@ -502,3 +502,23 @@ async fn t9_a_test_plan_lists_only_the_features_it_enables(pool: PgPool) {
     let answer = fixture.me_with_cookie(&cookie).await;
     assert_eq!(answer.body["features"], json!([]));
 }
+
+/// An organization without its `org_plans` row fails closed: no features are guessed.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_organization_without_a_plan_row_answers_500(pool: PgPool) {
+    let fixture = Fixture::new(pool).await;
+    let sam = fixture.sam().await;
+    let cookie = fixture.sign_in(sam).await;
+    sqlx::query("DELETE FROM org_plans WHERE org_id = $1")
+        .bind(fixture.org)
+        .execute(&fixture.pool)
+        .await
+        .expect("delete the plan row");
+    let answer = fixture.me_with_cookie(&cookie).await;
+    assert_eq!(
+        answer.status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "{answer:?}"
+    );
+    assert_eq!(answer.code(), "internal.error");
+}
