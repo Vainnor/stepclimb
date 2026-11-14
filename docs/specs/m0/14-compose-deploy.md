@@ -177,8 +177,9 @@ Read on 2026-11-12.
 ### Self-hosting guide
 
 - **B22.** `deploy/compose/README.md` is the self-hosting guide until the docs site (M4): the
-  requirements (Docker with Compose, a domain for TLS, 1 to 2 vCPU and 2 GB as the vZDC
-  deployment sizes it), quick start with the production example, creating the secret files,
+  requirements (Docker with Compose, a domain for TLS, 1 to 2 vCPU and 2 GB as the plan sizes a
+  single deployment; coordinator decision (2026-11-14): the guide names no particular
+  deployment), quick start with the production example, creating the secret files,
   enabling Caddy and MinIO, the configuration reference (B12), volumes and backups, restore,
   upgrades, and what each probe means. It names the development file as not for production.
 
@@ -231,7 +232,9 @@ Compose and image (CI, Linux):
   naming a missing file.
 - **T11.** (B21) The image's configured user is non-root and its final stage has no shell
   (`docker image inspect`, and `docker run --entrypoint sh` fails); the multi-arch build produces
-  amd64 and arm64 images.
+  amd64 and arm64 images. Coordinator decision (2026-11-14): `docker run` cannot start an image
+  of another architecture without an emulator, so for that image the check lists its file system
+  for a shell instead, and runs its binary's `check-config` under QEMU user-mode emulation.
 - **T12.** (B19) A dump taken from a stack with data restores into a fresh stack, and the server
   starts against it with `/readyz` 200.
 - **T13.** (B1) `just e2e` keeps passing against the development Compose file.
@@ -305,6 +308,21 @@ overrule one, which then updates this spec.
   or a native arm64 machine the owner provides is the owner's call (ADR 0021: long jobs go to a
   VM the owner provides).
   **Decided:** the recommendation (owner, 13 Nov 2026).
+  **Coordinator decision (2026-11-14), for the owner's review.** The build method was the
+  owner's call; with the owner away, the coordinator decided it on the owner's delegation and
+  accepted cross-compiling, with the arm64 image check inside `just ci`. The owner can overrule
+  it, which then updates this spec. The Rust stage cross-compiles: the web and Rust stages
+  run on the build machine's platform (`FROM --platform=$BUILDPLATFORM`), the Rust stage adds
+  rustup's `aarch64-unknown-linux-gnu` target and Debian's `gcc-aarch64-linux-gnu` linker, and
+  only the final distroless stage, which runs nothing, uses the target's base. Emulation was not
+  available: the development machine's rootless Docker has no binfmt_misc emulator registered,
+  so an arm64 container fails with `exec format error`, and registering one changes the host.
+  Cross-compiling needs no host change and took 1 min 16 s for a cold arm64 build (x86_64 Linux,
+  16 cores), so both architectures are checked in `just ci` (`just image-check`,
+  `bin/check-image.sh`) rather than in a separate recipe. The arm64 binary is run under QEMU
+  user-mode emulation (`qemu-aarch64`, added to the Linux dev shell). Cross-compiling works from
+  amd64 only; an arm64 machine builds and checks arm64 alone and says so, and building amd64
+  there is left until someone needs it.
 - **Q6. The MinIO image (ADR 0019, Accepted).** Decided by the owner on 13 Nov 2026: option (a),
   Chainguard's image pinned by digest; revisited in the M1 media spec. Options are ADR 0019's: (a)
   Chainguard's image pinned by digest; (b) MinIO built from source into our own image; (c) another
@@ -345,7 +363,8 @@ In dependency order. Each is one PR.
   and the dump-and-restore CI check. Covers B19, B20; T12. Depends on: I4; Q4 answered.
 - **I7. Image architectures.** Deliverable: the Dockerfile building for amd64 and arm64 (a
   recipe run locally or on the owner's VM), the non-root and no-shell checks; publishing, cosign
-  and SBOM in 01's `just release` if Q5 (a) is chosen. Covers B21; T11. Depends on: Q5
+  and SBOM in 01's `just release` if Q5 (a) is chosen (01 issue 7, not this issue). Covers B21;
+  T11. Depends on: Q5
   answered; 01-repo-and-ci (release recipe).
 - **I8. Self-hosting guide.** Deliverable: `deploy/compose/README.md` with every section of B22
   and the generated or tested configuration reference. Covers B12, B22; T4. Depends on: I1, I4,

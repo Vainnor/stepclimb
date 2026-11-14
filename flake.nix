@@ -7,7 +7,8 @@
 # same compiler. Node is the LTS line `.node-version` names. Playwright's browsers come from
 # nixpkgs (`playwright-driver.browsers`), so `@playwright/test` in package.json must stay at the
 # version of `playwright-driver` here. The Linux libraries are what Tauri 2 links (WebKitGTK 4.1,
-# libsoup 3, GTK 3, librsvg).
+# libsoup 3, GTK 3, librsvg). QEMU's user-mode emulators run the arm64 server image's binary on
+# an amd64 machine whose Docker cannot run arm64 containers (bin/check-image.sh).
 {
   description = "Stepclimb dev shell";
 
@@ -54,6 +55,7 @@
                 gtk3
                 librsvg
                 openssl
+                qemu-user
               ];
             PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
             PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = "true";

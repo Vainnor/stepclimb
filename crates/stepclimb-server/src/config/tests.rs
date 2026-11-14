@@ -1172,3 +1172,108 @@ fn a_trusted_range_wider_than_slash_8_is_refused_naming_the_setting() {
         );
     }
 }
+
+/// The configuration reference in the self-hosting guide: one row per variable, its cells
+/// trimmed (`docs/specs/m0/14-compose-deploy.md` B12, T4).
+fn reference_rows() -> Vec<Vec<String>> {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../deploy/compose/README.md"
+    );
+    let guide = std::fs::read_to_string(path).expect("deploy/compose/README.md is readable");
+    guide
+        .lines()
+        .filter(|line| line.starts_with("| `STEPCLIMB_"))
+        .map(|line| {
+            line.trim_matches('|')
+                .split('|')
+                .map(|cell| cell.trim().to_owned())
+                .collect()
+        })
+        .collect()
+}
+
+/// The Default cell the reference gives `setting`: `required` when the loader refuses its
+/// absence, `none` when its unset value is empty, otherwise the value the loader uses.
+fn reference_default(setting: &Setting) -> String {
+    let all = with_required(&[]);
+    let mut without = all.clone();
+    without.remove(setting.var);
+    match Config::load(&without, None) {
+        Err(ConfigError::Missing(missing)) if missing == *setting => return "required".to_owned(),
+        Err(error) => panic!("{} unset: {error}", setting.var),
+        Ok(_) => {}
+    }
+    let config = Config::load(&all, None).unwrap();
+    let (_, value) = config
+        .non_secret_values()
+        .into_iter()
+        .find(|(key, _)| *key == setting.key)
+        .unwrap_or_else(|| {
+            panic!(
+                "{} has a default but is not a non-secret value",
+                setting.var
+            )
+        });
+    if value == "(none)" {
+        "none".to_owned()
+    } else {
+        format!("`{value}`")
+    }
+}
+
+#[test]
+fn every_setting_is_in_the_configuration_reference() {
+    let rows = reference_rows();
+    for setting in SETTINGS {
+        let row = rows
+            .iter()
+            .find(|row| row[0].starts_with(&format!("`{}`", setting.var)))
+            .unwrap_or_else(|| {
+                panic!(
+                    "{} is missing from the configuration reference in deploy/compose/README.md",
+                    setting.var
+                )
+            });
+        let (var, key) = (setting.var, setting.key);
+        let (vars, keys) = if setting.secret {
+            (
+                format!("`{var}`, `{var}_FILE`"),
+                format!("`{key}`, `{key}_file`"),
+            )
+        } else {
+            (format!("`{var}`"), format!("`{key}`"))
+        };
+        assert_eq!(
+            row.len(),
+            6,
+            "{var}: Variable, TOML key, Type, Default, Secret, Meaning"
+        );
+        assert_eq!((&row[0], &row[1]), (&vars, &keys), "{var}");
+        assert_eq!(row[3], reference_default(setting), "{var}: Default");
+        let secret = if setting.secret { "yes" } else { "no" };
+        assert_eq!(row[4], secret, "{var}: Secret");
+    }
+}
+
+#[test]
+fn the_configuration_reference_names_only_variables_the_server_reads() {
+    let rows = reference_rows();
+    for row in &rows {
+        let var = row[0].split('`').nth(1).unwrap_or_default();
+        assert!(
+            known_vars().iter().any(|known| known == var),
+            "{var} is not read"
+        );
+    }
+    let config = rows.iter().find(|row| row[0] == format!("`{CONFIG_VAR}`"));
+    assert!(
+        config.is_some(),
+        "{CONFIG_VAR} is missing from the reference"
+    );
+    assert_eq!(
+        rows.len(),
+        SETTINGS.len() + 1,
+        "one row per setting and {CONFIG_VAR}"
+    );
+}

@@ -28,7 +28,7 @@ ci:
     python3 -X utf8 -B bin/ci_gate.py run -- "{{ just_executable() }}" _ci-checks
     bash bin/ci-stamp.sh "$tested" "$tree"
 
-_ci-checks: secrets-scan fmt-check lint layering lint-escapes spdx-check gate-check test-rust deny sqlx-check openapi-diff web-lint typecheck test-web ui-visual e2e compose-check compose-ops-check agents-check
+_ci-checks: secrets-scan fmt-check lint layering lint-escapes spdx-check gate-check test-rust deny sqlx-check openapi-diff web-lint typecheck test-web ui-visual e2e compose-check compose-ops-check image-check agents-check
     @echo "just ci: all gates passed"
 
 # Tests of bin/ci_gate.py, the gate's locks and per-run stack

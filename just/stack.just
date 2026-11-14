@@ -43,3 +43,8 @@ compose-ops-check:
       exec python3 -X utf8 -B bin/ci_gate.py run -- "{{ just_executable() }}" compose-ops-check
     fi
     bash bin/check-compose-ops.sh
+
+# Build the server image for linux/amd64 and linux/arm64 (arm64 only on an arm64 machine) and
+# check each: non-root, no shell, the right architecture, check-config runs (bin/check-image.sh)
+image-check:
+    bash bin/check-image.sh

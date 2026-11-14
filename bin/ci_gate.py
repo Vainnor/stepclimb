@@ -23,8 +23,8 @@ depend only on the test's path, the e2e server) lives in it, so runs from checko
 migrations never meet. The run also names the production and ops checks' projects
 (`stepclimb-prodcheck-<id>`, `stepclimb-opscheck-<id>` and its `-restore`), gives them its slot's
 ports and proxy subnets (slot_env), and sets SC_IMAGE, the server image
-tag the Compose files use, to `stepclimb:ci-<id>`; it removes every project and the image at the
-end. Before it starts, it removes what a killed run of this worktree left, every such project
+tag the Compose files use, to `stepclimb:ci-<id>` (bin/check-image.sh adds `-amd64` and `-arm64`
+tags of its own); it removes every project and those images at the end. Before it starts, it removes what a killed run of this worktree left, every such project
 whose worktree no longer exists (Compose labels each container with the directory of its file,
 `<worktree>/deploy/compose`), and any project holding its slot's subnets, which only a killed run
 that had the same slot can.
@@ -265,11 +265,17 @@ def run_projects(env: Mapping[str, str]) -> list[str]:
     return [env["SC_CI_PROJECT"], env["SC_PROD_CHECK_PROJECT"], ops, f"{ops}-restore"]
 
 
+def run_images(image: str) -> list[str]:
+    """The server image a run tags, and the per-architecture tags bin/check-image.sh adds to it."""
+    return [image, f"{image}-amd64", f"{image}-arm64"]
+
+
 def remove_stack(env: Mapping[str, str]) -> None:
     """Remove every project, container and image a run of this worktree creates."""
     for project in run_projects(env):
         remove_project(project, env)
-    remove_image(env["SC_IMAGE"], env)
+    for image in run_images(env["SC_IMAGE"]):
+        remove_image(image, env)
 
 
 def orphaned_projects(listing: str, exists: Callable[[str], bool] = os.path.isdir) -> list[str]:
@@ -293,7 +299,8 @@ def remove_orphans(env: Mapping[str, str]) -> None:
         remove_project(project, env)
         match = OWN_PROJECT.match(project)
         assert match is not None  # orphaned_projects returns only names it matched
-        remove_image(f"stepclimb:ci-{match.group(2)}", env)
+        for image in run_images(f"stepclimb:ci-{match.group(2)}"):
+            remove_image(image, env)
         say(f"removed {project}, left by a worktree that no longer exists")
 
 
@@ -461,7 +468,7 @@ def run_stack(toplevel: Path, env: dict[str, str], command: list[str], signals: 
         status = run_child(command, env, signals)
     finally:
         remove_stack(env)
-        say(f"removed {', '.join(run_projects(env))} and {env['SC_IMAGE']}")
+        say(f"removed {', '.join(run_projects(env))} and {', '.join(run_images(env['SC_IMAGE']))}")
     return 128 + signals.received if signals.received and status == 0 else status
 
 
