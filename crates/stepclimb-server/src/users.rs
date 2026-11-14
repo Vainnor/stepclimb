@@ -20,8 +20,13 @@
 //! admin can suspend such a user at once (Q3). Suspending yourself is refused (409
 //! `user.cannot_suspend_self`), and suspending the organization's last active Organization admin
 //! is refused by `stepclimb_core::users::set_status` (409 `role_assignment.last_org_admin`),
-//! which writes the `user.set_status` audit entry. The field changes and the status change run
-//! in one transaction, so a refused status leaves the fields as they were.
+//! which writes the `user.set_status` audit entry. Changing the `email` or `status` of a user
+//! who holds a permission the caller does not hold at organization scope is refused (403
+//! `permission.escalation`, owner decision of 2026-11-14); the check runs under the account tree
+//! lock, which role assignment writes also take, so an assignment cannot change the target's
+//! grants between the check and the write. The status change runs before the field changes, so
+//! every `PATCH` locks the organization row before the user row, and both run in one
+//! transaction: a refused status leaves the fields as they were.
 
 use std::time::SystemTime;
 
@@ -35,8 +40,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Map;
 use sqlx::{Postgres, Transaction};
 use stepclimb_core::{
-    OrgScope, Source,
+    OrgScope, Source, accounts,
     feature::Limit,
+    grants::{self, Grants},
     id::Uuid,
     identities::{self, NewIdentity},
     identity_providers, organizations,
@@ -56,8 +62,11 @@ use crate::{
     organization::present,
     pagination::{Page, PageParams},
     require::Require,
-    role_assignments::code::{ROLE_ASSIGNMENT_LAST_ORG_ADMIN, USER_NOT_FOUND},
-    roles::code::{NAME_EMPTY, TEXT_CONTAINS_NUL},
+    role_assignments::{
+        code::{ROLE_ASSIGNMENT_LAST_ORG_ADMIN, USER_NOT_FOUND},
+        holds_unheld,
+    },
+    roles::code::{NAME_EMPTY, PERMISSION_ESCALATION, TEXT_CONTAINS_NUL},
     timestamp,
 };
 
@@ -99,7 +108,7 @@ pub mod code {
 
 problem_responses! {
     UserNotFound => "`user.not_found`: no user of the organization has this id. `org.not_found`: the request's organization cannot be determined.",
-    UserWriteForbidden => "`permission.denied`: the caller does not hold `user.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site.",
+    UserWriteForbidden => "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email` or `status` of a user who holds a permission the caller does not hold at organization scope. `auth.csrf_refused`: the request did not come from this site.",
     UserCreateForbidden => "`permission.denied`: the caller does not hold `user.manage` at organization scope. `entitlement.limit_reached`: the organization's plan allows no more users; `limit` and `max` name the limit and its value. `auth.csrf_refused`: the request did not come from this site.",
     UserCreateConflict => "`user.external_id_taken`: another user of the organization has this external id. `user.email_taken`: another user of the organization has this email, in any letter case. `identity.taken`: one of `identities` is already linked to a user.",
     UserUpdateConflict => "`user.externally_managed`: an identity provider, the sync API, SCIM or a connector owns the user's names and email; change them there. `user.cannot_suspend_self`: you cannot suspend yourself. `user.email_taken`: another user of the organization has this email, in any letter case. `role_assignment.last_org_admin`: the user is the organization's last active Organization admin.",
@@ -416,32 +425,17 @@ pub async fn create_user(
     State(state): State<AppState>,
     ApiJson(body): ApiJson<NewUser>,
 ) -> Result<Response, ApiError> {
-    if body.identities.len() > MAX_NEW_IDENTITIES {
-        return Err(invalid(&["identities"], code::IDENTITIES_TOO_MANY));
-    }
     let scope = require.principal().scope();
     let now = state.clock.now();
+    let mut new = valid_new_user(body.clone())?;
     let mut tx = state.db.begin().await.map_err(|e| ApiError::internal(&e))?;
     entitlements.check_room(&mut tx, Limit::Users, 1).await?;
-    let tz = match body.tz {
-        Some(tz) => tz,
-        None => {
-            organizations::settings(&mut *tx, scope)
-                .await
-                .map_err(|error| ApiError::internal(&error))?
-                .default_tz
-        }
-    };
-    let new = repo::NewUser {
-        display_name: body.display_name,
-        given_name: body.given_name.unwrap_or_default(),
-        family_name: body.family_name.unwrap_or_default(),
-        email: body.email,
-        locale: body.locale,
-        tz,
-        source: Source::Local,
-        external_id: body.external_id,
-    };
+    if body.tz.is_none() {
+        new.tz = organizations::settings(&mut *tx, scope)
+            .await
+            .map_err(|error| ApiError::internal(&error))?
+            .default_tz;
+    }
     let user = repo::create(&mut *tx, scope, &new, now)
         .await
         .map_err(user_error)?;
@@ -459,6 +453,52 @@ pub async fn create_user(
         .into_response())
 }
 
+/// The repository's user for `body`, after every check that needs no database, so a body that
+/// breaks a rule answers 422 even when the organization is at its users limit: the identities'
+/// count and subjects, then the user's fields. Without a `tz` the user is checked with the
+/// default zone and the caller puts the organization's in its place.
+fn valid_new_user(body: NewUser) -> Result<repo::NewUser, ApiError> {
+    if body.identities.len() > MAX_NEW_IDENTITIES {
+        return Err(invalid(&["identities"], code::IDENTITIES_TOO_MANY));
+    }
+    for (index, identity) in body.identities.iter().enumerate() {
+        identities::validate_subject(&identity.subject)
+            .map_err(|error| identity_error(index, error))?;
+    }
+    let new = repo::NewUser {
+        display_name: body.display_name,
+        given_name: body.given_name.unwrap_or_default(),
+        family_name: body.family_name.unwrap_or_default(),
+        email: body.email,
+        locale: body.locale,
+        tz: body
+            .tz
+            .unwrap_or_else(|| stepclimb_core::tz::DEFAULT.to_owned()),
+        source: Source::Local,
+        external_id: body.external_id,
+    };
+    repo::validate(&new).map_err(user_error)?;
+    Ok(new)
+}
+
+/// The answer for an identities repository error of the `index`th of the request's
+/// `identities`.
+fn identity_error(index: usize, error: identities::Error) -> ApiError {
+    let index = index.to_string();
+    let at = |member, code| invalid(&["identities", &index, member], code);
+    match error {
+        identities::Error::Taken => ApiError::new(
+            StatusCode::CONFLICT,
+            code::IDENTITY_TAKEN,
+            "An identity to link is already linked to a user.",
+        ),
+        identities::Error::SubjectEmpty => at("subject", code::IDENTITY_SUBJECT_EMPTY),
+        identities::Error::SubjectTooLong => at("subject", code::TEXT_TOO_LONG),
+        identities::Error::ContainsNul { .. } => at("subject", TEXT_CONTAINS_NUL),
+        other => ApiError::internal(&other),
+    }
+}
+
 /// Link `identity`, the `index`th of the request's `identities`, to the new user `user_id`.
 async fn link(
     tx: &mut Transaction<'static, Postgres>,
@@ -467,8 +507,8 @@ async fn link(
     (index, identity): (usize, &NewUserIdentity),
     now: SystemTime,
 ) -> Result<(), ApiError> {
-    let index = index.to_string();
-    let invalid_at = |member, code| invalid(&["identities", &index, member], code);
+    let position = index.to_string();
+    let invalid_at = |member, code| invalid(&["identities", &position, member], code);
     let provider = identity_providers::get_by_key(&mut **tx, scope, &identity.provider_key)
         .await
         .map_err(|error| match error {
@@ -484,19 +524,10 @@ async fn link(
         subject: identity.subject.clone(),
         attributes: Map::new(),
     };
-    match identities::link(&mut **tx, scope, &new, now).await {
-        Ok(_) => Ok(()),
-        Err(identities::Error::Taken) => Err(ApiError::new(
-            StatusCode::CONFLICT,
-            code::IDENTITY_TAKEN,
-            "An identity to link is already linked to a user.",
-        )),
-        Err(identities::Error::SubjectEmpty) => {
-            Err(invalid_at("subject", code::IDENTITY_SUBJECT_EMPTY))
-        }
-        Err(identities::Error::ContainsNul { .. }) => Err(invalid_at("subject", TEXT_CONTAINS_NUL)),
-        Err(other) => Err(ApiError::internal(&other)),
-    }
+    identities::link(&mut **tx, scope, &new, now)
+        .await
+        .map(|_| ())
+        .map_err(|error| identity_error(index, error))
 }
 
 /// Change a user's names, email, locale, time zone or status. A patch naming nothing changes
@@ -533,23 +564,34 @@ pub async fn update_user(
     let principal = require.principal();
     let scope = principal.scope();
     let now = state.clock.now();
+    let guarded = body.email.is_some() || body.status.is_some();
     let mut tx = state.db.begin().await.map_err(|e| ApiError::internal(&e))?;
-    let user = repo::get(&mut *tx, scope, user_id)
+    if guarded {
+        // Before the target's grants are read: an assignment created or removed meanwhile
+        // holds this lock until it commits, so the check sees the grants the write applies to.
+        accounts::lock_tree(&mut tx, scope)
+            .await
+            .map_err(|error| ApiError::internal(&error))?;
+    }
+    let mut user = repo::get(&mut *tx, scope, user_id)
         .await
         .map_err(|error| ApiError::internal(&error))?
         .ok_or_else(user_not_found)?;
     refuse_patch(&body, &user, principal.user_id)?;
-    let fields = body.fields();
-    let mut user = if fields == repo::UserPatch::default() {
-        user
-    } else {
-        repo::update(&mut *tx, scope, user_id, &fields, now)
-            .await
-            .map_err(user_error)?
-    };
+    if guarded {
+        refuse_escalation(&mut tx, require.grants(), user_id).await?;
+    }
+    // The status first: `set_status` locks the organization row, then the user row, and the
+    // field update after it locks only the user row, so every PATCH takes them in that order.
     if let Some(status) = body.status {
         let actor = client.actor(principal);
         user = repo::set_status(&mut *tx, scope, user_id, status.into(), now, actor)
+            .await
+            .map_err(user_error)?;
+    }
+    let fields = body.fields();
+    if fields != repo::UserPatch::default() {
+        user = repo::update(&mut *tx, scope, user_id, &fields, now)
             .await
             .map_err(user_error)?;
     }
@@ -575,6 +617,34 @@ fn refuse_patch(patch: &UserPatch, user: &repo::User, caller: Uuid) -> Result<()
         ));
     }
     Ok(())
+}
+
+/// 403 `permission.escalation` when the user `user_id` holds a permission, at any scope, that
+/// the caller does not hold at organization scope, the scope the user routes act on (owner
+/// decision of 2026-11-14): changing such a user's email or status could take over or lock out
+/// someone with more rights than the caller. The caller's own permissions never exceed
+/// themselves, so changing your own email passes.
+async fn refuse_escalation(
+    tx: &mut Transaction<'static, Postgres>,
+    caller: &Grants,
+    user_id: Uuid,
+) -> Result<(), ApiError> {
+    let target = Grants::load(&mut **tx, caller.scope(), user_id)
+        .await
+        .map_err(|error| ApiError::internal(&error))?;
+    let keys: Vec<String> = target
+        .by_scope()
+        .flat_map(|(_, keys)| keys)
+        .map(str::to_owned)
+        .collect();
+    if !holds_unheld(caller, &keys, &grants::Target::Organization) {
+        return Ok(());
+    }
+    Err(ApiError::new(
+        StatusCode::FORBIDDEN,
+        PERMISSION_ESCALATION,
+        "This user holds permissions you do not. You cannot change their email or status.",
+    ))
 }
 
 fn user_not_found() -> ApiError {

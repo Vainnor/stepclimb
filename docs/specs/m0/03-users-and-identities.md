@@ -67,6 +67,16 @@ these rows are in `04` to `07`.
   `user.externally_managed`). Q3 is decided (option A): an admin may change such a user's
   `status`, `locale` and `tz`; the "suspended by" marker that keeps a sync from unsuspending
   them is M4's (coordinator decision, 2026-11-13, applying Q3 for issue 3).
+
+  Owner decision (2026-11-14). Through the admin API, changing the `email` or `status` of a user
+  who holds a permission, at any scope, that the caller does not hold at organization scope (the
+  scope the user routes act on) is refused with 403 `permission.escalation`, the code and rule of
+  `09-permissions-and-roles.md` B12 and Q4. Without it a holder of `user.manage` alone could
+  change an Organization admin's email and take over the account through a password reset, or
+  suspend them. Changing your own email passes, since your permissions never exceed your own.
+  The route takes the organization's account tree lock, which role assignment writes take too,
+  before it reads the target's grants, so an assignment cannot change them between the check and
+  the write. Names, locale and time zone are not covered.
 - **B7.** `status` is `active` or `suspended` in M0. A suspended user is refused at sign-in
   (Admission step 1, enforced in `07-admission.md`), and every credential of theirs stops working
   on its next request: the request authenticator in `08-sessions-and-csrf.md` reads the user's
@@ -113,7 +123,9 @@ these rows are in `04` to `07`.
   `stepclimb.toml` relate to this table is pending Q5.
 - **B14.** An identity links one user to one provider by the provider's `subject` (for VATSIM,
   the CID at `/data/cid`). `(provider_id, subject)` is unique, so one external account maps to at
-  most one user. A user can have several identities, from different providers or the same one
+  most one user. A subject holds at most 255 characters (OIDC's limit for `sub`), so it always
+  fits the unique index; a longer one answers 422 `text.too_long` (coordinator decision,
+  2026-11-14). A user can have several identities, from different providers or the same one
   (a person with two accounts at one provider may link both).
 - **B15.** `identities.attributes` holds the mapped attributes from the latest sign-in (for
   example `rating`, `subdivision`), written by `05`/`06` after each successful sign-in and read by
@@ -219,11 +231,14 @@ is accepted only for `email`, where it removes the address. `POST` takes at most
 `identities` (422, `errors[].code = "identities.too_many"` at `/identities`); an unknown or other
 organization's `provider_key` is 422 `identity.unknown_provider` at
 `/identities/{index}/provider_key`, an empty subject 422 `identity.subject_empty`, and any
-refusal creates neither the user nor any identity. The 422 field codes are `name.empty`
+refusal creates neither the user nor any identity. Every check that needs no database (the
+fields, the identities' count and subjects) runs before the users limit check, so an
+organization at its limit still gets the 422 for a body that breaks a rule. The 422 field codes are `name.empty`
 (`display_name`), `email.empty`, `email.invalid_character`, `text.contains_nul`,
 `text.too_long`, `tz.unknown` and `user.locale_unsupported`. A `PATCH` naming nothing changes
 nothing; the field changes and the status change of one `PATCH` run in one transaction, so a
-refused suspension leaves the fields as they were. User creation and field changes write no
+refused suspension leaves the fields as they were. The status change runs first, so every `PATCH`
+locks the organization row before the user row. User creation and field changes write no
 audit entry (spec 09 Q5); a status change writes `user.set_status`.
 
 `PATCH` with `status: "suspended"` on the caller's own user answers 409

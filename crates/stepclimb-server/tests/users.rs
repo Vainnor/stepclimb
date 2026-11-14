@@ -236,6 +236,11 @@ impl Fixture {
 
     /// A signed-in user of org A holding a custom role with `permissions` at `at`.
     async fn holder(&self, permissions: &[&str], at: Scope) -> String {
+        self.holder_with_id(permissions, at).await.0
+    }
+
+    /// [`Self::holder`] with the holder's id.
+    async fn holder_with_id(&self, permissions: &[&str], at: Scope) -> (String, Uuid) {
         let (cookie, user) = self.user().await;
         let role = NewRole {
             key: format!("r{}", new_id().simple()),
@@ -247,7 +252,7 @@ impl Fixture {
             .expect("create role")
             .id;
         self.assign(user, role, at).await;
-        cookie
+        (cookie, user)
     }
 
     async fn root(&self) -> Uuid {
@@ -786,6 +791,13 @@ async fn a_refused_identity_creates_nothing(pool: PgPool) {
     )
     .await
     .invalid("/identities/0/subject", "identity.subject_empty");
+    let too_long = "1".repeat(256);
+    f.post(
+        &admin,
+        with(json!([ok, { "provider_key": "vatsim", "subject": too_long }])),
+    )
+    .await
+    .invalid("/identities/1/subject", "text.too_long");
     let many: Vec<Value> = (0..21)
         .map(|i| json!({ "provider_key": "vatsim", "subject": format!("s{i}") }))
         .collect();
@@ -1078,7 +1090,9 @@ async fn suspending_a_user_ends_their_sessions_and_is_audited(pool: PgPool) {
 async fn suspending_the_last_organization_admin_is_refused(pool: PgPool) {
     let f = Fixture::new(pool).await;
     let (_, last) = f.admin().await;
-    let manager = f.holder(&["user.manage"], Scope::Organization).await;
+    // Every catalog permission, so the escalation rule passes and the last-admin rule decides.
+    let every: Vec<&str> = stepclimb_core::perm::ALL.iter().map(|p| p.key()).collect();
+    let manager = f.holder(&every, Scope::Organization).await;
     let before = f.stored(last).await;
 
     let answer = f
@@ -1159,4 +1173,136 @@ async fn t20_another_organizations_user_is_not_found(pool: PgPool) {
         .await
         .refused(StatusCode::BAD_REQUEST, "request.malformed");
     assert_eq!(f.stored(theirs).await, before);
+}
+
+// Escalation (owner decision of 2026-11-14).
+
+/// Changing the email or status of a user who holds a permission the caller lacks at
+/// organization scope is refused and changes nothing; a peer's is allowed, and so is your own.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn changing_the_email_or_status_of_a_user_with_more_permissions_is_refused(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (_, admin) = f.admin().await;
+    let (manager, me) = f
+        .holder_with_id(&["user.manage", "user.view"], Scope::Organization)
+        .await;
+    let root = f.root().await;
+    let (_, account_viewer) = f
+        .holder_with_id(&["account.view"], Scope::Account(root))
+        .await;
+    let (_, peer) = f
+        .holder_with_id(&["user.manage"], Scope::Organization)
+        .await;
+    let plain = f.stored_user(f.a, new_user("Plain", Source::Local)).await;
+
+    for target in [admin, account_viewer] {
+        let before = f.stored(target).await;
+        for body in [
+            json!({ "email": "taken@example.test" }),
+            json!({ "email": null }),
+            json!({ "status": "suspended" }),
+            json!({ "status": "active" }),
+            json!({ "status": "suspended", "display_name": "Renamed" }),
+        ] {
+            f.patch(&manager, target, body.clone())
+                .await
+                .refused(StatusCode::FORBIDDEN, "permission.escalation");
+            assert_eq!(f.stored(target).await, before, "{body}");
+        }
+        let other = f
+            .patch(&manager, target, json!({ "tz": "Asia/Tokyo" }))
+            .await;
+        assert_eq!(
+            other.status,
+            StatusCode::OK,
+            "other fields stay open: {other:?}"
+        );
+    }
+    assert!(f.status_entries(admin).await.is_empty());
+
+    for target in [peer, plain] {
+        let email = json!({ "email": format!("{target}@example.test") });
+        let changed = f.patch(&manager, target, email).await;
+        assert_eq!(changed.status, StatusCode::OK, "{changed:?}");
+        let suspended = f
+            .patch(&manager, target, json!({ "status": "suspended" }))
+            .await;
+        assert_eq!(suspended.status, StatusCode::OK, "{suspended:?}");
+    }
+    let own = f
+        .patch(&manager, me, json!({ "email": "me@example.test" }))
+        .await;
+    assert_eq!(own.status, StatusCode::OK, "your own email: {own:?}");
+    assert_eq!(own.body["email"], "me@example.test");
+}
+
+/// A field change and a suspension in one PATCH, and a suspension alone, of the same user, both
+/// waiting on the organization row this test holds: they take the organization row and the user
+/// row in the same order, so both finish.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn concurrent_suspensions_with_and_without_fields_do_not_deadlock(pool: PgPool) {
+    let f = Fixture::new(pool.clone()).await;
+    let (admin, _) = f.admin().await;
+    f.admin().await;
+    let sam = f.stored_user(f.a, new_user("Sam", Source::Local)).await;
+    let mut lock = pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE")
+        .bind(f.a)
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+
+    let spawn = |body: Value| {
+        let (app, org, admin) = (f.app.clone(), f.a, admin.clone());
+        let uri = format!("{USERS}/{sam}");
+        tokio::spawn(async move { send(&app, org, Method::PATCH, &uri, &admin, Some(body)).await })
+    };
+    // The suspension alone queues first, so it gets the organization row first: a PATCH that
+    // held the user row while it waited for the organization row would deadlock with it.
+    let status_only = spawn(json!({ "status": "suspended" }));
+    wait_for_lock_waiters(&pool, 1).await;
+    let with_fields = spawn(json!({ "status": "suspended", "display_name": "Sam Ortiz" }));
+    wait_for_lock_waiters(&pool, 2).await;
+    lock.commit().await.unwrap();
+
+    for task in [with_fields, status_only] {
+        let answer = tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .expect("the PATCH finishes once the organization row is free")
+            .expect("the task does not panic");
+        assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    }
+    let read = users::get(&f.pool, scope(f.a), sam).await.unwrap().unwrap();
+    assert_eq!(
+        (read.display_name.as_str(), read.status),
+        ("Sam Ortiz", users::Status::Suspended)
+    );
+}
+
+/// The body is checked before the users limit: an organization at its limit still gets the 422.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_body_that_breaks_a_rule_answers_422_at_the_limit(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (admin, _) = f.admin().await;
+    f.limit_users(1).await;
+    f.provider(f.a, "vatsim").await;
+    let long_subject = "1".repeat(256);
+    let identities = json!([{ "provider_key": "vatsim", "subject": long_subject }]);
+
+    f.post(&admin, json!({ "display_name": " " }))
+        .await
+        .invalid("/display_name", "name.empty");
+    f.post(&admin, json!({ "display_name": "Sam", "tz": "Nowhere" }))
+        .await
+        .invalid("/tz", "tz.unknown");
+    f.post(
+        &admin,
+        json!({ "display_name": "Sam", "identities": identities }),
+    )
+    .await
+    .invalid("/identities/0/subject", "text.too_long");
+    f.post(&admin, json!({ "display_name": "Sam" }))
+        .await
+        .refused(StatusCode::FORBIDDEN, "entitlement.limit_reached");
+    assert_eq!(f.count(f.a).await, 1);
 }

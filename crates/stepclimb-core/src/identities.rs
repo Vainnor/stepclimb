@@ -35,6 +35,11 @@ const PROVIDER_FKEY: &str = "identities_org_id_provider_id_fkey";
 /// The unique constraint on `(provider_id, subject)` (B14).
 const SUBJECT_UNIQUE: &str = "identities_provider_id_subject_key";
 
+/// The longest subject, in characters. At four bytes a character it stays under the size of a
+/// btree index entry, so the `(provider_id, subject)` unique index can always hold it; OIDC
+/// allows a `sub` of at most 255 ASCII characters (OpenID Connect Core 1.0, section 2).
+pub const MAX_SUBJECT_CHARS: usize = 255;
+
 /// An identity as the repository reads it.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Identity {
@@ -104,6 +109,9 @@ pub enum Error {
     /// The subject is empty.
     #[error("a subject cannot be empty")]
     SubjectEmpty,
+    /// The subject is longer than [`MAX_SUBJECT_CHARS`].
+    #[error("a subject is longer than {MAX_SUBJECT_CHARS} characters")]
+    SubjectTooLong,
     /// A string the caller passed holds NUL, which PostgreSQL `text` and `jsonb` cannot store.
     #[error("{field} cannot contain the NUL character")]
     ContainsNul { field: &'static str },
@@ -361,10 +369,20 @@ fn no_nul<'a>(field: &'static str, value: &'a str) -> Result<&'a str, Error> {
     Ok(value)
 }
 
+/// The subject check [`link`] makes, without a database, for a caller that must refuse an
+/// invalid subject before it takes a lock: [`Error::ContainsNul`], [`Error::SubjectEmpty`] or
+/// [`Error::SubjectTooLong`].
+pub fn validate_subject(subject: &str) -> Result<(), Error> {
+    valid_subject(subject).map(|_| ())
+}
+
 fn valid_subject(subject: &str) -> Result<&str, Error> {
     let subject = no_nul("subject", subject)?;
     if subject.is_empty() {
         return Err(Error::SubjectEmpty);
+    }
+    if subject.chars().count() > MAX_SUBJECT_CHARS {
+        return Err(Error::SubjectTooLong);
     }
     Ok(subject)
 }

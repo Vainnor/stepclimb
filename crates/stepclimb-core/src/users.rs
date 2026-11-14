@@ -496,6 +496,13 @@ pub async fn count_for_limit(db: impl PgExecutor<'_>, scope: OrgScope) -> Result
     Ok(count)
 }
 
+/// Every check [`create`] makes of `user` before it inserts, without a database: a caller that
+/// must refuse an invalid user before it takes a lock (the users limit, spec 10 B10) runs it
+/// first. [`create`] still makes the same checks itself.
+pub fn validate(user: &NewUser) -> Result<(), Error> {
+    valid_new_user(user).map(|_| ())
+}
+
 /// A [`NewUser`] after validation, borrowing from it.
 struct ValidNewUser<'a> {
     display_name: &'a str,
