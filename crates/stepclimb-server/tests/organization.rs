@@ -607,6 +607,83 @@ async fn t9_an_empty_patch_writes_nothing_and_returns_every_setting(pool: PgPool
     assert_eq!(stored, json!({ "newer_key": 1 }));
 }
 
+/// Spec 03 B3, Q4: `default_tz` takes an IANA time zone, stores the database's spelling of it,
+/// and refuses anything else; the same zone in another letter case writes nothing.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_default_time_zone_is_checked_and_stored_in_the_databases_spelling(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let admin = f.admin().await;
+    let patch = |tz: &str| json!({ "default_tz": tz }).to_string();
+
+    let set = f
+        .send(
+            Method::PATCH,
+            SETTINGS,
+            Some(&admin),
+            &patch("america/new_york"),
+        )
+        .await;
+    assert_eq!(set.status, StatusCode::OK, "{set:?}");
+    assert_eq!(set.body["default_tz"], "America/New_York");
+    assert_schema("OrgSettings", &set.body);
+    let events = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM audit_events WHERE action = 'organization.update_settings'",
+        )
+        .fetch_one(&f.pool)
+        .await
+        .expect("count entries")
+    };
+    assert_eq!(events().await, 1);
+
+    f.clock.advance(Duration::from_secs(60));
+    let same = f
+        .send(
+            Method::PATCH,
+            SETTINGS,
+            Some(&admin),
+            &patch("AMERICA/NEW_YORK"),
+        )
+        .await;
+    assert_eq!(same.status, StatusCode::OK, "{same:?}");
+    assert_eq!(events().await, 1, "the same zone writes nothing");
+    assert_eq!(f.updated_at().await, now());
+
+    for (body, status, code) in [
+        (
+            patch("Mars/Olympus_Mons"),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "request.invalid",
+        ),
+        (
+            patch("Etc/Unknown"),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "request.invalid",
+        ),
+        (
+            r#"{"default_tz": null}"#.to_owned(),
+            StatusCode::BAD_REQUEST,
+            "request.malformed",
+        ),
+        (
+            r#"{"default_tz": 5}"#.to_owned(),
+            StatusCode::BAD_REQUEST,
+            "request.malformed",
+        ),
+    ] {
+        let answer = f.send(Method::PATCH, SETTINGS, Some(&admin), &body).await;
+        assert_eq!((answer.status, answer.code()), (status, code), "{body}");
+        if status == StatusCode::UNPROCESSABLE_ENTITY {
+            assert_eq!(
+                answer.errors(),
+                [("/default_tz".to_owned(), "tz.unknown".to_owned())]
+            );
+        }
+    }
+    let read = f.send(Method::GET, SETTINGS, Some(&admin), "").await;
+    assert_eq!(read.body["default_tz"], "America/New_York");
+}
+
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn a_settings_body_that_is_not_an_object_is_malformed(pool: PgPool) {
     let f = Fixture::new(pool).await;

@@ -3,8 +3,8 @@
 //!
 //! The column is read and written only through these types. Each key is owned by the spec that
 //! uses it and is added here with its default in code (`#[serde(default)]` on the struct), so a
-//! stored object missing a key reads as that default and no migration backfills settings. M0's
-//! keys arrive with specs 03, 04 and 07; until then both structs are empty.
+//! stored object missing a key reads as that default and no migration backfills settings. Spec
+//! 03 owns `default_tz`; specs 04 and 07 add theirs.
 //!
 //! Stored settings are read tolerantly: a key this code does not know is ignored on read and
 //! kept in the row, because the repository merges a patch into the stored object
@@ -16,16 +16,31 @@
 use serde::{Deserialize, Serialize};
 
 /// Every organization setting with its effective value.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct OrgSettings {}
+pub struct OrgSettings {
+    /// The IANA time zone of a user created without one ([`crate::tz`]; spec 03 B3, Q4).
+    pub default_tz: String,
+}
+
+impl Default for OrgSettings {
+    fn default() -> Self {
+        Self {
+            default_tz: crate::tz::DEFAULT.to_owned(),
+        }
+    }
+}
 
 /// A partial update of [`OrgSettings`]: one optional member per key, `None` for "leave as it
 /// is". Its JSON form names only the keys being changed, which the repository merges into the
 /// stored object in one statement. Unknown keys are refused when it is parsed.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct OrgSettingsPatch {}
+pub struct OrgSettingsPatch {
+    /// An IANA time zone name; the repository stores the database's spelling of it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_tz: Option<String>,
+}
 
 impl OrgSettingsPatch {
     /// Whether a patch may name `key`, so the API can report each unknown key by name
@@ -72,6 +87,23 @@ mod tests {
         }
         assert!(!OrgSettingsPatch::knows("no_such_key"));
         assert!(!OrgSettingsPatch::knows(""));
+    }
+
+    #[test]
+    fn the_default_time_zone_is_utc() {
+        assert_eq!(OrgSettings::default().default_tz, "UTC");
+        let stored: OrgSettings =
+            serde_json::from_str(r#"{"default_tz": "Europe/Dublin"}"#).unwrap();
+        assert_eq!(stored.default_tz, "Europe/Dublin");
+    }
+
+    #[test]
+    fn a_patch_serializes_only_the_keys_it_names() {
+        let patch = OrgSettingsPatch {
+            default_tz: Some("Europe/Dublin".into()),
+        };
+        let json = serde_json::to_string(&patch).unwrap();
+        assert_eq!(json, r#"{"default_tz":"Europe/Dublin"}"#);
     }
 
     #[test]

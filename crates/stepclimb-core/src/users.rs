@@ -3,16 +3,18 @@
 //!
 //! A user is one row in `users` and belongs to exactly one organization; every query here filters
 //! by `org_id = scope.org_id()`. The repository validates what the spec states for every writer
-//! (a non-blank display name, the supported locale, a trimmed email unique in the organization),
-//! refuses NUL in every string it is given (PostgreSQL `text` cannot hold one), and leaves the
+//! (a non-blank display name, the supported locale, a trimmed email unique in the organization,
+//! an IANA time zone, stored in the database's spelling), refuses NUL in every string it is given
+//! (PostgreSQL `text` cannot hold one) and strings longer than their limit ([`MAX_NAME_CHARS`],
+//! [`MAX_EMAIL_CHARS`], [`MAX_EXTERNAL_ID_CHARS`]), and leaves the
 //! admin API's guards to the routes: refusing changes to the source-owned fields of a user an
 //! outside source owns (B6) and suspending yourself are decisions about who asks, and the sync
 //! API (M4) writes those same users through these functions.
 //!
 //! What the caller supplies:
 //!
-//! - `tz`, already resolved and validated. Its default is an organization setting (spec 03 Q4),
-//!   so the column has no default and this module stores the value as given.
+//! - `tz`, already resolved: its default is an organization setting (spec 03 Q4), so the column
+//!   has no default. This module checks it against the time zone database ([`crate::tz`]).
 //! - `now`, the request's clock reading, which `created_at` and `updated_at` are set from
 //!   (spec 02 B5).
 //!
@@ -30,7 +32,7 @@ use crate::{
     audit::{self, Action, Actor},
     db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
     id::new_id,
-    role_assignments,
+    name, role_assignments, tz,
 };
 
 /// The locale of a user created without one (B3).
@@ -38,6 +40,17 @@ pub const DEFAULT_LOCALE: &str = "en";
 
 /// The locales a user may have. Stepclimb is English-only at 1.0 (B3).
 pub const SUPPORTED_LOCALES: [&str; 1] = [DEFAULT_LOCALE];
+
+/// The longest display, given or family name, in characters (Unicode scalar values), as for
+/// organization and account names (spec 02 Q6).
+pub const MAX_NAME_CHARS: usize = name::MAX_CHARS;
+
+/// The longest email, in characters: the longest address an SMTP path can carry (RFC 5321
+/// section 4.5.3.1.3, 256 octets with the angle brackets).
+pub const MAX_EMAIL_CHARS: usize = 254;
+
+/// The longest external id, in characters.
+pub const MAX_EXTERNAL_ID_CHARS: usize = 200;
 
 /// The unique index that keeps `external_id` unique within an organization (B5).
 const EXTERNAL_ID_INDEX: &str = "users_external_id";
@@ -107,7 +120,7 @@ pub struct NewUser {
     pub email: Option<String>,
     /// [`DEFAULT_LOCALE`] when `None`; anything outside [`SUPPORTED_LOCALES`] is refused.
     pub locale: Option<String>,
-    /// An IANA zone the caller resolved and validated (spec 03 Q4).
+    /// An IANA time zone the caller resolved (spec 03 Q4); stored in the database's spelling.
     pub tz: String,
     /// `Local` for an admin's user, `Idp` for one made at sign-in (B4).
     pub source: Source,
@@ -159,6 +172,12 @@ pub enum Error {
     /// A string the caller passed holds NUL, which PostgreSQL `text` cannot store.
     #[error("{field} cannot contain the NUL character")]
     ContainsNul { field: &'static str },
+    /// A string is longer than its limit once trimmed (for the trimmed fields).
+    #[error("{field} is longer than {max} characters")]
+    TooLong { field: &'static str, max: usize },
+    /// The time zone is no time zone of the IANA database ([`crate::tz`]).
+    #[error("the time zone is not an IANA time zone")]
+    TzUnknown,
     /// The locale is not one of [`SUPPORTED_LOCALES`].
     #[error("the locale is not supported")]
     LocaleUnsupported,
@@ -477,6 +496,13 @@ pub async fn count_for_limit(db: impl PgExecutor<'_>, scope: OrgScope) -> Result
     Ok(count)
 }
 
+/// Every check [`create`] makes of `user` before it inserts, without a database: a caller that
+/// must refuse an invalid user before it takes a lock (the users limit, spec 10 B10) runs it
+/// first. [`create`] still makes the same checks itself.
+pub fn validate(user: &NewUser) -> Result<(), Error> {
+    valid_new_user(user).map(|_| ())
+}
+
 /// A [`NewUser`] after validation, borrowing from it.
 struct ValidNewUser<'a> {
     display_name: &'a str,
@@ -484,7 +510,7 @@ struct ValidNewUser<'a> {
     family_name: &'a str,
     email: Option<&'a str>,
     locale: &'a str,
-    tz: &'a str,
+    tz: String,
     source: Source,
     external_id: Option<&'a str>,
 }
@@ -492,16 +518,16 @@ struct ValidNewUser<'a> {
 fn valid_new_user(user: &NewUser) -> Result<ValidNewUser<'_>, Error> {
     Ok(ValidNewUser {
         display_name: valid_display_name(&user.display_name)?,
-        given_name: no_nul("given_name", &user.given_name)?,
-        family_name: no_nul("family_name", &user.family_name)?,
+        given_name: valid_text("given_name", &user.given_name, MAX_NAME_CHARS)?,
+        family_name: valid_text("family_name", &user.family_name, MAX_NAME_CHARS)?,
         email: user.email.as_deref().map(valid_email).transpose()?,
         locale: valid_locale(user.locale.as_deref().unwrap_or(DEFAULT_LOCALE))?,
-        tz: no_nul("tz", &user.tz)?,
+        tz: valid_tz(&user.tz)?,
         source: user.source,
         external_id: user
             .external_id
             .as_deref()
-            .map(|id| no_nul("external_id", id))
+            .map(|id| valid_text("external_id", id, MAX_EXTERNAL_ID_CHARS))
             .transpose()?,
     })
 }
@@ -515,7 +541,7 @@ struct ValidPatch<'a> {
     set_email: bool,
     email: Option<&'a str>,
     locale: Option<&'a str>,
-    tz: Option<&'a str>,
+    tz: Option<String>,
 }
 
 fn valid_patch(patch: &UserPatch) -> Result<ValidPatch<'_>, Error> {
@@ -535,13 +561,30 @@ fn valid_patch(patch: &UserPatch) -> Result<ValidPatch<'_>, Error> {
             .map(valid_email)
             .transpose()?,
         locale: patch.locale.as_deref().map(valid_locale).transpose()?,
-        tz: optional("tz", patch.tz.as_ref())?,
+        tz: patch.tz.as_deref().map(valid_tz).transpose()?,
     })
 }
 
-/// [`no_nul`] for a field a patch may leave out.
+/// [`valid_text`] for a name field a patch may leave out.
 fn optional<'a>(field: &'static str, value: Option<&'a String>) -> Result<Option<&'a str>, Error> {
-    value.map(|v| no_nul(field, v)).transpose()
+    value
+        .map(|v| valid_text(field, v, MAX_NAME_CHARS))
+        .transpose()
+}
+
+/// `value` unchanged when it holds no NUL and at most `max` characters.
+fn valid_text<'a>(field: &'static str, value: &'a str, max: usize) -> Result<&'a str, Error> {
+    let value = no_nul(field, value)?;
+    if value.chars().count() > max {
+        return Err(Error::TooLong { field, max });
+    }
+    Ok(value)
+}
+
+/// The time zone database's spelling of `name` (`america/new_york` is `America/New_York`).
+fn valid_tz(name: &str) -> Result<String, Error> {
+    no_nul("tz", name)?;
+    tz::canonical(name).ok_or(Error::TzUnknown)
 }
 
 /// `value` unchanged, or [`Error::ContainsNul`] naming `field`.
@@ -557,7 +600,7 @@ fn valid_display_name(name: &str) -> Result<&str, Error> {
     if name.is_empty() {
         return Err(Error::DisplayNameEmpty);
     }
-    Ok(name)
+    valid_text("display_name", name, MAX_NAME_CHARS)
 }
 
 fn valid_email(email: &str) -> Result<&str, Error> {
@@ -565,6 +608,7 @@ fn valid_email(email: &str) -> Result<&str, Error> {
     if email.is_empty() {
         return Err(Error::EmailEmpty);
     }
+    valid_text("email", email, MAX_EMAIL_CHARS)?;
     if email.chars().any(|c| c.is_control() || is_format_char(c)) {
         return Err(Error::EmailInvalidCharacter);
     }
@@ -675,7 +719,7 @@ mod tests {
             Err(Error::ContainsNul { field: "email" })
         ));
         assert!(matches!(
-            no_nul("tz", "UTC\0"),
+            valid_tz("UTC\0"),
             Err(Error::ContainsNul { field: "tz" })
         ));
         assert_eq!(no_nul("tz", "UTC").unwrap(), "UTC");
@@ -717,6 +761,47 @@ mod tests {
             !is_format_char('\u{2065}'),
             "unassigned, between two Cf ranges"
         );
+    }
+
+    #[test]
+    fn time_zones_are_checked_and_stored_in_the_databases_spelling() {
+        assert_eq!(valid_tz("america/new_york").unwrap(), "America/New_York");
+        assert_eq!(valid_tz("UTC").unwrap(), "UTC");
+        for name in ["Mars/Olympus_Mons", "", "Etc/Unknown", "+05:00"] {
+            assert!(matches!(valid_tz(name), Err(Error::TzUnknown)), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn the_length_limits_count_characters() {
+        let at_limit = "é".repeat(MAX_NAME_CHARS);
+        assert_eq!(
+            valid_display_name(&format!(" {at_limit} ")).unwrap(),
+            at_limit
+        );
+        let over = "a".repeat(MAX_NAME_CHARS + 1);
+        for (field, result) in [
+            ("display_name", valid_display_name(&over)),
+            (
+                "given_name",
+                valid_text("given_name", &over, MAX_NAME_CHARS),
+            ),
+        ] {
+            assert!(
+                matches!(result, Err(Error::TooLong { field: f, max: MAX_NAME_CHARS }) if f == field),
+                "{field}"
+            );
+        }
+        let local = "a".repeat(MAX_EMAIL_CHARS - "@example.test".len());
+        let email = format!("{local}@example.test");
+        assert_eq!(valid_email(&email).unwrap(), email);
+        assert!(matches!(
+            valid_email(&format!("a{email}")),
+            Err(Error::TooLong {
+                field: "email",
+                max: MAX_EMAIL_CHARS
+            })
+        ));
     }
 
     #[test]

@@ -213,8 +213,18 @@ async fn a_provider_subject_links_to_at_most_one_user(pool: PgPool) {
     assert_eq!(subjects, ["1000001", "1000002"]);
 }
 
+/// The longest subject, in four-byte characters, still fits the `(provider_id, subject)` unique
+/// index.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_longest_subject_fits_the_unique_index(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    let widest = "\u{1F600}".repeat(identities::MAX_SUBJECT_CHARS);
+    let linked = link(&pool, a.id, new(a.sam, a.oauth, &widest)).await;
+    assert_eq!(linked.subject, widest);
+}
+
 /// T12 through the repository: a user or provider outside the scope's organization, or one that
-/// does not exist, is refused, as are an empty subject and NUL, and nothing is inserted.
+/// does not exist, is refused, as are an empty or too long subject and NUL, and nothing is inserted.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn link_refuses_what_is_outside_the_scope_and_inserts_nothing(pool: PgPool) {
     let a = org(&pool, "org-a").await;
@@ -254,6 +264,11 @@ async fn link_refuses_what_is_outside_the_scope_and_inserts_nothing(pool: PgPool
         Error::ProviderNotFound
     );
     assert_err!(link(new(a.sam, a.oauth, "")).await, Error::SubjectEmpty);
+    let over = "1".repeat(identities::MAX_SUBJECT_CHARS + 1);
+    assert_err!(
+        link(new(a.sam, a.oauth, &over)).await,
+        Error::SubjectTooLong
+    );
     assert_err!(
         link(new(a.sam, a.oauth, "10\0")).await,
         Error::ContainsNul { field: "subject" }

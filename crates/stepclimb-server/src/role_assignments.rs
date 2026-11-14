@@ -480,11 +480,7 @@ fn refuse_escalation(
     permissions: &[String],
     target: &grants::Target,
 ) -> Result<(), ApiError> {
-    let in_catalog = |key: &str| perm::ALL.iter().any(|p| p.key() == key);
-    let unheld = permissions
-        .iter()
-        .any(|key| in_catalog(key) && !grants.holds_key(key, target));
-    if !unheld {
+    if !holds_unheld(grants, permissions, target) {
         return Ok(());
     }
     Err(ApiError::new(
@@ -492,6 +488,21 @@ fn refuse_escalation(
         crate::roles::code::PERMISSION_ESCALATION,
         "You can only grant or remove a role whose permissions you hold at its scope.",
     ))
+}
+
+/// Whether `permissions` has a catalog key that is not effective for the caller (`grants`) at
+/// `target`: the escalation rule of role assignments (spec 09 B12, Q4), and of the user admin
+/// routes' email and status changes (spec 03, owner decision of 2026-11-14). A key the catalog
+/// does not define grants nothing anywhere and does not count.
+pub(crate) fn holds_unheld(
+    grants: &Grants,
+    permissions: &[String],
+    target: &grants::Target,
+) -> bool {
+    let in_catalog = |key: &str| perm::ALL.iter().any(|p| p.key() == key);
+    permissions
+        .iter()
+        .any(|key| in_catalog(key) && !grants.holds_key(key, target))
 }
 
 /// 409 `role.unknown_builtin` for a built-in role this server does not define, such as a newer

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The users repository and the `users` table against a fresh database per test
-//! (docs/specs/m0/03-users-and-identities.md B1 to B8, B12; T1, T3, T4, T8). Needs
+//! (docs/specs/m0/03-users-and-identities.md B1 to B8, B12; T1, T3, T4, T8; B2's length limits
+//! and B3's time zone check). Needs
 //! `DATABASE_URL` (`just up`).
 //!
 //! Every test that reads or writes through the repository makes two organizations and checks
@@ -191,6 +192,94 @@ async fn create_refuses_invalid_fields_and_inserts_nothing(pool: PgPool) {
         "{french:?}"
     );
     assert_eq!(users::count_for_limit(&pool, scope(a)).await.unwrap(), 0);
+}
+
+/// Spec 03 B3, Q4: the zone is checked against the time zone database and stored in its
+/// spelling; one it does not have is refused and nothing is written.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn time_zones_are_checked_and_stored_in_the_databases_spelling(pool: PgPool) {
+    let a = insert_org(&pool, "org-a").await;
+    let lower = NewUser {
+        tz: "america/new_york".into(),
+        ..new_user("Sam")
+    };
+    let created = create(&pool, a, lower).await;
+    assert_eq!(created.tz, "America/New_York");
+
+    let unknown = NewUser {
+        tz: "Mars/Olympus_Mons".into(),
+        ..new_user("Robin")
+    };
+    let refused = users::create(&pool, scope(a), &unknown, request_time()).await;
+    assert!(matches!(refused, Err(Error::TzUnknown)), "{refused:?}");
+    assert_eq!(users::count_for_limit(&pool, scope(a)).await.unwrap(), 1);
+
+    let patch = UserPatch {
+        tz: Some("europe/dublin".into()),
+        ..UserPatch::default()
+    };
+    let updated = users::update(&pool, scope(a), created.id, &patch, later_time())
+        .await
+        .unwrap();
+    assert_eq!(updated.tz, "Europe/Dublin");
+}
+
+/// Names at most 200 characters, emails 254 and external ids 200 (coordinator decision on spec
+/// 03 B2): one more is refused and nothing is inserted.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn create_refuses_strings_over_their_limit(pool: PgPool) {
+    let a = insert_org(&pool, "org-a").await;
+    let long = |n| "a".repeat(n);
+    let email = |n: usize| format!("{}@example.test", "a".repeat(n - "@example.test".len()));
+    let cases = [
+        (
+            NewUser {
+                display_name: long(users::MAX_NAME_CHARS + 1),
+                ..new_user("x")
+            },
+            "display_name",
+            users::MAX_NAME_CHARS,
+        ),
+        (
+            NewUser {
+                given_name: long(users::MAX_NAME_CHARS + 1),
+                ..new_user("Sam")
+            },
+            "given_name",
+            users::MAX_NAME_CHARS,
+        ),
+        (
+            NewUser {
+                email: Some(email(users::MAX_EMAIL_CHARS + 1)),
+                ..new_user("Sam")
+            },
+            "email",
+            users::MAX_EMAIL_CHARS,
+        ),
+        (
+            NewUser {
+                external_id: Some(long(users::MAX_EXTERNAL_ID_CHARS + 1)),
+                ..new_user("Sam")
+            },
+            "external_id",
+            users::MAX_EXTERNAL_ID_CHARS,
+        ),
+    ];
+    for (user, field, max) in cases {
+        let result = users::create(&pool, scope(a), &user, request_time()).await;
+        assert!(
+            matches!(&result, Err(Error::TooLong { field: f, max: m }) if *f == field && *m == max),
+            "{field}: {result:?}"
+        );
+    }
+    assert_eq!(users::count_for_limit(&pool, scope(a)).await.unwrap(), 0);
+    let at_limit = NewUser {
+        display_name: long(users::MAX_NAME_CHARS),
+        email: Some(email(users::MAX_EMAIL_CHARS)),
+        external_id: Some(long(users::MAX_EXTERNAL_ID_CHARS)),
+        ..new_user("x")
+    };
+    create(&pool, a, at_limit).await;
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
@@ -399,6 +488,23 @@ async fn update_refuses_invalid_fields_and_changes_nothing(pool: PgPool) {
                 ..UserPatch::default()
             },
             Error::LocaleUnsupported,
+        ),
+        (
+            UserPatch {
+                tz: Some("Mars/Olympus_Mons".into()),
+                ..UserPatch::default()
+            },
+            Error::TzUnknown,
+        ),
+        (
+            UserPatch {
+                family_name: Some("a".repeat(users::MAX_NAME_CHARS + 1)),
+                ..UserPatch::default()
+            },
+            Error::TooLong {
+                field: "family_name",
+                max: users::MAX_NAME_CHARS,
+            },
         ),
     ];
 

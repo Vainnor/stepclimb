@@ -205,6 +205,45 @@ export interface paths {
         patch: operations["updateOrganizationSettings"];
         trace?: never;
     };
+    "/api/v1/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the organization's users, sorted by display name, then id. */
+        get: operations["listUsers"];
+        put?: never;
+        /** Create a user, `local` and `active`, and link the identities given to them. */
+        post: operations["createUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one user. */
+        get: operations["getUser"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change a user's names, email, locale, time zone or status. A patch naming nothing changes
+         *     nothing.
+         */
+        patch: operations["updateUser"];
+        trace?: never;
+    };
     "/auth/sign-out": {
         parameters: {
             query?: never;
@@ -416,16 +455,50 @@ export interface components {
             /** Format: uuid */
             user_id: string;
         };
+        /** @description A user to create. The new user is `local` and `active`, and has no local credential. */
+        NewUser: {
+            /** @description Trimmed; 1 to 200 characters. */
+            display_name: string;
+            /** @description Trimmed; at most 254 characters; unique in the organization in any letter case. */
+            email?: string | null;
+            /** @description At most 200 characters; unique in the organization. */
+            external_id?: string | null;
+            /** @description At most 200 characters; `""` when omitted. */
+            family_name?: string;
+            /** @description At most 200 characters; `""` when omitted. */
+            given_name?: string;
+            /**
+             * @description Identities to link to the new user, so they can sign in with them the first time; at
+             *     most 20.
+             */
+            identities?: components["schemas"]["NewUserIdentity"][];
+            /** @description `en`, the default and the only locale in M0. */
+            locale?: string;
+            /** @description An IANA time zone; the organization's `default_tz` when omitted. */
+            tz?: string;
+        };
+        /** @description An identity to link to a new user: the provider's subject at the provider with this key. */
+        NewUserIdentity: {
+            provider_key: string;
+            /** @description Stored exactly as given; not empty. */
+            subject: string;
+        };
         /**
          * @description Every organization setting with its effective value: the stored one, or the setting's
          *     default when none is stored.
          */
-        OrgSettings: Record<string, never>;
+        OrgSettings: {
+            /** @description The IANA time zone a user created without one gets; `UTC` unless set. */
+            default_tz: string;
+        };
         /**
          * @description A partial change to the organization settings: one optional member per setting; only the
          *     members present change. A member that is no setting is refused.
          */
-        OrgSettingsPatch: Record<string, never>;
+        OrgSettingsPatch: {
+            /** @description An IANA time zone, matched in any letter case and stored in the database's spelling. */
+            default_tz?: string;
+        };
         /** @description The caller's organization. */
         Organization: {
             /** Format: uuid */
@@ -519,6 +592,40 @@ export interface components {
                 source: components["schemas"]["AssignmentSource"];
                 /** Format: uuid */
                 user_id: string;
+            }[];
+            /** @description Pass this as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
+        };
+        /** @description One page of a list. */
+        Page_User: {
+            /** @description The items, in the list's sort order. */
+            items: {
+                /**
+                 * Format: date-time
+                 * @description RFC 3339, UTC.
+                 */
+                created_at: string;
+                display_name: string;
+                email: string | null;
+                /** @description The owning system's id for the user; `null` when there is none. */
+                external_id: string | null;
+                /** @description `""` when none was given. */
+                family_name: string;
+                /** @description `""` when none was given. */
+                given_name: string;
+                /** Format: uuid */
+                id: string;
+                /** @description `en` in M0. */
+                locale: string;
+                source: components["schemas"]["UserSource"];
+                status: components["schemas"]["UserStatus"];
+                /** @description An IANA time zone. */
+                tz: string;
+                /**
+                 * Format: date-time
+                 * @description RFC 3339, UTC.
+                 */
+                updated_at: string;
             }[];
             /** @description Pass this as `cursor` to get the next page; `null` on the last page. */
             next_cursor: string | null;
@@ -621,6 +728,61 @@ export interface components {
          * @enum {string}
          */
         ScopeType: "organization" | "account" | "course";
+        /** @description A user of the caller's organization. */
+        User: {
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            created_at: string;
+            display_name: string;
+            email: string | null;
+            /** @description The owning system's id for the user; `null` when there is none. */
+            external_id: string | null;
+            /** @description `""` when none was given. */
+            family_name: string;
+            /** @description `""` when none was given. */
+            given_name: string;
+            /** Format: uuid */
+            id: string;
+            /** @description `en` in M0. */
+            locale: string;
+            source: components["schemas"]["UserSource"];
+            status: components["schemas"]["UserStatus"];
+            /** @description An IANA time zone. */
+            tz: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            updated_at: string;
+        };
+        /**
+         * @description A change to a user; an omitted member is left as it is. A member sent as `null` is
+         *     malformed, except `email`, where `null` removes the email.
+         */
+        UserPatch: {
+            /** @description Trimmed; 1 to 200 characters. Refused for a user an outside source owns. */
+            display_name?: string;
+            /**
+             * @description Trimmed; at most 254 characters; `null` removes it. Refused for a user an outside source
+             *     owns.
+             */
+            email?: string | null;
+            /** @description At most 200 characters. Refused for a user an outside source owns. */
+            family_name?: string;
+            /** @description At most 200 characters. Refused for a user an outside source owns. */
+            given_name?: string;
+            /** @description `en` in M0. */
+            locale?: string;
+            /**
+             * @description `suspended` ends every session of the user on its next request; you cannot suspend
+             *     yourself.
+             */
+            status?: components["schemas"]["UserStatus"];
+            /** @description An IANA time zone. */
+            tz?: string;
+        };
         /**
          * @description Where the user record came from: made by an admin (`local`), at sign-in through an identity
          *     provider (`idp`), or by the sync API, SCIM or a connector, which own it.
@@ -906,7 +1068,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting. */
+        /** @description `request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `tz.unknown` a `default_tz` that is no IANA time zone. */
         SettingsInvalid: {
             headers: {
                 [name: string]: unknown;
@@ -944,6 +1106,51 @@ export interface components {
         };
         /** @description `role.builtin_immutable`: built-in roles cannot be changed. */
         UpdateConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `user.external_id_taken`: another user of the organization has this external id. `user.email_taken`: another user of the organization has this email, in any letter case. `identity.taken`: one of `identities` is already linked to a user. */
+        UserCreateConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: the caller does not hold `user.manage` at organization scope. `entitlement.limit_reached`: the organization's plan allows no more users; `limit` and `max` name the limit and its value. `auth.csrf_refused`: the request did not come from this site. */
+        UserCreateForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `user.not_found`: no user of the organization has this id. `org.not_found`: the request's organization cannot be determined. */
+        UserNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `user.externally_managed`: an identity provider, the sync API, SCIM or a connector owns the user's names and email; change them there. `user.cannot_suspend_self`: you cannot suspend yourself. `user.email_taken`: another user of the organization has this email, in any letter case. `role_assignment.last_org_admin`: the user is the organization's last active Organization admin. */
+        UserUpdateConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email` or `status` of a user who holds a permission the caller does not hold at organization scope. `auth.csrf_refused`: the request did not come from this site. */
+        UserWriteForbidden: {
             headers: {
                 [name: string]: unknown;
             };
@@ -1591,6 +1798,143 @@ export interface operations {
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             422: components["responses"]["SettingsInvalid"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    listUsers: {
+        parameters: {
+            query?: {
+                status?: components["schemas"]["UserStatus"];
+                source?: components["schemas"]["UserSource"];
+                /** @description A prefix of the display name or the email, in any letter case. */
+                q?: string;
+                /** @description The `next_cursor` of the previous page; omit it for the first page. */
+                cursor?: string;
+                /** @description How many items to return, 1 to 200; 50 when omitted. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of users */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_User"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["PermissionDenied"];
+            404: components["responses"]["OrganizationNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    createUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewUser"];
+            };
+        };
+        responses: {
+            /** @description The user is created */
+            201: {
+                headers: {
+                    /** @description The user's path */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["UserCreateForbidden"];
+            404: components["responses"]["OrganizationNotFound"];
+            409: components["responses"]["UserCreateConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["UnprocessableEntity"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    getUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's id. */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["PermissionDenied"];
+            404: components["responses"]["UserNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    updateUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's id. */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserPatch"];
+            };
+        };
+        responses: {
+            /** @description The user after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["UserWriteForbidden"];
+            404: components["responses"]["UserNotFound"];
+            409: components["responses"]["UserUpdateConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["UnprocessableEntity"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };

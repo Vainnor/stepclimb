@@ -192,9 +192,8 @@ async fn a_stored_setting_the_code_does_not_know_is_ignored_on_read(pool: PgPool
     assert_eq!(read, OrgSettings::default());
 }
 
-/// `OrgSettingsPatch` has no key yet, so every patch names nothing and writes nothing (spec 09
-/// B22): the stored object, unknown keys included, and `updated_at` stay. The merge of a named
-/// key is tested with the first setting.
+/// A patch naming no key writes nothing (spec 09 B22): the stored object, unknown keys
+/// included, and `updated_at` stay.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn update_settings_with_no_key_writes_nothing_in_either_organization(pool: PgPool) {
     let a = insert_org(&pool, "org-a", "Org A").await;
@@ -212,6 +211,62 @@ async fn update_settings_with_no_key_writes_nothing_in_either_organization(pool:
     assert_eq!(settings, OrgSettings::default());
     assert_eq!(stored(&pool, a).await, a_before, "org A is unchanged");
     assert_eq!(stored(&pool, b).await, b_before, "org B is unchanged");
+}
+
+/// A named key merges into the stored object, keeping the keys it does not name, and is stored
+/// in its checked form; `updated_at` moves and org B is untouched.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn update_settings_merges_the_default_time_zone(pool: PgPool) {
+    let a = insert_org(&pool, "org-a", "Org A").await;
+    let b = insert_org(&pool, "org-b", "Org B").await;
+    store_settings(&pool, a, r#"{"newer_key": {"kept": true}}"#).await;
+    let b_before = stored(&pool, b).await;
+
+    let patch = OrgSettingsPatch {
+        default_tz: Some("america/new_york".into()),
+    };
+    let settings =
+        organizations::update_settings(&pool, scope(a), &patch, request_time(), Actor::Instance)
+            .await
+            .unwrap();
+
+    assert_eq!(settings.default_tz, "America/New_York");
+    let raw: String = sqlx::query_scalar("SELECT settings::text FROM organizations WHERE id = $1")
+        .bind(a)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let raw: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(
+        raw,
+        serde_json::json!({ "newer_key": { "kept": true }, "default_tz": "America/New_York" })
+    );
+    assert_eq!(stored(&pool, b).await, b_before, "org B is unchanged");
+}
+
+/// A zone the database does not have is refused before anything is read or written.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn update_settings_refuses_an_unknown_time_zone(pool: PgPool) {
+    let a = insert_org(&pool, "org-a", "Org A").await;
+    let before = stored(&pool, a).await;
+    for name in ["Mars/Olympus_Mons", "", "Etc/Unknown"] {
+        let patch = OrgSettingsPatch {
+            default_tz: Some(name.into()),
+        };
+        let result = organizations::update_settings(
+            &pool,
+            scope(a),
+            &patch,
+            request_time(),
+            Actor::Instance,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(Error::DefaultTzUnknown)),
+            "{name:?}: {result:?}"
+        );
+    }
+    assert_eq!(stored(&pool, a).await, before);
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]

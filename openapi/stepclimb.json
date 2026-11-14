@@ -1148,6 +1148,284 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/api/v1/users": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "List the organization's users, sorted by display name, then id.",
+        "operationId": "listUsers",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/UserStatus"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/UserSource"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "A prefix of the display name or the email, in any letter case.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page; omit it for the first page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many items to return, 1 to 200; 50 when omitted.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 200,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of users",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_User"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/PermissionDenied"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Create a user, `local` and `active`, and link the identities given to them.",
+        "operationId": "createUser",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewUser"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The user is created",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The user's path"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/UserCreateForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/UserCreateConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/users/{user_id}": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Read one user.",
+        "operationId": "getUser",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "The user's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/PermissionDenied"
+          },
+          "404": {
+            "$ref": "#/components/responses/UserNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Change a user's names, email, locale, time zone or status. A patch naming nothing changes\nnothing.",
+        "operationId": "updateUser",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "The user's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The user after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/UserWriteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/UserNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/UserUpdateConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/auth/sign-out": {
       "post": {
         "tags": [
@@ -1555,13 +1833,98 @@
         },
         "additionalProperties": false
       },
+      "NewUser": {
+        "type": "object",
+        "description": "A user to create. The new user is `local` and `active`, and has no local credential.",
+        "required": [
+          "display_name"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string",
+            "description": "Trimmed; 1 to 200 characters."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Trimmed; at most 254 characters; unique in the organization in any letter case."
+          },
+          "external_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "At most 200 characters; unique in the organization."
+          },
+          "family_name": {
+            "type": "string",
+            "description": "At most 200 characters; `\"\"` when omitted."
+          },
+          "given_name": {
+            "type": "string",
+            "description": "At most 200 characters; `\"\"` when omitted."
+          },
+          "identities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NewUserIdentity"
+            },
+            "description": "Identities to link to the new user, so they can sign in with them the first time; at\nmost 20.",
+            "maxItems": 20
+          },
+          "locale": {
+            "type": "string",
+            "description": "`en`, the default and the only locale in M0."
+          },
+          "tz": {
+            "type": "string",
+            "description": "An IANA time zone; the organization's `default_tz` when omitted."
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewUserIdentity": {
+        "type": "object",
+        "description": "An identity to link to a new user: the provider's subject at the provider with this key.",
+        "required": [
+          "provider_key",
+          "subject"
+        ],
+        "properties": {
+          "provider_key": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string",
+            "description": "Stored exactly as given; not empty."
+          }
+        },
+        "additionalProperties": false
+      },
       "OrgSettings": {
         "type": "object",
-        "description": "Every organization setting with its effective value: the stored one, or the setting's\ndefault when none is stored."
+        "description": "Every organization setting with its effective value: the stored one, or the setting's\ndefault when none is stored.",
+        "required": [
+          "default_tz"
+        ],
+        "properties": {
+          "default_tz": {
+            "type": "string",
+            "description": "The IANA time zone a user created without one gets; `UTC` unless set."
+          }
+        }
       },
       "OrgSettingsPatch": {
         "type": "object",
         "description": "A partial change to the organization settings: one optional member per setting; only the\nmembers present change. A member that is no setting is refused.",
+        "properties": {
+          "default_tz": {
+            "type": "string",
+            "description": "An IANA time zone, matched in any letter case and stored in the database's spelling."
+          }
+        },
         "additionalProperties": false
       },
       "Organization": {
@@ -1799,6 +2162,99 @@
           }
         }
       },
+      "Page_User": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A user of the caller's organization.",
+              "required": [
+                "id",
+                "display_name",
+                "given_name",
+                "family_name",
+                "email",
+                "locale",
+                "tz",
+                "status",
+                "source",
+                "external_id",
+                "created_at",
+                "updated_at"
+              ],
+              "properties": {
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "RFC 3339, UTC."
+                },
+                "display_name": {
+                  "type": "string"
+                },
+                "email": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "external_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The owning system's id for the user; `null` when there is none."
+                },
+                "family_name": {
+                  "type": "string",
+                  "description": "`\"\"` when none was given."
+                },
+                "given_name": {
+                  "type": "string",
+                  "description": "`\"\"` when none was given."
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "locale": {
+                  "type": "string",
+                  "description": "`en` in M0."
+                },
+                "source": {
+                  "$ref": "#/components/schemas/UserSource"
+                },
+                "status": {
+                  "$ref": "#/components/schemas/UserStatus"
+                },
+                "tz": {
+                  "type": "string",
+                  "description": "An IANA time zone."
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "RFC 3339, UTC."
+                }
+              }
+            },
+            "description": "The items, in the list's sort order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass this as `cursor` to get the next page; `null` on the last page."
+          }
+        }
+      },
       "PermissionInfo": {
         "type": "object",
         "description": "One permission of the catalog.",
@@ -2020,6 +2476,116 @@
           "account",
           "course"
         ]
+      },
+      "User": {
+        "type": "object",
+        "description": "A user of the caller's organization.",
+        "required": [
+          "id",
+          "display_name",
+          "given_name",
+          "family_name",
+          "email",
+          "locale",
+          "tz",
+          "status",
+          "source",
+          "external_id",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "external_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The owning system's id for the user; `null` when there is none."
+          },
+          "family_name": {
+            "type": "string",
+            "description": "`\"\"` when none was given."
+          },
+          "given_name": {
+            "type": "string",
+            "description": "`\"\"` when none was given."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "locale": {
+            "type": "string",
+            "description": "`en` in M0."
+          },
+          "source": {
+            "$ref": "#/components/schemas/UserSource"
+          },
+          "status": {
+            "$ref": "#/components/schemas/UserStatus"
+          },
+          "tz": {
+            "type": "string",
+            "description": "An IANA time zone."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          }
+        }
+      },
+      "UserPatch": {
+        "type": "object",
+        "description": "A change to a user; an omitted member is left as it is. A member sent as `null` is\nmalformed, except `email`, where `null` removes the email.",
+        "properties": {
+          "display_name": {
+            "type": "string",
+            "description": "Trimmed; 1 to 200 characters. Refused for a user an outside source owns."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Trimmed; at most 254 characters; `null` removes it. Refused for a user an outside source\nowns."
+          },
+          "family_name": {
+            "type": "string",
+            "description": "At most 200 characters. Refused for a user an outside source owns."
+          },
+          "given_name": {
+            "type": "string",
+            "description": "At most 200 characters. Refused for a user an outside source owns."
+          },
+          "locale": {
+            "type": "string",
+            "description": "`en` in M0."
+          },
+          "status": {
+            "$ref": "#/components/schemas/UserStatus",
+            "description": "`suspended` ends every session of the user on its next request; you cannot suspend\nyourself."
+          },
+          "tz": {
+            "type": "string",
+            "description": "An IANA time zone."
+          }
+        },
+        "additionalProperties": false
       },
       "UserSource": {
         "type": "string",
@@ -2351,7 +2917,7 @@
         }
       },
       "SettingsInvalid": {
-        "description": "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting.",
+        "description": "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `tz.unknown` a `default_tz` that is no IANA time zone.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -2400,6 +2966,56 @@
           }
         }
       },
+      "UserCreateConflict": {
+        "description": "`user.external_id_taken`: another user of the organization has this external id. `user.email_taken`: another user of the organization has this email, in any letter case. `identity.taken`: one of `identities` is already linked to a user.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "UserCreateForbidden": {
+        "description": "`permission.denied`: the caller does not hold `user.manage` at organization scope. `entitlement.limit_reached`: the organization's plan allows no more users; `limit` and `max` name the limit and its value. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "UserNotFound": {
+        "description": "`user.not_found`: no user of the organization has this id. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "UserUpdateConflict": {
+        "description": "`user.externally_managed`: an identity provider, the sync API, SCIM or a connector owns the user's names and email; change them there. `user.cannot_suspend_self`: you cannot suspend yourself. `user.email_taken`: another user of the organization has this email, in any letter case. `role_assignment.last_org_admin`: the user is the organization's last active Organization admin.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "UserWriteForbidden": {
+        "description": "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email` or `status` of a user who holds a permission the caller does not hold at organization scope. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "WriteForbidden": {
         "description": "`permission.denied`: the caller does not hold `role.manage` at organization scope. `permission.escalation`: the caller does not hold, at organization scope, a permission the role gains or loses. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
@@ -2436,6 +3052,10 @@
     {
       "name": "roles",
       "description": "The permission catalog, roles and role assignments"
+    },
+    {
+      "name": "users",
+      "description": "The organization's users"
     }
   ]
 }
