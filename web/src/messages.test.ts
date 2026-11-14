@@ -20,7 +20,7 @@ const sources = import.meta.glob<string>(["./**/*.{ts,tsx}", "!./**/*.test.{ts,t
 
 describe("web catalog", () => {
   it("walks the app's source", () => {
-    expect(Object.keys(sources)).toContain("./routes/index.tsx");
+    expect(Object.keys(sources)).toContain("./routes/home.tsx");
   });
 
   it("has every message id the app uses", () => {

@@ -1,18 +1,27 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Smoke test of the Compose stack: the binary serves the built SPA, which reads /healthz through
+// Smoke test of the Compose stack: the binary serves the built SPA, which asks /api/v1/me through
 // the API client; the probes and the API docs answer.
 import { expect, test } from "@playwright/test";
 
-test("the skeleton route shows the server's health", async ({ page }) => {
-  await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Stepclimb" })).toBeVisible();
-  await expect(page.getByTestId("health-status")).toHaveText("ok");
+// A browser without a session cookie gets 401 from /me, and the app sends it to the sign-in
+// screen with the path it asked for as the return target (spec 11 B10).
+test("an anonymous browser is sent to sign in", async ({ page }) => {
+  const me = page.waitForResponse((response) => response.url().endsWith("/api/v1/me"));
+  await page.goto("/?tab=2");
+  expect((await me).status()).toBe(401);
+  await expect(page.getByRole("heading", { level: 1, name: "Sign in" })).toBeVisible();
+  const url = new URL(page.url());
+  expect(url.pathname).toBe("/sign-in");
+  expect(url.searchParams.get("return_to")).toBe("/?tab=2");
 });
 
-test("a deep link is served the SPA", async ({ page }) => {
+// Spec 11 T18: the M1 deep link is served the SPA, which renders the not-found view.
+test("a deep link is served the SPA and renders not found", async ({ page }) => {
   const response = await page.goto("/c/example/m/1/i/1");
   expect(response?.status()).toBe(200);
-  await expect(page.locator("#root")).toBeAttached();
+  await expect(
+    page.getByRole("heading", { level: 1, name: "There is no page at /c/example/m/1/i/1" }),
+  ).toBeVisible();
 });
 
 test("the probes answer", async ({ request }) => {

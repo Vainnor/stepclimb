@@ -1,3 +1,10 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 @import "@stepclimb/ui/styles.css";
 @source "./";
+
+/* A view's h1 takes focus by script after a client-side navigation, so a screen reader announces
+   the new view (spec 11 B6). It is not a control, so it draws no focus ring. */
+h1[tabindex="-1"]:focus {
+  outline: none;
+  box-shadow: none;
+}
