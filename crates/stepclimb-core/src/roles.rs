@@ -428,6 +428,31 @@ pub async fn get_for_key_share(
     .transpose()
 }
 
+/// Lock `FOR KEY SHARE`, until the caller's transaction ends, every custom role of the scope's
+/// organization that the user `user_id` holds an assignment of, in id order. A change of one of
+/// them through [`lock_custom`] (and so [`update_custom`]) waits for the caller to commit, so a
+/// check on the user's grants read after this holds until then (the user routes' escalation
+/// rule, spec 03 B6). Built-in roles change only when startup syncs them and are not locked.
+pub async fn key_share_custom_of_user(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    user_id: Uuid,
+) -> Result<(), Error> {
+    sqlx::query_scalar!(
+        "SELECT r.id FROM roles r
+         WHERE r.org_id = $1
+           AND r.id IN (SELECT a.role_id FROM role_assignments a
+                        WHERE a.org_id = $1 AND a.user_id = $2)
+         ORDER BY r.id
+         FOR KEY SHARE",
+        scope.org_id(),
+        user_id,
+    )
+    .fetch_all(conn)
+    .await?;
+    Ok(())
+}
+
 /// The built-in roles, then the scope's custom roles, each group sorted by key, starting after
 /// `after` (the sort key of the previous page's last role) and at most `limit` of them.
 ///

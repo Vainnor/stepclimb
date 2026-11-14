@@ -20,13 +20,21 @@
 //! admin can suspend such a user at once (Q3). Suspending yourself is refused (409
 //! `user.cannot_suspend_self`), and suspending the organization's last active Organization admin
 //! is refused by `stepclimb_core::users::set_status` (409 `role_assignment.last_org_admin`),
-//! which writes the `user.set_status` audit entry. Changing the `email` or `status` of a user
-//! who holds a permission the caller does not hold at organization scope is refused (403
-//! `permission.escalation`, owner decision of 2026-11-14); the check runs under the account tree
-//! lock, which role assignment writes also take, so an assignment cannot change the target's
-//! grants between the check and the write. The status change runs before the field changes, so
-//! every `PATCH` locks the organization row before the user row, and both run in one
-//! transaction: a refused status leaves the fields as they were.
+//! which writes the `user.set_status` audit entry.
+//!
+//! Changing the `email` or `status` of a user with an effective permission, at any scope, that
+//! the caller does not hold at organization scope is refused (403 `permission.escalation`, owner
+//! decision of 2026-11-14). Such a PATCH takes the organization's account tree lock first, which
+//! the role assignment routes take before they create or remove an assignment; then locks `FOR
+//! KEY SHARE` the custom roles the user holds, which an edit of a role's permissions
+//! (`roles::update_custom`) waits for; and only then reads the user's grants. Until the PATCH
+//! commits, neither of those writes can change what it checked. Not serialized with it: built-in
+//! roles, which change only when startup syncs them, and assignments written by the repository
+//! without the tree lock (none through the API in M0).
+//!
+//! The status change runs before the field changes, so every `PATCH` locks the organization row
+//! before the user row; both run in one transaction, so a refused status leaves the fields as
+//! they were.
 
 use std::time::SystemTime;
 
@@ -47,6 +55,7 @@ use stepclimb_core::{
     identities::{self, NewIdentity},
     identity_providers, organizations,
     perm::{UserManage, UserView},
+    roles,
     users::{self as repo, Status},
 };
 use utoipa::{IntoParams, ToSchema};
@@ -619,25 +628,28 @@ fn refuse_patch(patch: &UserPatch, user: &repo::User, caller: Uuid) -> Result<()
     Ok(())
 }
 
-/// 403 `permission.escalation` when the user `user_id` holds a permission, at any scope, that
-/// the caller does not hold at organization scope, the scope the user routes act on (owner
-/// decision of 2026-11-14): changing such a user's email or status could take over or lock out
-/// someone with more rights than the caller. The caller's own permissions never exceed
-/// themselves, so changing your own email passes.
+/// 403 `permission.escalation` when a permission effective for the user `user_id`, at any
+/// scope, is not effective for the caller at organization scope, the scope the user routes act on
+/// (owner decision of 2026-11-14): changing such a user's email or status could take over or lock
+/// out someone with more rights than the caller.
+///
+/// Runs in the PATCH's transaction after the account tree lock, which role assignment writes
+/// take too. It first locks the custom roles the user holds `FOR KEY SHARE`, which a change of
+/// those roles' permissions waits for, then reads the user's grants: until the PATCH commits,
+/// neither a new or removed assignment nor an edited custom role can change what was checked.
 async fn refuse_escalation(
     tx: &mut Transaction<'static, Postgres>,
     caller: &Grants,
     user_id: Uuid,
 ) -> Result<(), ApiError> {
-    let target = Grants::load(&mut **tx, caller.scope(), user_id)
+    let scope = caller.scope();
+    roles::key_share_custom_of_user(tx, scope, user_id)
         .await
         .map_err(|error| ApiError::internal(&error))?;
-    let keys: Vec<String> = target
-        .by_scope()
-        .flat_map(|(_, keys)| keys)
-        .map(str::to_owned)
-        .collect();
-    if !holds_unheld(caller, &keys, &grants::Target::Organization) {
+    let target = Grants::load(&mut **tx, scope, user_id)
+        .await
+        .map_err(|error| ApiError::internal(&error))?;
+    if !escalates(caller, &target) {
         return Ok(());
     }
     Err(ApiError::new(
@@ -645,6 +657,22 @@ async fn refuse_escalation(
         PERMISSION_ESCALATION,
         "This user holds permissions you do not. You cannot change their email or status.",
     ))
+}
+
+/// Whether `target` has an effective permission, at any scope, that is not effective for
+/// `caller` at organization scope. A caller acting on its own user passes unless its grants are
+/// narrower than the user's, as an API key's are when its scopes do not cover every permission
+/// of its owner: such a key is refused (coordinator decision of 2026-11-14, fail closed).
+//
+// course scopes: `Grants` ignores course-scope assignments, which grant nothing until M1. M1
+// must revisit this check once they do, so a permission held only at a course still counts.
+fn escalates(caller: &Grants, target: &Grants) -> bool {
+    let keys: Vec<String> = target
+        .by_scope()
+        .flat_map(|(_, keys)| keys)
+        .map(str::to_owned)
+        .collect();
+    holds_unheld(caller, &keys, &grants::Target::Organization)
 }
 
 fn user_not_found() -> ApiError {
@@ -698,6 +726,66 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "unit tests of the escalation rule need grants and have no credential"
+    )]
+    fn grants_of(org: &[&str], account: &[&str]) -> Grants {
+        use stepclimb_core::{
+            id::new_id,
+            role_assignments::{GrantScope, UserGrant},
+        };
+        let account_id = new_id();
+        let grant = |keys: &[&str], scope| UserGrant {
+            assignment_id: new_id(),
+            role_id: new_id(),
+            role_key: "custom".into(),
+            permissions: keys.iter().map(|&k| k.to_owned()).collect(),
+            scope,
+        };
+        let path = vec![account_id];
+        Grants::from_assignments(
+            OrgScope::instance(Uuid::nil()),
+            [
+                grant(org, GrantScope::Organization),
+                grant(
+                    account,
+                    GrantScope::Account {
+                        id: account_id,
+                        path,
+                    },
+                ),
+            ],
+        )
+    }
+
+    #[test]
+    fn a_target_with_a_permission_the_caller_lacks_escalates() {
+        let manager = grants_of(&["user.manage", "user.view"], &[]);
+        let admin = grants_of(&["organization.manage", "user.manage"], &[]);
+        let account_viewer = grants_of(&[], &["account.view"]);
+        let peer = grants_of(&["user.manage"], &[]);
+        assert!(escalates(&manager, &admin));
+        assert!(escalates(&manager, &account_viewer), "any scope counts");
+        assert!(!escalates(&manager, &peer));
+        assert!(!escalates(&manager, &grants_of(&[], &[])));
+        assert!(!escalates(&manager, &manager), "your own user");
+    }
+
+    /// An API key acts with its owner's grants narrowed to its scopes (spec 08 B27): a key that
+    /// does not cover every permission of its owner cannot change the owner's own email or
+    /// status (coordinator decision of 2026-11-14).
+    #[test]
+    fn a_narrowed_key_escalates_over_its_own_owner() {
+        let owner = grants_of(&["user.manage", "organization.manage"], &[]);
+        let mut key = owner.clone();
+        key.intersect_key_scopes(&["user.manage"]);
+        assert!(escalates(&key, &owner));
+        let mut full = owner.clone();
+        full.intersect_key_scopes(&["user.manage", "organization.manage"]);
+        assert!(!escalates(&full, &owner));
+    }
 
     #[test]
     fn repository_errors_map_to_their_status_code_and_field() {

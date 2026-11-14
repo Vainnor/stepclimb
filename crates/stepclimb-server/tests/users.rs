@@ -712,7 +712,7 @@ async fn wait_for_lock_waiters(pool: &PgPool, n: i64) {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    panic!("{n} requests never waited on the plan row");
+    panic!("{n} requests never waited on a lock");
 }
 
 // Pre-provisioned identities (B9, B14, B18).
@@ -1305,4 +1305,153 @@ async fn a_body_that_breaks_a_rule_answers_422_at_the_limit(pool: PgPool) {
         .await
         .refused(StatusCode::FORBIDDEN, "entitlement.limit_reached");
     assert_eq!(f.count(f.a).await, 1);
+}
+
+/// The guarded PATCH reads the target's grants only after the account tree lock: an
+/// Organization-admin assignment whose transaction holds that lock when the PATCH arrives is
+/// visible to the check once it commits, so the email change is refused.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_assignment_committed_while_the_patch_waits_is_checked(pool: PgPool) {
+    let f = Fixture::new(pool.clone()).await;
+    let manager = f.holder(&["user.manage"], Scope::Organization).await;
+    let plain = f.stored_user(f.a, new_user("Plain", Source::Local)).await;
+    let before = f.stored(plain).await;
+    let org_admin: Uuid =
+        sqlx::query_scalar("SELECT id FROM roles WHERE org_id IS NULL AND key = 'org_admin'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let mut assigning = pool.begin().await.unwrap();
+    stepclimb_core::accounts::lock_tree(&mut assigning, scope(f.a))
+        .await
+        .unwrap();
+    let assignment = NewAssignment {
+        user_id: plain,
+        role_id: org_admin,
+        scope: Scope::Organization,
+        source: Source::Local,
+        external_id: None,
+    };
+    role_assignments::create(
+        &mut *assigning,
+        scope(f.a),
+        &assignment,
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+
+    let patch = {
+        let (app, org, manager) = (f.app.clone(), f.a, manager.clone());
+        let uri = format!("{USERS}/{plain}");
+        let body = json!({ "email": "plain@example.test" });
+        tokio::spawn(
+            async move { send(&app, org, Method::PATCH, &uri, &manager, Some(body)).await },
+        )
+    };
+    wait_for_lock_waiters(&pool, 1).await;
+    assigning.commit().await.unwrap();
+
+    let answer = tokio::time::timeout(Duration::from_secs(10), patch)
+        .await
+        .expect("the PATCH finishes once the assignment commits")
+        .expect("the task does not panic");
+    answer.refused(StatusCode::FORBIDDEN, "permission.escalation");
+    assert_eq!(f.stored(plain).await, before);
+}
+
+/// The guarded PATCH locks the target's custom roles `FOR KEY SHARE` before it reads their
+/// permissions: an edit that gives one of them a permission the caller lacks, holding the role
+/// row when the PATCH arrives, is visible to the check once it commits.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_role_edit_committed_while_the_patch_waits_is_checked(pool: PgPool) {
+    let f = Fixture::new(pool.clone()).await;
+    let manager = f.holder(&["user.manage"], Scope::Organization).await;
+    let (_, peer) = f
+        .holder_with_id(&["user.manage"], Scope::Organization)
+        .await;
+    let role: Uuid = sqlx::query_scalar("SELECT role_id FROM role_assignments WHERE user_id = $1")
+        .bind(peer)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let before = f.stored(peer).await;
+    let mut editing = pool.begin().await.unwrap();
+    let patch = roles::RolePatch {
+        name: None,
+        permissions: Some(vec!["user.manage".into(), "organization.manage".into()]),
+    };
+    roles::update_custom(
+        &mut *editing,
+        scope(f.a),
+        role,
+        &patch,
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+
+    let request = {
+        let (app, org, manager) = (f.app.clone(), f.a, manager.clone());
+        let uri = format!("{USERS}/{peer}");
+        let body = json!({ "status": "suspended" });
+        tokio::spawn(
+            async move { send(&app, org, Method::PATCH, &uri, &manager, Some(body)).await },
+        )
+    };
+    wait_for_lock_waiters(&pool, 1).await;
+    editing.commit().await.unwrap();
+
+    let answer = tokio::time::timeout(Duration::from_secs(10), request)
+        .await
+        .expect("the PATCH finishes once the edit commits")
+        .expect("the task does not panic");
+    answer.refused(StatusCode::FORBIDDEN, "permission.escalation");
+    assert_eq!(f.stored(peer).await, before);
+}
+
+/// A PATCH that suspends and renames, queued on the organization row, holds no lock on the user
+/// row: another transaction gets that row at once. A PATCH that updated the fields first would
+/// hold it while it waits, and this would time out (or deadlock).
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_suspension_waiting_on_the_organization_row_holds_no_user_row(pool: PgPool) {
+    let f = Fixture::new(pool.clone()).await;
+    let (admin, _) = f.admin().await;
+    let sam = f.stored_user(f.a, new_user("Sam", Source::Local)).await;
+    let mut holder = pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE")
+        .bind(f.a)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+
+    let request = {
+        let (app, org, admin) = (f.app.clone(), f.a, admin.clone());
+        let uri = format!("{USERS}/{sam}");
+        let body = json!({ "status": "suspended", "display_name": "X" });
+        tokio::spawn(async move { send(&app, org, Method::PATCH, &uri, &admin, Some(body)).await })
+    };
+    wait_for_lock_waiters(&pool, 1).await;
+    sqlx::raw_sql("SET LOCAL lock_timeout = '2s'")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let user_row = sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+        .bind(sam)
+        .execute(&mut *holder)
+        .await;
+    assert!(
+        user_row.is_ok(),
+        "the PATCH held the user row: {user_row:?}"
+    );
+    holder.commit().await.unwrap();
+
+    let answer = tokio::time::timeout(Duration::from_secs(10), request)
+        .await
+        .expect("the PATCH finishes once the rows are free")
+        .expect("the task does not panic");
+    assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    assert_eq!(answer.body["display_name"], "X");
 }
