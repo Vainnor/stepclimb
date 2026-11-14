@@ -5,7 +5,7 @@
 //! table is the scope itself, so its queries filter by `id = scope.org_id()` where every other
 //! table's filter by `org_id`. [`create`] is the one function that makes an organization, with
 //! its root account (B26) and its `org_plans` row (spec 10 B5). `branding` belongs to spec 12
-//! and is neither read nor written here.
+//! and to the [`crate::branding`] repository; it is neither read nor written here.
 
 use std::time::SystemTime;
 

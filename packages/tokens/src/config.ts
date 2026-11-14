@@ -12,6 +12,7 @@ import css from "@terrazzo/plugin-css";
 import { docsTables } from "./docs";
 import { type Theme, themeToDtcg } from "./generate";
 import { tailwindKey, variableName } from "./names";
+import { osContrast, osDark } from "./stylesheet";
 import { brandThemes, checkThemes } from "./themes";
 
 /**
@@ -24,24 +25,11 @@ const media = (query: string, selectors: string[]) => (contents: string) =>
   `@media ${query} {\n  ${selectors.join(",\n  ")} {\n${contents}\n  }\n}`;
 
 /**
- * The OS dark setting applies only when the page chose neither light nor high contrast; without
- * the second `:not`, this selector's higher specificity would beat `[data-sc-theme="high-contrast"]`.
+ * Theme permutations carry only what the generator writes (spec 12, B18). Everything else (space,
+ * type, control heights) is declared once on `:root`, so a theme attribute on an inner element
+ * never resets the density of the view around it.
  */
-const osDark = ':not([data-sc-theme="light"]):not([data-sc-theme="high-contrast"])';
-
-/**
- * The OS contrast setting selects high contrast when the page chose neither light nor dark (spec
- * 12, Q5). It comes after the OS dark rule with the same specificity, so with both OS settings on
- * high contrast wins, as ThemeProvider decides.
- */
-const osContrast = ':not([data-sc-theme="light"]):not([data-sc-theme="dark"])';
-
-/**
- * Theme permutations carry only what changes between themes. Everything else (space, type,
- * control heights) is declared once on `:root`, so a theme attribute on an inner element never
- * resets the density of the view around it.
- */
-const themed = ["color.*", "font.ui"];
+const themed = ["color.*", "font.ui", "font.read", "radius.xs", "radius.sm", "radius.md"];
 
 /**
  * One brand's light, dark (by attribute, then by OS setting) and high-contrast (by attribute, then

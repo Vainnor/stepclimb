@@ -127,6 +127,12 @@ impl ApiError {
         }
     }
 
+    /// This error with `errors`, each rule the body broke, for a 422 whose `code` names the
+    /// area (`branding.invalid_input`) rather than `request.invalid`.
+    pub fn with_errors(self, errors: Vec<FieldError>) -> Self {
+        Self { errors, ..self }
+    }
+
     /// 400 `request.malformed`.
     pub fn malformed(detail: &'static str) -> Self {
         Self::new(StatusCode::BAD_REQUEST, code::REQUEST_MALFORMED, detail)

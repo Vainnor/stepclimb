@@ -12,7 +12,8 @@
   "scripts": {
     "build": "tz build",
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.generate.json"
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.generate.json",
+    "golden": "UPDATE_GOLDEN=1 vitest run test/golden.test.ts && biome format --write test/golden"
   },
   "devDependencies": {
     "@terrazzo/cli": "2.10.0",

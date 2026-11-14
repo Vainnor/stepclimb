@@ -31,6 +31,11 @@
 //!   parameter naming an id that does not exist, since the feature is checked before the
 //!   target is resolved.
 //!
+//! An entry that names no feature gets **every feature off** instead: its 2xx request, run with
+//! the organization on a plan with no catalog feature, must not answer
+//! `entitlement.feature_unavailable`, so a route cannot check a feature its entry does not
+//! declare.
+//!
 //! A walker test checks that the 403 of an operation documents `entitlement.feature_unavailable`
 //! exactly when its entry names a feature.
 //!
@@ -63,14 +68,14 @@ use stepclimb_core::{
     OrgScope, Source, accounts,
     audit::Actor,
     clock::ManualClock,
-    feature::{self, CustomRoles, Feature, Limit},
+    feature::{self, CustomBranding, CustomRoles, Feature, Limit},
     grants::ScopeId,
     id::{Uuid, new_id},
     identities::{self, NewIdentity},
     organizations,
     perm::{
-        self, AccountManage, AccountView, OrgManage, Permission, RoleAssign, RoleManage, RoleView,
-        ScopeType, UserManage, UserView,
+        self, AccountManage, AccountView, BrandingManage, OrgManage, Permission, RoleAssign,
+        RoleManage, RoleView, ScopeType, UserManage, UserView,
     },
     role_assignments::{self, NewAssignment, Scope},
     roles::{self, NewRole},
@@ -96,7 +101,7 @@ const CLIENT: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1
 
 /// The operations that need no credential: the probes and the unauthenticated routes specs 04
 /// to 08 declare (B21).
-const PUBLIC: &[&str] = &["healthz", "readyz", "signOut"];
+const PUBLIC: &[&str] = &["healthz", "readyz", "signOut", "getThemeCss"];
 
 /// One entry per operation that needs a principal (B20). The M0 specs' routes add theirs here
 /// as they land.
@@ -256,6 +261,17 @@ const TABLE: &[Entry] = &[
             setup: second_identity_of_owner,
         },
     },
+    Entry {
+        operation_id: "getBranding",
+        access: permission(BrandingManage::KEY, Target::Org, at_org),
+    },
+    Entry {
+        operation_id: "updateBranding",
+        access: gated(
+            CustomBranding::KEY,
+            permission(BrandingManage::KEY, Target::Org, new_branding),
+        ),
+    },
 ];
 
 /// A user that is not the organization's: 404 `user.not_found`. The user routes take the
@@ -331,6 +347,17 @@ fn second_identity_of_owner(
         Call {
             params: vec![("identity_id", org.two_identities(owner).await)],
             body: None,
+            at: At::Org,
+        }
+    })
+}
+
+/// Branding inputs every brand check passes.
+fn new_branding(_: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: Vec::new(),
+            body: Some(serde_json::json!({ "primary": "#500E0E", "ui_font": "Roboto" })),
             at: At::Org,
         }
     })
@@ -795,6 +822,8 @@ async fn run(world: &World, app: &Router, op: &Operation, access: &Access) -> Re
         Access::AuthOnly(setup) => {
             report.record(op, "401", anonymous(world, app, op, *setup).await);
             report.record(op, "2xx", allowed(world, app, op, &[], *setup).await);
+            let result = every_feature_off(world, app, op, &[], *setup).await;
+            report.record(op, "every feature off", result);
             let result = cross_organization(world, app, op, None, *setup).await;
             report.record(op, "cross-organization", result);
         }
@@ -840,6 +869,10 @@ async fn run(world: &World, app: &Router, op: &Operation, access: &Access) -> Re
             }
             let keys: Vec<&str> = [*key].iter().chain(*extra).copied().collect();
             report.record(op, "2xx", allowed(world, app, op, &keys, *setup).await);
+            if feature.is_none() {
+                let result = every_feature_off(world, app, op, &keys, *setup).await;
+                report.record(op, "every feature off", result);
+            }
             let not_found = match target {
                 Target::Scoped { cross_org, .. } => Some(*cross_org),
                 Target::Org | Target::AnyScope => None,
@@ -959,6 +992,33 @@ async fn allowed(
     answer.expect_success()
 }
 
+/// [`allowed`]'s request with the organization on a plan with no catalog feature: anything but
+/// 403 `entitlement.feature_unavailable`, since the entry declares no feature.
+async fn every_feature_off(
+    world: &World,
+    app: &Router,
+    op: &Operation,
+    keys: &[&str],
+    setup: Setup,
+) -> Result<(), String> {
+    let org = world.org().await;
+    let call = setup(&org).await;
+    let cookie = if keys.is_empty() {
+        org.user().await.0
+    } else {
+        org.holder(keys, call.at).await
+    };
+    org.plan_with(|_| false).await;
+    let answer = call_op(app, op, &call, org.id, Some(&cookie)).await?;
+    if answer.code().as_deref() == Some("entitlement.feature_unavailable") {
+        return Err(format!(
+            "its entry names no feature, but it answered {} {}",
+            answer.status, answer.body
+        ));
+    }
+    Ok(())
+}
+
 /// An Organization admin of org A calls with the target built in org B, which also holds a
 /// user, a session, a custom role and an assignment: `not_found` (or 2xx when the route has no
 /// target), org B's rows unchanged, and none of their identifying values answered. Every one of
@@ -1042,6 +1102,22 @@ async fn run_own(
             .expect_success()
     };
     report.record(op, "2xx", owner.await);
+    // As `every_feature_off`, for the owner: the entry declares no feature.
+    let featureless = async {
+        let org = world.org().await;
+        let (cookie, owner) = org.user().await;
+        let call = setup(&org, owner).await;
+        org.plan_with(|_| false).await;
+        let answer = call_op(app, op, &call, org.id, Some(&cookie)).await?;
+        if answer.code().as_deref() == Some("entitlement.feature_unavailable") {
+            return Err(format!(
+                "its entry names no feature, but it answered {} {}",
+                answer.status, answer.body
+            ));
+        }
+        Ok(())
+    };
+    report.record(op, "every feature off", featureless.await);
     report.record(
         op,
         "other-user",
@@ -1448,9 +1524,15 @@ impl Org {
     /// Point the organization at a new plan with every catalog feature but `feature` and no
     /// limit, by SQL, since M0 has no API that changes a plan.
     async fn plan_without(&self, feature: &str) {
+        self.plan_with(|key| key != feature).await;
+    }
+
+    /// Point the organization at a new plan holding the catalog features `includes` accepts
+    /// and no limit.
+    async fn plan_with(&self, includes: impl Fn(&str) -> bool) {
         let features: serde_json::Map<String, Value> = feature::ALL
             .iter()
-            .map(|key| ((*key).to_owned(), Value::Bool(*key != feature)))
+            .map(|key| ((*key).to_owned(), Value::Bool(includes(key))))
             .collect();
         let limits: serde_json::Map<String, Value> = Limit::ALL
             .iter()
@@ -1796,8 +1878,21 @@ const fn gated(feature: &'static str, access: Access) -> Access {
     }
 }
 
-const EVERY_CASE: [&str; 5] = ["401", "403", "404", "2xx", "cross-organization"];
-const NO_404: [&str; 4] = ["401", "403", "2xx", "cross-organization"];
+const EVERY_CASE: [&str; 6] = [
+    "401",
+    "403",
+    "404",
+    "2xx",
+    "every feature off",
+    "cross-organization",
+];
+const NO_404: [&str; 5] = [
+    "401",
+    "403",
+    "2xx",
+    "every feature off",
+    "cross-organization",
+];
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn the_runner_passes_a_correct_route_of_each_target_kind(pool: PgPool) {
@@ -1838,7 +1933,7 @@ async fn the_runner_passes_a_correct_route_of_each_target_kind(pool: PgPool) {
             Method::GET,
             "/t/me",
             Access::AuthOnly(at_org),
-            &["401", "2xx", "cross-organization"],
+            &["401", "2xx", "every feature off", "cross-organization"],
         ),
     ];
     for (method, path, access, expected) in cases {
@@ -1899,7 +1994,13 @@ async fn the_runner_passes_a_route_on_the_callers_own_row(pool: PgPool) {
     assert!(report.failures.is_empty(), "{:#?}", report.failures);
     assert_eq!(
         report.ran,
-        ["401", "2xx", "other-user", "cross-organization"]
+        [
+            "401",
+            "2xx",
+            "every feature off",
+            "other-user",
+            "cross-organization"
+        ]
     );
 }
 
@@ -1924,6 +2025,23 @@ async fn a_route_without_its_feature_check_fails_the_feature_off_cases(pool: PgP
     );
     assert!(
         report.failures[1].contains("account.not_found"),
+        "{report:#?}"
+    );
+}
+
+/// A route that checks a feature its entry does not declare fails only its every-feature-off
+/// case: with every feature on, the other cases cannot see the check.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_undeclared_feature_check_fails_the_every_feature_off_case(pool: PgPool) {
+    let world = World::new(pool).await;
+    let app = fixture_app(&world);
+    let op = fixture_op(Method::PATCH, "/t/gated/{account_id}");
+    let access = permission(AccountManage::KEY, ACCOUNT_NOT_FOUND, tower_in_path);
+    let report = run(&world, &app, &op, &access).await;
+    assert_eq!(report.ran, EVERY_CASE);
+    assert_eq!(failed_cases(&report), ["every feature off"], "{report:#?}");
+    assert!(
+        report.failures[0].contains("entitlement.feature_unavailable"),
         "{report:#?}"
     );
 }

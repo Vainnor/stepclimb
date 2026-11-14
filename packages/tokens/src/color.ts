@@ -180,6 +180,13 @@ export function contrast(a: Oklch, b: Oklch): number {
   return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
 }
 
+/**
+ * The largest chroma an input may have. sRGB's most saturated colors are near 0.32 and P3's near
+ * 0.37; a larger chroma only makes gamut mapping search longer, and a huge one leaves no scale
+ * step that clears its contrast.
+ */
+export const maxChroma = 0.5;
+
 /** CSS whitespace (CSS Syntax 3, after preprocessing): ASCII space, tab, LF, CR and form feed. */
 const ws = "[ \\t\\n\\r\\f]";
 /** A CSS `<number>` (CSS Syntax 3): `1`, `-0.5`, `.5`, `5e-1`; not `1.` or `1.e2`. */
@@ -199,8 +206,8 @@ const oklchPattern = new RegExp(
  *     oklch = "oklch(" ws* number "%"? ws+ number "%"? ws+ number "deg"? ws* ")"
  *
  * Lightness is a number 0 to 1 or a percentage; chroma a number at least 0 or a percentage of 0.4
- * (CSS Color 4); hue in degrees, normalized to 0 to 360. Anything else, including alpha, `none`
- * and other color functions, is a `BrandInputError` naming `field`.
+ * (CSS Color 4), at most `maxChroma`; hue in degrees, finite, normalized to 0 to 360. Anything
+ * else, including alpha, `none` and other color functions, is a `BrandInputError` naming `field`.
  */
 export function parseColor(input: string, field: string): Oklch {
   const text = input;
@@ -215,8 +222,12 @@ export function parseColor(input: string, field: string): Oklch {
     const l = Number(m[1]) / (m[2] ? 100 : 1);
     const c = (Number(m[3]) * (m[4] ? 0.4 : 1)) / (m[4] ? 100 : 1);
     const h = ((Number(m[5]) % 360) + 360) % 360;
-    if (l < 0 || l > 1 || c < 0) {
-      throw new BrandInputError(field, `${field}: lightness must be 0 to 1 and chroma at least 0`);
+    // A hue too large for a double reads as Infinity, then NaN; NaN fails every comparison.
+    if (!(l >= 0 && l <= 1 && c >= 0 && c <= maxChroma && Number.isFinite(h))) {
+      throw new BrandInputError(
+        field,
+        `${field}: lightness must be 0 to 1, chroma 0 to ${maxChroma}, and hue finite`,
+      );
     }
     return { l, c, h };
   }

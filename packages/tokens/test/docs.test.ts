@@ -220,10 +220,11 @@ describe("the docs build", () => {
       buildEdited(
         "base.json",
         editJson((json) => {
-          delete at(json, "radius").xs;
+          // Not xs, sm or md: the generated themes carry those, so they stay tokens.
+          delete at(json, "radius").pill;
         }),
       ),
-    ).rejects.toThrow("docs tables: radius.xs is listed in src/docs.ts but is not a token");
+    ).rejects.toThrow("docs tables: radius.pill is listed in src/docs.ts but is not a token");
   });
 
   it("fails when a color has no description in descriptions.json", async () => {

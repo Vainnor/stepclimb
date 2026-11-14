@@ -16,7 +16,7 @@ use tower_http::trace::TraceLayer;
 use utoipa_scalar::{Scalar, Servable};
 
 use crate::{
-    accounts, auth,
+    accounts, auth, branding,
     csrf::{self, OriginAllowlist},
     error::ApiError,
     health, identities, me, openapi, organization,
@@ -94,6 +94,7 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         ("/healthz", get(health::healthz)),
         ("/readyz", get(health::readyz)),
         ("/auth/sign-out", post(auth::sign_out)),
+        (branding::THEME_CSS_PATH, get(branding::theme_css)),
         (me::ME_PATH, get(me::get_me)),
         (
             identities::MY_IDENTITIES_PATH,
@@ -164,6 +165,10 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         (
             "/api/v1/admin/role-assignments/{assignment_id}",
             delete(role_assignments::delete_role_assignment),
+        ),
+        (
+            branding::BRANDING_PATH,
+            get(branding::get_branding).put(branding::update_branding),
         ),
     ]
 }

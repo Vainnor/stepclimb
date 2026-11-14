@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE organizations\n         SET branding = $2::text::jsonb,\n             updated_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond'\n         WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ab6ac9afb209cc69ab0410a82de33c890e8bf1225200eab1d0df4f0602327620"
+}

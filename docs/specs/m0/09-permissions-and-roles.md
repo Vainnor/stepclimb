@@ -281,6 +281,7 @@ also writes to:
   | `organization.create` | `organization` | `organizations::create` | `after`: slug, name |
   | `organization.rename` | `organization` | `organizations::rename` | `before` and `after`: name |
   | `organization.update_settings` | `organization` | `organizations::update_settings` | `before` and `after`: the effective value of each key the patch names |
+  | `organization.update_branding` | `organization` | `branding::save` | `before` (`null` when none was saved) and `after`: the inputs and `css_hash`, never the stylesheet (spec 12, coordinator decision 2026-11-14) |
   | `user.set_status` | `user` | `users::set_status` | `before` and `after`: status |
   | `identity.link` | `identity` | `identities::link` | `after`: user, provider key, subject (never the attributes) |
   | `identity.unlink` | `identity` | `identities::unlink` | `before`: the same |

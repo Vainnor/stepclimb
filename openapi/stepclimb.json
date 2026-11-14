@@ -387,6 +387,99 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/api/v1/admin/branding": {
+      "get": {
+        "tags": [
+          "branding"
+        ],
+        "summary": "Read the organization's branding.",
+        "operationId": "getBranding",
+        "responses": {
+          "200": {
+            "description": "The organization's branding",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Branding"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/PermissionDenied"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "branding"
+        ],
+        "summary": "Replace the organization's branding. The server generates the light, dark and\nhigh-contrast themes from the inputs and saves them only when every contrast pair passes;\n`/theme.css` serves the new stylesheet from then on.",
+        "operationId": "updateBranding",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrandingInputs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The organization's branding after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Branding"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/BrandingWriteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/BrandingInvalid"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/api/v1/admin/permissions": {
       "get": {
         "tags": [
@@ -1817,6 +1910,36 @@
           }
         }
       }
+    },
+    "/theme.css": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "The stylesheet of the request's organization: its saved branding's, or the default brand's.",
+        "operationId": "getThemeCss",
+        "responses": {
+          "200": {
+            "description": "The organization's light, dark and high-contrast themes as CSS variables, revalidated on every load (`Cache-Control: no-cache`)",
+            "content": {
+              "text/css": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1895,6 +2018,15 @@
         },
         "additionalProperties": false
       },
+      "Appearance": {
+        "type": "string",
+        "description": "An appearance every brand has.",
+        "enum": [
+          "light",
+          "dark",
+          "high-contrast"
+        ]
+      },
       "AssignmentSource": {
         "type": "string",
         "description": "Who owns an assignment: an admin of this organization (`local`), or the identity provider,\nsync API, SCIM or connector that wrote it, in which case it cannot be removed here.",
@@ -1904,6 +2036,196 @@
           "sync",
           "scim",
           "connector"
+        ]
+      },
+      "Branding": {
+        "type": "object",
+        "description": "The organization's branding: the saved inputs (the default brand's when it has saved none),\nthe generator version, the hash of the stylesheet `/theme.css` serves, and the contrast\nreport of its light, dark and high-contrast themes.",
+        "required": [
+          "inputs",
+          "generator",
+          "css_hash",
+          "report"
+        ],
+        "properties": {
+          "css_hash": {
+            "type": "string",
+            "description": "The SHA-256 of the stylesheet, lowercase hex."
+          },
+          "generator": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The version of the theme generator that wrote the stylesheet."
+          },
+          "inputs": {
+            "$ref": "#/components/schemas/SavedInputs"
+          },
+          "report": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContrastReport"
+            }
+          }
+        }
+      },
+      "BrandingInputs": {
+        "type": "object",
+        "description": "The branding inputs. The whole set is replaced; an omitted or `null` choice takes its\ndefault. A value that is not a choice is a 422, not a 400.",
+        "required": [
+          "primary"
+        ],
+        "properties": {
+          "corner_style": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CornerStyle",
+                "description": "Defaults to `default`."
+              }
+            ]
+          },
+          "primary": {
+            "type": "string",
+            "description": "The primary color: a CSS hex color (`#500E0E`, `#f00`) or `oklch(L C H)`, opaque."
+          },
+          "reading_font": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ReadingFont",
+                "description": "Defaults to `serif`."
+              }
+            ]
+          },
+          "ui_font": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/UiFont",
+                "description": "Defaults to `Atkinson Hyperlegible Next`."
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "BrandingProblem": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "report": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "$ref": "#/components/schemas/ContrastReport"
+                },
+                "description": "On `branding.contrast_failed`, every appearance's report, failing pairs first."
+              }
+            }
+          }
+        ],
+        "description": "A problem details body with the contrast report: `branding.contrast_failed` carries\n`report`, every other code leaves it out."
+      },
+      "ContrastPair": {
+        "type": "object",
+        "description": "One measured pair: `foreground` on `background`.",
+        "required": [
+          "foreground",
+          "background",
+          "ratio",
+          "minimum",
+          "pass"
+        ],
+        "properties": {
+          "background": {
+            "type": "string",
+            "description": "A color token, such as `bg-canvas`."
+          },
+          "foreground": {
+            "type": "string",
+            "description": "A color token, such as `fg-soft`."
+          },
+          "minimum": {
+            "type": "number",
+            "format": "double",
+            "description": "4.5 for text and 3 for other pairs; 7 and 4.5 in high contrast."
+          },
+          "pass": {
+            "type": "boolean"
+          },
+          "ratio": {
+            "type": "number",
+            "format": "double",
+            "description": "The WCAG 2 contrast ratio on the displayed 8-bit sRGB colors, 1 to 21, unrounded."
+          }
+        }
+      },
+      "ContrastReport": {
+        "type": "object",
+        "description": "One appearance's contrast report.",
+        "required": [
+          "appearance",
+          "pass",
+          "pairs",
+          "warnings"
+        ],
+        "properties": {
+          "appearance": {
+            "$ref": "#/components/schemas/Appearance"
+          },
+          "pairs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContrastPair"
+            }
+          },
+          "pass": {
+            "type": "boolean",
+            "description": "True when every pair passes."
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContrastWarning"
+            }
+          }
+        }
+      },
+      "ContrastWarning": {
+        "type": "object",
+        "description": "Something to look at that does not fail the theme. `brand-near-danger`: the brand's hue is\nwithin 30 degrees of `danger`'s.",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "CornerStyle": {
+        "type": "string",
+        "description": "The corner style: `square` sets the `xs`, `sm` and `md` radii to 0, `round` doubles them.",
+        "enum": [
+          "square",
+          "default",
+          "round"
         ]
       },
       "Entitlements": {
@@ -2809,6 +3131,14 @@
           }
         }
       },
+      "ReadingFont": {
+        "type": "string",
+        "description": "The reading font: the bundled serif, or the organization's UI font.",
+        "enum": [
+          "serif",
+          "sans"
+        ]
+      },
       "Role": {
         "type": "object",
         "description": "A built-in role or a custom role of the organization.",
@@ -2924,6 +3254,30 @@
         },
         "additionalProperties": false
       },
+      "SavedInputs": {
+        "type": "object",
+        "description": "The saved inputs, every choice made.",
+        "required": [
+          "primary",
+          "ui_font",
+          "reading_font",
+          "corner_style"
+        ],
+        "properties": {
+          "corner_style": {
+            "$ref": "#/components/schemas/CornerStyle"
+          },
+          "primary": {
+            "type": "string"
+          },
+          "reading_font": {
+            "$ref": "#/components/schemas/ReadingFont"
+          },
+          "ui_font": {
+            "$ref": "#/components/schemas/UiFont"
+          }
+        }
+      },
       "ScopeRef": {
         "type": "object",
         "description": "The scope a new assignment takes effect at.",
@@ -2950,6 +3304,14 @@
           "organization",
           "account",
           "course"
+        ]
+      },
+      "UiFont": {
+        "type": "string",
+        "description": "A UI font the instance bundles.",
+        "enum": [
+          "Atkinson Hyperlegible Next",
+          "Roboto"
         ]
       },
       "User": {
@@ -3165,6 +3527,26 @@
       },
       "BadRequest": {
         "description": "`request.malformed`: the body, a path parameter or a query parameter does not parse or does not match the schema, or `limit` is outside 1 to 200. `pagination.invalid_cursor`: the cursor does not decode.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "BrandingInvalid": {
+        "description": "`branding.invalid_input`: an input fails validation; `errors` names it (`branding.invalid_color`, `branding.too_long`, `branding.not_a_choice`). `branding.contrast_failed`: a generated theme has a failing contrast pair; `report` lists every appearance's pairs, failing pairs first.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/BrandingProblem"
+            }
+          }
+        }
+      },
+      "BrandingWriteForbidden": {
+        "description": "`permission.denied`: the caller does not hold `branding.manage` at organization scope. `entitlement.feature_unavailable`: the organization's plan does not include `custom_branding`. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -3591,6 +3973,10 @@
     {
       "name": "users",
       "description": "The organization's users"
+    },
+    {
+      "name": "branding",
+      "description": "The organization's branding and theme"
     }
   ]
 }
