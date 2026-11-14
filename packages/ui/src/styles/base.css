@@ -66,6 +66,12 @@
   :focus:not(:focus-visible) {
     outline: none;
   }
+  /* A view's h1 takes focus by script after a client-side navigation, so a screen reader
+     announces the new view (spec 11 B6). It is not a control, so it draws no ring. */
+  h1[tabindex="-1"]:focus {
+    outline: none;
+    box-shadow: none;
+  }
 
   /* Controls are not text-selectable (B15). */
   button,
