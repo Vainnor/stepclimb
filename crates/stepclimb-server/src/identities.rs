@@ -10,18 +10,20 @@
 //! does not exist, and an identity id of another user or organization is 404
 //! `identity.not_found`.
 //!
-//! Both admin writes change how the user signs in, so both apply the user routes' escalation
-//! rule (`users::refuse_escalation`, 403 `permission.escalation`): a user with an effective
-//! permission, at any scope, that the caller does not hold at organization scope is refused.
-//! Each runs in one transaction that takes the locks in the order the user routes take them:
-//! the organization's account tree lock, which role assignment writes take too; then, inside the
-//! escalation check, the user's custom roles `FOR KEY SHARE`; then the user's row, which
-//! `identities::unlink_unless_last` locks `FOR NO KEY UPDATE`. Until the write commits, no assignment or
-//! custom role change can alter what the check read. A malformed subject is refused before any
-//! lock. Linking refuses an unknown provider key (422 `identity.unknown_provider`, the same for
-//! another organization's key) and a `(provider, subject)` already linked to anyone (409
-//! `identity.taken`). Removing refuses the user's last sign-in method (409
-//! `identity.last_sign_in_method`); only an identity at an enabled provider counts as one.
+//! Both admin writes change how the user signs in, so both apply the user routes' escalation rule
+//! (`users::refuse_escalation`, 403 `permission.escalation`): a user with an effective permission,
+//! at any scope, that the caller does not hold at organization scope is refused. Each runs in one
+//! transaction that takes the locks in the order the user routes take them: the organization's
+//! account tree lock, which role assignment writes take too; then, inside the escalation check, the
+//! user's custom roles `FOR KEY SHARE`; then the user's row, which `identities::unlink_unless_last`
+//! locks `FOR NO KEY UPDATE`. Until the write commits, no assignment or custom role change can
+//! alter what the check read. A malformed subject is refused before any lock. Linking refuses an
+//! unknown provider key (422 `identity.unknown_provider`, the same for another organization's key)
+//! and a `(provider, subject)` already linked to anyone (409 `identity.taken`). Removing refuses
+//! the user's last sign-in method (409 `identity.last_sign_in_method`); only an identity at an
+//! enabled provider counts as one. Neither route links or removes an identity at the local
+//! provider (422 `identity.unknown_provider`, 409 `identity.local`): a local account changes
+//! through docs/specs/m0/04-local-accounts.md's routes.
 //!
 //! The `/me` routes need a signed-in user and no permission, and act on the caller's own
 //! identities only: another user's identity id is 404. A user whose record an outside source
@@ -78,6 +80,8 @@ pub mod code {
     pub const IDENTITY_NOT_FOUND: &str = "identity.not_found";
     /// Removing the identity would leave the user no way to sign in (409).
     pub const IDENTITY_LAST_SIGN_IN_METHOD: &str = "identity.last_sign_in_method";
+    /// The identity is a local account's, which spec 04's routes change, not these (409).
+    pub const IDENTITY_LOCAL: &str = "identity.local";
     /// An outside source owns the user, so the user cannot remove their identities (409).
     pub const IDENTITY_EXTERNALLY_MANAGED: &str = "identity.externally_managed";
 }
@@ -90,9 +94,9 @@ problem_responses! {
     IdentityWriteForbidden => "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the user holds a permission, at any scope, that the caller does not hold at organization scope. `auth.csrf_refused`: the request did not come from this site.",
     IdentityLinkConflict => "`identity.taken`: this provider's subject is already linked to a user.",
     IdentityDeleteNotFound => "`user.not_found`: no user of the organization has this id. `identity.not_found`: the user has no identity with this id. `org.not_found`: the request's organization cannot be determined.",
-    IdentityDeleteConflict => "`identity.last_sign_in_method`: the user would be left with no way to sign in.",
+    IdentityDeleteConflict => "`identity.last_sign_in_method`: the user would be left with no way to sign in. `identity.local`: the identity is the user's local account, which is not removed here.",
     MyIdentityNotFound => "`identity.not_found`: you have no identity with this id. `org.not_found`: the request's organization cannot be determined.",
-    MyIdentityDeleteConflict => "`identity.last_sign_in_method`: you would be left with no way to sign in. `identity.externally_managed`: an identity provider, the sync API, SCIM or a connector owns your user record and would link the identity again; ask an admin.",
+    MyIdentityDeleteConflict => "`identity.last_sign_in_method`: you would be left with no way to sign in. `identity.local`: the identity is your local account, which is not removed here. `identity.externally_managed`: an identity provider, the sync API, SCIM or a connector owns your user record and would link the identity again; ask an admin.",
 }
 
 /// A user's identity as an admin sees it.
@@ -270,6 +274,9 @@ pub async fn create_user_identity(
             }
             other => ApiError::internal(&other),
         })?
+        // The local provider takes no pre-provisioned identity: a local identity's subject is
+        // its user's id, and enrollment creates it (spec 04 B3, Q4).
+        .filter(|provider| provider.kind != identity_providers::Kind::Local)
         .ok_or_else(|| invalid("provider_key", IDENTITY_UNKNOWN_PROVIDER))?;
     let new = RepoNewIdentity {
         user_id,
@@ -457,6 +464,10 @@ fn identity_error(error: repo::Error) -> ApiError {
         ),
         E::UserNotFound => user_not_found(),
         E::Taken => conflict(IDENTITY_TAKEN, "This identity is already linked to a user."),
+        E::LocalIdentity => conflict(
+            code::IDENTITY_LOCAL,
+            "This identity is a local account. Change local sign-in through its own settings.",
+        ),
         E::LastSignInMethod => conflict(
             code::IDENTITY_LAST_SIGN_IN_METHOD,
             "This is the user's last way to sign in. Link another identity first.",
@@ -489,6 +500,7 @@ mod tests {
                 "identity.last_sign_in_method",
                 None,
             ),
+            (repo::Error::LocalIdentity, 409, "identity.local", None),
             (
                 repo::Error::SubjectEmpty,
                 422,

@@ -480,6 +480,102 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/api/v1/admin/local-sign-in": {
+      "get": {
+        "tags": [
+          "local-sign-in"
+        ],
+        "summary": "Read the organization's local sign-in switches.",
+        "operationId": "getLocalSignIn",
+        "responses": {
+          "200": {
+            "description": "The local sign-in switches",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalSignIn"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/PermissionDenied"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "local-sign-in"
+        ],
+        "summary": "Set every local sign-in switch. A body equal to the current switches changes nothing.",
+        "operationId": "updateLocalSignIn",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocalSignIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The switches after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalSignIn"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/LocalSignInForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/LocalSignInConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/LocalSignInInvalid"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/api/v1/admin/permissions": {
       "get": {
         "tags": [
@@ -2362,6 +2458,64 @@
           }
         }
       },
+      "LocalMethods": {
+        "type": "object",
+        "description": "The local sign-in method switches as the organization settings show them.",
+        "required": [
+          "passkey",
+          "password",
+          "totp",
+          "magic_link"
+        ],
+        "properties": {
+          "magic_link": {
+            "type": "boolean"
+          },
+          "passkey": {
+            "type": "boolean"
+          },
+          "password": {
+            "type": "boolean"
+          },
+          "totp": {
+            "type": "boolean"
+          }
+        }
+      },
+      "LocalSignIn": {
+        "type": "object",
+        "description": "The organization's local sign-in: whether it is on at all, and each method's switch. A method\nis offered only when `enabled` and its own switch are both on.",
+        "required": [
+          "enabled",
+          "passkey",
+          "password",
+          "totp",
+          "magic_link"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Local sign-in as a whole; off, no local method is offered."
+          },
+          "magic_link": {
+            "type": "boolean",
+            "description": "Sign-in with a link sent by email. Off until the server can send email."
+          },
+          "passkey": {
+            "type": "boolean",
+            "description": "Sign-in with a passkey."
+          },
+          "password": {
+            "type": "boolean",
+            "description": "Sign-in with a password."
+          },
+          "totp": {
+            "type": "boolean",
+            "description": "A TOTP code as the second step after a password."
+          }
+        },
+        "additionalProperties": false
+      },
       "Me": {
         "type": "object",
         "description": "What `GET /api/v1/me` answers.",
@@ -2669,7 +2823,8 @@
         "description": "Every organization setting with its effective value: the stored one, or the setting's\ndefault when none is stored.",
         "required": [
           "default_tz",
-          "email_matching"
+          "email_matching",
+          "local_sign_in"
         ],
         "properties": {
           "default_tz": {
@@ -2679,12 +2834,16 @@
           "email_matching": {
             "type": "boolean",
             "description": "Whether a sign-in through an identity the organization does not know yet may be linked\nto the existing user with the same email address. `false` unless set, and this release\nrefuses to set it to `true`."
+          },
+          "local_sign_in": {
+            "$ref": "#/components/schemas/LocalMethods",
+            "description": "The local sign-in method switches; read-only here, changed through\n`PUT /api/v1/admin/local-sign-in`."
           }
         }
       },
       "OrgSettingsPatch": {
         "type": "object",
-        "description": "A partial change to the organization settings: one optional member per setting; only the\nmembers present change. A member that is no setting is refused.",
+        "description": "A partial change to the organization settings: one optional member per setting this route\nwrites; only the members present change. A member that is no setting, or a setting another\nroute writes, is refused.",
         "properties": {
           "default_tz": {
             "type": "string",
@@ -3616,7 +3775,7 @@
         }
       },
       "IdentityDeleteConflict": {
-        "description": "`identity.last_sign_in_method`: the user would be left with no way to sign in.",
+        "description": "`identity.last_sign_in_method`: the user would be left with no way to sign in. `identity.local`: the identity is the user's local account, which is not removed here.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -3657,6 +3816,36 @@
       },
       "InternalError": {
         "description": "`internal.error`: the server failed; the cause is in its log.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "LocalSignInConflict": {
+        "description": "`local.last_method`: the change would leave the organization no way to sign in: no offered passkey, password or magic link (TOTP is only a second step), and no enabled outside provider.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "LocalSignInForbidden": {
+        "description": "`permission.denied`: the caller does not hold `provider.manage` at organization scope. `permission.escalation`: the change affects how every user signs in, and the caller does not hold every catalog permission at organization scope. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "LocalSignInInvalid": {
+        "description": "`request.invalid`: the change breaks a rule; `errors` lists each one. `local.magic_link_needs_email` marks `magic_link` switched on while the server cannot send email.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -3716,7 +3905,7 @@
         }
       },
       "MyIdentityDeleteConflict": {
-        "description": "`identity.last_sign_in_method`: you would be left with no way to sign in. `identity.externally_managed`: an identity provider, the sync API, SCIM or a connector owns your user record and would link the identity again; ask an admin.",
+        "description": "`identity.last_sign_in_method`: you would be left with no way to sign in. `identity.local`: the identity is your local account, which is not removed here. `identity.externally_managed`: an identity provider, the sync API, SCIM or a connector owns your user record and would link the identity again; ask an admin.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -3834,7 +4023,7 @@
         }
       },
       "SettingsInvalid": {
-        "description": "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses.",
+        "description": "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting another route changes (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`); `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -3977,6 +4166,10 @@
     {
       "name": "branding",
       "description": "The organization's branding and theme"
+    },
+    {
+      "name": "local-sign-in",
+      "description": "The organization's local sign-in methods"
     }
   ]
 }

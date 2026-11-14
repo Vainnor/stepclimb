@@ -82,6 +82,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/local-sign-in": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the organization's local sign-in switches. */
+        get: operations["getLocalSignIn"];
+        /** Set every local sign-in switch. A body equal to the current switches changes nothing. */
+        put: operations["updateLocalSignIn"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/permissions": {
         parameters: {
             query?: never;
@@ -621,6 +639,29 @@ export interface components {
              */
             updated_at: string;
         };
+        /** @description The local sign-in method switches as the organization settings show them. */
+        LocalMethods: {
+            magic_link: boolean;
+            passkey: boolean;
+            password: boolean;
+            totp: boolean;
+        };
+        /**
+         * @description The organization's local sign-in: whether it is on at all, and each method's switch. A method
+         *     is offered only when `enabled` and its own switch are both on.
+         */
+        LocalSignIn: {
+            /** @description Local sign-in as a whole; off, no local method is offered. */
+            enabled: boolean;
+            /** @description Sign-in with a link sent by email. Off until the server can send email. */
+            magic_link: boolean;
+            /** @description Sign-in with a passkey. */
+            passkey: boolean;
+            /** @description Sign-in with a password. */
+            password: boolean;
+            /** @description A TOTP code as the second step after a password. */
+            totp: boolean;
+        };
         /** @description What `GET /api/v1/me` answers. */
         Me: {
             /** @description The keys of the catalog features the organization's plan includes, sorted. */
@@ -762,10 +803,16 @@ export interface components {
              *     refuses to set it to `true`.
              */
             email_matching: boolean;
+            /**
+             * @description The local sign-in method switches; read-only here, changed through
+             *     `PUT /api/v1/admin/local-sign-in`.
+             */
+            local_sign_in: components["schemas"]["LocalMethods"];
         };
         /**
-         * @description A partial change to the organization settings: one optional member per setting; only the
-         *     members present change. A member that is no setting is refused.
+         * @description A partial change to the organization settings: one optional member per setting this route
+         *     writes; only the members present change. A member that is no setting, or a setting another
+         *     route writes, is refused.
          */
         OrgSettingsPatch: {
             /** @description An IANA time zone, matched in any letter case and stored in the database's spelling. */
@@ -1256,7 +1303,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `identity.last_sign_in_method`: the user would be left with no way to sign in. */
+        /** @description `identity.last_sign_in_method`: the user would be left with no way to sign in. `identity.local`: the identity is the user's local account, which is not removed here. */
         IdentityDeleteConflict: {
             headers: {
                 [name: string]: unknown;
@@ -1294,6 +1341,33 @@ export interface components {
         };
         /** @description `internal.error`: the server failed; the cause is in its log. */
         InternalError: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `local.last_method`: the change would leave the organization no way to sign in: no offered passkey, password or magic link (TOTP is only a second step), and no enabled outside provider. */
+        LocalSignInConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: the caller does not hold `provider.manage` at organization scope. `permission.escalation`: the change affects how every user signs in, and the caller does not hold every catalog permission at organization scope. `auth.csrf_refused`: the request did not come from this site. */
+        LocalSignInForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.invalid`: the change breaks a rule; `errors` lists each one. `local.magic_link_needs_email` marks `magic_link` switched on while the server cannot send email. */
+        LocalSignInInvalid: {
             headers: {
                 [name: string]: unknown;
             };
@@ -1346,7 +1420,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `identity.last_sign_in_method`: you would be left with no way to sign in. `identity.externally_managed`: an identity provider, the sync API, SCIM or a connector owns your user record and would link the identity again; ask an admin. */
+        /** @description `identity.last_sign_in_method`: you would be left with no way to sign in. `identity.local`: the identity is your local account, which is not removed here. `identity.externally_managed`: an identity provider, the sync API, SCIM or a connector owns your user record and would link the identity again; ask an admin. */
         MyIdentityDeleteConflict: {
             headers: {
                 [name: string]: unknown;
@@ -1447,7 +1521,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses. */
+        /** @description `request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting another route changes (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`); `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses. */
         SettingsInvalid: {
             headers: {
                 [name: string]: unknown;
@@ -1809,6 +1883,65 @@ export interface operations {
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             422: components["responses"]["BrandingInvalid"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    getLocalSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The local sign-in switches */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocalSignIn"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["PermissionDenied"];
+            404: components["responses"]["OrganizationNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    updateLocalSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LocalSignIn"];
+            };
+        };
+        responses: {
+            /** @description The switches after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocalSignIn"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["LocalSignInForbidden"];
+            404: components["responses"]["OrganizationNotFound"];
+            409: components["responses"]["LocalSignInConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["LocalSignInInvalid"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };

@@ -123,6 +123,10 @@ pub enum Error {
     /// The provider's subject is already linked to a user (B14).
     #[error("this identity is already linked to a user")]
     Taken,
+    /// The identity is at the local provider, which these removals do not touch: a local account
+    /// is changed through docs/specs/m0/04-local-accounts.md's routes.
+    #[error("the identity is a local account's")]
+    LocalIdentity,
     /// Removing the identity would leave its user no way to sign in (B19).
     #[error("the identity is the user's last sign-in method")]
     LastSignInMethod,
@@ -370,15 +374,18 @@ pub async fn unlink<'c>(
     Ok(())
 }
 
-/// Delete the identity `id` of the user `user_id` in the scope's organization, as [`unlink`]
-/// does (audit entry included), unless it is the user's last sign-in method
-/// ([`Error::LastSignInMethod`], B19). An identity of another user, or of another organization,
-/// is [`Error::NotFound`]; a user the organization does not have is [`Error::UserNotFound`].
+/// Delete the identity `id` of the user `user_id` in the scope's organization, as [`unlink`] does
+/// (audit entry included), unless it is at the local provider ([`Error::LocalIdentity`]) or is the
+/// user's last sign-in method ([`Error::LastSignInMethod`], B19). An identity of another user, or
+/// of another organization, is [`Error::NotFound`]; a user the organization does not have is
+/// [`Error::UserNotFound`].
 ///
 /// A user signs in with an identity at an enabled provider or a local credential, so the user
 /// must keep another identity at an enabled provider: one at a disabled provider does not
-/// count, and a user with none at an enabled provider can have no identity removed here. Local
-/// credentials arrive with docs/specs/m0/04-local-accounts.md, which adds them to this count.
+/// count, and a user with none at an enabled provider can have no identity removed here. A
+/// local identity does not count either: what signs a local account in is its passkey or
+/// password, not the identity. Local credentials arrive with
+/// docs/specs/m0/04-local-accounts.md issue 2, which adds them to this count.
 ///
 /// Takes [`lock_user`] first, so two removals for one user take turns and the second counts
 /// what the first left. Runs in one transaction (a savepoint when `db` is already one); the lock
@@ -395,7 +402,9 @@ pub async fn unlink_unless_last<'c>(
     lock_user(&mut tx, scope, user_id).await?;
     let counts = sqlx::query!(
         r#"SELECT count(*) FILTER (WHERE i.id = $3) AS "this!",
-                  count(*) FILTER (WHERE i.id <> $3 AND p.enabled) AS "others!"
+                  count(*) FILTER (WHERE i.id = $3 AND p.kind = 'local') AS "this_local!",
+                  count(*) FILTER (WHERE i.id <> $3 AND p.enabled AND p.kind <> 'local')
+                      AS "others!"
            FROM identities i
            JOIN identity_providers p ON p.org_id = i.org_id AND p.id = i.provider_id
            WHERE i.org_id = $1 AND i.user_id = $2"#,
@@ -407,6 +416,9 @@ pub async fn unlink_unless_last<'c>(
     .await?;
     if counts.this == 0 {
         return Err(Error::NotFound);
+    }
+    if counts.this_local > 0 {
+        return Err(Error::LocalIdentity);
     }
     if counts.others == 0 {
         return Err(Error::LastSignInMethod);

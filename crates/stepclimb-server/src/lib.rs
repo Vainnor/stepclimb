@@ -43,6 +43,7 @@ pub mod flow;
 pub mod health;
 pub mod healthcheck;
 pub mod identities;
+pub mod local_sign_in;
 pub mod me;
 pub mod openapi;
 pub mod organization;

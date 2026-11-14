@@ -785,6 +785,13 @@ async fn a_refused_identity_creates_nothing(pool: PgPool) {
     )
     .await
     .invalid("/identities/0/provider_key", "identity.unknown_provider");
+    // The local provider exists but takes no pre-provisioned identity (spec 04 B3, Q4).
+    f.post(
+        &admin,
+        with(json!([{ "provider_key": "local", "subject": "1" }])),
+    )
+    .await
+    .invalid("/identities/0/provider_key", "identity.unknown_provider");
     f.post(
         &admin,
         with(json!([{ "provider_key": "vatsim", "subject": "" }])),

@@ -114,7 +114,10 @@ These apply to every endpoint in M0, including the ones other specs define.
   settings. `GET /api/v1/organization/settings` returns every key with its effective value;
   `PATCH /api/v1/organization/settings` takes a partial object, validates each key it names,
   refuses unknown keys (422 `request.invalid`, `errors[].code = "settings.unknown_key"`) and
-  writes the merged object in one statement. Both need `perm::OrgManage`.
+  writes the merged object in one statement. Both need `perm::OrgManage`. The local sign-in
+  switches (key `local_sign_in`) are returned by the `GET` and written only through
+  `PUT /api/v1/admin/local-sign-in` (`04-local-accounts.md` Q2); a `PATCH` naming the key is
+  listed in the 422 as `settings.read_only` (coordinator decision, 2026-11-14).
 - **B15.** `organizations.branding` belongs to `12-tokens-and-theme-generator.md`; this spec
   neither reads nor writes it.
 

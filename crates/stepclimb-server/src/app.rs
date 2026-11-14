@@ -19,7 +19,7 @@ use crate::{
     accounts, auth, branding,
     csrf::{self, OriginAllowlist},
     error::ApiError,
-    health, identities, me, openapi, organization,
+    health, identities, local_sign_in, me, openapi, organization,
     rate_limit::RateLimiter,
     role_assignments, roles, spa, users,
     web_origin::WebOrigin,
@@ -169,6 +169,10 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         (
             branding::BRANDING_PATH,
             get(branding::get_branding).put(branding::update_branding),
+        ),
+        (
+            local_sign_in::LOCAL_SIGN_IN_PATH,
+            get(local_sign_in::get_local_sign_in).put(local_sign_in::update_local_sign_in),
         ),
     ]
 }

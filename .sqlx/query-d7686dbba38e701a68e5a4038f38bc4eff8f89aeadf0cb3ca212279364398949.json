@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE organizations\n         SET settings = settings || jsonb_build_object('local_sign_in', $2::text::jsonb),\n             updated_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond'\n         WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d7686dbba38e701a68e5a4038f38bc4eff8f89aeadf0cb3ca212279364398949"
+}

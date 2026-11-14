@@ -10,7 +10,10 @@
 //! The settings are the typed `stepclimb_core::OrgSettings` and `OrgSettingsPatch`. A patch
 //! names only the keys it changes; each key it names that is no setting is listed in the 422 as
 //! `settings.unknown_key`, and a known key whose value does not match its type is a 400
-//! `request.malformed`, as for any body that does not match the schema (B2).
+//! `request.malformed`, as for any body that does not match the schema (B2). `local_sign_in` is
+//! read here but written only through `/api/v1/admin/local-sign-in` with `provider.manage`
+//! (docs/specs/m0/04-local-accounts.md Q2), so a patch naming it is listed in the 422 as
+//! `settings.read_only`.
 //!
 //! `GET /api/v1/organization/entitlements` shows the organization's plan and what it allows, with
 //! every catalog feature and limit (docs/specs/m0/10-entitlements-framework.md B12). It needs
@@ -62,11 +65,17 @@ pub mod code {
     /// In a 422's `errors`: the patch sets `email_matching` to `true`, which the server refuses
     /// until matching by email is implemented (spec 03 B17).
     pub const EMAIL_MATCHING_UNAVAILABLE: &str = "settings.email_matching_unavailable";
+    /// In a 422's `errors`: the patch names a setting another route writes.
+    pub const SETTINGS_READ_ONLY: &str = "settings.read_only";
 }
+
+/// The settings this route reads but another route writes: the local sign-in switches belong
+/// to `/api/v1/admin/local-sign-in` (spec 04 Q2).
+pub const READ_ONLY_SETTINGS: &[&str] = CorePatch::WRITTEN_ELSEWHERE;
 
 problem_responses! {
     OrgWriteForbidden => "`permission.denied`: the caller does not hold `organization.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site.",
-    SettingsInvalid => "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses.",
+    SettingsInvalid => "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting another route changes (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`); `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses.",
 }
 
 /// The caller's organization.
@@ -123,14 +132,29 @@ pub struct OrgSettings {
     /// to the existing user with the same email address. `false` unless set, and this release
     /// refuses to set it to `true`.
     pub email_matching: bool,
+    /// The local sign-in method switches; read-only here, changed through
+    /// `PUT /api/v1/admin/local-sign-in`.
+    pub local_sign_in: LocalMethods,
 }
 
-/// A partial change to the organization settings: one optional member per setting; only the
-/// members present change. A member that is no setting is refused.
+/// The local sign-in method switches as the organization settings show them.
+//
+// The document's form of `stepclimb_core::local_sign_in::LocalMethods`.
+#[derive(ToSchema)]
+pub struct LocalMethods {
+    pub passkey: bool,
+    pub password: bool,
+    pub totp: bool,
+    pub magic_link: bool,
+}
+
+/// A partial change to the organization settings: one optional member per setting this route
+/// writes; only the members present change. A member that is no setting, or a setting another
+/// route writes, is refused.
 //
 // The document's form of `stepclimb_core::OrgSettingsPatch`, whose `deny_unknown_fields` this
 // repeats so the document says `additionalProperties: false`; `tests/organization.rs` checks
-// it declares the same members as `OrgSettings`.
+// it declares the members of `OrgSettings` but `READ_ONLY_SETTINGS`.
 #[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OrgSettingsPatch {
@@ -360,15 +384,15 @@ pub async fn get_entitlements(
     Json(entitlements.plan().into())
 }
 
-/// The most unknown keys a 422 lists, so a large body cannot make an equally large answer.
+/// The most refused keys a 422 lists, so a large body cannot make an equally large answer.
 pub const MAX_UNKNOWN_KEYS: usize = 20;
 
 const MALFORMED_PATCH: &str = "The request body is not valid JSON for this operation.";
 
-/// The patch in `body`, `None` when it names no key. In B2's order: 400 when a member is
-/// `null` (no setting is nullable; omit a member to leave it as it is), then 422 listing the
-/// first [`MAX_UNKNOWN_KEYS`] keys that are no setting, then 400 when a known key's value does
-/// not match its type.
+/// The patch in `body`, `None` when it names no key. In B2's order: 400 when a member is `null` (no
+/// setting is nullable; omit a member to leave it as it is), then 422 listing the first
+/// [`MAX_UNKNOWN_KEYS`] keys that are no setting or are [`READ_ONLY_SETTINGS`], then 400 when a
+/// known key's value does not match its type.
 fn parse_patch(body: Map<String, Value>) -> Result<Option<CorePatch>, ApiError> {
     if body.is_empty() {
         return Ok(None);
@@ -378,9 +402,17 @@ fn parse_patch(body: Map<String, Value>) -> Result<Option<CorePatch>, ApiError> 
     }
     let unknown: Vec<FieldError> = body
         .keys()
-        .filter(|key| !CorePatch::knows(key))
+        .filter_map(|key| {
+            let code = if READ_ONLY_SETTINGS.contains(&key.as_str()) {
+                code::SETTINGS_READ_ONLY
+            } else if !CorePatch::knows(key) {
+                code::SETTINGS_UNKNOWN_KEY
+            } else {
+                return None;
+            };
+            Some(FieldError::at(&[key], code))
+        })
         .take(MAX_UNKNOWN_KEYS)
-        .map(|key| FieldError::at(&[key], code::SETTINGS_UNKNOWN_KEY))
         .collect();
     if !unknown.is_empty() {
         return Err(ApiError::invalid(unknown));
@@ -414,6 +446,7 @@ fn org_error(error: organizations::Error) -> ApiError {
         | E::StoredSettings(_)
         | E::Plan(_)
         | E::OrgPlan(_)
+        | E::LocalProvider(_)
         | E::Time(_)
         | E::Database(_)) => ApiError::internal(&other),
     }
@@ -433,6 +466,30 @@ mod tests {
             let json = serde_json::to_value(PlanSource::from(source)).unwrap();
             assert_eq!(json, source.as_str());
         }
+    }
+
+    #[test]
+    fn a_patch_naming_the_local_sign_in_switches_is_refused() {
+        let body: Map<String, Value> = serde_json::from_value(json!({
+            "local_sign_in": { "passkey": false },
+            "default_tz": "UTC",
+            "zeta": 1,
+        }))
+        .unwrap();
+        let problem = parse_patch(body).unwrap_err().problem();
+        assert_eq!(problem.status, 422);
+        let fields: Vec<_> = problem
+            .errors
+            .iter()
+            .map(|e| (e.field.as_str(), e.code.as_str()))
+            .collect();
+        assert_eq!(
+            fields,
+            [
+                ("/local_sign_in", "settings.read_only"),
+                ("/zeta", "settings.unknown_key")
+            ]
+        );
     }
 
     #[test]

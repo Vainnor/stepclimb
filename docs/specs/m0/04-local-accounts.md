@@ -33,11 +33,58 @@ creates and hands over.
   credentials of that kind stop working for sign-in until the method is switched on again. They
   are not deleted. When every local method is off, or the local row is disabled, local sign-in
   is not offered (`08-sessions-and-csrf.md` B38).
+
+  Coordinator decisions (2026-11-14), for issue I1. TOTP is a second step after a password,
+  not a way in by itself: local sign-in counts as offered only while the passkey, the password
+  or the magic link is offered (a primary method), and with TOTP alone it is not offered. A
+  change through `PUT /api/v1/admin/local-sign-in` that would leave the organization no primary
+  way to sign in, meaning no offered primary local method and no enabled provider that is not
+  local, is refused with 409 `local.last_method` and writes nothing; disabling the local row is
+  such a change. The check runs under the organization row's lock that the route already
+  holds.
 - **B3.** A local account is a `users` row plus an `identities` row for the local provider. The
   identity's `subject`: pending Q4. The local row needs `kind = 'local'`, which widens the `kind`
   check of `03-users-and-identities.md` B13 by migration. This spec provides
   `local::has_credential(scope, user_id)` (a passkey or a password exists), which
   `03-users-and-identities.md` B19 calls before removing a user's last identity.
+
+  Coordinator decisions (2026-11-14), for issue I1:
+
+  - Storage (Q2 (b)): the four switches are one `OrgSettings` key, `local_sign_in`, an object
+    `{passkey, password, totp, magic_link}` whose missing members read as their defaults. Only
+    `local_sign_in::update` writes it; the generic settings patch cannot name it. The local
+    row's `enabled` column is the `enabled` of `/api/v1/admin/local-sign-in`. A `PUT`
+    names all five members; a missing, `null` or unknown member answers 400 `request.malformed`.
+  - The local row is written from code with a UUID v7 key: `organizations::create` for a new
+    organization, and `stepclimb serve` at startup for an organization created before the
+    migration, as the `org_plans` rows are. The migration widens the `kind` check and adds a
+    check that `kind = 'local'` exactly when `key = 'local'`, so no OpenID Connect or OAuth 2
+    provider can take the key `local`, and `UNIQUE (org_id, key)` allows one local row.
+  - Escalation (the owner's rule for writes that affect another user's sign-in): a `PUT` that
+    changes anything is refused with 403 `permission.escalation` unless the caller holds every
+    catalog permission at organization scope. This is `03-users-and-identities.md` B6's rule
+    applied to every user of the organization at once; an Organization admin holds every
+    catalog permission, so the two agree whenever one exists. A `PUT` equal to the current
+    switches changes nothing and is answered 200 with `provider.manage` alone. The check reads
+    the switches under the organization row's lock, which settings writes take.
+  - `local.magic_link_needs_email` is 422 `request.invalid` with the code at `/magic_link`. M0
+    has no email sender, so `local_sign_in::update` refuses every change switching the magic
+    link on.
+  - Audit: a change of the switches writes an `organization.update_settings` entry with
+    `local_sign_in` before and after; a change of the row's `enabled` writes an
+    `identity_provider.update` entry with `enabled` before and after
+    (`09-permissions-and-roles.md` B22). A `PUT` that changes both writes both.
+  - `auth.method_disabled` is the server's `local_sign_in::require_method(scope, method)`,
+    which every method route of issues I2 to I8 calls first. The local entries of
+    `/.well-known/stepclimb` are `LocalSignIn::offered()` in `stepclimb-core` (none when the row
+    is disabled or no primary method is on); the endpoint itself is `08-sessions-and-csrf.md`
+    I9. `identity_providers::list_enabled` leaves the local row out, so it lists the outside
+    providers only.
+  - T1's route-level half (`/auth/local/passkey/start` answering 404 `auth.method_disabled`)
+    lands with issue I2, whose routes are the first to call `require_method`; I1 tests the
+    switches and `require_method` itself.
+  - Defaults: passkey, password and TOTP on, the magic link off, the row enabled.
+
 - **B4.** Local sign-in finds the user by the organization and the email address. Uniqueness
   and case handling: pending Q5.
 - **B5.** Every completed local sign-in goes through admission (`07-admission.md` B1) with the
@@ -153,7 +200,7 @@ answer the admission refusals of `07-admission.md` as 403.
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
 | `GET /api/v1/admin/local-sign-in` | none | 200 `{enabled, passkey, password, totp, magic_link}` | `permission.denied` | `perm::ProviderManage`, organization |
-| `PUT /api/v1/admin/local-sign-in` | same shape | 200 | `local.magic_link_needs_email` (on before an email sender exists), `permission.denied` | `perm::ProviderManage`, organization |
+| `PUT /api/v1/admin/local-sign-in` | same shape | 200 | `local.magic_link_needs_email` (on before an email sender exists), `local.last_method` (409, B2), `permission.denied`, `permission.escalation` | `perm::ProviderManage`, organization |
 | `POST /api/v1/admin/users/{id}/enrollment-links` | none | 201 `{url, expires_at}` | `user.not_found`, `permission.denied` | `perm::UserManage`, organization (see Permissions) |
 | `POST /auth/local/enrollment/start` | `{token}` | 200 `{email, methods: [...], passkey_options?}`; sets the flow cookie | `auth.enrollment_invalid`, `auth.enrollment_expired` | none |
 | `POST /auth/local/enrollment/passkey` | `{token, credential, name?}` | 200 `{return_to}`; sets `__Host-sc_session` | `auth.enrollment_invalid`, `auth.enrollment_expired`, `auth.flow_invalid`, `auth.flow_expired`, `auth.passkey_invalid` | none |

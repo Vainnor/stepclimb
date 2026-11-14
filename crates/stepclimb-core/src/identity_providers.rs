@@ -27,11 +27,14 @@ pub enum Kind {
     Oidc,
     /// Generic OAuth 2 with a JSON user endpoint (spec 06).
     Oauth2,
+    /// The organization's own accounts: the one row with key `local` that holds the local
+    /// sign-in methods (spec 04 B1, [`crate::local_sign_in`]).
+    Local,
 }
 
 impl Kind {
     /// Every kind, in the order the `identity_providers.kind` check constraint lists them.
-    pub const ALL: [Self; 2] = [Self::Oidc, Self::Oauth2];
+    pub const ALL: [Self; 3] = [Self::Oidc, Self::Oauth2, Self::Local];
 
     /// The stored spelling.
     #[must_use]
@@ -39,6 +42,7 @@ impl Kind {
         match self {
             Self::Oidc => "oidc",
             Self::Oauth2 => "oauth2",
+            Self::Local => "local",
         }
     }
 
@@ -151,7 +155,8 @@ pub async fn get_by_key(
     .transpose()
 }
 
-/// The scope's enabled providers, sorted by key.
+/// The scope's enabled providers but the local one, sorted by key: the outside providers a
+/// person can sign in with. The local row's methods are [`crate::local_sign_in`]'s.
 pub async fn list_enabled(
     db: impl PgExecutor<'_>,
     scope: OrgScope,
@@ -162,9 +167,10 @@ pub async fn list_enabled(
                   (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
                   (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM identity_providers
-           WHERE org_id = $1 AND enabled
+           WHERE org_id = $1 AND enabled AND kind <> $2
            ORDER BY key"#,
         scope.org_id(),
+        Kind::Local.as_str(),
     )
     .fetch_all(db)
     .await?;
@@ -181,7 +187,7 @@ mod tests {
             assert_eq!(Kind::parse(kind.as_str()), Some(kind));
         }
         assert_eq!(Kind::parse("saml"), None);
-        assert_eq!(Kind::parse("local"), None);
+        assert_eq!(Kind::parse("Local"), None);
     }
 
     #[test]

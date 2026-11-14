@@ -4,8 +4,9 @@
 //! An organization is one row in `organizations`, the tenant every other row is scoped to. The
 //! table is the scope itself, so its queries filter by `id = scope.org_id()` where every other
 //! table's filter by `org_id`. [`create`] is the one function that makes an organization, with
-//! its root account (B26) and its `org_plans` row (spec 10 B5). `branding` belongs to spec 12
-//! and to the [`crate::branding`] repository; it is neither read nor written here.
+//! its root account (B26), its `org_plans` row (spec 10 B5) and its local provider row (spec 04
+//! B1). `branding` belongs to spec 12 and to the [`crate::branding`] repository; it is neither
+//! read nor written here.
 
 use std::time::SystemTime;
 
@@ -18,7 +19,7 @@ use crate::{
     audit::{self, Action, Actor},
     db::{TimeOutOfRange, epoch_micros},
     id::new_id,
-    name, org_plans, plans,
+    local_sign_in, name, org_plans, plans,
     settings::{OrgSettings, OrgSettingsPatch},
 };
 
@@ -99,6 +100,9 @@ pub enum Error {
     /// Giving the organization its plan failed.
     #[error("could not give the organization its plan")]
     OrgPlan(#[from] org_plans::Error),
+    /// Writing the local provider row failed.
+    #[error("could not write the local provider row")]
+    LocalProvider(#[source] local_sign_in::Error),
     /// The update time cannot be stored.
     #[error(transparent)]
     Time(#[from] TimeOutOfRange),
@@ -117,12 +121,12 @@ impl From<sqlx::Error> for Error {
 }
 
 /// Create an organization named `name`, trimmed, with the slug `slug`, its root account, named
-/// after it (B16, B26), and its `org_plans` row, plan `unlimited` with source `selfhost` (spec
-/// 10 B5), in one transaction (a savepoint when `db` is already one). It inserts the
-/// `unlimited` plan first when it does not exist yet, so it works before `stepclimb serve` has
-/// ever started; it never rewrites an existing one, which is startup's job. `created_at` and
-/// `updated_at` of the new rows are `now`. It writes the `organization.create` audit entry, by
-/// the instance, the only actor that creates organizations.
+/// after it (B16, B26), its `org_plans` row, plan `unlimited` with source `selfhost` (spec 10 B5),
+/// and its local provider row (spec 04 B1), in one transaction (a savepoint when `db` is already
+/// one). It inserts the `unlimited` plan first when it does not exist yet, so it works before
+/// `stepclimb serve` has ever started; it never rewrites an existing one, which is startup's job.
+/// `created_at` and `updated_at` of the new rows are `now`. It writes the `organization.create`
+/// audit entry, by the instance, the only actor that creates organizations.
 ///
 /// Only instance contexts call this: the `stepclimb admin` CLI in M0, the operator console in
 /// M6 (B9, B26). It takes no `OrgScope` because the organization it acts in does not exist
@@ -157,6 +161,9 @@ pub async fn create<'c>(
     accounts::create_root(&mut tx, scope, name, now_micros).await?;
     plans::insert_unlimited_if_missing(&mut tx, now_micros).await?;
     org_plans::ensure_selfhost(&mut *tx, scope, now).await?;
+    local_sign_in::ensure_row(&mut *tx, scope, now)
+        .await
+        .map_err(Error::LocalProvider)?;
     let data = json!({ "after": { "slug": organization.slug, "name": organization.name } });
     let (instance, create) = (Actor::Instance, Action::OrganizationCreate);
     let id = organization.id;
@@ -310,9 +317,10 @@ pub async fn update_settings<'c>(
 /// `patch` with each value validated and in its stored form: `default_tz` in the time zone
 /// database's spelling, so `utc` stores, and compares with the current value, as `UTC`.
 ///
-/// `email_matching` may only be set to `false` (spec 03 B17): nothing links an identity by
-/// email yet, so `true` would be a stored value no code applies, and the conditions spec 03 Q2
-/// sets for it (a verified address, a provider trusted for matching) would not exist. Spec 07 issue 4 implements the matching and lifts this refusal.
+/// `email_matching` may only be set to `false` (spec 03 B17): nothing links an identity by email
+/// yet, so `true` would be a stored value no code applies, and the conditions spec 03 Q2 sets for
+/// it (a verified address, a provider trusted for matching) would not exist. Spec 07 issue 4
+/// implements the matching and lifts this refusal.
 fn valid_patch(patch: &OrgSettingsPatch) -> Result<OrgSettingsPatch, Error> {
     let default_tz = match patch.default_tz.as_deref() {
         Some(name) => Some(crate::tz::canonical(name).ok_or(Error::DefaultTzUnknown)?),
