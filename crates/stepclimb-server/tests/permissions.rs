@@ -1502,9 +1502,15 @@ impl Org {
                 subject: subject.into(),
                 attributes: serde_json::Map::new(),
             };
-            let linked = identities::link(&self.pool, scope(self.id), &identity, now())
-                .await
-                .expect("link identity");
+            let linked = identities::link(
+                &self.pool,
+                scope(self.id),
+                &identity,
+                now(),
+                Actor::Instance,
+            )
+            .await
+            .expect("link identity");
             last = Some(linked.id);
         }
         last.expect("two identities")
@@ -1646,15 +1652,22 @@ async fn delete_mine(
     State(state): State<AppState>,
     ApiPath(id): ApiPath<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    identities::unlink(&state.db, principal.scope(), principal.user_id, id)
-        .await
-        .map_err(|_| {
-            ApiError::new(
-                StatusCode::NOT_FOUND,
-                "identity.not_found",
-                "No such identity.",
-            )
-        })?;
+    identities::unlink(
+        &state.db,
+        principal.scope(),
+        principal.user_id,
+        id,
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .map_err(|_| {
+        ApiError::new(
+            StatusCode::NOT_FOUND,
+            "identity.not_found",
+            "No such identity.",
+        )
+    })?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1778,7 +1791,7 @@ const fn gated(feature: &'static str, access: Access) -> Access {
             feature: Some(feature),
             setup,
         },
-        Access::AuthOnly(_) => panic!("a feature entry needs a permission"),
+        Access::AuthOnly(_) | Access::Own { .. } => panic!("a feature entry needs a permission"),
     }
 }
 

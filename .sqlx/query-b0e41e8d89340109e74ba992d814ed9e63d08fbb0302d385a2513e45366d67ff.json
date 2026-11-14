@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT count(*) FILTER (WHERE id = $3) AS \"this!\",\n                  count(*) FILTER (WHERE id <> $3) AS \"others!\"\n           FROM identities\n           WHERE org_id = $1 AND user_id = $2",
+  "query": "SELECT count(*) FILTER (WHERE i.id = $3) AS \"this!\",\n                  count(*) FILTER (WHERE i.id <> $3 AND p.enabled) AS \"others!\"\n           FROM identities i\n           JOIN identity_providers p ON p.org_id = i.org_id AND p.id = i.provider_id\n           WHERE i.org_id = $1 AND i.user_id = $2",
   "describe": {
     "columns": [
       {
@@ -28,5 +28,5 @@
       null
     ]
   },
-  "hash": "be4084b0df4fbf2a0795df40973efb1acf0a504cdb9fbe58c4b200db6e700a15"
+  "hash": "b0e41e8d89340109e74ba992d814ed9e63d08fbb0302d385a2513e45366d67ff"
 }

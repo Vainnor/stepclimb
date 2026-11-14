@@ -158,6 +158,13 @@ these rows are in `04` to `07`.
   mode (`07-admission.md`) a known person can sign in the first time. An identity already linked
   to any user answers 409 `identity.taken`; an unknown or other-organization provider key
   answers 422 (`errors[].code = "identity.unknown_provider"`).
+
+  Coordinator decision (2026-11-14), accepting a disclosure: within one organization, 409
+  `identity.taken` tells a holder of `user.manage` whether a provider's subject is already
+  linked to someone, without saying to whom. This is accepted, because answering every subject
+  the same way would make linking unusable: an admin could not tell a duplicate from a success.
+  Another organization's provider key answers 422 before the uniqueness check, so the answer
+  never reaches across organizations.
 - **B19.** Removing an identity (admin: `DELETE /api/v1/users/{user_id}/identities/{identity_id}`;
   self: `DELETE /api/v1/me/identities/{identity_id}`) deletes the row. It is refused with 409
   `identity.last_sign_in_method` when the user would be left with no identity and no local
@@ -184,15 +191,23 @@ these rows are in `04` to `07`.
   - The last-sign-in-method check counts the user's other identities only;
     `04-local-accounts.md` adds local credentials to it. An identity id that is not the user's
     answers 404 `identity.not_found` before the check runs, also for a user with no identities.
+  - Only an identity at an enabled provider counts as a sign-in method (fail closed): removing
+    a user's last identity at an enabled provider answers 409 even when they still hold one at
+    a disabled provider. An identity at a disabled provider can be removed while one at an
+    enabled provider stays; a user with none at an enabled provider can have no identity
+    removed until one is linked or a provider is enabled again.
   - `DELETE /api/v1/me/identities/{identity_id}` refuses a non-`local` user with 409
     `identity.externally_managed` before it looks up the identity, so the answer says nothing
     about the id.
   - `POST /api/v1/users/{user_id}/identities` answers 201 with the `Identity` and no `Location`
     header, since no route reads a single identity. An empty subject is 422 with
     `errors[].code = "identity.subject_empty"`, one over 255 characters `text.too_long`, and a NUL
-    in either member `text.contains_nul`. A
-    disabled provider's key is accepted, so an admin can pre-provision before enabling it.
-  - No identity change writes an audit entry: `09` B22 lists none.
+    in either member `text.contains_nul`. A disabled provider's key is accepted, so an admin can
+    pre-provision before enabling it.
+  - Every link and removal writes one audit entry in its transaction (`identity.link`,
+    `identity.unlink`, `09` B22) with the user, the provider's key and the subject, never the
+    attributes, and the caller with the request's client address. A link made while creating a
+    user (`POST /api/v1/users` with `identities`) writes its entry too.
 - **B20.** How a signed-in user links a further identity (starting a provider flow while signed
   in) is part of the sign-in flows in `05-oidc.md` and `06-oauth2-and-vatsim-preset.md`; they
   write through `identities::link`, which applies B14's uniqueness.

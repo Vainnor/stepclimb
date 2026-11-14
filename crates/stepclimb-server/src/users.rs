@@ -11,8 +11,8 @@
 //! the users limit check ([`Entitlements::check_room`], spec 10 B10), which locks the
 //! organization's plan row so concurrent creations take turns; a user without a `tz` gets the
 //! organization's `default_tz` setting (Q4); each of `identities` is linked to the new user, and
-//! any refusal rolls back the whole creation. Creation writes no audit entry (spec 09 Q5 lists
-//! status changes only).
+//! any refusal rolls back the whole creation. Creating the user writes no audit entry (spec 09
+//! Q5 lists status changes only); each linked identity writes its `identity.link` entry.
 //!
 //! `PATCH` refuses, for a user an outside source owns (source other than `local`), any change
 //! to the fields that source owns: `display_name`, `given_name`, `family_name` and `email` (409
@@ -49,6 +49,7 @@ use serde_json::Map;
 use sqlx::{Postgres, Transaction};
 use stepclimb_core::{
     OrgScope, Source, accounts,
+    audit::Actor,
     feature::Limit,
     grants::{self, Grants},
     id::Uuid,
@@ -431,6 +432,7 @@ pub async fn get_user(
 pub async fn create_user(
     require: Require<UserManage>,
     entitlements: Entitlements,
+    client: ClientAddress,
     State(state): State<AppState>,
     ApiJson(body): ApiJson<NewUser>,
 ) -> Result<Response, ApiError> {
@@ -449,7 +451,8 @@ pub async fn create_user(
         .await
         .map_err(user_error)?;
     for numbered in body.identities.iter().enumerate() {
-        link(&mut tx, scope, user.id, numbered, now).await?;
+        let actor = client.actor(require.principal());
+        link(&mut tx, scope, user.id, numbered, now, actor).await?;
     }
     tx.commit().await.map_err(|e| ApiError::internal(&e))?;
     let location = format!("{USERS_PATH}/{}", user.id);
@@ -515,6 +518,7 @@ async fn link(
     user_id: Uuid,
     (index, identity): (usize, &NewUserIdentity),
     now: SystemTime,
+    actor: Actor,
 ) -> Result<(), ApiError> {
     let position = index.to_string();
     let invalid_at = |member, code| invalid(&["identities", &position, member], code);
@@ -533,7 +537,7 @@ async fn link(
         subject: identity.subject.clone(),
         attributes: Map::new(),
     };
-    identities::link(&mut **tx, scope, &new, now)
+    identities::link(&mut **tx, scope, &new, now, actor)
         .await
         .map(|_| ())
         .map_err(|error| identity_error(index, error))

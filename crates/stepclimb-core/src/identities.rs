@@ -10,7 +10,11 @@
 //! Lookup is by `(provider, subject)` only ([`find_user`]): nothing here matches a user by email
 //! (B17). Who may link or unlink is the routes' to decide. [`unlink_unless_last`] refuses to
 //! remove a user's last sign-in method (B19); [`unlink`] does not, for writers that own the
-//! identity's source.
+//! identity's source. Only an identity at an enabled provider counts as a sign-in method.
+//!
+//! [`link`] and [`unlink`] write their audit entries themselves (`identity.link`,
+//! `identity.unlink`, docs/specs/m0/09-permissions-and-roles.md B22), in the transaction that
+//! makes the change, with the user, the provider's key and the subject; never the attributes.
 //!
 //! [`lock_user`] locks the user's row `FOR NO KEY UPDATE` until the transaction ends, the lock
 //! `users::set_status` takes on it, so two [`unlink_unless_last`] calls for one user take turns
@@ -25,12 +29,13 @@
 
 use std::time::SystemTime;
 
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use sqlx::{Acquire, PgConnection, PgExecutor, Postgres};
 use uuid::Uuid;
 
 use crate::{
     OrgScope,
+    audit::{self, Action, Actor},
     db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
     id::new_id,
     users::{self, User},
@@ -244,7 +249,8 @@ pub async fn find_user(
 }
 
 /// Link a user to a provider's subject in the scope's organization, with `created_at` and
-/// `updated_at` set to `now` (B14, B18, B20).
+/// `updated_at` set to `now` (B14, B18, B20), and write its `identity.link` audit entry by
+/// `actor`. Runs in one transaction (a savepoint when `db` is already one).
 ///
 /// Refuses a user or provider outside the organization ([`Error::UserNotFound`],
 /// [`Error::ProviderNotFound`]) and a `(provider, subject)` already linked to any user
@@ -255,15 +261,17 @@ pub async fn find_user(
 /// `(provider_id, subject)` unique index is consulted. Left to the composite foreign key alone,
 /// PostgreSQL checks that index first, and [`Error::Taken`] would tell org A whether a subject
 /// is linked at org B's provider.
-pub async fn link(
-    db: impl PgExecutor<'_>,
+pub async fn link<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
     scope: OrgScope,
     identity: &NewIdentity,
     now: SystemTime,
+    actor: Actor,
 ) -> Result<Identity, Error> {
     let subject = valid_subject(&identity.subject)?;
     let attributes = valid_attributes(&identity.attributes)?;
     let now = epoch_micros(now)?;
+    let mut tx = db.begin().await?;
     let row = sqlx::query_as!(
         Row,
         r#"WITH inserted AS (
@@ -294,42 +302,83 @@ pub async fn link(
         attributes,
         now,
     )
-    .fetch_optional(db)
+    .fetch_optional(&mut *tx)
     .await?
     .ok_or(Error::ProviderNotFound)?;
-    Identity::try_from(row)
+    let linked = Identity::try_from(row)?;
+    let data =
+        json!({ "after": audit_data(linked.user_id, &linked.provider_key, &linked.subject) });
+    audit::record(
+        &mut tx,
+        scope,
+        actor,
+        Action::IdentityLink,
+        linked.id,
+        &data,
+        now,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(linked)
 }
 
-/// Delete the identity `id` of the user `user_id` in the scope's organization. An identity of
-/// another user, or of another organization, is [`Error::NotFound`].
-pub async fn unlink(
-    db: impl PgExecutor<'_>,
+/// What an audit entry records of an identity: whose it is, the provider's key and the subject.
+/// Never the attributes, which can hold personal data the provider sent.
+fn audit_data(user_id: Uuid, provider_key: &str, subject: &str) -> Value {
+    json!({ "user_id": user_id, "provider_key": provider_key, "subject": subject })
+}
+
+/// Delete the identity `id` of the user `user_id` in the scope's organization, and write its
+/// `identity.unlink` audit entry by `actor` at `now`, with the identity as it was. An identity
+/// of another user, or of another organization, is [`Error::NotFound`]. Runs in one transaction
+/// (a savepoint when `db` is already one).
+pub async fn unlink<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
     scope: OrgScope,
     user_id: Uuid,
     id: Uuid,
+    now: SystemTime,
+    actor: Actor,
 ) -> Result<(), Error> {
-    let deleted = sqlx::query!(
-        "DELETE FROM identities WHERE org_id = $1 AND user_id = $2 AND id = $3",
+    let now = epoch_micros(now)?;
+    let mut tx = db.begin().await?;
+    let removed = sqlx::query!(
+        "DELETE FROM identities i
+         USING identity_providers p
+         WHERE i.org_id = $1 AND i.user_id = $2 AND i.id = $3
+           AND p.org_id = i.org_id AND p.id = i.provider_id
+         RETURNING i.subject, p.key",
         scope.org_id(),
         user_id,
         id,
     )
-    .execute(db)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(Error::NotFound)?;
+    let data = json!({ "before": audit_data(user_id, &removed.key, &removed.subject) });
+    audit::record(
+        &mut tx,
+        scope,
+        actor,
+        Action::IdentityUnlink,
+        id,
+        &data,
+        now,
+    )
     .await?;
-    if deleted.rows_affected() == 0 {
-        return Err(Error::NotFound);
-    }
+    tx.commit().await?;
     Ok(())
 }
 
-/// Delete the identity `id` of the user `user_id` in the scope's organization, unless it is the
-/// user's last sign-in method ([`Error::LastSignInMethod`], B19). An identity of another user,
-/// or of another organization, is [`Error::NotFound`]; a user the organization does not have is
-/// [`Error::UserNotFound`].
+/// Delete the identity `id` of the user `user_id` in the scope's organization, as [`unlink`]
+/// does (audit entry included), unless it is the user's last sign-in method
+/// ([`Error::LastSignInMethod`], B19). An identity of another user, or of another organization,
+/// is [`Error::NotFound`]; a user the organization does not have is [`Error::UserNotFound`].
 ///
-/// A user signs in with an identity or a local credential. Local credentials arrive with
-/// docs/specs/m0/04-local-accounts.md, which adds them to this count; until then no user has
-/// one, so the user must keep another identity.
+/// A user signs in with an identity at an enabled provider or a local credential, so the user
+/// must keep another identity at an enabled provider: one at a disabled provider does not
+/// count, and a user with none at an enabled provider can have no identity removed here. Local
+/// credentials arrive with docs/specs/m0/04-local-accounts.md, which adds them to this count.
 ///
 /// Takes [`lock_user`] first, so two removals for one user take turns and the second counts
 /// what the first left. Runs in one transaction (a savepoint when `db` is already one); the lock
@@ -339,14 +388,17 @@ pub async fn unlink_unless_last<'c>(
     scope: OrgScope,
     user_id: Uuid,
     id: Uuid,
+    now: SystemTime,
+    actor: Actor,
 ) -> Result<(), Error> {
     let mut tx = db.begin().await?;
     lock_user(&mut tx, scope, user_id).await?;
     let counts = sqlx::query!(
-        r#"SELECT count(*) FILTER (WHERE id = $3) AS "this!",
-                  count(*) FILTER (WHERE id <> $3) AS "others!"
-           FROM identities
-           WHERE org_id = $1 AND user_id = $2"#,
+        r#"SELECT count(*) FILTER (WHERE i.id = $3) AS "this!",
+                  count(*) FILTER (WHERE i.id <> $3 AND p.enabled) AS "others!"
+           FROM identities i
+           JOIN identity_providers p ON p.org_id = i.org_id AND p.id = i.provider_id
+           WHERE i.org_id = $1 AND i.user_id = $2"#,
         scope.org_id(),
         user_id,
         id,
@@ -359,7 +411,7 @@ pub async fn unlink_unless_last<'c>(
     if counts.others == 0 {
         return Err(Error::LastSignInMethod);
     }
-    unlink(&mut *tx, scope, user_id, id).await?;
+    unlink(&mut *tx, scope, user_id, id, now, actor).await?;
     tx.commit().await?;
     Ok(())
 }

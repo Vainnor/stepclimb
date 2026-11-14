@@ -12,7 +12,7 @@ use serde_json::{Map, Value, json};
 use sqlx::{PgPool, Postgres};
 use stepclimb_core::{
     OrgScope, Source,
-    audit::Actor,
+    audit::{self, Actor},
     id::{Uuid, new_id},
     identities::{self, Error, Identity, NewIdentity},
     identity_providers::{self, Kind},
@@ -115,7 +115,7 @@ fn new(user_id: Uuid, provider_id: Uuid, subject: &str) -> NewIdentity {
 }
 
 async fn link(pool: &PgPool, org: Uuid, identity: NewIdentity) -> Identity {
-    identities::link(pool, scope(org), &identity, request_time())
+    identities::link(pool, scope(org), &identity, request_time(), Actor::Instance)
         .await
         .expect("link identity")
 }
@@ -141,7 +141,7 @@ macro_rules! assert_err {
 }
 
 async fn try_link(pool: &PgPool, org: Uuid, identity: NewIdentity) -> Result<Identity, Error> {
-    identities::link(pool, scope(org), &identity, request_time()).await
+    identities::link(pool, scope(org), &identity, request_time(), Actor::Instance).await
 }
 
 /// The SQLSTATE and constraint of a failed statement.
@@ -167,6 +167,7 @@ async fn link_stores_the_identity_and_reads_it_back_with_its_provider_key(pool: 
             ..new(a.sam, a.oauth, "1000001")
         },
         request_time(),
+        Actor::Instance,
     )
     .await
     .unwrap();
@@ -469,18 +470,57 @@ async fn unlink_deletes_an_identity_of_that_user_in_the_scope_only(pool: PgPool)
     let theirs = link(&pool, b.id, new(b.sam, b.oauth, "1000003")).await;
     let before = table(&pool).await;
 
-    let other_user = identities::unlink(&pool, scope(a.id), a.sam, pats.id).await;
-    let other_org = identities::unlink(&pool, scope(a.id), b.sam, theirs.id).await;
-    let other_org_own_user = identities::unlink(&pool, scope(a.id), a.sam, theirs.id).await;
+    let other_user = identities::unlink(
+        &pool,
+        scope(a.id),
+        a.sam,
+        pats.id,
+        request_time(),
+        Actor::Instance,
+    )
+    .await;
+    let other_org = identities::unlink(
+        &pool,
+        scope(a.id),
+        b.sam,
+        theirs.id,
+        request_time(),
+        Actor::Instance,
+    )
+    .await;
+    let other_org_own_user = identities::unlink(
+        &pool,
+        scope(a.id),
+        a.sam,
+        theirs.id,
+        request_time(),
+        Actor::Instance,
+    )
+    .await;
     assert_err!(other_user, Error::NotFound);
     assert_err!(other_org, Error::NotFound);
     assert_err!(other_org_own_user, Error::NotFound);
     assert_eq!(table(&pool).await, before);
 
-    identities::unlink(&pool, scope(a.id), a.sam, mine.id)
-        .await
-        .unwrap();
-    let again = identities::unlink(&pool, scope(a.id), a.sam, mine.id).await;
+    identities::unlink(
+        &pool,
+        scope(a.id),
+        a.sam,
+        mine.id,
+        request_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+    let again = identities::unlink(
+        &pool,
+        scope(a.id),
+        a.sam,
+        mine.id,
+        request_time(),
+        Actor::Instance,
+    )
+    .await;
     assert_err!(again, Error::NotFound);
     let found = identities::find_user(&pool, scope(a.id), a.oauth, "1000001").await;
     assert_eq!(found.unwrap(), None);
@@ -640,25 +680,80 @@ async fn unlink_unless_last_keeps_a_users_last_identity(pool: PgPool) {
     let theirs = link(&pool, b.id, new(b.sam, b.oauth, "1000003")).await;
     let before = table(&pool).await;
 
-    let last = identities::unlink_unless_last(&pool, scope(a.id), a.sam, only.id).await;
-    let other_user = identities::unlink_unless_last(&pool, scope(a.id), a.sam, pats.id).await;
-    let other_org = identities::unlink_unless_last(&pool, scope(a.id), a.sam, theirs.id).await;
-    let other_org_user = identities::unlink_unless_last(&pool, scope(a.id), b.sam, theirs.id).await;
+    let last = identities::unlink_unless_last(
+        &pool,
+        scope(a.id),
+        a.sam,
+        only.id,
+        request_time(),
+        Actor::Instance,
+    )
+    .await;
+    let other_user = identities::unlink_unless_last(
+        &pool,
+        scope(a.id),
+        a.sam,
+        pats.id,
+        request_time(),
+        Actor::Instance,
+    )
+    .await;
+    let other_org = identities::unlink_unless_last(
+        &pool,
+        scope(a.id),
+        a.sam,
+        theirs.id,
+        request_time(),
+        Actor::Instance,
+    )
+    .await;
+    let other_org_user = identities::unlink_unless_last(
+        &pool,
+        scope(a.id),
+        b.sam,
+        theirs.id,
+        request_time(),
+        Actor::Instance,
+    )
+    .await;
     assert_err!(last, Error::LastSignInMethod);
     assert_err!(other_user, Error::NotFound);
     assert_err!(other_org, Error::NotFound);
     assert_err!(other_org_user, Error::UserNotFound);
     // A user with no identity at all is told the identity is not theirs, not that it is last.
     let kim = user(&pool, a.id, "Kim Example", None).await;
-    let none_left = identities::unlink_unless_last(&pool, scope(a.id), kim, pats.id).await;
+    let none_left = identities::unlink_unless_last(
+        &pool,
+        scope(a.id),
+        kim,
+        pats.id,
+        request_time(),
+        Actor::Instance,
+    )
+    .await;
     assert_err!(none_left, Error::NotFound);
     assert_eq!(table(&pool).await, before);
 
     let second = link(&pool, a.id, new(a.sam, a.oidc, "sub-1")).await;
-    identities::unlink_unless_last(&pool, scope(a.id), a.sam, only.id)
-        .await
-        .unwrap();
-    let now_last = identities::unlink_unless_last(&pool, scope(a.id), a.sam, second.id).await;
+    identities::unlink_unless_last(
+        &pool,
+        scope(a.id),
+        a.sam,
+        only.id,
+        request_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+    let now_last = identities::unlink_unless_last(
+        &pool,
+        scope(a.id),
+        a.sam,
+        second.id,
+        request_time(),
+        Actor::Instance,
+    )
+    .await;
     assert_err!(now_last, Error::LastSignInMethod);
     let left = identities::list_for_user(&pool, scope(a.id), a.sam)
         .await
@@ -697,15 +792,29 @@ async fn concurrent_removals_of_a_users_two_identities_keep_one(pool: PgPool) {
     let first = link(&pool, a.id, new(a.sam, a.oauth, "1000001")).await;
     let second = link(&pool, a.id, new(a.sam, a.oidc, "sub-1")).await;
     let mut removing = begin(&pool).await;
-    identities::unlink_unless_last(&mut *removing, scope(a.id), a.sam, first.id)
-        .await
-        .unwrap();
+    identities::unlink_unless_last(
+        &mut *removing,
+        scope(a.id),
+        a.sam,
+        first.id,
+        request_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
     let racing = tokio::spawn({
         let pool = pool.clone();
         async move {
-            identities::unlink_unless_last(&pool, scope(a.id), a.sam, second.id)
-                .await
-                .map_err(|e| format!("{e:?}"))
+            identities::unlink_unless_last(
+                &pool,
+                scope(a.id),
+                a.sam,
+                second.id,
+                request_time(),
+                Actor::Instance,
+            )
+            .await
+            .map_err(|e| format!("{e:?}"))
         }
     });
     until_a_call_waits_on_a_lock(&pool).await;
@@ -745,11 +854,122 @@ async fn lock_user_refuses_another_organizations_user_and_isolation_above_read_c
             "{locked:?}"
         );
         let linked = link(&pool, a.id, new(a.sam, a.oauth, &format!("s-{level}"))).await;
-        let unlinked =
-            identities::unlink_unless_last(&mut *conn, scope(a.id), a.sam, linked.id).await;
+        let unlinked = identities::unlink_unless_last(
+            &mut *conn,
+            scope(a.id),
+            a.sam,
+            linked.id,
+            request_time(),
+            Actor::Instance,
+        )
+        .await;
         assert!(
             matches!(&unlinked, Err(Error::IsolationLevel { found }) if found == level),
             "{unlinked:?}"
         );
     }
+}
+
+/// B19, coordinator decision (2026-11-14): an identity at a disabled provider is no sign-in
+/// method, so it does not keep the user's last identity at an enabled provider removable.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_identity_at_a_disabled_provider_is_no_sign_in_method(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    let off = provider(&pool, a.id, "disabled", "oidc", false).await;
+    let enabled = link(&pool, a.id, new(a.sam, a.oauth, "1000001")).await;
+    let disabled = link(&pool, a.id, new(a.sam, off, "sub-off")).await;
+    let before = table(&pool).await;
+
+    let last_enabled = identities::unlink_unless_last(
+        &pool,
+        scope(a.id),
+        a.sam,
+        enabled.id,
+        request_time(),
+        Actor::Instance,
+    )
+    .await;
+    assert_err!(last_enabled, Error::LastSignInMethod);
+    assert_eq!(table(&pool).await, before);
+
+    // The disabled one can go: the enabled one stays.
+    identities::unlink_unless_last(
+        &pool,
+        scope(a.id),
+        a.sam,
+        disabled.id,
+        request_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+    let left = identities::list_for_user(&pool, scope(a.id), a.sam)
+        .await
+        .unwrap();
+    assert_eq!(left, [enabled]);
+}
+
+/// Spec 09 B22: a link and an unlink each write one entry with the user, the provider's key
+/// and the subject, never the attributes; a refused one writes none.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn link_and_unlink_write_one_audit_entry_each(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    let actor = Actor::User {
+        id: a.pat,
+        ip: "2001:db8::7".parse().unwrap(),
+    };
+    let entries = || async {
+        let all = audit::list(&pool, scope(a.id), 100).await.unwrap();
+        all.into_iter()
+            .filter(|e| e.target_type == "identity")
+            .collect::<Vec<_>>()
+    };
+    let identity = NewIdentity {
+        attributes: object(json!({ "email_hint": "private-value" })),
+        ..new(a.sam, a.oauth, "1000001")
+    };
+    let linked = identities::link(&pool, scope(a.id), &identity, request_time(), actor)
+        .await
+        .unwrap();
+    let second = link(&pool, a.id, new(a.sam, a.oidc, "sub-1")).await;
+    let expected =
+        json!({ "user_id": a.sam, "provider_key": "oauth-example", "subject": "1000001" });
+
+    let after_link = entries().await;
+    assert_eq!(after_link.len(), 2);
+    let entry = &after_link[0];
+    assert_eq!(
+        (
+            entry.actor,
+            entry.action.as_str(),
+            entry.target_type.as_str(),
+            entry.target_id
+        ),
+        (actor, "identity.link", "identity", linked.id)
+    );
+    assert_eq!(entry.data, json!({ "after": expected }));
+    assert_eq!(entry.at, request_time());
+    assert!(!entry.data.to_string().contains("private-value"));
+
+    // Refused: taken, last sign-in method, not found. None writes an entry.
+    let taken = try_link(&pool, a.id, new(a.pat, a.oauth, "1000001")).await;
+    assert_err!(taken, Error::Taken);
+    let missing = identities::unlink(&pool, scope(a.id), a.pat, linked.id, later(), actor).await;
+    assert_err!(missing, Error::NotFound);
+    identities::unlink_unless_last(&pool, scope(a.id), a.sam, linked.id, later(), actor)
+        .await
+        .unwrap();
+    let last =
+        identities::unlink_unless_last(&pool, scope(a.id), a.sam, second.id, later(), actor).await;
+    assert_err!(last, Error::LastSignInMethod);
+
+    let all = entries().await;
+    assert_eq!(all.len(), 3, "{all:#?}");
+    let entry = &all[2];
+    assert_eq!(
+        (entry.actor, entry.action.as_str(), entry.target_id),
+        (actor, "identity.unlink", linked.id)
+    );
+    assert_eq!(entry.data, json!({ "before": expected }));
+    assert_eq!(entry.at, later());
 }

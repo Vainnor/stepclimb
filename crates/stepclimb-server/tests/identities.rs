@@ -23,7 +23,7 @@ use sqlx::PgPool;
 use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{
     OrgScope, Source, accounts,
-    audit::Actor,
+    audit::{self, Actor},
     clock::ManualClock,
     id::{Uuid, new_id},
     identities::{self, NewIdentity},
@@ -263,7 +263,7 @@ impl Fixture {
             subject: subject.into(),
             attributes,
         };
-        identities::link(&self.pool, scope(org), &identity, now())
+        identities::link(&self.pool, scope(org), &identity, now(), Actor::Instance)
             .await
             .expect("link identity")
             .id
@@ -691,4 +691,129 @@ async fn reading_a_more_privileged_users_identities_is_allowed(pool: PgPool) {
         .send(Method::GET, &user_identities(org_admin), &viewer, None)
         .await;
     assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+}
+
+// Audit entries (spec 09 B22, coordinator decision of 2026-11-14).
+
+impl Fixture {
+    /// Org A's `identity` audit entries, in write order.
+    async fn identity_entries(&self) -> Vec<audit::Entry> {
+        audit::list(&self.pool, scope(self.a.id), 1000)
+            .await
+            .expect("read entries")
+            .into_iter()
+            .filter(|e| e.target_type == "identity")
+            .collect()
+    }
+}
+
+/// The caller of a request as its audit entry records it.
+fn actor(user: Uuid) -> Actor {
+    Actor::User {
+        id: user,
+        ip: CLIENT.ip(),
+    }
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn each_identity_write_leaves_one_audit_entry(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (admin, admin_id) = f.admin().await;
+    let (cookie, me) = f.user().await;
+    let mine = f.link(f.a.id, me, f.a.oidc, "mine-1", json!({})).await;
+    f.link(f.a.id, me, f.a.oidc, "mine-2", json!({})).await;
+    let (_, user) = f.user().await;
+    let base = f.identity_entries().await.len();
+
+    let linked = f.post(&admin, user, "example-oauth", "1000001").await;
+    assert_eq!(linked.status, StatusCode::CREATED, "{linked:?}");
+    let linked_id: Uuid = linked.body["id"].as_str().unwrap().parse().unwrap();
+    f.link(f.a.id, user, f.a.oidc, "1000002", json!({})).await;
+    let base_after_fixture = f.identity_entries().await.len();
+    let removed = f.delete(&admin, user, linked_id).await;
+    assert_eq!(removed.status, StatusCode::NO_CONTENT, "{removed:?}");
+    let mine_removed = f.delete_mine(&cookie, mine).await;
+    assert_eq!(
+        mine_removed.status,
+        StatusCode::NO_CONTENT,
+        "{mine_removed:?}"
+    );
+
+    let entries = f.identity_entries().await;
+    assert_eq!(base_after_fixture, base + 2);
+    assert_eq!(entries.len(), base + 4);
+    let identity = |user: Uuid, key: &str, subject: &str| json!({ "user_id": user, "provider_key": key, "subject": subject });
+    let seen: Vec<_> = [&entries[base], &entries[base + 2], &entries[base + 3]]
+        .iter()
+        .map(|e| (e.actor, e.action.clone(), e.target_id, e.data.clone()))
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            (
+                actor(admin_id),
+                "identity.link".to_owned(),
+                linked_id,
+                json!({ "after": identity(user, "example-oauth", "1000001") })
+            ),
+            (
+                actor(admin_id),
+                "identity.unlink".to_owned(),
+                linked_id,
+                json!({ "before": identity(user, "example-oauth", "1000001") })
+            ),
+            (
+                actor(me),
+                "identity.unlink".to_owned(),
+                mine,
+                json!({ "before": identity(me, "example-oidc", "mine-1") })
+            ),
+        ]
+    );
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_refused_identity_write_leaves_no_audit_entry(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (admin, _) = f.admin().await;
+    let (manager, _) = f.holder(&["user.manage", "user.view"]).await;
+    let (_, org_admin) = f.admin().await;
+    let (cookie, me) = f.user().await;
+    let only = f.link(f.a.id, me, f.a.oidc, "mine-1", json!({})).await;
+    let (idp_cookie, _) = f.user_in(f.a.id, Source::Idp).await;
+    let before = f.identity_entries().await;
+
+    let refusals = [
+        f.post(&admin, me, "example-oidc", "mine-1").await, // taken
+        f.post(&admin, me, "missing", "x").await,           // unknown provider
+        f.post(&manager, org_admin, "example-oidc", "x").await, // escalation
+        f.delete(&admin, me, only).await,                   // last sign-in method
+        f.delete_mine(&cookie, only).await,                 // last sign-in method
+        f.delete_mine(&idp_cookie, only).await,             // externally managed
+    ];
+
+    for answer in &refusals {
+        assert!(answer.status.is_client_error(), "{answer:?}");
+    }
+    assert_eq!(f.identity_entries().await, before);
+}
+
+/// Identities linked while creating a user write their entries too.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn identities_linked_at_user_creation_are_audited(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (admin, admin_id) = f.admin().await;
+    let body = json!({
+        "display_name": "Casey Example",
+        "identities": [{ "provider_key": "example-oidc", "subject": "1000009" }],
+    });
+    let created = f
+        .send(Method::POST, "/api/v1/users", &admin, Some(body))
+        .await;
+    assert_eq!(created.status, StatusCode::CREATED, "{created:?}");
+    let entries = f.identity_entries().await;
+    assert_eq!(entries.len(), 1, "{entries:#?}");
+    assert_eq!(entries[0].actor, actor(admin_id));
+    assert_eq!(entries[0].action, "identity.link");
+    assert_eq!(entries[0].data["after"]["subject"], "1000009");
 }

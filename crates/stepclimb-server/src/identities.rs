@@ -16,18 +16,22 @@
 //! Each runs in one transaction that takes the locks in the order the user routes take them:
 //! the organization's account tree lock, which role assignment writes take too; then, inside the
 //! escalation check, the user's custom roles `FOR KEY SHARE`; then the user's row, which
-//! `identities::unlink_unless_last` locks `FOR UPDATE`. Until the write commits, no assignment or
+//! `identities::unlink_unless_last` locks `FOR NO KEY UPDATE`. Until the write commits, no assignment or
 //! custom role change can alter what the check read. A malformed subject is refused before any
 //! lock. Linking refuses an unknown provider key (422 `identity.unknown_provider`, the same for
 //! another organization's key) and a `(provider, subject)` already linked to anyone (409
 //! `identity.taken`). Removing refuses the user's last sign-in method (409
-//! `identity.last_sign_in_method`).
+//! `identity.last_sign_in_method`); only an identity at an enabled provider counts as one.
 //!
 //! The `/me` routes need a signed-in user and no permission, and act on the caller's own
 //! identities only: another user's identity id is 404. A user whose record an outside source
 //! owns cannot remove their identities (409 `identity.externally_managed`), since the source
 //! would re-create them. `/me/identities` never answers `attributes`, which can hold personal
-//! data the provider sent. No identity change writes an audit entry (spec 09 B22 lists none).
+//! data the provider sent.
+//!
+//! Each of the three writes records who made it: `identities::link` and `identities::unlink`
+//! write the `identity.link` and `identity.unlink` audit entries (spec 09 B22) in the write's
+//! transaction, with the caller and the client address ([`ClientAddress`]).
 
 use axum::{
     Json,
@@ -51,6 +55,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::{
     AppState,
+    audit::ClientAddress,
     error::{ApiError, FieldError},
     extract::{ApiJson, ApiPath},
     openapi::problem_responses,
@@ -249,6 +254,7 @@ pub async fn list_user_identities(
 )]
 pub async fn create_user_identity(
     require: Require<UserManage>,
+    client: ClientAddress,
     State(state): State<AppState>,
     ApiPath(UserIdParam { user_id }): ApiPath<UserIdParam>,
     ApiJson(body): ApiJson<NewIdentity>,
@@ -271,7 +277,8 @@ pub async fn create_user_identity(
         subject: body.subject,
         attributes: Map::new(),
     };
-    let linked = repo::link(&mut *tx, scope, &new, state.clock.now())
+    let actor = client.actor(require.principal());
+    let linked = repo::link(&mut *tx, scope, &new, state.clock.now(), actor)
         .await
         .map_err(identity_error)?;
     tx.commit().await.map_err(|e| ApiError::internal(&e))?;
@@ -300,6 +307,7 @@ pub async fn create_user_identity(
 )]
 pub async fn delete_user_identity(
     require: Require<UserManage>,
+    client: ClientAddress,
     State(state): State<AppState>,
     ApiPath(UserIdentityParams {
         user_id,
@@ -308,7 +316,9 @@ pub async fn delete_user_identity(
 ) -> Result<StatusCode, ApiError> {
     let mut tx = begin_on_user(&state, require.grants(), user_id).await?;
     let scope = require.principal().scope();
-    repo::unlink_unless_last(&mut *tx, scope, user_id, identity_id)
+    let actor = client.actor(require.principal());
+    let now = state.clock.now();
+    repo::unlink_unless_last(&mut *tx, scope, user_id, identity_id, now, actor)
         .await
         .map_err(identity_error)?;
     tx.commit().await.map_err(|e| ApiError::internal(&e))?;
@@ -389,6 +399,7 @@ pub async fn list_my_identities(
 )]
 pub async fn delete_my_identity(
     auth: AuthOnly,
+    client: ClientAddress,
     State(state): State<AppState>,
     ApiPath(IdentityIdParam { identity_id }): ApiPath<IdentityIdParam>,
 ) -> Result<StatusCode, ApiError> {
@@ -405,7 +416,9 @@ pub async fn delete_my_identity(
             "An outside system owns your user record and would link this identity again. Ask an admin.",
         ));
     }
-    repo::unlink_unless_last(&mut *tx, scope, principal.user_id, identity_id)
+    let actor = client.actor(principal);
+    let now = state.clock.now();
+    repo::unlink_unless_last(&mut *tx, scope, principal.user_id, identity_id, now, actor)
         .await
         .map_err(own_user_error)?;
     tx.commit().await.map_err(|e| ApiError::internal(&e))?;
