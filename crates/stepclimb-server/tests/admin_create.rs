@@ -267,7 +267,8 @@ async fn the_setup_link_enrolls_the_first_admin(pool: PgPool) {
     assert_eq!(token.len(), 43, "{url}");
     let scope = scope(created.organization.id);
     let hash = TokenHash::of(token);
-    let enrollment = local_tokens::check_enrollment(&pool, scope, hash.as_bytes(), now())
+    let mut conn = pool.acquire().await.unwrap();
+    let enrollment = local_tokens::check_enrollment(&mut conn, scope, hash.as_bytes(), now())
         .await
         .unwrap();
     assert_eq!(enrollment.user_id, created.user.id);
@@ -277,10 +278,10 @@ async fn the_setup_link_enrolls_the_first_admin(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(stored, hash.as_bytes());
-    let created_by: Option<stepclimb_core::id::Uuid> =
-        sqlx::query_scalar("SELECT created_by FROM local_tokens")
+    let creator: (Option<stepclimb_core::id::Uuid>, bool) =
+        sqlx::query_as("SELECT created_by, created_by_instance FROM local_tokens")
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(created_by, None);
+    assert_eq!(creator, (None, true));
 }

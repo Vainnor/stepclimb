@@ -301,6 +301,31 @@ pub async fn get(
     .transpose()
 }
 
+/// The user of the scope's organization whose email equals `email` in any letter case, as the
+/// `users_email` unique index compares it (`lower()`), or `None`.
+pub async fn find_by_email(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    email: &str,
+) -> Result<Option<User>, Error> {
+    let email = no_nul("email", email)?.trim();
+    sqlx::query_as!(
+        Row,
+        r#"SELECT id, display_name, given_name, family_name, email, locale, tz, status, source,
+                  external_id,
+                  (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM users
+           WHERE org_id = $1 AND lower(email) = lower($2)"#,
+        scope.org_id(),
+        email,
+    )
+    .fetch_optional(db)
+    .await?
+    .map(User::try_from)
+    .transpose()
+}
+
 /// The scope's users matching `filter`, sorted by display name then id, starting after `after`
 /// (the sort key of the previous page's last user) and at most `limit` of them.
 ///

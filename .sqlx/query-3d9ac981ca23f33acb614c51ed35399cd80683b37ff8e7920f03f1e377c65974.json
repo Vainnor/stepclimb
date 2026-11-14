@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n               SELECT 1 FROM identities i\n               JOIN identity_providers p ON p.org_id = i.org_id AND p.id = i.provider_id\n               WHERE i.org_id = $1 AND i.user_id = $2 AND p.enabled AND p.kind <> 'local'\n           ) AS \"found!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "found!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "3d9ac981ca23f33acb614c51ed35399cd80683b37ff8e7920f03f1e377c65974"
+}

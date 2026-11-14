@@ -16,9 +16,9 @@ migrations at startup and answers two health probes.
 
 Not available in M0:
 
-- **Signing in.** `stepclimb admin create` creates the organization and its first admin, but no
-  sign-in method exists yet: local accounts, OIDC and OAuth sign-in come with later M0 work. The
-  command says so when it runs.
+- **Signing in.** `stepclimb admin create` creates the organization and its first admin and
+  prints the admin's one-time enrollment link, but the web page that link opens, and the
+  passkey and password set-up behind it, come with later M0 work, as do OIDC and OAuth sign-in.
 - **Published images.** No image is pushed to a registry yet; you build it from this checkout.
 - **Object storage.** Nothing reads MinIO before M1's media work.
 - **Point-in-time recovery**, a Helm chart, metrics and a bare-metal binary: later milestones.
@@ -67,8 +67,25 @@ Every command runs from the repository root.
      --email admin@example.org --name "Ada Admin"
    ```
 
-   It exits 0 and prints the new organization's and user's ids. While an organization exists it
-   refuses to create another and exits 2.
+   It exits 0 and prints the new organization's and user's ids, then, as its last line, the
+   admin's one-time enrollment link (`https://<your host>/enroll#token=...`). The link works
+   once, for 7 days, and lets whoever holds it set up a passkey or password for the admin: treat
+   it as a password. When the output goes to a file or a log rather than a terminal, the command
+   warns on stderr that the log keeps the link. While an organization exists it refuses to
+   create another and exits 2.
+
+   If the link expires unused or is lost, make a new one for the same admin. It replaces the
+   old link:
+
+   ```sh
+   docker compose -f deploy/compose/compose.production.yaml run --rm stepclimb \
+     admin enrollment-link --org example --user admin@example.org
+   ```
+
+   `--user` takes the email, in any letter case, or the user's id. The command refuses (exit 2,
+   nothing changed) a user who is not an Organization admin, unless you add
+   `--admin-required-override`, and a user who can already sign in, unless you add `--force`.
+   It exists only on the command line, for whoever has shell access to the host.
 
 Without the `tls` profile the server is published on `127.0.0.1:8080` only, for a reverse proxy
 on the same host. To serve HTTPS from the stack itself, see [HTTPS with Caddy](#https-with-caddy).
@@ -267,6 +284,7 @@ the service. `--config <path>` works with every command.
 | `migrate` | Applies pending migrations and exits | 0; 1 on a database or migration failure |
 | `check-config` | Checks the configuration without connecting to anything and prints its non-secret values | 0 when valid; 2 when refused |
 | `admin create` | Applies migrations, then creates the organization and its first admin in one transaction | 0; 2 for a refused value or an existing organization; 1 on a database failure |
+| `admin enrollment-link` | Applies migrations, then makes a new one-time enrollment link for an organization's admin and prints it | 0; 2 for an unknown organization or user, a user who is not an Organization admin or can already sign in; 1 on a database failure |
 | `healthcheck` | Asks `/readyz` on the server's `STEPCLIMB_BIND` port; the container health check | 0 when it answers 200; 1 otherwise |
 
 Every command exits 2 when the configuration is refused.

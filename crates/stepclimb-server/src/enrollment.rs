@@ -24,7 +24,10 @@
 //! address first (`RateLimited<SignIn>`), then answers 404 `auth.method_disabled` unless the
 //! organization offers a method a link can set up (the passkey or the password, B2). A token
 //! that no unused link of the request's organization has answers 400 `auth.enrollment_invalid`,
-//! one past its expiry 400 `auth.enrollment_expired` (B7). It uses nothing up: the passkey and
+//! one past its expiry 400 `auth.enrollment_expired` (B7). A link an admin made answers
+//! `auth.enrollment_invalid` too once that admin could no longer make it: suspended, deleted,
+//! without `user.manage`, or holding less than the link's user now holds
+//! (`local_tokens::check_enrollment`). It uses nothing up: the passkey and
 //! password routes of issues I3 and I6 mark the link used when they store the credential, and
 //! the passkey options and their sign-in flow arrive with issue I3.
 
@@ -40,7 +43,12 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Acquire, Postgres};
 use stepclimb_auth::token::{RandomError, Token, TokenHash};
 use stepclimb_core::{
-    OrgScope, audit::Actor, id::Uuid, local_sign_in::Method, local_tokens as repo, perm::UserManage,
+    OrgScope,
+    audit::Actor,
+    id::Uuid,
+    local_sign_in::Method,
+    local_tokens::{self as repo, Origin},
+    perm::UserManage,
 };
 use utoipa::ToSchema;
 
@@ -136,14 +144,14 @@ pub enum LinkError {
     Time(#[from] timestamp::Unrepresentable),
 }
 
-/// Make an enrollment link for the user `user_id` of the scope's organization at `now`, by
-/// `actor` (`created_by` is the admin, `None` for the instance), opening `public_url`'s
-/// [`ENROLL_PAGE`]. Runs in one transaction (a savepoint when `db` is already one).
+/// Make an enrollment link for the user `user_id` of the scope's organization at `now`, made by
+/// `origin` and audited as `actor`, opening `public_url`'s [`ENROLL_PAGE`]. Runs in one
+/// transaction (a savepoint when `db` is already one).
 pub async fn create_link<'c>(
     db: impl Acquire<'c, Database = Postgres>,
     scope: OrgScope,
     user_id: Uuid,
-    created_by: Option<Uuid>,
+    origin: Origin,
     public_url: &WebOrigin,
     now: SystemTime,
     actor: Actor,
@@ -151,8 +159,7 @@ pub async fn create_link<'c>(
     let token = Token::generate()?;
     let hash = token.hash();
     let stored =
-        repo::create_enrollment(db, scope, user_id, hash.as_bytes(), created_by, now, actor)
-            .await?;
+        repo::create_enrollment(db, scope, user_id, hash.as_bytes(), origin, now, actor).await?;
     let expires_at_text = timestamp::rfc3339(stored.expires_at)?;
     Ok(SetupLink {
         id: stored.id,
@@ -192,12 +199,12 @@ pub async fn create_enrollment_link(
     let mut tx = begin_on_user(&state, require.grants(), user_id).await?;
     let actor = client.actor(principal);
     let now = state.clock.now();
-    let admin = Some(principal.user_id);
+    let origin = Origin::Admin(principal.user_id);
     let link = create_link(
         &mut *tx,
         scope,
         user_id,
-        admin,
+        origin,
         &state.public_url,
         now,
         actor,
@@ -282,7 +289,13 @@ pub async fn start_enrollment(
     let scope = org.scope();
     let methods = enrollable_methods(&state, scope).await?;
     let hash = TokenHash::of(&body.token);
-    let enrollment = repo::check_enrollment(&state.db, scope, hash.as_bytes(), state.clock.now())
+    let mut conn = state
+        .db
+        .acquire()
+        .await
+        .map_err(|e| ApiError::internal(&e))?;
+    let now = state.clock.now();
+    let enrollment = repo::check_enrollment(&mut conn, scope, hash.as_bytes(), now)
         .await
         .map_err(start_error)?;
     let started = EnrollmentStarted {

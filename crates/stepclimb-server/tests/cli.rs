@@ -496,7 +496,21 @@ fn every_subcommand_refuses_a_database_url_sqlx_would_not_read_as_written() {
         "--name",
         "Sam",
     ];
-    let subcommands: [&[&str]; 4] = [&["check-config"], &["migrate"], &["serve"], &admin_create];
+    let enrollment_link = [
+        "admin",
+        "enrollment-link",
+        "--org",
+        "example",
+        "--user",
+        "sam@example.test",
+    ];
+    let subcommands: [&[&str]; 5] = [
+        &["check-config"],
+        &["migrate"],
+        &["serve"],
+        &admin_create,
+        &enrollment_link,
+    ];
     for subcommand in subcommands {
         for (url, problem) in cases {
             let output = stepclimb()
@@ -724,6 +738,14 @@ async fn admin_create_on_an_empty_database_creates_the_organization_and_its_admi
     );
 
     assert!(!stderr.contains("no sign-in method"), "stderr: {stderr}");
+    // The test captures stdout, so it is no terminal: the link is a credential its logs keep.
+    assert!(
+        stderr.contains(
+            "stepclimb: warning: stdout is not a terminal; the enrollment link it carries is an \
+             admin credential for 7 days"
+        ),
+        "stderr: {stderr}"
+    );
     let (expires_at, token_hash): (String, Vec<u8>) = sqlx::query_as(
         "SELECT to_char(expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
                 token_hash
@@ -764,6 +786,70 @@ async fn admin_create_on_an_empty_database_creates_the_organization_and_its_admi
         assert!(!stdout.contains(&password), "stdout: {stdout}");
         assert!(!stderr.contains(&password), "stderr: {stderr}");
     }
+}
+
+/// `stepclimb admin enrollment-link` (spec 04 B10): a new link for the admin `admin create`
+/// made, printed last on stdout with the stderr warning, replacing the first link; an unknown
+/// user exits 2 and makes nothing.
+#[sqlx::test(migrations = false)]
+async fn admin_enrollment_link_prints_a_new_link_for_the_admin(pool: PgPool) {
+    let created = admin_create_binary(&pool, &create_args("example", "sam@example.test"));
+    assert_eq!(created.status.code(), Some(0), "{}", stderr_of(&created));
+    let first = stdout_of(&created)
+        .trim_end()
+        .rsplit('\n')
+        .next()
+        .unwrap()
+        .to_owned();
+
+    let output =
+        admin_enrollment_link_binary(&pool, &["--org", "example", "--user", "SAM@example.test"]);
+    let (stdout, stderr) = (stdout_of(&output), stderr_of(&output));
+    assert_eq!(output.status.code(), Some(0), "stderr: {stderr}");
+    assert!(
+        stderr.contains("stepclimb: warning: stdout is not a terminal"),
+        "{stderr}"
+    );
+    let link = stdout.trim_end().rsplit('\n').next().unwrap();
+    let token = link
+        .strip_prefix("https://lms.example.org/enroll#token=")
+        .unwrap_or_else(|| panic!("not an enrollment link: {stdout}"));
+    assert_ne!(link, first);
+    let stored: Vec<Vec<u8>> = sqlx::query_scalar("SELECT token_hash FROM local_tokens")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, [TokenHash::of(token).as_bytes().to_vec()]);
+    assert!(!stderr.contains(token), "stderr: {stderr}");
+
+    let before = created_rows(&pool).await;
+    let refused =
+        admin_enrollment_link_binary(&pool, &["--org", "example", "--user", "kim@example.test"]);
+    assert_eq!(refused.status.code(), Some(2), "{}", stderr_of(&refused));
+    assert!(
+        stderr_of(&refused).contains(
+            "stepclimb: admin enrollment-link: the organization has no user with this email or \
+             id; no link was made"
+        ),
+        "{}",
+        stderr_of(&refused)
+    );
+    assert_eq!(stdout_of(&refused), "");
+    assert_eq!(created_rows(&pool).await, before);
+}
+
+/// `stepclimb admin enrollment-link` with `args` against the database behind `pool`.
+fn admin_enrollment_link_binary(pool: &PgPool, args: &[&str]) -> Output {
+    stepclimb()
+        .args(["admin", "enrollment-link"])
+        .args(args)
+        .env(
+            "STEPCLIMB_DATABASE_URL",
+            pool.connect_options().to_url_lossy().as_str(),
+        )
+        .env("STEPCLIMB_ENCRYPTION_KEYS", KEYS)
+        .output()
+        .expect("the binary runs")
 }
 
 /// While an organization exists the command refuses, whatever the slug, and changes nothing

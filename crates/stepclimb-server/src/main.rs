@@ -2,21 +2,23 @@
 //! The `stepclimb` binary. The plan's full CLI is `serve | migrate | admin create |
 //! export-course | import-course | check-config | backup-verify`; `serve`, `migrate`,
 //! `admin create` and `check-config` exist so far, beside `healthcheck` for containers (ADR
-//! 0023).
+//! 0023) and `admin enrollment-link`, the way back in for an admin without a working link
+//! (spec 04 B10).
 //!
 //! Exit codes: 0 on success; 2 when the command line or the configuration is refused, before
-//! anything connects, or when `admin create` refuses an argument's value or finds an
-//! organization already there; 1 when the database, the migrations or the HTTP server fail, when
-//! `check-config` or `admin create` cannot write its report, or when `healthcheck` finds the
-//! server not ready.
+//! anything connects, or when an `admin` command refuses an argument's value or what it finds
+//! (an organization already there, an unknown user, a user who can sign in already); 1 when the
+//! database, the migrations or the HTTP server fail, when `check-config` or an `admin` command
+//! cannot write its report, or when `healthcheck` finds the server not ready.
 
 use std::future::Future;
-use std::io::Write as _;
+use std::io::{IsTerminal as _, Write as _};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use stepclimb_server::admin::{self, NewOrganizationAdmin};
+use stepclimb_server::recovery::{self, RecoveryRequest, UserRef};
 use stepclimb_server::{Config, healthcheck, startup};
 use tracing_subscriber::EnvFilter;
 
@@ -60,6 +62,27 @@ enum AdminCommand {
     /// organization with its first Organization admin in one transaction. Exit 0 on success; 2
     /// when a value is refused or an organization already exists; 1 when the database fails.
     Create(CreateArgs),
+    /// Apply database migrations, then make a new one-time enrollment link for an organization's
+    /// admin and print it, replacing the user's earlier unused links. Exit 0 on success; 2 when
+    /// the organization or the user is unknown, the user is not an Organization admin or can
+    /// already sign in (see the flags); 1 when the database fails.
+    EnrollmentLink(EnrollmentLinkArgs),
+}
+
+#[derive(Args)]
+struct EnrollmentLinkArgs {
+    /// The organization's slug.
+    #[arg(long, value_name = "SLUG")]
+    org: String,
+    /// The user's email address (in any letter case) or id.
+    #[arg(long, value_name = "EMAIL_OR_ID")]
+    user: String,
+    /// Make the link for a user who is not an Organization admin at organization scope.
+    #[arg(long)]
+    admin_required_override: bool,
+    /// Make the link for a user who can already sign in.
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(Args)]
@@ -104,6 +127,12 @@ fn main() -> ExitCode {
             init_logging(&config.log);
             admin_create(&config, args)
         }
+        Command::Admin {
+            command: AdminCommand::EnrollmentLink(args),
+        } => {
+            init_logging(&config.log);
+            admin_enrollment_link(&config, args)
+        }
         Command::Healthcheck => match healthcheck::check(config.bind) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
@@ -141,7 +170,9 @@ fn admin_create(config: &Config, args: CreateArgs) -> ExitCode {
         return ExitCode::FAILURE;
     };
     match runtime.block_on(admin::create_command(config, &input)) {
-        Ok(created) => write_stdout(&admin::report(&created)),
+        Ok(created) => write_link_report(&admin::report(&created), |error| {
+            admin::report_write_failure(&created, error)
+        }),
         Err(error) => {
             let (code, message) = admin::failure_report(&error, &input.org_slug);
             if code != 2 {
@@ -149,6 +180,54 @@ fn admin_create(config: &Config, args: CreateArgs) -> ExitCode {
             }
             eprint!("{message}");
             ExitCode::from(code)
+        }
+    }
+}
+
+/// `stepclimb admin enrollment-link`: print the link to stdout, or the problem to stderr with
+/// exit 2 for a refusal and 1 for anything else.
+fn admin_enrollment_link(config: &Config, args: EnrollmentLinkArgs) -> ExitCode {
+    let request = RecoveryRequest {
+        org_slug: args.org,
+        user: UserRef::parse(&args.user),
+        admin_required_override: args.admin_required_override,
+        force: args.force,
+    };
+    let Some(runtime) = runtime() else {
+        return ExitCode::FAILURE;
+    };
+    match runtime.block_on(recovery::recovery_command(config, &request)) {
+        Ok(recovered) => write_link_report(
+            &recovery::report(&recovered),
+            recovery::report_write_failure,
+        ),
+        Err(error) => {
+            let (code, message) = recovery::failure_report(&error);
+            if code != 2 {
+                tracing::error!(%error, "admin enrollment-link failed");
+            }
+            eprint!("{message}");
+            ExitCode::from(code)
+        }
+    }
+}
+
+/// Write a report that ends with an enrollment link to stdout, after warning on stderr when
+/// stdout is not a terminal; on a failed write print `failure`'s message and exit 1. The link
+/// is already committed by then.
+fn write_link_report(text: &str, failure: impl FnOnce(&std::io::Error) -> String) -> ExitCode {
+    let mut stdout = std::io::stdout();
+    if !stdout.is_terminal() {
+        eprint!("{}", admin::LINK_NOT_TERMINAL_WARNING);
+    }
+    match stdout
+        .write_all(text.as_bytes())
+        .and_then(|()| stdout.flush())
+    {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprint!("{}", failure(&error));
+            ExitCode::FAILURE
         }
     }
 }

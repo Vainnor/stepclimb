@@ -431,6 +431,27 @@ pub async fn unlink_unless_last<'c>(
     Ok(())
 }
 
+/// Whether the user `user_id` of the scope's organization has an identity at an enabled
+/// provider that is not local: a way to sign in that is not a local credential (B19's count).
+pub async fn has_enabled_identity(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    user_id: Uuid,
+) -> Result<bool, Error> {
+    let found = sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+               SELECT 1 FROM identities i
+               JOIN identity_providers p ON p.org_id = i.org_id AND p.id = i.provider_id
+               WHERE i.org_id = $1 AND i.user_id = $2 AND p.enabled AND p.kind <> 'local'
+           ) AS "found!""#,
+        scope.org_id(),
+        user_id,
+    )
+    .fetch_one(db)
+    .await?;
+    Ok(found)
+}
+
 /// Lock the row of the user `user_id` in the scope's organization `FOR NO KEY UPDATE` until the
 /// transaction ends (see the module documentation), and return the user. A user the
 /// organization does not have is [`Error::UserNotFound`]; a transaction whose isolation level is

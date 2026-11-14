@@ -841,7 +841,7 @@ async fn public_body(world: &World, org: &Org, id: &str) -> Option<Value> {
         &world.pool,
         scope(org.id),
         user,
-        None,
+        stepclimb_core::local_tokens::Origin::Bootstrap,
         &world.state().public_url,
         now(),
         Actor::Instance,

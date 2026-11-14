@@ -214,7 +214,9 @@ These apply to every endpoint in M0, including the ones other specs define.
     command prints one line to stderr saying the admin has no sign-in method yet and that the
     setup link arrives with local accounts. `04-local-accounts.md` I2 has replaced that line:
     the command creates the link in its transaction and prints it as the last line of stdout
-    (`04-local-accounts.md` B10, coordinator decision 2026-11-14).
+    (`04-local-accounts.md` B10, coordinator decision 2026-11-14). When the link cannot be
+    used, `stepclimb admin enrollment-link --org <slug> --user <email>` makes a new one
+    (`04-local-accounts.md` B10).
 
   Coordinator decisions (2026-11-13), on the owner's delegation:
   - Before creating anything the command applies the pending migrations and writes the built-in

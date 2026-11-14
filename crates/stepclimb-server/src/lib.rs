@@ -50,6 +50,7 @@ pub mod openapi;
 pub mod organization;
 pub mod pagination;
 pub mod rate_limit;
+pub mod recovery;
 pub mod request_org;
 pub mod require;
 pub mod role_assignments;

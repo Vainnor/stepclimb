@@ -38,7 +38,7 @@ use stepclimb_core::{
     users::{self, NewUser},
 };
 use stepclimb_server::{
-    AppState, app,
+    AppState,
     client_ip::TrustedProxies,
     rate_limit::{Limits, RateLimiter},
     request_org::TEST_ORG_HEADER,
@@ -625,11 +625,12 @@ async fn creating_a_link_is_audited_without_the_token(pool: PgPool) {
         !text.contains(&token) && !text.contains(&hash_hex),
         "{text}"
     );
-    let created_by: Option<Uuid> = sqlx::query_scalar("SELECT created_by FROM local_tokens")
-        .fetch_one(&f.pool)
-        .await
-        .expect("the creator");
-    assert_eq!(created_by, Some(admin));
+    let creator: (Option<Uuid>, bool) =
+        sqlx::query_as("SELECT created_by, created_by_instance FROM local_tokens")
+            .fetch_one(&f.pool)
+            .await
+            .expect("the creator");
+    assert_eq!(creator, (Some(admin), false));
 }
 
 /// B23, `08` B22: the start route counts against the client address's sign-in budget before it
@@ -694,46 +695,181 @@ async fn without_a_local_credential_the_last_identity_stays(pool: PgPool) {
     );
 }
 
-/// Spec 08 B41: every route under `/auth/` or `/oauth/` that adds a sign-in step takes
-/// `RateLimited` first. With a budget of one request a minute, each answers 429 the second
-/// time, whatever its body. Sign-out ends a session and adds no step, so it is not limited.
+/// B6, coordinator decision (2026-11-14): a link an admin made works only while that admin
+/// could make it again. Each case makes a link by a holder of `user.manage` alone for a user
+/// with no role, sees it work, changes one thing, and sees both the start route and
+/// `consume_enrollment` refuse it with the answer of an unknown token.
+async fn manager_link(f: &Fixture) -> (Uuid, Uuid, String) {
+    let email = format!("manager-{}@example.test", new_id().simple());
+    let manager = f.user_in(f.org, Some(&email), &["user.manage"]).await;
+    let cookie = f.cookie(f.org, manager).await;
+    let target = f
+        .user(&format!("target-{}@example.test", new_id().simple()))
+        .await;
+    let token = f.create_link(&cookie, target).await.token();
+    assert_eq!(f.start(&token).await.status, StatusCode::OK);
+    (manager, target, token)
+}
+
+async fn assert_unbacked(f: &Fixture, token: &str) {
+    let answer = f.start(token).await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::BAD_REQUEST, "auth.enrollment_invalid"),
+        "{answer:?}"
+    );
+    let mut conn = f.pool.acquire().await.expect("a connection");
+    let hash = TokenHash::of(token);
+    let used =
+        local_tokens::consume_enrollment(&mut conn, scope(f.org), hash.as_bytes(), now()).await;
+    assert!(
+        matches!(used, Err(local_tokens::Error::Invalid)),
+        "{used:?}"
+    );
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_link_stops_working_when_its_user_is_promoted_past_its_creator(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (_, target, token) = manager_link(&f).await;
+    let org_admin = roles::builtin_id(&f.pool, "org_admin")
+        .await
+        .expect("read the role")
+        .expect("the built-in role");
+    let assignment = NewAssignment {
+        user_id: target,
+        role_id: org_admin,
+        scope: Scope::Organization,
+        source: Source::Local,
+        external_id: None,
+    };
+    role_assignments::create(&f.pool, scope(f.org), &assignment, now(), Actor::Instance)
+        .await
+        .expect("promote the user");
+    assert_unbacked(&f, &token).await;
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_link_stops_working_when_its_creator_loses_user_manage(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (manager, _, token) = manager_link(&f).await;
+    sqlx::query("DELETE FROM role_assignments WHERE user_id = $1")
+        .bind(manager)
+        .execute(&f.pool)
+        .await
+        .expect("remove the creator's role");
+    assert_unbacked(&f, &token).await;
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_link_stops_working_when_its_creator_is_suspended(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (manager, _, token) = manager_link(&f).await;
+    users::set_status(
+        &f.pool,
+        scope(f.org),
+        manager,
+        users::Status::Suspended,
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .expect("suspend the creator");
+    assert_unbacked(&f, &token).await;
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_link_stops_working_when_its_creator_is_deleted(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (manager, _, token) = manager_link(&f).await;
+    for sql in [
+        "DELETE FROM role_assignments WHERE user_id = $1",
+        "DELETE FROM users WHERE id = $1",
+    ] {
+        sqlx::query(sql)
+            .bind(manager)
+            .execute(&f.pool)
+            .await
+            .expect("delete the creator");
+    }
+    let creator: (Option<Uuid>, bool) =
+        sqlx::query_as("SELECT created_by, created_by_instance FROM local_tokens")
+            .fetch_one(&f.pool)
+            .await
+            .expect("the link");
+    assert_eq!(creator, (None, false));
+    assert_unbacked(&f, &token).await;
+}
+
+/// Spec 08 B41: every operation under `/auth/` or `/oauth/` that adds a sign-in step takes
+/// `RateLimited` first. With a budget of one request a minute, each method of each such path in
+/// the OpenAPI document answers 429 the second time, whatever its body. The requests name no
+/// organization while two exist, so the request-organization resolver would refuse every one of
+/// them with 404: a 429 shows the limit ran before it. Sign-out ends a session and adds no step,
+/// so it is not limited.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn every_sign_in_route_is_rate_limited(pool: PgPool) {
     let f = Fixture::new(pool.clone()).await;
-    let paths: Vec<&str> = app::routes().into_iter().map(|(path, _)| path).collect();
-    let limited = unlimited_sign_in_routes(&pool, &f, &paths, router).await;
-    assert_eq!(limited, Vec::<String>::new());
-    assert!(paths.contains(&START), "{paths:?}");
+    organizations::create(&f.pool, "org-b", "Org B", now())
+        .await
+        .expect("a second organization");
+    let operations = sign_in_operations();
+    assert!(
+        operations.contains(&(Method::POST, START.to_owned())),
+        "{operations:?}"
+    );
+    assert_eq!(
+        unlimited(&pool, &operations, router).await,
+        Vec::<String>::new()
+    );
 }
 
 /// The walk of [`every_sign_in_route_is_rate_limited`] catches a route without the extractor.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn the_rate_limit_walk_names_a_route_without_the_extractor(pool: PgPool) {
-    let f = Fixture::new(pool.clone()).await;
+    Fixture::new(pool.clone()).await;
     async fn open() -> StatusCode {
         StatusCode::NO_CONTENT
     }
     let fixture = |state: AppState| router(state).route("/auth/test/open", post(open));
-    let found =
-        unlimited_sign_in_routes(&pool, &f, &["/auth/sign-out", "/auth/test/open"], fixture).await;
-    assert_eq!(found, ["/auth/test/open"]);
+    let operations = [
+        (Method::POST, "/auth/test/open".to_owned()),
+        (Method::POST, START.to_owned()),
+    ];
+    let found = unlimited(&pool, &operations, fixture).await;
+    assert_eq!(found, ["POST /auth/test/open"]);
 }
 
-/// The paths of `paths` under `/auth/` or `/oauth/`, sign-out aside, that do not answer 429 to
-/// a second POST within a minute from one address, on the app `build` makes with a budget of
-/// one request.
-async fn unlimited_sign_in_routes(
+/// Every method of every path of the OpenAPI document under `/auth/` or `/oauth/`, sign-out
+/// aside.
+fn sign_in_operations() -> Vec<(Method, String)> {
+    let document = serde_json::to_value(stepclimb_server::openapi::document()).expect("JSON");
+    let paths = document["paths"].as_object().expect("paths");
+    let mut operations = Vec::new();
+    for (path, item) in paths {
+        let sign_in = path.starts_with("/auth/") || path.starts_with("/oauth/");
+        if !sign_in || path == "/auth/sign-out" {
+            continue;
+        }
+        for method in item.as_object().expect("a path item").keys() {
+            let method = Method::from_bytes(method.to_uppercase().as_bytes()).expect("a method");
+            operations.push((method, path.clone()));
+        }
+    }
+    operations
+}
+
+/// The operations of `operations` that do not answer 429 to a second request within a minute
+/// from one address, naming no organization, on the app `build` makes with a budget of one
+/// request.
+async fn unlimited(
     pool: &PgPool,
-    f: &Fixture,
-    paths: &[&str],
+    operations: &[(Method, String)],
     build: impl Fn(AppState) -> Router,
 ) -> Vec<String> {
     let mut unlimited = Vec::new();
-    let walked = paths.iter().filter(|path| {
-        (path.starts_with("/auth/") || path.starts_with("/oauth/")) && **path != "/auth/sign-out"
-    });
-    for path in walked {
-        // A fresh limiter per route, so each starts with its budget unspent.
+    for (method, path) in operations {
+        // A fresh limiter per operation, so each starts with its budget unspent.
         let clock = ManualClock::new(now());
         let mut budget = limits(1);
         budget.token = NonZeroU32::new(1).expect("not zero");
@@ -741,9 +877,8 @@ async fn unlimited_sign_in_routes(
         let mut second = StatusCode::OK;
         for _ in 0..2 {
             let request = Request::builder()
-                .method(Method::POST)
-                .uri(*path)
-                .header(TEST_ORG_HEADER, f.org.to_string())
+                .method(method.clone())
+                .uri(path.as_str())
                 .header("sec-fetch-site", "same-origin")
                 .body(Body::empty())
                 .expect("a request");
@@ -755,7 +890,7 @@ async fn unlimited_sign_in_routes(
                 .status();
         }
         if second != StatusCode::TOO_MANY_REQUESTS {
-            unlimited.push((*path).to_owned());
+            unlimited.push(format!("{method} {path}"));
         }
     }
     unlimited

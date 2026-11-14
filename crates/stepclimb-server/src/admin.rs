@@ -22,6 +22,7 @@ use stepclimb_core::{
     audit::Actor,
     clock::Clock,
     id::Uuid,
+    local_tokens::Origin,
     organizations::{self, Organization},
     role_assignments::{self, NewAssignment, Scope},
     roles,
@@ -199,7 +200,7 @@ pub async fn create_organization_with_admin(
         &mut *tx,
         scope,
         user.id,
-        None,
+        Origin::Bootstrap,
         public_url,
         now,
         Actor::Instance,
@@ -228,13 +229,13 @@ fn first_admin(input: &NewOrganizationAdmin) -> NewUser {
     }
 }
 
-/// The scope of the organization the command has just created, which no credential can belong
-/// to yet.
+/// The scope of an organization the `stepclimb admin` CLI acts in: the one `admin create` has
+/// just created, or the one `admin enrollment-link` names by slug. No credential is involved.
 #[expect(
     clippy::disallowed_methods,
     reason = "spec 02 B9 allows the instance scope in the `stepclimb admin` CLI (B27)"
 )]
-fn cli_scope(org_id: Uuid) -> OrgScope {
+pub(crate) fn cli_scope(org_id: Uuid) -> OrgScope {
     OrgScope::instance(org_id)
 }
 
@@ -259,6 +260,27 @@ pub fn report(created: &Created) -> String {
     )
 }
 
+/// The stderr line for an enrollment link written to a stdout that is not a terminal (spec 04
+/// B10, coordinator decision 2026-11-14): the link is a credential, and whatever captures the
+/// output keeps it.
+pub const LINK_NOT_TERMINAL_WARNING: &str = "stepclimb: warning: stdout is not a terminal; the \
+     enrollment link it carries is an admin credential for 7 days, and any log or file that \
+     keeps this output keeps the link\n";
+
+/// The stderr line when `stepclimb admin create` committed but could not write its report: the
+/// organization and the admin exist, and only the recovery command can give the admin a link.
+pub fn report_write_failure(created: &Created, error: &std::io::Error) -> String {
+    let slug = &created.organization.slug;
+    let email = created.user.email.as_deref().unwrap_or_default();
+    format!(
+        "stepclimb: admin create: organization {slug:?} ({org_id}) and its admin {email:?} \
+         were created, but the report with the admin's enrollment link could not be written to \
+         stdout: {error}; run `stepclimb admin enrollment-link --org {slug} --user {email}` for \
+         a new link\n",
+        org_id = created.organization.id,
+    )
+}
+
 /// The exit code and the stderr message for a failed `stepclimb admin create` of the
 /// organization `slug`: 2 for a refusal, 1 otherwise. The message says what is known of the
 /// outcome: nothing was created before the commit; a failed commit leaves it unknown; a failure
@@ -277,7 +299,8 @@ pub fn failure_report(error: &CommandError, slug: &str) -> (u8, String) {
             1,
             format!(
                 "{prefix} {error}; check whether organization {slug:?} exists before running \
-                 the command again\n"
+                 the command again; if it does, `stepclimb admin enrollment-link --org {slug} \
+                 --user <email>` makes the admin a new link\n"
             ),
         ),
         CommandError::Create(error) => {

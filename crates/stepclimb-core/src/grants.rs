@@ -226,6 +226,19 @@ impl Grants {
         }
     }
 
+    /// Whether `other` has an effective permission, at any scope, that is not effective for
+    /// these grants at organization scope: the escalation rule of the user routes (spec 03,
+    /// owner decision of 2026-11-14), which an enrollment link's creator is held to at the
+    /// link's use as well (spec 04 B6). Course-scope assignments grant nothing until M1, so they
+    /// do not count here either.
+    #[must_use]
+    pub fn lacks_any_held_by(&self, other: &Grants) -> bool {
+        other
+            .by_scope()
+            .flat_map(|(_, keys)| keys)
+            .any(|key| !self.holds_key(key, &Target::Organization))
+    }
+
     /// Whether `P` is effective at any scope.
     #[must_use]
     pub fn holds_anywhere<P: Permission>(&self) -> bool {
