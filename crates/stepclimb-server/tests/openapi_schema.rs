@@ -185,3 +185,17 @@ fn property_names_are_checked() {
         "{errors:#?}"
     );
 }
+
+#[test]
+fn a_minimum_that_is_not_a_number_is_an_error() {
+    let mut document = document();
+    document["components"]["schemas"]["MeUser"]["properties"]["locale"] =
+        json!({ "type": ["string", "null"], "minimum": "1" });
+    let errors = common::schema_errors(&document, "Me", &good());
+    assert!(
+        errors
+            .iter()
+            .any(|e| e == "/user/locale: the schema's minimum \"1\" is not a number"),
+        "{errors:#?}"
+    );
+}

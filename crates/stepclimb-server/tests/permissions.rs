@@ -18,6 +18,19 @@
 //! An `AuthOnly` entry (a route that needs a principal and no permission) gets the 401, 2xx and
 //! cross-organization cases.
 //!
+//! An entry made with [`gated`] names the feature its route also takes as `Require<F>`
+//! (docs/specs/m0/10-entitlements-framework.md B9, issue 4) and gets two more cases, run with
+//! the organization on a plan that has every catalog feature but that one:
+//!
+//! - **feature off**: a user holding every permission at the target's scope gets 403
+//!   `entitlement.feature_unavailable`, and the organization's rows are unchanged;
+//! - **feature off, unknown ids** (a route with path parameters): the same, with every path
+//!   parameter naming an id that does not exist, since the feature is checked before the
+//!   target is resolved.
+//!
+//! A walker test checks that the 403 of an operation documents `entitlement.feature_unavailable`
+//! exactly when its entry names a feature.
+//!
 //! Each case builds its own organizations in the test's database, so cases cannot disturb each
 //! other. The request names its organization with the `test-support` header of `request_org`
 //! (the production resolver refuses every request while two organizations exist); the e2e test
@@ -47,6 +60,7 @@ use stepclimb_core::{
     OrgScope, Source, accounts,
     audit::Actor,
     clock::ManualClock,
+    feature::{self, CustomRoles, Feature, Limit},
     grants::ScopeId,
     id::{Uuid, new_id},
     organizations,
@@ -153,15 +167,24 @@ const TABLE: &[Entry] = &[
     },
     Entry {
         operation_id: "createRole",
-        access: permission(RoleManage::KEY, Target::Org, new_role_in_body),
+        access: gated(
+            CustomRoles::KEY,
+            permission(RoleManage::KEY, Target::Org, new_role_in_body),
+        ),
     },
     Entry {
         operation_id: "updateRole",
-        access: permission(RoleManage::KEY, ROLE_NOT_FOUND, rename_custom_role),
+        access: gated(
+            CustomRoles::KEY,
+            permission(RoleManage::KEY, ROLE_NOT_FOUND, rename_custom_role),
+        ),
     },
     Entry {
         operation_id: "deleteRole",
-        access: permission(RoleManage::KEY, ROLE_NOT_FOUND, custom_role_in_path),
+        access: gated(
+            CustomRoles::KEY,
+            permission(RoleManage::KEY, ROLE_NOT_FOUND, custom_role_in_path),
+        ),
     },
     Entry {
         operation_id: "listRoleAssignments",
@@ -399,6 +422,8 @@ enum Access {
         /// Permissions the 2xx case adds to `P`, which the route documents (a move's
         /// destination).
         extra: &'static [&'static str],
+        /// `F::KEY` of the `Require<F>` the route takes before the permission, if any.
+        feature: Option<&'static str>,
         setup: Setup,
     },
 }
@@ -558,6 +583,79 @@ fn the_walk_refuses_stale_duplicate_and_unnamed_entries() {
     );
 }
 
+/// The code of a disabled feature, which an operation's 403 documents when its route takes
+/// `Require<F>` (spec 10 API).
+const FEATURE_UNAVAILABLE: &str = "`entitlement.feature_unavailable`";
+
+/// The operations whose 403 documents [`FEATURE_UNAVAILABLE`] without a feature in their
+/// entry, and those with a feature in their entry whose 403 does not document it.
+fn feature_doc_mismatches(doc: &Value, table: &[Entry]) -> Vec<String> {
+    let operations = operations(doc).expect("named operations");
+    let mut problems = Vec::new();
+    for op in &operations {
+        let gated = table.iter().any(|entry| {
+            entry.operation_id == op.id
+                && matches!(
+                    entry.access,
+                    Access::Permission {
+                        feature: Some(_),
+                        ..
+                    }
+                )
+        });
+        let mut forbidden =
+            &doc["paths"][&op.path][op.method.as_str().to_lowercase()]["responses"]["403"];
+        if let Some(reference) = forbidden["$ref"].as_str() {
+            forbidden = doc
+                .pointer(reference.trim_start_matches('#'))
+                .unwrap_or(&Value::Null);
+        }
+        let documented = forbidden["description"]
+            .as_str()
+            .is_some_and(|text| text.contains(FEATURE_UNAVAILABLE));
+        match (gated, documented) {
+            (true, false) => problems.push(format!(
+                "{}: its entry names a feature but its 403 does not document {FEATURE_UNAVAILABLE}",
+                op.id
+            )),
+            (false, true) => problems.push(format!(
+                "{}: its 403 documents {FEATURE_UNAVAILABLE} but its entry names no feature",
+                op.id
+            )),
+            _ => {}
+        }
+    }
+    problems
+}
+
+#[test]
+fn a_403_documents_the_feature_code_exactly_when_the_entry_names_a_feature() {
+    let doc = document();
+    let problems = feature_doc_mismatches(&doc, TABLE);
+    assert!(problems.is_empty(), "{problems:#?}");
+
+    let mut undocumented = doc.clone();
+    undocumented["components"]["responses"]["DeleteForbidden"]["description"] =
+        Value::String("`permission.denied`: no.".into());
+    assert_eq!(
+        feature_doc_mismatches(&undocumented, TABLE),
+        [format!(
+            "deleteRole: its entry names a feature but its 403 does not document \
+             {FEATURE_UNAVAILABLE}"
+        )]
+    );
+
+    let mut overdocumented = doc;
+    overdocumented["paths"]["/api/v1/admin/roles"]["get"]["responses"]["403"] =
+        serde_json::json!({ "description": FEATURE_UNAVAILABLE });
+    assert_eq!(
+        feature_doc_mismatches(&overdocumented, TABLE),
+        [format!(
+            "listRoles: its 403 documents {FEATURE_UNAVAILABLE} but its entry names no feature"
+        )]
+    );
+}
+
 /// A protected route put in the public list would skip its cases; this catches it.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn public_operations_answer_without_a_credential(pool: PgPool) {
@@ -628,13 +726,32 @@ async fn run(world: &World, app: &Router, op: &Operation, access: &Access) -> Re
             key,
             target,
             extra,
+            feature,
             setup,
         } => {
             let Some(info) = perm::ALL.iter().find(|p| p.key() == *key) else {
                 report.record(op, "catalog", Err(format!("{key} is not in perm::ALL")));
                 return report;
             };
+            if let Some(feature) = feature
+                && !feature::ALL.contains(feature)
+            {
+                report.record(
+                    op,
+                    "catalog",
+                    Err(format!("{feature} is not in feature::ALL")),
+                );
+                return report;
+            }
             report.record(op, "401", anonymous(world, app, op, *setup).await);
+            if let Some(feature) = feature {
+                let result = feature_off(world, app, op, feature, *setup, false).await;
+                report.record(op, "feature off", result);
+                if op.path.contains('{') {
+                    let result = feature_off(world, app, op, feature, *setup, true).await;
+                    report.record(op, "feature off, unknown ids", result);
+                }
+            }
             report.record(op, "403", denied(world, app, op, key, *setup).await);
             if let Target::Scoped { not_found, .. } = target
                 && info.grantable().contains(&ScopeType::Account)
@@ -701,6 +818,47 @@ async fn hidden(
         Ok(answer) => answer.expect(StatusCode::NOT_FOUND, not_found),
         Err(why) => Err(why),
     })
+}
+
+/// The organization's plan has every catalog feature but `feature`: a user holding every
+/// permission at the target's scope gets 403 `entitlement.feature_unavailable` and the
+/// organization's rows stay as they were. With `unknown_ids`, every path parameter names an id
+/// that does not exist, which must not change the answer (spec 10 B9).
+async fn feature_off(
+    world: &World,
+    app: &Router,
+    op: &Operation,
+    feature: &str,
+    setup: Setup,
+    unknown_ids: bool,
+) -> Result<(), String> {
+    let org = world.org().await;
+    let mut call = setup(&org).await;
+    if unknown_ids {
+        call.params = call
+            .params
+            .iter()
+            .map(|(name, _)| (*name, new_id()))
+            .collect();
+    }
+    let cookie = org.holder(&all_keys(), call.at).await;
+    org.plan_without(feature).await;
+    let before = snapshot(&world.pool, org.id).await?;
+    let answer = call_op(app, op, &call, org.id, Some(&cookie)).await?;
+    let mut wrong = Vec::new();
+    wrong.extend(
+        answer
+            .expect(StatusCode::FORBIDDEN, "entitlement.feature_unavailable")
+            .err(),
+    );
+    if snapshot(&world.pool, org.id).await? != before {
+        wrong.push("the organization's rows changed".to_owned());
+    }
+    if wrong.is_empty() {
+        Ok(())
+    } else {
+        Err(wrong.join("; "))
+    }
 }
 
 /// With `keys` empty, a user with no role at all.
@@ -1127,6 +1285,34 @@ impl Org {
         cookie
     }
 
+    /// Point the organization at a new plan with every catalog feature but `feature` and no
+    /// limit, by SQL, since M0 has no API that changes a plan.
+    async fn plan_without(&self, feature: &str) {
+        let features: serde_json::Map<String, Value> = feature::ALL
+            .iter()
+            .map(|key| ((*key).to_owned(), Value::Bool(*key != feature)))
+            .collect();
+        let limits: serde_json::Map<String, Value> = Limit::ALL
+            .iter()
+            .map(|limit| (limit.key().to_owned(), Value::Null))
+            .collect();
+        let plan = new_id();
+        sqlx::query("INSERT INTO plans (id, key, features, limits) VALUES ($1, $2, $3, $4)")
+            .bind(plan)
+            .bind(format!("test_{}", plan.simple()))
+            .bind(Value::Object(features))
+            .bind(Value::Object(limits))
+            .execute(&self.pool)
+            .await
+            .expect("insert plan");
+        sqlx::query("UPDATE org_plans SET plan_id = $2, source = 'grant' WHERE org_id = $1")
+            .bind(self.id)
+            .bind(plan)
+            .execute(&self.pool)
+            .await
+            .expect("move to the plan");
+    }
+
     /// A new custom role with no permissions and no assignment.
     async fn custom_role(&self) -> Uuid {
         let role = NewRole {
@@ -1248,6 +1434,15 @@ async fn every_name(_: Authenticated, State(state): State<AppState>) -> String {
     names.join(",")
 }
 
+/// [`rename_account`] behind the `custom_roles` feature.
+async fn gated_rename(
+    _: Require<CustomRoles>,
+    require: Require<AccountManage, AccountTarget>,
+    state: State<AppState>,
+) -> Result<StatusCode, ApiError> {
+    rename_account(require, state).await
+}
+
 /// Checks `account.view` where its entry says `account.manage`.
 async fn wrong_permission(_: Require<AccountView, AccountTarget>) -> StatusCode {
     StatusCode::OK
@@ -1265,6 +1460,7 @@ fn fixture_app(world: &World) -> Router {
         .route("/t/me", get(me))
         .route("/t/open/{account_id}", patch(open_rename))
         .route("/t/wrong/{account_id}", patch(wrong_permission))
+        .route("/t/gated/{account_id}", patch(gated_rename))
         .route("/t/sessions", axum::routing::delete(end_other_sessions))
         .route("/t/names", get(every_name))
         .with_state(world.state())
@@ -1329,7 +1525,29 @@ const fn permission(key: &'static str, target: Target, setup: Setup) -> Access {
         key,
         target,
         extra: &[],
+        feature: None,
         setup,
+    }
+}
+
+/// `access`, a [`permission`] entry, for a route that also takes `Require<F>` with
+/// `F::KEY == feature`.
+const fn gated(feature: &'static str, access: Access) -> Access {
+    match access {
+        Access::Permission {
+            key,
+            target,
+            extra,
+            setup,
+            ..
+        } => Access::Permission {
+            key,
+            target,
+            extra,
+            feature: Some(feature),
+            setup,
+        },
+        Access::AuthOnly(_) => panic!("a feature entry needs a permission"),
     }
 }
 
@@ -1386,6 +1604,70 @@ async fn the_runner_passes_a_correct_route_of_each_target_kind(pool: PgPool) {
     }
 }
 
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_runner_passes_a_route_that_checks_its_feature(pool: PgPool) {
+    let world = World::new(pool).await;
+    let app = fixture_app(&world);
+    let op = fixture_op(Method::PATCH, "/t/gated/{account_id}");
+    let access = gated(
+        CustomRoles::KEY,
+        permission(AccountManage::KEY, ACCOUNT_NOT_FOUND, tower_in_path),
+    );
+    let report = run(&world, &app, &op, &access).await;
+    assert!(report.failures.is_empty(), "{:#?}", report.failures);
+    assert_eq!(
+        report.ran,
+        [
+            "401",
+            "feature off",
+            "feature off, unknown ids",
+            "403",
+            "404",
+            "2xx",
+            "cross-organization"
+        ]
+    );
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_route_without_its_feature_check_fails_the_feature_off_cases(pool: PgPool) {
+    let world = World::new(pool).await;
+    let app = fixture_app(&world);
+    let op = fixture_op(Method::PATCH, "/t/accounts/{account_id}");
+    let access = gated(
+        CustomRoles::KEY,
+        permission(AccountManage::KEY, ACCOUNT_NOT_FOUND, tower_in_path),
+    );
+    let report = run(&world, &app, &op, &access).await;
+    assert_eq!(
+        failed_cases(&report),
+        ["feature off", "feature off, unknown ids"],
+        "{report:#?}"
+    );
+    assert!(
+        report.failures[0].contains("the organization's rows changed"),
+        "{report:#?}"
+    );
+    assert!(
+        report.failures[1].contains("account.not_found"),
+        "{report:#?}"
+    );
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_unknown_feature_key_fails_the_entry(pool: PgPool) {
+    let world = World::new(pool).await;
+    let app = fixture_app(&world);
+    let op = fixture_op(Method::PATCH, "/t/gated/{account_id}");
+    let access = gated(
+        "teleportation",
+        permission(AccountManage::KEY, ACCOUNT_NOT_FOUND, tower_in_path),
+    );
+    let report = run(&world, &app, &op, &access).await;
+    assert_eq!(report.ran, ["catalog"]);
+    assert_eq!(report.failures.len(), 1);
+}
+
 /// Organization-only permissions have no 404 case: no account grant can hold them.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn an_organization_only_permission_has_no_404_case(pool: PgPool) {
@@ -1433,12 +1715,8 @@ fn failed_cases(report: &Report) -> Vec<&str> {
         .failures
         .iter()
         .map(|f| {
-            f.split(": ")
-                .next()
-                .expect("a case")
-                .rsplit(' ')
-                .next()
-                .expect("a case")
+            let (_, rest) = f.split_once(") ").expect("the operation, then a case");
+            rest.split_once(": ").expect("a case, then why").0
         })
         .collect()
 }

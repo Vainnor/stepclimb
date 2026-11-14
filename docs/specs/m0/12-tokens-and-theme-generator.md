@@ -216,8 +216,11 @@ is 11-app-shell's.
 One catalog entry for editing branding, named in 09-permissions-and-roles' conventions, held by
 the built-in Organization admin role at organization scope (`docs/plan/technical.md` ->
 Permissions and roles: "Everything, including providers, branding and integrations"). No other
-built-in role holds it. No entitlement feature: self-hosted gets everything, and the plan gates
-no branding feature on a plan.
+built-in role holds it. **Coordinator decision (2026-11-14).** `PUT /api/v1/admin/branding`
+also takes `Require<feature::CustomBranding>` (`custom_branding`), which
+`10-entitlements-framework.md` Q1 (decided by the owner, 13 Nov 2026) names for this spec;
+`GET` takes none. Self-hosted runs the `unlimited` plan, so the feature is always on there, and
+which managed plans include it is M6's to decide.
 
 ## Test cases
 

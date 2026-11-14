@@ -11,6 +11,12 @@
 //! its holder lacks. A permission the change keeps is not checked. The roles
 //! repository (`stepclimb_core::roles`) checks the role itself: key format, unique key, name,
 //! catalog keys, built-in roles immutable, no delete while assigned.
+//!
+//! The three writing routes also need the plan's `custom_roles` feature
+//! (docs/specs/m0/10-entitlements-framework.md B1, B9, Q1). `Require<CustomRoles>` runs before
+//! `Require<RoleManage>`, so a plan without it answers 403 `entitlement.feature_unavailable`
+//! before the permission check and before the role id is looked up. Reading the catalog and
+//! the roles needs no feature.
 
 use std::collections::BTreeSet;
 
@@ -22,6 +28,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use stepclimb_core::{
+    feature::CustomRoles,
     grants::{Grants, Target},
     id::Uuid,
     perm::{self, RoleManage, RoleView},
@@ -72,8 +79,8 @@ pub mod code {
 
 problem_responses! {
     RoleNotFound => "`role.not_found`: no built-in role and no custom role of the organization has this id. `org.not_found`: the request's organization cannot be determined.",
-    WriteForbidden => "`permission.denied`: the caller does not hold `role.manage` at organization scope. `permission.escalation`: the caller does not hold, at organization scope, a permission the role gains or loses. `auth.csrf_refused`: the request did not come from this site.",
-    DeleteForbidden => "`permission.denied`: the caller does not hold `role.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site.",
+    WriteForbidden => "`entitlement.feature_unavailable`: the organization's plan does not include custom roles. `permission.denied`: the caller does not hold `role.manage` at organization scope. `permission.escalation`: the caller does not hold, at organization scope, a permission the role gains or loses. `auth.csrf_refused`: the request did not come from this site.",
+    DeleteForbidden => "`entitlement.feature_unavailable`: the organization's plan does not include custom roles. `permission.denied`: the caller does not hold `role.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site.",
     CreateConflict => "`role.key_taken`: a built-in role or another custom role of the organization has the key.",
     UpdateConflict => "`role.builtin_immutable`: built-in roles cannot be changed.",
     DeleteConflict => "`role.builtin_immutable`: built-in roles cannot be deleted. `role.in_use`: the role still has assignments; remove them first.",
@@ -305,6 +312,7 @@ pub async fn get_role(
     )
 )]
 pub async fn create_role(
+    _: Require<CustomRoles>,
     require: Require<RoleManage>,
     client: ClientAddress,
     State(state): State<AppState>,
@@ -358,6 +366,7 @@ pub async fn create_role(
     )
 )]
 pub async fn update_role(
+    _: Require<CustomRoles>,
     require: Require<RoleManage>,
     client: ClientAddress,
     State(state): State<AppState>,
@@ -410,6 +419,7 @@ pub async fn update_role(
     )
 )]
 pub async fn delete_role(
+    _: Require<CustomRoles>,
     require: Require<RoleManage>,
     client: ClientAddress,
     State(state): State<AppState>,

@@ -955,7 +955,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `permission.denied`: the caller does not hold `role.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site. */
+        /** @description `entitlement.feature_unavailable`: the organization's plan does not include custom roles. `permission.denied`: the caller does not hold `role.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site. */
         DeleteForbidden: {
             headers: {
                 [name: string]: unknown;
@@ -1200,7 +1200,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `permission.denied`: the caller does not hold `role.manage` at organization scope. `permission.escalation`: the caller does not hold, at organization scope, a permission the role gains or loses. `auth.csrf_refused`: the request did not come from this site. */
+        /** @description `entitlement.feature_unavailable`: the organization's plan does not include custom roles. `permission.denied`: the caller does not hold `role.manage` at organization scope. `permission.escalation`: the caller does not hold, at organization scope, a permission the role gains or loses. `auth.csrf_refused`: the request did not come from this site. */
         WriteForbidden: {
             headers: {
                 [name: string]: unknown;

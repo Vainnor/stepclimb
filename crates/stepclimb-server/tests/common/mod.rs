@@ -6,7 +6,8 @@
 //! Schema utoipa writes: `$ref`, `type` (one name or a list), `enum`, `format` (`uuid`,
 //! `date-time` as the API writes it, `int32`, `int64`), `minimum`, `properties` with `required`,
 //! `additionalProperties` (a schema every undeclared member conforms to), `propertyNames` and
-//! `items`, plus the annotations `description`, `title` and `example`, which constrain nothing. Any other keyword, or another `format`, is reported as an
+//! `items`, plus the annotations `description`, `title` and `example`, which constrain nothing.
+//! Any other keyword, another `format`, or a `minimum` that is not a number is reported as an
 //! error rather than skipped, so a schema the checker cannot read never passes by default. A
 //! member the schema does not declare is an error too, so an answer cannot carry more than the
 //! document says.
@@ -151,10 +152,16 @@ fn minimum_conforms(
     at: &str,
     errors: &mut Vec<String>,
 ) {
-    let (Some(minimum), Some(number)) = (
-        schema.get("minimum").and_then(Value::as_f64),
-        value.as_f64(),
-    ) else {
+    let Some(minimum) = schema.get("minimum") else {
+        return;
+    };
+    let Some(minimum) = minimum.as_f64() else {
+        errors.push(format!(
+            "{at}: the schema's minimum {minimum} is not a number"
+        ));
+        return;
+    };
+    let Some(number) = value.as_f64() else {
         return;
     };
     if number < minimum {
