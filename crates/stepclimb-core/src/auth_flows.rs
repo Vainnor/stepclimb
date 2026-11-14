@@ -80,7 +80,8 @@ impl Kind {
 /// Only a path that starts with one `/` not followed by `/` or `\` is kept; anything else
 /// becomes `/`, so a sign-in never redirects to another host. Every byte must also be printable
 /// ASCII: browsers drop tab and newline from a URL, so `/<tab>/evil.example` would otherwise
-/// reach the browser as `//evil.example`.
+/// reach the browser as `//evil.example`. A `.` or `..` segment, literal or `%2e`, is refused
+/// too: browsers resolve it, so `/a/..//evil.example` would reach them as `//evil.example`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReturnTo(String);
 
@@ -113,6 +114,18 @@ fn is_safe_path(path: &str) -> bool {
         && bytes.first() == Some(&b'/')
         && !matches!(bytes.get(1), Some(b'/' | b'\\'))
         && bytes.iter().all(|byte| (b'!'..=b'~').contains(byte))
+        && !has_dot_segment(path)
+}
+
+/// True when the path part (before `?` or `#`) has a `.` or `..` segment, written literally or
+/// with `%2e`. Browsers resolve those segments, so `/a/..//evil.example` reaches them as
+/// `//evil.example`. `\` counts as a separator, as browsers read it in an `http` URL.
+fn has_dot_segment(path: &str) -> bool {
+    let end = path.find(['?', '#']).unwrap_or(path.len());
+    path[..end].split(['/', '\\']).any(|segment| {
+        let decoded = segment.to_ascii_lowercase().replace("%2e", ".");
+        decoded == "." || decoded == ".."
+    })
 }
 
 /// A flow to store.
@@ -320,6 +333,10 @@ mod tests {
             "/a//b",
             "/a\\b",
             "/.well-known/x",
+            "/a/...",
+            "/a/..b",
+            "/a?x=/../y",
+            "/a#/../b",
         ] {
             assert_eq!(sanitized(path), path);
         }
@@ -344,6 +361,25 @@ mod tests {
             assert_eq!(sanitized(requested), "/", "{requested:?}");
         }
         assert_eq!(ReturnTo::sanitize(None).as_str(), "/");
+    }
+
+    #[test]
+    fn a_dot_segment_becomes_root() {
+        for requested in [
+            "/..//evil.example",
+            "/.//evil.example",
+            "/a/..//evil",
+            "/%2e%2e//evil.example",
+            "/%2E//evil.example",
+            "/a/.%2e//evil",
+            "/a/%2e./b",
+            "/a\\..\\/evil",
+            "/a/.",
+            "/a/..",
+            "/a/..?x=1",
+        ] {
+            assert_eq!(sanitized(requested), "/", "{requested:?}");
+        }
     }
 
     #[test]
