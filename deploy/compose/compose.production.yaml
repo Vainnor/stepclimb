@@ -2,7 +2,8 @@
 # Stepclimb on Docker Compose for a self-hosted deployment: the server and PostgreSQL 16, with
 # MinIO as an option (plan, Technical -> Hosting: "stepclimb and postgres, with optional Caddy
 # (automatic TLS) and MinIO"). compose.yaml beside this file is the development stack and is not
-# for production: its passwords and encryption key are published.
+# for production: its passwords and encryption key are published. README.md beside this file is
+# the self-hosting guide.
 #
 # There are no default passwords. Every secret is a file in the secrets directory
 # (./secrets beside this file, or the directory SC_SECRETS_DIR names), mounted with Compose

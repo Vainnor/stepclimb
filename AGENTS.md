@@ -149,7 +149,7 @@ The Nix dev shell (`flake.nix`) provides every tool below.
 ## Commands (via `just`)
 
 ```bash
-just ci            # the merge gate, run locally: secrets, fmt, clippy, layering, lint escapes, spdx, tests, deny, sqlx, openapi, biome, tsc, vitest, story screenshots, playwright, compose, agents; several worktrees may run it at once
+just ci            # the merge gate, run locally: secrets, fmt, clippy, layering, lint escapes, spdx, tests, deny, sqlx, openapi, biome, tsc, vitest, story screenshots, playwright, compose, image, agents; several worktrees may run it at once
 just app-build     # the Tauri shell for this OS, unbundled and unsigned, after cargo-deny on its workspace
 just up / down     # PostgreSQL 16 and MinIO in Compose (deploy/compose/compose.yaml), one stack shared by every worktree
 just serve         # the server on :8080 against the Compose database, web build embedded
@@ -177,6 +177,7 @@ just e2e           # Playwright smoke test against this worktree's own Compose s
 just ui-visual     # Storybook story screenshots and axe in Playwright's pinned image (--update-snapshots)
 just compose-check # the production Compose example booted with generated secrets on the slot's port, then removed
 just compose-ops-check  # the same with Caddy (internal CA) on the slot's ports: TLS, forwarded headers, dumps, a restore
+just image-check   # the server image for linux/amd64 and linux/arm64 (arm64 only on arm64): non-root, no shell, architecture, check-config runs
 just agents-check  # agent hook tests and Codex mirrors of .claude/ (docs/agents.md)
 just secrets-scan  # gitleaks over the tree (staged | history also accepted)
 just clean-stale [--dry-run] [--days N]  # stale build output in every worktree's target/
@@ -186,7 +187,8 @@ just install-hooks # once per clone: .githooks (secret scan, formatting, no-attr
 Needs: the Nix dev shell (`nix develop`, or `use flake` in a local `.envrc`), or the same tools
 installed by hand: Rust via rustup, `just`, `cargo-nextest`, `cargo-deny`, `sqlx-cli`,
 `gitleaks` (or Docker), Node 26.13 with pnpm 12.9, Playwright's Chromium, `python3`, Docker with
-Compose, and on Linux WebKitGTK 4.1 for the Tauri app.
+Compose (with buildx), and on Linux WebKitGTK 4.1 for the Tauri app and QEMU's user-mode
+emulators (`qemu-aarch64`) for `just image-check`.
 
 There is no hosted CI and no GitHub Actions (ADR 0021): Actions minutes on a private repository
 run out too fast. `just ci` on the committed HEAD, on the machine the change was made on, is the

@@ -347,7 +347,7 @@ class OrphanTest(unittest.TestCase):
             ],
         )
 
-    def test_removes_each_orphan_and_its_image(self) -> None:
+    def test_removes_each_orphan_and_its_images(self) -> None:
         listing = "stepclimb-opscheck-0123abcd-restore\t/gone/a/deploy/compose\n"
         with (
             mock.patch.object(ci_gate, "checked", return_value=listing) as checked,
@@ -360,7 +360,8 @@ class OrphanTest(unittest.TestCase):
             ["docker", "compose", "-p", "stepclimb-opscheck-0123abcd-restore", "down", "--volumes"]
             + ["--remove-orphans", "--timeout", "5"],
         )
-        remove_image.assert_called_once_with("stepclimb:ci-0123abcd", {})
+        images = ["stepclimb:ci-0123abcd", "stepclimb:ci-0123abcd-amd64", "stepclimb:ci-0123abcd-arm64"]
+        self.assertEqual([c.args for c in remove_image.call_args_list], [(i, {}) for i in images])
 
 
 class SubnetTest(unittest.TestCase):
@@ -457,7 +458,7 @@ class StackCommandsTest(unittest.TestCase):
     }
     down = ["down", "--volumes", "--remove-orphans", "--timeout", "5"]
 
-    def test_remove_stack_removes_every_project_with_volumes_and_the_image(self) -> None:
+    def test_remove_stack_removes_every_project_with_volumes_and_the_images(self) -> None:
         with (
             mock.patch.object(ci_gate, "checked", return_value="") as checked,
             mock.patch.object(ci_gate, "remove_image") as remove_image,
@@ -473,7 +474,8 @@ class StackCommandsTest(unittest.TestCase):
         down = [["docker", "compose", "-p", project, *self.down] for project in projects]
         echo = ["docker", "rm", "--force", "stepclimb-opscheck-0123abcd-echo"]
         self.assertEqual(commands, [*down[:2], echo, *down[2:]])
-        remove_image.assert_called_once_with("stepclimb:ci-0123abcd", self.env)
+        images = ["stepclimb:ci-0123abcd", "stepclimb:ci-0123abcd-amd64", "stepclimb:ci-0123abcd-arm64"]
+        self.assertEqual([c.args for c in remove_image.call_args_list], [(i, self.env) for i in images])
 
     def test_start_database_uses_the_runs_own_postgres(self) -> None:
         answers = iter(["", "127.0.0.1:40001"])
