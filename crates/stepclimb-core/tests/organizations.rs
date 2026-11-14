@@ -224,6 +224,7 @@ async fn update_settings_merges_the_default_time_zone(pool: PgPool) {
 
     let patch = OrgSettingsPatch {
         default_tz: Some("america/new_york".into()),
+        ..OrgSettingsPatch::default()
     };
     let settings =
         organizations::update_settings(&pool, scope(a), &patch, request_time(), Actor::Instance)
@@ -252,6 +253,7 @@ async fn update_settings_refuses_an_unknown_time_zone(pool: PgPool) {
     for name in ["Mars/Olympus_Mons", "", "Etc/Unknown"] {
         let patch = OrgSettingsPatch {
             default_tz: Some(name.into()),
+            ..OrgSettingsPatch::default()
         };
         let result = organizations::update_settings(
             &pool,
@@ -267,6 +269,55 @@ async fn update_settings_refuses_an_unknown_time_zone(pool: PgPool) {
         );
     }
     assert_eq!(stored(&pool, a).await, before);
+}
+
+/// Spec 03 B17, T14: `email_matching` reads `false` by default and cannot be turned on, alone
+/// or beside a valid key; the refusal writes nothing, not even the valid key, and no audit entry.
+/// `false` is accepted and, being the current value, writes nothing either (spec 09 B22).
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn update_settings_refuses_to_turn_email_matching_on(pool: PgPool) {
+    let a = insert_org(&pool, "org-a", "Org A").await;
+    let before = stored(&pool, a).await;
+    let settings = organizations::settings(&pool, scope(a)).await.unwrap();
+    assert!(!settings.email_matching);
+
+    for default_tz in [None, Some("Europe/Dublin".to_owned())] {
+        let patch = OrgSettingsPatch {
+            default_tz: default_tz.clone(),
+            email_matching: Some(true),
+        };
+        let result = organizations::update_settings(
+            &pool,
+            scope(a),
+            &patch,
+            request_time(),
+            Actor::Instance,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(Error::EmailMatchingUnavailable)),
+            "{default_tz:?}: {result:?}"
+        );
+    }
+    assert_eq!(stored(&pool, a).await, before, "the refusals wrote nothing");
+
+    let patch = OrgSettingsPatch {
+        email_matching: Some(false),
+        ..OrgSettingsPatch::default()
+    };
+    let settings =
+        organizations::update_settings(&pool, scope(a), &patch, request_time(), Actor::Instance)
+            .await
+            .unwrap();
+    assert!(!settings.email_matching);
+    assert_eq!(stored(&pool, a).await, before, "false is the current value");
+    let entries: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events WHERE action = 'organization.update_settings'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(entries, 0);
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]

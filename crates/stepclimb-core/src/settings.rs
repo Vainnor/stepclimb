@@ -4,7 +4,7 @@
 //! The column is read and written only through these types. Each key is owned by the spec that
 //! uses it and is added here with its default in code (`#[serde(default)]` on the struct), so a
 //! stored object missing a key reads as that default and no migration backfills settings. Spec
-//! 03 owns `default_tz`; specs 04 and 07 add theirs.
+//! 03 owns `default_tz` and `email_matching`; specs 04 and 07 add theirs.
 //!
 //! Stored settings are read tolerantly: a key this code does not know is ignored on read and
 //! kept in the row, because the repository merges a patch into the stored object
@@ -21,12 +21,17 @@ use serde::{Deserialize, Serialize};
 pub struct OrgSettings {
     /// The IANA time zone of a user created without one ([`crate::tz`]; spec 03 B3, Q4).
     pub default_tz: String,
+    /// Whether a sign-in through an identity the organization does not know may be linked to
+    /// an existing user with the same email address (spec 03 B17). Off by default; the
+    /// repository refuses to turn it on until spec 07 issue 4 implements the matching.
+    pub email_matching: bool,
 }
 
 impl Default for OrgSettings {
     fn default() -> Self {
         Self {
             default_tz: crate::tz::DEFAULT.to_owned(),
+            email_matching: false,
         }
     }
 }
@@ -40,6 +45,9 @@ pub struct OrgSettingsPatch {
     /// An IANA time zone name; the repository stores the database's spelling of it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_tz: Option<String>,
+    /// Only `false` is accepted until spec 07 issue 4 implements the matching (spec 03 B17).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email_matching: Option<bool>,
 }
 
 impl OrgSettingsPatch {
@@ -98,12 +106,28 @@ mod tests {
     }
 
     #[test]
+    fn email_matching_is_off_by_default_and_reads_a_stored_value() {
+        assert!(!OrgSettings::default().email_matching);
+        let settings: OrgSettings = serde_json::from_str(r#"{"default_tz": "UTC"}"#).unwrap();
+        assert!(!settings.email_matching);
+        let stored: OrgSettings = serde_json::from_str(r#"{"email_matching": true}"#).unwrap();
+        assert!(stored.email_matching);
+    }
+
+    #[test]
     fn a_patch_serializes_only_the_keys_it_names() {
         let patch = OrgSettingsPatch {
             default_tz: Some("Europe/Dublin".into()),
+            ..OrgSettingsPatch::default()
         };
         let json = serde_json::to_string(&patch).unwrap();
         assert_eq!(json, r#"{"default_tz":"Europe/Dublin"}"#);
+        let patch = OrgSettingsPatch {
+            email_matching: Some(false),
+            ..OrgSettingsPatch::default()
+        };
+        let json = serde_json::to_string(&patch).unwrap();
+        assert_eq!(json, r#"{"email_matching":false}"#);
     }
 
     #[test]

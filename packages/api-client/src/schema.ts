@@ -638,6 +638,12 @@ export interface components {
         OrgSettings: {
             /** @description The IANA time zone a user created without one gets; `UTC` unless set. */
             default_tz: string;
+            /**
+             * @description Whether a sign-in through an identity the organization does not know yet may be linked
+             *     to the existing user with the same email address. `false` unless set, and this release
+             *     refuses to set it to `true`.
+             */
+            email_matching: boolean;
         };
         /**
          * @description A partial change to the organization settings: one optional member per setting; only the
@@ -646,6 +652,11 @@ export interface components {
         OrgSettingsPatch: {
             /** @description An IANA time zone, matched in any letter case and stored in the database's spelling. */
             default_tz?: string;
+            /**
+             * @description Only `false` is accepted: `true` answers 422 with
+             *     `settings.email_matching_unavailable`.
+             */
+            email_matching?: boolean;
         };
         /** @description The caller's organization. */
         Organization: {
@@ -1283,7 +1294,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `tz.unknown` a `default_tz` that is no IANA time zone. */
+        /** @description `request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses. */
         SettingsInvalid: {
             headers: {
                 [name: string]: unknown;

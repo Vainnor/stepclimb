@@ -59,11 +59,14 @@ pub const ENTITLEMENTS_PATH: &str = "/api/v1/organization/entitlements";
 pub mod code {
     /// In a 422's `errors`: the patch names a key that is no organization setting.
     pub const SETTINGS_UNKNOWN_KEY: &str = "settings.unknown_key";
+    /// In a 422's `errors`: the patch sets `email_matching` to `true`, which the server refuses
+    /// until matching by email is implemented (spec 03 B17).
+    pub const EMAIL_MATCHING_UNAVAILABLE: &str = "settings.email_matching_unavailable";
 }
 
 problem_responses! {
     OrgWriteForbidden => "`permission.denied`: the caller does not hold `organization.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site.",
-    SettingsInvalid => "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `tz.unknown` a `default_tz` that is no IANA time zone.",
+    SettingsInvalid => "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses.",
 }
 
 /// The caller's organization.
@@ -116,6 +119,10 @@ where
 pub struct OrgSettings {
     /// The IANA time zone a user created without one gets; `UTC` unless set.
     pub default_tz: String,
+    /// Whether a sign-in through an identity the organization does not know yet may be linked
+    /// to the existing user with the same email address. `false` unless set, and this release
+    /// refuses to set it to `true`.
+    pub email_matching: bool,
 }
 
 /// A partial change to the organization settings: one optional member per setting; only the
@@ -131,6 +138,11 @@ pub struct OrgSettingsPatch {
     #[serde(default)]
     #[schema(value_type = String)]
     pub default_tz: Option<String>,
+    /// Only `false` is accepted: `true` answers 422 with
+    /// `settings.email_matching_unavailable`.
+    #[serde(default)]
+    #[schema(value_type = bool)]
+    pub email_matching: Option<bool>,
 }
 
 /// Read the caller's organization.
@@ -392,6 +404,10 @@ fn org_error(error: organizations::Error) -> ApiError {
         E::NameTooLong => invalid(NAME_TOO_LONG),
         E::NameContainsNul => invalid(TEXT_CONTAINS_NUL),
         E::DefaultTzUnknown => ApiError::invalid(vec![FieldError::at(&["default_tz"], TZ_UNKNOWN)]),
+        E::EmailMatchingUnavailable => ApiError::invalid(vec![FieldError::at(
+            &["email_matching"],
+            code::EMAIL_MATCHING_UNAVAILABLE,
+        )]),
         other @ (E::SlugInvalid
         | E::SlugReserved
         | E::SlugTaken
@@ -500,6 +516,12 @@ mod tests {
                 422,
                 "request.invalid",
                 Some(("/default_tz", "tz.unknown")),
+            ),
+            (
+                organizations::Error::EmailMatchingUnavailable,
+                422,
+                "request.invalid",
+                Some(("/email_matching", "settings.email_matching_unavailable")),
             ),
             (organizations::Error::SlugTaken, 500, "internal.error", None),
         ];
