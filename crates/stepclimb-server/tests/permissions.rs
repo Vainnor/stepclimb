@@ -1102,6 +1102,22 @@ async fn run_own(
             .expect_success()
     };
     report.record(op, "2xx", owner.await);
+    // As `every_feature_off`, for the owner: the entry declares no feature.
+    let featureless = async {
+        let org = world.org().await;
+        let (cookie, owner) = org.user().await;
+        let call = setup(&org, owner).await;
+        org.plan_with(|_| false).await;
+        let answer = call_op(app, op, &call, org.id, Some(&cookie)).await?;
+        if answer.code().as_deref() == Some("entitlement.feature_unavailable") {
+            return Err(format!(
+                "its entry names no feature, but it answered {} {}",
+                answer.status, answer.body
+            ));
+        }
+        Ok(())
+    };
+    report.record(op, "every feature off", featureless.await);
     report.record(
         op,
         "other-user",
@@ -1978,7 +1994,13 @@ async fn the_runner_passes_a_route_on_the_callers_own_row(pool: PgPool) {
     assert!(report.failures.is_empty(), "{:#?}", report.failures);
     assert_eq!(
         report.ran,
-        ["401", "2xx", "other-user", "cross-organization"]
+        [
+            "401",
+            "2xx",
+            "every feature off",
+            "other-user",
+            "cross-organization"
+        ]
     );
 }
 

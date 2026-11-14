@@ -231,7 +231,7 @@ impl TryFrom<Row> for Entry {
 mod tests {
     use super::*;
 
-    const ALL: [Action; 15] = [
+    const ALL: [Action; 16] = [
         Action::RoleCreate,
         Action::RoleUpdate,
         Action::RoleDelete,
@@ -244,6 +244,7 @@ mod tests {
         Action::OrganizationCreate,
         Action::OrganizationRename,
         Action::OrganizationUpdateSettings,
+        Action::OrganizationUpdateBranding,
         Action::UserSetStatus,
         Action::IdentityLink,
         Action::IdentityUnlink,
