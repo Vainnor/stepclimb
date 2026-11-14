@@ -17,6 +17,7 @@ const INTERACTIVE = [
   "button",
   "[role=button]",
   "[role=checkbox]",
+  "[role=columnheader]",
   "[role=gridcell]",
   "[role=menuitem]",
   "[role=menuitemcheckbox]",
@@ -306,6 +307,18 @@ test.describe("at 1280 px @desktop", () => {
     await page.keyboard.press("Tab");
     await page.keyboard.press("Tab");
     await expect(pre).toBeFocused();
+  });
+
+  test("DataTable's loading live region is rendered before it has anything to say", async ({
+    page,
+  }) => {
+    // Not loading: the region is empty. A live region that is display: none, or that appears only
+    // with its text, is often not announced when the text arrives.
+    await openStory(page, story("data-datatable--default"), "light");
+    const region = page.locator("[data-slot=data-table-status]");
+    await expect(region).toHaveAttribute("role", "status");
+    await expect(region).toHaveText("");
+    expect(await region.evaluate((el) => getComputedStyle(el).display)).not.toBe("none");
   });
 
   test("keyboard focus on an unstyled element draws the ring", async ({ page }) => {

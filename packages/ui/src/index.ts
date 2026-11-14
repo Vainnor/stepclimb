@@ -1,9 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Stepclimb UI: the Foundations, the Actions, the data states, the form fields, the overlays but
-// Toast and CommandPalette, the navigation, and the theme and strings providers so far; the rest of
-// the M0 inventory is specified in docs/specs/m0/13-base-ui-components.md.
+// Stepclimb UI: the M0 inventory of docs/specs/m0/13-base-ui-components.md (Foundations, Actions,
+// the M0 forms, Overlays, Navigation and the M0 data components), and the theme and strings
+// providers.
 export { AppShell, type AppShellProps, appShell } from "./patterns/app-shell";
 export { BottomTabs, type BottomTabsProps, bottomTabs } from "./patterns/bottom-tabs";
+export {
+  type Command,
+  CommandPalette,
+  type CommandPaletteProps,
+  commandPalette,
+  isPaletteShortcut,
+} from "./patterns/command-palette";
+export {
+  DataTable,
+  type DataTableColumn,
+  type DataTableProps,
+  dataTable,
+} from "./patterns/data-table";
 export { EmptyState, type EmptyStateProps, emptyState } from "./patterns/empty-state";
 export { ErrorState, type ErrorStateProps, errorState } from "./patterns/error-state";
 export {
@@ -44,6 +57,13 @@ export {
   type CopyResult,
   copyButton,
 } from "./primitives/copy-button";
+export {
+  DataList,
+  DataListItem,
+  type DataListItemProps,
+  type DataListProps,
+  dataList,
+} from "./primitives/data-list";
 export {
   Dialog,
   DialogBody,
@@ -119,6 +139,21 @@ export { Sheet, type SheetPlacement, type SheetProps, sheet } from "./primitives
 export { SKELETON_DELAY_MS, Skeleton, type SkeletonProps, skeleton } from "./primitives/skeleton";
 export { Switch, type SwitchProps, switchField } from "./primitives/switch";
 export {
+  Cell,
+  type CellProps,
+  Column,
+  type ColumnProps,
+  Row,
+  type RowProps,
+  Table,
+  TableBody,
+  type TableBodyProps,
+  TableHeader,
+  type TableHeaderProps,
+  type TableProps,
+  table,
+} from "./primitives/table";
+export {
   Tab,
   TabList,
   type TabListProps,
@@ -132,6 +167,19 @@ export {
 export { Text, type TextProps, text } from "./primitives/text";
 export { TextArea, type TextAreaProps, textArea } from "./primitives/text-area";
 export { TextField, type TextFieldProps, textField } from "./primitives/text-field";
+export {
+  createToastQueue,
+  TOAST_MIN_TIMEOUT_MS,
+  TOAST_TIMEOUT_MS,
+  type ToastMessage,
+  type ToastOptions,
+  type ToastQueue,
+  ToastRegion,
+  type ToastRegionProps,
+  type ToastTone,
+  toast,
+  toastTimeout,
+} from "./primitives/toast";
 export {
   ToggleButton,
   ToggleButtonGroup,

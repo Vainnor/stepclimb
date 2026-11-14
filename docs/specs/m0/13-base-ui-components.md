@@ -72,7 +72,10 @@ From `docs/plan/ui.md` -> Component conventions and `.claude/rules/ui.md`.
   (11-app-shell B23). Components never hard-code nouns. React Aria's own accessibility strings,
   which it translates and offers no prop to replace, are accepted as they are: the hidden
   "Dismiss" button at each end of a modal overlay and NumberField's `aria-roledescription`
-  (coordinator decision on PR #131, 13 Nov 2026, option (a) of the two raised there).
+  (coordinator decision on PR #131, 13 Nov 2026, option (a) of the two raised there), and a
+  table's hidden "sortable column" description of a sortable header and "sorted by column ... in
+  ... order" description of a sorted table (decided by the owner, 13 Nov 2026, on the same
+  grounds).
 - **B6.** Logical properties only (`ms-`, `pe-`, `start-`), so right-to-left works.
 - **B7.** Every stateful component works controlled and uncontrolled (`value` and `defaultValue`,
   `isOpen` and `defaultOpen`, following React Aria's names).
@@ -127,8 +130,8 @@ names the React Aria Components export each is built on.
 | | Sheet (side and bottom) | `Sheet` (stable in 1.22.1) or `ModalOverlay` and `Modal` | Side sheet for editing on wide screens, bottom sheet on phones; respects safe areas. Built on `ModalOverlay` and `Modal`, like Dialog and the Menu's sheet: React Aria's `Sheet` adds swipe gestures and snap points no M0 screen asks for. Every modal overlay (Dialog, Sheet, the Menu, Select and ComboBox sheets) is top-anchored and as tall as `--visual-viewport-height`, which ModalOverlay sets, since iOS does not shrink the layout viewport for the keyboard (coordinator decisions on PR #139, 13 Nov 2026) |
 | | Popover | `Popover` | One soft shadow (floating layer) |
 | | Tooltip | `TooltipTrigger`, `Tooltip` | Never the only place information lives |
-| | Toast | `UNSTABLE_ToastRegion`, `UNSTABLE_ToastQueue` (Q7) | Queue API for the app; error toasts stay until dismissed |
-| | CommandPalette | `Autocomplete`, `Menu`, `ModalOverlay` | The component and its keyboard model; the app wires its commands from M1 |
+| | Toast | `UNSTABLE_ToastRegion`, `UNSTABLE_ToastQueue` (Q7) | Queue API for the app; error toasts stay until dismissed. Coordinator decision (2026-11-13): `createToastQueue()` and `ToastRegion` are the API and only `toast.tsx` imports the unstable parts (ADR 0024); a toast is announced and never takes focus, and its timer pauses while the region is hovered or focused; a toast that is not an error stays 6 s by default and at least 5 s; at most three show, the newest first; tones neutral, success and error, each with its own icon; no actions in a toast; no motion; the region sits at the bottom inline end from 768 px and across the top under it, inside the safe areas, clear of the BottomTabs and the iOS keyboard |
+| | CommandPalette | `Autocomplete`, `Menu`, `ModalOverlay` | The component and its keyboard model; the app wires its commands from M1. Coordinator decision (2026-11-13): ⌘K on Apple platforms and Ctrl+K elsewhere toggles it, unless a handler already prevented the key; typing filters by label and keywords, ignoring case and accents; Up and Down move while focus stays in the search box; Enter runs and closes; Escape clears the search, then closes. Commands are data (`{ id, label, keywords?, icon?, isDisabled? }`), and when any command has an icon, one without keeps the icon column so labels align; the scrim is dimmed, not blurred, like the Menu's sheet; the panel is top-anchored inside `--visual-viewport-height` |
 | Navigation | AppShell | none (landmarks) | `header`, `nav` and `main` landmarks, skip link, the SideNav and BottomTabs breakpoints of 11-app-shell B3 |
 | | SideNav | `Link` in a `nav` | `aria-current="page"` on the active entry; the organization's logo slot; the collapsed variant (11 Q1): icons only from 768 to 1023 px, labels kept as link names and shown as tooltips |
 | | BottomTabs | `Link` in a `nav` | Navigation links, not ARIA tabs; fixed inside the bottom safe area; no rubber-band bounce |
@@ -137,8 +140,8 @@ names the React Aria Components export each is built on.
 | | Tabs | `Tabs`, `TabList`, `Tab`, `TabPanel` | |
 | | Pagination | `Button` in a `nav` | Cursor-based Previous and Next (Q9) |
 | | OrgSwitcher | `Select` or `MenuTrigger` | Rendered by the app only in multi-organization mode (11-app-shell B19). A `MenuTrigger` whose menu checks the current organization; choosing another calls back with its id and the app goes to its origin (11 Q3) (coordinator decision on PR #139, 13 Nov 2026) |
-| Data (M0 part, Q1) | DataTable | `Table`, `TableHeader`, `Column`, `TableBody`, `Row`, `Cell` | Sorting, selection, a loading row, an empty state, cursor pagination; compact density for dense views |
-| | DataList | `GridList` | |
+| Data (M0 part, Q1) | DataTable | `Table`, `TableHeader`, `Column`, `TableBody`, `Row`, `Cell` | Sorting, selection, a loading row, an empty state, cursor pagination; compact density for dense views. Sorting is controlled only, as React Aria offers no uncontrolled sort, and the server sorts (decided by the owner, 13 Nov 2026). Coordinator decision (2026-11-13): built from the `Table` parts in `src/primitives/table.tsx` (B1); selection adds a checkbox per row and a select-all box for `multiple`, named from strings; the loading row is a loading line under the table, not a row of the grid (React Aria's `TableLoadMoreItem` puts `aria-level` on a grid row, which ARIA allows only in a treegrid), shown after 300 ms and announced through a live region that is in the page from the first render; the table is `aria-busy` while loading and shows no empty state then; rows are `--sc-control-h` tall, so a compact ThemeProvider is the compact density; the table scrolls sideways in its own box at narrow widths |
+| | DataList | `GridList` | Coordinator decision (2026-11-13): optional selection with a checkbox per item, `onAction`, and an empty state |
 | | Avatar | none | Image with an initials fallback from the display name; pill radius |
 | | Meter, ProgressBar | `Meter`, `ProgressBar` | Value label through strings |
 | | Skeleton | none | Appears only after 300 ms; no shimmer |

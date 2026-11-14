@@ -136,7 +136,8 @@ The Nix dev shell (`flake.nix`) provides every tool below.
 - Dependencies are updated by hand once a month and before each release, as in Mainline:
   `cargo update` in both Cargo workspaces and `pnpm update`, then `just ci`, `just deny` and
   `just app-build`, opened as a lockfile-only PR. A framework or major-version bump goes through
-  `dependency-researcher` first. There is no Dependabot (owner, 13 Nov 2026).
+  `dependency-researcher` first. Before bumping `react-aria-components`, read its release notes for
+  the `UNSTABLE_` toast parts Stepclimb UI builds Toast on (ADR 0024). There is no Dependabot (owner, 13 Nov 2026).
 - The remote is the private GitHub repository `Vainnor/stepclimb`; `next` is the default branch.
   A GitHub ruleset on `main` and `next` enforces PR-only, squash-only, and no force push or
   deletion (ADR 0018). It requires no status checks: there is no hosted CI (ADR 0021). `.claude/hooks/git-guard` refuses the

@@ -7,6 +7,8 @@ import type { ReactElement } from "react";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AppShell } from "../patterns/app-shell";
 import { BottomTabs } from "../patterns/bottom-tabs";
+import { CommandPalette } from "../patterns/command-palette";
+import { DataTable } from "../patterns/data-table";
 import { EmptyState } from "../patterns/empty-state";
 import { ErrorState } from "../patterns/error-state";
 import { OrgSwitcher } from "../patterns/org-switcher";
@@ -20,6 +22,7 @@ import { ButtonGroup } from "../primitives/button-group";
 import { Checkbox, CheckboxGroup } from "../primitives/checkbox";
 import { ComboBox, ComboBoxItem } from "../primitives/combo-box";
 import { CopyButton } from "../primitives/copy-button";
+import { DataList, DataListItem } from "../primitives/data-list";
 import { Dialog } from "../primitives/dialog";
 import { Heading } from "../primitives/heading";
 import { IconButton } from "../primitives/icon-button";
@@ -42,6 +45,7 @@ import { Tab, TabList, TabPanel, Tabs } from "../primitives/tabs";
 import { Text } from "../primitives/text";
 import { TextArea } from "../primitives/text-area";
 import { TextField } from "../primitives/text-field";
+import { createToastQueue, ToastRegion } from "../primitives/toast";
 import { ToggleButton, ToggleButtonGroup } from "../primitives/toggle-button";
 import { Toolbar } from "../primitives/toolbar";
 import { Tooltip, TooltipTrigger } from "../primitives/tooltip";
@@ -51,6 +55,14 @@ import { Icon } from "../theme/icon";
 import { ThemeProvider } from "../theme/theme-provider";
 
 const navEntries = [{ id: "a", href: "/a", label: "«caller»", icon: HouseIcon }];
+
+const toasts = createToastQueue();
+toasts.add({ title: "«caller»", description: "«caller»", tone: "error" });
+
+const tableColumns = [
+  { id: "a", label: "«caller»", allowsSorting: true, render: () => "«caller»" },
+  { id: "b", label: "«caller»", align: "end" as const, render: () => "«caller»" },
+];
 
 const components: [string, ReactElement][] = [
   [
@@ -94,6 +106,47 @@ const components: [string, ReactElement][] = [
     <ComboBox key="co" label="«caller»" defaultInputValue="«caller»" isLoading>
       <ComboBoxItem id="a">«caller»</ComboBoxItem>
     </ComboBox>,
+  ],
+  [
+    "CommandPalette (open)",
+    <CommandPalette
+      key="cp"
+      defaultOpen
+      commands={[{ id: "a", label: "«caller»" }]}
+      onAction={() => {}}
+    />,
+  ],
+  [
+    "CommandPalette (open, no match)",
+    <CommandPalette key="cq" defaultOpen commands={[]} onAction={() => {}} />,
+  ],
+  [
+    "DataList (selectable)",
+    <DataList key="dli" aria-label="«caller»" selectionMode="multiple">
+      <DataListItem id="a">«caller»</DataListItem>
+    </DataList>,
+  ],
+  [
+    "DataTable (sortable, selectable, paged)",
+    <DataTable
+      key="dt"
+      aria-label="«caller»"
+      columns={tableColumns}
+      rows={[{ id: "r" }]}
+      sortDescriptor={{ column: "a", direction: "ascending" }}
+      selectionMode="multiple"
+      pagination={{ nextCursor: "n", onPageChange: () => {} }}
+    />,
+  ],
+  [
+    "DataTable (empty)",
+    <DataTable
+      key="de"
+      aria-label="«caller»"
+      columns={tableColumns}
+      rows={[]}
+      emptyState="«caller»"
+    />,
   ],
   [
     "Dialog (open)",
@@ -227,6 +280,7 @@ const components: [string, ReactElement][] = [
   ["SearchField", <SearchField key="sf" label="«caller»" defaultValue="«caller»" />],
   ["Separator", <Separator key="s" />],
   ["Text", <Text key="t">«caller»</Text>],
+  ["Toast (one shown)", <ToastRegion key="to" queue={toasts} />],
   ["TextArea", <TextArea key="ta" label="«caller»" isInvalid errorMessage="«caller»" />],
   ["TextField", <TextField key="tf" label="«caller»" isInvalid errorMessage="«caller»" />],
   [
@@ -270,15 +324,22 @@ describe("no hard-coded strings", () => {
     vi.unstubAllGlobals();
   });
 
-  // React Aria's modal overlays put a hidden "Dismiss" button at each end for screen readers,
-  // labeled from React Aria's own translations, with no prop to pass a label. It is the one text
+  // React Aria's own accessibility strings, which it translates and offers no prop to replace
+  // (spec 13 B5): the hidden "Dismiss" button at each end of a modal overlay, and a table's
+  // "sortable column" description of a sortable header and "sorted by column … in … order"
+  // description of the table, with the column's name taken from the caller. They are the only text
   // a component shows that is not a Stepclimb message.
-  const reactAriaDismiss = (text: string) => text !== "Dismiss";
+  const reactAria = [
+    /^Dismiss$/,
+    /^sortablecolumn$/,
+    /^sortedbycolumnin(ascending|descending)order$/,
+  ];
+  const notReactAria = (text: string) => !reactAria.some((pattern) => pattern.test(text));
 
   it.each(components)("%s renders only catalog messages and the caller's content", (_, ui) => {
     renderWithStrings(ui, { marked: true });
     // The whole body: overlays render outside the container.
-    expect(unmarkedText(document.body).filter(reactAriaDismiss)).toEqual([]);
+    expect(unmarkedText(document.body).filter(notReactAria)).toEqual([]);
   });
 
   it("notices a hard-coded string", () => {

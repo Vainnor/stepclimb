@@ -30,3 +30,4 @@ Decided list (`docs/plan/technical.md` -> Decided, and `docs/plan/ui.md` -> UI d
 | [0021](0021-no-hosted-ci.md) | No hosted CI: the merge gate runs locally | Accepted |
 | [0022](0022-configuration-names-and-file.md) | Configuration names and the stepclimb.toml layout | Accepted |
 | [0023](0023-container-healthcheck-subcommand.md) | Container health checks through `stepclimb healthcheck` | Accepted |
+| [0024](0024-toast-on-unstable-react-aria-exports.md) | Toast on React Aria's unstable toast exports | Accepted |
