@@ -36,6 +36,7 @@ pub mod client_ip;
 pub mod config;
 mod cookie;
 pub mod csrf;
+pub mod enrollment;
 pub mod entitlements;
 pub mod error;
 pub mod extract;

@@ -38,6 +38,7 @@ use crate::{
     audit::{self, Action, Actor},
     db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
     id::new_id,
+    local,
     users::{self, User},
 };
 
@@ -149,6 +150,9 @@ pub enum Error {
     /// from happening, and the read fails closed if it does.
     #[error("the stored identity attributes are not a JSON object")]
     StoredAttributes,
+    /// Reading the user's local credentials failed.
+    #[error(transparent)]
+    Local(#[from] local::Error),
     /// The linked user's row does not read back.
     #[error(transparent)]
     User(#[from] users::Error),
@@ -384,8 +388,7 @@ pub async fn unlink<'c>(
 /// must keep another identity at an enabled provider: one at a disabled provider does not
 /// count, and a user with none at an enabled provider can have no identity removed here. A
 /// local identity does not count either: what signs a local account in is its passkey or
-/// password, not the identity. Local credentials arrive with
-/// docs/specs/m0/04-local-accounts.md issue 2, which adds them to this count.
+/// password, not the identity, and [`local::has_credential`] counts those.
 ///
 /// Takes [`lock_user`] first, so two removals for one user take turns and the second counts
 /// what the first left. Runs in one transaction (a savepoint when `db` is already one); the lock
@@ -420,7 +423,7 @@ pub async fn unlink_unless_last<'c>(
     if counts.this_local > 0 {
         return Err(Error::LocalIdentity);
     }
-    if counts.others == 0 {
+    if counts.others == 0 && !local::has_credential(&mut tx, scope, user_id).await? {
         return Err(Error::LastSignInMethod);
     }
     unlink(&mut *tx, scope, user_id, id, now, actor).await?;

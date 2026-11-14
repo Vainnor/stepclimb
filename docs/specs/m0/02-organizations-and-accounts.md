@@ -212,7 +212,9 @@ These apply to every endpoint in M0, including the ones other specs define.
     (`04-local-accounts.md` B6, B10, Q7), whose table and function `04-local-accounts.md` issue
     I2 delivers, and I2 adds the printed link to this command. Until then, on success the
     command prints one line to stderr saying the admin has no sign-in method yet and that the
-    setup link arrives with local accounts.
+    setup link arrives with local accounts. `04-local-accounts.md` I2 has replaced that line:
+    the command creates the link in its transaction and prints it as the last line of stdout
+    (`04-local-accounts.md` B10, coordinator decision 2026-11-14).
 
   Coordinator decisions (2026-11-13), on the owner's delegation:
   - Before creating anything the command applies the pending migrations and writes the built-in
@@ -226,7 +228,8 @@ These apply to every endpoint in M0, including the ones other specs define.
     refused (an invalid or reserved slug, a blank or too long organization name, an email that
     is blank or contains control or invisible characters, a blank name, or a missing argument),
     naming the flag; 1 when the database fails. On success it prints the organization's slug
-    and id and the user's email and id to stdout, and no secret.
+    and id and the user's email and id to stdout, and no other secret than the admin's
+    enrollment link, its last line (`04-local-accounts.md` I2).
   - A failure before the commit says nothing was created. A failed commit says the outcome is
     unknown and to check whether the organization exists. A failure while preparing the
     database says no organization was created but the migrations or the role and plan sync may

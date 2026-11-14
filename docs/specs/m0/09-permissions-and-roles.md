@@ -286,6 +286,7 @@ also writes to:
   | `identity.link` | `identity` | `identities::link` | `after`: user, provider key, subject (never the attributes) |
   | `identity.unlink` | `identity` | `identities::unlink` | `before`: the same |
   | `identity_provider.update` | `identity_provider` | `local_sign_in::update` (`04` issue 1) | `before` and `after`: enabled |
+  | `enrollment_link.create` | `enrollment_link` | `local_tokens::create_enrollment` (`04` issue 2) | `after`: user, expiry; never the token or its hash |
 
   A request that changes nothing writes nothing, neither the row (its `updated_at` stays) nor an
   entry, and answers the row as it is: a patch naming no member, a patch naming only values the
@@ -303,8 +304,8 @@ also writes to:
   proxy the right-most `X-Forwarded-For` entry that is not one), or the instance itself, with
   neither id nor address. A route that changes something without the TCP peer's address answers
   500 and changes nothing. Handlers never pass the instance actor; only the `stepclimb admin`
-  CLI does. `stepclimb admin create` writes `organization.create` and the first
-  admin's `role_assignment.grant` as the instance; creating the user is not audited (Q5 lists
+  CLI does. `stepclimb admin create` writes `organization.create`, the first
+  admin's `role_assignment.grant` and their `enrollment_link.create` as the instance; creating the user is not audited (Q5 lists
   status changes only). `08`'s service accounts and app tokens add their own actor type and the
   API key id when they land.
 - **B24.** `stepclimb_core::audit::list` reads the scope's entries in write order. No route

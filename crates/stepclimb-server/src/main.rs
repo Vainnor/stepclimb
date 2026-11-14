@@ -141,10 +141,7 @@ fn admin_create(config: &Config, args: CreateArgs) -> ExitCode {
         return ExitCode::FAILURE;
     };
     match runtime.block_on(admin::create_command(config, &input)) {
-        Ok(created) => {
-            eprint!("{}", admin::NO_SIGN_IN_NOTICE);
-            write_stdout(&admin::report(&created))
-        }
+        Ok(created) => write_stdout(&admin::report(&created)),
         Err(error) => {
             let (code, message) = admin::failure_report(&error, &input.org_slug);
             if code != 2 {

@@ -20,7 +20,8 @@
 //! not local. Disabling the local row counts as such a change.
 //!
 //! [`require_method`] is the check of B2: a route of a method the organization does not offer
-//! answers 404 `auth.method_disabled`. The method routes of spec 04 issues 3 to 8 call it first.
+//! answers 404 `auth.method_disabled`. The method routes of spec 04 issues 2 to 8 call it, or
+//! [`require_any_method`] for a route of several methods, first.
 
 use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
@@ -212,15 +213,31 @@ pub async fn require_method(
     scope: OrgScope,
     method: Method,
 ) -> Result<(), ApiError> {
+    require_any_method(db, scope, &[method]).await.map(|_| ())
+}
+
+/// [`require_method`] for a route that serves several methods, such as the enrollment link,
+/// which can set up a passkey or a password: the methods of `methods` the organization offers,
+/// in `methods`' order, or 404 `auth.method_disabled` when it offers none of them.
+pub async fn require_any_method(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    methods: &[Method],
+) -> Result<Vec<Method>, ApiError> {
     let local = repo::get(db, scope).await.map_err(local_error)?;
-    if local.offers(method) {
-        return Ok(());
+    let offered: Vec<Method> = methods
+        .iter()
+        .copied()
+        .filter(|method| local.offers(*method))
+        .collect();
+    if offered.is_empty() {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            code::AUTH_METHOD_DISABLED,
+            "This sign-in method is switched off for this organization.",
+        ));
     }
-    Err(ApiError::new(
-        StatusCode::NOT_FOUND,
-        code::AUTH_METHOD_DISABLED,
-        "This sign-in method is switched off for this organization.",
-    ))
+    Ok(offered)
 }
 
 /// The answer for a local sign-in repository error.

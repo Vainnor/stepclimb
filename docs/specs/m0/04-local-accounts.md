@@ -47,6 +47,10 @@ creates and hands over.
   check of `03-users-and-identities.md` B13 by migration. This spec provides
   `local::has_credential(scope, user_id)` (a passkey or a password exists), which
   `03-users-and-identities.md` B19 calls before removing a user's last identity.
+  `identities::unlink_unless_last` calls it (issue I2). No passkey or password can be stored
+  before issues I3 and I6, so until then it answers `false`; each of those issues adds its
+  check and a test that the credential lets the user's last outside identity go
+  (coordinator decision, 2026-11-14).
 
   Coordinator decisions (2026-11-14), for issue I1:
 
@@ -87,6 +91,16 @@ creates and hands over.
 
 - **B4.** Local sign-in finds the user by the organization and the email address. Uniqueness
   and case handling: pending Q5.
+
+  Coordinator decision (2026-11-14), for issue I2: local sign-in reads `users.email` through
+  the `users_email` unique index on `(org_id, lower(email))` that `03-users-and-identities.md`
+  B12 (its Q1, option A) already built, and `local_logins` gets no `email_normalized` column.
+  Q5 (a) chose a second unique copy of the address in `local_logins` while the uniqueness of
+  `users.email` was still `03`'s open Q1; with that index in place the copy adds nothing but a
+  second value that goes stale whenever an admin or a provider changes the user's email. The
+  address is lowercased in full, as Q5 (a) says, by `lower()` in both the index and the
+  lookup. `local_logins` is created by issue I6 with the password columns. The lookup function
+  lands with its first caller, the sign-in route of issue I4 or I6.
 - **B5.** Every completed local sign-in goes through admission (`07-admission.md` B1) with the
   local provider, the identity's subject and no mapped attributes, and creates a session
   (`08-sessions-and-csrf.md` B7). A suspended user is refused there.
@@ -103,6 +117,36 @@ creates and hands over.
   credential creation options bound to a new sign-in flow (`08-sessions-and-csrf.md` B17). An
   unknown or used token answers 400 `auth.enrollment_invalid`; an expired one 400
   `auth.enrollment_expired`.
+
+  Coordinator decisions (2026-11-14), for issue I2:
+
+  - The link is the public URL's `/enroll` page with the token in the fragment,
+    `https://<host>/enroll#token=<token>`. A browser sends no fragment to a server, so the token
+    stays out of access logs, proxy logs and `Referer` headers; the page posts it to the start
+    route. The token is a 256-bit `stepclimb_auth::token::Token` (43 characters); the database
+    holds its SHA-256 only.
+  - Creating a link deletes the user's earlier unused enrollment links (B6), under a lock on
+    the user's row, so two creations at once leave one live link.
+  - A user without an email gets no link: 409 `local.email_required`, since B4 finds a user by
+    email. A link whose user has lost the email since answers `auth.enrollment_invalid`.
+  - Creating a link for another user is an escalation-guarded write: it lets the holder set up
+    a way to sign in as that user, so it applies `03-users-and-identities.md` B6's rule (403
+    `permission.escalation` for a user with a permission the caller does not hold at
+    organization scope) under the identity admin routes' locks. It writes an
+    `enrollment_link.create` entry (`09-permissions-and-roles.md` B22) with the user and the
+    expiry, never the token or its hash.
+  - The start route takes `RateLimited<SignIn>` first, then answers 404 `auth.method_disabled`
+    unless the organization offers the passkey or the password (the methods a link can set
+    up), before it reads the token. `methods` lists those offered, passkey first. It uses
+    nothing up and checks no user status: the passkey and password routes (I3, I6) mark the
+    link used in the transaction that stores the credential, and admission (B5) refuses a
+    suspended user there. The answer carries `Cache-Control: no-store`.
+  - Until issue I3 adds `passkey_options`, the start route starts no sign-in flow and sets no
+    flow cookie: the flow exists only to hold the WebAuthn challenge.
+  - An unknown token, one of another organization, one replaced by a newer link and a used one
+    all answer the same 400 `auth.enrollment_invalid`; only an expired one answers
+    `auth.enrollment_expired`, as this behavior says. Telling expired apart reveals only what
+    the holder of the token already has.
 - **B8.** `POST /auth/local/enrollment/passkey` with the browser's registration response and an
   optional passkey name verifies it with `webauthn-rs` against the flow's challenge, the
   organization's relying party ID and origin (`08-sessions-and-csrf.md` Q1), and the WebAuthn
@@ -115,8 +159,17 @@ creates and hands over.
 - **B10.** How the first organization admin of a new instance gets an account (for example
   `stepclimb admin create` printing an enrollment link): pending Q7. Self sign-up with a local
   account needs email verification and waits for email (M1): pending Q6. `stepclimb admin
-  create` exists (`02-organizations-and-accounts.md` B27) and creates the admin without a link;
-  issue I2 adds the printed enrollment link (decided by the owner, 13 Nov 2026).
+  create` exists (`02-organizations-and-accounts.md` B27); issue I2 adds the printed enrollment
+  link (decided by the owner, 13 Nov 2026).
+
+  Coordinator decision (2026-11-14), for issue I2: `stepclimb admin create` makes the first
+  admin's link with the same function as the admin route (`enrollment::create_link`), by the
+  instance (`created_by` NULL), in the transaction that creates the organization, so a failure
+  leaves neither. The link has Q6's 7-day lifetime and is printed once, as the last line of
+  stdout, after a line naming its expiry. A first admin whose link expires unused, or whose
+  run's commit outcome is unknown, has no way to get another: no one can sign in to create one,
+  and the command refuses while an organization exists. A recovery command is the owner's to
+  decide.
 
 ### Passkey sign-in
 
@@ -201,8 +254,8 @@ answer the admission refusals of `07-admission.md` as 403.
 | --- | --- | --- | --- | --- |
 | `GET /api/v1/admin/local-sign-in` | none | 200 `{enabled, passkey, password, totp, magic_link}` | `permission.denied` | `perm::ProviderManage`, organization |
 | `PUT /api/v1/admin/local-sign-in` | same shape | 200 | `local.magic_link_needs_email` (on before an email sender exists), `local.last_method` (409, B2), `permission.denied`, `permission.escalation` | `perm::ProviderManage`, organization |
-| `POST /api/v1/admin/users/{id}/enrollment-links` | none | 201 `{url, expires_at}` | `user.not_found`, `permission.denied` | `perm::UserManage`, organization (see Permissions) |
-| `POST /auth/local/enrollment/start` | `{token}` | 200 `{email, methods: [...], passkey_options?}`; sets the flow cookie | `auth.enrollment_invalid`, `auth.enrollment_expired` | none |
+| `POST /api/v1/admin/users/{user_id}/enrollment-links` | none | 201 `{url, expires_at}` | `user.not_found`, `local.email_required` (409), `permission.denied`, `permission.escalation` | `perm::UserManage`, organization (see Permissions) |
+| `POST /auth/local/enrollment/start` | `{token}` | 200 `{email, methods: [...], passkey_options?}`; sets the flow cookie once I3 adds `passkey_options` | `auth.enrollment_invalid`, `auth.enrollment_expired` | none |
 | `POST /auth/local/enrollment/passkey` | `{token, credential, name?}` | 200 `{return_to}`; sets `__Host-sc_session` | `auth.enrollment_invalid`, `auth.enrollment_expired`, `auth.flow_invalid`, `auth.flow_expired`, `auth.passkey_invalid` | none |
 | `POST /auth/local/enrollment/password` | `{token, password}` | 200 `{return_to}`; sets the session | `auth.enrollment_invalid`, `auth.enrollment_expired`, `local.password_weak` | none |
 | `POST /auth/local/passkey/start` | `{email, return_to?}` | 200 `{options}`; sets the flow cookie | (Q9) | none |
@@ -255,7 +308,13 @@ Proposed, pending Q3 (none of these is in the plan's data model):
   `user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE`, `kind text NOT NULL CHECK
   (kind IN ('enrollment', 'magic_link'))`, `token_hash bytea NOT NULL UNIQUE`, `created_by uuid
   NULL REFERENCES users(id)`, `expires_at timestamptz NOT NULL`, `used_at timestamptz NULL`,
-  `created_at`, `updated_at`. Index on `(user_id, kind)` for B6's invalidation.
+  `created_at`, `updated_at`. Index on `(user_id, kind)` for B6's invalidation. Built by issue I2
+  (`migrations/20261114150000_local_tokens.sql`) with four changes: the user's foreign key is
+  the composite `(org_id, user_id) REFERENCES users (org_id, id) ON DELETE CASCADE`, so a
+  token's user is always in the token's organization; `token_hash` checks
+  `octet_length = 32`, as `sessions.token_hash` does; `created_by` is `ON DELETE SET NULL`;
+  and the index is `(org_id, user_id, kind)` (coordinator decision, 2026-11-14). Per B4's
+  decision, `local_logins` has no `email_normalized`.
 - Recovery codes, if Q11 adds them: `totp_recovery_codes(id, user_id, code_hash, used_at,
   created_at, updated_at)`, organization derived through `user_id`.
 

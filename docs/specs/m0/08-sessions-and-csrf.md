@@ -204,7 +204,9 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   and `POST /oauth/token` and `POST /oauth/revoke` take `RateLimited<Token>`, as their first
   extractor. The issue that adds the first such route also adds a router walk, like T17's, that
   fails when a route under `/auth/` or `/oauth/` lacks it, so a route cannot skip its limit
-  silently. A password or TOTP check passes `account_check` its account identifier through one
+  silently. `04-local-accounts.md` I2 added the first, `POST /auth/local/enrollment/start`, and
+  the walk (`tests/enrollment.rs`): with a budget of one request, every such route but
+  `/auth/sign-out`, which adds no sign-in step, must answer 429 to its second POST. A password or TOTP check passes `account_check` its account identifier through one
   normalizing type shared by the sign-in methods (for example a newtype built only by the
   function that matches accounts), so `Ada@example.org` and `ada@example.org` cannot get two
   budgets (security review of I5, 13 Nov 2026).

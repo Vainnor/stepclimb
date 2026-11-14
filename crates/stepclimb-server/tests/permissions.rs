@@ -101,7 +101,13 @@ const CLIENT: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1
 
 /// The operations that need no credential: the probes and the unauthenticated routes specs 04
 /// to 08 declare (B21).
-const PUBLIC: &[&str] = &["healthz", "readyz", "signOut", "getThemeCss"];
+const PUBLIC: &[&str] = &[
+    "healthz",
+    "readyz",
+    "signOut",
+    "getThemeCss",
+    "startEnrollment",
+];
 
 /// One entry per operation that needs a principal (B20). The M0 specs' routes add theirs here
 /// as they land.
@@ -239,6 +245,10 @@ const TABLE: &[Entry] = &[
         access: permission(UserManage::KEY, USER_NOT_FOUND, rename_user_in_path),
     },
     Entry {
+        operation_id: "createEnrollmentLink",
+        access: permission(UserManage::KEY, USER_NOT_FOUND, user_with_email_in_path),
+    },
+    Entry {
         operation_id: "listUserIdentities",
         access: permission(UserView::KEY, USER_NOT_FOUND, user_in_path),
     },
@@ -312,6 +322,20 @@ const USER_NOT_FOUND: Target = Target::Scoped {
 fn user_in_path(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
         let (_, user) = org.user().await;
+        Call {
+            params: vec![("user_id", user)],
+            body: None,
+            at: At::Org,
+        }
+    })
+}
+
+/// A new user of `org` with an email, which an enrollment link needs (spec 04 B4), named in the
+/// path; the caller acts at organization scope.
+fn user_with_email_in_path(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let email = format!("enroll-{}@example.test", new_id().simple());
+        let (_, user) = org.named_user("Pat Example".into(), Some(email)).await;
         Call {
             params: vec![("user_id", user)],
             body: None,
@@ -798,9 +822,34 @@ async fn public_operations_answer_without_a_credential(pool: PgPool) {
             .iter()
             .find(|op| op.id == *id)
             .expect("listed operations exist");
-        let answer = send(&app, &op.method, &op.path, org.id, None, None).await;
+        let body = public_body(&world, &org, id).await;
+        let answer = send(&app, &op.method, &op.path, org.id, None, body.as_ref()).await;
         assert!(answer.status.is_success(), "{id}: {answer:?}");
     }
+}
+
+/// The body a public operation needs to succeed: the enrollment start route takes a live
+/// enrollment link of the organization's user; the others take none.
+async fn public_body(world: &World, org: &Org, id: &str) -> Option<Value> {
+    if id != "startEnrollment" {
+        return None;
+    }
+    let (_, user) = org
+        .named_user("Pat Example".into(), Some("pat@example.test".into()))
+        .await;
+    let link = stepclimb_server::enrollment::create_link(
+        &world.pool,
+        scope(org.id),
+        user,
+        None,
+        &world.state().public_url,
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .expect("create an enrollment link");
+    let (_, token) = link.expose_url().split_once("#token=").expect("a token");
+    Some(serde_json::json!({ "token": token }))
 }
 
 // The suite over the real router.

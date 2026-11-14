@@ -5,8 +5,10 @@
 //! The command brings the database to what this binary serves first ([`startup::prepare`]:
 //! migrations, the built-in roles, the `unlimited` plan), so the Organization admin role exists
 //! even when `stepclimb serve` has never run. It then creates the organization (with its root
-//! account and plan row, B26), the user and the user's organization-scope Organization admin
-//! assignment in one transaction: when any step fails, none of them is kept.
+//! account and plan row, B26), the user, the user's organization-scope Organization admin
+//! assignment and the user's enrollment link (spec 04 B10, Q7) in one transaction: when any step
+//! fails, none of them is kept. The report on stdout ends with the link, the one place it is
+//! shown: the admin opens it to set up a passkey or a password.
 //!
 //! While any organization exists the command refuses (decided by the owner, 13 Nov 2026): with
 //! two, the request-organization resolver answers 404 to every unauthenticated request until
@@ -26,7 +28,12 @@ use stepclimb_core::{
     users::{self, NewUser, User},
 };
 
-use crate::{Config, startup};
+use crate::{
+    Config,
+    enrollment::{self, LinkError, SetupLink},
+    startup,
+    web_origin::WebOrigin,
+};
 
 /// The built-in role the first user gets (spec 09 B4).
 pub const ORG_ADMIN_ROLE: &str = "org_admin";
@@ -53,6 +60,8 @@ pub struct Created {
     pub organization: Organization,
     pub user: User,
     pub assignment_id: Uuid,
+    /// The admin's enrollment link, which the report prints once.
+    pub setup_link: SetupLink,
 }
 
 /// Why creating the organization and its admin failed. Nothing was written, except after
@@ -77,6 +86,8 @@ pub enum CreateError {
     RoleMissing,
     #[error("could not assign the Organization admin role: {0}")]
     Assignment(#[source] role_assignments::Error),
+    #[error("could not create the admin's enrollment link: {0}")]
+    SetupLink(#[source] LinkError),
     #[error("could not start the transaction: {0}")]
     Begin(#[source] sqlx::Error),
     /// The commit failed: the database may or may not have applied it.
@@ -136,7 +147,8 @@ pub async fn create_command(
     let clock = Clock::system();
     let result = async {
         startup::prepare(&pool, &clock).await?;
-        Ok(create_organization_with_admin(&pool, input, clock.now()).await?)
+        let now = clock.now();
+        Ok(create_organization_with_admin(&pool, input, &config.public_url, now).await?)
     }
     .await;
     pool.close().await;
@@ -146,11 +158,13 @@ pub async fn create_command(
 /// Create the organization `input` names, refusing with [`CreateError::OrganizationExists`] when
 /// the instance has one already (the count holds until the commit, [`organizations::lock_and_count`]), with its root account and plan row
 /// ([`organizations::create`]), a `local`, `active` user with `input`'s email and name, and that
-/// user's Organization admin assignment at organization scope, all in one transaction stamped
+/// user's Organization admin assignment at organization scope, and the user's enrollment link to
+/// `public_url` ([`enrollment::create_link`], by the instance), all in one transaction stamped
 /// `now`. The built-in roles must have been synced ([`roles::sync_builtin`]).
 pub async fn create_organization_with_admin(
     pool: &PgPool,
     input: &NewOrganizationAdmin,
+    public_url: &WebOrigin,
     now: SystemTime,
 ) -> Result<Created, CreateError> {
     let mut tx = pool.begin().await.map_err(CreateError::Begin)?;
@@ -181,11 +195,23 @@ pub async fn create_organization_with_admin(
     let assignment = role_assignments::create(&mut *tx, scope, &assignment, now, Actor::Instance)
         .await
         .map_err(CreateError::Assignment)?;
+    let setup_link = enrollment::create_link(
+        &mut *tx,
+        scope,
+        user.id,
+        None,
+        public_url,
+        now,
+        Actor::Instance,
+    )
+    .await
+    .map_err(CreateError::SetupLink)?;
     tx.commit().await.map_err(CreateError::Commit)?;
     Ok(Created {
         organization,
         user,
         assignment_id: assignment.id,
+        setup_link,
     })
 }
 
@@ -212,24 +238,26 @@ fn cli_scope(org_id: Uuid) -> OrgScope {
     OrgScope::instance(org_id)
 }
 
-/// The report `stepclimb admin create` prints on success. It holds ids, the slug and the email,
-/// and no secret.
+/// The report `stepclimb admin create` prints to stdout on success: the ids, the slug and the
+/// email, then the admin's enrollment link with its expiry. The link is a secret, printed here
+/// once and never logged (spec 04 B24): whoever holds it can set up a way to sign in as the
+/// admin until it is used or expires.
 pub fn report(created: &Created) -> String {
     let email = created.user.email.as_deref().unwrap_or_default();
     format!(
         "stepclimb: created organization {slug:?} ({org_id})\n\
          stepclimb: created user {email:?} ({user_id}) with the Organization admin role at \
-         organization scope\n",
+         organization scope\n\
+         stepclimb: open this one-time link to set up the admin's passkey or password; it works \
+         once and expires at {expires}:\n\
+         {url}\n",
         slug = created.organization.slug,
         org_id = created.organization.id,
         user_id = created.user.id,
+        expires = created.setup_link.expires_at_text,
+        url = created.setup_link.expose_url(),
     )
 }
-
-/// The line `stepclimb admin create` prints to stderr on success: the admin cannot sign in yet
-/// (decided by the owner, 13 Nov 2026; spec 04 I2 adds the setup link).
-pub const NO_SIGN_IN_NOTICE: &str = "stepclimb: admin create: the admin has no sign-in method \
-     yet; the setup link arrives with local accounts (docs/specs/m0/04-local-accounts.md)\n";
 
 /// The exit code and the stderr message for a failed `stepclimb admin create` of the
 /// organization `slug`: 2 for a refusal, 1 otherwise. The message says what is known of the

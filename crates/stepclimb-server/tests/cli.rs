@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 
 use sqlx::{ConnectOptions, PgPool};
+use stepclimb_auth::token::TokenHash;
 use stepclimb_core::{db::MIGRATOR, id::Uuid};
 
 /// The binary with no `STEPCLIMB_*` variable from this process but a public URL, which every
@@ -616,6 +617,7 @@ async fn created_rows(pool: &PgPool) -> Vec<String> {
         "org_plans",
         "users",
         "role_assignments",
+        "local_tokens",
         "roles",
         "plans",
     ] {
@@ -721,22 +723,37 @@ async fn admin_create_on_an_empty_database_creates_the_organization_and_its_admi
         8
     );
 
-    assert!(
-        stderr.contains(
-            "stepclimb: admin create: the admin has no sign-in method yet; the setup link arrives \
-             with local accounts (docs/specs/m0/04-local-accounts.md)\n"
-        ),
-        "stderr: {stderr}"
-    );
+    assert!(!stderr.contains("no sign-in method"), "stderr: {stderr}");
+    let (expires_at, token_hash): (String, Vec<u8>) = sqlx::query_as(
+        "SELECT to_char(expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
+                token_hash
+         FROM local_tokens WHERE org_id = $1 AND user_id = $2 AND kind = 'enrollment'",
+    )
+    .bind(org_id)
+    .bind(user.0)
+    .fetch_one(&pool)
+    .await
+    .expect("exactly one enrollment link");
+    let (report, link) = stdout.trim_end().rsplit_once('\n').expect("the link line");
     assert_eq!(
-        stdout,
+        format!("{report}\n"),
         format!(
             "stepclimb: created organization \"example\" ({org_id})\n\
              stepclimb: created user \"sam@example.test\" ({}) with the Organization admin role \
-             at organization scope\n",
+             at organization scope\n\
+             stepclimb: open this one-time link to set up the admin's passkey or password; it \
+             works once and expires at {expires_at}:\n",
             user.0
         )
     );
+    // Spec 04 B6, Q7: the link opens the web app's enrollment page, and the database holds the
+    // SHA-256 of its token, not the token.
+    let token = link
+        .strip_prefix("https://lms.example.org/enroll#token=")
+        .unwrap_or_else(|| panic!("not an enrollment link: {link}"));
+    assert_eq!(token.len(), 43, "{link}");
+    assert_eq!(token_hash, TokenHash::of(token).as_bytes());
+    assert!(!stderr.contains(token), "stderr: {stderr}");
     let password = pool
         .connect_options()
         .to_url_lossy()

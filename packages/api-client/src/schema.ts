@@ -189,6 +189,23 @@ export interface paths {
         patch: operations["updateRole"];
         trace?: never;
     };
+    "/api/v1/admin/users/{user_id}/enrollment-links": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create an enrollment link for a user, replacing their earlier unused one. */
+        post: operations["createEnrollmentLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me": {
         parameters: {
             query?: never;
@@ -368,6 +385,23 @@ export interface paths {
         post?: never;
         /** Remove an identity from a user. The user must keep a way to sign in. */
         delete: operations["deleteUserIdentity"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/local/enrollment/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Open an enrollment link: say whose it is and what it can set up, without using it. */
+        post: operations["startEnrollment"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -578,6 +612,36 @@ export interface components {
          * @enum {string}
          */
         CornerStyle: "square" | "default" | "round";
+        /**
+         * @description A local method an enrollment link can set up.
+         * @enum {string}
+         */
+        EnrollMethod: "passkey" | "password";
+        /** @description An enrollment link, returned once: the only copy of its token. */
+        EnrollmentLink: {
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            expires_at: string;
+            /**
+             * @description The link to hand to the user. It holds a secret: anyone with it can set up a way to
+             *     sign in as the user until it is used, replaced or expires.
+             */
+            url: string;
+        };
+        /** @description The token from an enrollment link. */
+        EnrollmentStart: {
+            /** @description The text after `#token=` in the link. */
+            token: string;
+        };
+        /** @description What an enrollment link sets up. */
+        EnrollmentStarted: {
+            /** @description The email the user will sign in with. */
+            email: string;
+            /** @description The methods the organization lets the user set up, passkey first. Never empty. */
+            methods: components["schemas"]["EnrollMethod"][];
+        };
         /** @description The organization's plan and what it allows: every feature and limit of the server's catalogs. */
         Entitlements: {
             /** @description Every catalog feature, by key, with whether the plan includes it. */
@@ -1296,6 +1360,33 @@ export interface components {
         };
         /** @description `account.not_found`: the account does not exist or you cannot see its parent. `org.not_found`: the request's organization cannot be determined. */
         DeleteNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `local.email_required`: the user has no email address, which local sign-in finds them by; add one first. */
+        EnrollmentLinkConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.malformed`: the body is not `{token}`. `auth.enrollment_invalid`: the link is unknown, already used, replaced by a newer link, or for another organization. `auth.enrollment_expired`: the link is older than its 7-day lifetime; ask an admin for a new one. */
+        EnrollmentStartInvalid: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `auth.method_disabled`: the organization offers neither passkey nor password sign-in. `org.not_found`: the request's organization cannot be determined. */
+        EnrollmentStartNotFound: {
             headers: {
                 [name: string]: unknown;
             };
@@ -2233,6 +2324,36 @@ export interface operations {
             503: components["responses"]["NoOrganization"];
         };
     };
+    createEnrollmentLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The user's id. */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The link, shown once */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnrollmentLink"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["IdentityWriteForbidden"];
+            404: components["responses"]["UserNotFound"];
+            409: components["responses"]["EnrollmentLinkConflict"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
     getMe: {
         parameters: {
             query?: never;
@@ -2678,6 +2799,40 @@ export interface operations {
             403: components["responses"]["IdentityWriteForbidden"];
             404: components["responses"]["IdentityDeleteNotFound"];
             409: components["responses"]["IdentityDeleteConflict"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    startEnrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnrollmentStart"];
+            };
+        };
+        responses: {
+            /** @description The link is live */
+            200: {
+                headers: {
+                    /** @description `no-store`: the answer holds the user's email */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnrollmentStarted"];
+                };
+            };
+            400: components["responses"]["EnrollmentStartInvalid"];
+            403: components["responses"]["CsrfRefused"];
+            404: components["responses"]["EnrollmentStartNotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };
