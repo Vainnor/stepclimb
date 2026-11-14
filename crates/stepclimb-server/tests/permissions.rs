@@ -117,6 +117,10 @@ const TABLE: &[Entry] = &[
         access: Access::AuthOnly(at_org),
     },
     Entry {
+        operation_id: "updateMyAppearance",
+        access: Access::AuthOnly(dark_compact),
+    },
+    Entry {
         operation_id: "getOrganization",
         access: Access::AuthOnly(at_org),
     },
@@ -291,6 +295,17 @@ const TABLE: &[Entry] = &[
         access: permission(ProviderManage::KEY, Target::Org, unchanged_local_sign_in),
     },
 ];
+
+/// An appearance choice: the caller's own row, so it needs no target.
+fn dark_compact(_: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: Vec::new(),
+            body: Some(serde_json::json!({ "theme": "dark", "density": "compact" })),
+            at: At::Org,
+        }
+    })
+}
 
 /// The local sign-in switches as a new organization has them. A `PUT` of them changes nothing,
 /// so `provider.manage` alone may send it: the escalation rule applies only to a change (spec

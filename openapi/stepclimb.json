@@ -1209,6 +1209,62 @@
         }
       }
     },
+    "/api/v1/me/appearance": {
+      "put": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Set the signed-in user's theme and density. The answer also sets the `__Host-sc_appearance`\ncookie, so this browser's signed-out screens use the same choice.",
+        "operationId": "updateMyAppearance",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserAppearance"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The appearance after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserAppearance"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/CsrfRefused"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/api/v1/me/identities": {
       "get": {
         "tags": [
@@ -2132,9 +2188,20 @@
         ],
         "summary": "The stylesheet of the request's organization: its saved branding's, or the default brand's.",
         "operationId": "getThemeCss",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "query",
+            "description": "The stylesheet's SHA-256 (lowercase hex), as the served page links it. When it is the\nserved stylesheet's, the answer is cached for a year; otherwise it is revalidated on\nevery load.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "The organization's light, dark and high-contrast themes as CSS variables, revalidated on every load (`Cache-Control: no-cache`)",
+            "description": "The organization's light, dark and high-contrast themes as CSS variables: the default brand's when it has saved no branding or the instance has no organization yet. Cached for a year (`Cache-Control: public, max-age=31536000, immutable`) when `v` is the stylesheet's hash, as the page the server serves links it; revalidated on every load (`no-cache`) otherwise.",
             "content": {
               "text/css": {
                 "schema": {
@@ -2143,14 +2210,14 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
           "404": {
             "$ref": "#/components/responses/OrganizationNotFound"
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
-          },
-          "503": {
-            "$ref": "#/components/responses/NoOrganization"
           }
         }
       }
@@ -2442,6 +2509,14 @@
           "round"
         ]
       },
+      "DensityChoice": {
+        "type": "string",
+        "description": "The density a user chose. `compact` sets the shorter control heights.",
+        "enum": [
+          "comfortable",
+          "compact"
+        ]
+      },
       "EnrollMethod": {
         "type": "string",
         "description": "A local method an enrollment link can set up.",
@@ -2703,9 +2778,14 @@
           "user",
           "organization",
           "grants",
-          "features"
+          "features",
+          "appearance"
         ],
         "properties": {
+          "appearance": {
+            "$ref": "#/components/schemas/UserAppearance",
+            "description": "The theme and density the user chose (docs/specs/m0/11-app-shell.md B21, Q6)."
+          },
           "features": {
             "type": "array",
             "items": {
@@ -3645,6 +3725,16 @@
           "course"
         ]
       },
+      "ThemeChoice": {
+        "type": "string",
+        "description": "The theme a user chose. `system` follows the operating system's color and contrast settings.",
+        "enum": [
+          "system",
+          "light",
+          "dark",
+          "high-contrast"
+        ]
+      },
       "UiFont": {
         "type": "string",
         "description": "A UI font the instance bundles.",
@@ -3724,6 +3814,23 @@
             "description": "RFC 3339, UTC."
           }
         }
+      },
+      "UserAppearance": {
+        "type": "object",
+        "description": "The theme and density the signed-in user's pages are drawn in.",
+        "required": [
+          "theme",
+          "density"
+        ],
+        "properties": {
+          "density": {
+            "$ref": "#/components/schemas/DensityChoice"
+          },
+          "theme": {
+            "$ref": "#/components/schemas/ThemeChoice"
+          }
+        },
+        "additionalProperties": false
       },
       "UserPatch": {
         "type": "object",

@@ -13,6 +13,10 @@ import type { Theme } from "../../src/generate";
 
 export interface Built {
   variables: string;
+  /** build/css/structure.css: the variables no theme sets. */
+  structure: string;
+  /** build/css/theme.css: the default brand's stylesheet. */
+  theme: string;
   tailwind: string;
   /** build/docs/tokens.json, the docs tables' data. */
   docs: string;
@@ -56,6 +60,8 @@ async function runBuild(
   };
   return {
     variables: file("css/variables.css"),
+    structure: file("css/structure.css"),
+    theme: file("css/theme.css"),
     tailwind: file("css/tailwind-theme.css"),
     docs: file("docs/tokens.json"),
     docsMarkdown: file("docs/tokens.md"),

@@ -481,6 +481,9 @@ overrule any of them.
   organization from `RequestOrg`, `text/css; charset=utf-8`, `Cache-Control: no-cache`, in the
   OpenAPI document under `operations`). 11 I2 keeps the `<link>` in `index.html`, the fingerprint
   and its cache headers (11 Q4), the Vite proxy and the bundle without color variables (11 Q5).
+  11 I2 has since replaced `no-cache` with the fingerprint: `immutable` for `?v=` naming the served
+  stylesheet's hash, `no-cache` otherwise, and the default stylesheet when the instance has no
+  organization yet (11's coordinator decisions, 2026-11-14).
 
 ## Issues
 

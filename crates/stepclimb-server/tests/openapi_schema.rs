@@ -28,6 +28,7 @@ fn good() -> Value {
             "permissions": ["account.view"],
         }],
         "features": ["custom_roles"],
+        "appearance": { "theme": "dark", "density": "compact" },
     })
 }
 
@@ -50,6 +51,7 @@ fn a_wrong_type_enum_value_or_uuid_is_an_error() {
         ("/organization/id", json!("not-a-uuid")),
         ("/features", json!("custom_roles")),
         ("/grants/0/permissions/0", json!(7)),
+        ("/appearance/theme", json!("sepia")),
     ];
     for (pointer, replacement) in broken {
         let mut value = good();

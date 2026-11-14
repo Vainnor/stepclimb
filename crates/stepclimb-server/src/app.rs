@@ -7,7 +7,7 @@ use axum::{
     http::{HeaderValue, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{MethodRouter, delete, get, post},
+    routing::{MethodRouter, delete, get, post, put},
 };
 use sqlx::PgPool;
 use stepclimb_auth::encryption::KeyRing;
@@ -16,7 +16,7 @@ use tower_http::trace::TraceLayer;
 use utoipa_scalar::{Scalar, Servable};
 
 use crate::{
-    accounts, auth, branding,
+    accounts, appearance, auth, branding,
     csrf::{self, OriginAllowlist},
     enrollment,
     error::ApiError,
@@ -101,6 +101,10 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         ),
         (branding::THEME_CSS_PATH, get(branding::theme_css)),
         (me::ME_PATH, get(me::get_me)),
+        (
+            appearance::MY_APPEARANCE_PATH,
+            put(appearance::update_my_appearance),
+        ),
         (
             identities::MY_IDENTITIES_PATH,
             get(identities::list_my_identities),

@@ -11,6 +11,14 @@ Stepclimb UI's design tokens: W3C design-token (DTCG 2025.10) JSON in `src/token
   when `data-sc-brand` and `data-sc-theme` sit on the same element: a `data-sc-theme` on an inner
   element without `data-sc-brand` gets the default brand's theme. `[data-sc-density="compact"]` on any element
   sets the compact control heights for that element and its children.
+- `build/css/structure.css` (`@stepclimb/tokens/structure.css`): the `:root` variables no theme
+  sets (space, type, control heights, motion, the pill radius, the floating shadow) and the compact
+  density. With the server's `/theme.css`, which sets the colors, fonts and radii, it gives a page
+  what `variables.css` gives it; the web app imports it through `@stepclimb/ui/app.css`
+  (`docs/specs/m0/11-app-shell.md` Q5).
+- `build/css/theme.css` (`@stepclimb/tokens/theme.css`): the default brand's stylesheet, as
+  `/theme.css` serves it. A web build copies it to `web/dist/theme.css` for the Tauri shell, which
+  runs without a server.
 - `build/css/tailwind-theme.css`: Tailwind 4's `@theme inline` mapped onto those variables, with
   Tailwind's own palette removed.
 - `build/docs/tokens.json` and `build/docs/tokens.md` (`src/docs.ts`): the docs tables, one per

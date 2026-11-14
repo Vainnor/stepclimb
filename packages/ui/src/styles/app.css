@@ -1,0 +1,11 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* Stepclimb UI's styles for a page whose theme is the server's `/theme.css`, linked before the
+   bundle (docs/specs/m0/11-app-shell.md B20, Q5): the same as index.css without the theme
+   variables, so the bundle never overrides the organization's colors, fonts or radii. */
+@import "tailwindcss";
+@import "@stepclimb/tokens/structure.css";
+@import "@stepclimb/tokens/tailwind-theme.css";
+@import "./base.css";
+
+/* Scan the library's own sources, wherever the importing app lives. */
+@source "../";

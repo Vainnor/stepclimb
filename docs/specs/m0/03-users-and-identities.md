@@ -258,6 +258,8 @@ these rows are in `04` to `07`.
   intersecting with its scopes). `features` lists the enabled entitlement features as
   `10-entitlements-framework.md` computes them. The web app uses both only to show or hide UI;
   the server checks every request itself. Courses and next-up items join the response in M1.
+  `appearance` (`{ "theme": "system", "density": "comfortable" }`) joined the response with
+  `11-app-shell.md` Q6 (coordinator decision, 2026-11-14); `PUT /api/v1/me/appearance` sets it.
 - **B23.** `GET /api/v1/me/identities` lists the user's identities with `id`, `provider_key`,
   `provider_label` (from the provider's config), `subject` and `created_at`; never `attributes`
   (they can hold personal data the provider sent, and the user's own copy belongs to M4's export).

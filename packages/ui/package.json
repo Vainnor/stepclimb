@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./styles.css": "./src/styles/index.css",
+    "./app.css": "./src/styles/app.css",
     "./strings-check": "./src/strings/check.ts",
     "./storybook": "./src/storybook/theme-matrix.tsx"
   },

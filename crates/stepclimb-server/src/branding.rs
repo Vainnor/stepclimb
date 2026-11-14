@@ -7,7 +7,9 @@
 //! A change is checked, generated with `stepclimb_core::theme`, refused with 422
 //! `branding.contrast_failed` when any theme has a failing contrast pair, and stored with its
 //! stylesheet. `/theme.css` is public, as the sign-in screen needs it: it serves the request
-//! organization's stored stylesheet, or the default brand's when it has saved none.
+//! organization's stored stylesheet, or the default brand's when it has saved none or the
+//! instance has no organization yet. The page the server serves links it as
+//! `/theme.css?v=<hash>` (`spa`), which is cached for a year (docs/specs/m0/11-app-shell.md Q4).
 
 use std::sync::LazyLock;
 
@@ -26,7 +28,7 @@ use stepclimb_core::{
     theme::{self, Brand, BrandInputs as CoreInputs, ContrastReport as CoreReport, InputRule},
 };
 use utoipa::{
-    ToResponse, ToSchema,
+    IntoParams, ToResponse, ToSchema,
     openapi::{ContentBuilder, RefOr, Response as DocResponse, ResponseBuilder, schema::Ref},
 };
 
@@ -34,7 +36,7 @@ use crate::{
     AppState,
     audit::ClientAddress,
     error::{ApiError, FieldError, PROBLEM_JSON, Problem},
-    extract::ApiJson,
+    extract::{ApiJson, ApiQuery},
     openapi::problem_responses,
     request_org::{self, RequestOrg},
     require::Require,
@@ -46,9 +48,18 @@ pub const BRANDING_PATH: &str = "/api/v1/admin/branding";
 /// The path of the request organization's stylesheet.
 pub const THEME_CSS_PATH: &str = "/theme.css";
 
-/// `/theme.css`'s `Cache-Control`: a browser revalidates on every load, so a saved change shows
-/// on the next one.
+/// `/theme.css?v=<hash>`'s `Cache-Control` when `<hash>` is the served stylesheet's
+/// (docs/specs/m0/11-app-shell.md Q4): a saved change has another hash, so a page links another
+/// URL and the browser never needs to revalidate this one.
+pub const THEME_CSS_IMMUTABLE: &str = "public, max-age=31536000, immutable";
+
+/// `/theme.css`'s `Cache-Control` without the served stylesheet's hash (the Vite dev server's
+/// page, or a page served before a branding change): a browser revalidates on every load, so a
+/// saved change shows on the next one.
 pub const THEME_CSS_CACHE_CONTROL: &str = "no-cache";
+
+/// The query parameter that fingerprints `/theme.css`.
+pub const THEME_CSS_VERSION_PARAM: &str = "v";
 
 /// The codes this module produces.
 pub mod code {
@@ -369,39 +380,77 @@ pub async fn update_branding(
     Ok(Json(Branding::new(&saved)))
 }
 
+/// The stylesheet a page of the request's organization uses and its SHA-256: the saved
+/// branding's, or the default brand's when it has saved none (B25) or the instance has no
+/// organization yet (`org.none`), whose pages still draw the setup error in a theme.
+pub struct Served {
+    pub css: String,
+    pub css_hash: String,
+}
+
+/// The request organization's [`Served`] stylesheet. `org` is the [`RequestOrg`] extraction,
+/// whose `org.none` refusal answers the default brand's and whose other refusals are returned.
+pub async fn served(
+    state: &AppState,
+    org: Result<RequestOrg, ApiError>,
+) -> Result<Served, ApiError> {
+    let saved = match org {
+        Ok(org) => branding::get(&state.db, org.scope())
+            .await
+            .map_err(branding_error)?,
+        Err(error) if error.code() == request_org::code::ORG_NONE => None,
+        Err(error) => return Err(error),
+    };
+    let (css, css_hash) = match saved {
+        Some(saved) => (saved.css, saved.css_hash),
+        None => (DEFAULT.css.clone(), DEFAULT.css_hash.clone()),
+    };
+    Ok(Served { css, css_hash })
+}
+
+/// The query of `/theme.css`.
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ThemeCssQuery {
+    /// The stylesheet's SHA-256 (lowercase hex), as the served page links it. When it is the
+    /// served stylesheet's, the answer is cached for a year; otherwise it is revalidated on
+    /// every load.
+    pub v: Option<String>,
+}
+
 /// The stylesheet of the request's organization: its saved branding's, or the default brand's.
 #[utoipa::path(
     get,
     path = "/theme.css",
     operation_id = "getThemeCss",
     tag = "operations",
+    params(ThemeCssQuery),
     responses(
-        (status = 200, description = "The organization's light, dark and high-contrast themes as CSS variables, revalidated on every load (`Cache-Control: no-cache`)", body = String, content_type = "text/css"),
+        (status = 200, description = "The organization's light, dark and high-contrast themes as CSS variables: the default brand's when it has saved no branding or the instance has no organization yet. Cached for a year (`Cache-Control: public, max-age=31536000, immutable`) when `v` is the stylesheet's hash, as the page the server serves links it; revalidated on every load (`no-cache`) otherwise.", body = String, content_type = "text/css"),
+        (status = 400, response = crate::openapi::BadRequest),
         (status = 404, response = crate::openapi::OrganizationNotFound),
         (status = 500, response = crate::openapi::InternalError),
-        (status = 503, response = crate::openapi::NoOrganization),
     )
 )]
 pub async fn theme_css(
-    org: RequestOrg,
+    org: Result<RequestOrg, ApiError>,
+    ApiQuery(query): ApiQuery<ThemeCssQuery>,
     State(state): State<AppState>,
 ) -> Result<Response, ApiError> {
-    let css = match branding::get(&state.db, org.scope()).await {
-        Ok(Some(saved)) => saved.css,
-        Ok(None) => DEFAULT.css.clone(),
-        Err(error) => return Err(branding_error(error)),
+    let served = served(&state, org).await?;
+    let cache = if query.v.as_deref() == Some(served.css_hash.as_str()) {
+        THEME_CSS_IMMUTABLE
+    } else {
+        THEME_CSS_CACHE_CONTROL
     };
     let headers = [
         (
             header::CONTENT_TYPE,
             HeaderValue::from_static("text/css; charset=utf-8"),
         ),
-        (
-            header::CACHE_CONTROL,
-            HeaderValue::from_static(THEME_CSS_CACHE_CONTROL),
-        ),
+        (header::CACHE_CONTROL, HeaderValue::from_static(cache)),
     ];
-    Ok((headers, css).into_response())
+    Ok((headers, served.css).into_response())
 }
 
 fn invalid_input(error: theme::InputError) -> BrandingError {

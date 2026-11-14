@@ -20,6 +20,7 @@ const me = {
   organization: { id: orgId, slug: "example", name: "Example Training" },
   grants: [],
   features: [],
+  appearance: { theme: "system", density: "comfortable" },
 };
 
 async function signIn(page: Page) {

@@ -22,10 +22,12 @@
 //! [`audit`], the entries the repository functions that change roles, assignments, accounts,
 //! organizations and user status write with their change; [`tz`], the IANA time zone names
 //! users and organizations are set to; and [`theme`], the server's port of the theme generator,
-//! with the [`branding`] repository that stores an organization's generated stylesheet. The other
+//! with the [`branding`] repository that stores an organization's generated stylesheet; and
+//! [`appearance`], the theme and density a user chose. The other
 //! repositories arrive with the M0 specs in `docs/specs/m0/`.
 
 pub mod accounts;
+pub mod appearance;
 pub mod audit;
 pub mod auth_flows;
 pub mod branding;

@@ -217,6 +217,7 @@ async fn t17_a_session_user_gets_the_b22_shape(pool: PgPool) {
             },
             "grants": [],
             "features": every_feature(),
+            "appearance": { "theme": "system", "density": "comfortable" },
         })
     );
     let errors = common::schema_errors(&document(), "Me", &answer.body);
