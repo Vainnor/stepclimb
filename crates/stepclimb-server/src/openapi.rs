@@ -4,9 +4,10 @@
 //! It is committed as `openapi/stepclimb.json`; `just openapi-diff` regenerates it and the
 //! TypeScript client (`packages/api-client`) and fails when either differs from what is
 //! committed. Today it lists the operations probes, which the web app's skeleton route calls
-//! through the generated client, sign-out, `GET /api/v1/me`, the caller's organization and its
-//! settings, the account tree, the permission catalog, roles and role assignment routes under `/api/v1/admin`,
-//! the user admin routes, and the shared error schemas and responses below. The other M0 specs add their endpoints under `/api/v1`.
+//! through the generated client, sign-out, `GET /api/v1/me`, the caller's organization, its
+//! settings and its entitlements, the account tree, the permission catalog, roles and role
+//! assignment routes under `/api/v1/admin`, the user admin routes, and the shared error schemas
+//! and responses below. The other M0 specs add their endpoints under `/api/v1`.
 //!
 //! Every `/api/v1` operation lists its errors in `#[utoipa::path]` (spec 02 B6). The errors
 //! common to every operation reference the responses here, such as
@@ -50,6 +51,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         organization::update_organization,
         organization::get_settings,
         organization::update_settings,
+        organization::get_entitlements,
         accounts::list_accounts,
         accounts::get_account,
         accounts::create_account,

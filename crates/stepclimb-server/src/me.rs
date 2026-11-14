@@ -5,22 +5,26 @@
 //! The route needs a principal that is a user and no permission ([`AuthOnly`]). Today the only
 //! such principal is a browser session; the user and the organization are read with the
 //! session's scope, so the answer can only be the caller's own rows. `grants` are the grants
-//! every `Require` of the request checks (spec 09 B16). `features` is part of the schema and
-//! answered empty until spec 10 issue 3 fills it. The web app reads both only to show or hide
-//! UI; every route checks its own permission and feature on the server.
+//! every `Require` of the request checks (spec 09 B16). `features` are the catalog features the
+//! organization's plan includes, from the same per-request load every `Require<Feature>` checks
+//! (spec 10 B12). The web app reads both only to show or hide UI; every route checks its own
+//! permission and feature on the server.
 
 use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
 use stepclimb_core::{
-    Source,
+    Source, feature,
     grants::{Grants, ScopeId},
     id::Uuid,
-    organizations, users,
+    organizations,
+    plans::PlanEntitlements,
+    users,
 };
 use utoipa::ToSchema;
 
 use crate::{
-    AppState, error::ApiError, organization::Organization, require::AuthOnly, roles::ScopeType,
+    AppState, entitlements::Entitlements, error::ApiError, organization::Organization,
+    require::AuthOnly, roles::ScopeType,
 };
 
 /// The path of the route.
@@ -35,8 +39,7 @@ pub struct Me {
     /// permissions sorted: the organization first, then accounts by id. A permission held at a
     /// scope also takes effect in every account inside it, which are not listed again.
     pub grants: Vec<MeGrant>,
-    /// The keys of the organization's enabled features. Always empty until the server computes
-    /// features for this route.
+    /// The keys of the catalog features the organization's plan includes, sorted.
     pub features: Vec<String>,
 }
 
@@ -156,7 +159,11 @@ struct UserMissing;
         (status = 503, response = crate::openapi::NoOrganization),
     )
 )]
-pub async fn get_me(auth: AuthOnly, State(state): State<AppState>) -> Result<Json<Me>, ApiError> {
+pub async fn get_me(
+    auth: AuthOnly,
+    entitlements: Entitlements,
+    State(state): State<AppState>,
+) -> Result<Json<Me>, ApiError> {
     let principal = auth.principal();
     let scope = principal.scope();
     let user = users::get(&state.db, scope, principal.user_id)
@@ -170,8 +177,20 @@ pub async fn get_me(auth: AuthOnly, State(state): State<AppState>) -> Result<Jso
         user: user.into(),
         organization: organization.into(),
         grants: me_grants(auth.grants()),
-        features: Vec::new(),
+        features: enabled_features(&entitlements.plan().entitlements),
     }))
+}
+
+/// The keys of [`feature::ALL`] the plan includes, sorted. A feature only a test crate defines
+/// is in no catalog and never listed, even on the `unlimited` plan.
+fn enabled_features(plan: &PlanEntitlements) -> Vec<String> {
+    let mut keys: Vec<String> = feature::ALL
+        .iter()
+        .filter(|key| plan.has_key(key))
+        .map(|key| (*key).to_owned())
+        .collect();
+    keys.sort_unstable();
+    keys
 }
 
 /// The grants as `GET /api/v1/me` lists them.

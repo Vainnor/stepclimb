@@ -139,6 +139,11 @@ only bites on managed hosting (M6); self-hosted gets everything, which fits the 
   `perm::OrgManage`. `GET /api/v1/me` lists the enabled feature keys for any signed-in user
   (`03-users-and-identities.md` B22) so the web app can hide what the plan does not include; the
   server still checks every request.
+  **Coordinator decision (2026-11-14).** Both answers list the catalogs (`feature::ALL`,
+  `Limit::ALL`), never the plan row's keys, each value as B7 reads it: a key the row has and the
+  catalog does not is left out, and a catalog key the row lacks shows as `false` or `0`.
+  `features` and `limits` in the entitlements answer are JSON objects keyed by catalog key, as
+  the example below shows, and `/me` lists its enabled keys sorted, as it sorts permissions.
 
 ## API
 

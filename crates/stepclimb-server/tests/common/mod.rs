@@ -4,7 +4,8 @@
 //! [`schema_errors`] checks an answer against a schema of the OpenAPI document (spec 03 T17 and
 //! the specs' later "validated against the OpenAPI schema" cases). It reads the subset of JSON
 //! Schema utoipa writes: `$ref`, `type` (one name or a list), `enum`, `format` (`uuid`,
-//! `date-time` as the API writes it, `int32`, `int64`), `properties` with `required`, and
+//! `date-time` as the API writes it, `int32`, `int64`), `minimum`, `properties` with `required`,
+//! `additionalProperties` (a schema every undeclared member conforms to), `propertyNames` and
 //! `items`, plus the annotations `description`, `title` and `example`, which constrain nothing. Any other keyword, or another `format`, is reported as an
 //! error rather than skipped, so a schema the checker cannot read never passes by default. A
 //! member the schema does not declare is an error too, so an answer cannot carry more than the
@@ -19,8 +20,11 @@ const CHECKED: &[&str] = &[
     "type",
     "enum",
     "format",
+    "minimum",
     "properties",
     "required",
+    "additionalProperties",
+    "propertyNames",
     "items",
 ];
 
@@ -65,6 +69,7 @@ fn conforms(document: &Value, schema: &Value, value: &Value, at: &str, errors: &
     }
     enum_conforms(schema, value, at, errors);
     format_conforms(schema, value, at, errors);
+    minimum_conforms(schema, value, at, errors);
     object_conforms(document, schema, value, at, errors);
     if let (Some(items), Some(item_schema)) = (value.as_array(), schema.get("items")) {
         for (index, item) in items.iter().enumerate() {
@@ -140,6 +145,23 @@ fn format_conforms(schema: &Map<String, Value>, value: &Value, at: &str, errors:
     }
 }
 
+fn minimum_conforms(
+    schema: &Map<String, Value>,
+    value: &Value,
+    at: &str,
+    errors: &mut Vec<String>,
+) {
+    let (Some(minimum), Some(number)) = (
+        schema.get("minimum").and_then(Value::as_f64),
+        value.as_f64(),
+    ) else {
+        return;
+    };
+    if number < minimum {
+        errors.push(format!("{at}: {value} is below the minimum {minimum}"));
+    }
+}
+
 /// RFC 3339 as `stepclimb_server::timestamp` writes it: `2025-11-13T02:13:20.123456Z`.
 fn is_api_timestamp(text: &str) -> bool {
     const SHAPE: &[u8] = b"dddd-dd-ddTdd:dd:dd.ddddddZ";
@@ -174,10 +196,21 @@ fn object_conforms(
             errors.push(format!("{at}/{name}: required but missing"));
         }
     }
+    let additional = schema.get("additionalProperties").filter(|s| s.is_object());
     for (name, member) in object {
-        match properties.get(name) {
-            Some(property) => conforms(document, property, member, &format!("{at}/{name}"), errors),
-            None => errors.push(format!("{at}/{name}: not declared in the schema")),
+        let member_at = format!("{at}/{name}");
+        if let Some(names) = schema.get("propertyNames") {
+            conforms(
+                document,
+                names,
+                &Value::String(name.clone()),
+                &member_at,
+                errors,
+            );
+        }
+        match properties.get(name).or(additional) {
+            Some(property) => conforms(document, property, member, &member_at, errors),
+            None => errors.push(format!("{member_at}: not declared in the schema")),
         }
     }
 }

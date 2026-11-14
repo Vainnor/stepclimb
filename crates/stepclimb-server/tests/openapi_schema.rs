@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The schema checker of `tests/common` must be able to fail: each test breaks one thing a
-//! conforming `Me` answer or the document's schema has and expects an error for it. No
-//! database.
+//! conforming `Me` or `Entitlements` answer or the document's schema has and expects an error
+//! for it. No database.
 
 use serde_json::{Value, json};
 use stepclimb_server::openapi;
@@ -136,4 +136,52 @@ fn a_timestamp_or_integer_outside_its_format_is_an_error() {
             "{locale} was accepted"
         );
     }
+}
+
+/// An `Entitlements` answer: a map of features and a map of limits, one with a value.
+fn good_entitlements() -> Value {
+    json!({
+        "plan": { "key": "unlimited", "source": "selfhost" },
+        "features": { "custom_roles": true, "api_keys": false },
+        "limits": { "users": 5, "storage": null },
+    })
+}
+
+#[test]
+fn a_map_member_is_checked_against_its_value_schema() {
+    let check = |value: &Value| common::schema_errors(&document(), "Entitlements", value);
+    let errors = check(&good_entitlements());
+    assert!(errors.is_empty(), "{errors:#?}");
+    let broken = [
+        ("/features/custom_roles", json!("yes")),
+        ("/limits/users", json!(-1)),
+        ("/limits/users", json!("5")),
+        ("/plan/source", json!("trial")),
+    ];
+    for (pointer, replacement) in broken {
+        let mut value = good_entitlements();
+        *value.pointer_mut(pointer).expect("a member") = replacement.clone();
+        assert!(
+            !check(&value).is_empty(),
+            "{pointer} = {replacement} was accepted"
+        );
+    }
+    let mut extra = good_entitlements();
+    extra["plan"]["ends_at"] = json!(null);
+    assert!(
+        !check(&extra).is_empty(),
+        "an undeclared member was accepted"
+    );
+}
+
+#[test]
+fn property_names_are_checked() {
+    let mut document = document();
+    document["components"]["schemas"]["Entitlements"]["properties"]["features"]["propertyNames"] =
+        json!({ "type": "string", "enum": ["custom_roles"] });
+    let errors = common::schema_errors(&document, "Entitlements", &good_entitlements());
+    assert!(
+        errors.iter().any(|e| e.starts_with("/features/api_keys")),
+        "{errors:#?}"
+    );
 }
