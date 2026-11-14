@@ -429,9 +429,9 @@ Coordinator decisions (2026-11-14), on the owner's delegation, while building I3
   cannot sign in from the browser. I5 replaces the view and keeps the route and its search.
 - **The return target's parameter is `return_to`**, the name the server's flows use (04, 05,
   08 B19). The client keeps a value only by 08 B19's rule: one leading `/` not followed by `/`
-  or `\`, every character from `!` to `~`, at most 2,048 characters; anything else is `/`. The
-  sign-in route applies the rule when it reads the parameter. Sign-out goes to `/sign-in`
-  without one.
+  or `\`, every character from `!` to `~`, no `.` or `..` path segment (literal or `%2e`), at
+  most 2,048 characters; anything else is `/`. The sign-in route applies the rule when it reads
+  the parameter. Sign-out goes to `/sign-in` without one.
 - **Signed-out screens name the product until I5.** The signed-out layout shows "Stepclimb" and
   sets the document title to `<view> · Stepclimb`, because the organization's name reaches a
   signed-out browser only through `/.well-known/stepclimb` (08 I9), which I5 reads.
@@ -442,16 +442,21 @@ Coordinator decisions (2026-11-14), on the owner's delegation, while building I3
   {courses} yet." The skeleton route that read `/healthz` is removed; the probes stay.
 - **The not-found view asks `/me`** to choose its layout: AppShell when it answers 200, the
   signed-out layout for a 401 or any failure. It never redirects to sign in.
-- **A `/me` failure other than a 401** shows ErrorState in the signed-out layout with the
-  problem's `title`, or "The server could not be reached" when nothing answered, and "Try
-  again". It never signs the user out. I7 brings the other route errors and the offline state.
+- **A `/me` failure other than a 401** shows ErrorState in the signed-out layout with "Try
+  again", and never signs the user out. A problem `code` the app knows gets a plain message from
+  the strings catalog saying what happened and what to do: `org.none` (the server has no
+  organization yet) is the one M0 maps. Any other code shows the problem's `title`, and no
+  answer at all shows "The server could not be reached". I7 brings the other route errors and
+  the offline state.
 - **No automatic retries.** Queries and mutations fail on the first error, so a 401 reaches the
   session handler at once and every error view offers "Try again".
-- **A 401 is a session end only inside the signed-in layout.** Several at once leave once.
+- **A 401 is a session end only inside the signed-in layout.** Several at once leave once. A
+  401 that arrived elsewhere (the not-found view) leaves the user's data cached beside the
+  error; the signed-in layout draws its skeleton, never that data, while it ends the session.
 - **SideNav logo.** Until 12's branding fields exist (logo, Q8's back link), the SideNav shows
   the organization's name, its initials when collapsed, and no back link.
-- **The focused `h1` draws no ring.** B6 focuses it by script; it is not a control
-  (`web/src/styles.css`).
+- **The focused `h1` draws no ring.** B6 focuses it by script; it is not a control. The rule
+  is in Stepclimb UI's `base.css`, for any `h1` with `tabindex="-1"`.
 - **End-to-end tests answer `/me` in the browser.** The e2e stack has no organization and nothing
   can sign in before I5, so T15 and T17 fulfill `/api/v1/me` with a synthetic user in Playwright;
   T18 and an anonymous browser's redirect to `/sign-in` run against the real server.

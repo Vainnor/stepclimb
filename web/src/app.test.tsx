@@ -96,11 +96,30 @@ describe("the /me load (B9, T3)", () => {
     });
     const app = renderApp("/");
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Service Unavailable" }),
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "This server has no organization yet",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "An administrator has to create the organization on the server. Try again once that is done.",
+      ),
     ).toBeInTheDocument();
     expect(app.router.state.location.pathname).toBe("/");
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeInTheDocument();
+  });
+
+  it("shows the server's title for a problem code it does not explain", async () => {
+    stubServer({ "GET /api/v1/me": () => problem(500, "internal", "Internal Server Error") });
+    renderApp("/");
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Internal Server Error" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Stepclimb could not load this page. Try again in a moment."),
+    ).toBeInTheDocument();
   });
 
   it("says the server could not be reached when it does not answer", async () => {
@@ -154,6 +173,31 @@ describe("session expiry (B10, T4)", () => {
     expect(app.context.queryClient.getQueryCache().getAll()).toEqual([]);
     // One expired /me, not a loop of them.
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("never draws the expired user when a 401 arrived outside the signed-in layout", async () => {
+    let expired = false;
+    stubServer({ "GET /api/v1/me": () => (expired ? unauthenticated() : signedIn()) });
+    const app = renderApp("/nowhere");
+    await screen.findByRole("heading", { level: 1, name: "Page not found" });
+    expect(screen.getByText("Avery Example")).toBeInTheDocument();
+
+    // The not-found view is outside the signed-in layout: its 401 does not end the session, and
+    // the cache keeps the user's data beside the error.
+    expired = true;
+    await act(() => app.context.queryClient.invalidateQueries());
+    await waitFor(() => expect(screen.queryByText("Avery Example")).toBeNull());
+    const home = screen.getByRole("link", { name: "Go to the home page" });
+
+    let drawn = false;
+    const observer = new MutationObserver(() => {
+      if (screen.queryByText("Avery Example") !== null) drawn = true;
+    });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    await userEvent.click(home);
+    await screen.findByRole("heading", { level: 1, name: "Sign in" });
+    observer.disconnect();
+    expect(drawn).toBe(false);
   });
 
   it("leaves once when several requests answer 401 together", async () => {

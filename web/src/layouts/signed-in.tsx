@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The signed-in layout (docs/specs/m0/11-app-shell.md B2 to B6, B9 to B11): AppShell with the
 // SideNav, BottomTabs and TopBar, drawn only once `/me` has loaded. While it loads, the delayed
-// ShellSkeleton. A 401 never reaches this layout's render: the session handler clears the cache,
-// so the query is pending again, and takes the browser to the sign-in screen. Any other failure
-// shows LoadError.
+// ShellSkeleton. On a 401 it draws the skeleton too, never the cached user, while the session
+// handler clears the cache and takes the browser to the sign-in screen. Any other failure shows
+// LoadError.
 import {
   AppShell,
   BottomTabs,
@@ -17,6 +17,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { Outlet, useMatches } from "@tanstack/react-router";
 import type { ReactNode } from "react";
+import { isUnauthorized } from "../api";
 import type { ViewInfo } from "../context";
 import { navRoutes, visibleNavEntries } from "../navigation";
 import { type Me, meQuery } from "../session";
@@ -95,6 +96,9 @@ export function SignedInLayout() {
   const { t } = useStepclimbStrings();
   const me = useQuery(meQuery);
   const view = useCurrentView();
+  // A 401 the session handler did not act on (it arrived on a page outside this layout) leaves the
+  // expired user's data in the cache: never draw it.
+  if (isUnauthorized(me.error)) return <ShellSkeleton />;
   if (me.data) {
     return (
       <SignedInShell me={me.data} title={view.title(t)} current={view.nav}>

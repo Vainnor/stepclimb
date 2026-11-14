@@ -86,3 +86,22 @@ test("the skip link is the first focusable element and moves focus to main (B6)"
   await page.keyboard.press("Enter");
   await expect(page.locator("main")).toBeFocused();
 });
+
+// Sign-out against the real server: the browser's own fetch passes the CSRF check (it sends
+// `Sec-Fetch-Site: same-origin`), and the server answers 204 with or without a session.
+test("Sign out posts to the real server and lands on /sign-in (B12)", async ({ page }) => {
+  await signIn(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Avery Example, account menu" }).click();
+  const signOut = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === "/auth/sign-out" &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("menuitem", { name: "Sign out" }).click();
+  const response = await signOut;
+  // 403 here would be `auth.csrf_refused`: the browser's request did not pass the CSRF check.
+  expect(response.status()).toBe(204);
+  await expect(page.getByRole("heading", { level: 1, name: "Sign in" })).toBeVisible();
+  expect(new URL(page.url()).pathname).toBe("/sign-in");
+});

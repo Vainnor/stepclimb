@@ -18,7 +18,34 @@ describe("safeReturnTarget (B15, T7)", () => {
     expect(safeReturnTarget(value)).toBe("/");
   });
 
-  it.each(["/", "/courses?x=1", "/c/s1/m/2", "/a//b", "/a\\b"])("keeps %j", (value) => {
+  it.each([
+    "/..//evil.example",
+    "/.//evil.example",
+    "/a/..//evil",
+    "/%2e%2e//evil.example",
+    "/%2E//evil.example",
+    "/a/.%2e//evil",
+    "/a/%2e./b",
+    "/a\\..\\/evil",
+    "/a/.",
+    "/a/..",
+    "/a/..?x=1",
+  ])("refuses the dot segment in %j", (value) => {
+    expect(safeReturnTarget(value)).toBe("/");
+  });
+
+  it.each([
+    "/",
+    "/courses?x=1",
+    "/c/s1/m/2",
+    "/a//b",
+    "/a\\b",
+    "/.well-known/x",
+    "/a/...",
+    "/a/..b",
+    "/a?x=/../y",
+    "/a#/../b",
+  ])("keeps %j", (value) => {
     expect(safeReturnTarget(value)).toBe(value);
   });
 

@@ -13,16 +13,18 @@ export function SignedOutFrame({ children }: { children: ReactNode }) {
     <div
       data-slot="signed-out"
       className={[
-        "flex min-h-dvh flex-col items-center bg-canvas",
+        "flex min-h-dvh flex-col items-center",
         "pt-[max(2.5rem,env(safe-area-inset-top))] pb-[max(2.5rem,env(safe-area-inset-bottom))]",
         "ps-[max(1rem,env(safe-area-inset-left))] pe-[max(1rem,env(safe-area-inset-right))]",
         "rtl:ps-[max(1rem,env(safe-area-inset-right))] rtl:pe-[max(1rem,env(safe-area-inset-left))]",
       ].join(" ")}
     >
       <div className="flex w-full max-w-md flex-col gap-8">
-        <Text size="lg" tone="strong">
-          {t("app.name")}
-        </Text>
+        <header>
+          <Text size="lg" tone="strong">
+            {t("app.name")}
+          </Text>
+        </header>
         <main id="main" tabIndex={-1} className="flex flex-col gap-4 outline-none">
           {children}
         </main>

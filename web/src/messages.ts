@@ -20,6 +20,9 @@ export const webMessages: Catalog = {
     "notFound.heading": "There is no page at {path}",
     "notFound.home": "Go to the home page",
     "notFound.title": "Page not found",
+    "problem.orgNone.description":
+      "An administrator has to create the organization on the server. Try again once that is done.",
+    "problem.orgNone.title": "This server has no organization yet",
     "signIn.title": "Sign in",
     "signIn.unavailable": "This version of Stepclimb cannot sign you in from the browser yet.",
     "signOut.failed": "Sign-out failed",

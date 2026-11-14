@@ -24,8 +24,8 @@ export const MAX_RETURN_TARGET = 2048;
 /**
  * `value` when it is a path on this origin, otherwise `/` (B15). The rule is the server's own
  * (spec 08 B19): one leading `/`, not followed by `/` or `\`, only printable ASCII without
- * spaces, at most 2,048 characters. Browsers drop tabs and newlines from a URL, so `/<tab>/x`
- * would reach them as `//x`; refusing anything outside `!` to `~` closes that.
+ * spaces, no `.` or `..` path segment, at most 2,048 characters. Browsers drop tabs and newlines
+ * from a URL and resolve dot segments, so `/<tab>/x` and `/a/..//x` would reach them as `//x`.
  */
 export function safeReturnTarget(value: unknown): string {
   if (typeof value !== "string" || value.length > MAX_RETURN_TARGET) return "/";
@@ -34,7 +34,20 @@ export function safeReturnTarget(value: unknown): string {
     const code = value.charCodeAt(i);
     if (code < 0x21 || code > 0x7e) return "/";
   }
-  return value;
+  return hasDotSegment(value) ? "/" : value;
+}
+
+/**
+ * True when the path part (before `?` or `#`) has a `.` or `..` segment, literal or written with
+ * `%2e`. `\` counts as a separator, as browsers read it in an `http` URL.
+ */
+function hasDotSegment(path: string): boolean {
+  const end = path.search(/[?#]/);
+  const segments = (end === -1 ? path : path.slice(0, end)).split(/[/\\]/);
+  return segments.some((segment) => {
+    const decoded = segment.toLowerCase().replaceAll("%2e", ".");
+    return decoded === "." || decoded === "..";
+  });
 }
 
 /**
