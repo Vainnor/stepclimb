@@ -32,8 +32,10 @@ applies the migrations and exits; `stepclimb admin create` creates the instance'
 first Organization admin user in one transaction, and refuses once one exists (no sign-in link
 yet: spec 04 I2); `stepclimb check-config` validates the configuration without
 connecting and prints its non-secret values (exit 2 on bad configuration, 1 on a database
-failure). `web/` has one route that reads
-`/healthz` through `packages/api-client`. `packages/tokens` builds the default and vZDC example
+failure). `web/` routes with TanStack Router through a
+signed-out layout (`/sign-in`, which cannot sign in yet: spec 11 I5) and a signed-in AppShell
+(Home) that loads `GET /api/v1/me` through `packages/api-client`, sends a 401 to `/sign-in` with
+its return target, and signs out (spec 11 I3, I4). `packages/tokens` builds the default and vZDC example
 themes with Terrazzo; `packages/ui` has `Button` and `useStepclimbStrings()`, the ICU message
 lookup every `web/` string goes through (spec 11 I1). `apps/app` is a Tauri 2 shell that loads
 `web/`. `stepclimb-core` has UUID v7 ids, the permission catalog, the entitlement catalogs, the

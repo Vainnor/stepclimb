@@ -160,6 +160,11 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   else becomes `/`. A path is also kept only when every byte is printable ASCII and it is at
   most 2,048 bytes: browsers drop tab and newline from a URL, so `/<tab>/evil.example` would
   reach them as `//evil.example` (I4's reading of B19, 13 Nov 2026; the owner can overrule it).
+  Coordinator decision (2026-11-14), failing closed: a path with a `.` or `..` segment in its
+  path part (before `?` or `#`), written literally or with `%2e` in either case, and with `/` or
+  `\` as the separator, also becomes `/`. Browsers resolve those segments, so `/a/..//evil.example`
+  would reach them as `//evil.example`. The web app applies the same rule to the return target it
+  carries to `/sign-in` (11 B15).
 - **B20.** Flow payloads that hold secrets (PKCE verifier, OIDC nonce, WebAuthn ceremony state)
   are encrypted per B3.
 - **B21.** Expired flows are deleted by the request that finds them and by a periodic cleanup;
@@ -407,8 +412,9 @@ Database tests use `#[sqlx::test]`; time-dependent tests use the controllable cl
   and its UI (coordinator decision, 13 Nov 2026).
 - **T18.** (B18) Completing a flow twice answers `auth.flow_invalid` the second time; a flow used
   after its expiry (clock moved) answers `auth.flow_expired`.
-- **T19.** (B19) `return_to` values `https://evil.example`, `//evil.example`, `/\evil.example`
-  and `javascript:x` all end at `/`; `/c/s1/m/2` is kept.
+- **T19.** (B19) `return_to` values `https://evil.example`, `//evil.example`, `/\evil.example`,
+  `javascript:x`, `/..//evil.example`, `/.//evil.example`, `/a/..//evil` and `/%2e%2e//evil.example`
+  all end at `/`; `/c/s1/m/2` and `/.well-known/x` are kept.
 - **T20.** (B22, B23) The request after the limit answers 429 `auth.rate_limited` with
   `Retry-After`; the counter resets after the window (clock moved); failures for one account
   from two IPs share the account budget.
