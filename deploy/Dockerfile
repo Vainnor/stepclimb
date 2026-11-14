@@ -33,9 +33,9 @@ ARG TARGETARCH
 WORKDIR /src
 COPY rust-toolchain.toml ./
 # The Rust target for TARGETARCH, in /target.env. A target other than the build machine's gets
-# rustup's standard library for it and the cross linker from Debian bookworm's archive (not
-# pinned beyond the base image's release), named in /target.env; the server links no C code, so
-# the linker is all it needs.
+# rustup's standard library for it and the cross C compiler and linker from Debian bookworm's
+# archive (not pinned beyond the base image's release), named in /target.env; the only C code
+# the server links is ring's, the TLS crypto of outbound HTTP, which the cross compiler builds.
 RUN set -eu; \
     case "$TARGETARCH" in \
         amd64) target=x86_64-unknown-linux-gnu ;; \
@@ -53,6 +53,7 @@ RUN set -eu; \
         apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross; \
         rm -rf /var/lib/apt/lists/*; \
         echo "export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> /target.env; \
+        echo "export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> /target.env; \
     fi
 COPY Cargo.toml Cargo.lock ./
 COPY .cargo .cargo

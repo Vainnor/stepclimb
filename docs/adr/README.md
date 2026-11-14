@@ -31,3 +31,4 @@ Decided list (`docs/plan/technical.md` -> Decided, and `docs/plan/ui.md` -> UI d
 | [0022](0022-configuration-names-and-file.md) | Configuration names and the stepclimb.toml layout | Accepted |
 | [0023](0023-container-healthcheck-subcommand.md) | Container health checks through `stepclimb healthcheck` | Accepted |
 | [0024](0024-toast-on-unstable-react-aria-exports.md) | Toast on React Aria's unstable toast exports | Accepted |
+| [0025](0025-outbound-http-client.md) | Outbound HTTP: reqwest with rustls, ring and the system trust store | Accepted |
