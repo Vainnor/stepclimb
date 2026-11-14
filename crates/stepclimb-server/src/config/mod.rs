@@ -109,6 +109,13 @@ pub const FAILED_SIGN_IN_LIMIT: Setting = Setting {
     example: "10 (failed password or TOTP checks per account per 15 minutes)",
 };
 
+pub const ALLOW_INSECURE_PROVIDERS: Setting = Setting {
+    var: "STEPCLIMB_ALLOW_INSECURE_PROVIDERS",
+    key: "allow_insecure_providers",
+    secret: false,
+    example: "true (only for tests and local development) or false",
+};
+
 /// Every setting [`Config`] reads.
 pub const SETTINGS: &[Setting] = &[
     BIND,
@@ -121,6 +128,7 @@ pub const SETTINGS: &[Setting] = &[
     SIGN_IN_RATE_LIMIT,
     TOKEN_RATE_LIMIT,
     FAILED_SIGN_IN_LIMIT,
+    ALLOW_INSECURE_PROVIDERS,
 ];
 
 /// The variable naming the configuration file when `--config` is not given.
@@ -172,6 +180,12 @@ pub struct Config {
     /// `failed_sign_in_limit`: failed password or TOTP checks per account per 15 minutes; 10
     /// when unset.
     pub failed_sign_in_limit: NonZeroU32,
+    /// `allow_insecure_providers`: `true` lets the server fetch `http` and loopback URLs for
+    /// identity providers and the admission webhook (spec 05 Q4,
+    /// `stepclimb_auth::outbound::UrlPolicy`), which tests and the development stack need;
+    /// `false` when unset. Never on in production: it lets an admin reach services on the
+    /// server's own host.
+    pub allow_insecure_providers: bool,
 }
 
 impl fmt::Debug for Config {
@@ -188,6 +202,7 @@ impl fmt::Debug for Config {
             .field("sign_in_rate_limit", &self.sign_in_rate_limit)
             .field("token_rate_limit", &self.token_rate_limit)
             .field("failed_sign_in_limit", &self.failed_sign_in_limit)
+            .field("allow_insecure_providers", &self.allow_insecure_providers)
             .finish()
     }
 }
@@ -399,6 +414,7 @@ impl Config {
             sign_in_rate_limit: sources.count(&SIGN_IN_RATE_LIMIT, defaults.sign_in)?,
             token_rate_limit: sources.count(&TOKEN_RATE_LIMIT, defaults.token)?,
             failed_sign_in_limit: sources.count(&FAILED_SIGN_IN_LIMIT, defaults.failed_checks)?,
+            allow_insecure_providers: sources.flag(&ALLOW_INSECURE_PROVIDERS)?,
         })
     }
 
@@ -427,6 +443,10 @@ impl Config {
             (
                 FAILED_SIGN_IN_LIMIT.key,
                 self.failed_sign_in_limit.to_string(),
+            ),
+            (
+                ALLOW_INSECURE_PROVIDERS.key,
+                self.allow_insecure_providers.to_string(),
             ),
         ]
     }
@@ -612,6 +632,22 @@ impl Sources<'_> {
                 origin,
                 problem: format!(
                     "{value:?} is not a whole number of 1 or more; for example {}",
+                    setting.example
+                ),
+            }),
+        }
+    }
+
+    /// `true` or `false`, or `false` when neither source sets it.
+    fn flag(&self, setting: &Setting) -> Result<bool, ConfigError> {
+        match self.plain(setting)? {
+            None => Ok(false),
+            Some((value, _)) if value == "true" => Ok(true),
+            Some((value, _)) if value == "false" => Ok(false),
+            Some((value, origin)) => Err(ConfigError::Invalid {
+                origin,
+                problem: format!(
+                    "{value:?} is not true or false; for example {}",
                     setting.example
                 ),
             }),

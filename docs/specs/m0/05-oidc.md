@@ -34,6 +34,20 @@ validates the ID token with the `openidconnect` crate, maps claims into an ident
   (endpoint in `06-oauth2-and-vatsim-preset.md` B14).
 - **B2.** The issuer URL and every URL the server fetches for the provider follow the outbound
   URL policy (pending Q4). Every outbound request has a timeout (pending Q4).
+- Coordinator decision (2026-11-14), for I1 (`stepclimb_auth::oidc_config`): the config also
+  holds `userinfo` (Q3, default `true`); any other member, `claims.subject` included (B12), is
+  refused as `provider.field_unknown`, so a misspelled one is not silently dropped. The
+  `client_secret` is required when the row has none stored, since both methods of Q6 need it.
+  `issuer` is kept exactly as written (B4 compares it character for character) and must be an
+  absolute `http(s)` URL with no query, fragment, whitespace or control character. A pointer
+  must start with `/`; the empty pointer, which names the whole claims object, is refused.
+  Each problem is a JSON Pointer and a code (`provider.field_required`, `provider.field_unknown`,
+  `provider.field_type`, `provider.field_empty`, `provider.url_invalid`,
+  `provider.url_refused`, `provider.scopes_missing_openid`, `provider.scope_invalid`,
+  `provider.pointer_invalid`, `text.contains_nul`), the `errors` of `06` B14's 422. The stored
+  secret is `client_secret: {"sealed": "<base64>"}`, sealed to
+  `[org_id, "identity_providers", provider_id, "client_secret"]`. T1's 422 itself arrives with
+  the admin API (`06` I5); I1 tests the validation it returns.
 - **B3.** A provider that is disabled, belongs to another organization, or does not exist is
   "not found" for every `/auth/{key}/...` request, which redirects to the sign-in route with
   `error=auth.provider_not_found`.
@@ -248,6 +262,19 @@ overrule one, which then updates this spec.
   seconds per provider request (the webhook keeps its 3 seconds). Recommendation: (a) with the
   insecure switch and 5 seconds.
   **Decided:** the recommendation (owner, 13 Nov 2026).
+  Coordinator decision (2026-11-14), for I1 (`stepclimb_auth::outbound`, ADR 0025): the
+  switch is `STEPCLIMB_ALLOW_INSECURE_PROVIDERS` (`true` or `false`, default `false`). Loopback
+  addresses need the switch on every instance; private and unique-local addresses (plus
+  `100.64.0.0/10`, `198.18.0.0/15`, `192.0.0.0/24`, `fec0::/10`) are refused on a
+  multi-organization instance; link-local (`169.254.0.0/16`, where cloud metadata services
+  listen, and `fe80::/10`), unspecified, multicast, reserved and documentation addresses are
+  always refused. An IPv6 address carrying an IPv4 one (mapped, NAT64, 6to4) is judged by that
+  IPv4 address. A host name is refused when any address it resolves to is refused, and the
+  connection uses only the checked addresses. Saving checks the scheme, credentials in the URL
+  (refused) and an address written as the host, without DNS. No outbound request follows a
+  redirect or uses a proxy, providers included, as the `openidconnect` crate's documentation
+  advises against following redirects. The 5 s covers the whole exchange, body included, and a
+  provider response body over 1 MiB is refused.
 - **Q5. Caching and clock skew.** The plan does not say how often discovery and JWKS are
   fetched. (a) In memory per provider for 1 hour, a JWKS refetch on an unknown `kid` at most
   once per minute, 60 seconds of clock skew; (b) fetch on every sign-in, no cache; (c) honor

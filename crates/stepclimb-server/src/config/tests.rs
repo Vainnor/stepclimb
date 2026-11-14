@@ -220,6 +220,7 @@ fn every_known_variable_is_accepted() {
             "STEPCLIMB_SIGN_IN_RATE_LIMIT",
             "STEPCLIMB_TOKEN_RATE_LIMIT",
             "STEPCLIMB_FAILED_SIGN_IN_LIMIT",
+            "STEPCLIMB_ALLOW_INSECURE_PROVIDERS",
             "STEPCLIMB_CONFIG",
         ]
     );
@@ -415,6 +416,7 @@ fn every_config_field_is_a_classified_setting() {
         sign_in_rate_limit: _,
         token_rate_limit: _,
         failed_sign_in_limit: _,
+        allow_insecure_providers: _,
     } = config;
     let fields = [
         (BIND, false),
@@ -427,6 +429,7 @@ fn every_config_field_is_a_classified_setting() {
         (SIGN_IN_RATE_LIMIT, false),
         (TOKEN_RATE_LIMIT, false),
         (FAILED_SIGN_IN_LIMIT, false),
+        (ALLOW_INSECURE_PROVIDERS, false),
     ];
     for (setting, secret) in fields {
         assert!(
@@ -755,6 +758,7 @@ fn non_secret_values_list_every_non_secret_setting_and_no_secret() {
             ("sign_in_rate_limit", "20".to_owned()),
             ("token_rate_limit", "60".to_owned()),
             ("failed_sign_in_limit", "10".to_owned()),
+            ("allow_insecure_providers", "false".to_owned()),
         ]
     );
     let printed = format!("{values:?}");
@@ -1275,5 +1279,49 @@ fn the_configuration_reference_names_only_variables_the_server_reads() {
         rows.len(),
         SETTINGS.len() + 1,
         "one row per setting and {CONFIG_VAR}"
+    );
+}
+
+#[test]
+fn the_insecure_providers_switch_is_off_unless_set_true() {
+    let unset = Config::load(&with_required(&[]), None).unwrap();
+    assert!(!unset.allow_insecure_providers);
+    for (value, on) in [("true", true), ("false", false), ("", false)] {
+        let config = Config::load(
+            &with_required(&[(ALLOW_INSECURE_PROVIDERS.var, value)]),
+            None,
+        )
+        .unwrap();
+        assert_eq!(config.allow_insecure_providers, on, "{value:?}");
+    }
+    for value in ["yes", "1", "TRUE", " true"] {
+        let error = Config::load(
+            &with_required(&[(ALLOW_INSECURE_PROVIDERS.var, value)]),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "STEPCLIMB_ALLOW_INSECURE_PROVIDERS: {value:?} is not true or false; for example {}",
+                ALLOW_INSECURE_PROVIDERS.example
+            ),
+            "{value:?}"
+        );
+    }
+}
+
+#[test]
+fn the_insecure_providers_switch_is_read_from_the_file() {
+    let file =
+        toml("public_url = \"https://lms.example.org\"\nallow_insecure_providers = \"true\"\n");
+    let vars = env(&[
+        ("STEPCLIMB_DATABASE_URL", URL),
+        ("STEPCLIMB_ENCRYPTION_KEYS", KEYS),
+    ]);
+    assert!(
+        Config::load(&vars, Some(&file))
+            .unwrap()
+            .allow_insecure_providers
     );
 }
