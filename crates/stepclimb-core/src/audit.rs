@@ -54,6 +54,7 @@ pub enum Action {
     IdentityLink,
     IdentityUnlink,
     IdentityProviderUpdate,
+    EnrollmentLinkCreate,
 }
 
 impl Action {
@@ -78,6 +79,7 @@ impl Action {
             Self::IdentityLink => "identity.link",
             Self::IdentityUnlink => "identity.unlink",
             Self::IdentityProviderUpdate => "identity_provider.update",
+            Self::EnrollmentLinkCreate => "enrollment_link.create",
         }
     }
 
@@ -97,6 +99,7 @@ impl Action {
             Self::UserSetStatus => "user",
             Self::IdentityLink | Self::IdentityUnlink => "identity",
             Self::IdentityProviderUpdate => "identity_provider",
+            Self::EnrollmentLinkCreate => "enrollment_link",
         }
     }
 }
@@ -234,7 +237,7 @@ impl TryFrom<Row> for Entry {
 mod tests {
     use super::*;
 
-    const ALL: [Action; 17] = [
+    const ALL: [Action; 18] = [
         Action::RoleCreate,
         Action::RoleUpdate,
         Action::RoleDelete,
@@ -252,6 +255,7 @@ mod tests {
         Action::IdentityLink,
         Action::IdentityUnlink,
         Action::IdentityProviderUpdate,
+        Action::EnrollmentLinkCreate,
     ];
 
     #[test]

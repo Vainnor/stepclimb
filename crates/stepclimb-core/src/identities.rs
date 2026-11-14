@@ -38,6 +38,7 @@ use crate::{
     audit::{self, Action, Actor},
     db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
     id::new_id,
+    local,
     users::{self, User},
 };
 
@@ -149,6 +150,9 @@ pub enum Error {
     /// from happening, and the read fails closed if it does.
     #[error("the stored identity attributes are not a JSON object")]
     StoredAttributes,
+    /// Reading the user's local credentials failed.
+    #[error(transparent)]
+    Local(#[from] local::Error),
     /// The linked user's row does not read back.
     #[error(transparent)]
     User(#[from] users::Error),
@@ -384,8 +388,7 @@ pub async fn unlink<'c>(
 /// must keep another identity at an enabled provider: one at a disabled provider does not
 /// count, and a user with none at an enabled provider can have no identity removed here. A
 /// local identity does not count either: what signs a local account in is its passkey or
-/// password, not the identity. Local credentials arrive with
-/// docs/specs/m0/04-local-accounts.md issue 2, which adds them to this count.
+/// password, not the identity, and [`local::has_credential`] counts those.
 ///
 /// Takes [`lock_user`] first, so two removals for one user take turns and the second counts
 /// what the first left. Runs in one transaction (a savepoint when `db` is already one); the lock
@@ -420,12 +423,33 @@ pub async fn unlink_unless_last<'c>(
     if counts.this_local > 0 {
         return Err(Error::LocalIdentity);
     }
-    if counts.others == 0 {
+    if counts.others == 0 && !local::has_credential(&mut tx, scope, user_id).await? {
         return Err(Error::LastSignInMethod);
     }
     unlink(&mut *tx, scope, user_id, id, now, actor).await?;
     tx.commit().await?;
     Ok(())
+}
+
+/// Whether the user `user_id` of the scope's organization has an identity at an enabled
+/// provider that is not local: a way to sign in that is not a local credential (B19's count).
+pub async fn has_enabled_identity(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    user_id: Uuid,
+) -> Result<bool, Error> {
+    let found = sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+               SELECT 1 FROM identities i
+               JOIN identity_providers p ON p.org_id = i.org_id AND p.id = i.provider_id
+               WHERE i.org_id = $1 AND i.user_id = $2 AND p.enabled AND p.kind <> 'local'
+           ) AS "found!""#,
+        scope.org_id(),
+        user_id,
+    )
+    .fetch_one(db)
+    .await?;
+    Ok(found)
 }
 
 /// Lock the row of the user `user_id` in the scope's organization `FOR NO KEY UPDATE` until the

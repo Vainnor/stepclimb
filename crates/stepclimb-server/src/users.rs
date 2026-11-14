@@ -51,7 +51,7 @@ use stepclimb_core::{
     OrgScope, Source, accounts,
     audit::Actor,
     feature::Limit,
-    grants::{self, Grants},
+    grants::Grants,
     id::Uuid,
     identities::{self, NewIdentity},
     identity_providers, organizations,
@@ -72,10 +72,7 @@ use crate::{
     organization::present,
     pagination::{Page, PageParams},
     require::Require,
-    role_assignments::{
-        code::{ROLE_ASSIGNMENT_LAST_ORG_ADMIN, USER_NOT_FOUND},
-        holds_unheld,
-    },
+    role_assignments::code::{ROLE_ASSIGNMENT_LAST_ORG_ADMIN, USER_NOT_FOUND},
     roles::code::{NAME_EMPTY, PERMISSION_ESCALATION, TEXT_CONTAINS_NUL},
     timestamp,
 };
@@ -679,12 +676,7 @@ pub(crate) async fn refuse_escalation(
 // course scopes: `Grants` ignores course-scope assignments, which grant nothing until M1. M1
 // must revisit this check once they do, so a permission held only at a course still counts.
 fn escalates(caller: &Grants, target: &Grants) -> bool {
-    let keys: Vec<String> = target
-        .by_scope()
-        .flat_map(|(_, keys)| keys)
-        .map(str::to_owned)
-        .collect();
-    holds_unheld(caller, &keys, &grants::Target::Organization)
+    caller.lacks_any_held_by(target)
 }
 
 pub(crate) fn user_not_found() -> ApiError {

@@ -6,6 +6,8 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use sqlx::PgPool;
+use stepclimb_auth::token::TokenHash;
+use stepclimb_core::local_tokens;
 use stepclimb_core::{
     OrgScope,
     audit::{self, Actor},
@@ -13,11 +15,18 @@ use stepclimb_core::{
     role_assignments::{self, GrantScope},
     roles, users,
 };
-use stepclimb_server::admin::{CreateError, NewOrganizationAdmin, create_organization_with_admin};
+use stepclimb_server::{
+    admin::{CreateError, NewOrganizationAdmin, create_organization_with_admin},
+    web_origin::WebOrigin,
+};
 
 /// 2025-11-13T02:13:20.123456Z: an odd microsecond count, so a rounded write shows.
 fn now() -> SystemTime {
     UNIX_EPOCH + Duration::from_micros(1_763_000_000_123_456)
+}
+
+fn public_url() -> WebOrigin {
+    WebOrigin::parse("https://lms.example.org").expect("a valid origin")
 }
 
 fn input(slug: &str) -> NewOrganizationAdmin {
@@ -51,6 +60,7 @@ async fn assert_nothing_created(pool: &PgPool) {
         "org_plans",
         "users",
         "role_assignments",
+        "local_tokens",
         "audit_events",
     ] {
         assert_eq!(count(pool, table).await, 0, "{table}");
@@ -60,7 +70,7 @@ async fn assert_nothing_created(pool: &PgPool) {
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn the_first_user_holds_every_permission_at_organization_scope(pool: PgPool) {
     roles::sync_builtin(&pool, now()).await.unwrap();
-    let created = create_organization_with_admin(&pool, &input("example"), now())
+    let created = create_organization_with_admin(&pool, &input("example"), &public_url(), now())
         .await
         .unwrap();
     let scope = scope(created.organization.id);
@@ -88,7 +98,8 @@ async fn the_first_user_holds_every_permission_at_organization_scope(pool: PgPoo
 /// built-in roles, the role lookup fails last.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn a_failure_after_the_user_is_inserted_leaves_nothing_behind(pool: PgPool) {
-    let result = create_organization_with_admin(&pool, &input("example"), now()).await;
+    let result =
+        create_organization_with_admin(&pool, &input("example"), &public_url(), now()).await;
     assert!(
         matches!(result, Err(CreateError::RoleMissing)),
         "{result:?}"
@@ -144,7 +155,7 @@ async fn a_refused_value_names_its_flag_and_leaves_nothing_behind(pool: PgPool) 
         ),
     ];
     for (input, flag) in cases {
-        let error = create_organization_with_admin(&pool, &input, now())
+        let error = create_organization_with_admin(&pool, &input, &public_url(), now())
             .await
             .expect_err("refused");
         assert_eq!(error.refused_argument(), Some(flag), "{error:?}");
@@ -158,7 +169,8 @@ async fn an_existing_organization_is_refused_and_nothing_is_written(pool: PgPool
     organizations::create(&pool, "first", "First", now())
         .await
         .unwrap();
-    let result = create_organization_with_admin(&pool, &input("second"), now()).await;
+    let result =
+        create_organization_with_admin(&pool, &input("second"), &public_url(), now()).await;
     let error = result.expect_err("refused");
     assert!(
         matches!(error, CreateError::OrganizationExists),
@@ -182,7 +194,8 @@ async fn a_concurrent_create_waits_for_the_first_and_is_refused(pool: PgPool) {
         .unwrap();
 
     let input = input("second");
-    let second = create_organization_with_admin(&pool, &input, now());
+    let public_url = public_url();
+    let second = create_organization_with_admin(&pool, &input, &public_url, now());
     tokio::pin!(second);
     let early = tokio::time::timeout(Duration::from_millis(300), &mut second).await;
     assert!(early.is_err(), "the second create did not wait: {early:?}");
@@ -197,12 +210,12 @@ async fn a_concurrent_create_waits_for_the_first_and_is_refused(pool: PgPool) {
     assert_eq!(count(&pool, "users").await, 0);
 }
 
-/// The command writes two audit entries by the instance: the organization (with its root
-/// account and plan) and the first user's Organization admin assignment.
+/// The command writes three audit entries by the instance: the organization (with its root
+/// account and plan), the first user's Organization admin assignment and their enrollment link.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn the_command_audits_the_organization_and_the_first_admin_grant(pool: PgPool) {
     roles::sync_builtin(&pool, now()).await.unwrap();
-    let created = create_organization_with_admin(&pool, &input("example"), now())
+    let created = create_organization_with_admin(&pool, &input("example"), &public_url(), now())
         .await
         .unwrap();
 
@@ -226,10 +239,49 @@ async fn the_command_audits_the_organization_and_the_first_admin_grant(pool: PgP
                 "role_assignment.grant",
                 created.assignment_id
             ),
+            (
+                Actor::Instance,
+                "enrollment_link.create",
+                created.setup_link.id
+            ),
         ]
     );
     assert_eq!(
         entries[1].data["after"]["user_id"],
         created.user.id.to_string()
     );
+}
+
+/// Spec 04 B10, Q7: the report's link opens the web app's enrollment page with a token that the
+/// enrollment start route accepts for the new admin, and the database holds only its hash.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_setup_link_enrolls_the_first_admin(pool: PgPool) {
+    roles::sync_builtin(&pool, now()).await.unwrap();
+    let created = create_organization_with_admin(&pool, &input("example"), &public_url(), now())
+        .await
+        .unwrap();
+    let url = created.setup_link.expose_url();
+    let token = url
+        .strip_prefix("https://lms.example.org/enroll#token=")
+        .unwrap_or_else(|| panic!("not an enrollment link: {url}"));
+    assert_eq!(token.len(), 43, "{url}");
+    let scope = scope(created.organization.id);
+    let hash = TokenHash::of(token);
+    let mut conn = pool.acquire().await.unwrap();
+    let enrollment = local_tokens::check_enrollment(&mut conn, scope, hash.as_bytes(), now())
+        .await
+        .unwrap();
+    assert_eq!(enrollment.user_id, created.user.id);
+    assert_eq!(enrollment.email, "sam@example.test");
+    let stored: Vec<u8> = sqlx::query_scalar("SELECT token_hash FROM local_tokens")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, hash.as_bytes());
+    let creator: (Option<stepclimb_core::id::Uuid>, bool) =
+        sqlx::query_as("SELECT created_by, created_by_instance FROM local_tokens")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(creator, (None, true));
 }

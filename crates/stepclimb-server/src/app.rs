@@ -18,6 +18,7 @@ use utoipa_scalar::{Scalar, Servable};
 use crate::{
     accounts, auth, branding,
     csrf::{self, OriginAllowlist},
+    enrollment,
     error::ApiError,
     health, identities, local_sign_in, me, openapi, organization,
     rate_limit::RateLimiter,
@@ -94,6 +95,10 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         ("/healthz", get(health::healthz)),
         ("/readyz", get(health::readyz)),
         ("/auth/sign-out", post(auth::sign_out)),
+        (
+            enrollment::ENROLLMENT_START_PATH,
+            post(enrollment::start_enrollment),
+        ),
         (branding::THEME_CSS_PATH, get(branding::theme_css)),
         (me::ME_PATH, get(me::get_me)),
         (
@@ -156,6 +161,10 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         (
             "/api/v1/users/{user_id}",
             get(users::get_user).patch(users::update_user),
+        ),
+        (
+            "/api/v1/admin/users/{user_id}/enrollment-links",
+            post(enrollment::create_enrollment_link),
         ),
         (
             role_assignments::ROLE_ASSIGNMENTS_PATH,

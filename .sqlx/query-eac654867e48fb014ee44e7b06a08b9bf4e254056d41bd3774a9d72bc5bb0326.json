@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO local_tokens (id, org_id, user_id, kind, token_hash, created_by,\n                                   created_by_instance, expires_at, created_at, updated_at)\n         VALUES ($1, $2, $3, $4, $5, $6, $7,\n                 timestamptz 'epoch' + $9::bigint * interval '1 microsecond',\n                 timestamptz 'epoch' + $8::bigint * interval '1 microsecond',\n                 timestamptz 'epoch' + $8::bigint * interval '1 microsecond')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Bytea",
+        "Uuid",
+        "Bool",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "eac654867e48fb014ee44e7b06a08b9bf4e254056d41bd3774a9d72bc5bb0326"
+}

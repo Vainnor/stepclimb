@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM local_tokens\n         WHERE org_id = $1 AND user_id = $2 AND kind = $3 AND used_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0ff63b605a4362a44b449ba38f997bd0c316232886ea336ff6674a9420f89887"
+}

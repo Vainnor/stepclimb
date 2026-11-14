@@ -335,8 +335,9 @@ pub async fn delete_user_identity(
 /// A transaction holding the account tree lock and the user's custom roles `FOR KEY SHARE`,
 /// once the escalation rule has passed for the user `user_id`: 404 `user.not_found` when the
 /// organization has no such user, 403 `permission.escalation` when they hold a permission the
-/// caller lacks.
-async fn begin_on_user(
+/// caller lacks. `crate::enrollment` takes it too: an enrollment link changes how the user signs
+/// in.
+pub(crate) async fn begin_on_user(
     state: &AppState,
     grants: &Grants,
     user_id: Uuid,
@@ -479,6 +480,7 @@ fn identity_error(error: repo::Error) -> ApiError {
         | E::IsolationLevel { .. }
         | E::StoredAttributes
         | E::User(_)
+        | E::Local(_)
         | E::Time(_)
         | E::Database(_)) => ApiError::internal(&other),
     }

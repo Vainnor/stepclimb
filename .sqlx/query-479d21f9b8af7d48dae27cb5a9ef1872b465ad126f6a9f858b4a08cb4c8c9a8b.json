@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE local_tokens\n         SET used_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond',\n             updated_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond'\n         WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "479d21f9b8af7d48dae27cb5a9ef1872b465ad126f6a9f858b4a08cb4c8c9a8b"
+}

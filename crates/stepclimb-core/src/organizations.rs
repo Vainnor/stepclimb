@@ -383,6 +383,18 @@ pub async fn lock_and_count(conn: &mut PgConnection) -> Result<i64, Error> {
     count(&mut *conn).await
 }
 
+/// The id of the organization with the slug `slug`, or `None`, for the `stepclimb admin` CLI,
+/// which names an organization by its slug (spec 02 B27; `stepclimb admin enrollment-link`).
+pub async fn id_by_slug(db: impl PgExecutor<'_>, slug: &str) -> Result<Option<Uuid>, Error> {
+    // Instance-wide on purpose, so it takes no `OrgScope`: the CLI runs on the host, the
+    // instance's own trust boundary, and needs the id to build the scope it then acts in. It
+    // returns an id only, never a row's contents.
+    let id = sqlx::query_scalar!("SELECT id FROM organizations WHERE slug = $1", slug)
+        .fetch_optional(db)
+        .await?;
+    Ok(id)
+}
+
 /// The id of every organization, for instance-wide jobs that then act in each organization
 /// with an instance scope (the sign-in flow cleanup, spec 08 B21).
 pub async fn ids(db: impl PgExecutor<'_>) -> Result<Vec<Uuid>, Error> {

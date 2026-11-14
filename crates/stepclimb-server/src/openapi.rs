@@ -8,8 +8,8 @@
 //! settings and its entitlements, the account tree, the permission catalog, roles and role
 //! assignment routes under `/api/v1/admin`, the user admin routes, users' identities and the
 //! signed-in user's, the organization's branding and its stylesheet (`/theme.css`), the local
-//! sign-in switches, and the shared error schemas and responses below. The other M0 specs add
-//! their endpoints under `/api/v1`.
+//! sign-in switches, enrollment links and the enrollment start route, and the shared error
+//! schemas and responses below. The other M0 specs add their endpoints under `/api/v1`.
 //!
 //! Every `/api/v1` operation lists its errors in `#[utoipa::path]` (spec 02 B6). The errors
 //! common to every operation reference the responses here, such as
@@ -25,7 +25,7 @@ use utoipa::{
 };
 
 use crate::{
-    accounts, auth, branding,
+    accounts, auth, branding, enrollment,
     error::{FieldError, PROBLEM_JSON, Problem},
     health, identities, local_sign_in, me, organization, role_assignments, roles, users,
 };
@@ -48,6 +48,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         health::healthz,
         health::readyz,
         auth::sign_out,
+        enrollment::start_enrollment,
         me::get_me,
         organization::get_organization,
         organization::update_organization,
@@ -73,6 +74,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         users::get_user,
         users::create_user,
         users::update_user,
+        enrollment::create_enrollment_link,
         identities::list_user_identities,
         identities::create_user_identity,
         identities::delete_user_identity,
@@ -132,7 +134,11 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             branding::ContrastPair,
             branding::ContrastWarning,
             branding::BrandingProblem,
-            local_sign_in::LocalSignIn
+            local_sign_in::LocalSignIn,
+            enrollment::EnrollmentLink,
+            enrollment::EnrollmentStart,
+            enrollment::EnrollMethod,
+            enrollment::EnrollmentStarted
         ),
         responses(
             BadRequest,
@@ -188,12 +194,15 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             branding::BrandingInvalid,
             local_sign_in::LocalSignInForbidden,
             local_sign_in::LocalSignInConflict,
-            local_sign_in::LocalSignInInvalid
+            local_sign_in::LocalSignInInvalid,
+            enrollment::EnrollmentLinkConflict,
+            enrollment::EnrollmentStartInvalid,
+            enrollment::EnrollmentStartNotFound
         )
     ),
     tags(
         (name = "operations", description = "Liveness and readiness probes"),
-        (name = "auth", description = "Browser sessions"),
+        (name = "auth", description = "Browser sessions and sign-in"),
         (name = "me", description = "The signed-in user"),
         (name = "organization", description = "The caller's organization and its settings"),
         (name = "accounts", description = "The account tree inside the organization"),

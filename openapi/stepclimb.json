@@ -1121,6 +1121,61 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/api/v1/admin/users/{user_id}/enrollment-links": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Create an enrollment link for a user, replacing their earlier unused one.",
+        "operationId": "createEnrollmentLink",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "The user's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "The link, shown once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollmentLink"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/IdentityWriteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/UserNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/EnrollmentLinkConflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/api/v1/me": {
       "get": {
         "tags": [
@@ -1919,6 +1974,69 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/auth/local/enrollment/start": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Open an enrollment link: say whose it is and what it can set up, without using it.",
+        "operationId": "startEnrollment",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrollmentStart"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The link is live",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`no-store`: the answer holds the user's email"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollmentStarted"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/EnrollmentStartInvalid"
+          },
+          "403": {
+            "$ref": "#/components/responses/CsrfRefused"
+          },
+          "404": {
+            "$ref": "#/components/responses/EnrollmentStartNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      }
+    },
     "/auth/sign-out": {
       "post": {
         "tags": [
@@ -2323,6 +2441,68 @@
           "default",
           "round"
         ]
+      },
+      "EnrollMethod": {
+        "type": "string",
+        "description": "A local method an enrollment link can set up.",
+        "enum": [
+          "passkey",
+          "password"
+        ]
+      },
+      "EnrollmentLink": {
+        "type": "object",
+        "description": "An enrollment link, returned once: the only copy of its token.",
+        "required": [
+          "url",
+          "expires_at"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          },
+          "url": {
+            "type": "string",
+            "description": "The link to hand to the user. It holds a secret: anyone with it can set up a way to\nsign in as the user until it is used, replaced or expires."
+          }
+        }
+      },
+      "EnrollmentStart": {
+        "type": "object",
+        "description": "The token from an enrollment link.",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "The text after `#token=` in the link."
+          }
+        },
+        "additionalProperties": false
+      },
+      "EnrollmentStarted": {
+        "type": "object",
+        "description": "What an enrollment link sets up.",
+        "required": [
+          "email",
+          "methods"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "The email the user will sign in with."
+          },
+          "methods": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnrollMethod"
+            },
+            "description": "The methods the organization lets the user set up, passkey first. Never empty."
+          }
+        }
       },
       "Entitlements": {
         "type": "object",
@@ -3774,6 +3954,36 @@
           }
         }
       },
+      "EnrollmentLinkConflict": {
+        "description": "`local.email_required`: the user has no email address, which local sign-in finds them by; add one first.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "EnrollmentStartInvalid": {
+        "description": "`request.malformed`: the body is not `{token}`. `auth.enrollment_invalid`: the link is unknown, already used, replaced by a newer link, or for another organization. `auth.enrollment_expired`: the link is older than its 7-day lifetime; ask an admin for a new one.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "EnrollmentStartNotFound": {
+        "description": "`auth.method_disabled`: the organization offers neither passkey nor password sign-in. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "IdentityDeleteConflict": {
         "description": "`identity.last_sign_in_method`: the user would be left with no way to sign in. `identity.local`: the identity is the user's local account, which is not removed here.",
         "content": {
@@ -4141,7 +4351,7 @@
     },
     {
       "name": "auth",
-      "description": "Browser sessions"
+      "description": "Browser sessions and sign-in"
     },
     {
       "name": "me",
