@@ -436,7 +436,9 @@ In dependency order. Each is one PR.
   fingerprint headers, the `<link>` in `web/index.html` before the bundle, the Vite proxy for
   `/theme.css` and `/auth`, the route in the OpenAPI document. Covers B20, B22; T13, T20.
   Depends on: Q4 and Q5 answered; 12 I1 (the built default theme with every token);
-  02-organizations-and-accounts (organization from host).
+  02-organizations-and-accounts (organization from host). The server route itself, with
+  `Cache-Control: no-cache`, landed with 12 I8 (coordinator decision, 2026-11-14, in spec 12);
+  this issue replaces its cache headers with Q4's fingerprint and adds the rest.
 - **I3. Router, layouts and AppShell wiring.** Deliverable: the route tree with signed-out and
   signed-in layouts, React Aria `RouterProvider` wired to TanStack Router, AppShell with SideNav,
   BottomTabs and TopBar, data-driven navigation entries, document titles, focus on navigation,

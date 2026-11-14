@@ -7,7 +7,7 @@
 //! through the generated client, sign-out, `GET /api/v1/me`, the caller's organization, its
 //! settings and its entitlements, the account tree, the permission catalog, roles and role
 //! assignment routes under `/api/v1/admin`, the user admin routes, users' identities and the
-//! signed-in user's, and the shared error schemas and responses below. The other M0 specs add
+//! signed-in user's, the organization's branding and its stylesheet (`/theme.css`), and the shared error schemas and responses below. The other M0 specs add
 //! their endpoints under `/api/v1`.
 //!
 //! Every `/api/v1` operation lists its errors in `#[utoipa::path]` (spec 02 B6). The errors
@@ -24,7 +24,7 @@ use utoipa::{
 };
 
 use crate::{
-    accounts, auth,
+    accounts, auth, branding,
     error::{FieldError, PROBLEM_JSON, Problem},
     health, identities, me, organization, role_assignments, roles, users,
 };
@@ -76,7 +76,10 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         identities::create_user_identity,
         identities::delete_user_identity,
         identities::list_my_identities,
-        identities::delete_my_identity
+        identities::delete_my_identity,
+        branding::get_branding,
+        branding::update_branding,
+        branding::theme_css
     ),
     components(
         schemas(
@@ -113,7 +116,18 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             users::UserPatch,
             identities::Identity,
             identities::MyIdentity,
-            identities::NewIdentity
+            identities::NewIdentity,
+            branding::BrandingInputs,
+            branding::SavedInputs,
+            branding::UiFont,
+            branding::ReadingFont,
+            branding::CornerStyle,
+            branding::Branding,
+            branding::Appearance,
+            branding::ContrastReport,
+            branding::ContrastPair,
+            branding::ContrastWarning,
+            branding::BrandingProblem
         ),
         responses(
             BadRequest,
@@ -164,7 +178,9 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             identities::IdentityDeleteNotFound,
             identities::IdentityDeleteConflict,
             identities::MyIdentityNotFound,
-            identities::MyIdentityDeleteConflict
+            identities::MyIdentityDeleteConflict,
+            branding::BrandingWriteForbidden,
+            branding::BrandingInvalid
         )
     ),
     tags(
@@ -174,7 +190,8 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         (name = "organization", description = "The caller's organization and its settings"),
         (name = "accounts", description = "The account tree inside the organization"),
         (name = "roles", description = "The permission catalog, roles and role assignments"),
-        (name = "users", description = "The organization's users")
+        (name = "users", description = "The organization's users"),
+        (name = "branding", description = "The organization's branding and theme")
     )
 )]
 struct ApiDoc;

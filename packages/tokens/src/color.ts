@@ -199,8 +199,8 @@ const oklchPattern = new RegExp(
  *     oklch = "oklch(" ws* number "%"? ws+ number "%"? ws+ number "deg"? ws* ")"
  *
  * Lightness is a number 0 to 1 or a percentage; chroma a number at least 0 or a percentage of 0.4
- * (CSS Color 4); hue in degrees, normalized to 0 to 360. Anything else, including alpha, `none`
- * and other color functions, is a `BrandInputError` naming `field`.
+ * (CSS Color 4); hue in degrees, normalized to 0 to 360. Chroma and hue must be finite. Anything
+ * else, including alpha, `none` and other color functions, is a `BrandInputError` naming `field`.
  */
 export function parseColor(input: string, field: string): Oklch {
   const text = input;
@@ -215,8 +215,12 @@ export function parseColor(input: string, field: string): Oklch {
     const l = Number(m[1]) / (m[2] ? 100 : 1);
     const c = (Number(m[3]) * (m[4] ? 0.4 : 1)) / (m[4] ? 100 : 1);
     const h = ((Number(m[5]) % 360) + 360) % 360;
-    if (l < 0 || l > 1 || c < 0) {
-      throw new BrandInputError(field, `${field}: lightness must be 0 to 1 and chroma at least 0`);
+    // A number too large for a double reads as Infinity, and its hue as NaN.
+    if (!(l >= 0 && l <= 1 && c >= 0 && Number.isFinite(c) && Number.isFinite(h))) {
+      throw new BrandInputError(
+        field,
+        `${field}: lightness must be 0 to 1, chroma a finite number at least 0, and hue finite`,
+      );
     }
     return { l, c, h };
   }

@@ -63,14 +63,14 @@ use stepclimb_core::{
     OrgScope, Source, accounts,
     audit::Actor,
     clock::ManualClock,
-    feature::{self, CustomRoles, Feature, Limit},
+    feature::{self, CustomBranding, CustomRoles, Feature, Limit},
     grants::ScopeId,
     id::{Uuid, new_id},
     identities::{self, NewIdentity},
     organizations,
     perm::{
-        self, AccountManage, AccountView, OrgManage, Permission, RoleAssign, RoleManage, RoleView,
-        ScopeType, UserManage, UserView,
+        self, AccountManage, AccountView, BrandingManage, OrgManage, Permission, RoleAssign,
+        RoleManage, RoleView, ScopeType, UserManage, UserView,
     },
     role_assignments::{self, NewAssignment, Scope},
     roles::{self, NewRole},
@@ -96,7 +96,7 @@ const CLIENT: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1
 
 /// The operations that need no credential: the probes and the unauthenticated routes specs 04
 /// to 08 declare (B21).
-const PUBLIC: &[&str] = &["healthz", "readyz", "signOut"];
+const PUBLIC: &[&str] = &["healthz", "readyz", "signOut", "getThemeCss"];
 
 /// One entry per operation that needs a principal (B20). The M0 specs' routes add theirs here
 /// as they land.
@@ -256,6 +256,17 @@ const TABLE: &[Entry] = &[
             setup: second_identity_of_owner,
         },
     },
+    Entry {
+        operation_id: "getBranding",
+        access: permission(BrandingManage::KEY, Target::Org, at_org),
+    },
+    Entry {
+        operation_id: "updateBranding",
+        access: gated(
+            CustomBranding::KEY,
+            permission(BrandingManage::KEY, Target::Org, new_branding),
+        ),
+    },
 ];
 
 /// A user that is not the organization's: 404 `user.not_found`. The user routes take the
@@ -331,6 +342,17 @@ fn second_identity_of_owner(
         Call {
             params: vec![("identity_id", org.two_identities(owner).await)],
             body: None,
+            at: At::Org,
+        }
+    })
+}
+
+/// Branding inputs every brand check passes.
+fn new_branding(_: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: Vec::new(),
+            body: Some(serde_json::json!({ "primary": "#500E0E", "ui_font": "Roboto" })),
             at: At::Org,
         }
     })

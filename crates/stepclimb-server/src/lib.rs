@@ -10,7 +10,8 @@
 //! routes ([`role_assignments`]), the user admin routes under `/api/v1/users` ([`users`]),
 //! users' identities under `/api/v1/users/{user_id}/identities` and `/api/v1/me/identities`
 //! ([`identities`]), the signed-in user at
-//! `GET /api/v1/me` ([`me`]), the OpenAPI document (`/api/openapi.json`) and its Scalar UI
+//! `GET /api/v1/me` ([`me`]), the organization's branding at `/api/v1/admin/branding` and its
+//! stylesheet at `/theme.css` ([`branding`]), the OpenAPI document (`/api/openapi.json`) and its Scalar UI
 //! (`/docs`), and the built web SPA for every other path. Every `/api/v1` response carries
 //! `Cache-Control: no-store` ([`app`]). The other M0 specs in `docs/specs/m0/` add their
 //! `/api/v1` endpoints on the conventions in [`error`] (problem details), [`extract`]
@@ -30,6 +31,7 @@ pub mod admin;
 pub mod app;
 pub mod audit;
 pub mod auth;
+pub mod branding;
 pub mod client_ip;
 pub mod config;
 mod cookie;

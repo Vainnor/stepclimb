@@ -4,7 +4,7 @@
 //! [`schema_errors`] checks an answer against a schema of the OpenAPI document (spec 03 T17 and
 //! the specs' later "validated against the OpenAPI schema" cases). It reads the subset of JSON
 //! Schema utoipa writes: `$ref`, `type` (one name or a list), `enum`, `format` (`uuid`,
-//! `date-time` as the API writes it, `int32`, `int64`), `minimum`, `properties` with `required`,
+//! `date-time` as the API writes it, `int32`, `int64`, `double`), `minimum`, `properties` with `required`,
 //! `additionalProperties` (a schema every undeclared member conforms to), `propertyNames` and
 //! `items`, plus the annotations `description`, `title` and `example`, which constrain nothing.
 //! Any other keyword, another `format`, or a `minimum` that is not a number is reported as an
@@ -136,6 +136,8 @@ fn format_conforms(schema: &Map<String, Value>, value: &Value, at: &str, errors:
         "date-time" => value.as_str().is_none_or(is_api_timestamp),
         "int32" => !value.is_number() || value.as_i64().is_some_and(|n| i32::try_from(n).is_ok()),
         "int64" => !value.is_number() || value.is_i64(),
+        // Any JSON number is a double.
+        "double" => true,
         other => {
             errors.push(format!("{at}: the checker does not read format {other:?}"));
             return;

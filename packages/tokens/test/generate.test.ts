@@ -91,6 +91,10 @@ const VZDC_RULE = `[data-sc-brand="vzdc"] {
   --sc-state-overdue: var(--sc-danger);
   --sc-state-review: var(--sc-warning);
   --sc-font-ui: "Roboto", "Segoe UI", system-ui, sans-serif;
+  --sc-font-read: "Source Serif 4", "Georgia", "Times New Roman", serif;
+  --sc-radius-xs: 3px;
+  --sc-radius-sm: 5px;
+  --sc-radius-md: 8px;
 }
 `;
 
@@ -288,9 +292,12 @@ describe("generate", () => {
           );
         }
         const dtcg = themeToDtcg(theme) as Record<string, Record<string, unknown>>;
-        expect(Object.keys(dtcg).sort()).toEqual(["color", "font"]);
-        expect(Object.keys(dtcg.font ?? {})).toEqual(["ui"]);
-        expect(themeToCss(theme, ":root")).not.toMatch(/--sc-(space|text|weight|control|radius)/);
+        expect(Object.keys(dtcg).sort()).toEqual(["color", "font", "radius"]);
+        expect(Object.keys(dtcg.font ?? {})).toEqual(["ui", "read"]);
+        expect(Object.keys(dtcg.radius ?? {})).toEqual(["xs", "sm", "md"]);
+        expect(themeToCss(theme, ":root")).not.toMatch(
+          /--sc-(space|text|weight|control|leading|shadow|motion|radius-pill)/,
+        );
       }
     }
   });
@@ -311,6 +318,58 @@ describe("generate", () => {
     expect(() => generate({ primary: "dark red" })).toThrow(
       expect.objectContaining({ name: "BrandInputError", field: "primary" }),
     );
+  });
+
+  it("refuses a primary color with a chroma or hue too large to be finite", () => {
+    for (const primary of [
+      "oklch(0.5 1e400 120)",
+      "oklch(0.5 0.1 1e400)",
+      "oklch(0.5 0.1 -1e400)",
+    ]) {
+      expect(() => generate({ primary }), primary).toThrow(
+        expect.objectContaining({ name: "BrandInputError", field: "primary" }),
+      );
+    }
+  });
+
+  it("takes the reading font and corner style, in every appearance (Q8)", () => {
+    const roboto = ["Roboto", "Segoe UI", "system-ui", "sans-serif"];
+    const serif = ["Source Serif 4", "Georgia", "Times New Roman", "serif"];
+    const cases: [BrandInputs, readonly string[], Record<string, number>][] = [
+      [{ primary: "#500E0E" }, serif, { xs: 3, sm: 5, md: 8 }],
+      [
+        { primary: "#500E0E", uiFont: "Roboto", readingFont: "sans" },
+        roboto,
+        { xs: 3, sm: 5, md: 8 },
+      ],
+      [
+        { primary: "#500E0E", readingFont: "serif", cornerStyle: "square" },
+        serif,
+        { xs: 0, sm: 0, md: 0 },
+      ],
+      [{ primary: "#500E0E", cornerStyle: "round" }, serif, { xs: 6, sm: 10, md: 16 }],
+    ];
+    for (const [inputs, read, radius] of cases) {
+      for (const appearance of appearances) {
+        const theme = generate(inputs)[appearance];
+        expect(theme.font.read, JSON.stringify(inputs)).toEqual(read);
+        expect(theme.radius, JSON.stringify(inputs)).toEqual(radius);
+      }
+    }
+  });
+
+  it("refuses a reading font or corner style that is not a choice, naming the field", () => {
+    const bad: [Partial<BrandInputs>, string][] = [
+      [{ readingFont: "mono" as never }, "readingFont"],
+      [{ readingFont: "toString" as never }, "readingFont"],
+      [{ cornerStyle: "pointy" as never }, "cornerStyle"],
+      [{ cornerStyle: "hasOwnProperty" as never }, "cornerStyle"],
+    ];
+    for (const [inputs, field] of bad) {
+      expect(() => generate({ primary: "#500E0E", ...inputs }), field).toThrow(
+        expect.objectContaining({ name: "BrandInputError", field }),
+      );
+    }
   });
 });
 
@@ -436,16 +495,28 @@ describe("serialization (B19)", () => {
 
   it("writes DTCG JSON the token build accepts, giving the same values in variables.css", async () => {
     // A brand the shipped themes do not use, put in vZDC's light context.
-    const theme = generate({ primary: "#f8f000", uiFont: "Roboto" }).light;
-    const themes = brandThemes();
-    themes.set("vzdc-light", theme);
-    const built = await buildTokens(tokensDir, themes);
-    const block = built.variables.split('[data-sc-brand="vzdc"][data-sc-theme="light"] {')[1] ?? "";
-    for (const [token, color] of allColors(theme)) {
-      const name = variableName(`color.${token}`);
-      const value = new RegExp(`${name}: (oklch\\([^)]*\\));`).exec(block)?.[1];
-      if (!value) throw new Error(`variables.css has no ${name} for vzdc light`);
-      expect(ref(color).deltaE(new Color(value), "OK"), token).toBeLessThan(0.001);
+    for (const cornerStyle of ["square", "round"] as const) {
+      const inputs: BrandInputs = { primary: "#f8f000", uiFont: "Roboto", cornerStyle };
+      const theme = generate({ ...inputs, readingFont: "sans" }).light;
+      const themes = brandThemes();
+      themes.set("vzdc-light", theme);
+      const built = await buildTokens(tokensDir, themes);
+      const block =
+        (built.variables.split('[data-sc-brand="vzdc"][data-sc-theme="light"] {')[1] ?? "").split(
+          "}",
+        )[0] ?? "";
+      for (const [token, color] of allColors(theme)) {
+        const name = variableName(`color.${token}`);
+        const value = new RegExp(`${name}: (oklch\\([^)]*\\));`).exec(block)?.[1];
+        if (!value) throw new Error(`variables.css has no ${name} for vzdc light`);
+        expect(ref(color).deltaE(new Color(value), "OK"), token).toBeLessThan(0.001);
+      }
+      // The fonts and radii as the build writes them, line for line.
+      const own = themeToCss(theme, "x").split("\n");
+      for (const name of ["font-ui", "font-read", "radius-xs", "radius-sm", "radius-md"]) {
+        const line = own.find((l) => l.startsWith(`  --sc-${name}:`))?.trim();
+        expect(block, `${cornerStyle} ${name}`).toContain(`${line}\n`);
+      }
     }
   });
 });

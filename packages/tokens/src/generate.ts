@@ -6,6 +6,7 @@
 // the reference the server's port is held equal to.
 import { BrandInputError, contrast, gamutMapSrgb, inSrgb, type Oklch, parseColor } from "./color";
 import { variableName } from "./names";
+import base from "./tokens/base.json";
 import learning from "./tokens/learning.json";
 
 export type { Oklch } from "./color";
@@ -23,12 +24,47 @@ export const uiFonts = {
 } as const satisfies Record<string, readonly string[]>;
 export type UiFont = keyof typeof uiFonts;
 
+/**
+ * The generator's version. The server stores it with an organization's branding; it changes
+ * whenever the same inputs would give different output.
+ */
+export const GENERATOR_VERSION = 1;
+
+/** The reading font (spec 12, Q8): the bundled serif of `base.json`, or the organization's UI font. */
+export const readingFonts = ["serif", "sans"] as const;
+export type ReadingFont = (typeof readingFonts)[number];
+
+/** The radius tokens corner style controls; `pill` is not one of them. */
+export const radiusTokens = ["xs", "sm", "md"] as const;
+export type RadiusToken = (typeof radiusTokens)[number];
+
+const baseRadius = (token: RadiusToken): number => {
+  const { value, unit } = base.radius[token].$value;
+  if (unit !== "px") throw new Error(`base.json: radius.${token} is not in px`);
+  return value;
+};
+
+/**
+ * Corner styles in px (spec 12, Q8 and its coordinator decision): `default` is `base.json`'s
+ * scale, `square` sets every radius to 0, `round` doubles it.
+ */
+export const cornerStyles = {
+  square: { xs: 0, sm: 0, md: 0 },
+  default: { xs: baseRadius("xs"), sm: baseRadius("sm"), md: baseRadius("md") },
+  round: { xs: 2 * baseRadius("xs"), sm: 2 * baseRadius("sm"), md: 2 * baseRadius("md") },
+} as const satisfies Record<string, Record<RadiusToken, number>>;
+export type CornerStyle = keyof typeof cornerStyles;
+
 /** The branding inputs that shape tokens (spec 12, B12). */
 export interface BrandInputs {
   /** The primary color: a CSS hex color, or `oklch(L C H)`. */
   primary: string;
   /** Defaults to Atkinson Hyperlegible Next. */
   uiFont?: UiFont;
+  /** Defaults to `serif`. */
+  readingFont?: ReadingFont;
+  /** Defaults to `default`. */
+  cornerStyle?: CornerStyle;
 }
 
 /** Every color token a theme carries, in the plan's order (UI tab -> Tokens). */
@@ -65,7 +101,9 @@ export type Appearance = (typeof appearances)[number];
 export interface Theme {
   appearance: Appearance;
   colors: Record<ColorToken, Oklch>;
-  font: { ui: readonly string[] };
+  font: { ui: readonly string[]; read: readonly string[] };
+  /** The radius tokens in px. */
+  radius: Record<RadiusToken, number>;
 }
 
 export type GeneratedThemes = Record<Appearance, Theme>;
@@ -417,7 +455,13 @@ export function brandTokens(
   };
 }
 
-function theme(appearance: Appearance, primary: Oklch, font: readonly string[]): Theme {
+/** What a theme takes from the inputs besides its colors. */
+interface Shape {
+  font: Theme["font"];
+  radius: Theme["radius"];
+}
+
+function theme(appearance: Appearance, primary: Oklch, shape: Shape): Theme {
   const recipe = recipes[appearance];
   // A grey's hue is floating-point noise; below the written chroma precision it is treated as 0.
   const hue = primary.c < 0.0001 ? 0 : primary.h;
@@ -444,9 +488,27 @@ function theme(appearance: Appearance, primary: Oklch, font: readonly string[]):
   return {
     appearance,
     colors: Object.fromEntries(colorTokens.map((t) => [t, colors[t]])) as Theme["colors"],
-    font: { ui: font },
+    font: shape.font,
+    radius: shape.radius,
   };
 }
+
+/** `value`, or `fallback` when it is absent; a `BrandInputError` naming `field` when it is not a key of `allowed`. */
+function choice<K extends string>(
+  field: string,
+  value: string | undefined,
+  allowed: Readonly<Record<K, unknown>>,
+  fallback: K,
+): K {
+  if (value === undefined) return fallback;
+  if (!Object.hasOwn(allowed, value)) {
+    throw new BrandInputError(field, `${field}: "${value}" is not one of the choices`);
+  }
+  return value as K;
+}
+
+const readingFontChoices: Record<ReadingFont, true> = { serif: true, sans: true };
+const serif: readonly string[] = base.font.read.$value;
 
 /**
  * Generates a brand's light, dark and high-contrast themes from the same inputs (B16). Throws
@@ -454,15 +516,17 @@ function theme(appearance: Appearance, primary: Oklch, font: readonly string[]):
  */
 export function generate(inputs: BrandInputs): GeneratedThemes {
   const primary = parseColor(inputs.primary, "primary");
-  const name = inputs.uiFont ?? "Atkinson Hyperlegible Next";
-  if (!Object.hasOwn(uiFonts, name)) {
-    throw new BrandInputError("uiFont", `uiFont: "${name}" is not a bundled font`);
-  }
-  const font = uiFonts[name];
+  const ui = uiFonts[choice("uiFont", inputs.uiFont, uiFonts, "Atkinson Hyperlegible Next")];
+  const reading = choice("readingFont", inputs.readingFont, readingFontChoices, "serif");
+  const corners = choice("cornerStyle", inputs.cornerStyle, cornerStyles, "default");
+  const shape: Shape = {
+    font: { ui, read: reading === "serif" ? serif : ui },
+    radius: { ...cornerStyles[corners] },
+  };
   return {
-    light: theme("light", primary, font),
-    dark: theme("dark", primary, font),
-    "high-contrast": theme("high-contrast", primary, font),
+    light: theme("light", primary, shape),
+    dark: theme("dark", primary, shape),
+    "high-contrast": theme("high-contrast", primary, shape),
   };
 }
 
@@ -479,7 +543,20 @@ export function themeToDtcg(theme: Theme): object {
       return [t, { $type: "color", $value: value }];
     }),
   );
-  return { color, font: { ui: { $type: "fontFamily", $value: [...theme.font.ui] } } };
+  const radius = Object.fromEntries(
+    radiusTokens.map((t) => [
+      t,
+      { $type: "dimension", $value: { value: theme.radius[t], unit: "px" } },
+    ]),
+  );
+  return {
+    color,
+    font: {
+      ui: { $type: "fontFamily", $value: [...theme.font.ui] },
+      read: { $type: "fontFamily", $value: [...theme.font.read] },
+    },
+    radius,
+  };
 }
 
 /** Trims a fixed-point number's trailing zeros: `50.20` -> `50.2`, `195.00` -> `195`. */
@@ -522,10 +599,11 @@ export const learningAliases = Object.entries(learning.color).map(([token, { $va
 
 /**
  * The theme as one CSS rule under `selector`, with variables.css's names: every color token, the
- * learning states as `var()` of their targets (so they resolve to this theme's colors), and the UI
- * font.
+ * learning states as `var()` of their targets (so they resolve to this theme's colors), the UI
+ * and reading fonts and the radius tokens corner style controls. `indent` goes before every
+ * line, for a rule inside `@media`.
  */
-export function themeToCss(theme: Theme, selector: string): string {
+export function themeToCss(theme: Theme, selector: string, indent = ""): string {
   const lines = [
     ...colorTokens.map((t) => `${variableName(`color.${t}`)}: ${cssColor(theme.colors[t])};`),
     ...learningAliases.map(
@@ -533,6 +611,9 @@ export function themeToCss(theme: Theme, selector: string): string {
         `${variableName(`color.${state}`)}: var(${variableName(`color.${target}`)});`,
     ),
     `${variableName("font.ui")}: ${cssFontStack(theme.font.ui)};`,
+    `${variableName("font.read")}: ${cssFontStack(theme.font.read)};`,
+    ...radiusTokens.map((t) => `${variableName(`radius.${t}`)}: ${theme.radius[t]}px;`),
   ];
-  return `${selector} {\n${lines.map((l) => `  ${l}`).join("\n")}\n}\n`;
+  const body = lines.map((l) => `${indent}  ${l}`).join("\n");
+  return `${indent}${selector} {\n${body}\n${indent}}\n`;
 }

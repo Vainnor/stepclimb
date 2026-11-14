@@ -36,9 +36,12 @@ places.
 `docs/specs/m0/12-tokens-and-theme-generator.md`.
 
 The theme generator, `src/generate.ts` with its color math in `src/color.ts`, takes an
-organization's primary color (hex or `oklch()`) and UI font and returns a theme per appearance
-(light, dark, high contrast): every color token and `font.ui`, written as DTCG JSON
-(`themeToDtcg`) or as one CSS rule with `variables.css`'s names (`themeToCss`). For each
+organization's primary color (hex or `oklch()`), UI font, reading font (`serif` or `sans`) and
+corner style (`square`, `default`, `round`) and returns a theme per appearance (light, dark, high
+contrast): every color token, `font.ui`, `font.read` and `radius.xs`, `sm` and `md`, written as
+DTCG JSON (`themeToDtcg`) or as one CSS rule with `variables.css`'s names (`themeToCss`).
+`brandStylesheet` in `src/stylesheet.ts` writes a brand's three themes under the default brand's
+selectors: the stylesheet the server serves at `/theme.css`. For each
 appearance it builds a 12-step OKLCH brand scale and a neutral scale at the brand's hue (high contrast's
 neutrals are grey), gamut-maps every color into sRGB (CSS Color 4) and picks `brand`, `brand-fg`
 and `ring` by WCAG contrast. Status colors do not follow the brand. The default brand's input,
@@ -51,6 +54,13 @@ WCAG 2 ratio on the displayed 8-bit sRGB colors: 4.5:1 text and 3:1 UI in light 
 and 4.5:1 in high contrast, the learning states through the tokens they alias. It also warns,
 without failing, when the brand's hue is within 30 degrees of `danger`'s. The build fails with
 every failing pair listed when a shipped theme does not pass (`checkThemes` in `src/themes.ts`).
+
+The server runs a Rust port of the generator (`stepclimb_core::theme`). The golden vectors in
+`test/golden/theme-vectors.json` are this generator's stylesheets, contrast ratios and refusals
+for fixed and seeded inputs; `test/golden.test.ts` fails when they are stale and
+`crates/stepclimb-core/tests/theme_golden.rs` when the port gives anything else. After a
+deliberate change to the generator, run `pnpm --filter @stepclimb/tokens golden` and port the
+change.
 
 Where the plan's example values fail those minimums, the principle wins (coordinator decision,
 spec 12): light `warning` is 0.663 rather than 0.72, light `line-strong` 0.633 rather than 0.78,

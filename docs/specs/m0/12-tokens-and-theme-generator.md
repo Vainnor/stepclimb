@@ -410,6 +410,62 @@ overrule any of them.
   unmapped value into sRGB, as the story screenshots did, that is 0, 84, 86 before and 0, 79, 80
   after, at most 5 levels per channel.
 
+### Coordinator decisions (2026-11-14)
+
+Taken on the owner's delegation while building I7 and I8 (PR for #79, #80); the owner can
+overrule any of them.
+
+- **Coordinator decision (2026-11-14): the Rust port and its vectors (Q12).** The generator is
+  ported to `stepclimb_core::theme`, operation for operation, including V8's `Math.hypot`,
+  `Math.round` and `toFixed` rounding, so both give the same doubles. The golden vectors are
+  `packages/tokens/test/golden/theme-vectors.json`, written by the TypeScript generator
+  (`pnpm --filter @stepclimb/tokens golden`): 14 named inputs with their full stylesheet and every
+  contrast ratio, 240 seeded inputs with the stylesheet's SHA-256 and the verdicts, and 15 bad
+  inputs with the field each names. Vitest fails when the file is stale (T12); the Rust test
+  fails on any other byte, a ratio more than 1e-9 apart, or another verdict (T13). A one-off
+  check of 20,000 further seeded inputs, chroma up to 1.5, found no difference.
+- **Coordinator decision (2026-11-14): corner style and reading font are generator inputs.**
+  `BrandInputs` gains `readingFont` (`serif`, the default, or `sans`) and `cornerStyle`
+  (`square`, `default`, `round`), and every theme carries `font.read` and `radius.xs|sm|md`
+  (B18). The build's theme permutations include them, so a shipped brand's choice reaches
+  `variables.css`; the default and vZDC brands keep the default values. `oklch()` input with a
+  chroma or hue too large to be finite is refused, in both generators.
+- **Coordinator decision (2026-11-14): the stylesheet.** `/theme.css` is one stylesheet per
+  organization, `brandStylesheet()` in `src/stylesheet.ts`: the default brand's selectors of
+  `variables.css` (light on `:root` and `[data-sc-theme="light"]`, dark and high contrast by
+  attribute, then by OS setting), each rule with every color, the learning-state aliases, both
+  fonts and the three radii. For the default brand it gives every element the values
+  `variables.css` gives it (`test/stylesheet.test.ts`).
+- **Coordinator decision (2026-11-14): the API's inputs and answer.** `PUT` replaces the whole
+  set: `primary` is required, an omitted or `null` choice takes its default, and an unknown member
+  is a 400. A value that is not a choice is a 422 `branding.invalid_input`, its `errors` entry
+  coded `branding.invalid_color` (`primary`) or `branding.not_a_choice`. `GET` for an
+  organization without saved branding answers the default brand's inputs, hash and report.
+  Both answer `inputs`, `generator`, `css_hash` (SHA-256, lowercase hex) and `report`, the light,
+  dark and high-contrast reports. The stored record is `{"version": 1, "inputs", "generator",
+  "css", "css_hash"}`; `GET` recomputes the report from the stored inputs. Saving branding equal
+  to the stored record writes nothing.
+- **Coordinator decision (2026-11-14): the contrast guard is unreachable from valid input today.**
+  No input the generator accepts gives a failing theme (T7's sweep, the 254 vectors and the
+  20,000-input check above), so T14's 422 `branding.contrast_failed` cannot be reached through
+  the API. The guard stays (B21), and only `theme::render` can make the `Rendered` value
+  `branding::save` takes, so a stylesheet that skipped the report cannot be stored. T14's
+  contrast case is tested on the guard with a doctored theme and on the 422 body; its
+  invalid-input case runs through the API and checks the stored branding is unchanged.
+- **Coordinator decision (2026-11-14): `custom_branding` gates the change.** Spec 10 Q1 (decided
+  by the owner after this spec's Permissions section) checks `custom_branding` on 12's routes.
+  `PUT` takes `Require<CustomBranding>` before `Require<BrandingManage>`; `GET` takes only the
+  permission, as reading roles needs no `custom_roles`. Self-hosted's unlimited plan has the
+  feature.
+- **Coordinator decision (2026-11-14): no audit entry.** Spec 09 B22's table does not list a
+  branding change, so I8 writes none. Whether to add `organization.update_branding` is for the
+  owner.
+- **Coordinator decision (2026-11-14): the server half of `/theme.css` lands with I8.** 11 I2
+  (#67) is not built, and T15 and T17 need the route. I8 adds `GET /theme.css` (public,
+  organization from `RequestOrg`, `text/css; charset=utf-8`, `Cache-Control: no-cache`, in the
+  OpenAPI document under `operations`). 11 I2 keeps the `<link>` in `index.html`, the fingerprint
+  and its cache headers (11 Q4), the Vite proxy and the bundle without color variables (11 Q5).
+
 ## Issues
 
 In dependency order. Each is one PR.
