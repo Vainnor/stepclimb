@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The organization routes and the `RequestOrg` extractor over the router
-//! (docs/specs/m0/02-organizations-and-accounts.md B11 to B14, T6 to T9). The permission suite's
-//! cases for each route are also in `tests/permissions.rs`.
+//! (docs/specs/m0/02-organizations-and-accounts.md B11 to B14, T6 to T9), and the entitlements
+//! route (docs/specs/m0/10-entitlements-framework.md B12, T8). The permission suite's cases for
+//! each route are also in `tests/permissions.rs`.
 //!
 //! The production request-organization resolver serves these tests: no request carries the
-//! `test-support` organization header, except the one cross-organization read. `session::start`
+//! `test-support` organization header, except the cross-organization reads. A test plan is
+//! written by SQL and an organization pointed at it, since M0 has no API that changes a plan. `session::start`
 //! stands in for the sign-in specs. Needs `DATABASE_URL` (`just up`).
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -25,6 +27,7 @@ use stepclimb_core::{
     OrgScope, Source,
     audit::Actor,
     clock::ManualClock,
+    feature::{self, Limit},
     id::{Uuid, new_id},
     organizations, perm,
     role_assignments::{self, NewAssignment, Scope},
@@ -69,6 +72,7 @@ fn scope(org_id: Uuid) -> OrgScope {
 
 const ORGANIZATION: &str = "/api/v1/organization";
 const SETTINGS: &str = "/api/v1/organization/settings";
+const ENTITLEMENTS: &str = "/api/v1/organization/entitlements";
 
 fn state(pool: &PgPool, clock: &ManualClock) -> AppState {
     AppState {
@@ -221,14 +225,50 @@ impl Fixture {
 
     /// A signed-in Organization admin.
     async fn admin(&self) -> String {
-        let (cookie, user) = self.user_of(self.org).await;
+        self.admin_of(self.org).await
+    }
+
+    /// A signed-in Organization admin of `org`.
+    async fn admin_of(&self, org: Uuid) -> String {
+        let (cookie, user) = self.user_of(org).await;
         let role = sqlx::query_scalar("SELECT id FROM roles WHERE org_id IS NULL AND key = $1")
             .bind("org_admin")
             .fetch_one(&self.pool)
             .await
             .expect("a built-in role");
-        self.assign(user, role, Scope::Organization).await;
+        let assignment = NewAssignment {
+            user_id: user,
+            role_id: role,
+            scope: Scope::Organization,
+            source: Source::Local,
+            external_id: None,
+        };
+        role_assignments::create(&self.pool, scope(org), &assignment, now(), Actor::Instance)
+            .await
+            .expect("create assignment");
         cookie
+    }
+
+    /// Point `org` at a new test plan with these `features` and `limits`, by SQL, with source
+    /// `grant`: the plan's key.
+    async fn use_plan(&self, org: Uuid, features: Value, limits: Value) -> String {
+        let plan = new_id();
+        let key = format!("test_{}", plan.simple());
+        sqlx::query("INSERT INTO plans (id, key, features, limits) VALUES ($1, $2, $3, $4)")
+            .bind(plan)
+            .bind(&key)
+            .bind(features)
+            .bind(limits)
+            .execute(&self.pool)
+            .await
+            .expect("insert plan");
+        sqlx::query("UPDATE org_plans SET plan_id = $2, source = 'grant' WHERE org_id = $1")
+            .bind(org)
+            .bind(plan)
+            .execute(&self.pool)
+            .await
+            .expect("move to the plan");
+        key
     }
 
     /// A signed-in user holding every permission but `organization.manage`, at the root account.
@@ -284,6 +324,34 @@ impl Fixture {
         .expect("the organization");
         UNIX_EPOCH + Duration::from_micros(micros.try_into().expect("after the epoch"))
     }
+}
+
+/// `GET /api/v1/organization/entitlements` as `cookie`, naming `org` with the `test-support`
+/// header.
+async fn entitlements_of(f: &Fixture, org: Uuid, cookie: &str) -> Answer {
+    let request = Request::get(ENTITLEMENTS)
+        .header(header::COOKIE, cookie)
+        .header(TEST_ORG_HEADER, org.to_string())
+        .body(Body::empty())
+        .expect("a request");
+    answer(&f.app, request).await
+}
+
+/// What the `unlimited` plan answers: every catalog feature on, every limit `null`.
+fn unlimited_answer() -> Value {
+    let features: serde_json::Map<String, Value> = feature::ALL
+        .iter()
+        .map(|key| ((*key).to_owned(), Value::Bool(true)))
+        .collect();
+    let limits: serde_json::Map<String, Value> = Limit::ALL
+        .iter()
+        .map(|limit| (limit.key().to_owned(), Value::Null))
+        .collect();
+    json!({
+        "plan": { "key": "unlimited", "source": "selfhost" },
+        "features": features,
+        "limits": limits,
+    })
 }
 
 // T6: RequestOrg.
@@ -728,4 +796,114 @@ fn the_rename_patch_documents_a_name_that_is_not_nullable() {
     assert_eq!(name["type"], "string", "{name}");
     let required = &doc["components"]["schemas"]["OrganizationPatch"]["required"];
     assert!(required.is_null(), "{required}");
+}
+
+// Spec 10 T8: the entitlements route.
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t8_entitlements_need_organization_manage(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let anonymous = f.send(Method::GET, ENTITLEMENTS, None, "").await;
+    assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(anonymous.code(), "auth.unauthenticated");
+    let manager = f.account_manager().await;
+    let denied = f.send(Method::GET, ENTITLEMENTS, Some(&manager), "").await;
+    assert_eq!(denied.status, StatusCode::FORBIDDEN, "{denied:?}");
+    assert_eq!(denied.code(), "permission.denied");
+    let (plain, _) = f.user_of(f.org).await;
+    let denied = f.send(Method::GET, ENTITLEMENTS, Some(&plain), "").await;
+    assert_eq!(denied.status, StatusCode::FORBIDDEN, "{denied:?}");
+    assert_eq!(denied.code(), "permission.denied");
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t8_an_admin_sees_the_unlimited_plan_with_every_catalog_key(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let admin = f.admin().await;
+    let answer = f.send(Method::GET, ENTITLEMENTS, Some(&admin), "").await;
+    assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    assert_eq!(answer.body, unlimited_answer());
+    assert_eq!(
+        answer.body["features"].as_object().expect("a map").len(),
+        feature::ALL.len()
+    );
+    assert_eq!(answer.body["limits"], json!({ "users": null }));
+    assert_schema("Entitlements", &answer.body);
+}
+
+/// A plan other than `unlimited` shows each catalog key as the server reads it (B7): only a
+/// stored `true` enables a feature, a missing limit is `0`, and a key the catalog does not
+/// have is left out.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t8_a_test_plan_shows_each_catalog_key_as_the_server_reads_it(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let admin = f.admin().await;
+    let key = f
+        .use_plan(
+            f.org,
+            json!({ "custom_roles": true, "api_keys": "yes", "retired_feature": true }),
+            json!({ "retired_limit": 9 }),
+        )
+        .await;
+    let answer = f.send(Method::GET, ENTITLEMENTS, Some(&admin), "").await;
+    assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    let features: serde_json::Map<String, Value> = feature::ALL
+        .iter()
+        .map(|k| ((*k).to_owned(), Value::Bool(*k == "custom_roles")))
+        .collect();
+    assert_eq!(
+        answer.body,
+        json!({
+            "plan": { "key": key, "source": "grant" },
+            "features": features,
+            "limits": { "users": 0 },
+        })
+    );
+    assert_schema("Entitlements", &answer.body);
+
+    f.use_plan(f.org, json!({}), json!({ "users": 25 })).await;
+    let answer = f.send(Method::GET, ENTITLEMENTS, Some(&admin), "").await;
+    assert_eq!(answer.body["limits"], json!({ "users": 25 }));
+    assert!(
+        answer.body["features"]
+            .as_object()
+            .expect("a map")
+            .values()
+            .all(|on| *on == json!(false)),
+        "{answer:?}"
+    );
+}
+
+/// Cross-organization: each organization's admin sees their own organization's plan, never the
+/// other's.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t8_an_admin_of_org_b_sees_org_bs_plan(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let b = organizations::create(&f.pool, "org-b", "Org B", now())
+        .await
+        .expect("create organization")
+        .id;
+    let key_b = f
+        .use_plan(b, json!({ "api_keys": true }), json!({ "users": 3 }))
+        .await;
+    let admin_a = f.admin_of(f.org).await;
+    let admin_b = f.admin_of(b).await;
+
+    let seen_by_b = entitlements_of(&f, b, &admin_b).await;
+    assert_eq!(seen_by_b.status, StatusCode::OK, "{seen_by_b:?}");
+    assert_eq!(
+        seen_by_b.body["plan"],
+        json!({ "key": key_b, "source": "grant" })
+    );
+    assert_eq!(seen_by_b.body["features"]["api_keys"], true);
+    assert_eq!(seen_by_b.body["features"]["custom_roles"], false);
+    assert_eq!(seen_by_b.body["limits"], json!({ "users": 3 }));
+
+    let seen_by_a = entitlements_of(&f, f.org, &admin_a).await;
+    assert_eq!(seen_by_a.status, StatusCode::OK, "{seen_by_a:?}");
+    assert_eq!(seen_by_a.body, unlimited_answer());
+
+    // A's session names org B: the session belongs to A, so B's plan is never answered.
+    let crossed = entitlements_of(&f, b, &admin_a).await;
+    assert_eq!(crossed.status, StatusCode::UNAUTHORIZED, "{crossed:?}");
 }

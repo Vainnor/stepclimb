@@ -11,12 +11,23 @@
 //! names only the keys it changes; each key it names that is no setting is listed in the 422 as
 //! `settings.unknown_key`, and a known key whose value does not match its type is a 400
 //! `request.malformed`, as for any body that does not match the schema (B2).
+//!
+//! `GET /api/v1/organization/entitlements` shows the organization's plan and what it allows, with
+//! every catalog feature and limit (docs/specs/m0/10-entitlements-framework.md B12). It needs
+//! `organization.manage`, and reads the plan through the request's [`RequestEntitlements`], the
+//! same load every `Require<Feature>` of the request checks.
+
+use std::collections::BTreeMap;
 
 use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use stepclimb_core::{
-    OrgSettings as CoreSettings, OrgSettingsPatch as CorePatch, id::Uuid, organizations,
+    OrgSettings as CoreSettings, OrgSettingsPatch as CorePatch,
+    feature::{self, Limit},
+    id::Uuid,
+    org_plans::{OrgPlan, PlanSource as CoreSource},
+    organizations,
     perm::OrgManage,
 };
 use utoipa::ToSchema;
@@ -24,6 +35,7 @@ use utoipa::ToSchema;
 use crate::{
     AppState,
     audit::ClientAddress,
+    entitlements::Entitlements as RequestEntitlements,
     error::{ApiError, FieldError},
     extract::ApiJson,
     openapi::problem_responses,
@@ -39,6 +51,9 @@ pub const ORGANIZATION_PATH: &str = "/api/v1/organization";
 
 /// The path of the caller's organization settings.
 pub const SETTINGS_PATH: &str = "/api/v1/organization/settings";
+
+/// The path of the caller's organization's entitlements.
+pub const ENTITLEMENTS_PATH: &str = "/api/v1/organization/entitlements";
 
 /// The codes this module produces.
 pub mod code {
@@ -246,6 +261,93 @@ pub async fn update_settings(
     Ok(Json(settings))
 }
 
+/// The organization's plan and what it allows: every feature and limit of the server's catalogs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[schema(as = Entitlements)]
+pub struct OrgEntitlements {
+    pub plan: PlanRef,
+    /// Every catalog feature, by key, with whether the plan includes it.
+    pub features: BTreeMap<String, bool>,
+    /// Every catalog limit, by key, with the most units the plan allows, or `null` for no limit.
+    pub limits: BTreeMap<String, Option<u64>>,
+}
+
+/// Which plan the organization runs on and how it got it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, ToSchema)]
+pub struct PlanRef {
+    /// The plan's key; `unlimited` for a self-hosted organization.
+    pub key: String,
+    pub source: PlanSource,
+}
+
+/// How the organization got its plan: a subscription (`stripe`), granted by the operator
+/// (`grant`), the non-profit plan (`nonprofit`), or the self-hosted `unlimited` plan
+/// (`selfhost`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum PlanSource {
+    Stripe,
+    Grant,
+    Nonprofit,
+    Selfhost,
+}
+
+impl From<CoreSource> for PlanSource {
+    fn from(source: CoreSource) -> Self {
+        match source {
+            CoreSource::Stripe => Self::Stripe,
+            CoreSource::Grant => Self::Grant,
+            CoreSource::Nonprofit => Self::Nonprofit,
+            CoreSource::Selfhost => Self::Selfhost,
+        }
+    }
+}
+
+impl From<&OrgPlan> for OrgEntitlements {
+    /// Lists [`feature::ALL`] and [`Limit::ALL`], not the plan row's keys: a key the catalog no
+    /// longer has is left out, and one the row lacks shows as the plan reads it (B7).
+    fn from(plan: &OrgPlan) -> Self {
+        let rules = &plan.entitlements;
+        Self {
+            plan: PlanRef {
+                key: plan.plan.clone(),
+                source: plan.source.into(),
+            },
+            features: feature::ALL
+                .iter()
+                .map(|key| ((*key).to_owned(), rules.has_key(key)))
+                .collect(),
+            limits: Limit::ALL
+                .iter()
+                .map(|limit| (limit.key().to_owned(), rules.limit(*limit)))
+                .collect(),
+        }
+    }
+}
+
+/// Read the organization's plan, every catalog feature with whether the plan includes it, and
+/// every catalog limit with its value.
+#[utoipa::path(
+    get,
+    path = "/api/v1/organization/entitlements",
+    operation_id = "getOrganizationEntitlements",
+    tag = "organization",
+    responses(
+        (status = 200, description = "The plan and what it allows", body = OrgEntitlements),
+        (status = 401, response = crate::openapi::Unauthenticated),
+        (status = 403, response = crate::openapi::PermissionDenied),
+        (status = 404, response = crate::openapi::OrganizationNotFound),
+        (status = 500, response = crate::openapi::InternalError),
+        (status = 503, response = crate::openapi::NoOrganization),
+    )
+)]
+pub async fn get_entitlements(
+    _: Require<OrgManage>,
+    entitlements: RequestEntitlements,
+) -> Json<OrgEntitlements> {
+    Json(entitlements.plan().into())
+}
+
 /// The most unknown keys a 422 lists, so a large body cannot make an equally large answer.
 pub const MAX_UNKNOWN_KEYS: usize = 20;
 
@@ -306,6 +408,16 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// The API's spellings are the stored ones, so a source added to the core cannot reach the
+    /// API under another name.
+    #[test]
+    fn plan_sources_serialize_as_their_stored_spelling() {
+        for source in CoreSource::ALL {
+            let json = serde_json::to_value(PlanSource::from(source)).unwrap();
+            assert_eq!(json, source.as_str());
+        }
+    }
 
     #[test]
     fn a_patch_lists_every_unknown_key() {

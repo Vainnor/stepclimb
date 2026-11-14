@@ -184,6 +184,26 @@ export interface paths {
         patch: operations["updateOrganization"];
         trace?: never;
     };
+    "/api/v1/organization/entitlements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the organization's plan, every catalog feature with whether the plan includes it, and
+         *     every catalog limit with its value.
+         */
+        get: operations["getOrganizationEntitlements"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/organization/settings": {
         parameters: {
             query?: never;
@@ -353,6 +373,18 @@ export interface components {
          * @enum {string}
          */
         AssignmentSource: "local" | "idp" | "sync" | "scim" | "connector";
+        /** @description The organization's plan and what it allows: every feature and limit of the server's catalogs. */
+        Entitlements: {
+            /** @description Every catalog feature, by key, with whether the plan includes it. */
+            features: {
+                [key: string]: boolean;
+            };
+            /** @description Every catalog limit, by key, with the most units the plan allows, or `null` for no limit. */
+            limits: {
+                [key: string]: number | null;
+            };
+            plan: components["schemas"]["PlanRef"];
+        };
         /** @description One rule a request body broke, in a 422's `errors`. */
         FieldError: {
             /** @description The stable code of the rule, such as `settings.unknown_key`. */
@@ -380,10 +412,7 @@ export interface components {
         HealthStatus: "ok" | "unavailable";
         /** @description What `GET /api/v1/me` answers. */
         Me: {
-            /**
-             * @description The keys of the organization's enabled features. Always empty until the server computes
-             *     features for this route.
-             */
+            /** @description The keys of the catalog features the organization's plan includes, sorted. */
             features: string[];
             /**
              * @description Each scope where the caller holds at least one effective permission, with those
@@ -637,6 +666,19 @@ export interface components {
             /** @description The key roles list, `area.action`. */
             key: string;
         };
+        /** @description Which plan the organization runs on and how it got it. */
+        PlanRef: {
+            /** @description The plan's key; `unlimited` for a self-hosted organization. */
+            key: string;
+            source: components["schemas"]["PlanSource"];
+        };
+        /**
+         * @description How the organization got its plan: a subscription (`stripe`), granted by the operator
+         *     (`grant`), the non-profit plan (`nonprofit`), or the self-hosted `unlimited` plan
+         *     (`selfhost`).
+         * @enum {string}
+         */
+        PlanSource: "stripe" | "grant" | "nonprofit" | "selfhost";
         /** @description The body of every error response (RFC 9457). */
         Problem: {
             /** @description The stable error code, `area.reason`. */
@@ -1740,6 +1782,31 @@ export interface operations {
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             422: components["responses"]["UnprocessableEntity"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    getOrganizationEntitlements: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The plan and what it allows */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Entitlements"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["PermissionDenied"];
+            404: components["responses"]["OrganizationNotFound"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };

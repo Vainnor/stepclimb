@@ -1055,6 +1055,42 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/api/v1/organization/entitlements": {
+      "get": {
+        "tags": [
+          "organization"
+        ],
+        "summary": "Read the organization's plan, every catalog feature with whether the plan includes it, and\nevery catalog limit with its value.",
+        "operationId": "getOrganizationEntitlements",
+        "responses": {
+          "200": {
+            "description": "The plan and what it allows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Entitlements"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/PermissionDenied"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      }
+    },
     "/api/v1/organization/settings": {
       "get": {
         "tags": [
@@ -1602,6 +1638,45 @@
           "connector"
         ]
       },
+      "Entitlements": {
+        "type": "object",
+        "description": "The organization's plan and what it allows: every feature and limit of the server's catalogs.",
+        "required": [
+          "plan",
+          "features",
+          "limits"
+        ],
+        "properties": {
+          "features": {
+            "type": "object",
+            "description": "Every catalog feature, by key, with whether the plan includes it.",
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "limits": {
+            "type": "object",
+            "description": "Every catalog limit, by key, with the most units the plan allows, or `null` for no limit.",
+            "additionalProperties": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "plan": {
+            "$ref": "#/components/schemas/PlanRef"
+          }
+        }
+      },
       "FieldError": {
         "type": "object",
         "description": "One rule a request body broke, in a 422's `errors`.",
@@ -1672,7 +1747,7 @@
             "items": {
               "type": "string"
             },
-            "description": "The keys of the organization's enabled features. Always empty until the server computes\nfeatures for this route."
+            "description": "The keys of the catalog features the organization's plan includes, sorted."
           },
           "grants": {
             "type": "array",
@@ -2275,6 +2350,33 @@
             "description": "The key roles list, `area.action`."
           }
         }
+      },
+      "PlanRef": {
+        "type": "object",
+        "description": "Which plan the organization runs on and how it got it.",
+        "required": [
+          "key",
+          "source"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The plan's key; `unlimited` for a self-hosted organization."
+          },
+          "source": {
+            "$ref": "#/components/schemas/PlanSource"
+          }
+        }
+      },
+      "PlanSource": {
+        "type": "string",
+        "description": "How the organization got its plan: a subscription (`stripe`), granted by the operator\n(`grant`), the non-profit plan (`nonprofit`), or the self-hosted `unlimited` plan\n(`selfhost`).",
+        "enum": [
+          "stripe",
+          "grant",
+          "nonprofit",
+          "selfhost"
+        ]
       },
       "Problem": {
         "type": "object",

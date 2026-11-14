@@ -104,6 +104,10 @@ const TABLE: &[Entry] = &[
         access: permission(OrgManage::KEY, Target::Org, empty_settings_patch),
     },
     Entry {
+        operation_id: "getOrganizationEntitlements",
+        access: permission(OrgManage::KEY, Target::Org, at_org),
+    },
+    Entry {
         operation_id: "listAccounts",
         access: permission(AccountView::KEY, Target::AnyScope, at_org),
     },

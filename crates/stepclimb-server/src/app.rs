@@ -104,6 +104,10 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
             get(organization::get_settings).patch(organization::update_settings),
         ),
         (
+            organization::ENTITLEMENTS_PATH,
+            get(organization::get_entitlements),
+        ),
+        (
             accounts::ACCOUNTS_PATH,
             get(accounts::list_accounts).post(accounts::create_account),
         ),

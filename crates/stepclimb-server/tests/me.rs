@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! `GET /api/v1/me` over the whole router (docs/specs/m0/03-users-and-identities.md B21, B22,
-//! T6, T17). The 401, 2xx and cross-organization cases of the permission suite are in
-//! `tests/permissions.rs` (its `getMe` entry).
+//! T6, T17; its `features`, docs/specs/m0/10-entitlements-framework.md B12, T9). The 401, 2xx and
+//! cross-organization cases of the permission suite are in `tests/permissions.rs` (its `getMe`
+//! entry). A test plan is written by SQL and the organization pointed at it, since M0 has no API
+//! that changes a plan.
 //!
 //! One organization, so the production request-organization resolver serves it.
 //! `session::start` stands in for the sign-in specs. Needs `DATABASE_URL` (`just up`).
@@ -21,7 +23,8 @@ use stepclimb_core::{
     OrgScope, Source, accounts,
     audit::Actor,
     clock::ManualClock,
-    id::Uuid,
+    feature,
+    id::{Uuid, new_id},
     organizations,
     role_assignments::{self, NewAssignment, Scope},
     roles,
@@ -179,6 +182,13 @@ impl Fixture {
     }
 }
 
+/// Every catalog feature key, sorted: what the `unlimited` plan lists.
+fn every_feature() -> Vec<&'static str> {
+    let mut keys = feature::ALL.to_vec();
+    keys.sort_unstable();
+    keys
+}
+
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn t17_a_session_user_gets_the_b22_shape(pool: PgPool) {
     let fixture = Fixture::new(pool).await;
@@ -206,7 +216,7 @@ async fn t17_a_session_user_gets_the_b22_shape(pool: PgPool) {
                 "name": "Example Org",
             },
             "grants": [],
-            "features": [],
+            "features": every_feature(),
         })
     );
     let errors = common::schema_errors(&document(), "Me", &answer.body);
@@ -433,4 +443,62 @@ async fn an_organization_grant_comes_first_and_a_removed_assignment_is_gone(pool
     every.sort_unstable();
     assert_eq!(grants[0]["permissions"], json!(every));
     assert_eq!(removed.body["grants"], json!([]));
+}
+
+// Spec 10 T9: the features `/me` lists.
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t9_unlimited_lists_every_catalog_feature_sorted(pool: PgPool) {
+    let fixture = Fixture::new(pool).await;
+    let sam = fixture.sam().await;
+    let answer = fixture.me_with_cookie(&fixture.sign_in(sam).await).await;
+    assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    assert_eq!(answer.body["features"], json!(every_feature()));
+    assert_eq!(every_feature().len(), feature::ALL.len());
+}
+
+/// A test plan lists only the catalog features it stores as `true` (B7); a key the catalog does
+/// not have is never listed. A plan change applies on the next request (B8).
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t9_a_test_plan_lists_only_the_features_it_enables(pool: PgPool) {
+    let fixture = Fixture::new(pool).await;
+    let sam = fixture.sam().await;
+    let cookie = fixture.sign_in(sam).await;
+    let plan = new_id();
+    sqlx::query("INSERT INTO plans (id, key, features, limits) VALUES ($1, $2, $3, '{}'::jsonb)")
+        .bind(plan)
+        .bind(format!("test_{}", plan.simple()))
+        .bind(json!({
+            "oidc_providers": true,
+            "api_keys": true,
+            "custom_roles": false,
+            "custom_branding": "true",
+            "retired_feature": true,
+        }))
+        .execute(&fixture.pool)
+        .await
+        .expect("insert plan");
+    sqlx::query("UPDATE org_plans SET plan_id = $2, source = 'grant' WHERE org_id = $1")
+        .bind(fixture.org)
+        .bind(plan)
+        .execute(&fixture.pool)
+        .await
+        .expect("move to the plan");
+
+    let answer = fixture.me_with_cookie(&cookie).await;
+    assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    assert_eq!(
+        answer.body["features"],
+        json!(["api_keys", "oidc_providers"])
+    );
+    let errors = common::schema_errors(&document(), "Me", &answer.body);
+    assert!(errors.is_empty(), "{errors:#?}");
+
+    sqlx::query("UPDATE plans SET features = '{}'::jsonb WHERE id = $1")
+        .bind(plan)
+        .execute(&fixture.pool)
+        .await
+        .expect("disable every feature");
+    let answer = fixture.me_with_cookie(&cookie).await;
+    assert_eq!(answer.body["features"], json!([]));
 }
