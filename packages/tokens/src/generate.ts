@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The theme generator: an organization's brand color in, a theme of color tokens and the UI font
-// out (spec 12, B11 to B15, B18, B19). It builds a 12-step OKLCH brand scale and a 12-step
+// out (spec 12, B11 to B18, B19). For each appearance it builds a 12-step OKLCH brand scale and a
 // neutral scale at the brand's hue, gamut-maps every color into sRGB, and picks the brand tokens
 // by their WCAG contrast. No DOM or Node dependency: it runs at build time, in the browser and is
 // the reference the server's port is held equal to.
@@ -116,7 +116,10 @@ interface Recipe {
   brandTarget: (inputL: number) => number;
   /** How many steps past `brand` `brand-fg` aims at. */
   fgOffset: number;
-  /** The neutral scale, and each neutral token's step in it. */
+  /**
+   * The neutral scale, lightest or darkest end first, and each neutral token's step in it. Every
+   * step carries a token (or the scrim), so the scale has as many steps as the appearance uses.
+   */
   neutralStops: readonly Stop[];
   neutralSteps: Record<NeutralToken, number>;
   /** The modal scrim: a neutral step at this opacity. */
@@ -130,7 +133,7 @@ interface Recipe {
  * (spec 12, Q9): on-brand 0.99, brand-soft 0.95, brand 0.50, brand-hover 0.45, brand-fg 0.40;
  * `brand` is the passing step nearest the input's lightness. The neutrals are the plan's, except
  * `line-strong` (0.78 in the plan) and `fg-soft` (0.55), darkened by the least that clears B20's
- * minimums for every brand hue (coordinator decision, spec 12).
+ * minimums for every brand hue (coordinator and owner decisions, spec 12).
  */
 const light: Recipe = {
   brandStops: [
@@ -156,8 +159,7 @@ const light: Recipe = {
     { l: 0.93, c: 0.006 },
     { l: 0.885, c: 0.009 },
     { l: 0.7, c: 0.008 },
-    { l: 0.655, c: 0.012 },
-    { l: 0.62, c: 0.009 },
+    { l: 0.633, c: 0.012 },
     { l: 0.533, c: 0.01 },
     { l: 0.46, c: 0.012 },
     { l: 0.31, c: 0.013 },
@@ -171,12 +173,12 @@ const light: Recipe = {
     line: 4,
     "fg-disabled": 5,
     "line-strong": 6,
-    "fg-soft": 8,
-    "fg-sub": 9,
-    "fg-default": 10,
-    "fg-strong": 11,
+    "fg-soft": 7,
+    "fg-sub": 8,
+    "fg-default": 9,
+    "fg-strong": 10,
   },
-  overlay: { step: 11, alpha: 0.45 },
+  overlay: { step: 10, alpha: 0.45 },
   status: {
     success: [0.55, 0.12, 150],
     "success-soft": [0.95, 0.03, 150],
@@ -294,7 +296,6 @@ const highContrast: Recipe = {
     { l: 0.25, c: 0 },
     { l: 0.18, c: 0 },
     { l: 0.13, c: 0 },
-    { l: 0.06, c: 0 },
     { l: 0, c: 0 },
   ],
   neutralSteps: {
@@ -310,7 +311,7 @@ const highContrast: Recipe = {
     "fg-default": 8,
     "fg-strong": 9,
   },
-  overlay: { step: 11, alpha: 0.6 },
+  overlay: { step: 10, alpha: 0.6 },
   status: {
     success: [0.42, 0.12, 150],
     "success-soft": [0.95, 0.03, 150],
@@ -465,7 +466,7 @@ export function generate(inputs: BrandInputs): GeneratedThemes {
   };
 }
 
-/** The theme as DTCG 2025.10 JSON, the shape of `src/tokens/themes/*.json`. */
+/** The theme as DTCG 2025.10 JSON: one theme context's tokens, as the build's resolver takes them. */
 export function themeToDtcg(theme: Theme): object {
   const color = Object.fromEntries(
     colorTokens.map((t) => {

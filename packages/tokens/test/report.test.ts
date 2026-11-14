@@ -24,7 +24,7 @@ const withColors = (theme: Theme, colors: Partial<Theme["colors"]>): Theme => ({
   colors: { ...theme.colors, ...colors },
 });
 
-/** B20's table, restated: [foreground, background, "text" or "ui"]. */
+/** B20's table, restated: [foreground, background, "text" or "ui"]; 43 pairs. */
 const b20: [string, string, "text" | "ui"][] = [
   ...["fg-strong", "fg-default", "fg-sub", "fg-soft"].flatMap((fg) =>
     ["bg-canvas", "bg-raised", "bg-sunken"].map((bg): [string, string, "text"] => [fg, bg, "text"]),
@@ -48,6 +48,8 @@ const b20: [string, string, "text" | "ui"][] = [
     [fg, "bg-canvas", "ui"],
     [fg, "bg-raised", "ui"],
   ]),
+  // Owner decision (13 Nov 2026): input borders also on wells and inputs.
+  ["line-strong", "bg-sunken", "ui"],
 ];
 
 describe("contrastReport", () => {

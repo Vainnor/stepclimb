@@ -62,6 +62,8 @@ export const requiredPairs: readonly Pair[] = [
     [`${s}-fg`, "bg-canvas", "text"],
   ]),
   ...(["brand", "ring", "line-strong"] as const).flatMap((t) => onCanvasAndRaised(t, "ui")),
+  // Input borders sit on wells and inputs too (owner decision, spec 12 B20).
+  ["line-strong", "bg-sunken", "ui"],
   ...learningAliases.flatMap(([state]) => onCanvasAndRaised(state, "ui")),
 ];
 

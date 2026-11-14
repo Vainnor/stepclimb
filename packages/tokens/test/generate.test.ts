@@ -63,7 +63,7 @@ const VZDC_RULE = `[data-sc-brand="vzdc"] {
   --sc-fg-sub: oklch(46% 0.012 25.87);
   --sc-fg-soft: oklch(53.3% 0.01 25.87);
   --sc-fg-disabled: oklch(70% 0.008 25.87);
-  --sc-line-strong: oklch(65.5% 0.012 25.87);
+  --sc-line-strong: oklch(63.3% 0.012 25.87);
   --sc-line: oklch(88.5% 0.009 25.87);
   --sc-line-soft: oklch(93% 0.006 25.87);
   --sc-brand: oklch(31% 0.0808 25.87);

@@ -19,8 +19,8 @@ export const defaultThemes: Record<Appearance, Record<ColorToken, Value>> = {
     // Coordinator decision: the plan's 0.55; 4.5:1 on bg-sunken.
     "fg-soft": [0.533, 0.01, 195],
     "fg-disabled": [0.7, 0.008, 195],
-    // Coordinator decision: the plan's 0.78; 3:1 on bg-canvas and bg-raised.
-    "line-strong": [0.655, 0.012, 195],
+    // Coordinator and owner decisions: the plan's 0.78; 3:1 on bg-canvas, bg-raised and bg-sunken.
+    "line-strong": [0.633, 0.012, 195],
     line: [0.885, 0.009, 195],
     "line-soft": [0.93, 0.006, 195],
     brand: [0.5, 0.09, 195],

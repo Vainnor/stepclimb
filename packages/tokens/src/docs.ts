@@ -214,7 +214,7 @@ export function docsMarkdown(tables: DocsTables): string {
   return `# Stepclimb UI tokens\n\n${intro}\n\n${sections.join("\n\n")}\n`;
 }
 
-/** The value variables.css declares outside the `color-gamut` queries. */
+/** The value variables.css declares: a color's sRGB form, which is the only one it writes. */
 function baseValue(t: TokenTransformed): string {
   if (typeof t.value === "string") return t.value;
   const srgb = t.value.srgb;

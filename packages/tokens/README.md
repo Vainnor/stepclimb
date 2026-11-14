@@ -39,7 +39,7 @@ The theme generator, `src/generate.ts` with its color math in `src/color.ts`, ta
 organization's primary color (hex or `oklch()`) and UI font and returns a theme per appearance
 (light, dark, high contrast): every color token and `font.ui`, written as DTCG JSON
 (`themeToDtcg`) or as one CSS rule with `variables.css`'s names (`themeToCss`). For each
-appearance it builds 12-step OKLCH brand and neutral scales at the brand's hue (high contrast's
+appearance it builds a 12-step OKLCH brand scale and a neutral scale at the brand's hue (high contrast's
 neutrals are grey), gamut-maps every color into sRGB (CSS Color 4) and picks `brand`, `brand-fg`
 and `ring` by WCAG contrast. Status colors do not follow the brand. The default brand's input,
 `oklch(0.5 0.09 195)`, reproduces the plan's values in all three appearances, with the
@@ -53,7 +53,7 @@ without failing, when the brand's hue is within 30 degrees of `danger`'s. The bu
 every failing pair listed when a shipped theme does not pass (`checkThemes` in `src/themes.ts`).
 
 Where the plan's example values fail those minimums, the principle wins (coordinator decision,
-spec 12): light `warning` is 0.663 rather than 0.72, light `line-strong` 0.655 rather than 0.78,
+spec 12): light `warning` is 0.663 rather than 0.72, light `line-strong` 0.633 rather than 0.78,
 light `fg-soft` 0.533 rather than 0.55, and dark `line-strong` 0.507 rather than 0.42, each the
 smallest lightness change that passes for every brand hue. Generated colors are inside sRGB, so
 `variables.css` has no `color-gamut` overrides.

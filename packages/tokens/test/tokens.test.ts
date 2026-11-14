@@ -198,36 +198,29 @@ describe("theme selection (B5, B8, T4)", () => {
     expect(contrast["fg-soft"]).not.toBe(light["fg-soft"]);
   });
 
-  // Wide-gamut displays also read the `@media (color-gamut: ...)` overrides.
-  const cases = (["srgb", "p3", "rec2020"] as const).flatMap((gamut) => [
-    ["default", gamut, {}] as const,
-    ["vzdc", gamut, vzdc] as const,
-  ]);
-
-  it.each(cases)("lets %s light win over the OS dark setting on %s", (_, gamut, brand) => {
-    const chosen = at(root({ ...brand, "data-sc-theme": "light" }), true, [], gamut);
-    expect(chosen).toEqual(at(root(brand), false, [], gamut));
-  });
-
-  it.each(cases)("lets %s high contrast win over the OS dark setting on %s", (_, gamut, brand) => {
-    const el = root({ ...brand, "data-sc-theme": "high-contrast" });
-    expect(at(el, true, [], gamut)).toEqual(at(el, false, [], gamut));
-    expect(at(el, true, [], gamut)).not.toEqual(at(root(brand), false, [], gamut));
-  });
-
-  it.each(cases)(
-    "follows the OS dark setting only when no theme is chosen, %s on %s",
-    (_, gamut, brand) => {
-      const os = at(root(brand), true, [], gamut);
-      expect(os).toEqual(at(root({ ...brand, "data-sc-theme": "dark" }), false, [], gamut));
-      expect(os).not.toEqual(at(root(brand), false, [], gamut));
-    },
-  );
-
-  it.each([
+  const brands = [
     ["default", {}],
     ["vzdc", vzdc],
-  ] as const)(
+  ] as const;
+
+  it.each(brands)("lets %s light win over the OS dark setting", (_, brand) => {
+    const chosen = at(root({ ...brand, "data-sc-theme": "light" }), true);
+    expect(chosen).toEqual(at(root(brand), false));
+  });
+
+  it.each(brands)("lets %s high contrast win over the OS dark setting", (_, brand) => {
+    const el = root({ ...brand, "data-sc-theme": "high-contrast" });
+    expect(at(el, true)).toEqual(at(el, false));
+    expect(at(el, true)).not.toEqual(at(root(brand), false));
+  });
+
+  it.each(brands)("follows the OS dark setting only when no theme is chosen, %s", (_, brand) => {
+    const os = at(root(brand), true);
+    expect(os).toEqual(at(root({ ...brand, "data-sc-theme": "dark" }), false));
+    expect(os).not.toEqual(at(root(brand), false));
+  });
+
+  it.each(brands)(
     "lets the OS contrast setting select %s high contrast when no theme is chosen (Q5)",
     (_, brand) => {
       const chosen = at(root({ ...brand, "data-sc-theme": "high-contrast" }));
@@ -251,6 +244,13 @@ describe("theme selection (B5, B8, T4)", () => {
       contrast: true,
     });
     expect(colors(inner)).toEqual(colors(inContext("default dark (attribute)")));
+  });
+
+  it("gives a wide-gamut display the same values, since no theme has color-gamut overrides", () => {
+    expect(built.variables).not.toContain("color-gamut");
+    for (const gamut of ["p3", "rec2020"] as const) {
+      expect(at(root(vzdc), false, [], gamut)).toEqual(at(root(vzdc), false));
+    }
   });
 
   it("writes the themes in resolution order: light, dark, OS dark, high contrast, OS high contrast, then each further brand", () => {

@@ -156,6 +156,7 @@ it at `packages/tokens/tokens/`. See Open question Q1.
   | `<status>-fg` on `<status>-soft` and on `bg-canvas`, for each status | 4.5:1 | Feedback text |
   | `brand`, `ring`, `line-strong` on `bg-canvas` and `bg-raised` | 3:1 | UI components and focus (WCAG 1.4.11) |
   | each `state-*` on `bg-canvas` and `bg-raised` | 3:1 | Learning-state icons and shapes |
+  | `line-strong` on `bg-sunken` | 3:1 | Input borders on wells and inputs (decided by the owner, 13 Nov 2026) |
 
   `fg-disabled` is not checked: WCAG exempts disabled controls. The high-contrast theme's pairs
   use Q10's minimums. A learning state is measured as the token it aliases (Q3).
@@ -374,10 +375,15 @@ overrule any of them.
   by the smallest lightness change that passes on 8-bit sRGB for every brand hue (the neutrals
   carry the brand's hue), keeping hue and chroma: light `warning` 0.72 to 0.663 (so
   `state-review` clears 3:1 on `bg-canvas` and `bg-raised`), light `line-strong` 0.78 to 0.655
-  (3:1 on both), light `fg-soft` 0.55 to 0.533 (4.5:1 on `bg-sunken`, which also lifts the
-  placeholder text of Select, ComboBox and TextField), and dark `line-strong` 0.42 to 0.507 (3:1
+  (3:1 on both; then 0.633 by the owner's decision below), light `fg-soft` 0.55 to 0.533 (4.5:1
+  on `bg-sunken`, which also lifts the placeholder text of Select, ComboBox and TextField), and dark `line-strong` 0.42 to 0.507 (3:1
   on both, the same rule applied to the dark theme). `docs/plan/` is unchanged; the owner may
   update the plan's table.
+- **Owner decision (13 Nov 2026): `line-strong` on `bg-sunken`.** B20 also requires
+  `line-strong` on `bg-sunken` at the UI minimum (3:1, 4.5:1 in high contrast) in every theme.
+  Light `line-strong` darkens again by the smallest change that passes on `bg-canvas`,
+  `bg-raised` and `bg-sunken` for every brand hue: 0.655 to 0.633. Dark (0.507) and high contrast
+  (0.25) already pass.
 - **Coordinator decision (2026-11-13): OS contrast setting.** `prefers-contrast: more` selects
   high contrast (B5). `shadow.float` stays as it is in every theme; dark relies on the 1 px line.
 - **Coordinator decision (2026-11-13): Q8's open values.** Corner style `square` sets every
