@@ -21,6 +21,8 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 jiff.workspace = true
+# The SHA-256 of a stored theme stylesheet (spec 12, B24).
+sha2.workspace = true
 
 [dev-dependencies]
 stepclimb-core = { path = ".", features = ["test-support"] }
