@@ -1,7 +1,7 @@
 {
   "name": "Stepclimb UI",
   "version": "2025.10",
-  "description": "The shared scales and the learning-state aliases, then one theme per brand and appearance, then the density. The default brand is Stepclimb's; vzdc is the plan's example organization brand.",
+  "description": "The shared scales and the learning-state aliases, then one theme per brand and appearance, then the density. The default brand is Stepclimb's; vzdc is the plan's example organization brand. The theme contexts are empty here: src/config.ts fills each with the theme src/themes.ts generates for it.",
   "sets": {
     "base": { "sources": [{ "$ref": "base.json" }, { "$ref": "learning.json" }] }
   },
@@ -9,12 +9,12 @@
     "theme": {
       "default": "default-light",
       "contexts": {
-        "default-light": [{ "$ref": "themes/default-light.json" }],
-        "default-dark": [{ "$ref": "themes/default-dark.json" }],
-        "default-high-contrast": [{ "$ref": "themes/default-high-contrast.json" }],
-        "vzdc-light": [{ "$ref": "themes/vzdc-light.json" }],
-        "vzdc-dark": [{ "$ref": "themes/vzdc-dark.json" }],
-        "vzdc-high-contrast": [{ "$ref": "themes/vzdc-high-contrast.json" }]
+        "default-light": [],
+        "default-dark": [],
+        "default-high-contrast": [],
+        "vzdc-light": [],
+        "vzdc-dark": [],
+        "vzdc-high-contrast": []
       }
     },
     "density": {

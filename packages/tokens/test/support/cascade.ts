@@ -68,6 +68,8 @@ export interface Element {
 export interface Env {
   /** The OS setting `prefers-color-scheme: dark`. */
   dark: boolean;
+  /** The OS setting `prefers-contrast: more`; off when absent. */
+  contrast?: boolean;
   /** The display's gamut; `srgb` when absent. */
   gamut?: "srgb" | "p3" | "rec2020";
 }
@@ -102,6 +104,7 @@ const gamuts = ["srgb", "p3", "rec2020"];
 
 function mediaMatches(condition: string, env: Env): boolean {
   if (condition === "(prefers-color-scheme: dark)") return env.dark;
+  if (condition === "(prefers-contrast: more)") return env.contrast === true;
   const gamut = /^\(color-gamut: (\w+)\)$/.exec(condition)?.[1];
   if (gamut) return gamuts.indexOf(env.gamut ?? "srgb") >= gamuts.indexOf(gamut);
   throw new Error(`media query outside the model: ${condition}`);

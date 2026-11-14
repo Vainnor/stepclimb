@@ -28,6 +28,13 @@
       color-scheme: dark;
     }
   }
+  /* The OS contrast setting selects the light-based high-contrast theme when the page chose
+     neither light nor dark, as variables.css does. */
+  @media (prefers-contrast: more) {
+    :root:not([data-sc-theme="light"]):not([data-sc-theme="dark"]) {
+      color-scheme: light;
+    }
+  }
   /* A light or high-contrast subtree inside a dark page draws light form controls and scrollbars. */
   [data-sc-theme="light"],
   [data-sc-theme="high-contrast"] {
