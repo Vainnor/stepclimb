@@ -153,6 +153,12 @@ these rows are in `04` to `07`.
   providers, whether a verified-email claim is required, what happens with two matching users)
   is pending Q2; until Q2 is decided the setting is stored and returned but the server refuses to
   set it to `true` (422, `errors[].code = "settings.email_matching_unavailable"`).
+  **Coordinator decision (2026-11-14).** Q2 is decided (option A), but nothing applies it until
+  `07-admission.md` issue 4 builds the matching and the per-provider trust flag Q2 A needs. The
+  refusal stays until that issue lands, and that issue lifts it: a `true` no code reads would
+  tell an admin their organization matches by email when it does not. `false` is accepted;
+  a change of the value writes the `organization.update_settings` entry like any other key,
+  and a patch equal to the current value writes nothing (spec 09 B22).
 - **B18.** An admin can pre-provision an identity for a user (`POST
   /api/v1/users/{user_id}/identities` with `provider_key` and `subject`), so that in sync-only
   mode (`07-admission.md`) a known person can sign in the first time. An identity already linked
@@ -424,7 +430,8 @@ synthetic.
   `(provider, subject)` and none for an unknown one.
 - **T14** (B17). With `email_matching` off (the default), an unknown identity whose email equals
   an existing user's is not linked by `find_user` or any other M0 function; setting
-  `email_matching` to `true` answers 422 `settings.email_matching_unavailable` (until Q2).
+  `email_matching` to `true` answers 422 `settings.email_matching_unavailable` (until
+  `07-admission.md` issue 4, per B17's coordinator decision).
 - **T15** (B18). Pre-provisioning an identity and then calling `find_user` with it returns the
   user; an unknown `provider_key` answers 422 `identity.unknown_provider`; an org B provider key
   answers the same 422.
@@ -541,5 +548,6 @@ overrule one, which then updates this spec.
    `08-sessions-and-csrf.md` issue that provides the authenticated principal.
 6. **The `email_matching` setting.** Deliver the `OrgSettings` key (default `false`), the refusal
    to enable it until Q2 is decided, and T14 proving no M0 path links by email. After Q2, a
-   follow-up issue in `07-admission.md` implements the decided matching. Covers B17, T14.
+   follow-up issue in `07-admission.md` implements the decided matching and lifts the refusal
+   (B17's coordinator decision). Covers B17, T14.
    Depends on: issue 2; `02-organizations-and-accounts.md` issue 4.

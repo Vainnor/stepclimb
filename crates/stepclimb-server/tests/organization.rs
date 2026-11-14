@@ -752,6 +752,106 @@ async fn the_default_time_zone_is_checked_and_stored_in_the_databases_spelling(p
     assert_eq!(read.body["default_tz"], "America/New_York");
 }
 
+/// Spec 03 B17, T14: `email_matching` reads `false` and cannot be turned on. `true`, alone or
+/// beside a valid `default_tz`, answers 422 `settings.email_matching_unavailable` and writes
+/// nothing, not even the valid key, and no audit entry; `false` is accepted and, being the
+/// current value, writes nothing; a value that is no boolean is malformed.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn email_matching_cannot_be_turned_on(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let admin = f.admin().await;
+    let read = f.send(Method::GET, SETTINGS, Some(&admin), "").await;
+    assert_eq!(read.status, StatusCode::OK, "{read:?}");
+    assert_eq!(read.body["email_matching"], false);
+    f.clock.advance(Duration::from_secs(60));
+
+    for body in [
+        json!({ "email_matching": true }),
+        json!({ "email_matching": true, "default_tz": "Europe/Dublin" }),
+    ] {
+        let answer = f
+            .send(Method::PATCH, SETTINGS, Some(&admin), &body.to_string())
+            .await;
+        assert_eq!(
+            (answer.status, answer.code()),
+            (StatusCode::UNPROCESSABLE_ENTITY, "request.invalid"),
+            "{body}"
+        );
+        assert!(answer.is_problem());
+        assert_eq!(
+            answer.errors(),
+            [(
+                "/email_matching".to_owned(),
+                "settings.email_matching_unavailable".to_owned()
+            )]
+        );
+    }
+    for body in [r#"{"email_matching": "true"}"#, r#"{"email_matching": 1}"#] {
+        let answer = f.send(Method::PATCH, SETTINGS, Some(&admin), body).await;
+        assert_eq!(
+            (answer.status, answer.code()),
+            (StatusCode::BAD_REQUEST, "request.malformed"),
+            "{body}"
+        );
+    }
+    let off = f
+        .send(
+            Method::PATCH,
+            SETTINGS,
+            Some(&admin),
+            r#"{"email_matching": false}"#,
+        )
+        .await;
+    assert_eq!(off.status, StatusCode::OK, "{off:?}");
+    assert_eq!(off.body["email_matching"], false);
+    assert_schema("OrgSettings", &off.body);
+
+    assert_eq!(f.updated_at().await, now());
+    let stored: String =
+        sqlx::query_scalar("SELECT settings::text FROM organizations WHERE id = $1")
+            .bind(f.org)
+            .fetch_one(&f.pool)
+            .await
+            .expect("the organization");
+    assert_eq!(stored, "{}");
+    let entries: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events WHERE action = 'organization.update_settings'",
+    )
+    .fetch_one(&f.pool)
+    .await
+    .expect("count entries");
+    assert_eq!(entries, 0);
+}
+
+/// An admin of org B reads org B's `email_matching`, never org A's, even when org A's row holds
+/// a value this release cannot write.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn email_matching_is_read_from_the_callers_organization(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let b = organizations::create(&f.pool, "org-b", "Org B", now())
+        .await
+        .expect("create organization");
+    sqlx::query("UPDATE organizations SET settings = '{\"email_matching\": true}' WHERE id = $1")
+        .bind(f.org)
+        .execute(&f.pool)
+        .await
+        .expect("seed org A");
+    let read = |org: Uuid, cookie: String| {
+        let request = Request::get(SETTINGS)
+            .header(header::COOKIE, cookie)
+            .header(TEST_ORG_HEADER, org.to_string())
+            .body(Body::empty())
+            .expect("a request");
+        answer(&f.app, request)
+    };
+    let of_b = read(b.id, f.admin_of(b.id).await).await;
+    assert_eq!(of_b.status, StatusCode::OK, "{of_b:?}");
+    assert_eq!(of_b.body["email_matching"], false);
+    let of_a = read(f.org, f.admin().await).await;
+    assert_eq!(of_a.status, StatusCode::OK, "{of_a:?}");
+    assert_eq!(of_a.body["email_matching"], true);
+}
+
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn a_settings_body_that_is_not_an_object_is_malformed(pool: PgPool) {
     let f = Fixture::new(pool).await;

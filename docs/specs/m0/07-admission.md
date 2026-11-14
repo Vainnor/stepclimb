@@ -51,8 +51,8 @@ just-in-time user creation only when the organization allows sign-up. Every sign
      identity and is handled by B4);
   2. when the organization's `email_matching` setting (`03-users-and-identities.md` B17, off by
      default as the plan says) is on, a user in the organization with the same email, under the
-     conditions `03-users-and-identities.md` Q2 sets (pending that Q2; until it is decided the
-     setting cannot be turned on).
+     conditions `03-users-and-identities.md` Q2 sets (decided: option A; until issue 4 builds
+     the matching, the setting cannot be turned on, `03-users-and-identities.md` B17).
   A match creates the `identities` row linking `(provider_id, subject)` to that user, inside
   B3's transaction, so it is rolled back if a later step refuses.
 - **B6.** With email matching off, an identity is never linked by email, whatever the provider
@@ -331,7 +331,8 @@ overrule one, which then updates this spec.
 3. **I3. Declarative rules.** Rule model, validation on save, evaluation at step 2, storage per
    Q2. Covers B8 to B10; T7, T8, T21 (steps 1, 2, 5). Depends on: I2, Q1, Q3.
 4. **I4. Unknown-identity resolution and sync-only mode.** The provisioned-user match (Q4),
-   email matching under `03-users-and-identities.md` Q2's conditions, sync-only refusal. Covers
+   email matching under `03-users-and-identities.md` Q2's conditions (which lifts the refusal to
+   set `email_matching` to `true`, `03-users-and-identities.md` B17), sync-only refusal. Covers
    B5, B6, B11; T2 to T5, T9. Depends on: I3, Q4, `03-users-and-identities.md` Q2.
 5. **I5. Webhook administration.** Migration for `admission_webhooks` (pending Q2), the four
    webhook routes, server-generated secret returned once, rotation, encryption at rest. Covers

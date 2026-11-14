@@ -436,6 +436,45 @@ async fn find_user_returns_the_linked_user_for_a_known_identity_only(pool: PgPoo
     assert_err!(nul, Error::ContainsNul { field: "subject" });
 }
 
+/// T14 (B17): with `email_matching` off, the default, a sign-in through an identity the
+/// organization does not know is not linked to the user with the same email address. The M0
+/// lookup takes no email, and its miss links nothing in either organization (both have a user
+/// at `sam@example.test`). No other M0 function links without a `user_id` from its caller.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_unknown_identity_is_never_linked_by_email_with_matching_off(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    let b = org(&pool, "org-b").await;
+    let settings = organizations::settings(&pool, scope(a.id)).await.unwrap();
+    assert!(!settings.email_matching, "off by default");
+    let before = table(&pool).await;
+    assert!(before.is_empty());
+
+    for provider in [a.oidc, a.oauth] {
+        let found = identities::find_user(&pool, scope(a.id), provider, "2000001")
+            .await
+            .unwrap();
+        assert_eq!(found, None);
+    }
+    let sam = users::get(&pool, scope(a.id), a.sam)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(sam.email.as_deref(), Some("sam@example.test"));
+    assert!(
+        identities::list_for_user(&pool, scope(a.id), a.sam)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        identities::list_for_user(&pool, scope(b.id), b.sam)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(table(&pool).await, before, "no identity was linked");
+}
+
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn list_for_user_reads_one_users_identities_in_the_scope_only(pool: PgPool) {
     let a = org(&pool, "org-a").await;

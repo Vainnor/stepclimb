@@ -2346,12 +2346,17 @@
         "type": "object",
         "description": "Every organization setting with its effective value: the stored one, or the setting's\ndefault when none is stored.",
         "required": [
-          "default_tz"
+          "default_tz",
+          "email_matching"
         ],
         "properties": {
           "default_tz": {
             "type": "string",
             "description": "The IANA time zone a user created without one gets; `UTC` unless set."
+          },
+          "email_matching": {
+            "type": "boolean",
+            "description": "Whether a sign-in through an identity the organization does not know yet may be linked\nto the existing user with the same email address. `false` unless set, and this release\nrefuses to set it to `true`."
           }
         }
       },
@@ -2362,6 +2367,10 @@
           "default_tz": {
             "type": "string",
             "description": "An IANA time zone, matched in any letter case and stored in the database's spelling."
+          },
+          "email_matching": {
+            "type": "boolean",
+            "description": "Only `false` is accepted: `true` answers 422 with\n`settings.email_matching_unavailable`."
           }
         },
         "additionalProperties": false
@@ -3443,7 +3452,7 @@
         }
       },
       "SettingsInvalid": {
-        "description": "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `tz.unknown` a `default_tz` that is no IANA time zone.",
+        "description": "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses.",
         "content": {
           "application/problem+json": {
             "schema": {

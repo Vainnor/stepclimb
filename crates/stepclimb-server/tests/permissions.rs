@@ -119,7 +119,7 @@ const TABLE: &[Entry] = &[
     },
     Entry {
         operation_id: "updateOrganizationSettings",
-        access: permission(OrgManage::KEY, Target::Org, empty_settings_patch),
+        access: permission(OrgManage::KEY, Target::Org, settings_patch),
     },
     Entry {
         operation_id: "getOrganizationEntitlements",
@@ -347,12 +347,13 @@ fn rename_organization(_: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_
     })
 }
 
-/// A settings patch naming no key, the only valid one while no setting exists.
-fn empty_settings_patch(_: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+/// A settings patch that names `email_matching` with its current value, so the allowed case
+/// passes the setting's validation and writes nothing.
+fn settings_patch(_: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
         Call {
             params: Vec::new(),
-            body: Some(serde_json::json!({})),
+            body: Some(serde_json::json!({ "email_matching": false })),
             at: At::Org,
         }
     })
