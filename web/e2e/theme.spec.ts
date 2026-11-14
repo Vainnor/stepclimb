@@ -3,7 +3,25 @@
 // The e2e stack has no organization, so `/theme.css` is the default brand's; the appearance
 // comes from the `__Host-sc_appearance` cookie, as for any signed-out browser. The menu test
 // answers `/api/v1/me` and the save in the browser, as tests/shell.spec.ts does.
+import AxeBuilder from "@axe-core/playwright";
 import { type Browser, expect, type Page, test } from "@playwright/test";
+
+const WCAG = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"];
+
+/** axe's WCAG 2.2 AA violations on the whole page, one line per node. */
+async function violations(page: Page): Promise<string[]> {
+  const result = await new AxeBuilder({ page }).withTags(WCAG).analyze();
+  return result.violations.flatMap((v) =>
+    v.nodes.map((node) => `${v.id}: ${node.target.join(" ")}: ${node.failureSummary ?? v.help}`),
+  );
+}
+
+/** Opens the user menu and its Theme submenu. */
+async function openThemeMenu(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "Avery Example, account menu" }).click();
+  await page.getByRole("menuitem", { name: "Theme" }).click();
+  await expect(page.getByRole("menuitemradio", { name: "Dark" })).toBeVisible();
+}
 
 /** A page opened with JavaScript off, so only what the server sent can draw it. */
 async function withoutScript(browser: Browser, appearance?: string): Promise<Page> {
@@ -68,7 +86,9 @@ test("a signed-out browser's appearance cookie is in the page before any script 
   expect(await canvas(page)).not.toBe(plain);
 });
 
-test("choosing a theme in the user menu redraws the page in it (B21)", async ({ page }) => {
+test("choosing a theme in the user menu redraws the page in it, with no axe violations (B21)", async ({
+  page,
+}) => {
   const me = {
     user: {
       id: "01900000-0000-7000-8000-000000000002",
@@ -95,9 +115,21 @@ test("choosing a theme in the user menu redraws the page in it (B21)", async ({ 
   await expect(page.locator("html")).toHaveAttribute("data-sc-theme", "light");
   const light = await canvas(page);
 
-  await page.getByRole("button", { name: "Avery Example, account menu" }).click();
-  await page.getByRole("menuitem", { name: "Theme" }).click();
+  await openThemeMenu(page);
+  expect(await violations(page)).toEqual([]);
   await page.getByRole("menuitemradio", { name: "Dark" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-sc-theme", "dark");
   expect(await canvas(page)).not.toBe(light);
+
+  // Whatever the choice left open (the submenu, the menu) closes before the menu is opened again.
+  for (let i = 0; i < 3 && (await page.getByRole("menu").count()) > 0; i++) {
+    await page.keyboard.press("Escape");
+  }
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await openThemeMenu(page);
+  await expect(page.getByRole("menuitemradio", { name: "Dark" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  expect(await violations(page)).toEqual([]);
 });

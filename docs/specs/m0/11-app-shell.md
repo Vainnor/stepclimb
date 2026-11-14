@@ -156,9 +156,9 @@ Read on 2026-11-12; the spec builds on it.
 - **B21.** The page sets `data-sc-theme` on `<html>` from the user's appearance choice, and
   leaves it unset to follow `prefers-color-scheme` (theme resolution order, `docs/plan/ui.md` ->
   What we borrow). The choices are light, dark, high contrast and system; the organization's
-  default appearance applies until the user chooses. Where the choice is stored, and how it is
-  applied before first paint without an inline script, is Open question Q6. Density is set the
-  same way with `data-sc-density`.
+  default appearance applies until the user chooses (not built yet: issue #162). Where the
+  choice is stored, and how it is applied before first paint without an inline script, is Open
+  question Q6. Density is set the same way with `data-sc-density`.
 - **B22.** The Vite dev server proxies `/theme.css` (and `/auth`) to `stepclimb serve`, as it
   does `/api`, so development matches production.
 
@@ -474,7 +474,9 @@ Coordinator decisions (2026-11-14), on the owner's delegation, while building I2
   is not its own. `index.html` is `private, no-cache` with `Vary: Cookie`. When the request's
   organization cannot be found, the link stays unfingerprinted and `/theme.css` gives the same
   refusal; a database error there is logged and has the same effect, since the app's own `/me`
-  request then shows the failure.
+  request then shows the failure. A stored hash that is not 64 lowercase hex digits also leaves
+  the link unfingerprinted, so nothing else reaches the attribute. A server error while finding
+  the page's session is logged and the page drawn from the appearance cookie.
 - **An instance without an organization serves the default theme.** `/theme.css` answers the
   default brand's stylesheet for `org.none` instead of 503, because with Q5 the page has no
   other colors and the "no organization yet" screen must still be drawn. Two or more
@@ -490,22 +492,25 @@ Coordinator decisions (2026-11-14), on the owner's delegation, while building I2
 - **The Tauri shell's theme.** `apps/app` loads `web/dist` with no server, so `vite build` copies
   the default brand's stylesheet to `web/dist/theme.css`. The server never serves that file: its
   `/theme.css` route answers first. Linking a server's theme is M5.
-- **Where the choice lives (Q6).** Two columns of `users`, `theme` (`system`, `light`, `dark`,
+- **Where the choice lives (Q6), for the owner to confirm.** Two columns of `users`, `theme` (`system`, `light`, `dark`,
   `high-contrast`) and `density` (`comfortable`, `compact`), defaulting to `system` and
   `comfortable`. `GET /api/v1/me` returns them as `appearance`; `PUT /api/v1/me/appearance` sets
   both (authenticated user, no permission, CSRF-checked) and answers them with
   `__Host-sc_appearance=<theme>.<density>` (one year, `HttpOnly`, `SameSite=Lax`), the cookie
   of Q6 (b). `index.html` takes the signed-in user's choice, or without a session the cookie's;
-  an unreadable or repeated cookie is no choice. 03 lists no profile route for M0; this one
-  changes only the caller's own display preference, so it is not the self-service profile
-  editing 03 leaves out.
+  an unreadable or repeated cookie is no choice. 03 lists no profile route for M0; this narrow,
+  self-only preference route is the one exception, and 03 says so. The coordinator kept both the
+  columns and the route after review (2026-11-14); the owner confirms or overrules them.
 - **No organization default appearance yet.** B21's "the organization's default appearance"
-  has no input: 12's branding inputs do not include one. Until a spec adds it, a user who has not
-  chosen follows the operating system (`data-sc-theme` unset).
+  has no input: 12's branding inputs do not include one. Until #162 adds it, a user who has not
+  chosen follows the operating system (`data-sc-theme` unset). #162 also re-renders stored
+  stylesheets when the generator version changes. I6 therefore covers B21 except the
+  organization default.
 - **The choice is in the user menu,** as two submenus, Theme (Match my device, Light, Dark, High
   contrast) and Density (Comfortable, Compact), each marking the current value. The app saves
   first and applies the answer to `<html>`; a failed save shows an error toast and changes
-  nothing. The app also applies `/me`'s choice when it loads, for a page the server did not
+  nothing. While a save is pending, both submenu items are disabled and the one being saved reads
+  "Theme: saving Dark", so a second quick choice cannot send the first one's old value back. The app also applies `/me`'s choice when it loads, for a page the server did not
   write (the Vite dev server, the Tauri shell).
 - **The OrgSwitcher (B19, Q3)** stays out of the shell: M0 resolves one organization per
   instance (`RequestOrg` answers 404 with two or more), so there is no second session to list.

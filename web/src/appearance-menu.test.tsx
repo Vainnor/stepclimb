@@ -96,6 +96,45 @@ describe("the appearance choice (B21)", () => {
     await waitFor(() => expect(html.hasAttribute("data-sc-theme")).toBe(false));
   });
 
+  it("blocks a second choice while the first is saving, and marks the one being saved", async () => {
+    const bodies: unknown[] = [];
+    let answer: (response: Response) => void = () => undefined;
+    stubServer({
+      "GET /api/v1/me": signedIn(),
+      "PUT /api/v1/me/appearance": async (request) => {
+        bodies.push(await request.json());
+        return new Promise<Response>((resolve) => {
+          answer = resolve;
+        });
+      },
+    });
+    renderApp("/");
+    await screen.findByRole("heading", { level: 1, name: "Home" });
+    await choose("Theme", "Dark");
+    await waitFor(() => expect(bodies).toHaveLength(1));
+
+    // Compact, before Dark's save has answered.
+    if (!screen.queryByRole("menuitem", { name: /^Density/ })) {
+      await userEvent.click(screen.getByRole("button", { name: "Avery Example, account menu" }));
+    }
+    const density = await screen.findByRole("menuitem", { name: "Density" });
+    expect(density).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("menuitem", { name: "Theme: saving Dark" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    await userEvent.click(density);
+    expect(screen.queryByRole("menu", { name: "Density" })).toBeNull();
+
+    answer(json({ theme: "dark", density: "comfortable" }));
+    await waitFor(() => expect(html.getAttribute("data-sc-theme")).toBe("dark"));
+    expect(html.hasAttribute("data-sc-density")).toBe(false);
+    expect(bodies).toEqual([{ theme: "dark", density: "comfortable" }]);
+    expect(await screen.findByRole("menuitem", { name: "Density" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+  });
+
   it("shows an error toast and keeps the page as it was when the save fails", async () => {
     stubServer({
       "GET /api/v1/me": signedIn(),

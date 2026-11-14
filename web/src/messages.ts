@@ -36,6 +36,7 @@ export const webMessages: Catalog = {
     "signOut.failed": "Sign-out failed",
     "signOut.failedHint": "You are still signed in. Try again in a moment.",
     "userMenu.label": "{name}, account menu",
+    "userMenu.saving": "{setting}: saving {choice}",
     "userMenu.density": "Density",
     "userMenu.signOut": "Sign out",
     "userMenu.theme": "Theme",

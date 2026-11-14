@@ -2,7 +2,8 @@
 // The user menu at the TopBar's inline end (docs/specs/m0/11-app-shell.md B4, B12, B21): the
 // user's Avatar and display name, opening a menu with the theme and density choices and Sign out.
 // A choice is saved on the server first, then applied to the page; a failed save shows an error
-// toast and leaves the page as it was. Signing out calls the server, then leaves the signed-in
+// toast and leaves the page as it was. While a save is pending, both submenus are disabled and the
+// one being saved says so, so a second choice cannot send the first one's old value back. Signing out calls the server, then leaves the signed-in
 // area; a failed sign-out shows an error toast and leaves the user signed in.
 import {
   Avatar,
@@ -92,11 +93,18 @@ export function UserMenu({ name, appearance }: UserMenuProps) {
       });
     },
   });
+  // The choice on its way to the server, shown in place of the saved one until it answers.
+  const pending = change.isPending ? change.variables : undefined;
+  const shown = pending ?? appearance;
+  const savingTheme = pending && pending.theme !== appearance.theme;
+  const savingDensity = pending && pending.density !== appearance.density;
   const chooseTheme = (keys: "all" | Set<Key>) => {
+    if (change.isPending) return;
     const theme = themeChoices.find((choice) => choice === chosen(keys));
     if (theme) change.mutate({ ...appearance, theme });
   };
   const chooseDensity = (keys: "all" | Set<Key>) => {
+    if (change.isPending) return;
     const density = densityChoices.find((choice) => choice === chosen(keys));
     if (density) change.mutate({ ...appearance, density });
   };
@@ -117,12 +125,19 @@ export function UserMenu({ name, appearance }: UserMenuProps) {
         }}
       >
         <SubmenuTrigger>
-          <MenuItem id="theme">{t("userMenu.theme")}</MenuItem>
+          <MenuItem id="theme" isDisabled={change.isPending} textValue={t("userMenu.theme")}>
+            {savingTheme
+              ? t("userMenu.saving", {
+                  setting: t("userMenu.theme"),
+                  choice: themeLabel(t, shown.theme),
+                })
+              : t("userMenu.theme")}
+          </MenuItem>
           <Menu
             aria-label={t("userMenu.theme")}
             selectionMode="single"
             disallowEmptySelection
-            selectedKeys={[appearance.theme]}
+            selectedKeys={[shown.theme]}
             onSelectionChange={chooseTheme}
           >
             {themeChoices.map((theme) => (
@@ -133,12 +148,19 @@ export function UserMenu({ name, appearance }: UserMenuProps) {
           </Menu>
         </SubmenuTrigger>
         <SubmenuTrigger>
-          <MenuItem id="density">{t("userMenu.density")}</MenuItem>
+          <MenuItem id="density" isDisabled={change.isPending} textValue={t("userMenu.density")}>
+            {savingDensity
+              ? t("userMenu.saving", {
+                  setting: t("userMenu.density"),
+                  choice: densityLabel(t, shown.density),
+                })
+              : t("userMenu.density")}
+          </MenuItem>
           <Menu
             aria-label={t("userMenu.density")}
             selectionMode="single"
             disallowEmptySelection
-            selectedKeys={[appearance.density]}
+            selectedKeys={[shown.density]}
             onSelectionChange={chooseDensity}
           >
             {densityChoices.map((density) => (

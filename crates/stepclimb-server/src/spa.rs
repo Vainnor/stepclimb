@@ -101,11 +101,19 @@ async fn theme_hash(state: &AppState, parts: &mut Parts) -> Option<String> {
 }
 
 /// The signed-in user's appearance; without a session, the cookie's; without either, none
-/// chosen. A failed lookup of the user's choice is logged and the page drawn as if none were
-/// chosen: the app's `/me` request then shows the failure itself.
+/// chosen. A server error while finding the session or the user's choice is logged and the page
+/// drawn from the cookie, or as if none were chosen: the app's `/me` request then shows the
+/// failure itself.
 async fn page_appearance(state: &AppState, parts: &mut Parts) -> Appearance {
-    let Ok(auth) = Authenticated::from_request_parts(parts, state).await else {
-        return from_cookie(&parts.headers).unwrap_or_default();
+    let auth = match Authenticated::from_request_parts(parts, state).await {
+        Ok(auth) => auth,
+        Err(rejection) => {
+            let error = rejection.error();
+            if error.status().is_server_error() {
+                tracing::error!(code = error.code(), "index.html: the request's session");
+            }
+            return from_cookie(&parts.headers).unwrap_or_default();
+        }
     };
     match appearance::get(&state.db, auth.scope(), auth.user_id).await {
         Ok(appearance) => appearance,
@@ -116,11 +124,17 @@ async fn page_appearance(state: &AppState, parts: &mut Parts) -> Appearance {
     }
 }
 
+/// A SHA-256 as the branding record stores it: 64 lowercase hex digits.
+fn is_css_hash(hash: &str) -> bool {
+    hash.len() == 64 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 /// `index.html` with the fingerprinted theme link and the appearance attributes on `<html>`.
-/// Both values are names and hex digits, which need no escaping in an attribute.
+/// A stored hash that is not a SHA-256 leaves the link unfingerprinted, so nothing but hex digits
+/// reaches the attribute; the appearance values are fixed names. Neither needs escaping.
 fn render_index(template: &str, page: &Page) -> String {
     let mut html = template.to_owned();
-    if let Some(hash) = &page.theme_hash {
+    if let Some(hash) = page.theme_hash.as_deref().filter(|hash| is_css_hash(hash)) {
         let link = format!("href=\"{THEME_CSS_PATH}\"");
         let fingerprinted = format!("href=\"{THEME_CSS_PATH}?{THEME_CSS_VERSION_PARAM}={hash}\"");
         html = html.replacen(&link, &fingerprinted, 1);
@@ -188,16 +202,41 @@ mod tests {
 
     const TEMPLATE: &str = "<!doctype html>\n<html lang=\"en\">\n  <head>\n    <link rel=\"stylesheet\" href=\"/theme.css\" />\n    <script type=\"module\" src=\"/assets/index.js\"></script>\n  </head>\n</html>\n";
 
+    const HASH: &str = "dfea0dc5cea5d1d6f5b7ac255b46b3bf2b4357aa9804d1c882bba7537b286910";
+
     #[test]
     fn the_page_links_the_fingerprinted_theme() {
         let page = Page {
-            theme_hash: Some("ab12".into()),
+            theme_hash: Some(HASH.into()),
             ..Page::default()
         };
         let html = render_index(TEMPLATE, &page);
         assert!(html.contains(r#"<html lang="en">"#), "{html}");
-        assert!(html.contains(r#"href="/theme.css?v=ab12""#), "{html}");
+        assert!(
+            html.contains(&format!(r#"href="/theme.css?v={HASH}""#)),
+            "{html}"
+        );
         assert!(!html.contains(r#"href="/theme.css""#), "{html}");
+    }
+
+    #[test]
+    fn a_hash_that_is_not_a_sha256_leaves_the_link_plain() {
+        let upper = HASH.to_uppercase();
+        let quoted = format!("{}\"", &HASH[..63]);
+        for hash in [
+            "ab12",
+            &HASH[..63],
+            &format!("{HASH}0"),
+            upper.as_str(),
+            quoted.as_str(),
+            "",
+        ] {
+            let page = Page {
+                theme_hash: Some(hash.into()),
+                ..Page::default()
+            };
+            assert_eq!(render_index(TEMPLATE, &page), TEMPLATE, "{hash:?}");
+        }
     }
 
     #[test]
