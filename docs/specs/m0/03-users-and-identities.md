@@ -164,6 +164,35 @@ these rows are in `04` to `07`.
   credential (`04-local-accounts.md` provides the "has a local credential" check). An identity
   whose user is not `local` source can be removed by an admin but not by the user (409
   `identity.externally_managed`), since its source re-creates it.
+
+  Coordinator decisions (2026-11-14), for issue 4:
+
+  - Linking an identity to another user lets whoever controls that provider subject sign in as
+    them, and removing one changes how they sign in. Both admin writes therefore apply B6's
+    escalation rule unchanged, through the same check as the `PATCH` route: a user with an
+    effective permission, at any scope, that the caller does not hold at organization scope is
+    refused with 403 `permission.escalation`, serialized as B6 says (the account tree lock, then
+    the user's custom roles `FOR KEY SHARE`, then the read of their grants). Reads are not
+    refused.
+  - The writes take their locks in the user routes' order: the account tree lock, the user's
+    custom roles, then the user's row. A removal locks the user's row `FOR NO KEY UPDATE`
+    (`identities::lock_user`, the lock `users::set_status` takes) before it counts, so two
+    removals for one user take turns and cannot both pass the last-method check. Like
+    `users::set_status`, it refuses an isolation level above `READ COMMITTED`. A link takes no
+    user-row lock: a concurrent link only adds to a removal's count. A malformed subject (empty,
+    over `identities::MAX_SUBJECT_CHARS`, or holding NUL) is refused before any lock.
+  - The last-sign-in-method check counts the user's other identities only;
+    `04-local-accounts.md` adds local credentials to it. An identity id that is not the user's
+    answers 404 `identity.not_found` before the check runs, also for a user with no identities.
+  - `DELETE /api/v1/me/identities/{identity_id}` refuses a non-`local` user with 409
+    `identity.externally_managed` before it looks up the identity, so the answer says nothing
+    about the id.
+  - `POST /api/v1/users/{user_id}/identities` answers 201 with the `Identity` and no `Location`
+    header, since no route reads a single identity. An empty subject is 422 with
+    `errors[].code = "identity.subject_empty"`, one over 255 characters `text.too_long`, and a NUL
+    in either member `text.contains_nul`. A
+    disabled provider's key is accepted, so an admin can pre-provision before enabling it.
+  - No identity change writes an audit entry: `09` B22 lists none.
 - **B20.** How a signed-in user links a further identity (starting a provider flow while signed
   in) is part of the sign-in flows in `05-oidc.md` and `06-oauth2-and-vatsim-preset.md`; they
   write through `identities::link`, which applies B14's uniqueness.
@@ -201,6 +230,12 @@ these rows are in `04` to `07`.
 - **B23.** `GET /api/v1/me/identities` lists the user's identities with `id`, `provider_key`,
   `provider_label` (from the provider's config), `subject` and `created_at`; never `attributes`
   (they can hold personal data the provider sent, and the user's own copy belongs to M4's export).
+
+  Coordinator decision (2026-11-14), for issue 4: `provider_label` is the string `label` member
+  of the provider's `config`, and `null` when the config has none or it is not a string. Specs
+  05 and 06 require a label on every provider they write; no M0 writer stores one yet, and
+  failing the whole list over one provider's config would hide the user's identities from them.
+  Both identity lists are sorted by identity id, oldest first.
 - **B24.** Coordinator decision (2026-11-13), for issue 5. API keys arrive with
   `08-sessions-and-csrf.md` issue 6 and app access tokens with its issue 8, and until then the
   server accepts no bearer credential, so `GET /api/v1/me` answers browser sessions only and a
@@ -227,8 +262,8 @@ Common errors as in `02-organizations-and-accounts.md` -> API (400, 401, 415, 50
 | `POST /api/v1/users` | `{ display_name, given_name?, family_name?, email?, locale?, tz?, external_id?, identities?: [{ provider_key, subject }] }` | 201 `User`, `Location` | 409 `identity.taken`, 409 `user.external_id_taken`, 409 `user.email_taken`, 422 `request.invalid`, limit error from `10` | `perm::UserManage` (organization) |
 | `PATCH /api/v1/users/{user_id}` | `{ display_name?, given_name?, family_name?, email?, locale?, tz?, status? }` | 200 `User` | 404 `user.not_found`, 409 `user.externally_managed`, 409 `user.cannot_suspend_self`, 409 `user.email_taken`, 409 `role_assignment.last_org_admin`, 422 `request.invalid` | `perm::UserManage` (organization) |
 | `GET /api/v1/users/{user_id}/identities` | | 200 `Identity[]` | 404 `user.not_found` | `perm::UserView` (organization) |
-| `POST /api/v1/users/{user_id}/identities` | `{ provider_key, subject }` | 201 `Identity` | 404 `user.not_found`, 409 `identity.taken`, 422 `request.invalid` | `perm::UserManage` (organization) |
-| `DELETE /api/v1/users/{user_id}/identities/{identity_id}` | | 204 | 404 `user.not_found`, 404 `identity.not_found`, 409 `identity.last_sign_in_method` | `perm::UserManage` (organization) |
+| `POST /api/v1/users/{user_id}/identities` | `{ provider_key, subject }` | 201 `Identity` | 403 `permission.escalation`, 404 `user.not_found`, 409 `identity.taken`, 422 `request.invalid` | `perm::UserManage` (organization) |
+| `DELETE /api/v1/users/{user_id}/identities/{identity_id}` | | 204 | 403 `permission.escalation`, 404 `user.not_found`, 404 `identity.not_found`, 409 `identity.last_sign_in_method` | `perm::UserManage` (organization) |
 
 Schemas: `User { id, display_name, given_name, family_name, email, locale, tz, status, source,
 external_id, created_at, updated_at }`; `Identity { id, provider_key, subject, attributes,

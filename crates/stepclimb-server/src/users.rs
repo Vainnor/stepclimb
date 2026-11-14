@@ -588,7 +588,9 @@ pub async fn update_user(
         .ok_or_else(user_not_found)?;
     refuse_patch(&body, &user, principal.user_id)?;
     if guarded {
-        refuse_escalation(&mut tx, require.grants(), user_id).await?;
+        let detail =
+            "This user holds permissions you do not. You cannot change their email or status.";
+        refuse_escalation(&mut tx, require.grants(), user_id, detail).await?;
     }
     // The status first: `set_status` locks the organization row, then the user row, and the
     // field update after it locks only the user row, so every PATCH takes them in that order.
@@ -637,10 +639,12 @@ fn refuse_patch(patch: &UserPatch, user: &repo::User, caller: Uuid) -> Result<()
 /// take too. It first locks the custom roles the user holds `FOR KEY SHARE`, which a change of
 /// those roles' permissions waits for, then reads the user's grants: until the PATCH commits,
 /// neither a new or removed assignment nor an edited custom role can change what was checked.
-async fn refuse_escalation(
+/// The identity admin routes (`crate::identities`) apply it too, with their own `detail`.
+pub(crate) async fn refuse_escalation(
     tx: &mut Transaction<'static, Postgres>,
     caller: &Grants,
     user_id: Uuid,
+    detail: &'static str,
 ) -> Result<(), ApiError> {
     let scope = caller.scope();
     roles::key_share_custom_of_user(tx, scope, user_id)
@@ -655,7 +659,7 @@ async fn refuse_escalation(
     Err(ApiError::new(
         StatusCode::FORBIDDEN,
         PERMISSION_ESCALATION,
-        "This user holds permissions you do not. You cannot change their email or status.",
+        detail,
     ))
 }
 
@@ -675,7 +679,7 @@ fn escalates(caller: &Grants, target: &Grants) -> bool {
     holds_unheld(caller, &keys, &grants::Target::Organization)
 }
 
-fn user_not_found() -> ApiError {
+pub(crate) fn user_not_found() -> ApiError {
     ApiError::new(
         StatusCode::NOT_FOUND,
         USER_NOT_FOUND,

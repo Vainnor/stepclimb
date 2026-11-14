@@ -9,7 +9,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value, json};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres};
 use stepclimb_core::{
     OrgScope, Source,
     audit::Actor,
@@ -590,4 +590,166 @@ async fn list_enabled_lists_the_scopes_enabled_providers_by_key(pool: PgPool) {
     assert!(listed.iter().all(|p| p.enabled));
     assert_eq!(listed[1].kind, Kind::Oidc);
     assert_eq!(listed[1].created_at, listed[1].updated_at);
+}
+
+/// The label is the config's string `label`; a provider whose config has none, or a label that
+/// is not a string, reads as `None`.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn identities_read_their_providers_label_from_its_config(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    let unlabeled = new_id();
+    let numbered = new_id();
+    for (id, key, config) in [
+        (unlabeled, "unlabeled", r#"{"client_id": "x"}"#),
+        (numbered, "numbered", r#"{"label": 7}"#),
+    ] {
+        sqlx::query(
+            "INSERT INTO identity_providers (id, org_id, key, kind, config)
+             VALUES ($1, $2, $3, 'oidc', $4::jsonb)",
+        )
+        .bind(id)
+        .bind(a.id)
+        .bind(key)
+        .bind(config)
+        .execute(&pool)
+        .await
+        .expect("insert provider");
+    }
+
+    let labeled = link(&pool, a.id, new(a.sam, a.oauth, "1000001")).await;
+    link(&pool, a.id, new(a.sam, unlabeled, "sub-1")).await;
+    link(&pool, a.id, new(a.sam, numbered, "sub-2")).await;
+    let listed = identities::list_for_user(&pool, scope(a.id), a.sam)
+        .await
+        .unwrap();
+
+    assert_eq!(labeled.provider_label.as_deref(), Some("Example"));
+    let labels: Vec<Option<&str>> = listed.iter().map(|i| i.provider_label.as_deref()).collect();
+    assert_eq!(labels, [Some("Example"), None, None]);
+}
+
+/// B19: the last identity of a user with no local credential stays; with a second one, either
+/// can go. Another user's or organization's identity is `NotFound`, also when the user has only
+/// one, so the answer never says how many identities someone else has.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn unlink_unless_last_keeps_a_users_last_identity(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    let b = org(&pool, "org-b").await;
+    let only = link(&pool, a.id, new(a.sam, a.oauth, "1000001")).await;
+    let pats = link(&pool, a.id, new(a.pat, a.oauth, "1000002")).await;
+    let theirs = link(&pool, b.id, new(b.sam, b.oauth, "1000003")).await;
+    let before = table(&pool).await;
+
+    let last = identities::unlink_unless_last(&pool, scope(a.id), a.sam, only.id).await;
+    let other_user = identities::unlink_unless_last(&pool, scope(a.id), a.sam, pats.id).await;
+    let other_org = identities::unlink_unless_last(&pool, scope(a.id), a.sam, theirs.id).await;
+    let other_org_user = identities::unlink_unless_last(&pool, scope(a.id), b.sam, theirs.id).await;
+    assert_err!(last, Error::LastSignInMethod);
+    assert_err!(other_user, Error::NotFound);
+    assert_err!(other_org, Error::NotFound);
+    assert_err!(other_org_user, Error::UserNotFound);
+    // A user with no identity at all is told the identity is not theirs, not that it is last.
+    let kim = user(&pool, a.id, "Kim Example", None).await;
+    let none_left = identities::unlink_unless_last(&pool, scope(a.id), kim, pats.id).await;
+    assert_err!(none_left, Error::NotFound);
+    assert_eq!(table(&pool).await, before);
+
+    let second = link(&pool, a.id, new(a.sam, a.oidc, "sub-1")).await;
+    identities::unlink_unless_last(&pool, scope(a.id), a.sam, only.id)
+        .await
+        .unwrap();
+    let now_last = identities::unlink_unless_last(&pool, scope(a.id), a.sam, second.id).await;
+    assert_err!(now_last, Error::LastSignInMethod);
+    let left = identities::list_for_user(&pool, scope(a.id), a.sam)
+        .await
+        .unwrap();
+    assert_eq!(left, [second]);
+}
+
+/// Waits until a session of this test's database waits on a row or transaction lock, so the
+/// test knows the second call is blocked behind the first.
+async fn until_a_call_waits_on_a_lock(pool: &PgPool) {
+    for _ in 0..500 {
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("read pg_stat_activity");
+        if waiting > 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("no session waited on a lock within 5 s");
+}
+
+async fn begin(pool: &PgPool) -> sqlx::Transaction<'static, Postgres> {
+    pool.begin().await.expect("begin")
+}
+
+/// Two removals of a user's two identities take turns: the second waits for the first, then
+/// counts what it left and keeps the last one.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn concurrent_removals_of_a_users_two_identities_keep_one(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    let first = link(&pool, a.id, new(a.sam, a.oauth, "1000001")).await;
+    let second = link(&pool, a.id, new(a.sam, a.oidc, "sub-1")).await;
+    let mut removing = begin(&pool).await;
+    identities::unlink_unless_last(&mut *removing, scope(a.id), a.sam, first.id)
+        .await
+        .unwrap();
+    let racing = tokio::spawn({
+        let pool = pool.clone();
+        async move {
+            identities::unlink_unless_last(&pool, scope(a.id), a.sam, second.id)
+                .await
+                .map_err(|e| format!("{e:?}"))
+        }
+    });
+    until_a_call_waits_on_a_lock(&pool).await;
+    removing.commit().await.unwrap();
+
+    let raced = racing.await.expect("the second removal ran");
+
+    assert_eq!(raced, Err("LastSignInMethod".to_owned()));
+    let left = identities::list_for_user(&pool, scope(a.id), a.sam)
+        .await
+        .unwrap();
+    assert_eq!(left, [second]);
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn lock_user_refuses_another_organizations_user_and_isolation_above_read_committed(
+    pool: PgPool,
+) {
+    let a = org(&pool, "org-a").await;
+    let b = org(&pool, "org-b").await;
+    let mut conn = pool.acquire().await.unwrap();
+    let across = identities::lock_user(&mut conn, scope(a.id), b.sam).await;
+    assert_err!(across, Error::UserNotFound);
+
+    for level in ["repeatable read", "serializable"] {
+        let set = format!(
+            "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL {}",
+            level.to_uppercase()
+        );
+        sqlx::raw_sql(sqlx::AssertSqlSafe(set))
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        let locked = identities::lock_user(&mut conn, scope(a.id), a.sam).await;
+        assert!(
+            matches!(&locked, Err(Error::IsolationLevel { found }) if found == level),
+            "{locked:?}"
+        );
+        let linked = link(&pool, a.id, new(a.sam, a.oauth, &format!("s-{level}"))).await;
+        let unlinked =
+            identities::unlink_unless_last(&mut *conn, scope(a.id), a.sam, linked.id).await;
+        assert!(
+            matches!(&unlinked, Err(Error::IsolationLevel { found }) if found == level),
+            "{unlinked:?}"
+        );
+    }
 }

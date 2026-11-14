@@ -8,8 +8,16 @@
 //! [`Error::Taken`].
 //!
 //! Lookup is by `(provider, subject)` only ([`find_user`]): nothing here matches a user by email
-//! (B17). Who may link or unlink, and refusing to remove a user's last sign-in method (B19), are
-//! the routes' to decide.
+//! (B17). Who may link or unlink is the routes' to decide. [`unlink_unless_last`] refuses to
+//! remove a user's last sign-in method (B19); [`unlink`] does not, for writers that own the
+//! identity's source.
+//!
+//! [`lock_user`] locks the user's row `FOR NO KEY UPDATE` until the transaction ends, the lock
+//! `users::set_status` takes on it, so two [`unlink_unless_last`] calls for one user take turns
+//! and the second counts what the first left. A link to the user is not held off; it only adds
+//! to the count. Like the other locks of this crate, it protects only at `READ COMMITTED`, where
+//! each statement after the wait sees what the previous holder committed; [`lock_user`] refuses
+//! any other level with [`Error::IsolationLevel`].
 //!
 //! `attributes` are the mapped attributes of the latest sign-in (B15), a JSON object stored as
 //! given. PostgreSQL `jsonb` cannot store NUL in a string or key, so a NUL anywhere in it is
@@ -18,7 +26,7 @@
 use std::time::SystemTime;
 
 use serde_json::{Map, Value};
-use sqlx::PgExecutor;
+use sqlx::{Acquire, PgConnection, PgExecutor, Postgres};
 use uuid::Uuid;
 
 use crate::{
@@ -48,6 +56,9 @@ pub struct Identity {
     pub provider_id: Uuid,
     /// The provider's `key`, read with the identity.
     pub provider_key: String,
+    /// The provider's `label` from its config, read with the identity; `None` when the config
+    /// has no string `label`.
+    pub provider_label: Option<String>,
     pub subject: String,
     /// The mapped attributes of the latest sign-in (B15).
     pub attributes: Map<String, Value>,
@@ -64,6 +75,7 @@ impl std::fmt::Debug for Identity {
             .field("user_id", &self.user_id)
             .field("provider_id", &self.provider_id)
             .field("provider_key", &self.provider_key)
+            .field("provider_label", &self.provider_label)
             .field("subject", &self.subject)
             .field("created_at", &self.created_at)
             .field("updated_at", &self.updated_at)
@@ -106,6 +118,15 @@ pub enum Error {
     /// The provider's subject is already linked to a user (B14).
     #[error("this identity is already linked to a user")]
     Taken,
+    /// Removing the identity would leave its user no way to sign in (B19).
+    #[error("the identity is the user's last sign-in method")]
+    LastSignInMethod,
+    /// The transaction runs at an isolation level other than `READ COMMITTED`, where
+    /// [`lock_user`] does not protect what is read after it.
+    #[error(
+        "a user's identities can be changed under lock only at READ COMMITTED isolation, not {found}"
+    )]
+    IsolationLevel { found: String },
     /// The subject is empty.
     #[error("a subject cannot be empty")]
     SubjectEmpty,
@@ -147,6 +168,7 @@ struct Row {
     user_id: Uuid,
     provider_id: Uuid,
     provider_key: String,
+    provider_label: Option<String>,
     subject: String,
     attributes: String,
     created_at_us: i64,
@@ -164,6 +186,7 @@ impl TryFrom<Row> for Identity {
             user_id: row.user_id,
             provider_id: row.provider_id,
             provider_key: row.provider_key,
+            provider_label: row.provider_label,
             subject: row.subject,
             attributes,
             created_at: from_epoch_micros(row.created_at_us)?,
@@ -255,8 +278,10 @@ pub async fn link(
                          updated_at
            )
            SELECT i.id AS "id!", i.user_id AS "user_id!", i.provider_id AS "provider_id!",
-                  p.key AS "provider_key!", i.subject AS "subject!",
-                  i.attributes::text AS "attributes!",
+                  p.key AS "provider_key!",
+                  CASE WHEN jsonb_typeof(p.config -> 'label') = 'string'
+                       THEN p.config ->> 'label' END AS provider_label,
+                  i.subject AS "subject!", i.attributes::text AS "attributes!",
                   (extract(epoch FROM i.created_at) * 1000000)::bigint AS "created_at_us!",
                   (extract(epoch FROM i.updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM inserted i
@@ -297,6 +322,75 @@ pub async fn unlink(
     Ok(())
 }
 
+/// Delete the identity `id` of the user `user_id` in the scope's organization, unless it is the
+/// user's last sign-in method ([`Error::LastSignInMethod`], B19). An identity of another user,
+/// or of another organization, is [`Error::NotFound`]; a user the organization does not have is
+/// [`Error::UserNotFound`].
+///
+/// A user signs in with an identity or a local credential. Local credentials arrive with
+/// docs/specs/m0/04-local-accounts.md, which adds them to this count; until then no user has
+/// one, so the user must keep another identity.
+///
+/// Takes [`lock_user`] first, so two removals for one user take turns and the second counts
+/// what the first left. Runs in one transaction (a savepoint when `db` is already one); the lock
+/// is held until the outermost transaction ends.
+pub async fn unlink_unless_last<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
+    scope: OrgScope,
+    user_id: Uuid,
+    id: Uuid,
+) -> Result<(), Error> {
+    let mut tx = db.begin().await?;
+    lock_user(&mut tx, scope, user_id).await?;
+    let counts = sqlx::query!(
+        r#"SELECT count(*) FILTER (WHERE id = $3) AS "this!",
+                  count(*) FILTER (WHERE id <> $3) AS "others!"
+           FROM identities
+           WHERE org_id = $1 AND user_id = $2"#,
+        scope.org_id(),
+        user_id,
+        id,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if counts.this == 0 {
+        return Err(Error::NotFound);
+    }
+    if counts.others == 0 {
+        return Err(Error::LastSignInMethod);
+    }
+    unlink(&mut *tx, scope, user_id, id).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Lock the row of the user `user_id` in the scope's organization `FOR NO KEY UPDATE` until the
+/// transaction ends (see the module documentation), and return the user. A user the
+/// organization does not have is [`Error::UserNotFound`]; a transaction whose isolation level is
+/// not `READ COMMITTED` is [`Error::IsolationLevel`].
+pub async fn lock_user(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    user_id: Uuid,
+) -> Result<User, Error> {
+    let isolation = sqlx::query_scalar!(
+        r#"SELECT current_setting('transaction_isolation') AS "isolation!"
+           FROM users WHERE org_id = $1 AND id = $2
+           FOR NO KEY UPDATE"#,
+        scope.org_id(),
+        user_id,
+    )
+    .fetch_optional(&mut *conn)
+    .await?
+    .ok_or(Error::UserNotFound)?;
+    if isolation != "read committed" {
+        return Err(Error::IsolationLevel { found: isolation });
+    }
+    users::get(&mut *conn, scope, user_id)
+        .await?
+        .ok_or(Error::UserNotFound)
+}
+
 /// The identities of the user `user_id` in the scope's organization, sorted by id (creation
 /// order). Empty for a user the organization does not have.
 pub async fn list_for_user(
@@ -306,8 +400,10 @@ pub async fn list_for_user(
 ) -> Result<Vec<Identity>, Error> {
     let rows = sqlx::query_as!(
         Row,
-        r#"SELECT i.id, i.user_id, i.provider_id, p.key AS "provider_key!", i.subject,
-                  i.attributes::text AS "attributes!",
+        r#"SELECT i.id, i.user_id, i.provider_id, p.key AS "provider_key!",
+                  CASE WHEN jsonb_typeof(p.config -> 'label') = 'string'
+                       THEN p.config ->> 'label' END AS provider_label,
+                  i.subject, i.attributes::text AS "attributes!",
                   (extract(epoch FROM i.created_at) * 1000000)::bigint AS "created_at_us!",
                   (extract(epoch FROM i.updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM identities i
@@ -344,8 +440,10 @@ pub async fn update_attributes(
                          updated_at
            )
            SELECT i.id AS "id!", i.user_id AS "user_id!", i.provider_id AS "provider_id!",
-                  p.key AS "provider_key!", i.subject AS "subject!",
-                  i.attributes::text AS "attributes!",
+                  p.key AS "provider_key!",
+                  CASE WHEN jsonb_typeof(p.config -> 'label') = 'string'
+                       THEN p.config ->> 'label' END AS provider_label,
+                  i.subject AS "subject!", i.attributes::text AS "attributes!",
                   (extract(epoch FROM i.created_at) * 1000000)::bigint AS "created_at_us!",
                   (extract(epoch FROM i.updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM updated i
@@ -476,6 +574,7 @@ mod tests {
             user_id: Uuid::nil(),
             provider_id: Uuid::nil(),
             provider_key: "example".into(),
+            provider_label: Some("Example".into()),
             subject: "1000001".into(),
             attributes: object(json!({ "email_hint": "private-value" })),
             created_at: SystemTime::UNIX_EPOCH,

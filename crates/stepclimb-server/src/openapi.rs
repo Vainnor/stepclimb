@@ -6,8 +6,9 @@
 //! committed. Today it lists the operations probes, which the web app's skeleton route calls
 //! through the generated client, sign-out, `GET /api/v1/me`, the caller's organization, its
 //! settings and its entitlements, the account tree, the permission catalog, roles and role
-//! assignment routes under `/api/v1/admin`, the user admin routes, and the shared error schemas
-//! and responses below. The other M0 specs add their endpoints under `/api/v1`.
+//! assignment routes under `/api/v1/admin`, the user admin routes, users' identities and the
+//! signed-in user's, and the shared error schemas and responses below. The other M0 specs add
+//! their endpoints under `/api/v1`.
 //!
 //! Every `/api/v1` operation lists its errors in `#[utoipa::path]` (spec 02 B6). The errors
 //! common to every operation reference the responses here, such as
@@ -25,7 +26,7 @@ use utoipa::{
 use crate::{
     accounts, auth,
     error::{FieldError, PROBLEM_JSON, Problem},
-    health, me, organization, role_assignments, roles, users,
+    health, identities, me, organization, role_assignments, roles, users,
 };
 
 /// The operation extension that marks a handler as changing state (spec 08 B12, T17). Every
@@ -70,7 +71,12 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         users::list_users,
         users::get_user,
         users::create_user,
-        users::update_user
+        users::update_user,
+        identities::list_user_identities,
+        identities::create_user_identity,
+        identities::delete_user_identity,
+        identities::list_my_identities,
+        identities::delete_my_identity
     ),
     components(
         schemas(
@@ -104,7 +110,10 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             users::User,
             users::NewUser,
             users::NewUserIdentity,
-            users::UserPatch
+            users::UserPatch,
+            identities::Identity,
+            identities::MyIdentity,
+            identities::NewIdentity
         ),
         responses(
             BadRequest,
@@ -149,7 +158,13 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             users::UserWriteForbidden,
             users::UserCreateForbidden,
             users::UserCreateConflict,
-            users::UserUpdateConflict
+            users::UserUpdateConflict,
+            identities::IdentityWriteForbidden,
+            identities::IdentityLinkConflict,
+            identities::IdentityDeleteNotFound,
+            identities::IdentityDeleteConflict,
+            identities::MyIdentityNotFound,
+            identities::MyIdentityDeleteConflict
         )
     ),
     tags(
