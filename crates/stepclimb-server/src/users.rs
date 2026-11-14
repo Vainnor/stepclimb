@@ -100,7 +100,8 @@ pub mod code {
     pub const IDENTITY_TAKEN: &str = "identity.taken";
     /// In a 422's `errors`: the locale is not supported (only `en` in M0).
     pub const USER_LOCALE_UNSUPPORTED: &str = "user.locale_unsupported";
-    /// In a 422's `errors`: no identity provider of the organization has this key.
+    /// In a 422's `errors`: no identity provider of the organization that takes pre-provisioned
+    /// identities has this key (the local provider does not).
     pub const IDENTITY_UNKNOWN_PROVIDER: &str = "identity.unknown_provider";
     /// In a 422's `errors`: the subject is empty.
     pub const IDENTITY_SUBJECT_EMPTY: &str = "identity.subject_empty";
@@ -530,6 +531,9 @@ async fn link(
             }
             other => ApiError::internal(&other),
         })?
+        // The local provider takes no pre-provisioned identity: a local identity's subject is
+        // its user's id, and enrollment creates it (spec 04 B3, Q4).
+        .filter(|provider| provider.kind != identity_providers::Kind::Local)
         .ok_or_else(|| invalid_at("provider_key", code::IDENTITY_UNKNOWN_PROVIDER))?;
     let new = NewIdentity {
         user_id,

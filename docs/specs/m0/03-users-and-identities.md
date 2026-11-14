@@ -171,6 +171,11 @@ these rows are in `04` to `07`.
   the same way would make linking unusable: an admin could not tell a duplicate from a success.
   Another organization's provider key answers 422 before the uniqueness check, so the answer
   never reaches across organizations.
+
+  Coordinator decision (2026-11-14), for `04-local-accounts.md` issue 1: the local provider row
+  takes no pre-provisioned identity. A local identity's subject is its user's id
+  (`04-local-accounts.md` Q4), and enrollment creates it, so `provider_key: "local"` answers 422
+  `identity.unknown_provider` here and in `POST /api/v1/users`, as if the key did not exist.
 - **B19.** Removing an identity (admin: `DELETE /api/v1/users/{user_id}/identities/{identity_id}`;
   self: `DELETE /api/v1/me/identities/{identity_id}`) deletes the row. It is refused with 409
   `identity.last_sign_in_method` when the user would be left with no identity and no local
@@ -195,7 +200,12 @@ these rows are in `04` to `07`.
     user-row lock: a concurrent link only adds to a removal's count. A malformed subject (empty,
     over `identities::MAX_SUBJECT_CHARS`, or holding NUL) is refused before any lock.
   - The last-sign-in-method check counts the user's other identities only;
-    `04-local-accounts.md` adds local credentials to it. An identity id that is not the user's
+    `04-local-accounts.md` adds local credentials to it. An identity at the local provider is
+    not counted: a local account signs in with its passkey or password, not with the identity
+    (coordinator decision, 2026-11-14, `04-local-accounts.md` issue 1). Neither removal route
+    removes an identity at the local provider: both answer 409 `identity.local`, checked in
+    `identities::unlink_unless_last`, and a local account changes through
+    `04-local-accounts.md`'s routes (coordinator decision, 2026-11-14). An identity id that is not the user's
     answers 404 `identity.not_found` before the check runs, also for a user with no identities.
   - Only an identity at an enabled provider counts as a sign-in method (fail closed): removing
     a user's last identity at an enabled provider answers 409 even when they still hold one at
@@ -277,14 +287,14 @@ Common errors as in `02-organizations-and-accounts.md` -> API (400, 401, 415, 50
 | --- | --- | --- | --- | --- |
 | `GET /api/v1/me` | | 200 `Me` | 403 `auth.not_a_user` (not answered in M0, B24) | authenticated user |
 | `GET /api/v1/me/identities` | | 200 `MyIdentity[]` | 403 `auth.not_a_user` | authenticated user |
-| `DELETE /api/v1/me/identities/{identity_id}` | | 204 | 404 `identity.not_found`, 409 `identity.last_sign_in_method`, 409 `identity.externally_managed` | authenticated user (own identities only) |
+| `DELETE /api/v1/me/identities/{identity_id}` | | 204 | 404 `identity.not_found`, 409 `identity.last_sign_in_method`, 409 `identity.externally_managed`, 409 `identity.local` | authenticated user (own identities only) |
 | `GET /api/v1/users` | `?status&source&q&cursor&limit` | 200 `Page<User>` | 400 `pagination.invalid_cursor`, 400 `request.malformed` | `perm::UserView` (organization) |
 | `GET /api/v1/users/{user_id}` | | 200 `User` | 404 `user.not_found` | `perm::UserView` (organization) |
 | `POST /api/v1/users` | `{ display_name, given_name?, family_name?, email?, locale?, tz?, external_id?, identities?: [{ provider_key, subject }] }` | 201 `User`, `Location` | 409 `identity.taken`, 409 `user.external_id_taken`, 409 `user.email_taken`, 422 `request.invalid`, limit error from `10` | `perm::UserManage` (organization) |
 | `PATCH /api/v1/users/{user_id}` | `{ display_name?, given_name?, family_name?, email?, locale?, tz?, status? }` | 200 `User` | 404 `user.not_found`, 409 `user.externally_managed`, 409 `user.cannot_suspend_self`, 409 `user.email_taken`, 409 `role_assignment.last_org_admin`, 422 `request.invalid` | `perm::UserManage` (organization) |
 | `GET /api/v1/users/{user_id}/identities` | | 200 `Identity[]` | 404 `user.not_found` | `perm::UserView` (organization) |
 | `POST /api/v1/users/{user_id}/identities` | `{ provider_key, subject }` | 201 `Identity` | 403 `permission.escalation`, 404 `user.not_found`, 409 `identity.taken`, 422 `request.invalid` | `perm::UserManage` (organization) |
-| `DELETE /api/v1/users/{user_id}/identities/{identity_id}` | | 204 | 403 `permission.escalation`, 404 `user.not_found`, 404 `identity.not_found`, 409 `identity.last_sign_in_method` | `perm::UserManage` (organization) |
+| `DELETE /api/v1/users/{user_id}/identities/{identity_id}` | | 204 | 403 `permission.escalation`, 404 `user.not_found`, 404 `identity.not_found`, 409 `identity.last_sign_in_method`, 409 `identity.local` | `perm::UserManage` (organization) |
 
 Schemas: `User { id, display_name, given_name, family_name, email, locale, tz, status, source,
 external_id, created_at, updated_at }`; `Identity { id, provider_key, subject, attributes,

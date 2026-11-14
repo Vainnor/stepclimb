@@ -35,7 +35,7 @@ use stepclimb_core::{
     users::{self, NewUser},
 };
 use stepclimb_server::{
-    AppState,
+    AppState, organization,
     request_org::{RequestOrg, TEST_ORG_HEADER},
     router, session,
     web_origin::WebOrigin,
@@ -884,7 +884,17 @@ fn the_documented_settings_describe_what_the_routes_serialize() {
             .map(|p| p.keys().cloned().collect())
             .unwrap_or_default()
     };
-    assert_eq!(members("OrgSettingsPatch"), members("OrgSettings"));
+    let writable: Vec<String> = members("OrgSettings")
+        .into_iter()
+        .filter(|key| !organization::READ_ONLY_SETTINGS.contains(&key.as_str()))
+        .collect();
+    assert_eq!(members("OrgSettingsPatch"), writable);
+    assert_eq!(
+        organization::READ_ONLY_SETTINGS,
+        ["local_sign_in"],
+        "a read-only setting is a member of OrgSettings"
+    );
+    assert!(members("OrgSettings").contains(&"local_sign_in".to_owned()));
     assert!(schemas["OrgSettingsPatch"].get("required").is_none());
     assert_eq!(schemas["OrgSettingsPatch"]["additionalProperties"], false);
 }

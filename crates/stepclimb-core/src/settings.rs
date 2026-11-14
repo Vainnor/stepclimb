@@ -4,7 +4,7 @@
 //! The column is read and written only through these types. Each key is owned by the spec that
 //! uses it and is added here with its default in code (`#[serde(default)]` on the struct), so a
 //! stored object missing a key reads as that default and no migration backfills settings. Spec
-//! 03 owns `default_tz` and `email_matching`; specs 04 and 07 add theirs.
+//! 03 owns `default_tz` and `email_matching`, spec 04 `local_sign_in`; spec 07 adds its keys.
 //!
 //! Stored settings are read tolerantly: a key this code does not know is ignored on read and
 //! kept in the row, because the repository merges a patch into the stored object
@@ -14,6 +14,8 @@
 //! (spec 02 B14, `settings.unknown_key`).
 
 use serde::{Deserialize, Serialize};
+
+use crate::local_sign_in::LocalMethods;
 
 /// Every organization setting with its effective value.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,6 +27,9 @@ pub struct OrgSettings {
     /// an existing user with the same email address (spec 03 B17). Off by default; the
     /// repository refuses to turn it on until spec 07 issue 4 implements the matching.
     pub email_matching: bool,
+    /// The local sign-in method switches (spec 04 B1, Q2), written only through
+    /// [`crate::local_sign_in::update`].
+    pub local_sign_in: LocalMethods,
 }
 
 impl Default for OrgSettings {
@@ -32,13 +37,15 @@ impl Default for OrgSettings {
         Self {
             default_tz: crate::tz::DEFAULT.to_owned(),
             email_matching: false,
+            local_sign_in: LocalMethods::default(),
         }
     }
 }
 
-/// A partial update of [`OrgSettings`]: one optional member per key, `None` for "leave as it
-/// is". Its JSON form names only the keys being changed, which the repository merges into the
-/// stored object in one statement. Unknown keys are refused when it is parsed.
+/// A partial update of [`OrgSettings`]: one optional member per key but those in
+/// [`OrgSettingsPatch::WRITTEN_ELSEWHERE`], `None` for "leave as it is". Its JSON form names only
+/// the keys being changed, which the repository merges into the stored object in one statement.
+/// Unknown keys are refused when it is parsed.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OrgSettingsPatch {
@@ -51,6 +58,10 @@ pub struct OrgSettingsPatch {
 }
 
 impl OrgSettingsPatch {
+    /// The settings keys no patch can name, because one repository function writes each with
+    /// rules of its own: `local_sign_in` through [`crate::local_sign_in::update`] (spec 04 Q2).
+    pub const WRITTEN_ELSEWHERE: &'static [&'static str] = &["local_sign_in"];
+
     /// Whether a patch may name `key`, so the API can report each unknown key by name
     /// (`settings.unknown_key`) instead of failing the whole parse. It asks the type itself:
     /// every member is optional, so `{ key: null }` parses exactly when `key` is a member, and
@@ -84,14 +95,18 @@ mod tests {
     }
 
     #[test]
-    fn a_patch_knows_every_settings_key_and_no_other() {
+    fn a_patch_knows_every_settings_key_but_those_written_elsewhere() {
         let serde_json::Value::Object(defaults) =
             serde_json::to_value(OrgSettings::default()).unwrap()
         else {
             panic!("the settings serialize to an object");
         };
         for key in defaults.keys() {
-            assert!(OrgSettingsPatch::knows(key), "{key}");
+            let elsewhere = OrgSettingsPatch::WRITTEN_ELSEWHERE.contains(&key.as_str());
+            assert_eq!(OrgSettingsPatch::knows(key), !elsewhere, "{key}");
+        }
+        for key in OrgSettingsPatch::WRITTEN_ELSEWHERE {
+            assert!(defaults.contains_key(*key), "{key} is a setting");
         }
         assert!(!OrgSettingsPatch::knows("no_such_key"));
         assert!(!OrgSettingsPatch::knows(""));

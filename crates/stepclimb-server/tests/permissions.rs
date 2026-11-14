@@ -74,8 +74,8 @@ use stepclimb_core::{
     identities::{self, NewIdentity},
     organizations,
     perm::{
-        self, AccountManage, AccountView, BrandingManage, OrgManage, Permission, RoleAssign,
-        RoleManage, RoleView, ScopeType, UserManage, UserView,
+        self, AccountManage, AccountView, BrandingManage, OrgManage, Permission, ProviderManage,
+        RoleAssign, RoleManage, RoleView, ScopeType, UserManage, UserView,
     },
     role_assignments::{self, NewAssignment, Scope},
     roles::{self, NewRole},
@@ -272,7 +272,34 @@ const TABLE: &[Entry] = &[
             permission(BrandingManage::KEY, Target::Org, new_branding),
         ),
     },
+    Entry {
+        operation_id: "getLocalSignIn",
+        access: permission(ProviderManage::KEY, Target::Org, at_org),
+    },
+    Entry {
+        operation_id: "updateLocalSignIn",
+        access: permission(ProviderManage::KEY, Target::Org, unchanged_local_sign_in),
+    },
 ];
+
+/// The local sign-in switches as a new organization has them. A `PUT` of them changes nothing,
+/// so `provider.manage` alone may send it: the escalation rule applies only to a change (spec
+/// 04, tests/local_sign_in.rs).
+fn unchanged_local_sign_in(_: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: Vec::new(),
+            body: Some(serde_json::json!({
+                "enabled": true,
+                "passkey": true,
+                "password": true,
+                "totp": true,
+                "magic_link": false,
+            })),
+            at: At::Org,
+        }
+    })
+}
 
 /// A user that is not the organization's: 404 `user.not_found`. The user routes take the
 /// organization as their target (spec 03 API), so they have no wrong-account 404 case.

@@ -7,7 +7,8 @@
 //! through the generated client, sign-out, `GET /api/v1/me`, the caller's organization, its
 //! settings and its entitlements, the account tree, the permission catalog, roles and role
 //! assignment routes under `/api/v1/admin`, the user admin routes, users' identities and the
-//! signed-in user's, the organization's branding and its stylesheet (`/theme.css`), and the shared error schemas and responses below. The other M0 specs add
+//! signed-in user's, the organization's branding and its stylesheet (`/theme.css`), the local
+//! sign-in switches, and the shared error schemas and responses below. The other M0 specs add
 //! their endpoints under `/api/v1`.
 //!
 //! Every `/api/v1` operation lists its errors in `#[utoipa::path]` (spec 02 B6). The errors
@@ -26,7 +27,7 @@ use utoipa::{
 use crate::{
     accounts, auth, branding,
     error::{FieldError, PROBLEM_JSON, Problem},
-    health, identities, me, organization, role_assignments, roles, users,
+    health, identities, local_sign_in, me, organization, role_assignments, roles, users,
 };
 
 /// The operation extension that marks a handler as changing state (spec 08 B12, T17). Every
@@ -79,7 +80,9 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         identities::delete_my_identity,
         branding::get_branding,
         branding::update_branding,
-        branding::theme_css
+        branding::theme_css,
+        local_sign_in::get_local_sign_in,
+        local_sign_in::update_local_sign_in
     ),
     components(
         schemas(
@@ -97,6 +100,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             organization::OrganizationPatch,
             organization::OrgSettings,
             organization::OrgSettingsPatch,
+            organization::LocalMethods,
             accounts::Account,
             accounts::NewAccount,
             accounts::AccountPatch,
@@ -127,7 +131,8 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             branding::ContrastReport,
             branding::ContrastPair,
             branding::ContrastWarning,
-            branding::BrandingProblem
+            branding::BrandingProblem,
+            local_sign_in::LocalSignIn
         ),
         responses(
             BadRequest,
@@ -180,7 +185,10 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             identities::MyIdentityNotFound,
             identities::MyIdentityDeleteConflict,
             branding::BrandingWriteForbidden,
-            branding::BrandingInvalid
+            branding::BrandingInvalid,
+            local_sign_in::LocalSignInForbidden,
+            local_sign_in::LocalSignInConflict,
+            local_sign_in::LocalSignInInvalid
         )
     ),
     tags(
@@ -191,7 +199,8 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         (name = "accounts", description = "The account tree inside the organization"),
         (name = "roles", description = "The permission catalog, roles and role assignments"),
         (name = "users", description = "The organization's users"),
-        (name = "branding", description = "The organization's branding and theme")
+        (name = "branding", description = "The organization's branding and theme"),
+        (name = "local-sign-in", description = "The organization's local sign-in methods")
     )
 )]
 struct ApiDoc;

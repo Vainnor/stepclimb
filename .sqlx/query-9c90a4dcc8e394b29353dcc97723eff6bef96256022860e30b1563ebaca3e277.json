@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO identity_providers (id, org_id, key, kind, config, enabled, created_at,\n                                         updated_at)\n         VALUES ($1, $2, $3, $4, '{}'::jsonb, true,\n                 timestamptz 'epoch' + $5::bigint * interval '1 microsecond',\n                 timestamptz 'epoch' + $5::bigint * interval '1 microsecond')\n         ON CONFLICT (org_id, key) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9c90a4dcc8e394b29353dcc97723eff6bef96256022860e30b1563ebaca3e277"
+}

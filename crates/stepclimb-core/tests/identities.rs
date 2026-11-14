@@ -225,7 +225,8 @@ async fn the_longest_subject_fits_the_unique_index(pool: PgPool) {
 }
 
 /// T12 through the repository: a user or provider outside the scope's organization, or one that
-/// does not exist, is refused, as are an empty or too long subject and NUL, and nothing is inserted.
+/// does not exist, is refused, as are an empty or too long subject and NUL, and nothing is
+/// inserted.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn link_refuses_what_is_outside_the_scope_and_inserts_nothing(pool: PgPool) {
     let a = org(&pool, "org-a").await;
@@ -664,9 +665,10 @@ async fn list_enabled_lists_the_scopes_enabled_providers_by_key(pool: PgPool) {
         .await
         .unwrap();
 
+    // The organization's enabled local row (spec 04 B1) is not listed.
     let ids: Vec<Uuid> = listed.iter().map(|p| p.id).collect();
     assert_eq!(ids, [a.oauth, a.oidc, zeta]);
-    assert!(listed.iter().all(|p| p.enabled));
+    assert!(listed.iter().all(|p| p.enabled && p.kind != Kind::Local));
     assert_eq!(listed[1].kind, Kind::Oidc);
     assert_eq!(listed[1].created_at, listed[1].updated_at);
 }
@@ -907,6 +909,34 @@ async fn lock_user_refuses_another_organizations_user_and_isolation_above_read_c
             "{unlinked:?}"
         );
     }
+}
+
+/// A local identity is no sign-in method by itself: the local account signs in with its
+/// passkey or password (spec 04 B3), so it does not keep the user's last identity at an enabled
+/// provider removable.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_local_identity_is_no_sign_in_method(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    let local = identity_providers::get_by_key(&pool, scope(a.id), "local")
+        .await
+        .unwrap()
+        .expect("the local row");
+    let external = link(&pool, a.id, new(a.sam, a.oauth, "1000001")).await;
+    link(&pool, a.id, new(a.sam, local.id, &a.sam.to_string())).await;
+    let before = table(&pool).await;
+
+    let last = identities::unlink_unless_last(
+        &pool,
+        scope(a.id),
+        a.sam,
+        external.id,
+        request_time(),
+        Actor::Instance,
+    )
+    .await;
+
+    assert_err!(last, Error::LastSignInMethod);
+    assert_eq!(table(&pool).await, before);
 }
 
 /// B19, coordinator decision (2026-11-14): an identity at a disabled provider is no sign-in

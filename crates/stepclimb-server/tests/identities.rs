@@ -27,7 +27,7 @@ use stepclimb_core::{
     clock::ManualClock,
     id::{Uuid, new_id},
     identities::{self, NewIdentity},
-    organizations,
+    identity_providers, organizations,
     role_assignments::{self, NewAssignment, Scope},
     roles::{self, NewRole},
     users::{self, NewUser},
@@ -360,7 +360,8 @@ async fn t15_an_unknown_or_other_organizations_provider_key_is_refused(pool: PgP
     // Org B has its own provider under a key org A lacks.
     provider(&f.pool, f.b.id, "only-b", json!({})).await;
 
-    for key in ["missing", "only-b", "nul\u{0}"] {
+    // `local` is org A's local provider, which takes no pre-provisioned identity (spec 04 B3).
+    for key in ["missing", "only-b", "local", "nul\u{0}"] {
         let refused = f.post(&admin, user, key, "1000001").await;
         assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY, "{key}");
         let code = if key.contains('\0') {
@@ -528,6 +529,36 @@ async fn t16_an_admin_cannot_remove_a_users_last_identity(pool: PgPool) {
     assert_eq!(removed.body, Value::Null);
     let left = identities::find_user(&f.pool, scope(f.a.id), f.a.oidc, "1000001").await;
     assert_eq!(left.unwrap(), None);
+}
+
+/// A local identity is removed through neither route, even with other identities left: a local
+/// account changes through spec 04's routes (spec 04 B3).
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn neither_route_removes_a_local_identity(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (admin, _) = f.admin().await;
+    let local = identity_providers::get_by_key(&f.pool, scope(f.a.id), "local")
+        .await
+        .unwrap()
+        .expect("the local row")
+        .id;
+    let (cookie, me) = f.user().await;
+    let mine = f.link(f.a.id, me, local, &me.to_string(), json!({})).await;
+    f.link(f.a.id, me, f.a.oidc, "1000001", json!({})).await;
+    f.link(f.a.id, me, f.a.oauth, "sub-2", json!({})).await;
+    let before = f.table().await;
+
+    let by_admin = f.delete(&admin, me, mine).await;
+    let by_me = f.delete_mine(&cookie, mine).await;
+
+    for refused in [by_admin, by_me] {
+        assert_eq!(
+            (refused.status, refused.code()),
+            (StatusCode::CONFLICT, "identity.local"),
+            "{refused:?}"
+        );
+    }
+    assert_eq!(f.table().await, before);
 }
 
 /// An admin can remove an identity of a user an outside source owns (B19).
