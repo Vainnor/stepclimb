@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "WITH updated AS (\n               UPDATE identities\n               SET attributes = $3::text::jsonb,\n                   updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond'\n               WHERE org_id = $1 AND id = $2\n               RETURNING id, org_id, user_id, provider_id, subject, attributes, created_at,\n                         updated_at\n           )\n           SELECT i.id AS \"id!\", i.user_id AS \"user_id!\", i.provider_id AS \"provider_id!\",\n                  p.key AS \"provider_key!\", i.subject AS \"subject!\",\n                  i.attributes::text AS \"attributes!\",\n                  (extract(epoch FROM i.created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM i.updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM updated i\n           JOIN identity_providers p ON p.org_id = i.org_id AND p.id = i.provider_id",
+  "query": "WITH updated AS (\n               UPDATE identities\n               SET attributes = $3::text::jsonb,\n                   updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond'\n               WHERE org_id = $1 AND id = $2\n               RETURNING id, org_id, user_id, provider_id, subject, attributes, created_at,\n                         updated_at\n           )\n           SELECT i.id AS \"id!\", i.user_id AS \"user_id!\", i.provider_id AS \"provider_id!\",\n                  p.key AS \"provider_key!\",\n                  CASE WHEN jsonb_typeof(p.config -> 'label') = 'string'\n                       THEN p.config ->> 'label' END AS provider_label,\n                  i.subject AS \"subject!\", i.attributes::text AS \"attributes!\",\n                  (extract(epoch FROM i.created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM i.updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM updated i\n           JOIN identity_providers p ON p.org_id = i.org_id AND p.id = i.provider_id",
   "describe": {
     "columns": [
       {
@@ -49,6 +49,12 @@
       },
       {
         "ordinal": 4,
+        "name": "provider_label",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
         "name": "subject!",
         "type_info": "Text",
         "origin": {
@@ -59,19 +65,19 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "attributes!",
         "type_info": "Text",
         "origin": "Expression"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "created_at_us!",
         "type_info": "Int8",
         "origin": "Expression"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "updated_at_us!",
         "type_info": "Int8",
         "origin": "Expression"
@@ -90,11 +96,12 @@
       false,
       false,
       false,
+      null,
       false,
       null,
       null,
       null
     ]
   },
-  "hash": "2c5c5210b371fb57caca6358ad670b8059b32d09890ceda9da2716dfbc6b24bb"
+  "hash": "1f3b83d16359c9e2108b69d40f4dfc55b3d4e3599b6cc82a056d3c3e1fb4ed24"
 }

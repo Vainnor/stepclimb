@@ -11,8 +11,8 @@
 //! the users limit check ([`Entitlements::check_room`], spec 10 B10), which locks the
 //! organization's plan row so concurrent creations take turns; a user without a `tz` gets the
 //! organization's `default_tz` setting (Q4); each of `identities` is linked to the new user, and
-//! any refusal rolls back the whole creation. Creation writes no audit entry (spec 09 Q5 lists
-//! status changes only).
+//! any refusal rolls back the whole creation. Creating the user writes no audit entry (spec 09
+//! Q5 lists status changes only); each linked identity writes its `identity.link` entry.
 //!
 //! `PATCH` refuses, for a user an outside source owns (source other than `local`), any change
 //! to the fields that source owns: `display_name`, `given_name`, `family_name` and `email` (409
@@ -49,6 +49,7 @@ use serde_json::Map;
 use sqlx::{Postgres, Transaction};
 use stepclimb_core::{
     OrgScope, Source, accounts,
+    audit::Actor,
     feature::Limit,
     grants::{self, Grants},
     id::Uuid,
@@ -431,6 +432,7 @@ pub async fn get_user(
 pub async fn create_user(
     require: Require<UserManage>,
     entitlements: Entitlements,
+    client: ClientAddress,
     State(state): State<AppState>,
     ApiJson(body): ApiJson<NewUser>,
 ) -> Result<Response, ApiError> {
@@ -449,7 +451,8 @@ pub async fn create_user(
         .await
         .map_err(user_error)?;
     for numbered in body.identities.iter().enumerate() {
-        link(&mut tx, scope, user.id, numbered, now).await?;
+        let actor = client.actor(require.principal());
+        link(&mut tx, scope, user.id, numbered, now, actor).await?;
     }
     tx.commit().await.map_err(|e| ApiError::internal(&e))?;
     let location = format!("{USERS_PATH}/{}", user.id);
@@ -515,6 +518,7 @@ async fn link(
     user_id: Uuid,
     (index, identity): (usize, &NewUserIdentity),
     now: SystemTime,
+    actor: Actor,
 ) -> Result<(), ApiError> {
     let position = index.to_string();
     let invalid_at = |member, code| invalid(&["identities", &position, member], code);
@@ -533,7 +537,7 @@ async fn link(
         subject: identity.subject.clone(),
         attributes: Map::new(),
     };
-    identities::link(&mut **tx, scope, &new, now)
+    identities::link(&mut **tx, scope, &new, now, actor)
         .await
         .map(|_| ())
         .map_err(|error| identity_error(index, error))
@@ -588,7 +592,9 @@ pub async fn update_user(
         .ok_or_else(user_not_found)?;
     refuse_patch(&body, &user, principal.user_id)?;
     if guarded {
-        refuse_escalation(&mut tx, require.grants(), user_id).await?;
+        let detail =
+            "This user holds permissions you do not. You cannot change their email or status.";
+        refuse_escalation(&mut tx, require.grants(), user_id, detail).await?;
     }
     // The status first: `set_status` locks the organization row, then the user row, and the
     // field update after it locks only the user row, so every PATCH takes them in that order.
@@ -637,10 +643,12 @@ fn refuse_patch(patch: &UserPatch, user: &repo::User, caller: Uuid) -> Result<()
 /// take too. It first locks the custom roles the user holds `FOR KEY SHARE`, which a change of
 /// those roles' permissions waits for, then reads the user's grants: until the PATCH commits,
 /// neither a new or removed assignment nor an edited custom role can change what was checked.
-async fn refuse_escalation(
+/// The identity admin routes (`crate::identities`) apply it too, with their own `detail`.
+pub(crate) async fn refuse_escalation(
     tx: &mut Transaction<'static, Postgres>,
     caller: &Grants,
     user_id: Uuid,
+    detail: &'static str,
 ) -> Result<(), ApiError> {
     let scope = caller.scope();
     roles::key_share_custom_of_user(tx, scope, user_id)
@@ -655,7 +663,7 @@ async fn refuse_escalation(
     Err(ApiError::new(
         StatusCode::FORBIDDEN,
         PERMISSION_ESCALATION,
-        "This user holds permissions you do not. You cannot change their email or status.",
+        detail,
     ))
 }
 
@@ -675,7 +683,7 @@ fn escalates(caller: &Grants, target: &Grants) -> bool {
     holds_unheld(caller, &keys, &grants::Target::Organization)
 }
 
-fn user_not_found() -> ApiError {
+pub(crate) fn user_not_found() -> ApiError {
     ApiError::new(
         StatusCode::NOT_FOUND,
         USER_NOT_FOUND,

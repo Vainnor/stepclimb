@@ -1,11 +1,11 @@
 {
   "db_name": "PostgreSQL",
-  "query": "WITH inserted AS (\n               INSERT INTO identities (id, org_id, user_id, provider_id, subject, attributes,\n                                       created_at, updated_at)\n               SELECT $1, p.org_id, $3, p.id, $5, $6::text::jsonb,\n                      timestamptz 'epoch' + $7::bigint * interval '1 microsecond',\n                      timestamptz 'epoch' + $7::bigint * interval '1 microsecond'\n               FROM identity_providers p\n               WHERE p.org_id = $2 AND p.id = $4\n               RETURNING id, org_id, user_id, provider_id, subject, attributes, created_at,\n                         updated_at\n           )\n           SELECT i.id AS \"id!\", i.user_id AS \"user_id!\", i.provider_id AS \"provider_id!\",\n                  p.key AS \"provider_key!\", i.subject AS \"subject!\",\n                  i.attributes::text AS \"attributes!\",\n                  (extract(epoch FROM i.created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM i.updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM inserted i\n           JOIN identity_providers p ON p.org_id = i.org_id AND p.id = i.provider_id",
+  "query": "SELECT i.id, i.user_id, i.provider_id, p.key AS \"provider_key!\",\n                  CASE WHEN jsonb_typeof(p.config -> 'label') = 'string'\n                       THEN p.config ->> 'label' END AS provider_label,\n                  i.subject, i.attributes::text AS \"attributes!\",\n                  (extract(epoch FROM i.created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM i.updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM identities i\n           JOIN identity_providers p ON p.org_id = i.org_id AND p.id = i.provider_id\n           WHERE i.org_id = $1 AND i.user_id = $2\n           ORDER BY i.id",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "id!",
+        "name": "id",
         "type_info": "Uuid",
         "origin": {
           "Table": {
@@ -16,7 +16,7 @@
       },
       {
         "ordinal": 1,
-        "name": "user_id!",
+        "name": "user_id",
         "type_info": "Uuid",
         "origin": {
           "Table": {
@@ -27,7 +27,7 @@
       },
       {
         "ordinal": 2,
-        "name": "provider_id!",
+        "name": "provider_id",
         "type_info": "Uuid",
         "origin": {
           "Table": {
@@ -49,7 +49,13 @@
       },
       {
         "ordinal": 4,
-        "name": "subject!",
+        "name": "provider_label",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "subject",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -59,19 +65,19 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "attributes!",
         "type_info": "Text",
         "origin": "Expression"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "created_at_us!",
         "type_info": "Int8",
         "origin": "Expression"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "updated_at_us!",
         "type_info": "Int8",
         "origin": "Expression"
@@ -80,12 +86,7 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Uuid",
-        "Uuid",
-        "Uuid",
-        "Text",
-        "Text",
-        "Int8"
+        "Uuid"
       ]
     },
     "nullable": [
@@ -93,11 +94,12 @@
       false,
       false,
       false,
+      null,
       false,
       null,
       null,
       null
     ]
   },
-  "hash": "19770c49b221295109fca0d597649e46cf0dedb49f1d4e1290310ea06419ea88"
+  "hash": "7d51152ac51efe9bfc51075a50051bebb091300375eb538d0be88e48a28d1db9"
 }

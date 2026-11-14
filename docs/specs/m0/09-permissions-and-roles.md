@@ -282,6 +282,8 @@ also writes to:
   | `organization.rename` | `organization` | `organizations::rename` | `before` and `after`: name |
   | `organization.update_settings` | `organization` | `organizations::update_settings` | `before` and `after`: the effective value of each key the patch names |
   | `user.set_status` | `user` | `users::set_status` | `before` and `after`: status |
+  | `identity.link` | `identity` | `identities::link` | `after`: user, provider key, subject (never the attributes) |
+  | `identity.unlink` | `identity` | `identities::unlink` | `before`: the same |
 
   A request that changes nothing writes nothing, neither the row (its `updated_at` stays) nor an
   entry, and answers the row as it is: a patch naming no member, a patch naming only values the

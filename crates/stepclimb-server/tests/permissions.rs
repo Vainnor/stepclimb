@@ -16,7 +16,10 @@
 //!   and none of their ids is in the response.
 //!
 //! An `AuthOnly` entry (a route that needs a principal and no permission) gets the 401, 2xx and
-//! cross-organization cases.
+//! cross-organization cases. An `Own` entry (an `AuthOnly` route on a row of the caller's own,
+//! such as `DELETE /api/v1/me/identities/{identity_id}`) gets the 401 and 2xx cases, an
+//! **other-user** case (the same organization's other user's row: 404) and a
+//! cross-organization case that names a row of org B's user (404).
 //!
 //! An entry made with [`gated`] names the feature its route also takes as `Require<F>`
 //! (docs/specs/m0/10-entitlements-framework.md B9, issue 4) and gets two more cases, run with
@@ -63,6 +66,7 @@ use stepclimb_core::{
     feature::{self, CustomRoles, Feature, Limit},
     grants::ScopeId,
     id::{Uuid, new_id},
+    identities::{self, NewIdentity},
     organizations,
     perm::{
         self, AccountManage, AccountView, OrgManage, Permission, RoleAssign, RoleManage, RoleView,
@@ -229,6 +233,29 @@ const TABLE: &[Entry] = &[
         operation_id: "updateUser",
         access: permission(UserManage::KEY, USER_NOT_FOUND, rename_user_in_path),
     },
+    Entry {
+        operation_id: "listUserIdentities",
+        access: permission(UserView::KEY, USER_NOT_FOUND, user_in_path),
+    },
+    Entry {
+        operation_id: "createUserIdentity",
+        access: permission(UserManage::KEY, USER_NOT_FOUND, new_identity_for_user),
+    },
+    Entry {
+        operation_id: "deleteUserIdentity",
+        access: permission(UserManage::KEY, USER_NOT_FOUND, second_identity_of_user),
+    },
+    Entry {
+        operation_id: "listMyIdentities",
+        access: Access::AuthOnly(at_org),
+    },
+    Entry {
+        operation_id: "deleteMyIdentity",
+        access: Access::Own {
+            not_found: "identity.not_found",
+            setup: second_identity_of_owner,
+        },
+    },
 ];
 
 /// A user that is not the organization's: 404 `user.not_found`. The user routes take the
@@ -260,12 +287,50 @@ fn rename_user_in_path(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + 
     })
 }
 
+/// [`user_in_path`] with a new provider's subject to link in the body.
+fn new_identity_for_user(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let (_, key) = org.provider().await;
+        Call {
+            body: Some(serde_json::json!({ "provider_key": key, "subject": "1000001" })),
+            ..user_in_path(org).await
+        }
+    })
+}
+
 /// A new user named in the body.
 fn new_user_in_body(_: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
         Call {
             params: Vec::new(),
             body: Some(serde_json::json!({ "display_name": "Casey Example" })),
+            at: At::Org,
+        }
+    })
+}
+
+/// A new user with two identities, the second named in the path, so removing it leaves one.
+fn second_identity_of_user(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let (_, user) = org.user().await;
+        let identity = org.two_identities(user).await;
+        Call {
+            params: vec![("user_id", user), ("identity_id", identity)],
+            body: None,
+            at: At::Org,
+        }
+    })
+}
+
+/// Two identities of `owner`, the second named in the path.
+fn second_identity_of_owner(
+    org: &Org,
+    owner: Uuid,
+) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async move {
+        Call {
+            params: vec![("identity_id", org.two_identities(owner).await)],
+            body: None,
             at: At::Org,
         }
     })
@@ -414,6 +479,13 @@ enum Access {
     /// A principal and no permission (`GET /api/v1/me`): the 401, 2xx and cross-organization
     /// cases.
     AuthOnly(Setup),
+    /// A principal and no permission, on a row of the caller's own that the setup builds for
+    /// the user it is given: the 401, 2xx, other-user and cross-organization cases. Another
+    /// user's row, in the same organization or another, answers 404 with `not_found`.
+    Own {
+        not_found: &'static str,
+        setup: OwnSetup,
+    },
     /// `Require<P, T>`: every case.
     Permission {
         /// `P::KEY`.
@@ -449,6 +521,9 @@ enum Target {
 
 /// Builds what one case calls in a fresh organization.
 type Setup = for<'a> fn(&'a Org) -> Pin<Box<dyn Future<Output = Call> + Send + 'a>>;
+
+/// Builds what one case calls in a fresh organization, on a row of the user it is given.
+type OwnSetup = for<'a> fn(&'a Org, Uuid) -> Pin<Box<dyn Future<Output = Call> + Send + 'a>>;
 
 /// One call of an operation.
 struct Call {
@@ -722,6 +797,9 @@ async fn run(world: &World, app: &Router, op: &Operation, access: &Access) -> Re
             let result = cross_organization(world, app, op, None, *setup).await;
             report.record(op, "cross-organization", result);
         }
+        Access::Own { not_found, setup } => {
+            run_own(world, app, op, not_found, *setup, &mut report).await
+        }
         Access::Permission {
             key,
             target,
@@ -896,15 +974,29 @@ async fn cross_organization(
     let b = world.org().await;
     b.seed().await;
     let call = setup(&b).await;
-    let before = snapshot(&world.pool, b.id).await?;
-    let answer = call_op(app, op, &call, a.id, Some(&admin)).await?;
+    called_from_org_a(&world.pool, app, op, not_found, (a.id, &admin), &b, &call).await
+}
+
+/// `call`, built in org B, made by `admin` of org A (`a`): `not_found` (or 2xx), org B's rows
+/// unchanged, and none of their identifying values answered.
+async fn called_from_org_a(
+    pool: &PgPool,
+    app: &Router,
+    op: &Operation,
+    not_found: Option<&str>,
+    (a, admin): (Uuid, &str),
+    b: &Org,
+    call: &Call,
+) -> Result<(), String> {
+    let before = snapshot(pool, b.id).await?;
+    let answer = call_op(app, op, call, a, Some(admin)).await?;
     let mut wrong = Vec::new();
     let status = match not_found {
         Some(code) => answer.expect(StatusCode::NOT_FOUND, code),
         None => answer.expect_success(),
     };
     wrong.extend(status.err());
-    if snapshot(&world.pool, b.id).await? != before {
+    if snapshot(pool, b.id).await? != before {
         wrong.push("org B's rows changed".to_owned());
     }
     let mut identifying = Vec::new();
@@ -920,6 +1012,73 @@ async fn cross_organization(
     } else {
         Err(wrong.join("; "))
     }
+}
+
+/// The cases of an [`Access::Own`] entry.
+async fn run_own(
+    world: &World,
+    app: &Router,
+    op: &Operation,
+    not_found: &'static str,
+    setup: OwnSetup,
+    report: &mut Report,
+) {
+    let anonymous = async {
+        let org = world.org().await;
+        let (_, owner) = org.user().await;
+        let call = setup(&org, owner).await;
+        call_op(app, op, &call, org.id, None)
+            .await?
+            .expect(StatusCode::UNAUTHORIZED, "auth.unauthenticated")
+    };
+    report.record(op, "401", anonymous.await);
+    let owner = async {
+        let org = world.org().await;
+        let (cookie, owner) = org.user().await;
+        let call = setup(&org, owner).await;
+        call_op(app, op, &call, org.id, Some(&cookie))
+            .await?
+            .expect_success()
+    };
+    report.record(op, "2xx", owner.await);
+    report.record(
+        op,
+        "other-user",
+        other_users(world, app, op, not_found, setup).await,
+    );
+    let cross = async {
+        let a = world.org().await;
+        let admin = a.holder_of_builtin("org_admin", At::Org).await;
+        let b = world.org().await;
+        b.seed().await;
+        let (_, owner) = b.user().await;
+        let call = setup(&b, owner).await;
+        let admin = (a.id, admin.as_str());
+        called_from_org_a(&world.pool, app, op, Some(not_found), admin, &b, &call).await
+    };
+    report.record(op, "cross-organization", cross.await);
+}
+
+/// Another user of the same organization, an Organization admin, calls with the owner's row:
+/// `not_found`, and the organization's rows unchanged.
+async fn other_users(
+    world: &World,
+    app: &Router,
+    op: &Operation,
+    not_found: &str,
+    setup: OwnSetup,
+) -> Result<(), String> {
+    let org = world.org().await;
+    let (_, owner) = org.user().await;
+    let call = setup(&org, owner).await;
+    let admin = org.holder_of_builtin("org_admin", At::Org).await;
+    let before = snapshot(&world.pool, org.id).await?;
+    let answer = call_op(app, op, &call, org.id, Some(&admin)).await?;
+    answer.expect(StatusCode::NOT_FOUND, not_found)?;
+    if snapshot(&world.pool, org.id).await? != before {
+        return Err("the owner's rows changed".to_owned());
+    }
+    Ok(())
 }
 
 /// Tables whose rows belong to an organization without an `org_id` column, with the condition
@@ -1313,6 +1472,50 @@ impl Org {
             .expect("move to the plan");
     }
 
+    /// A new identity provider of the organization: its id and key. The write functions
+    /// belong to specs 05 and 06, so the row is inserted directly.
+    async fn provider(&self) -> (Uuid, String) {
+        let id = new_id();
+        let key = format!("p{}", id.simple());
+        sqlx::query(
+            "INSERT INTO identity_providers (id, org_id, key, kind, config)
+             VALUES ($1, $2, $3, 'oidc', $4::jsonb)",
+        )
+        .bind(id)
+        .bind(self.id)
+        .bind(&key)
+        .bind(format!(r#"{{"label": "Provider of {}"}}"#, self.slug))
+        .execute(&self.pool)
+        .await
+        .expect("insert provider");
+        (id, key)
+    }
+
+    /// Two identities of `user` at a new provider; the second's id.
+    async fn two_identities(&self, user: Uuid) -> Uuid {
+        let (provider, _) = self.provider().await;
+        let mut last = None;
+        for subject in ["1000001", "1000002"] {
+            let identity = NewIdentity {
+                user_id: user,
+                provider_id: provider,
+                subject: subject.into(),
+                attributes: serde_json::Map::new(),
+            };
+            let linked = identities::link(
+                &self.pool,
+                scope(self.id),
+                &identity,
+                now(),
+                Actor::Instance,
+            )
+            .await
+            .expect("link identity");
+            last = Some(linked.id);
+        }
+        last.expect("two identities")
+    }
+
     /// A new custom role with no permissions and no assignment.
     async fn custom_role(&self) -> Uuid {
         let role = NewRole {
@@ -1443,6 +1646,45 @@ async fn gated_rename(
     rename_account(require, state).await
 }
 
+/// Removes one of the caller's own identities.
+async fn delete_mine(
+    principal: Authenticated,
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    identities::unlink(
+        &state.db,
+        principal.scope(),
+        principal.user_id,
+        id,
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .map_err(|_| {
+        ApiError::new(
+            StatusCode::NOT_FOUND,
+            "identity.not_found",
+            "No such identity.",
+        )
+    })?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Removes any identity by id, whoever and wherever its user is.
+async fn delete_anyones(
+    _: Authenticated,
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<Uuid>,
+) -> StatusCode {
+    sqlx::query("DELETE FROM identities WHERE id = $1")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .expect("delete");
+    StatusCode::NO_CONTENT
+}
+
 /// Checks `account.view` where its entry says `account.manage`.
 async fn wrong_permission(_: Require<AccountView, AccountTarget>) -> StatusCode {
     StatusCode::OK
@@ -1463,6 +1705,8 @@ fn fixture_app(world: &World) -> Router {
         .route("/t/gated/{account_id}", patch(gated_rename))
         .route("/t/sessions", axum::routing::delete(end_other_sessions))
         .route("/t/names", get(every_name))
+        .route("/t/mine/{id}", axum::routing::delete(delete_mine))
+        .route("/t/anyones/{id}", axum::routing::delete(delete_anyones))
         .with_state(world.state())
 }
 
@@ -1547,7 +1791,7 @@ const fn gated(feature: &'static str, access: Access) -> Access {
             feature: Some(feature),
             setup,
         },
-        Access::AuthOnly(_) => panic!("a feature entry needs a permission"),
+        Access::AuthOnly(_) | Access::Own { .. } => panic!("a feature entry needs a permission"),
     }
 }
 
@@ -1629,6 +1873,35 @@ async fn the_runner_passes_a_route_that_checks_its_feature(pool: PgPool) {
     );
 }
 
+/// Two identities of `owner`, the second named as the fixture routes' `{id}`.
+fn fixture_identity(org: &Org, owner: Uuid) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async move {
+        Call {
+            params: vec![("id", org.two_identities(owner).await)],
+            body: None,
+            at: At::Org,
+        }
+    })
+}
+
+const OWN_IDENTITY: Access = Access::Own {
+    not_found: "identity.not_found",
+    setup: fixture_identity,
+};
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_runner_passes_a_route_on_the_callers_own_row(pool: PgPool) {
+    let world = World::new(pool).await;
+    let app = fixture_app(&world);
+    let op = fixture_op(Method::DELETE, "/t/mine/{id}");
+    let report = run(&world, &app, &op, &OWN_IDENTITY).await;
+    assert!(report.failures.is_empty(), "{:#?}", report.failures);
+    assert_eq!(
+        report.ran,
+        ["401", "2xx", "other-user", "cross-organization"]
+    );
+}
+
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn a_route_without_its_feature_check_fails_the_feature_off_cases(pool: PgPool) {
     let world = World::new(pool).await;
@@ -1650,6 +1923,23 @@ async fn a_route_without_its_feature_check_fails_the_feature_off_cases(pool: PgP
     );
     assert!(
         report.failures[1].contains("account.not_found"),
+        "{report:#?}"
+    );
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_route_on_anyones_row_fails_the_other_user_and_cross_organization_cases(pool: PgPool) {
+    let world = World::new(pool).await;
+    let app = fixture_app(&world);
+    let op = fixture_op(Method::DELETE, "/t/anyones/{id}");
+    let report = run(&world, &app, &op, &OWN_IDENTITY).await;
+    assert_eq!(
+        failed_cases(&report),
+        ["other-user", "cross-organization"],
+        "{report:#?}"
+    );
+    assert!(
+        report.failures[1].contains("org B's rows changed"),
         "{report:#?}"
     );
 }

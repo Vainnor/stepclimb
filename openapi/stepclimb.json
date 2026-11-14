@@ -965,6 +965,90 @@
         }
       }
     },
+    "/api/v1/me/identities": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "List the signed-in user's identities, oldest first, without the attributes providers sent.",
+        "operationId": "listMyIdentities",
+        "responses": {
+          "200": {
+            "description": "Your identities",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MyIdentity"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      }
+    },
+    "/api/v1/me/identities/{identity_id}": {
+      "delete": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Remove one of the signed-in user's identities. You must keep a way to sign in.",
+        "operationId": "deleteMyIdentity",
+        "parameters": [
+          {
+            "name": "identity_id",
+            "in": "path",
+            "description": "The identity's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The identity is removed"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/CsrfRefused"
+          },
+          "404": {
+            "$ref": "#/components/responses/MyIdentityNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/MyIdentityDeleteConflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/api/v1/organization": {
       "get": {
         "tags": [
@@ -1462,6 +1546,190 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/api/v1/users/{user_id}/identities": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "List a user's identities, oldest first.",
+        "operationId": "listUserIdentities",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "The user's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user's identities",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Identity"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/PermissionDenied"
+          },
+          "404": {
+            "$ref": "#/components/responses/UserNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Link an identity to a user, so they can sign in with it.",
+        "operationId": "createUserIdentity",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "The user's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewIdentity"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The identity is linked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Identity"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/IdentityWriteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/UserNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdentityLinkConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/users/{user_id}/identities/{identity_id}": {
+      "delete": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Remove an identity from a user. The user must keep a way to sign in.",
+        "operationId": "deleteUserIdentity",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "The user's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "identity_id",
+            "in": "path",
+            "description": "The identity's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The identity is removed"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/IdentityWriteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/IdentityDeleteNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdentityDeleteConflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/auth/sign-out": {
       "post": {
         "tags": [
@@ -1732,6 +2000,46 @@
           "unavailable"
         ]
       },
+      "Identity": {
+        "type": "object",
+        "description": "A user's identity as an admin sees it.",
+        "required": [
+          "id",
+          "provider_key",
+          "subject",
+          "attributes",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "attributes": {
+            "type": "object",
+            "description": "The attributes the provider sent at the latest sign-in, as mapped by the provider's\nconfiguration; `{}` before the first sign-in. Admission rules read them."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "provider_key": {
+            "type": "string",
+            "description": "The key of the identity provider."
+          },
+          "subject": {
+            "type": "string",
+            "description": "The provider's id for the person, exactly as the provider sends it."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          }
+        }
+      },
       "Me": {
         "type": "object",
         "description": "What `GET /api/v1/me` answers.",
@@ -1836,6 +2144,43 @@
           }
         }
       },
+      "MyIdentity": {
+        "type": "object",
+        "description": "One of the signed-in user's identities.",
+        "required": [
+          "id",
+          "provider_key",
+          "provider_label",
+          "subject",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "provider_key": {
+            "type": "string",
+            "description": "The key of the identity provider."
+          },
+          "provider_label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The provider's label, such as \"Sign in with Example\"; `null` when the provider's\nconfiguration has none."
+          },
+          "subject": {
+            "type": "string",
+            "description": "The provider's id for you, exactly as the provider sends it."
+          }
+        }
+      },
       "NewAccount": {
         "type": "object",
         "description": "An account to create.",
@@ -1852,6 +2197,25 @@
             "type": "string",
             "format": "uuid",
             "description": "The parent account; you must hold `account.manage` at a scope containing it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewIdentity": {
+        "type": "object",
+        "description": "An identity to link to a user, so they can sign in with it the first time.",
+        "required": [
+          "provider_key",
+          "subject"
+        ],
+        "properties": {
+          "provider_key": {
+            "type": "string",
+            "description": "The key of one of the organization's identity providers."
+          },
+          "subject": {
+            "type": "string",
+            "description": "The provider's id for the person; stored exactly as given, not empty."
           }
         },
         "additionalProperties": false
@@ -2860,6 +3224,46 @@
           }
         }
       },
+      "IdentityDeleteConflict": {
+        "description": "`identity.last_sign_in_method`: the user would be left with no way to sign in.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "IdentityDeleteNotFound": {
+        "description": "`user.not_found`: no user of the organization has this id. `identity.not_found`: the user has no identity with this id. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "IdentityLinkConflict": {
+        "description": "`identity.taken`: this provider's subject is already linked to a user.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "IdentityWriteForbidden": {
+        "description": "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the user holds a permission, at any scope, that the caller does not hold at organization scope. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "InternalError": {
         "description": "`internal.error`: the server failed; the cause is in its log.",
         "content": {
@@ -2912,6 +3316,26 @@
       },
       "MoveNotFound": {
         "description": "`account.not_found`: the account does not exist or you cannot see its parent, or the destination `parent_id` does not exist or is outside every subtree where you hold `account.manage`. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "MyIdentityDeleteConflict": {
+        "description": "`identity.last_sign_in_method`: you would be left with no way to sign in. `identity.externally_managed`: an identity provider, the sync API, SCIM or a connector owns your user record and would link the identity again; ask an admin.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "MyIdentityNotFound": {
+        "description": "`identity.not_found`: you have no identity with this id. `org.not_found`: the request's organization cannot be determined.",
         "content": {
           "application/problem+json": {
             "schema": {

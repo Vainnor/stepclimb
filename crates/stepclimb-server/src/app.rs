@@ -19,7 +19,7 @@ use crate::{
     accounts, auth,
     csrf::{self, OriginAllowlist},
     error::ApiError,
-    health, me, openapi, organization,
+    health, identities, me, openapi, organization,
     rate_limit::RateLimiter,
     role_assignments, roles, spa, users,
     web_origin::WebOrigin,
@@ -95,6 +95,22 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         ("/readyz", get(health::readyz)),
         ("/auth/sign-out", post(auth::sign_out)),
         (me::ME_PATH, get(me::get_me)),
+        (
+            identities::MY_IDENTITIES_PATH,
+            get(identities::list_my_identities),
+        ),
+        (
+            "/api/v1/me/identities/{identity_id}",
+            delete(identities::delete_my_identity),
+        ),
+        (
+            "/api/v1/users/{user_id}/identities",
+            get(identities::list_user_identities).post(identities::create_user_identity),
+        ),
+        (
+            "/api/v1/users/{user_id}/identities/{identity_id}",
+            delete(identities::delete_user_identity),
+        ),
         (
             organization::ORGANIZATION_PATH,
             get(organization::get_organization).patch(organization::update_organization),
