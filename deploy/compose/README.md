@@ -31,8 +31,9 @@ Not available in M0:
 - `openssl`, for the commands below that make secrets.
 - For HTTPS with a public certificate: a domain whose DNS points at the host, with ports 80 and
   443 reachable from the internet.
-- About 1 to 2 vCPU and 2 GB of memory for one organization (the plan's estimate for a single
-  deployment; no load test has measured it yet).
+- About 1 to 2 vCPU and 2 GB of memory for one small organization: the plan's estimate for its
+  first single-organization deployment. A larger organization may need more, and no load test
+  has measured either yet.
 
 The image builds for linux/amd64 and linux/arm64. An amd64 host builds both; an arm64 host builds
 arm64 only.
@@ -41,11 +42,11 @@ arm64 only.
 
 Every command runs from the repository root.
 
-1. Create the secret files (next section).
+1. Create the secret files and point `SC_SECRETS_DIR` at them (next section).
 2. Say where users will open Stepclimb. Compose reads `deploy/compose/.env`, which git ignores:
 
    ```sh
-   echo 'SC_PUBLIC_URL=https://lms.example.org' > deploy/compose/.env
+   echo 'SC_PUBLIC_URL=https://lms.example.org' >> deploy/compose/.env
    ```
 
 3. Build the image and start the stack:
@@ -78,9 +79,12 @@ without `--profile tls` leaves Caddy running.
 
 ## Secret files
 
-The example has no default passwords. Each secret is a file in `deploy/compose/secrets/` (git
-ignores it; `SC_SECRETS_DIR` names another directory), mounted into the containers with Compose
-`secrets:`. Starting the stack while a file is missing fails, naming the file.
+The example has no default passwords. Each secret is a file in the directory `SC_SECRETS_DIR`
+names, mounted into the containers with Compose `secrets:`. Starting the stack while a file is
+missing fails, naming the file. Keep that directory outside the checkout: a `git clean -x`, a
+`rm -rf` of the checkout or a copy of it then cannot take the secrets along. Without
+`SC_SECRETS_DIR` the stack reads `deploy/compose/secrets/`, which git and the image build
+ignore.
 
 | File | Holds |
 | --- | --- |
@@ -90,12 +94,14 @@ ignores it; `SC_SECRETS_DIR` names another directory), mounted into the containe
 | `minio_root_user`, `minio_root_password` | MinIO's root credentials, with the `minio` profile only |
 
 ```sh
-mkdir -m 700 deploy/compose/secrets
-openssl rand -hex 32 > deploy/compose/secrets/postgres_password
+secrets="$HOME/stepclimb-secrets"
+mkdir -m 700 "$secrets"
+openssl rand -hex 32 > "$secrets/postgres_password"
 printf 'postgres://stepclimb:%s@postgres:5432/stepclimb\n' \
-  "$(cat deploy/compose/secrets/postgres_password)" > deploy/compose/secrets/database_url
-printf 'k1:%s\n' "$(openssl rand -base64 32)" > deploy/compose/secrets/encryption_keys
-chmod 644 deploy/compose/secrets/*
+  "$(cat "$secrets/postgres_password")" > "$secrets/database_url"
+printf 'k1:%s\n' "$(openssl rand -base64 32)" > "$secrets/encryption_keys"
+chmod 644 "$secrets"/*
+echo "SC_SECRETS_DIR=$secrets" >> deploy/compose/.env
 ```
 
 A hex password needs no escaping in the URL. A password with `@`, `/`, `?`, `&` or `#` must be
@@ -138,7 +144,8 @@ Caddy discards the forwarding headers a client sends and writes its own. It has 
 changes the first three octets; change it if that range is in use on the host), and the server
 trusts `X-Forwarded-For` from that address only (`STEPCLIMB_TRUSTED_PROXIES`).
 
-The server rate-limits sign-in and token requests per client address. Caddy sees each client's
+The server rate-limits sign-in and token requests per client address, though the limits have
+nothing to count until the sign-in and token routes arrive (none exists in M0). Caddy sees each client's
 real address only where Docker passes it through: rootful Docker does for connections from other
 hosts; rootless Docker does only with a RootlessKit port driver that keeps source addresses (see
 Docker's rootless documentation). Otherwise every request arrives from the network gateway, `.1`,
@@ -153,9 +160,10 @@ image is Chainguard's, pinned by digest (`docs/adr/0019-minio-image.md`). Create
 files first, then name the profile:
 
 ```sh
-printf 'stepclimb-media\n' > deploy/compose/secrets/minio_root_user
-openssl rand -hex 24 > deploy/compose/secrets/minio_root_password
-chmod 644 deploy/compose/secrets/minio_*
+secrets="$HOME/stepclimb-secrets"
+printf 'stepclimb-media\n' > "$secrets/minio_root_user"
+openssl rand -hex 24 > "$secrets/minio_root_password"
+chmod 644 "$secrets"/minio_*
 docker compose -f deploy/compose/compose.production.yaml --profile minio up -d --build --wait
 ```
 
@@ -164,14 +172,15 @@ Nothing in M0 reads object storage, so there is no reason to run it yet.
 ## Compose variables
 
 These `SC_*` variables configure the Compose file, not the server. Set them in the environment or
-in `deploy/compose/.env`.
+in `deploy/compose/.env`. A test (`bin/test_compose_guide.py`, in `just ci`) fails when this table
+and `compose.production.yaml` disagree on a name or a default.
 
 | Variable | Default | What it sets |
 | --- | --- | --- |
 | `SC_PUBLIC_URL` | required | The address users open; becomes the server's `STEPCLIMB_PUBLIC_URL` |
 | `SC_DOMAIN` | none | The domain Caddy serves; required with the `tls` profile |
 | `SC_CERT_ISSUER` | `acme` | `acme` (Let's Encrypt) or `internal` (Caddy's own CA) |
-| `SC_SECRETS_DIR` | `./secrets` | The directory holding the secret files, relative to `deploy/compose/` |
+| `SC_SECRETS_DIR` | `./secrets` | The directory holding the secret files: an absolute path, or one relative to `deploy/compose/` |
 | `SC_HTTP_ADDRESS` | `127.0.0.1` | The host address the server is published on |
 | `SC_HTTP_PORT` | `8080` | The host port the server is published on |
 | `SC_PROXY_ADDRESS` | `0.0.0.0` | The host address Caddy is published on |
@@ -244,8 +253,8 @@ default or secrecy is wrong.
 | `STEPCLIMB_TOKEN_RATE_LIMIT` | `token_rate_limit` | whole number, 1 or more | `60` | no | `/oauth/token` and `/oauth/revoke` requests per minute from one client address |
 | `STEPCLIMB_FAILED_SIGN_IN_LIMIT` | `failed_sign_in_limit` | whole number, 1 or more | `10` | no | Failed password or TOTP checks per account per 15 minutes |
 
-No sign-in or token route exists in M0 yet, so the three limits have nothing to count until they
-arrive.
+The three limits have nothing to count until the sign-in and token routes arrive; none exists in
+M0.
 
 ## Commands
 

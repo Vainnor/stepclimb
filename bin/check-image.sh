@@ -10,7 +10,8 @@
 #   - `stepclimb check-config` runs in it and accepts a valid configuration: in a container for
 #     the machine's own platform, and under QEMU user-mode emulation (qemu-aarch64 or
 #     qemu-x86_64, from the Nix dev shell on Linux) for another, which Docker without a
-#     registered emulator (binfmt_misc) cannot run as a container.
+#     registered emulator (binfmt_misc) cannot run as a container. Before an emulated run, the
+#     binary's ELF interpreter must be in the image, so the run cannot use the host's loader.
 #
 #   bin/check-image.sh [PLATFORM...]
 #
@@ -68,6 +69,61 @@ print({62: "x86_64", 183: "aarch64"}.get(struct.unpack_from("<H", header, 18)[0]
 PY
 }
 
+# The ELF interpreter (PT_INTERP) of the binary $2, resolved inside the image root $1: symlinks
+# are followed within $1, never into the host's file system. Prints the interpreter's path and
+# fails when $1 does not hold it, so an emulated run cannot load the host's dynamic loader.
+interpreter_in_root() {
+    python3 -I - "$1" "$2" <<'PY'
+import os, struct, sys
+
+def fail(message):
+    print(message)
+    sys.exit(1)
+
+root, binary = sys.argv[1], sys.argv[2]
+with open(binary, "rb") as file:
+    data = file.read()
+if data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
+    fail("not a 64-bit little-endian ELF file")
+(phoff,) = struct.unpack_from("<Q", data, 32)
+phentsize, phnum = struct.unpack_from("<HH", data, 54)
+interp = None
+for i in range(phnum):
+    kind, _, offset, _, _, size = struct.unpack_from("<IIQQQQ", data, phoff + i * phentsize)
+    if kind == 3:  # PT_INTERP
+        interp = data[offset:offset + size].rstrip(b"\0").decode()
+if interp is None:
+    fail("no ELF interpreter")
+
+def split(path):
+    return [part for part in path.split("/") if part not in ("", ".")]
+
+parts, done, hops = split(interp), [], 0
+while parts:
+    part = parts.pop(0)
+    if part == "..":
+        if done:
+            done.pop()
+        continue
+    done.append(part)
+    host = os.path.join(root, *done)
+    if os.path.islink(host):
+        hops += 1
+        if hops > 40:
+            fail(f"{interp}: too many symbolic links")
+        target = os.readlink(host)
+        done.pop()
+        if target.startswith("/"):
+            done = []
+        parts = split(target) + parts
+    elif not os.path.lexists(host):
+        fail(f"{interp} is not in the image")
+if not os.path.isfile(os.path.join(root, *done)):
+    fail(f"{interp} is not a file in the image")
+print(interp)
+PY
+}
+
 # The uid that the user $1 (a name, a uid, or either with :group) has in the passwd file $2.
 uid_of() {
     local user=${1%%:*}
@@ -80,7 +136,7 @@ uid_of() {
 }
 
 check_platform() {
-    local platform=$1 arch=${1#linux/} tag root machine qemu user uid container how
+    local platform=$1 arch=${1#linux/} tag root machine qemu user uid container how interpreter
     case $arch in
         amd64) machine=x86_64 qemu=qemu-x86_64 ;;
         arm64) machine=aarch64 qemu=qemu-aarch64 ;;
@@ -126,12 +182,14 @@ check_platform() {
             || fail "check-config failed in $tag: $(cat "$work/check.log")"
         how="in a container"
     else
+        interpreter=$(interpreter_in_root "$root" "$root/usr/local/bin/stepclimb") \
+            || fail "/usr/local/bin/stepclimb in $tag cannot load from the image: $interpreter"
         qemu=$(command -v "$qemu") \
             || fail "cannot run the $arch image: $qemu is not on PATH (nix develop provides it on Linux)"
         env -i "${config_env[@]}" "$qemu" -L "$root" "$root/usr/local/bin/stepclimb" check-config \
             >"$work/check.log" 2>&1 \
             || fail "check-config failed under $qemu: $(cat "$work/check.log")"
-        how="under ${qemu##*/}"
+        how="under ${qemu##*/}, loader $interpreter from the image"
     fi
     grep -qx 'stepclimb: the configuration is valid' "$work/check.log" \
         || fail "check-config did not report a valid configuration: $(cat "$work/check.log")"

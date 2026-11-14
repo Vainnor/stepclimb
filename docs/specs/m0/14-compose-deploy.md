@@ -308,7 +308,10 @@ overrule one, which then updates this spec.
   or a native arm64 machine the owner provides is the owner's call (ADR 0021: long jobs go to a
   VM the owner provides).
   **Decided:** the recommendation (owner, 13 Nov 2026).
-  **Coordinator decision (2026-11-14).** The Rust stage cross-compiles: the web and Rust stages
+  **Coordinator decision (2026-11-14), for the owner's review.** The build method was the
+  owner's call; with the owner away, the coordinator decided it on the owner's delegation and
+  accepted cross-compiling, with the arm64 image check inside `just ci`. The owner can overrule
+  it, which then updates this spec. The Rust stage cross-compiles: the web and Rust stages
   run on the build machine's platform (`FROM --platform=$BUILDPLATFORM`), the Rust stage adds
   rustup's `aarch64-unknown-linux-gnu` target and Debian's `gcc-aarch64-linux-gnu` linker, and
   only the final distroless stage, which runs nothing, uses the target's base. Emulation was not
