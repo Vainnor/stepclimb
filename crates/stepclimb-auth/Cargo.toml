@@ -22,11 +22,14 @@ rustls-platform-verifier.workspace = true
 http.workspace = true
 tokio.workspace = true
 url.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
+webauthn-rs.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["io-util", "test-util"] }
+webauthn-authenticator-rs.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
