@@ -302,3 +302,12 @@ overrule one, which then updates this spec.
    names, the matching error in each route's OpenAPI entry, and a permission suite addition that
    runs the disabled-feature case for each such route. Covers B9 on real routes. Depends on: issue 2
    and the issues that add those routes (`05`, `06`, `07`, `08`, `09` issue 5, `12`).
+   **Coordinator decision (2026-11-14).** Issue 4 gates the routes that exist when it lands:
+   `custom_roles` on `POST /api/v1/admin/roles` and `PATCH` and `DELETE
+   /api/v1/admin/roles/{role_id}`, the role-writing routes of `09` issue 5. Reading the catalog
+   and the roles, and the role assignment routes (`09` issue 6), take no feature. The issue that
+   adds each other route Q1 names puts the check on it, with the suite entry and the OpenAPI
+   error: `oidc_providers` and `oauth2_providers` on provider creation and change (`06` issue 5,
+   as `05-oidc.md` Q1 decides), `admission_webhook` on webhook administration (`07` issue 5),
+   `api_keys` on the service-account routes (`08` issue 6) and `custom_branding` on `PUT
+   /api/v1/admin/branding` (`12` I8).
