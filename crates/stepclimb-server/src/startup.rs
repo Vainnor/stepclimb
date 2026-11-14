@@ -201,6 +201,7 @@ pub fn log_configuration(config: &Config) {
         sign_in_rate_limit = %config.sign_in_rate_limit,
         token_rate_limit = %config.token_rate_limit,
         failed_sign_in_limit = %config.failed_sign_in_limit,
+        allow_insecure_providers = %config.allow_insecure_providers,
         "configuration loaded"
     );
 }

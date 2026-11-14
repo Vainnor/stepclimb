@@ -269,6 +269,7 @@ default or secrecy is wrong.
 | `STEPCLIMB_SIGN_IN_RATE_LIMIT` | `sign_in_rate_limit` | whole number, 1 or more | `20` | no | Sign-in requests per minute from one client address |
 | `STEPCLIMB_TOKEN_RATE_LIMIT` | `token_rate_limit` | whole number, 1 or more | `60` | no | `/oauth/token` and `/oauth/revoke` requests per minute from one client address |
 | `STEPCLIMB_FAILED_SIGN_IN_LIMIT` | `failed_sign_in_limit` | whole number, 1 or more | `10` | no | Failed password or TOTP checks per account per 15 minutes |
+| `STEPCLIMB_ALLOW_INSECURE_PROVIDERS` | `allow_insecure_providers` | `true` or `false` | `false` | no | Lets the server fetch `http` and loopback URLs for identity providers and the admission webhook. For tests and local development only: it lets an organization admin make the server call services on its own host |
 
 The three limits have nothing to count until the sign-in and token routes arrive; none exists in
 M0.

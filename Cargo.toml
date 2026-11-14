@@ -93,6 +93,18 @@ clap = { version = "=4.6.7", default-features = false, features = ["std", "deriv
 # The database URL's query parameters, read with the parser sqlx itself uses, so the loader can
 # refuse one sqlx would ignore (docs/specs/m0/14-compose-deploy.md B10). The version sqlx brings.
 url = { version = "=2.5.8", default-features = false, features = ["std"] }
+# Outbound HTTP to identity providers and the admission webhook (docs/specs/m0/05-oidc.md I1,
+# Q4): `stepclimb_auth::outbound`. reqwest with rustls and no built-in crypto provider: the
+# client hands reqwest a rustls config whose crypto is ring (a C compiler only; aws-lc-rs,
+# reqwest's default, also needs cmake) and whose certificates are checked against the system's
+# trust store by rustls-platform-verifier (the version reqwest brings), so an operator's
+# internal CA works. No proxy, cookie, decompression or HTTP/2 feature. `http` is the version
+# hyper already brings; its request and response types are what the `openidconnect` crate's
+# HTTP client trait takes.
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-platform-verifier = "=0.7.1"
+http = "=1.5.0"
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["fmt", "env-filter", "json", "ansi"] }
 
