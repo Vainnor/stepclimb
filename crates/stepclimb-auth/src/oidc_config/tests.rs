@@ -301,8 +301,8 @@ fn a_sealed_secret_opens_only_for_its_own_row() {
     };
     for wrong in [other_provider, other_org] {
         assert_eq!(
-            config.client_secret(&ring(), wrong),
-            Err(DecryptError::Inauthentic),
+            config.client_secret(&ring(), wrong).err(),
+            Some(DecryptError::Inauthentic),
             "{wrong:?}"
         );
     }

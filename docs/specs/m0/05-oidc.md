@@ -262,19 +262,20 @@ overrule one, which then updates this spec.
   seconds per provider request (the webhook keeps its 3 seconds). Recommendation: (a) with the
   insecure switch and 5 seconds.
   **Decided:** the recommendation (owner, 13 Nov 2026).
-  Coordinator decision (2026-11-14), for I1 (`stepclimb_auth::outbound`, ADR 0025): the
-  switch is `STEPCLIMB_ALLOW_INSECURE_PROVIDERS` (`true` or `false`, default `false`). Loopback
-  addresses need the switch on every instance; private and unique-local addresses (plus
-  `100.64.0.0/10`, `198.18.0.0/15`, `192.0.0.0/24`, `fec0::/10`) are refused on a
-  multi-organization instance; link-local (`169.254.0.0/16`, where cloud metadata services
-  listen, and `fe80::/10`), unspecified, multicast, reserved and documentation addresses are
-  always refused. An IPv6 address carrying an IPv4 one (mapped, NAT64, 6to4) is judged by that
-  IPv4 address. A host name is refused when any address it resolves to is refused, and the
-  connection uses only the checked addresses. Saving checks the scheme, credentials in the URL
-  (refused) and an address written as the host, without DNS. No outbound request follows a
-  redirect or uses a proxy, providers included, as the `openidconnect` crate's documentation
-  advises against following redirects. The 5 s covers the whole exchange, body included, and a
-  provider response body over 1 MiB is refused.
+  Coordinator decision (2026-11-14), for I1 (`stepclimb_auth::outbound`, ADR 0025): the switch is
+  `STEPCLIMB_ALLOW_INSECURE_PROVIDERS` (`true` or `false`, default `false`). Loopback addresses
+  need the switch on every instance; private and unique-local addresses (plus `100.64.0.0/10`,
+  `198.18.0.0/15`, `192.0.0.0/24`, `fec0::/10`) are refused on a multi-organization instance;
+  link-local (`169.254.0.0/16`, where cloud metadata services listen, and `fe80::/10`), the
+  metadata addresses inside private ranges (`100.100.100.200`, `fd00:ec2::254`), Teredo
+  (`2001::/32`), unspecified, multicast, reserved and documentation addresses are always refused.
+  An IPv6 address carrying an IPv4 one (mapped, NAT64, 6to4) is judged by that IPv4 address. A
+  host name is refused when any address it resolves to is refused, and the connection uses only
+  the checked addresses. Saving checks the scheme, credentials in the URL (refused) and an
+  address written as the host, without DNS. No outbound request follows a redirect or uses a
+  proxy, providers included, as the `openidconnect` crate's documentation advises against
+  following redirects. The 5 s covers the whole exchange, body included, and a provider response
+  body over 1 MiB is refused.
 - **Q5. Caching and clock skew.** The plan does not say how often discovery and JWKS are
   fetched. (a) In memory per provider for 1 hour, a JWKS refetch on an unknown `kid` at most
   once per minute, 60 seconds of clock skew; (b) fetch on every sign-in, no cache; (c) honor

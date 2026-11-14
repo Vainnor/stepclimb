@@ -2,7 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-11-14
-- **Decider:** the coordinator, on the owner's delegation of M0 decisions (2026-11-13)
+- **Decider:** the coordinator, on the owner's delegation of M0 decisions (2026-11-13); the
+  owner to confirm
 - **Related:** `docs/specs/m0/05-oidc.md` I1, B2, Q4; `docs/specs/m0/07-admission.md` B14 to
   B17; `docs/plan/technical.md` -> Architecture and stack (`openidconnect`, `oauth2`);
   `crates/stepclimb-auth/src/outbound/`

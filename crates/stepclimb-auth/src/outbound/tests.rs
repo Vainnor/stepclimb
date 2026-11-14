@@ -354,3 +354,63 @@ fn the_provider_client_has_the_documented_limits() {
     assert_eq!(client.max_body, 1024 * 1024);
     assert_eq!(client.policy(), INSECURE);
 }
+
+/// Set in the child process of `proxy_variables_are_ignored`, naming the port of the server the
+/// child requests directly.
+const PROXY_CHILD: &str = "STEPCLIMB_TEST_PROXY_CHILD";
+
+/// The process environment cannot be changed without `unsafe`, so the test runs itself again with
+/// `HTTP_PROXY` and `HTTPS_PROXY` naming a listener of its own. The child makes one request; the
+/// listener must see no connection, and the request must reach the server directly.
+#[test]
+fn proxy_variables_are_ignored() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime");
+    if let Ok(port) = std::env::var(PROXY_CHILD) {
+        let url = format!("http://127.0.0.1:{port}/");
+        let response = runtime
+            .block_on(client(INSECURE).send(get(&url)))
+            .expect("the request reaches the server directly");
+        assert_eq!(response.status(), http::StatusCode::OK);
+        return;
+    }
+    let proxy = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    proxy.set_nonblocking(true).expect("nonblocking");
+    let proxy_url = format!("http://{}", proxy.local_addr().expect("address"));
+    let server = runtime.block_on(Server::start(ok("{}")));
+
+    let output = std::process::Command::new(std::env::current_exe().expect("the test binary"))
+        .args([
+            "--exact",
+            "outbound::tests::proxy_variables_are_ignored",
+            "--nocapture",
+        ])
+        .env(PROXY_CHILD, server.port.to_string())
+        .env("HTTP_PROXY", &proxy_url)
+        .env("HTTPS_PROXY", &proxy_url)
+        .env("ALL_PROXY", &proxy_url)
+        .env("http_proxy", &proxy_url)
+        .env("https_proxy", &proxy_url)
+        .env_remove("NO_PROXY")
+        .env_remove("no_proxy")
+        .output()
+        .expect("the child runs");
+
+    assert!(
+        matches!(proxy.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
+        "the proxy saw a connection"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "child failed: {stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "the child ran the test: {stdout}"
+    );
+    assert_eq!(server.requests().len(), 1, "the server saw the request");
+}

@@ -81,8 +81,9 @@ pub struct ConfigProblem {
 pub struct ConfigErrors(pub Vec<ConfigProblem>);
 
 /// A client secret in the clear. `Debug` never shows it; it leaves the type only through
-/// [`ClientSecret::expose_secret`], for the token request.
-#[derive(Clone, PartialEq, Eq)]
+/// [`ClientSecret::expose_secret`], for the token request. No `PartialEq`: comparing a secret
+/// with `==` is not constant time.
+#[derive(Clone)]
 pub struct ClientSecret(String);
 
 impl ClientSecret {
@@ -152,14 +153,14 @@ pub struct OidcSettings {
 }
 
 /// The secret of a validated config: a new one from the admin, or the one already stored.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub enum DraftSecret {
     New(ClientSecret),
     Kept(SealedSecret),
 }
 
 /// A validated config, before its secret is sealed.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct OidcConfigDraft {
     pub settings: OidcSettings,
     pub secret: DraftSecret,

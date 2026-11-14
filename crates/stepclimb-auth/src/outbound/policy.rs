@@ -11,7 +11,10 @@
 //! | public | everything below does not name | always |
 //! | loopback | `127.0.0.0/8`, `::1` | only with the insecure switch |
 //! | private | `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10` (shared), `198.18.0.0/15` (benchmarking), `192.0.0.0/24`, `fc00::/7` (unique local), `fec0::/10` (site local), `64:ff9b:1::/48` | only when private networks are allowed (a single-organization instance) |
-//! | never | `0.0.0.0/8`, `169.254.0.0/16` and `fe80::/10` (link local, where cloud metadata services listen), multicast, `240.0.0.0/4` and broadcast, the documentation ranges, `::`, `100::/64`, other `::/96` | never |
+//! | never | `0.0.0.0/8`, `169.254.0.0/16` and `fe80::/10` (link local, where cloud metadata services listen), the metadata services inside private ranges (`100.100.100.200`, `fd00:ec2::254`), multicast, `240.0.0.0/4` and broadcast, the documentation ranges, `::`, `100::/64`, `2001::/32` (Teredo, which tunnels to an IPv4 address the policy cannot see), other `::/96` | never |
+//!
+//! The never class is checked before the private one, so a metadata address stays refused
+//! where private networks are allowed.
 //!
 //! An IPv6 address that carries an IPv4 one (`::ffff:0:0/96` mapped, `64:ff9b::/96` NAT64,
 //! `2002::/16` 6to4) is classed by the IPv4 address it carries.
@@ -130,6 +133,7 @@ fn in_v4(ip: Ipv4Addr, network: [u8; 4], prefix: u32) -> bool {
 const V4_NEVER: &[([u8; 4], u32)] = &[
     ([0, 0, 0, 0], 8),
     ([169, 254, 0, 0], 16),
+    ([100, 100, 100, 200], 32),
     ([224, 0, 0, 0], 4),
     ([240, 0, 0, 0], 4),
     ([192, 0, 2, 0], 24),
@@ -173,6 +177,8 @@ const V6_NEVER: &[(Ipv6Addr, u32)] = &[
     (v6([0xff00, 0, 0, 0, 0, 0, 0, 0]), 8),
     (v6([0x2001, 0xdb8, 0, 0, 0, 0, 0, 0]), 32),
     (v6([0x100, 0, 0, 0, 0, 0, 0, 0]), 64),
+    (v6([0x2001, 0, 0, 0, 0, 0, 0, 0]), 32),
+    (v6([0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x254]), 128),
     (v6([0, 0, 0, 0, 0, 0, 0, 0]), 96),
 ];
 
@@ -263,6 +269,31 @@ mod tests {
         ] {
             assert_eq!(class(never), AddressClass::Never, "{never}");
         }
+    }
+
+    #[test]
+    fn metadata_addresses_inside_private_ranges_are_never_allowed() {
+        let everything = UrlPolicy::new(true, true);
+        for metadata in ["100.100.100.200", "fd00:ec2::254"] {
+            assert_eq!(class(metadata), AddressClass::Never, "{metadata}");
+            let ip: IpAddr = metadata.parse().expect("an address");
+            assert_eq!(
+                everything.check_address(ip),
+                Err(Refused::Never),
+                "{metadata}"
+            );
+        }
+        // Their neighbors stay private.
+        assert_eq!(class("100.100.100.201"), AddressClass::Private);
+        assert_eq!(class("fd00:ec2::253"), AddressClass::Private);
+    }
+
+    #[test]
+    fn teredo_is_never_allowed() {
+        for teredo in ["2001::1", "2001:0:4136:e378:8000:63bf:3fff:fdd2"] {
+            assert_eq!(class(teredo), AddressClass::Never, "{teredo}");
+        }
+        assert_eq!(class("2001:4860::8888"), AddressClass::Public);
     }
 
     #[test]
