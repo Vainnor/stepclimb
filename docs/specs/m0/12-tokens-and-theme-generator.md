@@ -402,8 +402,10 @@ overrule any of them.
 - **Coordinator decision (2026-11-13): no wide-gamut overrides.** The hand-written themes gave
   P3 and Rec. 2020 displays the plan's unmapped colors through `@media (color-gamut: ...)`. The
   generator writes sRGB colors only (B13), so those overrides are gone. A wide-gamut display now
-  shows the sRGB value; the largest difference in the default brand is `brand-hover`'s in light,
-  0.014 in OKLab.
+  shows the sRGB value. The largest difference in the default brand is high contrast's `brand`
+  and `ring` (`oklch(0.38 0.12 195)`, outside sRGB), 0.055 in OKLab; where a browser clipped the
+  unmapped value into sRGB, as the story screenshots did, that is 0, 84, 86 before and 0, 79, 80
+  after, at most 5 levels per channel.
 
 ## Issues
 
