@@ -320,8 +320,14 @@ describe("generate", () => {
     );
   });
 
-  it("refuses a primary color with a chroma or hue too large to be finite", () => {
+  it("refuses a chroma above 0.5 and a hue too large to be finite, quickly", () => {
+    const start = performance.now();
     for (const primary of [
+      "oklch(0.5 0.5001 120)",
+      "oklch(0.5 126% 120)",
+      "oklch(0.5 2 120)",
+      "oklch(0.5 1e100 120)",
+      "oklch(0.5 1e150 120)",
       "oklch(0.5 1e400 120)",
       "oklch(0.5 0.1 1e400)",
       "oklch(0.5 0.1 -1e400)",
@@ -329,6 +335,17 @@ describe("generate", () => {
       expect(() => generate({ primary }), primary).toThrow(
         expect.objectContaining({ name: "BrandInputError", field: "primary" }),
       );
+    }
+    // A refused input never reaches gamut mapping, so the whole list takes well under a second.
+    expect(performance.now() - start).toBeLessThan(1000);
+  });
+
+  it("generates a passing theme at the chroma cap in every appearance", () => {
+    for (const hue of [0, 30, 145, 250, 330]) {
+      const themes = generate({ primary: `oklch(0.6 0.5 ${hue})` });
+      for (const appearance of appearances) {
+        expect(contrastReport(themes[appearance]).pass, `${hue} ${appearance}`).toBe(true);
+      }
     }
   });
 

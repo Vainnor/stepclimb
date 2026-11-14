@@ -47,7 +47,7 @@ const named: BrandInputs[] = [
   { primary: " oklch(70% 100% 145deg) " },
   { primary: "oklch(0.5 0.00009 120)" },
   { primary: "OKLCH(.62 .2 359.996)" },
-  { primary: "oklch(0.45 2 -30)" },
+  { primary: "oklch(0.45 0.5 -30)" },
 ];
 
 /** Inputs both generators must refuse, and the field each names. */
@@ -59,6 +59,10 @@ const invalid: BrandInputs[] = [
   { primary: "oklch(0.5 -0.1 10)" },
   { primary: "oklch(0.5 0.1 10 / 0.5)" },
   { primary: "oklch(0.5 1e400 10)" },
+  { primary: "oklch(0.5 1e150 10)" },
+  { primary: "oklch(0.45 2 -30)" },
+  { primary: "oklch(0.5 0.5001 10)" },
+  { primary: "oklch(0.5 126% 10)" },
   { primary: "oklch(0.5 0.1 1e400)" },
   { primary: "oklch(1. 0.1 10)" },
   { primary: "rgb(1 2 3)" },

@@ -3,7 +3,7 @@
 //! with the WCAG 2 contrast ratio on the displayed 8-bit sRGB colors. The port of
 //! `packages/tokens/src/report.ts`; the pairs are its `requiredPairs`, in its order.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::{
     Appearance, Theme,
@@ -96,10 +96,10 @@ pub const REQUIRED_PAIRS: [(&str, &str, PairKind); 43] = [
 ];
 
 /// One measured pair: `foreground` on `background`.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ContrastPair {
-    pub foreground: &'static str,
-    pub background: &'static str,
+    pub foreground: String,
+    pub background: String,
     /// The WCAG 2 contrast ratio, 1 to 21, unrounded.
     pub ratio: f64,
     pub minimum: f64,
@@ -107,15 +107,15 @@ pub struct ContrastPair {
 }
 
 /// Something a person should look at that does not fail the theme.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContrastWarning {
     /// `brand-near-danger`.
-    pub code: &'static str,
+    pub code: String,
     pub message: String,
 }
 
 /// One appearance's report.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ContrastReport {
     pub appearance: Appearance,
     /// True when every pair passes; warnings never fail a theme.
@@ -163,7 +163,7 @@ fn warnings(theme: &Theme) -> Vec<ContrastWarning> {
         return Vec::new();
     }
     vec![ContrastWarning {
-        code: "brand-near-danger",
+        code: "brand-near-danger".to_owned(),
         message: format!(
             "brand's hue is {} degrees from danger's; in-progress and overdue learning states may look alike",
             js_to_fixed(distance, 1)
@@ -183,8 +183,8 @@ pub fn contrast_report(theme: &Theme) -> ContrastReport {
                 Ui => min.ui,
             };
             ContrastPair {
-                foreground,
-                background,
+                foreground: foreground.to_owned(),
+                background: background.to_owned(),
                 ratio,
                 minimum,
                 pass: ratio >= minimum,

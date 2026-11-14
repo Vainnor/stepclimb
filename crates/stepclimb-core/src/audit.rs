@@ -49,6 +49,7 @@ pub enum Action {
     OrganizationCreate,
     OrganizationRename,
     OrganizationUpdateSettings,
+    OrganizationUpdateBranding,
     UserSetStatus,
     IdentityLink,
     IdentityUnlink,
@@ -71,6 +72,7 @@ impl Action {
             Self::OrganizationCreate => "organization.create",
             Self::OrganizationRename => "organization.rename",
             Self::OrganizationUpdateSettings => "organization.update_settings",
+            Self::OrganizationUpdateBranding => "organization.update_branding",
             Self::UserSetStatus => "user.set_status",
             Self::IdentityLink => "identity.link",
             Self::IdentityUnlink => "identity.unlink",
@@ -88,7 +90,8 @@ impl Action {
             }
             Self::OrganizationCreate
             | Self::OrganizationRename
-            | Self::OrganizationUpdateSettings => "organization",
+            | Self::OrganizationUpdateSettings
+            | Self::OrganizationUpdateBranding => "organization",
             Self::UserSetStatus => "user",
             Self::IdentityLink | Self::IdentityUnlink => "identity",
         }

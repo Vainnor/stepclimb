@@ -3,7 +3,7 @@
 //! (spec 12, B11 to B18). The port of `packages/tokens/src/generate.ts`; the stops, the step
 //! choice and the rounding are its own, value for value.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::{
     Brand, RenderError,
@@ -49,7 +49,7 @@ pub const COLOR_TOKENS: [&str; 30] = [
 pub const RADIUS_TOKENS: [&str; 3] = ["xs", "sm", "md"];
 
 /// The appearances every brand has (spec 12, B5, B16).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Appearance {
     Light,
@@ -427,33 +427,53 @@ fn brand_tokens(
     ])
 }
 
-fn theme(appearance: Appearance, primary: Oklch, brand: &Brand) -> Result<Theme, RenderError> {
-    let recipe = recipe(appearance);
-    // A grey's hue is floating-point noise; below the written chroma precision it is 0.
-    let hue = if primary.c < 0.0001 { 0.0 } else { primary.h };
-    let neutrals = scale(
+/// The neutral tokens of `recipe` at `hue`, a greyer input giving greyer neutrals, and the
+/// neutral scale they come from.
+fn neutrals(recipe: &Recipe, primary: Oklch, hue: f64) -> (Vec<(&'static str, Oklch)>, Vec<Oklch>) {
+    let scale = scale(
         recipe.neutral_stops,
         hue,
         (primary.c / REFERENCE_CHROMA).min(1.0),
     );
-    let brand_scale = scale(recipe.brand_stops, hue, primary.c / REFERENCE_CHROMA);
-    let mut colors: Vec<(&'static str, Oklch)> = recipe
+    let tokens = recipe
         .neutral_steps
         .iter()
-        .map(|&(token, i)| (token, neutrals[i]))
+        .map(|&(token, i)| (token, scale[i]))
         .collect();
-    let neutral = |token: &str| colors.iter().find(|(t, _)| *t == token).map(|(_, c)| *c);
-    let (canvas, raised) = neutral("bg-canvas")
-        .zip(neutral("bg-raised"))
-        .ok_or(RenderError::NoStep("bg-canvas"))?;
+    (tokens, scale)
+}
+
+/// The modal scrim: a step of the neutral scale at the recipe's opacity.
+fn overlay(recipe: &Recipe, neutral_scale: &[Oklch]) -> (&'static str, Oklch) {
     let (step, alpha) = recipe.overlay;
-    colors.push((
-        "bg-overlay",
-        Oklch {
-            alpha: Some(alpha),
-            ..neutrals[step]
-        },
-    ));
+    let color = Oklch {
+        alpha: Some(alpha),
+        ..neutral_scale[step]
+    };
+    ("bg-overlay", color)
+}
+
+/// `colors` in [`COLOR_TOKENS`] order; a token missing from them is [`RenderError::NoStep`].
+fn ordered(colors: &[(&'static str, Oklch)]) -> Result<Vec<(&'static str, Oklch)>, RenderError> {
+    COLOR_TOKENS
+        .iter()
+        .map(|&token| {
+            let color = colors.iter().find(|(t, _)| *t == token).map(|(_, c)| *c);
+            color.map(|c| (token, c)).ok_or(RenderError::NoStep(token))
+        })
+        .collect()
+}
+
+fn theme(appearance: Appearance, primary: Oklch, brand: &Brand) -> Result<Theme, RenderError> {
+    let recipe = recipe(appearance);
+    // A grey's hue is floating-point noise; below the written chroma precision it is 0.
+    let hue = if primary.c < 0.0001 { 0.0 } else { primary.h };
+    let (mut colors, neutral_scale) = neutrals(recipe, primary, hue);
+    let find = |token: &str| colors.iter().find(|(t, _)| *t == token).map(|(_, c)| *c);
+    let (canvas, raised) = find("bg-canvas")
+        .zip(find("bg-raised"))
+        .ok_or(RenderError::NoStep("bg-canvas"))?;
+    colors.push(overlay(recipe, &neutral_scale));
     let min = minimums(appearance);
     let rule = BrandRule {
         text: min.text,
@@ -461,23 +481,13 @@ fn theme(appearance: Appearance, primary: Oklch, brand: &Brand) -> Result<Theme,
         fg_offset: recipe.fg_offset,
     };
     let target = recipe.brand_target.unwrap_or(primary.l);
+    let brand_scale = scale(recipe.brand_stops, hue, primary.c / REFERENCE_CHROMA);
     colors.extend(brand_tokens(&brand_scale, target, canvas, raised, &rule)?);
-    colors.extend(
-        recipe
-            .status
-            .iter()
-            .map(|&(token, l, c, h)| (token, finalize(Oklch::new(l, c, h)))),
-    );
-    let ordered = COLOR_TOKENS
-        .iter()
-        .map(|&token| {
-            let color = colors.iter().find(|(t, _)| *t == token).map(|(_, c)| *c);
-            color.map(|c| (token, c)).ok_or(RenderError::NoStep(token))
-        })
-        .collect::<Result<_, _>>()?;
+    let status = recipe.status.iter();
+    colors.extend(status.map(|&(token, l, c, h)| (token, finalize(Oklch::new(l, c, h)))));
     Ok(Theme {
         appearance,
-        colors: ordered,
+        colors: ordered(&colors)?,
         font_ui: brand.ui_font.stack(),
         font_read: brand.reading_stack(),
         radius: brand.corner_style.radius(),

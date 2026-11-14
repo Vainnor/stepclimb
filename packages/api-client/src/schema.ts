@@ -60,6 +60,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/branding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the organization's branding. */
+        get: operations["getBranding"];
+        /**
+         * Replace the organization's branding. The server generates the light, dark and
+         *     high-contrast themes from the inputs and saves them only when every contrast pair passes;
+         *     `/theme.css` serves the new stylesheet from then on.
+         */
+        put: operations["updateBranding"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/permissions": {
         parameters: {
             query?: never;
@@ -388,6 +410,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/theme.css": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The stylesheet of the request's organization: its saved branding's, or the default brand's. */
+        get: operations["getThemeCss"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -437,11 +476,90 @@ export interface components {
             name?: string;
         };
         /**
+         * @description An appearance every brand has.
+         * @enum {string}
+         */
+        Appearance: "light" | "dark" | "high-contrast";
+        /**
          * @description Who owns an assignment: an admin of this organization (`local`), or the identity provider,
          *     sync API, SCIM or connector that wrote it, in which case it cannot be removed here.
          * @enum {string}
          */
         AssignmentSource: "local" | "idp" | "sync" | "scim" | "connector";
+        /**
+         * @description The organization's branding: the saved inputs (the default brand's when it has saved none),
+         *     the generator version, the hash of the stylesheet `/theme.css` serves, and the contrast
+         *     report of its light, dark and high-contrast themes.
+         */
+        Branding: {
+            /** @description The SHA-256 of the stylesheet, lowercase hex. */
+            css_hash: string;
+            /**
+             * Format: int32
+             * @description The version of the theme generator that wrote the stylesheet.
+             */
+            generator: number;
+            inputs: components["schemas"]["SavedInputs"];
+            report: components["schemas"]["ContrastReport"][];
+        };
+        /**
+         * @description The branding inputs. The whole set is replaced; an omitted or `null` choice takes its
+         *     default. A value that is not a choice is a 422, not a 400.
+         */
+        BrandingInputs: {
+            corner_style?: null | components["schemas"]["CornerStyle"];
+            /** @description The primary color: a CSS hex color (`#500E0E`, `#f00`) or `oklch(L C H)`, opaque. */
+            primary: string;
+            reading_font?: null | components["schemas"]["ReadingFont"];
+            ui_font?: null | components["schemas"]["UiFont"];
+        };
+        /**
+         * @description A problem details body with the contrast report: `branding.contrast_failed` carries
+         *     `report`, every other code leaves it out.
+         */
+        BrandingProblem: components["schemas"]["Problem"] & {
+            /** @description On `branding.contrast_failed`, every appearance's report, failing pairs first. */
+            report?: components["schemas"]["ContrastReport"][] | null;
+        };
+        /** @description One measured pair: `foreground` on `background`. */
+        ContrastPair: {
+            /** @description A color token, such as `bg-canvas`. */
+            background: string;
+            /** @description A color token, such as `fg-soft`. */
+            foreground: string;
+            /**
+             * Format: double
+             * @description 4.5 for text and 3 for other pairs; 7 and 4.5 in high contrast.
+             */
+            minimum: number;
+            pass: boolean;
+            /**
+             * Format: double
+             * @description The WCAG 2 contrast ratio on the displayed 8-bit sRGB colors, 1 to 21, unrounded.
+             */
+            ratio: number;
+        };
+        /** @description One appearance's contrast report. */
+        ContrastReport: {
+            appearance: components["schemas"]["Appearance"];
+            pairs: components["schemas"]["ContrastPair"][];
+            /** @description True when every pair passes. */
+            pass: boolean;
+            warnings: components["schemas"]["ContrastWarning"][];
+        };
+        /**
+         * @description Something to look at that does not fail the theme. `brand-near-danger`: the brand's hue is
+         *     within 30 degrees of `danger`'s.
+         */
+        ContrastWarning: {
+            code: string;
+            message: string;
+        };
+        /**
+         * @description The corner style: `square` sets the `xs`, `sm` and `md` radii to 0, `round` doubles them.
+         * @enum {string}
+         */
+        CornerStyle: "square" | "default" | "round";
         /** @description The organization's plan and what it allows: every feature and limit of the server's catalogs. */
         Entitlements: {
             /** @description Every catalog feature, by key, with whether the plan includes it. */
@@ -837,6 +955,11 @@ export interface components {
             /** @description `about:blank` until the docs site documents each code. */
             type: string;
         };
+        /**
+         * @description The reading font: the bundled serif, or the organization's UI font.
+         * @enum {string}
+         */
+        ReadingFont: "serif" | "sans";
         /** @description A built-in role or a custom role of the organization. */
         Role: {
             /** @description Built-in roles are the same in every organization and cannot be changed or deleted. */
@@ -886,6 +1009,13 @@ export interface components {
              */
             permissions?: string[] | null;
         };
+        /** @description The saved inputs, every choice made. */
+        SavedInputs: {
+            corner_style: components["schemas"]["CornerStyle"];
+            primary: string;
+            reading_font: components["schemas"]["ReadingFont"];
+            ui_font: components["schemas"]["UiFont"];
+        };
         /** @description The scope a new assignment takes effect at. */
         ScopeRef: {
             /**
@@ -900,6 +1030,11 @@ export interface components {
          * @enum {string}
          */
         ScopeType: "organization" | "account" | "course";
+        /**
+         * @description A UI font the instance bundles.
+         * @enum {string}
+         */
+        UiFont: "Atkinson Hyperlegible Next" | "Roboto";
         /** @description A user of the caller's organization. */
         User: {
             /**
@@ -1042,6 +1177,24 @@ export interface components {
         };
         /** @description `request.malformed`: the body, a path parameter or a query parameter does not parse or does not match the schema, or `limit` is outside 1 to 200. `pagination.invalid_cursor`: the cursor does not decode. */
         BadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `branding.invalid_input`: an input fails validation; `errors` names it (`branding.invalid_color`, `branding.too_long`, `branding.not_a_choice`). `branding.contrast_failed`: a generated theme has a failing contrast pair; `report` lists every appearance's pairs, failing pairs first. */
+        BrandingInvalid: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["BrandingProblem"];
+            };
+        };
+        /** @description `permission.denied`: the caller does not hold `branding.manage` at organization scope. `entitlement.feature_unavailable`: the organization's plan does not include `custom_branding`. `auth.csrf_refused`: the request did not come from this site. */
+        BrandingWriteForbidden: {
             headers: {
                 [name: string]: unknown;
             };
@@ -1598,6 +1751,64 @@ export interface operations {
             409: components["responses"]["MoveConflict"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    getBranding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The organization's branding */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Branding"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["PermissionDenied"];
+            404: components["responses"]["OrganizationNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    updateBranding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BrandingInputs"];
+            };
+        };
+        responses: {
+            /** @description The organization's branding after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Branding"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["BrandingWriteForbidden"];
+            404: components["responses"]["OrganizationNotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["BrandingInvalid"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };
@@ -2409,6 +2620,29 @@ export interface operations {
                     "application/json": components["schemas"]["Health"];
                 };
             };
+        };
+    };
+    getThemeCss: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The organization's light, dark and high-contrast themes as CSS variables, revalidated on every load (`Cache-Control: no-cache`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/css": string;
+                };
+            };
+            404: components["responses"]["OrganizationNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
         };
     };
 }

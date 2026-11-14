@@ -23,7 +23,7 @@ use stepclimb_core::{
     branding::{self, Branding as Saved},
     feature::CustomBranding,
     perm::BrandingManage,
-    theme::{self, Brand, BrandInputs as CoreInputs, ContrastReport as CoreReport, Rendered},
+    theme::{self, Brand, BrandInputs as CoreInputs, ContrastReport as CoreReport, InputRule},
 };
 use utoipa::{
     ToResponse, ToSchema,
@@ -32,6 +32,7 @@ use utoipa::{
 
 use crate::{
     AppState,
+    audit::ClientAddress,
     error::{ApiError, FieldError, PROBLEM_JSON, Problem},
     extract::ApiJson,
     openapi::problem_responses,
@@ -58,6 +59,8 @@ pub mod code {
     pub const CONTRAST_FAILED: &str = "branding.contrast_failed";
     /// In a 422's `errors`: `primary` is not a hex color or `oklch()` the generator reads.
     pub const INVALID_COLOR: &str = "branding.invalid_color";
+    /// In a 422's `errors`: `primary` is longer than 64 characters once trimmed.
+    pub const TOO_LONG: &str = "branding.too_long";
     /// In a 422's `errors`: the value is not one of the input's choices.
     pub const NOT_A_CHOICE: &str = "branding.not_a_choice";
 }
@@ -198,12 +201,12 @@ pub struct Branding {
 }
 
 impl Branding {
-    fn new(saved: &Saved, rendered: &Rendered) -> Self {
+    fn new(saved: &Saved) -> Self {
         Self {
             inputs: saved.brand.clone(),
             generator: saved.generator,
             css_hash: saved.css_hash.clone(),
-            report: rendered.reports().to_vec(),
+            report: saved.report.clone(),
         }
     }
 }
@@ -228,7 +231,7 @@ impl<'r> ToResponse<'r> for BrandingInvalid {
         let response = ResponseBuilder::new()
             .description(
                 "`branding.invalid_input`: an input fails validation; `errors` names it \
-                 (`branding.invalid_color`, `branding.not_a_choice`). `branding.contrast_failed`: \
+                 (`branding.invalid_color`, `branding.too_long`, `branding.not_a_choice`). `branding.contrast_failed`: \
                  a generated theme has a failing contrast pair; `report` lists every appearance's \
                  pairs, failing pairs first.",
             )
@@ -262,6 +265,7 @@ impl IntoResponse for BrandingError {
             Self::Api(error) => return error.into_response(),
             Self::ContrastFailed(reports) => reports,
         };
+        let reports: Vec<CoreReport> = reports.into_iter().map(CoreReport::failing_first).collect();
         let error = ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             code::CONTRAST_FAILED,
@@ -279,24 +283,21 @@ impl IntoResponse for BrandingError {
 }
 
 /// The default brand's stylesheet and reports (B25).
-static DEFAULT: LazyLock<(Saved, Rendered)> = LazyLock::new(|| {
+static DEFAULT: LazyLock<Saved> = LazyLock::new(|| {
     // Invariant: the default brand passes every contrast pair; the build guard (spec 12 B22) and
     // this module's test check it.
     let rendered = theme::render(&Brand::stepclimb_default())
         .expect("the default brand renders and passes its contrast report");
-    (Saved::from_rendered(&rendered), rendered)
+    Saved::from_rendered(&rendered)
 });
 
-/// The saved branding of `scope` with its reports, or the default's.
-async fn current(state: &AppState, scope: OrgScope) -> Result<(Saved, Rendered), ApiError> {
-    let Some(saved) = branding::get(&state.db, scope)
+/// The saved branding of `scope`, as stored with its reports, or the default's. Nothing is
+/// generated: what this answers always describes the stylesheet `/theme.css` serves.
+async fn current(state: &AppState, scope: OrgScope) -> Result<Saved, ApiError> {
+    let saved = branding::get(&state.db, scope)
         .await
-        .map_err(branding_error)?
-    else {
-        return Ok(DEFAULT.clone());
-    };
-    let rendered = theme::render(&saved.brand).map_err(|e| ApiError::internal(&e))?;
-    Ok((saved, rendered))
+        .map_err(branding_error)?;
+    Ok(saved.unwrap_or_else(|| DEFAULT.clone()))
 }
 
 /// Read the organization's branding.
@@ -318,8 +319,8 @@ pub async fn get_branding(
     require: Require<BrandingManage>,
     State(state): State<AppState>,
 ) -> Result<Json<Branding>, ApiError> {
-    let (saved, rendered) = current(&state, require.principal().scope()).await?;
-    Ok(Json(Branding::new(&saved, &rendered)))
+    let saved = current(&state, require.principal().scope()).await?;
+    Ok(Json(Branding::new(&saved)))
 }
 
 /// Replace the organization's branding. The server generates the light, dark and
@@ -348,6 +349,7 @@ pub async fn get_branding(
 pub async fn update_branding(
     _feature: Require<CustomBranding>,
     require: Require<BrandingManage>,
+    client: ClientAddress,
     State(state): State<AppState>,
     ApiJson(body): ApiJson<BrandingInputs>,
 ) -> Result<Json<Branding>, BrandingError> {
@@ -360,10 +362,11 @@ pub async fn update_branding(
     .map_err(invalid_input)?;
     let rendered = theme::render(&brand).map_err(render_error)?;
     let scope = require.principal().scope();
-    let saved = branding::save(&state.db, scope, &rendered, state.clock.now())
+    let actor = client.actor(require.principal());
+    let saved = branding::save(&state.db, scope, &rendered, state.clock.now(), actor)
         .await
         .map_err(branding_error)?;
-    Ok(Json(Branding::new(&saved, &rendered)))
+    Ok(Json(Branding::new(&saved)))
 }
 
 /// The stylesheet of the request's organization: its saved branding's, or the default brand's.
@@ -385,7 +388,7 @@ pub async fn theme_css(
 ) -> Result<Response, ApiError> {
     let css = match branding::get(&state.db, org.scope()).await {
         Ok(Some(saved)) => saved.css,
-        Ok(None) => DEFAULT.0.css.clone(),
+        Ok(None) => DEFAULT.css.clone(),
         Err(error) => return Err(branding_error(error)),
     };
     let headers = [
@@ -402,10 +405,10 @@ pub async fn theme_css(
 }
 
 fn invalid_input(error: theme::InputError) -> BrandingError {
-    let rule = if error.field == "primary" {
-        code::INVALID_COLOR
-    } else {
-        code::NOT_A_CHOICE
+    let rule = match error.rule {
+        InputRule::InvalidColor => code::INVALID_COLOR,
+        InputRule::TooLong => code::TOO_LONG,
+        InputRule::NotAChoice => code::NOT_A_CHOICE,
     };
     let error = ApiError::new(
         StatusCode::UNPROCESSABLE_ENTITY,
@@ -444,29 +447,25 @@ mod tests {
 
     #[test]
     fn the_default_brand_renders() {
-        let (saved, rendered) = &*DEFAULT;
-        assert_eq!(saved.css, rendered.css());
-        assert_eq!(saved.brand, Brand::stepclimb_default());
-        assert!(rendered.reports().iter().all(|r| r.pass));
+        assert_eq!(DEFAULT.brand, Brand::stepclimb_default());
+        assert_eq!(DEFAULT.css_hash, branding::css_hash(&DEFAULT.css));
+        assert_eq!(DEFAULT.report.len(), 3);
+        assert!(DEFAULT.report.iter().all(|r| r.pass));
     }
 
     #[test]
     fn a_bad_input_is_422_branding_invalid_input_naming_the_field() {
+        let input = |primary: &str, corner_style: Option<&str>| Inputs {
+            primary: primary.into(),
+            corner_style: corner_style.map(Into::into),
+            ..Inputs::default()
+        };
+        let long = format!("oklch(0.5 0.1 {})", "1".repeat(60));
         for (inputs, field, rule) in [
+            (input("dark red", None), "/primary", code::INVALID_COLOR),
+            (input(&long, None), "/primary", code::TOO_LONG),
             (
-                Inputs {
-                    primary: "dark red".into(),
-                    ..Inputs::default()
-                },
-                "/primary",
-                code::INVALID_COLOR,
-            ),
-            (
-                Inputs {
-                    primary: "#500E0E".into(),
-                    corner_style: Some("pointy".into()),
-                    ..Inputs::default()
-                },
+                input("#500E0E", Some("pointy")),
                 "/corner_style",
                 code::NOT_A_CHOICE,
             ),
@@ -490,23 +489,58 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn a_contrast_failure_is_422_with_the_report_failing_pairs_first() {
-        let mut light = DEFAULT.1.reports()[0].clone();
-        light.pass = false;
-        light.pairs[9].pass = false;
-        let reports = vec![light.failing_first(), DEFAULT.1.reports()[1].clone()];
-        let response = BrandingError::ContrastFailed(reports).into_response();
-        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    async fn body_of(error: BrandingError) -> (StatusCode, serde_json::Value) {
+        let response = error.into_response();
+        let status = response.status();
         assert_eq!(response.headers()[header::CONTENT_TYPE], PROBLEM_JSON);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        (status, serde_json::from_slice(&body).unwrap())
+    }
+
+    #[tokio::test]
+    async fn render_error_maps_a_contrast_failure_to_422_branding_contrast_failed() {
+        let failing = theme::RenderError::Contrast(DEFAULT.report.clone());
+        let (status, body) = body_of(render_error(failing)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body["code"], code::CONTRAST_FAILED);
+        assert_eq!(body["report"].as_array().map(Vec::len), Some(3));
+    }
+
+    #[tokio::test]
+    async fn a_contrast_failure_answers_its_failing_pairs_first() {
+        // Unsorted, as the guard gives it: fg-soft on bg-canvas (pair 9) and line-strong on
+        // bg-sunken (pair 30) fail between passing pairs.
+        let mut light = DEFAULT.report[0].clone();
+        light.pass = false;
+        light.pairs[9].pass = false;
+        light.pairs[30].pass = false;
+        assert!(light.pairs[0].pass);
+        let reports = vec![light, DEFAULT.report[1].clone()];
+        let (status, body) = body_of(BrandingError::ContrastFailed(reports)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(body["code"], code::CONTRAST_FAILED);
         assert_eq!(body["status"], 422);
-        assert_eq!(body["report"][0]["pass"], false);
-        assert_eq!(body["report"][0]["pairs"][0]["foreground"], "fg-soft");
-        assert_eq!(body["report"][0]["pairs"][0]["pass"], false);
-        assert_eq!(body["report"][0]["pairs"][1]["pass"], true);
+        let pairs = body["report"][0]["pairs"].as_array().unwrap();
+        let first: Vec<(&str, &str, bool)> = pairs[..3]
+            .iter()
+            .map(|p| {
+                let name = |k: &str| p[k].as_str().unwrap();
+                (
+                    name("foreground"),
+                    name("background"),
+                    p["pass"].as_bool().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            first,
+            [
+                ("fg-soft", "bg-canvas", false),
+                ("line-strong", "bg-sunken", false),
+                ("fg-strong", "bg-canvas", true),
+            ]
+        );
+        assert_eq!(pairs.len(), DEFAULT.report[0].pairs.len());
         assert_eq!(body["report"].as_array().unwrap().len(), 2);
     }
 }

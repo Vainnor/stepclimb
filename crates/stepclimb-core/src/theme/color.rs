@@ -6,7 +6,7 @@
 
 use std::f64::consts::PI;
 
-use super::InputError;
+use super::{InputError, InputRule};
 
 /// A color in OKLCH: lightness 0 to 1, chroma, hue in degrees 0 to 360, optional alpha 0 to 1.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -240,8 +240,13 @@ pub fn contrast(a: Oklch, b: Oklch) -> f64 {
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
+/// The largest chroma an input may have (`maxChroma` in `color.ts`). sRGB's most saturated
+/// colors are near 0.32 and P3's near 0.37; a larger chroma only makes gamut mapping search
+/// longer, and a huge one leaves no scale step that clears its contrast.
+pub const MAX_CHROMA: f64 = 0.5;
+
 /// CSS whitespace (CSS Syntax 3, after preprocessing): ASCII space, tab, LF, CR and form feed.
-fn is_css_space(c: char) -> bool {
+pub(crate) fn is_css_space(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0c')
 }
 
@@ -255,19 +260,22 @@ fn is_css_space(c: char) -> bool {
 /// ```
 ///
 /// Lightness is a number 0 to 1 or a percentage; chroma a number at least 0 or a percentage of
-/// 0.4 (CSS Color 4); hue in degrees, normalized to 0 to 360. Chroma and hue must be finite.
+/// 0.4 (CSS Color 4), at most [`MAX_CHROMA`]; hue in degrees, finite, normalized to 0 to 360.
 /// Anything else, including alpha, `none` and other color functions, is an [`InputError`]
 /// naming `field`.
 pub fn parse_color(input: &str, field: &'static str) -> Result<Oklch, InputError> {
-    let error = || InputError { field };
+    let error = || InputError {
+        field,
+        rule: InputRule::InvalidColor,
+    };
     let text = input.trim_matches(is_css_space);
     if let Some(hex) = text.strip_prefix('#') {
         return parse_hex(hex).ok_or_else(error);
     }
     let (l, c, h) = parse_oklch(text).ok_or_else(error)?;
     let h = ((h % 360.0) + 360.0) % 360.0;
-    // A number too large for a double reads as infinity, and its hue as NaN.
-    if !((0.0..=1.0).contains(&l) && c >= 0.0 && c.is_finite() && h.is_finite()) {
+    // A hue too large for a double reads as infinity, then NaN; NaN fails every comparison.
+    if !((0.0..=1.0).contains(&l) && (0.0..=MAX_CHROMA).contains(&c) && h.is_finite()) {
         return Err(error());
     }
     Ok(Oklch::new(l, c, h))
@@ -388,6 +396,8 @@ mod tests {
         let percent = parse_color("OKLCH(50% 25% 400deg)", "primary").unwrap();
         assert_eq!((percent.l, percent.c), (0.5, 0.1));
         assert!((percent.h - 40.0).abs() < 1e-9);
+        assert_eq!(parse_color("oklch(0.5 0.5 10)", "primary").unwrap().c, 0.5);
+        assert_eq!(parse_color("oklch(0.5 125% 10)", "primary").unwrap().c, 0.5);
         let short = parse_color("oklch(.5 +1e-1 -30)", "primary").unwrap();
         assert_eq!((short.l, short.c, short.h), (0.5, 0.1, 330.0));
     }
@@ -404,6 +414,9 @@ mod tests {
             "oklch(0.5 -0.1 10)",
             "oklch(0.5 0.1 10 / 0.5)",
             "oklch(0.5 1e400 10)",
+            "oklch(0.5 0.5001 10)",
+            "oklch(0.5 126% 10)",
+            "oklch(0.5 1e150 10)",
             "oklch(0.5 0.1 1e400)",
             "oklch(1. 0.1 10)",
             "oklch(0.5 0.1)",
@@ -417,7 +430,10 @@ mod tests {
         ] {
             assert_eq!(
                 parse_color(bad, "primary"),
-                Err(InputError { field: "primary" }),
+                Err(InputError {
+                    field: "primary",
+                    rule: InputRule::InvalidColor
+                }),
                 "{bad:?}"
             );
         }

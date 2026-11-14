@@ -9,7 +9,8 @@
 - **Depends on:** 01-repo-and-ci (CI gates), 02-organizations-and-accounts (the organization and
   its `branding` column), 09-permissions-and-roles (the permission for branding and the `Require`
   extractor), 11-app-shell (the `/theme.css` route)
-- **Review:** standard
+- **Review:** maintainer line by line for I8 (a permission, a feature check and an audit
+  entry); standard for the rest
 
 ## Summary
 
@@ -196,7 +197,7 @@ it at `packages/tokens/tokens/`. See Open question Q1.
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
 | `GET /api/v1/admin/branding` | none | `200` the saved inputs, the generator version, the CSS hash and the contrast report | `401`, `403`, `404` (problem+json) | branding permission (below), organization scope |
-| `PUT /api/v1/admin/branding` | the inputs of B12 (JSON) | `200` as GET | `422 branding.invalid_input` (a field fails validation; `errors[]` names it), `422 branding.contrast_failed` (the report, failing pairs first, in a `report` extension member), `401`, `403`, `404` | branding permission, organization scope |
+| `PUT /api/v1/admin/branding` | the inputs of B12 (JSON) | `200` as GET | `422 branding.invalid_input` (a field fails validation; `errors[]` names it), `422 branding.contrast_failed` (the report, failing pairs first, in a `report` extension member), `403 entitlement.feature_unavailable` (the plan lacks `custom_branding`), `401`, `403`, `404` | branding permission and the `custom_branding` feature, organization scope |
 
 Both are in the OpenAPI document with their schemas, including the report. The codes follow the
 `area.reason` form. The web app calls them only through `@stepclimb/api-client`. `GET /theme.css`
@@ -206,7 +207,8 @@ is 11-app-shell's.
 
 - `organizations.branding` (`jsonb NOT NULL DEFAULT '{}'`, in
   `migrations/20261112000001_organizations.sql`) holds the saved inputs, the generator version,
-  the rendered CSS and its hash. An empty object means the default theme (B25). No new table.
+  the rendered CSS, its hash and the contrast report of its themes. An empty object means the
+  default theme (B25). No new table.
 - The JSON is versioned from its first release (`.claude/rules/architecture.md` -> Crate
   boundaries: data formats are versioned): a top-level `version` field.
 - Logos and the favicon need file storage, which is M1 (Q6).
@@ -259,6 +261,10 @@ Server (crate `tests/`, `#[sqlx::test]`):
   permission 403, wrong scope 404, Organization admin 2xx.
 - **T17.** Cross-organization: an admin of organization A cannot read or write B's branding, and
   A's save never changes B's `/theme.css`.
+- **T18.** With the organization's plan lacking `custom_branding`, `PUT` answers 403
+  `entitlement.feature_unavailable` and changes nothing; `GET` still answers 200.
+- **T19.** A change writes one `organization.update_branding` audit entry; a refused or unchanged
+  `PUT` writes none.
 
 ## Out of scope
 
@@ -422,14 +428,18 @@ overrule any of them.
   (`pnpm --filter @stepclimb/tokens golden`): 14 named inputs with their full stylesheet and every
   contrast ratio, 240 seeded inputs with the stylesheet's SHA-256 and the verdicts, and 15 bad
   inputs with the field each names. Vitest fails when the file is stale (T12); the Rust test
-  fails on any other byte, a ratio more than 1e-9 apart, or another verdict (T13). A one-off
-  check of 20,000 further seeded inputs, chroma up to 1.5, found no difference.
+  fails on any other byte, a ratio more than 1e-9 apart, or another verdict (T13).
 - **Coordinator decision (2026-11-14): corner style and reading font are generator inputs.**
   `BrandInputs` gains `readingFont` (`serif`, the default, or `sans`) and `cornerStyle`
   (`square`, `default`, `round`), and every theme carries `font.read` and `radius.xs|sm|md`
   (B18). The build's theme permutations include them, so a shipped brand's choice reaches
-  `variables.css`; the default and vZDC brands keep the default values. `oklch()` input with a
-  chroma or hue too large to be finite is refused, in both generators.
+  `variables.css`; the default and vZDC brands keep the default values.
+- **Coordinator decision (2026-11-14): chroma is capped at 0.5.** An `oklch()` input with a
+  chroma above 0.5 (or a hue too large to be finite) is refused, in both generators, as
+  `branding.invalid_color`. Without the cap, a chroma of 1e150 left no brand step that clears
+  4.5:1 (the server answered 500) and 1e100 took 60 ms of gamut mapping on the request's thread;
+  sRGB's most saturated colors are near 0.32 and P3's near 0.37. `primary` is stored trimmed and
+  at most 64 characters (`branding.too_long`).
 - **Coordinator decision (2026-11-14): the stylesheet.** `/theme.css` is one stylesheet per
   organization, `brandStylesheet()` in `src/stylesheet.ts`: the default brand's selectors of
   `variables.css` (light on `:root` and `[data-sc-theme="light"]`, dark and high contrast by
@@ -439,27 +449,33 @@ overrule any of them.
 - **Coordinator decision (2026-11-14): the API's inputs and answer.** `PUT` replaces the whole
   set: `primary` is required, an omitted or `null` choice takes its default, and an unknown member
   is a 400. A value that is not a choice is a 422 `branding.invalid_input`, its `errors` entry
-  coded `branding.invalid_color` (`primary`) or `branding.not_a_choice`. `GET` for an
-  organization without saved branding answers the default brand's inputs, hash and report.
-  Both answer `inputs`, `generator`, `css_hash` (SHA-256, lowercase hex) and `report`, the light,
-  dark and high-contrast reports. The stored record is `{"version": 1, "inputs", "generator",
-  "css", "css_hash"}`; `GET` recomputes the report from the stored inputs. Saving branding equal
-  to the stored record writes nothing.
-- **Coordinator decision (2026-11-14): the contrast guard is unreachable from valid input today.**
-  No input the generator accepts gives a failing theme (T7's sweep, the 254 vectors and the
-  20,000-input check above), so T14's 422 `branding.contrast_failed` cannot be reached through
-  the API. The guard stays (B21), and only `theme::render` can make the `Rendered` value
-  `branding::save` takes, so a stylesheet that skipped the report cannot be stored. T14's
-  contrast case is tested on the guard with a doctored theme and on the 422 body; its
-  invalid-input case runs through the API and checks the stored branding is unchanged.
+  coded `branding.invalid_color` or `branding.too_long` (`primary`) or `branding.not_a_choice`.
+  `GET` for an organization without saved branding answers the default brand's inputs, hash and
+  report. Both answer `inputs`, `generator`, `css_hash` (SHA-256, lowercase hex) and `report`,
+  the light, dark and high-contrast reports. The stored record is `{"version": 1, "inputs",
+  "generator", "css", "css_hash", "report"}`, written together at save time; `GET` answers it
+  as stored and never generates, so the report always describes the stylesheet `/theme.css`
+  serves. Saving the same inputs, generator version and stylesheet again writes nothing.
+  Regenerating saved branding when `GENERATOR_VERSION` changes is a later decision.
+- **Coordinator decision (2026-11-14): the contrast guard and the chroma cap.** The cap keeps
+  every accepted input inside the range the generator's stops were fitted for. Within it, no
+  input tried gives a failing theme: T7's sweep, a test at the cap for five hues, and the 254
+  golden vectors. That is evidence, not proof, so the guard stays (B21) and so does the
+  generator's no-step error (a 500). T14's 422 `branding.contrast_failed` is therefore not
+  reached through the API today: it is tested on the guard with a doctored theme and on the 422
+  body, and only `theme::render` can make the `Rendered` value `branding::save` takes, so a
+  stylesheet that skipped the report cannot be stored. T14's invalid-input cases run through
+  the API and check the stored branding is unchanged.
 - **Coordinator decision (2026-11-14): `custom_branding` gates the change.** Spec 10 Q1 (decided
   by the owner after this spec's Permissions section) checks `custom_branding` on 12's routes.
   `PUT` takes `Require<CustomBranding>` before `Require<BrandingManage>`; `GET` takes only the
   permission, as reading roles needs no `custom_roles`. Self-hosted's unlimited plan has the
   feature.
-- **Coordinator decision (2026-11-14): no audit entry.** Spec 09 B22's table does not list a
-  branding change, so I8 writes none. Whether to add `organization.update_branding` is for the
-  owner.
+- **Coordinator decision (2026-11-14): branding changes are audited.** A change writes
+  `organization.update_branding` (target type `organization`, as `organization.update_settings`),
+  in `branding::save`'s transaction after the update, by the signed-in user with the client
+  address. `data` holds the inputs and `css_hash` before (`null` when none was saved) and after,
+  never the stylesheet. A refused or unchanged save writes none (09 B22, which lists the row).
 - **Coordinator decision (2026-11-14): the server half of `/theme.css` lands with I8.** 11 I2
   (#67) is not built, and T15 and T17 need the route. I8 adds `GET /theme.css` (public,
   organization from `RequestOrg`, `text/css; charset=utf-8`, `Cache-Control: no-cache`, in the
@@ -493,8 +509,9 @@ In dependency order. Each is one PR.
   decides, the shared golden vectors, CI running them against both. Covers B24 (generation);
   T12, T13. Depends on: I4; Q12 answered.
 - **I8. Branding API and per-organization theme.** Deliverable: `GET` and `PUT
-  /api/v1/admin/branding` with validation, the guardrail, the stored CSS and hash in
-  `organizations.branding`, `/theme.css` serving it, the permission entry, OpenAPI and client
-  regenerated. Covers B21, B24, B25; T14 to T17. Depends on: I7; 11 I2 (`/theme.css`); 09 (the
-  permission and `Require`); 02 (organization scope). Maintainer review is not required by the
-  plan's list, but the PR flags the new permission for the 09 reviewer.
+  /api/v1/admin/branding` with validation, the guardrail, the stored CSS, hash and report in
+  `organizations.branding`, `/theme.css` serving it, the permission entry, the `custom_branding`
+  feature check on `PUT` (10 Q1), the `organization.update_branding` audit entry, OpenAPI and
+  client regenerated. Covers B21, B24, B25; T14 to T19. Depends on: I7; 11 I2 (`/theme.css`);
+  09 (the permission and `Require`); 10 (`Require<Feature>`); 02 (organization scope).
+  Maintainer review: line by line (permissions, entitlements, audit).

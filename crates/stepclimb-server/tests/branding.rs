@@ -306,6 +306,22 @@ async fn t14_an_invalid_input_is_422_naming_it_and_changes_nothing(pool: PgPool)
             "/primary",
             "branding.invalid_color",
         ),
+        // A chroma above 0.5: 1e150 once made the generator find no step and answer 500.
+        (
+            json!({ "primary": "oklch(0.5 1e150 10)" }),
+            "/primary",
+            "branding.invalid_color",
+        ),
+        (
+            json!({ "primary": "oklch(0.5 0.5001 10)" }),
+            "/primary",
+            "branding.invalid_color",
+        ),
+        (
+            json!({ "primary": format!("oklch(0.5 0.1 {})", "1".repeat(60)) }),
+            "/primary",
+            "branding.too_long",
+        ),
         (
             json!({ "primary": "#500E0E", "ui_font": "Comic Sans" }),
             "/ui_font",
@@ -454,4 +470,91 @@ async fn t16_only_the_organization_admin_role_holds_branding_manage(pool: PgPool
         assert_eq!(denied.status, StatusCode::FORBIDDEN, "{method}: {denied:?}");
         assert_eq!(denied.code(), "permission.denied");
     }
+}
+
+async fn audit_entries(pool: &PgPool, org: Uuid) -> Vec<stepclimb_core::audit::Entry> {
+    stepclimb_core::audit::list(pool, scope(org), 50)
+        .await
+        .expect("read audit entries")
+        .into_iter()
+        .filter(|e| e.action == "organization.update_branding")
+        .collect()
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_change_writes_one_audit_entry_and_a_refused_or_unchanged_one_none(pool: PgPool) {
+    let w = World::new(pool).await;
+    let a = w.org("org-a").await;
+    let admin = w.user(a, Some("org_admin")).await;
+    let member = w.user(a, None).await;
+    let put = |cookie: &str, primary: &str| {
+        let body = json!({ "primary": primary });
+        let cookie = cookie.to_owned();
+        let w = &w;
+        async move {
+            w.send(a, Method::PUT, BRANDING, Some(&cookie), Some(body))
+                .await
+        }
+    };
+
+    assert_eq!(put(&member, "#500E0E").await.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        put(&admin, "dark red").await.status,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert!(audit_entries(&w.pool, a).await.is_empty());
+
+    let saved = put(&admin, "#500E0E").await;
+    assert_eq!(saved.status, StatusCode::OK, "{saved:?}");
+    assert_eq!(put(&admin, "  #500E0E ").await.status, StatusCode::OK);
+    let entries = audit_entries(&w.pool, a).await;
+    assert_eq!(entries.len(), 1, "{entries:#?}");
+    let entry = &entries[0];
+    assert_eq!(entry.target_type, "organization");
+    assert_eq!(entry.target_id, a);
+    assert!(
+        matches!(entry.actor, Actor::User { ip, .. } if ip == CLIENT.ip()),
+        "{entry:?}"
+    );
+    assert_eq!(entry.data["before"], Value::Null);
+    assert_eq!(entry.data["after"]["inputs"], saved.json()["inputs"]);
+    assert_eq!(entry.data["after"]["css_hash"], saved.json()["css_hash"]);
+    assert!(!entry.data.to_string().contains("--sc-"));
+
+    assert_eq!(put(&admin, "#0a1030").await.status, StatusCode::OK);
+    let entries = audit_entries(&w.pool, a).await;
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[1].data["before"], entries[0].data["after"]);
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn get_answers_the_stored_report_without_generating_it(pool: PgPool) {
+    let w = World::new(pool).await;
+    let a = w.org("org-a").await;
+    let admin = w.user(a, Some("org_admin")).await;
+    let saved = w
+        .send(
+            a,
+            Method::PUT,
+            BRANDING,
+            Some(&admin),
+            Some(json!({ "primary": "#f8f000" })),
+        )
+        .await;
+    assert_eq!(saved.status, StatusCode::OK, "{saved:?}");
+    // Rewrite the stored report: GET must answer it as stored, not a fresh one.
+    sqlx::query(
+        "UPDATE organizations
+         SET branding = jsonb_set(branding, '{report,0,warnings}',
+                                  '[{\"code\": \"stored\", \"message\": \"as stored\"}]')
+         WHERE id = $1",
+    )
+    .bind(a)
+    .execute(&w.pool)
+    .await
+    .expect("rewrite the stored report");
+    let read = w.send(a, Method::GET, BRANDING, Some(&admin), None).await;
+    assert_eq!(read.status, StatusCode::OK, "{read:?}");
+    assert_eq!(read.json()["report"][0]["warnings"][0]["code"], "stored");
+    assert_eq!(read.json()["css_hash"], saved.json()["css_hash"]);
 }

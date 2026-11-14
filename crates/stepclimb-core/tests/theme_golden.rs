@@ -141,7 +141,7 @@ fn t13_named_vectors_give_the_same_stylesheet_ratios_and_verdicts() {
         for (ours, theirs) in reports.iter().zip(&vector.reports) {
             assert_eq!(appearance_name(ours), theirs.appearance, "{at}");
             assert_eq!(ours.pass, theirs.pass, "{at} {}", theirs.appearance);
-            let codes: Vec<&str> = ours.warnings.iter().map(|w| w.code).collect();
+            let codes: Vec<&str> = ours.warnings.iter().map(|w| w.code.as_str()).collect();
             assert_eq!(codes, theirs.warnings, "{at} {}", theirs.appearance);
             assert_eq!(ours.pairs.len(), theirs.ratios.len(), "{at}");
             for (pair, ratio) in ours.pairs.iter().zip(&theirs.ratios) {
@@ -177,7 +177,7 @@ fn t13_swept_vectors_give_the_same_stylesheet_and_verdicts() {
         assert_eq!(pass, vector.pass, "{at}");
         let warnings: Vec<Vec<String>> = reports
             .iter()
-            .map(|r| r.warnings.iter().map(|w| w.code.to_owned()).collect())
+            .map(|r| r.warnings.iter().map(|w| w.code.clone()).collect())
             .collect();
         assert_eq!(warnings, vector.warnings, "{at}");
     }

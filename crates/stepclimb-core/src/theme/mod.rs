@@ -46,7 +46,22 @@ pub struct BrandInputs {
 #[error("the branding input {field} is not valid")]
 pub struct InputError {
     pub field: &'static str,
+    pub rule: InputRule,
 }
+
+/// The rule an input broke.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputRule {
+    /// `primary` is not a color [`color::parse_color`] reads.
+    InvalidColor,
+    /// `primary` is longer than [`MAX_PRIMARY_CHARS`] once trimmed.
+    TooLong,
+    /// The value is not one of the input's choices.
+    NotAChoice,
+}
+
+/// The longest `primary`, in characters, once trimmed; the longest valid color needs far fewer.
+pub const MAX_PRIMARY_CHARS: usize = 64;
 
 /// The bundled UI fonts an organization chooses from (spec 12, Q8).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,7 +139,7 @@ impl CornerStyle {
 /// Checked branding inputs, every choice made.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Brand {
-    /// As the client sent it; it parses as a color.
+    /// As the client sent it, without leading and trailing CSS whitespace; it parses as a color.
     pub primary: String,
     pub ui_font: UiFont,
     pub reading_font: ReadingFont,
@@ -134,10 +149,18 @@ pub struct Brand {
 impl Brand {
     /// The inputs checked in order (`primary`, `ui_font`, `reading_font`, `corner_style`), the
     /// first that fails named in the error, as `generate.ts` checks them.
+    /// `primary` is trimmed of CSS whitespace and at most [`MAX_PRIMARY_CHARS`] long.
     pub fn parse(inputs: &BrandInputs) -> Result<Self, InputError> {
-        color::parse_color(&inputs.primary, "primary")?;
+        let primary = inputs.primary.trim_matches(color::is_css_space);
+        if primary.chars().count() > MAX_PRIMARY_CHARS {
+            return Err(InputError {
+                field: "primary",
+                rule: InputRule::TooLong,
+            });
+        }
+        color::parse_color(primary, "primary")?;
         Ok(Self {
-            primary: inputs.primary.clone(),
+            primary: primary.to_owned(),
             ui_font: choice("ui_font", inputs.ui_font.as_deref(), &UiFont::ALL)?,
             reading_font: choice(
                 "reading_font",
@@ -184,7 +207,10 @@ fn choice<T: Copy + Default>(
     all.iter()
         .find(|(_, name)| *name == value)
         .map(|(choice, _)| *choice)
-        .ok_or(InputError { field })
+        .ok_or(InputError {
+            field,
+            rule: InputRule::NotAChoice,
+        })
 }
 
 /// Why a stylesheet could not be rendered.
@@ -193,11 +219,13 @@ pub enum RenderError {
     /// An input is not valid.
     #[error(transparent)]
     Input(#[from] InputError),
-    /// A theme has a failing contrast pair (B21); the reports of every appearance, each with its
-    /// failing pairs first.
+    /// A theme has a failing contrast pair (B21); the reports of every appearance.
     #[error("a generated theme fails its contrast report")]
     Contrast(Vec<ContrastReport>),
-    /// The generator found no scale step for a token, which its stops rule out.
+    /// The generator found no scale step for a token. A chroma far above
+    /// [`color::MAX_CHROMA`] does this (1e150 did); at or under the cap, every input the
+    /// property sweeps and the golden vectors try finds every step, which is evidence, not
+    /// proof, so this stays an error rather than a panic.
     #[error("generator invariant: no scale step fits {0}")]
     NoStep(&'static str),
 }
@@ -228,7 +256,7 @@ impl Rendered {
 }
 
 /// Generates the brand's themes, runs the contrast report on each and writes the stylesheet;
-/// refuses a theme with any failing pair (B21) with the reports, failing pairs first.
+/// refuses a theme with any failing pair (B21) with the reports.
 pub fn render(brand: &Brand) -> Result<Rendered, RenderError> {
     let themes = generate(brand)?;
     check(brand, &themes)
@@ -241,12 +269,7 @@ fn check(brand: &Brand, themes: &GeneratedThemes) -> Result<Rendered, RenderErro
         .map(|&a| report::contrast_report(themes.get(a)))
         .collect();
     if !reports.iter().all(|r| r.pass) {
-        return Err(RenderError::Contrast(
-            reports
-                .into_iter()
-                .map(ContrastReport::failing_first)
-                .collect(),
-        ));
+        return Err(RenderError::Contrast(reports));
     }
     Ok(Rendered {
         brand: brand.clone(),
@@ -283,6 +306,17 @@ mod tests {
             Brand::parse(&i).unwrap_err().field
         };
         assert_eq!(bad(|i| i.primary = "red".into()), "primary");
+        assert_eq!(
+            Brand::parse(&inputs("oklch(2 0 0)")).unwrap_err().rule,
+            InputRule::InvalidColor
+        );
+        assert_eq!(
+            Brand::parse(&inputs("#f00")).unwrap(),
+            Brand {
+                primary: "#f00".into(),
+                ..Brand::parse(&inputs(" #f00\n")).unwrap()
+            }
+        );
         assert_eq!(bad(|i| i.ui_font = Some("roboto".into())), "ui_font");
         assert_eq!(
             bad(|i| i.reading_font = Some("Serif".into())),
@@ -298,6 +332,28 @@ mod tests {
                 i.corner_style = Some("pointy".into());
             }),
             "primary"
+        );
+    }
+
+    #[test]
+    fn primary_is_trimmed_and_at_most_64_characters() {
+        let padded = format!("  {}  ", "oklch(0.5 0.1 10)");
+        assert_eq!(
+            Brand::parse(&inputs(&padded)).unwrap().primary,
+            "oklch(0.5 0.1 10)"
+        );
+        // Valid colors, 64 and 65 characters long once trimmed.
+        let at_cap = format!("oklch(0.5 0.1 {})", "1".repeat(MAX_PRIMARY_CHARS - 15));
+        assert_eq!(at_cap.chars().count(), MAX_PRIMARY_CHARS);
+        assert!(Brand::parse(&inputs(&format!(" {at_cap} "))).is_ok());
+        let over = format!("oklch(0.5 0.1 {})", "1".repeat(MAX_PRIMARY_CHARS - 14));
+        assert!(color::parse_color(&over, "primary").is_ok());
+        assert_eq!(
+            Brand::parse(&inputs(&over)).unwrap_err(),
+            InputError {
+                field: "primary",
+                rule: InputRule::TooLong
+            }
         );
     }
 
@@ -322,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn the_guard_refuses_a_theme_with_a_failing_pair_failing_pairs_first() {
+    fn the_guard_refuses_a_theme_with_a_failing_pair() {
         let brand = Brand::stepclimb_default();
         let mut themes = generate(&brand).unwrap();
         // fg-soft at the lightness of fg-disabled: about 3:1 on the light canvas.
@@ -337,11 +393,10 @@ mod tests {
         let failing: Vec<_> = light
             .pairs
             .iter()
-            .take_while(|p| !p.pass)
-            .map(|p| (p.foreground, p.background))
+            .filter(|p| !p.pass)
+            .map(|p| (p.foreground.as_str(), p.background.as_str()))
             .collect();
         assert!(failing.contains(&("fg-soft", "bg-canvas")), "{failing:?}");
-        assert!(light.pairs[failing.len()..].iter().all(|p| p.pass));
         assert!(reports[1].pass && reports[2].pass);
     }
 }
