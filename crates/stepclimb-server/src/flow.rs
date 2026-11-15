@@ -63,6 +63,9 @@ pub struct FlowStart<'a> {
     /// The user the flow is for, when known before it completes. Must be a user of the scope's
     /// organization.
     pub user_id: Option<Uuid>,
+    /// The identity provider an OIDC or OAuth 2 flow is for. Must be a provider of the scope's
+    /// organization.
+    pub provider_id: Option<Uuid>,
     /// What the continuing step needs (a PKCE verifier, a nonce, WebAuthn state), serialized by
     /// the caller. It is stored sealed (B20).
     pub payload: &'a [u8],
@@ -75,6 +78,7 @@ impl std::fmt::Debug for FlowStart<'_> {
         f.debug_struct("FlowStart")
             .field("kind", &self.kind)
             .field("user_id", &self.user_id)
+            .field("provider_id", &self.provider_id)
             .field("return_to", &self.return_to)
             .finish_non_exhaustive()
     }
@@ -122,6 +126,7 @@ pub async fn start(
         id,
         kind: flow.kind,
         user_id: flow.user_id,
+        provider_id: flow.provider_id,
         token_hash: token_hash.as_bytes(),
         payload: &sealed,
         return_to: &return_to,
@@ -140,6 +145,8 @@ pub async fn start(
 pub struct Finished {
     pub id: Uuid,
     pub user_id: Option<Uuid>,
+    /// The provider the flow was started for; a provider's callback refuses another's flow.
+    pub provider_id: Option<Uuid>,
     /// The payload [`start`] was given, opened. It can hold secrets: never log it.
     pub payload: Vec<u8>,
     pub return_to: ReturnTo,
@@ -150,6 +157,7 @@ impl std::fmt::Debug for Finished {
         f.debug_struct("Finished")
             .field("id", &self.id)
             .field("user_id", &self.user_id)
+            .field("provider_id", &self.provider_id)
             .field("return_to", &self.return_to)
             .finish_non_exhaustive()
     }
@@ -214,6 +222,7 @@ pub async fn finish(
     Ok(Finished {
         id: flow.id,
         user_id: flow.user_id,
+        provider_id: flow.provider_id,
         payload,
         return_to: flow.return_to,
     })
@@ -356,12 +365,14 @@ mod tests {
         let start = FlowStart {
             kind: Kind::Oidc,
             user_id: None,
+            provider_id: None,
             payload: b"pkce-verifier-zq",
             return_to: Some("/c/1"),
         };
         let finished = Finished {
             id: new_id(),
             user_id: None,
+            provider_id: None,
             payload: b"pkce-verifier-zq".to_vec(),
             return_to: ReturnTo::root(),
         };

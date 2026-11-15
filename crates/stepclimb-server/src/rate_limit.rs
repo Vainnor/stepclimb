@@ -394,6 +394,21 @@ pub(crate) fn client_address(parts: &Parts, state: &AppState) -> Result<IpAddr, 
     Ok(state.rate_limits.client_ip(peer.ip(), &parts.headers))
 }
 
+/// Count the request in `parts` against its client address's budget for `C`: the address it was
+/// counted against, or [`TooManyRequests`] when the budget is spent. The outer error is a wiring
+/// fault ([`NoPeerAddress`]). A route whose refusal is not 429 problem details, such as a browser
+/// navigation that answers a redirect, calls this from its own extractor.
+pub(crate) fn count<C: RouteClass>(
+    parts: &Parts,
+    state: &AppState,
+) -> Result<Result<IpAddr, TooManyRequests>, ApiError> {
+    let client = client_address(parts, state)?;
+    Ok(state
+        .rate_limits
+        .hit_address(C::CLASS, client, state.clock.now())
+        .map(|()| client))
+}
+
 impl<C, S> FromRequestParts<S> for RateLimited<C>
 where
     C: RouteClass,
@@ -404,10 +419,8 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Response> {
         let state = AppState::from_ref(state);
-        let client = client_address(parts, &state).map_err(IntoResponse::into_response)?;
-        state
-            .rate_limits
-            .hit_address(C::CLASS, client, state.clock.now())
+        let client = count::<C>(parts, &state)
+            .map_err(IntoResponse::into_response)?
             .map_err(IntoResponse::into_response)?;
         Ok(Self {
             client,

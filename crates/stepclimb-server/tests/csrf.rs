@@ -57,6 +57,7 @@ fn state(db: PgPool, public_url: &str) -> AppState {
         public_url: WebOrigin::parse(public_url).expect("a valid origin"),
         allowed_origins: vec![WebOrigin::parse(ALLOWED).expect("a valid origin")],
         rate_limits: Default::default(),
+        providers: stepclimb_server::providers::Providers::new(false).expect("provider clients"),
     }
 }
 

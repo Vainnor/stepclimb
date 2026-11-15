@@ -347,8 +347,9 @@ DELETE CASCADE` so a flow's user is in the flow's organization, `payload bytea N
 NULL`, `created_at`, `updated_at`. Index on `(org_id, expires_at)` for the per-organization
 cleanup. `org_id` is direct because a flow exists before any user is known. `provider_id uuid
 NULL`, with `(org_id, provider_id) REFERENCES identity_providers(org_id, id) ON DELETE CASCADE`,
-is added by the first issue whose flow names a provider (`05-oidc.md` I2), since
-`identity_providers` (`03-users-and-identities.md` I2) does not exist when I4 lands.
+was added by the first issue whose flow names a provider (`05-oidc.md` I2, migration
+`20261115090000_auth_flow_provider.sql`), since `identity_providers`
+(`03-users-and-identities.md` I2) did not exist when I4 landed.
 
 **Proposed, pending Q10: `oauth_authorization_codes`**: `id uuid PK`, `user_id uuid NOT NULL
 REFERENCES users(id) ON DELETE CASCADE`, `client_id text NOT NULL`, `code_hash bytea NOT NULL

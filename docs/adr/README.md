@@ -34,3 +34,4 @@ Decided list (`docs/plan/technical.md` -> Decided, and `docs/plan/ui.md` -> UI d
 | [0025](0025-outbound-http-client.md) | Outbound HTTP: reqwest with rustls, ring and the system trust store | Accepted |
 | [0026](0026-webauthn-rs-for-passkeys.md) | webauthn-rs 0.6 for passkeys | Accepted |
 | [0027](0027-mock-identity-provider.md) | The mock identity provider is a test-only workspace crate | Accepted |
+| [0028](0028-oidc-discovery-and-authorization.md) | OIDC discovery and the authorization request on openidconnect's types | Accepted |

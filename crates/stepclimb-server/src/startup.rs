@@ -22,7 +22,7 @@ use stepclimb_core::{
 };
 use tokio::net::TcpListener;
 
-use crate::{AppState, Config, flow, rate_limit::RateLimiter, router};
+use crate::{AppState, Config, flow, providers::Providers, rate_limit::RateLimiter, router};
 
 /// How long a request waits for a database connection from the pool.
 pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -57,6 +57,8 @@ pub enum StartupError {
     },
     #[error("the HTTP server failed: {0}")]
     Serve(#[source] std::io::Error),
+    #[error(transparent)]
+    ProviderClient(#[from] stepclimb_auth::outbound::BuildError),
 }
 
 /// Open the connection pool.
@@ -188,6 +190,18 @@ pub fn warn_about_development_keys(keys: &KeyRing) {
     }
 }
 
+/// Log a warning when the insecure-providers switch is on: the server then fetches `http` and
+/// loopback URLs an admin enters for an identity provider, which only tests and local
+/// development need (spec 05 Q4).
+pub fn warn_about_insecure_providers(config: &Config) {
+    if config.allow_insecure_providers {
+        tracing::warn!(
+            "allow_insecure_providers is on: identity providers may use http and loopback \
+             addresses; never turn it on in production"
+        );
+    }
+}
+
 /// Log the configuration's non-secret values. The database URL and the key ring are secrets and
 /// are left out.
 pub fn log_configuration(config: &Config) {
@@ -220,6 +234,7 @@ pub async fn migrate_only(config: &Config) -> Result<(), StartupError> {
 pub async fn serve(config: Config) -> Result<(), StartupError> {
     log_configuration(&config);
     warn_about_development_keys(&config.encryption_keys);
+    warn_about_insecure_providers(&config);
     let pool = connect(&config.database_url).await?;
     let clock = Clock::system();
     prepare(&pool, &clock).await?;
@@ -247,6 +262,7 @@ pub async fn serve_on(
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), StartupError> {
     let rate_limits = RateLimiter::new(config.limits(), config.trusted_proxies.clone());
+    let providers = Providers::new(config.allow_insecure_providers)?;
     let state = AppState {
         db,
         clock,
@@ -254,6 +270,7 @@ pub async fn serve_on(
         public_url: config.public_url,
         allowed_origins: config.allowed_origins,
         rate_limits,
+        providers,
     };
     axum::serve(
         listener,
@@ -377,6 +394,38 @@ mod tests {
         );
         assert!(!output.contains("zq"), "{output}");
         assert!(!output.contains("AAEC"), "{output}");
+    }
+
+    fn config_with_insecure_providers(value: &str) -> Config {
+        Config::load(
+            &[
+                ("STEPCLIMB_DATABASE_URL", "postgres://app@db:5432/stepclimb"),
+                (
+                    "STEPCLIMB_ENCRYPTION_KEYS",
+                    "k:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+                ),
+                ("STEPCLIMB_PUBLIC_URL", "https://lms.example.org"),
+                ("STEPCLIMB_ALLOW_INSECURE_PROVIDERS", value),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect(),
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn the_insecure_providers_switch_is_warned_about_only_when_on() {
+        let on = config_with_insecure_providers("true");
+        let output = captured(|| warn_about_insecure_providers(&on));
+        assert!(output.contains("WARN"), "{output}");
+        assert!(
+            output.contains("allow_insecure_providers is on"),
+            "{output}"
+        );
+        let off = config_with_insecure_providers("false");
+        assert_eq!(captured(|| warn_about_insecure_providers(&off)), "");
     }
 
     #[test]

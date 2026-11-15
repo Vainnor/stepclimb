@@ -22,6 +22,8 @@ use crate::{
     error::ApiError,
     health, identities, local_sign_in, me, openapi, organization, passkey_enrollment,
     passkey_sign_in,
+    provider_sign_in,
+    providers::Providers,
     rate_limit::RateLimiter,
     role_assignments, roles, spa, users,
     web_origin::WebOrigin,
@@ -41,6 +43,9 @@ pub struct AppState {
     pub allowed_origins: Vec<WebOrigin>,
     /// The sign-in and token rate limits and the proxies trusted to name a client's address.
     pub rate_limits: RateLimiter,
+    /// The outbound clients for identity providers and their discovery cache
+    /// (`allow_insecure_providers`).
+    pub providers: Providers,
 }
 
 /// The `Strict-Transport-Security` value: one year, for this host only. Subdomains of the
@@ -111,6 +116,10 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         (
             passkey_sign_in::PASSKEY_FINISH_PATH,
             post(passkey_sign_in::finish_passkey_sign_in),
+        ),
+        (
+            provider_sign_in::START_PATH,
+            get(provider_sign_in::start_provider_sign_in),
         ),
         (branding::THEME_CSS_PATH, get(branding::theme_css)),
         (me::ME_PATH, get(me::get_me)),

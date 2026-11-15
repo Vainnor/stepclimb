@@ -68,6 +68,7 @@ impl Fixture {
         let flow = FlowStart {
             kind,
             user_id: None,
+            provider_id: None,
             payload: PAYLOAD,
             return_to,
         };
@@ -366,6 +367,7 @@ async fn cleanup_deletes_expired_flows_in_every_organization(pool: PgPool) {
         FlowStart {
             kind: Kind::Oidc,
             user_id: None,
+            provider_id: None,
             payload: PAYLOAD,
             return_to: None,
         },

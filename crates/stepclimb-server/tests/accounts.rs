@@ -151,6 +151,8 @@ impl Fixture {
             public_url: WebOrigin::parse("https://lms.example.org").expect("a valid origin"),
             allowed_origins: Vec::new(),
             rate_limits: Default::default(),
+            providers: stepclimb_server::providers::Providers::new(false)
+                .expect("provider clients"),
         };
         let a = tree(&pool, "org-a").await;
         Self {

@@ -111,6 +111,7 @@ const PUBLIC: &[&str] = &[
     "enrollPasskey",
     "startPasskeySignIn",
     "finishPasskeySignIn",
+    "startProviderSignIn",
 ];
 
 /// One entry per operation that needs a principal (B20). The M0 specs' routes add theirs here
@@ -841,6 +842,10 @@ async fn public_operations_answer_without_a_credential(pool: PgPool) {
             .iter()
             .find(|op| op.id == *id)
             .expect("listed operations exist");
+        if *id == "startProviderSignIn" {
+            provider_sign_in_answers_without_a_credential(&world, &app, &org).await;
+            continue;
+        }
         let (body, cookie) = public_request(&world, &org, id).await;
         let answer = send(
             &app,
@@ -853,6 +858,51 @@ async fn public_operations_answer_without_a_credential(pool: PgPool) {
         .await;
         assert!(answer.status.is_success(), "{id}: {answer:?}");
     }
+}
+
+/// The provider sign-in start answers a redirect, not a 2xx: with an enabled provider of the
+/// organization pointing at the mock IdP, an anonymous request is sent to the provider's
+/// authorization endpoint (a protected route would answer 401 instead).
+async fn provider_sign_in_answers_without_a_credential(world: &World, app: &Router, org: &Org) {
+    let mock = stepclimb_mock_idp::MockIdp::start()
+        .await
+        .expect("the mock starts");
+    let id = new_id();
+    let config = serde_json::json!({
+        "issuer": mock.issuer(),
+        "client_id": mock.client_id(),
+        "client_secret": mock.client_secret(),
+    });
+    let stored = stepclimb_auth::oidc_config::validate(
+        &config,
+        stepclimb_auth::outbound::UrlPolicy::new(true, true),
+        None,
+    )
+    .expect("a valid config")
+    .seal(
+        &world.state().keys,
+        stepclimb_auth::oidc_config::ProviderRow {
+            org_id: org.id,
+            provider_id: id,
+        },
+    )
+    .expect("seal")
+    .to_json();
+    sqlx::query(
+        "INSERT INTO identity_providers (id, org_id, key, kind, config) \
+         VALUES ($1, $2, 'mock', 'oidc', $3)",
+    )
+    .bind(id)
+    .bind(org.id)
+    .bind(Value::Object(stored))
+    .execute(&world.pool)
+    .await
+    .expect("insert provider");
+    let answer = send(app, &Method::GET, "/auth/mock/start", org.id, None, None).await;
+    assert_eq!(answer.status, StatusCode::SEE_OTHER, "{answer:?}");
+    let location = answer.headers[header::LOCATION].to_str().expect("ASCII");
+    let authorize = mock.url(stepclimb_mock_idp::Endpoint::Authorize);
+    assert!(location.starts_with(&authorize), "{location}");
 }
 
 /// The body and cookie a public operation needs to succeed: the enrollment start route takes a
@@ -1449,6 +1499,7 @@ fn all_keys() -> Vec<&'static str> {
 #[derive(Debug)]
 struct Answer {
     status: StatusCode,
+    headers: HeaderMap,
     body: String,
 }
 
@@ -1527,6 +1578,7 @@ async fn send(
         .await
         .expect("the router never fails");
     let status = response.status();
+    let headers = response.headers().clone();
     let bytes = response
         .into_body()
         .collect()
@@ -1535,6 +1587,7 @@ async fn send(
         .to_bytes();
     Answer {
         status,
+        headers,
         body: String::from_utf8_lossy(&bytes).into_owned(),
     }
 }
@@ -1574,6 +1627,9 @@ impl World {
             public_url: WebOrigin::parse("https://lms.example.org").expect("a valid origin"),
             allowed_origins: Vec::new(),
             rate_limits: Default::default(),
+            // The insecure switch on, as the test setup sets it (spec 05 Q4): the mock IdP of
+            // the provider sign-in case listens on http loopback.
+            providers: stepclimb_server::providers::Providers::new(true).expect("provider clients"),
         }
     }
 
@@ -2417,6 +2473,7 @@ async fn the_test_header_picks_one_of_several_organizations(pool: PgPool) {
                 .await
                 .expect("the router never fails");
             let status = response.status();
+            let headers = response.headers().clone();
             let body = response
                 .into_body()
                 .collect()
@@ -2425,6 +2482,7 @@ async fn the_test_header_picks_one_of_several_organizations(pool: PgPool) {
                 .to_bytes();
             Answer {
                 status,
+                headers,
                 body: String::from_utf8_lossy(&body).into_owned(),
             }
         }
@@ -2466,6 +2524,7 @@ async fn a_malformed_test_header_names_no_organization(pool: PgPool) {
         .await
         .expect("the router never fails");
     let status = response.status();
+    let headers = response.headers().clone();
     let body = response
         .into_body()
         .collect()
@@ -2474,6 +2533,7 @@ async fn a_malformed_test_header_names_no_organization(pool: PgPool) {
         .to_bytes();
     Answer {
         status,
+        headers,
         body: String::from_utf8_lossy(&body).into_owned(),
     }
     .expect(StatusCode::NOT_FOUND, "org.not_found")

@@ -499,6 +499,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/{provider}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Start a sign-in with an outside identity provider.
+         * @description A browser navigation. Sends the browser to the provider's authorization endpoint with `state`, `nonce` and a PKCE S256 challenge, bound to the sign-in flow whose `__Host-sc_flow` cookie this answer sets. Every refusal is a 303 to `/sign-in?error=<code>`: `auth.provider_not_found` (no enabled provider with this key), `auth.provider_unavailable` (the provider's discovery document could not be read or names another issuer) or `auth.rate_limited` (with `Retry-After`).
+         */
+        get: operations["startProviderSignIn"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -3304,6 +3324,45 @@ export interface operations {
                 content?: never;
             };
             403: components["responses"]["CsrfRefused"];
+            404: components["responses"]["OrganizationNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    startProviderSignIn: {
+        parameters: {
+            query?: {
+                /**
+                 * @description The path on this site to land on after sign-in. Anything but a safe path on this host
+                 *     becomes `/`.
+                 */
+                return_to?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The provider's key in the organization (`identity_providers.key`). */
+                provider: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description To the provider's authorization endpoint, or to `/sign-in?error=<code>` */
+            303: {
+                headers: {
+                    /** @description `no-store` */
+                    "Cache-Control"?: string;
+                    /** @description The authorization URL, or the sign-in page with the error code */
+                    Location?: string;
+                    /** @description With `auth.rate_limited`: seconds to wait, at least 1 */
+                    "Retry-After"?: number;
+                    /** @description To the provider: the `__Host-sc_flow` cookie of the sign-in flow */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
             404: components["responses"]["OrganizationNotFound"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];

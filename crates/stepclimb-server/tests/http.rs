@@ -84,6 +84,7 @@ fn state(db: PgPool) -> AppState {
         public_url: WebOrigin::parse("http://localhost:8080").expect("a valid origin"),
         allowed_origins: Vec::new(),
         rate_limits: Default::default(),
+        providers: stepclimb_server::providers::Providers::new(false).expect("provider clients"),
     }
 }
 
@@ -196,6 +197,7 @@ async fn the_openapi_document_is_3_1_and_lists_every_route() {
             "/auth/local/passkey/finish",
             "/auth/local/passkey/start",
             "/auth/sign-out",
+            "/auth/{provider}/start",
             "/healthz",
             "/readyz",
             "/theme.css"
