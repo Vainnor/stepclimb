@@ -32,10 +32,11 @@ pub struct ClientAddress(pub IpAddr);
 impl ClientAddress {
     /// The audit actor of a change `principal` makes from this address.
     /// A change an API key makes is the key's (spec 08 I6), recorded by its service account's
-    /// id; the key's owner is on the service account.
+    /// id; the key's owner is on the service account. A change through an app access token is
+    /// its user's, as through a browser session: the app signs in as the user (spec 08 B36).
     pub fn actor(self, principal: Authenticated) -> Actor {
         match principal.via() {
-            Via::Session => Actor::User {
+            Via::Session | Via::AppToken { .. } => Actor::User {
                 id: principal.user_id,
                 ip: self.0,
             },

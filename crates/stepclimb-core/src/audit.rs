@@ -72,6 +72,10 @@ pub enum Action {
     AdmissionWebhookUpdate,
     AdmissionWebhookRotateSecret,
     AdmissionWebhookDelete,
+    /// A spent refresh token or authorization code was presented again, and its refresh family
+    /// was revoked (docs/specs/m0/08-sessions-and-csrf.md B32, B34, Q14). The entry names the
+    /// family by its first token's id.
+    RefreshTokenReuse,
 }
 
 impl Action {
@@ -111,6 +115,7 @@ impl Action {
             Self::AdmissionWebhookUpdate => "admission_webhook.update",
             Self::AdmissionWebhookRotateSecret => "admission_webhook.rotate_secret",
             Self::AdmissionWebhookDelete => "admission_webhook.delete",
+            Self::RefreshTokenReuse => "refresh_token.reuse",
         }
     }
 
@@ -143,6 +148,7 @@ impl Action {
             | Self::AdmissionWebhookUpdate
             | Self::AdmissionWebhookRotateSecret
             | Self::AdmissionWebhookDelete => "admission_webhook",
+            Self::RefreshTokenReuse => "refresh_token",
         }
     }
 }
@@ -285,7 +291,7 @@ impl TryFrom<Row> for Entry {
 mod tests {
     use super::*;
 
-    const ALL: [Action; 28] = [
+    const ALL: [Action; 29] = [
         Action::RoleCreate,
         Action::RoleUpdate,
         Action::RoleDelete,
@@ -314,6 +320,7 @@ mod tests {
         Action::TotpDisable,
         Action::ServiceAccountCreate,
         Action::ServiceAccountDelete,
+        Action::RefreshTokenReuse,
     ];
 
     #[test]

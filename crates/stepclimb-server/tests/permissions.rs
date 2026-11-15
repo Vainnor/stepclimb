@@ -115,7 +115,9 @@ const CLIENT: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1
 /// to 08 declare (B21). The OAuth 2.1 authorization endpoint (`authorizeApp`,
 /// `answerAppAuthorization`) needs no permission (spec 08 Permissions); it answers a missing
 /// session with sign-in or its error page rather than a 401 problem, and
-/// `tests/oauth_authorize.rs` covers its session, bearer and cross-organization cases.
+/// `tests/oauth_authorize.rs` covers its session, bearer and cross-organization cases. The token
+/// and revocation endpoints (`requestAppToken`, `revokeAppToken`) take no credential at all (the
+/// clients are public); `tests/oauth_token.rs` covers their cases.
 const PUBLIC: &[&str] = &[
     "healthz",
     "readyz",
@@ -134,6 +136,8 @@ const PUBLIC: &[&str] = &[
     "finishProviderSignIn",
     "authorizeApp",
     "answerAppAuthorization",
+    "requestAppToken",
+    "revokeAppToken",
 ];
 
 /// One entry per operation that needs a principal (B20). The M0 specs' routes add theirs here
@@ -1438,6 +1442,10 @@ async fn public_operations_answer_without_a_credential(pool: PgPool) {
             authorization_answers_without_a_credential(&app, &org).await;
             continue;
         }
+        if *id == "requestAppToken" || *id == "revokeAppToken" {
+            token_endpoint_answers_without_a_credential(&app, &org, &op.path).await;
+            continue;
+        }
         let (body, cookie) = public_request(&world, &org, id).await;
         let answer = send(
             &app,
@@ -1470,6 +1478,42 @@ async fn authorization_answers_without_a_credential(app: &Router, org: &Org) {
         answered.body.contains("<code>request.malformed</code>"),
         "{answered:?}"
     );
+}
+
+/// The token and revocation endpoints answer a form with no credential: revoking an unknown token
+/// is 200 (RFC 7009), and an unknown refresh token is the RFC 6749 `invalid_grant`, never a 401.
+async fn token_endpoint_answers_without_a_credential(app: &Router, org: &Org, path: &str) {
+    let body = if path == "/oauth/revoke" {
+        "token=unknown&client_id=stepclimb-app"
+    } else {
+        "grant_type=refresh_token&refresh_token=unknown&client_id=stepclimb-app"
+    };
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri(path)
+        .header(TEST_ORG_HEADER, org.id.to_string())
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .expect("a valid request");
+    let response = app
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("the router never fails");
+    let status = response.status();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body is readable")
+        .to_bytes();
+    let text = String::from_utf8_lossy(&bytes);
+    if path == "/oauth/revoke" {
+        assert_eq!(status, StatusCode::OK, "{path}: {text}");
+    } else {
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path}: {text}");
+        assert!(text.contains("\"invalid_grant\""), "{text}");
+    }
 }
 
 /// The provider sign-in start answers a redirect, not a 2xx: with an enabled provider of the

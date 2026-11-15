@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT u.status\n           FROM oauth_refresh_tokens f\n           JOIN users u ON u.org_id = f.org_id AND u.id = f.user_id\n           WHERE f.org_id = $1 AND f.id = $2 AND f.family_id = $2\n             AND f.user_id = $3 AND f.client_id = $4",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "status"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b85dd0c32d595c9a0220c13c1db2dd0a8a5a9f4648f5c44da6169a23e2eb35a3"
+}

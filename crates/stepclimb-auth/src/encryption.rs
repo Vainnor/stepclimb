@@ -40,6 +40,13 @@
 //! (`deploy/compose/development-encryption-keys`). The ring accepts it, and
 //! [`KeyRing::development_key_ids`] names it so the server can warn.
 //!
+//! Each key also signs the app access tokens of the OAuth 2.1 server
+//! (docs/specs/m0/08-sessions-and-csrf.md Q12, ADR 0031) with HMAC-SHA-256, under a key derived
+//! from it: HMAC-SHA-256 keyed with the AES key over [`ACCESS_TOKEN_KEY_LABEL`]. The AES key itself
+//! never signs, and the derived key never encrypts. [`KeyRing::sign_access_token`] signs with the
+//! current key and names its id; [`KeyRing::verify_access_token`] checks a tag under the key the
+//! token names, so a rotation keeps the tokens signed before it valid until they expire.
+//!
 //! Errors and `Debug` output name key ids and entry positions, never key material or plaintext.
 
 use std::fmt;
@@ -49,6 +56,8 @@ use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
 use crate::token::{RandomError, random_bytes};
@@ -59,6 +68,13 @@ const NONCE_BYTES: usize = 12;
 const TAG_BYTES: usize = 16;
 const FORMAT_VERSION: u8 = 1;
 const MAX_KEY_ID_LEN: usize = 32;
+
+/// What the key that signs app access tokens is derived for: the message HMAC-SHA-256 under the
+/// AES key authenticates to make it.
+pub const ACCESS_TOKEN_KEY_LABEL: &[u8] = b"stepclimb oauth access token signing key v1";
+
+/// The length of an HMAC-SHA-256 tag.
+pub const MAC_BYTES: usize = 32;
 
 /// The bytes of the published local development key. Anything encrypted under it is readable by
 /// anyone with this repository.
@@ -74,6 +90,8 @@ pub struct KeyRing {
 struct RingKey {
     id: String,
     cipher: Aes256Gcm,
+    /// The HMAC-SHA-256 key app access tokens are signed with, derived from the AES key.
+    access_token_key: [u8; KEY_BYTES],
     is_development_key: bool,
 }
 
@@ -193,6 +211,27 @@ impl KeyRing {
             .map_err(|_| DecryptError::Inauthentic)
     }
 
+    /// Sign `message`, an app access token's header and payload, with the current key's access
+    /// token key (HMAC-SHA-256). Returns the key's id, which the token names, and the tag.
+    #[must_use]
+    pub fn sign_access_token(&self, message: &[u8]) -> (&str, [u8; MAC_BYTES]) {
+        let key = self.current();
+        (key.id.as_str(), hmac_sha256(&key.access_token_key, message))
+    }
+
+    /// Whether `tag` is the access token tag of `message` under the key `key_id`. A key id the
+    /// ring does not hold is `false`. The tag is compared in constant time.
+    #[must_use]
+    pub fn verify_access_token(&self, key_id: &str, message: &[u8], tag: &[u8]) -> bool {
+        let Some(key) = self.keys.iter().find(|key| key.id == key_id) else {
+            return false;
+        };
+        mac(&key.access_token_key)
+            .chain_update(message)
+            .verify_slice(tag)
+            .is_ok()
+    }
+
     fn current(&self) -> &RingKey {
         // `parse` refuses an empty ring, and no other constructor exists.
         &self.keys[0]
@@ -230,8 +269,21 @@ fn parse_entry(position: usize, entry: &str) -> Result<RingKey, KeyRingError> {
     Ok(RingKey {
         id: id.to_owned(),
         cipher: Aes256Gcm::new(&Key::<Aes256Gcm>::from(bytes)),
+        access_token_key: hmac_sha256(&bytes, ACCESS_TOKEN_KEY_LABEL),
         is_development_key: bytes.ct_eq(&DEVELOPMENT_KEY).into(),
     })
+}
+
+fn mac(key: &[u8; KEY_BYTES]) -> Hmac<Sha256> {
+    Hmac::<Sha256>::new_from_slice(key).expect("HMAC takes any key length")
+}
+
+fn hmac_sha256(key: &[u8; KEY_BYTES], message: &[u8]) -> [u8; MAC_BYTES] {
+    mac(key)
+        .chain_update(message)
+        .finalize()
+        .into_bytes()
+        .into()
 }
 
 /// The header, then each context part prefixed by its length. The header carries its own id
@@ -539,5 +591,49 @@ mod tests {
             ring.decrypt(&sealed, &[]).unwrap_err(),
             DecryptError::NoContext
         );
+    }
+    /// The tag, computed outside this code (Python's `hmac` over the derived key), for key A.
+    const SIGNED_UNDER_A: &str = "ad6c3833f188ef1d68de1da8c932a2281982be8fcdd71423f414f789e353180a";
+
+    #[test]
+    fn an_access_token_tag_is_hmac_sha256_under_the_derived_key() {
+        let ring = ring(KEY_A);
+        let (id, tag) = ring.sign_access_token(b"header.payload");
+        assert_eq!(id, "a");
+        assert_eq!(tag.to_vec(), hex(SIGNED_UNDER_A));
+        assert!(ring.verify_access_token("a", b"header.payload", &tag));
+        // The AES key itself does not sign: its own HMAC is another tag.
+        let raw = STANDARD
+            .decode("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
+            .unwrap();
+        let raw: [u8; KEY_BYTES] = raw.try_into().unwrap();
+        assert_ne!(hmac_sha256(&raw, b"header.payload"), tag);
+    }
+
+    #[test]
+    fn an_access_token_tag_fails_under_another_message_key_or_id() {
+        let ring = ring(KEY_A);
+        let (_, tag) = ring.sign_access_token(b"header.payload");
+        assert!(!ring.verify_access_token("a", b"header.payloaD", &tag));
+        assert!(!ring.verify_access_token("b", b"header.payload", &tag));
+        assert!(!ring.verify_access_token("a", b"header.payload", &tag[..31]));
+        let mut altered = tag;
+        altered[0] ^= 1;
+        assert!(!ring.verify_access_token("a", b"header.payload", &altered));
+        let other = KeyRing::parse(KEY_A_OTHER).unwrap();
+        assert!(!other.verify_access_token("a", b"header.payload", &tag));
+    }
+
+    #[test]
+    fn a_rotated_ring_signs_with_the_new_key_and_still_verifies_the_old() {
+        let old = ring(KEY_A);
+        let (_, old_tag) = old.sign_access_token(b"m");
+        let rotated = ring(&format!("{KEY_B},{KEY_A}"));
+        let (id, new_tag) = rotated.sign_access_token(b"m");
+        assert_eq!(id, "b");
+        assert_ne!(new_tag, old_tag);
+        assert!(rotated.verify_access_token("a", b"m", &old_tag));
+        assert!(rotated.verify_access_token("b", b"m", &new_tag));
+        assert!(!ring(KEY_B).verify_access_token("a", b"m", &old_tag));
     }
 }

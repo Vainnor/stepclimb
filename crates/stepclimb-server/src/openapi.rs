@@ -12,7 +12,8 @@
 //! through a link and passkey sign-in, the start of sign-in with an outside identity provider,
 //! the signed-in user's passkeys, password enrollment, sign-in and change, TOTP enrollment,
 //! its sign-in step and disabling, the discovery document (`/.well-known/stepclimb`), the OAuth
-//! 2.1 authorization endpoint for Stepclimb's own apps (`/oauth/authorize`), service
+//! 2.1 authorization, token and revocation endpoints for Stepclimb's own apps (`/oauth/authorize`,
+//! `/oauth/token`, `/oauth/revoke`), service
 //! accounts and their API keys, and the shared error
 //! schemas and responses below. The other M0 specs add their endpoints under `/api/v1`.
 //!
@@ -33,7 +34,7 @@ use crate::{
     accounts, admission_settings, admission_webhook, admission_webhook_call, appearance, auth,
     branding, discovery, enrollment,
     error::{FieldError, PROBLEM_JSON, Problem},
-    health, identities, local_sign_in, me, my_passkeys, oauth_authorize, organization,
+    health, identities, local_sign_in, me, my_passkeys, oauth_authorize, oauth_token, organization,
     passkey_enrollment, passkey_options, passkey_sign_in, password, provider_admin,
     provider_callback, provider_sign_in, role_assignments, roles, service_accounts, totp,
     totp_enrollment, users,
@@ -70,6 +71,8 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         provider_callback::finish_provider_sign_in,
         oauth_authorize::authorize_app,
         oauth_authorize::answer_app_authorization,
+        oauth_token::request_app_token,
+        oauth_token::revoke_app_token,
         me::get_me,
         appearance::update_my_appearance,
         password::change_my_password,
@@ -144,6 +147,10 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             discovery::LocalMethod,
             discovery::DiscoveryTheme,
             discovery::DiscoveryOauth,
+            oauth_token::TokenResponse,
+            oauth_token::OAuthError,
+            oauth_token::TokenForm,
+            oauth_token::RevokeForm,
             me::Me,
             me::MeUser,
             me::MeGrant,
@@ -436,7 +443,7 @@ problem_responses! {
     CsrfRefused => "`auth.csrf_refused`: an unsafe request without a bearer credential did not come from this site: `Sec-Fetch-Site` is not `same-origin`, `Origin` is sent but is not an allowed origin, or neither header is sent.",
     OrganizationNotFound => "`org.not_found`: the request's organization cannot be determined.",
     NoOrganization => "`org.none`: the instance has no organization yet.",
-    Unauthenticated => "`auth.unauthenticated`: no credential, or one that names no session of the organization, or a bearer credential that is not an API key. `auth.session_expired`: the session passed its idle or absolute expiry. `auth.api_key_invalid`: the API key is malformed, fails its checksum, or names no service account of the organization. `auth.suspended`: the user, or the API key's owner, is suspended.",
+    Unauthenticated => "`auth.unauthenticated`: no credential, or one that names no session of the organization, or an `Authorization` header that is not one `Bearer <credential>`. `auth.session_expired`: the session passed its idle or absolute expiry. `auth.api_key_invalid`: the API key is malformed, fails its checksum, or names no service account of the organization. `auth.access_token_invalid`: the bearer credential is not an app access token this server issued for the organization, or its sign-in was revoked. `auth.access_token_expired`: the app access token is past its 15 minutes; refresh it. `auth.suspended`: the user, or the API key's owner, is suspended.",
     PermissionDenied => "`permission.denied`: the caller does not hold the operation's permission at a scope containing its target.",
 }
 

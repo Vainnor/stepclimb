@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE oauth_authorization_codes\n           SET used_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond',\n               updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond',\n               family_id = $3\n           WHERE org_id = $1 AND id = $2 AND used_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "76a5531eb9e6052e4398d4109badb4b271e76f69db0be282bc34f42f64c82fc6"
+}

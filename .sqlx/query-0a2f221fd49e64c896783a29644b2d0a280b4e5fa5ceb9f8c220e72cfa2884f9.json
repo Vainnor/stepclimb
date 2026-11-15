@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO oauth_refresh_tokens\n               (id, org_id, client_id, user_id, token_hash, family_id, rotated_from, expires_at,\n                created_at, updated_at)\n           SELECT $1, r.org_id, r.client_id, r.user_id, $3, r.family_id, r.id,\n                  timestamptz 'epoch' + $5::bigint * interval '1 microsecond',\n                  timestamptz 'epoch' + $4::bigint * interval '1 microsecond',\n                  timestamptz 'epoch' + $4::bigint * interval '1 microsecond'\n           FROM oauth_refresh_tokens r\n           WHERE r.org_id = $2 AND r.id = $6\n           ON CONFLICT (rotated_from) DO NOTHING\n           RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "oauth_refresh_tokens",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bytea",
+        "Int8",
+        "Int8",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0a2f221fd49e64c896783a29644b2d0a280b4e5fa5ceb9f8c220e72cfa2884f9"
+}

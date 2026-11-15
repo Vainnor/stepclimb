@@ -93,13 +93,6 @@ pub enum ScopeOrigin {
 /// The kinds of credential a resolver builds a scope from. A separate type from
 /// [`ScopeOrigin`] so that the credential path cannot produce an `Instance` scope.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the app-token resolver of spec 08 builds AppToken"
-    )
-)]
 pub(crate) enum Credential {
     Session,
     ApiKey,

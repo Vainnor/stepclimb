@@ -1,0 +1,115 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.id, c.user_id, c.client_id, c.redirect_uri, c.code_challenge,\n                  (extract(epoch FROM c.expires_at) * 1000000)::bigint AS expires_at_us,\n                  (extract(epoch FROM c.used_at) * 1000000)::bigint AS used_at_us,\n                  c.family_id, u.status\n           FROM oauth_authorization_codes c\n           JOIN users u ON u.org_id = c.org_id AND u.id = c.user_id\n           WHERE c.org_id = $1 AND c.code_hash = $2\n           FOR UPDATE OF c",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "oauth_authorization_codes",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "oauth_authorization_codes",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "client_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "oauth_authorization_codes",
+            "name": "client_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "redirect_uri",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "oauth_authorization_codes",
+            "name": "redirect_uri"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "code_challenge",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "oauth_authorization_codes",
+            "name": "code_challenge"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "expires_at_us",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "used_at_us",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "family_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "oauth_authorization_codes",
+            "name": "family_id"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "status"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      true,
+      false
+    ]
+  },
+  "hash": "71f1c467ee4a4e2f408fb1cbae8d0d82c42efe7e4a398b6f3d4a9b46236d01e6"
+}

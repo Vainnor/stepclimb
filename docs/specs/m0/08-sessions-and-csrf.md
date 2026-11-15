@@ -281,8 +281,9 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   - The bearer header must be the request's only `Authorization` header, `Bearer` in any case,
     one space, then the credential. A credential that starts with `sc_` is an API key and is
     checked by its shape and CRC-32 before the request's organization is resolved, so a bad
-    checksum costs no query. Any other bearer credential answers 401 `auth.unauthenticated`
-    until I8 adds app access tokens. A cookie beside a bearer header is never read or cleared.
+    checksum costs no query. Any other credential, one word without spaces, is an app access
+    token (B46); an `Authorization` header that is not one `Bearer <credential>` answers 401
+    `auth.unauthenticated`. A cookie beside a bearer header is never read or cleared.
     A page of the web app (`spa`) never authenticates a bearer header, so a page load does not
     look a key up or record its use.
   - A change an API key makes is audited with actor type `api_key` and the service account's
@@ -386,7 +387,7 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   - **Codes** are `Token`s (Q2), stored as their SHA-256 in `oauth_authorization_codes` with the
     organization, user, client, redirect URI and challenge, and expire 60 seconds after issue
     (Q10). The periodic flow cleanup (B21) also deletes expired codes. Single use at the token
-    endpoint is I8's.
+    endpoint is I8's (B46).
 - **B32.** `POST /oauth/token` with `grant_type=authorization_code` exchanges a code once, when
   `client_id` and `redirect_uri` match the code and the S256 challenge computed from
   `code_verifier` (RFC 7636) equals the stored challenge. It returns an access token valid for
@@ -408,6 +409,74 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   revoked family also stops its live access tokens: pending Q12.
 - **B37.** `/oauth/token` and `/oauth/revoke` take `application/x-www-form-urlencoded` bodies.
   Their error format: pending Q13.
+- **B46.** How I8 builds B32 to B37 and Q11 to Q14. Coordinator decisions (2026-11-15), for the
+  owner's review; the owner can overrule any of them:
+  - **Access tokens (Q12).** A JWT in compact JWS form, HS256, header exactly `alg: "HS256"`,
+    `typ: "JWT"` and `kid`, payload exactly `iss` (the public URL, as `oauth.issuer`), `sub` (the
+    user), `org`, `client_id`, `fid` (the refresh family), `iat` and `exp` (`iat` + 900), in
+    `stepclimb_auth::oauth_server::access_token`. No JOSE crate: the server signs and checks only
+    its own tokens. The signing key is derived from each key of the encryption key ring (Q3):
+    HMAC-SHA-256 under the AES key over a fixed label, so the AES key never signs, a rotation
+    keeps older tokens valid for their 15 minutes, and there is no second secret to configure
+    (ADR 0031). A presented token is checked without the database first (length, the three
+    base64url parts, the header, the signature in constant time, the issuer, then `exp` against
+    the server clock: past it is 401 `auth.access_token_expired`, anything else 401
+    `auth.access_token_invalid`). Then its `org` must be the request's (B6), its client still in
+    the registry, and its family must still exist for its user and client, read with the user's
+    status in one indexed query (Q12 (b)): a revoked or reused family stops its access tokens at
+    once (401 `auth.access_token_invalid`); a suspended user answers 401 `auth.suspended` (B11).
+  - **What an app token may do.** It acts as its user with all of the user's current grants,
+    like a browser session (the plan names no app scopes), and its changes are audited as the
+    user's. It is a bearer credential, so every route that takes `NoBearer` or `SessionOnly`
+    (B44) refuses it with 403 `auth.session_required`, and the admin user routes refuse an app
+    token whose target is its own user, as they refuse a key on its owner. A router walk over
+    every operation that documents `auth.session_required` checks this (`tests/oauth_token.rs`).
+  - **The token endpoint's order.** `RateLimited<Token>` first (B41), then the request's
+    organization, then the body: not `application/x-www-form-urlencoded`, over 4,096 bytes, or a
+    parameter it reads given twice is `invalid_request`; a missing `grant_type` is
+    `invalid_request`, any but `authorization_code` and `refresh_token` `unsupported_grant_type`;
+    a missing or empty grant parameter, or a `code_verifier` that is not RFC 7636's 43 to 128
+    unreserved characters, is `invalid_request`; an unknown `client_id` is `invalid_client`.
+    Every refusal is RFC 6749 section 5.2 JSON (`error`, a fixed `error_description`) with
+    status 400, `invalid_client` included, since the clients send no `Authorization` header to
+    answer 401 for (RFC 6749 section 5.2). The organization's 404 or 503 and the 429 stay
+    `problem+json`. Every answer carries `Cache-Control: no-store` and `Pragma: no-cache` (RFC
+    6749 section 5.1).
+  - **The code exchange (B32).** One transaction locks the code's row (`FOR UPDATE`), so a second
+    exchange of the same code waits and then reads it used. A used code is reuse: the family its
+    first exchange started is revoked and audited, and the answer is `invalid_grant`. Otherwise
+    the code must be unexpired at the server clock, its `client_id` and `redirect_uri` equal to
+    the request's character for character, the S256 of `code_verifier` equal to its challenge
+    in constant time, and its user active. A code that fails one of these is not spent, so a
+    request without the verifier cannot burn the app's code; it still expires in 60 seconds. A
+    passing exchange starts a family, records `used_at` and the `family_id` on the code, and
+    answers both tokens. Every refusal of a code is the same `invalid_grant`.
+  - **The refresh (B33, B34, Q11).** One transaction locks the presented token's row, which must
+    be the request's client's. Whether a token rotated from it exists is read by a second
+    statement after the lock is held (under read committed, the locking statement does not see
+    a concurrent refresh's new row). One that was rotated is reuse: the family is revoked and
+    audited. An expired token or a suspended user is `invalid_grant` and keeps the family, so
+    unsuspending restores it (B11). The new token expires 30 days after the refresh or 90 days
+    after the family's first token, whichever is sooner (Q11 (b)). If a concurrent refresh
+    rotated the token first, the unique index on `rotated_from` makes the insert do nothing and
+    that also counts as reuse (Q11: strict, no grace window).
+  - **Reuse audit (Q14).** Reuse of a code or of a refresh token writes `refresh_token.reuse` in
+    the transaction that revokes the family: actor the instance (whoever presented the credential
+    is not known to be its user), target the family by its first token's id, data the user, the
+    client, `presented` (`authorization_code` or `refresh_token`), the client address and how
+    many tokens were deleted; never a token or hash.
+  - **Revocation (B35, Q12, RFC 7009).** `token` and `client_id` are required once each;
+    `token_type_hint` may be given once and is otherwise ignored, both kinds being tried. A
+    refresh token of the family, spent or not, or an access token that verifies, issued to that
+    client in the request's organization, deletes the whole family, so its access tokens stop
+    too. The answer is 200 with an empty body whatever was found, including a token of another
+    client or organization.
+  - **CSRF and CORS.** `POST /oauth/token` and `POST /oauth/revoke`, those two paths exactly,
+    skip the CSRF check (B16): neither reads a cookie or any credential a browser attaches on its
+    own, and the app's form posts carry what Fetch Metadata its HTTP client sends. Neither
+    endpoint sends CORS headers: the app calls them from its native HTTP client (RFC 8252), not
+    from a page, and the M5 spec decides whether a web origin ever needs them.
+  - **Cleanup.** The periodic cleanup (B21) deletes every family whose newest token has expired.
 
 ### Server discovery
 
@@ -436,8 +505,8 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
     labels are the web app's strings, so its `label` is always `null`.
   - **`oauth`** lists the OAuth 2.1 server's `issuer` (the public URL, B45) and the endpoints
     that exist, as absolute URLs on `STEPCLIMB_PUBLIC_URL`: I7 added `issuer` and
-    `authorization_endpoint` (`<public URL>/oauth/authorize`);
-    `token_endpoint` and `revocation_endpoint` join it with I8. Listing a URL that answers 404
+    `authorization_endpoint` (`<public URL>/oauth/authorize`), and I8 `token_endpoint`
+    (`/oauth/token`) and `revocation_endpoint` (`/oauth/revoke`). Listing a URL that answers 404
     would point the M5 app at nothing.
   - **`theme`** (`11-app-shell.md` Q4) is `{stylesheet}`, the absolute URL
     `<STEPCLIMB_PUBLIC_URL>/theme.css?v=<SHA-256>` of the stylesheet `/theme.css` serves the
@@ -458,11 +527,11 @@ Every endpoint has `#[utoipa::path]` and appears in `openapi/stepclimb.json`. Er
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
 | `POST /auth/sign-out` | none (cookie) | 204, cookie cleared | `auth.csrf_refused` | none |
-| `GET /.well-known/stepclimb` | none | 200 `{name, sign_in: [{key, kind, label, methods?}], theme: {stylesheet}, oauth: {issuer, authorization_endpoint}}`; `token_endpoint` and `revocation_endpoint` join `oauth` with I8 (B38) | `org.not_found`, `org.none` | none |
+| `GET /.well-known/stepclimb` | none | 200 `{name, sign_in: [{key, kind, label, methods?}], theme: {stylesheet}, oauth: {issuer, authorization_endpoint, token_endpoint, revocation_endpoint}}` (B38) | `org.not_found`, `org.none` | none |
 | `GET /oauth/authorize` | query `response_type=code, client_id, redirect_uri, code_challenge, code_challenge_method=S256, state?` | 200 HTML confirmation page with the flow cookie; 303 to `/sign-in?return_to=...` without a session; 303 to `redirect_uri?error&error_description&state&iss` (B45) | HTML page 400 `oauth.client_unknown`, `oauth.redirect_uri_mismatch`; 403 `auth.session_required` | browser session (or sign-in first) |
 | `POST /oauth/authorize` | form `decision=allow\|deny, request` (the confirmation page) | 303 to `redirect_uri?code&state&iss` or `?error=access_denied&state&iss` | HTML page 400 `request.malformed`, `auth.flow_invalid`, `auth.flow_expired`; 401 `auth.unauthenticated`; 403 `auth.session_required`, `auth.csrf_refused` | browser session |
-| `POST /oauth/token` | form: `grant_type=authorization_code, code, redirect_uri, client_id, code_verifier` or `grant_type=refresh_token, refresh_token, client_id` | 200 `{access_token, token_type: "Bearer", expires_in: 900, refresh_token}` | `invalid_request`, `invalid_client`, `invalid_grant`, `unsupported_grant_type` (format Q13), `auth.rate_limited` | none (client is public) |
-| `POST /oauth/revoke` | form: `token, token_type_hint?, client_id` | 200 | `invalid_request`, `auth.rate_limited` | none |
+| `POST /oauth/token` | form: `grant_type=authorization_code, code, redirect_uri, client_id, code_verifier` or `grant_type=refresh_token, refresh_token, client_id` | 200 `{access_token, token_type: "Bearer", expires_in: 900, refresh_token}` | 400 `invalid_request`, `invalid_client`, `invalid_grant`, `unsupported_grant_type` (RFC 6749 JSON, Q13, B46); 429 `auth.rate_limited`; `org.not_found`, `org.none` | none (client is public) |
+| `POST /oauth/revoke` | form: `token, token_type_hint?, client_id` | 200, empty body | 400 `invalid_request`, `invalid_client` (RFC 6749 JSON, B46); 429 `auth.rate_limited`; `org.not_found`, `org.none` | none |
 | `GET /api/v1/admin/service-accounts` | cursor pagination, by id | 200 page of `{id, name, kind, scopes, owner_user_id, created_at, last_used_at}`, never the key | `auth.unauthenticated`, `entitlement.feature_unavailable`, `permission.denied` | `Require<ApiKeys>`, `perm::ServiceAccountManage`, organization |
 | `POST /api/v1/admin/service-accounts` | `{name, scopes: [string]}` | 201 `{id, ..., key}` (the only time `key` is returned) | `entitlement.feature_unavailable`, `permission.denied`, `service_account.scope_exceeds_owner` (403), `service_account.scope_unknown`, `service_account.scope_duplicate`, `name.empty`, `name.too_long` (422) | `Require<ApiKeys>`, `perm::ServiceAccountManage`, organization |
 | `DELETE /api/v1/admin/service-accounts/{service_account_id}` | none | 204 | `entitlement.feature_unavailable`, `permission.denied`, `service_account.not_found` | `Require<ApiKeys>`, `perm::ServiceAccountManage`, organization |
@@ -493,6 +562,15 @@ uuid NOT NULL`, `rotated_from uuid NULL REFERENCES oauth_refresh_tokens(id) ON D
 unique index on `rotated_from` (a token rotates at most once, which also makes two concurrent
 rotations of one token conflict instead of both succeeding). A token is "already rotated" when a
 row with `rotated_from = its id` exists. Organization: derived through `user_id`.
+As built by I8 (migration `20261116060000_oauth_refresh_tokens.sql`, B46; coordinator decision
+2026-11-15): `org_id uuid NOT NULL REFERENCES organizations(id)` is direct, with `(org_id,
+user_id) REFERENCES users(org_id, id) ON DELETE CASCADE`, as on `oauth_authorization_codes`;
+`token_hash` is checked to 32 bytes; `family_id` references the family's first row `ON DELETE
+CASCADE`, and a check makes a row its family's first exactly when it rotated from nothing
+(`(id = family_id) = (rotated_from IS NULL)`); an index on `(org_id, expires_at)` serves the
+cleanup. The same migration adds `used_at timestamptz NULL` and `family_id uuid NULL REFERENCES
+oauth_refresh_tokens(id) ON DELETE SET NULL` to `oauth_authorization_codes`, with a check that a
+code has a family only once used.
 
 **`service_accounts`** (plan columns): `id uuid PK`, `org_id uuid NOT NULL REFERENCES
 organizations(id)`, `kind text NOT NULL`, `owner_user_id uuid NULL REFERENCES users(id)`,
@@ -798,7 +876,7 @@ overrule one, which then updates this spec.
    the sign-in round trip through a flow, code issuance and storage. Covers B30, B31, B41 (the
    authorization endpoint's sign-in steps), B45; T27 to T29. Depends on: I4, `07-admission.md` I1
    (sign-in completion returns to the flow), Q10.
-8. **I8. OAuth 2.1 token and revoke endpoints.** Migration for `oauth_refresh_tokens`; code
+8. **I8. OAuth 2.1 token and revoke endpoints.** (B46 records how it was built.) Migration for `oauth_refresh_tokens`; code
    exchange with PKCE, JWT access tokens, rotation, reuse detection, revocation, access-token
    authentication in the extractor, `RateLimited<Token>` on both endpoints and the router walk of
    B41 for `/oauth/`. Covers B32 to B37, B41; T3 (full sign-in, API-key request and token

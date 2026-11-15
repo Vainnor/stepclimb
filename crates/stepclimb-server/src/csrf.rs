@@ -7,6 +7,9 @@
 //!
 //! - it carries an `Authorization: Bearer` header, a credential a browser never attaches on its
 //!   own (B16); the session extractor then ignores the session cookie;
+//! - it is a POST to the OAuth 2.1 token or revocation endpoint (B16), which the app calls with
+//!   everything it needs in the form body: neither reads a cookie or any credential a browser
+//!   attaches on its own, so a cross-site post can do nothing there it could not do directly;
 //! - or its one `Sec-Fetch-Site` header is `same-origin`, or it has none and sends `Origin`
 //!   (B14); and its `Origin`, when it sends one, is the public origin or one of the allowed
 //!   origins (B14, Q6), even on a same-origin request, which closes DNS rebinding.
@@ -25,7 +28,11 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-use crate::{error::ApiError, web_origin::WebOrigin};
+use crate::{
+    error::ApiError,
+    oauth_token::{REVOKE_PATH, TOKEN_PATH},
+    web_origin::WebOrigin,
+};
 
 /// The codes this module produces.
 pub mod code {
@@ -57,6 +64,7 @@ pub async fn refuse_cross_site(
 ) -> Response {
     if is_safe(request.method())
         || carries_bearer(request.headers())
+        || is_token_endpoint(request.method(), request.uri().path())
         || is_same_origin(request.headers(), &allowlist)
     {
         next.run(request).await
@@ -71,6 +79,11 @@ fn refused() -> ApiError {
         code::AUTH_CSRF_REFUSED,
         "The request did not come from this site, so it was refused.",
     )
+}
+
+/// A POST to `/oauth/token` or `/oauth/revoke`, exactly (B16).
+fn is_token_endpoint(method: &Method, path: &str) -> bool {
+    *method == Method::POST && matches!(path, TOKEN_PATH | REVOKE_PATH)
 }
 
 /// GET, HEAD and OPTIONS change no state but `last_seen_at` and sign-in flows (B12).
@@ -148,6 +161,23 @@ mod tests {
             );
         }
         headers
+    }
+
+    #[test]
+    fn only_a_post_to_the_two_token_endpoints_is_exempt() {
+        assert!(is_token_endpoint(&Method::POST, "/oauth/token"));
+        assert!(is_token_endpoint(&Method::POST, "/oauth/revoke"));
+        for (method, path) in [
+            (Method::POST, "/oauth/authorize"),
+            (Method::POST, "/oauth/token/"),
+            (Method::POST, "/oauth/tokens"),
+            (Method::POST, "/OAUTH/token"),
+            (Method::POST, "/api/v1/oauth/token"),
+            (Method::PUT, "/oauth/token"),
+            (Method::DELETE, "/oauth/revoke"),
+        ] {
+            assert!(!is_token_endpoint(&method, path), "{method} {path}");
+        }
     }
 
     #[test]

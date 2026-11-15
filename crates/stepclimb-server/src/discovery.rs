@@ -14,9 +14,9 @@
 //!   reaches the document;
 //! - `theme`, the absolute URL of the organization's stylesheet fingerprinted with its hash, as
 //!   the page the server serves links it (`spa`);
-//! - `oauth`, the absolute URLs of the OAuth 2.1 endpoints the apps sign in through: today the
-//!   authorization endpoint, with the `issuer` its redirects carry as `iss` (RFC 9207). The token
-//!   and revocation endpoints join it with spec 08 I8.
+//! - `oauth`, the absolute URLs of the OAuth 2.1 endpoints the apps sign in through: the
+//!   authorization, token and revocation endpoints, with the `issuer` the authorization
+//!   endpoint's redirects carry as `iss` (RFC 9207).
 //!
 //! The organization comes from `RequestOrg`, and every read is scoped to it. The answer is
 //! `Cache-Control: no-cache`: it changes whenever an admin switches a method or saves branding,
@@ -42,6 +42,7 @@ use crate::{
     branding::{self, THEME_CSS_PATH, THEME_CSS_VERSION_PARAM},
     error::ApiError,
     oauth_authorize::AUTHORIZE_PATH,
+    oauth_token::{REVOKE_PATH, TOKEN_PATH},
     request_org::{self, RequestOrg},
     spa::is_css_hash,
     web_origin::WebOrigin,
@@ -79,6 +80,10 @@ pub struct DiscoveryOauth {
     /// `<public URL>/oauth/authorize`, which the app opens in the system browser with its PKCE
     /// challenge.
     pub authorization_endpoint: String,
+    /// `<public URL>/oauth/token`, where the app exchanges its code and refreshes its tokens.
+    pub token_endpoint: String,
+    /// `<public URL>/oauth/revoke`, where the app ends its sign-in (RFC 7009).
+    pub revocation_endpoint: String,
 }
 
 /// One sign-in method the organization offers.
@@ -177,6 +182,8 @@ pub async fn get_discovery(
         oauth: DiscoveryOauth {
             issuer: crate::oauth_authorize::issuer(&state),
             authorization_endpoint: public_endpoint(&state.public_url, AUTHORIZE_PATH),
+            token_endpoint: public_endpoint(&state.public_url, TOKEN_PATH),
+            revocation_endpoint: public_endpoint(&state.public_url, REVOKE_PATH),
         },
     };
     let cache = [(
@@ -330,12 +337,20 @@ mod tests {
     }
 
     #[test]
-    fn the_authorization_endpoint_is_on_the_public_url() {
+    fn the_oauth_endpoints_are_on_the_public_url() {
         for public in ["https://lms.example.org/", "https://lms.example.org"] {
             let origin = WebOrigin::parse(public).unwrap();
             assert_eq!(
                 public_endpoint(&origin, AUTHORIZE_PATH),
                 "https://lms.example.org/oauth/authorize"
+            );
+            assert_eq!(
+                public_endpoint(&origin, TOKEN_PATH),
+                "https://lms.example.org/oauth/token"
+            );
+            assert_eq!(
+                public_endpoint(&origin, REVOKE_PATH),
+                "https://lms.example.org/oauth/revoke"
             );
         }
     }

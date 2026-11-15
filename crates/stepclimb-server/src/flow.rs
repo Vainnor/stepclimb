@@ -29,7 +29,7 @@ use stepclimb_core::{
     auth_flows::{self, Consumed, Kind, LIFETIME, NewFlow, ReturnTo},
     clock::Clock,
     id::{Uuid, new_id},
-    oauth_codes, organizations,
+    oauth_codes, oauth_refresh_tokens, organizations,
 };
 
 use crate::cookie::{self, Presented};
@@ -267,8 +267,8 @@ pub fn clear_cookie() -> HeaderValue {
     HeaderValue::from_static("__Host-sc_flow=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax")
 }
 
-/// Delete every flow and every OAuth 2.1 authorization code that has expired at `now`,
-/// organization by organization (B21). Returns how many rows were deleted. A failure in one
+/// Delete every flow and every OAuth 2.1 authorization code that has expired at `now`, and every
+/// refresh token family none of whose tokens is still valid, organization by organization (B21). Returns how many rows were deleted. A failure in one
 /// organization is logged and the others still run; only failing to list the organizations
 /// stops the pass.
 pub async fn delete_expired(db: &PgPool, now: SystemTime) -> Result<u64, organizations::Error> {
@@ -289,6 +289,14 @@ pub async fn delete_expired(db: &PgPool, now: SystemTime) -> Result<u64, organiz
                 %org_id,
                 %error,
                 "could not delete the organization's expired authorization codes"
+            ),
+        }
+        match oauth_refresh_tokens::delete_expired(db, scope, now).await {
+            Ok(count) => deleted += count,
+            Err(error) => tracing::error!(
+                %org_id,
+                %error,
+                "could not delete the organization's expired refresh tokens"
             ),
         }
     }

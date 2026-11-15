@@ -282,7 +282,8 @@ these rows are in `04` to `07`.
   bearer request is anonymous (401). The owned-key half of B21 and T17 lands with `08` issue 6,
   which adds the key principal to the route and its test (delivered: `tests/service_accounts.rs`, an
   owned key answers its owner with the key's narrowed grants); the app-token case lands with `08`
-  issue 8 (access-token authentication), which does the same for app tokens. The ownerless half cannot arise in M0: `08` Q9 (a) makes every service
+  issue 8 (access-token authentication), which does the same for app tokens (delivered:
+  `tests/oauth_token.rs`, an app token answers its user with all of the user's grants). The ownerless half cannot arise in M0: `08` Q9 (a) makes every service
   account have an owner, so no M0 principal is not a user. The server therefore neither produces
   nor documents 403 `auth.not_a_user` until a principal without a user exists. `user` carries
   B22's nine members only (no `external_id` or timestamps), and `email` is always present, `null`

@@ -94,7 +94,7 @@ const ESCALATION_DETAIL: &str =
     "This user holds permissions you do not. You cannot change how they sign in.";
 
 problem_responses! {
-    IdentityWriteForbidden => "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the user holds a permission, at any scope, that the caller does not hold at organization scope. `auth.session_required`: an API key acts on its own owner. `auth.csrf_refused`: the request did not come from this site.",
+    IdentityWriteForbidden => "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the user holds a permission, at any scope, that the caller does not hold at organization scope. `auth.session_required`: an API key acts on its own owner, or an app token on its own user. `auth.csrf_refused`: the request did not come from this site.",
     IdentityLinkConflict => "`identity.taken`: this provider's subject is already linked to a user.",
     IdentityDeleteNotFound => "`user.not_found`: no user of the organization has this id. `identity.not_found`: the user has no identity with this id. `org.not_found`: the request's organization cannot be determined.",
     IdentityDeleteConflict => "`identity.last_sign_in_method`: the user would be left with no way to sign in. `identity.local`: the identity is the user's local account, which is not removed here.",
@@ -339,7 +339,7 @@ pub async fn delete_user_identity(
 /// A transaction holding the account tree lock and the user's custom roles `FOR KEY SHARE`,
 /// once the escalation rule has passed for the user `user_id`: 404 `user.not_found` when the
 /// organization has no such user, 403 `permission.escalation` when they hold a permission the
-/// caller lacks, 403 `auth.session_required` when an API key acts on its own owner.
+/// caller lacks, 403 `auth.session_required` when an API key acts on its own owner or an app token on its own user.
 /// `crate::enrollment` takes it too: an enrollment link changes how the user signs
 /// in.
 pub(crate) async fn begin_on_user(

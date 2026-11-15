@@ -20,8 +20,8 @@ use crate::{
     csrf::{self, OriginAllowlist},
     discovery, enrollment,
     error::ApiError,
-    health, identities, local_sign_in, me, my_passkeys, oauth_authorize, openapi, organization,
-    passkey_enrollment, passkey_sign_in, password,
+    health, identities, local_sign_in, me, my_passkeys, oauth_authorize, oauth_token, openapi,
+    organization, passkey_enrollment, passkey_sign_in, password,
     password_hasher::PasswordHasher,
     provider_admin, provider_callback, provider_sign_in,
     providers::Providers,
@@ -158,6 +158,14 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         (
             oauth_authorize::AUTHORIZE_PATH,
             get(oauth_authorize::authorize_app).post(oauth_authorize::answer_app_authorization),
+        ),
+        (
+            oauth_token::TOKEN_PATH,
+            post(oauth_token::request_app_token),
+        ),
+        (
+            oauth_token::REVOKE_PATH,
+            post(oauth_token::revoke_app_token),
         ),
         (branding::THEME_CSS_PATH, get(branding::theme_css)),
         (me::ME_PATH, get(me::get_me)),
