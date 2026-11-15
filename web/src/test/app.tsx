@@ -27,6 +27,10 @@ export function discoveryFixture(
     name: "Example Training",
     sign_in: [...local, ...providers],
     theme: { stylesheet: "http://localhost/theme.css" },
+    oauth: {
+      issuer: "http://localhost",
+      authorization_endpoint: "http://localhost/oauth/authorize",
+    },
   };
 }
 

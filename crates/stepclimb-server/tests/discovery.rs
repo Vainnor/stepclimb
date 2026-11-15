@@ -222,7 +222,10 @@ async fn a_new_organization_offers_its_default_local_methods(pool: PgPool) {
     assert_eq!(keys, ["name", "oauth", "sign_in", "theme"]);
     assert_eq!(
         body["oauth"],
-        json!({ "authorization_endpoint": "https://lms.example.org/oauth/authorize" })
+        json!({
+            "issuer": "https://lms.example.org",
+            "authorization_endpoint": "https://lms.example.org/oauth/authorize",
+        })
     );
     let errors = common::schema_errors(&document(), "Discovery", &body);
     assert!(errors.is_empty(), "{errors:#?}");

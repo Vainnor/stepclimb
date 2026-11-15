@@ -157,9 +157,10 @@ pub struct RedirectError {
 }
 
 impl RedirectError {
-    /// The redirect URI with `error`, `error_description` and `state`.
+    /// The redirect URI with `error`, `error_description`, `state` and `iss`, the issuer
+    /// identifier of this server (RFC 9207), so the app can tell which server answered.
     #[must_use]
-    pub fn location(&self) -> String {
+    pub fn location(&self, issuer: &str) -> String {
         let mut pairs = vec![
             ("error", self.error.as_str()),
             ("error_description", self.description),
@@ -167,6 +168,7 @@ impl RedirectError {
         if let Some(state) = &self.state {
             pairs.push(("state", state));
         }
+        pairs.push(("iss", issuer));
         with_query(&self.redirect_uri, &pairs)
     }
 }
@@ -483,9 +485,10 @@ mod tests {
     fn an_error_location_carries_the_error_and_the_state() {
         let error = redirected(&with("response_type", Some("token")));
         assert_eq!(
-            error.location(),
+            error.location("https://lms.example.org"),
             "dev.stepclimb.shell:/oauth/callback?error=unsupported_response_type\
-             &error_description=Only+response_type%3Dcode+is+supported.&state=xyz+1"
+             &error_description=Only+response_type%3Dcode+is+supported.&state=xyz+1\
+             &iss=https%3A%2F%2Flms.example.org"
         );
     }
 

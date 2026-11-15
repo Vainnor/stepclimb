@@ -23,7 +23,9 @@
 //! user's and its client and redirect URI still pass. "Cancel" sends the browser to the
 //! redirect URI with `error=access_denied`; "Allow" stores a new authorization code, bound to
 //! the organization, user, client, redirect URI and challenge and valid 60 seconds, and sends
-//! the browser to the redirect URI with `code` and `state`. The code exists only in that
+//! the browser to the redirect URI with `code` and `state`. Every answer sent to a redirect URI
+//! also carries `iss`, the server's issuer identifier (RFC 9207), and the form carries the id of
+//! the flow its page was shown for, so an answer counts only for that page. The code exists only in that
 //! `Location` and as its hash in the table; no log line carries it (the request span leaves the
 //! query out, spec 08 B4).
 
@@ -84,7 +86,7 @@ and `state`; other parameters are ignored and none may be given twice. An unknow
 (`oauth.client_unknown`) or a `redirect_uri` the client has not registered \
 (`oauth.redirect_uri_mismatch`) answers an HTML error page and never redirects. Any other problem \
 is a 303 to the redirect URI with `error` (`invalid_request`, `unsupported_response_type`), \
-`error_description` and `state`. Without a browser session, a 303 to \
+`error_description`, `state` and `iss`, the issuer (RFC 9207). Without a browser session, a 303 to \
 `/sign-in?return_to=<this request>`. Signed in, the confirmation page, whose form posts the \
 answer to `POST /oauth/authorize`, with the `__Host-sc_flow` cookie holding the request. Over the \
 sign-in budget, a 303 to `/sign-in?error=auth.rate_limited` with `Retry-After`.",
@@ -129,7 +131,9 @@ pub async fn authorize_app(
     let request = match authorize::parse(query.as_deref().unwrap_or("")) {
         Ok(request) => request,
         Err(Refusal::Page(code)) => return Ok(oauth_page::refused(code)),
-        Err(Refusal::Redirect(error)) => return Ok(to_client(&error.location())),
+        Err(Refusal::Redirect(error)) => {
+            return Ok(to_client(&error.location(&issuer(&state))));
+        }
     };
     let principal = match signed_in(&state, &headers).await {
         SignedIn::Yes(principal) => principal,
@@ -182,8 +186,14 @@ fn return_to(request: &Request) -> String {
 /// A 303 to `location`, with the pages' protective headers.
 fn to_client(location: &str) -> Response {
     let mut response = crate::provider_sign_in::redirect(location);
-    oauth_page::protect(&mut response);
+    oauth_page::protect(&mut response, oauth_page::REFERRER_POLICY);
     response
+}
+
+/// This server's issuer identifier: the public URL, as the discovery document's `oauth.issuer`
+/// names it. Every answer sent to a redirect URI carries it as `iss` (RFC 9207).
+pub(crate) fn issuer(state: &AppState) -> String {
+    state.public_url.to_string()
 }
 
 /// Store the request for the user's answer and show the confirmation page.
@@ -208,7 +218,8 @@ async fn confirm(
     let started = flow::start(&state.db, &state.keys, scope, start, state.clock.now())
         .await
         .map_err(|error| ApiError::internal(&error))?;
-    let mut response = oauth_page::confirmation(request.client.name, &user, &organization.name);
+    let mut response =
+        oauth_page::confirmation(request.client.name, &user, &organization.name, started.id);
     response
         .headers_mut()
         .append(header::SET_COOKIE, started.set_cookie);
@@ -239,17 +250,32 @@ enum Decision {
     Deny,
 }
 
-impl Decision {
-    /// The form body's one `decision`, `allow` or `deny`; anything else is `None`.
+/// The confirmation form: the answer and the id of the flow the page was shown for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Answer {
+    decision: Decision,
+    request: Uuid,
+}
+
+impl Answer {
+    /// The form body's one `decision`, `allow` or `deny`, and its one `request`, a flow id;
+    /// anything else is `None`.
     fn parse(body: &[u8]) -> Option<Self> {
-        let mut decisions = form_urlencoded::parse(body).filter(|(name, _)| name == "decision");
-        let decision = match decisions.next()?.1.as_ref() {
-            "allow" => Self::Allow,
-            "deny" => Self::Deny,
+        let decision = match only(body, "decision")?.as_str() {
+            "allow" => Decision::Allow,
+            "deny" => Decision::Deny,
             _ => return None,
         };
-        decisions.next().is_none().then_some(decision)
+        let request = Uuid::try_parse(&only(body, "request")?).ok()?;
+        Some(Self { decision, request })
     }
+}
+
+/// The value of the form field `name` when the body has exactly one.
+fn only(body: &[u8], name: &str) -> Option<String> {
+    let mut values = form_urlencoded::parse(body).filter(|(field, _)| field == name);
+    let value = values.next()?.1.into_owned();
+    values.next().is_none().then_some(value)
 }
 
 /// Answer an app's sign-in from the confirmation page.
@@ -260,12 +286,13 @@ impl Decision {
     tag = "auth",
     extensions(("x-stepclimb-mutates" = json!(true))),
     description = "The confirmation page's form: `application/x-www-form-urlencoded` with one \
-`decision`, `allow` or `deny`, in the browser that opened the page (the request waits in its \
+`decision`, `allow` or `deny`, and one `request`, the id the page carries, in the browser that opened the page (the request waits in its \
 `__Host-sc_flow` cookie) and signed in as the same user. `allow` is a 303 to the redirect URI \
-with `code` (single use, valid 60 seconds) and `state`; `deny` a 303 with \
-`error=access_denied` and `state`. Every refusal is an HTML error page: `request.malformed` (no \
-single `decision`), `auth.unauthenticated` (401, no session), `auth.flow_invalid` or \
-`auth.flow_expired` (the request was answered already, expired, or is another user's).",
+with `code` (single use, valid 60 seconds), `state` and `iss` (the issuer, RFC 9207); `deny` \
+a 303 with `error=access_denied`, `state` and `iss`. Every refusal is an HTML error page: `request.malformed` (no \
+single `decision` and `request`), `auth.unauthenticated` (401, no session), `auth.flow_invalid` \
+or `auth.flow_expired` (the request was answered already, expired, is another user's, or is not \
+the one the answered page showed).",
     responses(
         (
             status = 303,
@@ -301,11 +328,11 @@ pub async fn answer_app_authorization(
     headers: HeaderMap,
     body: Body,
 ) -> Result<Response, ApiError> {
-    let decision = match to_bytes(body, MAX_ANSWER_LEN).await {
-        Ok(bytes) => Decision::parse(&bytes),
+    let answer = match to_bytes(body, MAX_ANSWER_LEN).await {
+        Ok(bytes) => Answer::parse(&bytes),
         Err(_) => None,
     };
-    let Some(decision) = decision else {
+    let Some(answer) = answer else {
         return Ok(oauth_page::refused(REQUEST_MALFORMED));
     };
     let principal = match signed_in(&state, &headers).await {
@@ -320,7 +347,7 @@ pub async fn answer_app_authorization(
             return Ok(page);
         }
     };
-    let location = decide(&state, principal, &headers, decision).await?;
+    let location = decide(&state, principal, &headers, answer).await?;
     let mut response = match location {
         Ok(location) => to_client(&location),
         Err(code) => oauth_page::refused(code),
@@ -332,12 +359,13 @@ pub async fn answer_app_authorization(
 }
 
 /// Take the request's flow and answer it: `Ok` with the redirect URI to send the browser to, or
-/// `Err` with the code of the error page.
+/// `Err` with the code of the error page. The flow must be the one the answered page was shown
+/// for, and the signed-in user's.
 async fn decide(
     state: &AppState,
     principal: Authenticated,
     headers: &HeaderMap,
-    decision: Decision,
+    answer: Answer,
 ) -> Result<Result<String, &'static str>, ApiError> {
     let scope = principal.scope();
     let now = state.clock.now();
@@ -363,15 +391,17 @@ async fn decide(
             return Ok(Err(code));
         }
     };
-    let request = (finished.user_id == Some(principal.user_id))
+    let shown = finished.id == answer.request;
+    let request = (shown && finished.user_id == Some(principal.user_id))
         .then(|| Pending::from_payload(&finished.payload))
         .flatten()
         .and_then(|pending| pending.recheck());
-    let location = match (request, decision) {
+    let issuer = issuer(state);
+    let location = match (request, answer.decision) {
         (None, _) => Err(AUTH_FLOW_INVALID),
-        (Some(request), Decision::Deny) => Ok(declined(request)),
+        (Some(request), Decision::Deny) => Ok(declined(request, &issuer)),
         (Some(request), Decision::Allow) => {
-            Ok(issue(&mut tx, scope, principal.user_id, &request, now).await?)
+            Ok(issue(&mut tx, scope, principal.user_id, &request, &issuer, now).await?)
         }
     };
     tx.commit().await.map_err(|e| internal(&e))?;
@@ -379,14 +409,14 @@ async fn decide(
 }
 
 /// The redirect URI with `error=access_denied`.
-fn declined(request: Request) -> String {
+fn declined(request: Request, issuer: &str) -> String {
     RedirectError {
         redirect_uri: request.redirect_uri,
         error: ErrorCode::AccessDenied,
         description: DECLINED,
         state: request.state,
     }
-    .location()
+    .location(issuer)
 }
 
 /// Store a new code for `request` in the transaction and return the redirect URI with it.
@@ -395,6 +425,7 @@ async fn issue(
     scope: OrgScope,
     user_id: Uuid,
     request: &Request,
+    issuer: &str,
     now: std::time::SystemTime,
 ) -> Result<String, ApiError> {
     let code = Token::generate().map_err(|error| ApiError::internal(&error))?;
@@ -414,6 +445,7 @@ async fn issue(
     if let Some(state) = &request.state {
         pairs.push(("state", state));
     }
+    pairs.push(("iss", issuer));
     Ok(with_query(&request.redirect_uri, &pairs))
 }
 
@@ -482,24 +514,35 @@ mod tests {
     }
 
     #[test]
-    fn the_answer_is_exactly_one_allow_or_deny() {
-        assert_eq!(Decision::parse(b"decision=allow"), Some(Decision::Allow));
-        assert_eq!(Decision::parse(b"decision=deny&x=1"), Some(Decision::Deny));
+    fn the_answer_is_one_allow_or_deny_and_one_flow_id() {
+        const ID: &str = "01928f6e-7b1a-7cc3-9a5e-3f1c2b4d5e6f";
+        let id = Uuid::try_parse(ID).unwrap();
+        let parse = |body: String| Answer::parse(body.as_bytes());
+        assert_eq!(
+            parse(format!("decision=allow&request={ID}")),
+            Some(Answer {
+                decision: Decision::Allow,
+                request: id
+            })
+        );
+        assert_eq!(
+            parse(format!("request={ID}&decision=deny&x=1")).map(|a| a.decision),
+            Some(Decision::Deny)
+        );
         for body in [
-            &b""[..],
-            b"decision=",
-            b"decision=Allow",
-            b"decision=yes",
-            b"decision=allow&decision=allow",
-            b"decision=deny&decision=allow",
-            b"allow",
+            String::new(),
+            "decision=allow".to_owned(),
+            format!("request={ID}"),
+            format!("decision=&request={ID}"),
+            format!("decision=Allow&request={ID}"),
+            format!("decision=yes&request={ID}"),
+            format!("decision=allow&decision=allow&request={ID}"),
+            format!("decision=deny&decision=allow&request={ID}"),
+            format!("decision=allow&request={ID}&request={ID}"),
+            "decision=allow&request=not-an-id".to_owned(),
+            "allow".to_owned(),
         ] {
-            assert_eq!(
-                Decision::parse(body),
-                None,
-                "{}",
-                String::from_utf8_lossy(body)
-            );
+            assert_eq!(parse(body.clone()), None, "{body}");
         }
     }
 }

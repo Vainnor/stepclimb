@@ -5,29 +5,43 @@
 //! Both are small HTML documents the server writes, since the endpoint is a browser navigation
 //! the app opens in the system browser and the error page must show without the web app. Every
 //! value from the organization or the user is HTML-escaped. Each page answers `Cache-Control:
-//! no-store`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, and a
+//! no-store`, `X-Content-Type-Options: nosniff`, a `Referrer-Policy`, and a
 //! `Content-Security-Policy` that loads nothing and refuses framing (with `X-Frame-Options:
 //! DENY` for older browsers), so another site cannot overlay the confirmation buttons. The
 //! policy leaves `form-action` out on purpose: browsers apply it to the redirect after the form
 //! is sent, and that redirect goes to the app's own scheme or loopback address.
+//!
+//! The confirmation page's `Referrer-Policy` is `same-origin`. Under `no-referrer` a browser
+//! sends `Origin: null` with the page's form post (Fetch, "serializing a request origin"), which
+//! the CSRF check refuses (spec 08 B14), so the user could never answer. Every other page and
+//! redirect of the endpoint is `no-referrer`: none of them posts a form, and a redirect to the
+//! app carries the code.
 
 use axum::{
     http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 
+use stepclimb_core::id::Uuid;
+
 use crate::oauth_authorize::AUTHORIZE_PATH;
 
 /// The page's `Content-Security-Policy`.
 pub const PAGE_CSP: &str = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'";
 
-/// The headers every page and every redirect of the endpoint carries.
-pub(crate) fn protect(response: &mut Response) {
+/// The `Referrer-Policy` of the confirmation page, whose form post must carry the page's origin.
+pub const CONFIRMATION_REFERRER_POLICY: &str = "same-origin";
+
+/// The `Referrer-Policy` of every other page and redirect of the endpoint.
+pub const REFERRER_POLICY: &str = "no-referrer";
+
+/// The headers every page and every redirect of the endpoint carries, with `referrer_policy`.
+pub(crate) fn protect(response: &mut Response, referrer_policy: &'static str) {
     let headers = response.headers_mut();
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     headers.insert(
         header::REFERRER_POLICY,
-        HeaderValue::from_static("no-referrer"),
+        HeaderValue::from_static(referrer_policy),
     );
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
@@ -40,7 +54,7 @@ pub(crate) fn protect(response: &mut Response) {
     );
 }
 
-fn page(status: StatusCode, title: &str, body: &str) -> Response {
+fn page(status: StatusCode, title: &str, body: &str, referrer_policy: &'static str) -> Response {
     let html = format!(
         "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
@@ -56,14 +70,14 @@ fn page(status: StatusCode, title: &str, body: &str) -> Response {
         html,
     )
         .into_response();
-    protect(&mut response);
+    protect(&mut response, referrer_policy);
     response
 }
 
 /// The confirmation page: `app` asks to sign in as `user` at `organization`. Its form posts
-/// the answer back to the endpoint; the request itself waits in the sign-in flow whose cookie
-/// the caller adds.
-pub(crate) fn confirmation(app: &str, user: &str, organization: &str) -> Response {
+/// the answer back to the endpoint with `request`, the id of the sign-in flow the request waits
+/// in, whose cookie the caller adds: the answer counts only for the page that showed it.
+pub(crate) fn confirmation(app: &str, user: &str, organization: &str, request: Uuid) -> Response {
     let (app, user, organization) = (escape(app), escape(user), escape(organization));
     let body = format!(
         "<h1>Sign in to {app}?</h1>\n\
@@ -71,11 +85,17 @@ pub(crate) fn confirmation(app: &str, user: &str, organization: &str) -> Respons
          <strong>{user}</strong>.</p>\n\
          <p>Allow it only if you started signing in from the app just now.</p>\n\
          <form method=\"post\" action=\"{AUTHORIZE_PATH}\">\n\
+         <input type=\"hidden\" name=\"request\" value=\"{request}\">\n\
          <button type=\"submit\" name=\"decision\" value=\"allow\">Allow</button>\n\
          <button type=\"submit\" name=\"decision\" value=\"deny\">Cancel</button>\n\
          </form>\n"
     );
-    page(StatusCode::OK, "Sign in to the app", &body)
+    page(
+        StatusCode::OK,
+        "Sign in to the app",
+        &body,
+        CONFIRMATION_REFERRER_POLICY,
+    )
 }
 
 /// The error page for `code`, with its status and message. Nothing is redirected.
@@ -86,7 +106,7 @@ pub(crate) fn refused(code: &'static str) -> Response {
         escape(message),
         escape(code),
     );
-    page(status, "The app could not sign in", &body)
+    page(status, "The app could not sign in", &body, REFERRER_POLICY)
 }
 
 /// The status and the message of each code [`refused`] shows.
@@ -155,7 +175,13 @@ mod tests {
 
     #[tokio::test]
     async fn the_confirmation_page_names_the_app_the_user_and_the_organization_escaped() {
-        let response = confirmation("the app", "Sam <sam@example.test>", "Org & <b>Co</b>");
+        let request = Uuid::nil();
+        let response = confirmation(
+            "the app",
+            "Sam <sam@example.test>",
+            "Org & <b>Co</b>",
+            request,
+        );
         assert_eq!(response.status(), StatusCode::OK);
         let html = text(response).await;
         assert!(
@@ -168,15 +194,22 @@ mod tests {
         );
         assert!(html.contains("<form method=\"post\" action=\"/oauth/authorize\">"));
         assert!(html.contains("value=\"allow\"") && html.contains("value=\"deny\""));
+        assert!(html.contains(&format!(
+            "<input type=\"hidden\" name=\"request\" value=\"{request}\">"
+        )));
     }
 
     #[test]
     fn every_page_refuses_framing_and_caching() {
-        for response in [confirmation("a", "b", "c"), refused("oauth.client_unknown")] {
+        let pages = [
+            (confirmation("a", "b", "c", Uuid::nil()), "same-origin"),
+            (refused("oauth.client_unknown"), "no-referrer"),
+        ];
+        for (response, referrer_policy) in pages {
             let headers = response.headers();
             assert_eq!(headers[header::CACHE_CONTROL], "no-store");
             assert_eq!(headers[header::X_FRAME_OPTIONS], "DENY");
-            assert_eq!(headers[header::REFERRER_POLICY], "no-referrer");
+            assert_eq!(headers[header::REFERRER_POLICY], referrer_policy);
             assert_eq!(headers[header::CONTENT_SECURITY_POLICY], PAGE_CSP);
             assert!(PAGE_CSP.contains("frame-ancestors 'none'"));
             assert!(!PAGE_CSP.contains("form-action"));

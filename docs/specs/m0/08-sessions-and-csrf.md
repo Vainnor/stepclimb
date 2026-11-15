@@ -358,18 +358,31 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
     organization, with "Allow" and "Cancel". The page names no device: the request carries no
     trustworthy device name, and a name from the query would be text an attacker chose on a page
     that asks for trust. The page is plain HTML the server writes, in English, with
-    `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY` and a
-    `Content-Security-Policy` that loads nothing and forbids framing. Its policy has no
-    `form-action`, which browsers apply to the redirect after the form is sent to the app's
-    scheme. A page drawn with the web app's components through the API is left for later.
-  - **The answer** is `POST /oauth/authorize` with one `decision`, `allow` or `deny`, form
-    encoded. It passes the CSRF check (B14) and the same budget and bearer refusal, needs the
+    `Cache-Control: no-store`, `X-Frame-Options: DENY` and a `Content-Security-Policy` that loads
+    nothing and forbids framing. Its policy has no `form-action`, which browsers apply to the
+    redirect after the form is sent to the app's scheme. Its `Referrer-Policy` is `same-origin`:
+    under `no-referrer` a browser sends `Origin: null` with the form post, which B14 refuses, so
+    no one could answer (security review of I7, coordinator decision 2026-11-15). The error pages
+    and every redirect of the endpoint are `no-referrer`. A page drawn with the web app's
+    components through the API is left for later.
+  - **The answer** is `POST /oauth/authorize` with one `decision`, `allow` or `deny`, and one
+    `request`, the flow id the page carries in a hidden field, form encoded. It passes the CSRF check (B14) and the same budget and bearer refusal, needs the
     browser session (else a 401 page `auth.unauthenticated`), and in one transaction takes the
     flow (B18: a second answer or a late one shows `auth.flow_invalid` or `auth.flow_expired`),
-    checks the flow is this user's (else `auth.flow_invalid`) and checks its client and redirect
-    URI against the registry again. `deny` is a 303 to the redirect URI with
+    checks the flow is this user's and is the one the answered page was shown for (else
+    `auth.flow_invalid`: opening the request again replaces the flow cookie, and the older page's
+    answer then counts for nothing), and checks its client and redirect URI against the registry
+    again. `deny` is a 303 to the redirect URI with
     `error=access_denied` and `state`; `allow` stores the code and is a 303 with `code` and
     `state`. Both clear the flow cookie.
+  - **Issuer (RFC 9207).** Every answer the endpoint sends to a redirect URI, a code or an error,
+    carries `iss`, the server's issuer identifier: `STEPCLIMB_PUBLIC_URL` as the discovery
+    document's `oauth.issuer` writes it. The app must compare `iss` with the issuer it expects
+    for the server it started the sign-in with, and refuse the answer when they differ or `iss`
+    is missing; and when it links a server it must check that the document's `oauth.issuer`
+    equals the URL it fetched the document from. That stops a mix-up between two servers the app
+    is linked to (M5, `docs/specs/m5.md`). Security review of I7, coordinator decision
+    2026-11-15.
   - **Codes** are `Token`s (Q2), stored as their SHA-256 in `oauth_authorization_codes` with the
     organization, user, client, redirect URI and challenge, and expire 60 seconds after issue
     (Q10). The periodic flow cleanup (B21) also deletes expired codes. Single use at the token
@@ -421,8 +434,9 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   - **`label`** is the string `label` member of the provider's config, and `null` when it has
     none or it is not a string, as `03-users-and-identities.md` B23 reads it. Local sign-in's
     labels are the web app's strings, so its `label` is always `null`.
-  - **`oauth`** lists the OAuth 2.1 endpoints that exist, as absolute URLs on
-    `STEPCLIMB_PUBLIC_URL`: I7 added `authorization_endpoint` (`<public URL>/oauth/authorize`);
+  - **`oauth`** lists the OAuth 2.1 server's `issuer` (the public URL, B45) and the endpoints
+    that exist, as absolute URLs on `STEPCLIMB_PUBLIC_URL`: I7 added `issuer` and
+    `authorization_endpoint` (`<public URL>/oauth/authorize`);
     `token_endpoint` and `revocation_endpoint` join it with I8. Listing a URL that answers 404
     would point the M5 app at nothing.
   - **`theme`** (`11-app-shell.md` Q4) is `{stylesheet}`, the absolute URL
@@ -444,9 +458,9 @@ Every endpoint has `#[utoipa::path]` and appears in `openapi/stepclimb.json`. Er
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
 | `POST /auth/sign-out` | none (cookie) | 204, cookie cleared | `auth.csrf_refused` | none |
-| `GET /.well-known/stepclimb` | none | 200 `{name, sign_in: [{key, kind, label, methods?}], theme: {stylesheet}, oauth: {authorization_endpoint}}`; `token_endpoint` and `revocation_endpoint` join `oauth` with I8 (B38) | `org.not_found`, `org.none` | none |
-| `GET /oauth/authorize` | query `response_type=code, client_id, redirect_uri, code_challenge, code_challenge_method=S256, state?` | 200 HTML confirmation page with the flow cookie; 303 to `/sign-in?return_to=...` without a session; 303 to `redirect_uri?error&error_description&state` (B45) | HTML page 400 `oauth.client_unknown`, `oauth.redirect_uri_mismatch`; 403 `auth.session_required` | browser session (or sign-in first) |
-| `POST /oauth/authorize` | form `decision=allow\|deny` (the confirmation page) | 303 to `redirect_uri?code&state` or `?error=access_denied&state` | HTML page 400 `request.malformed`, `auth.flow_invalid`, `auth.flow_expired`; 401 `auth.unauthenticated`; 403 `auth.session_required`, `auth.csrf_refused` | browser session |
+| `GET /.well-known/stepclimb` | none | 200 `{name, sign_in: [{key, kind, label, methods?}], theme: {stylesheet}, oauth: {issuer, authorization_endpoint}}`; `token_endpoint` and `revocation_endpoint` join `oauth` with I8 (B38) | `org.not_found`, `org.none` | none |
+| `GET /oauth/authorize` | query `response_type=code, client_id, redirect_uri, code_challenge, code_challenge_method=S256, state?` | 200 HTML confirmation page with the flow cookie; 303 to `/sign-in?return_to=...` without a session; 303 to `redirect_uri?error&error_description&state&iss` (B45) | HTML page 400 `oauth.client_unknown`, `oauth.redirect_uri_mismatch`; 403 `auth.session_required` | browser session (or sign-in first) |
+| `POST /oauth/authorize` | form `decision=allow\|deny, request` (the confirmation page) | 303 to `redirect_uri?code&state&iss` or `?error=access_denied&state&iss` | HTML page 400 `request.malformed`, `auth.flow_invalid`, `auth.flow_expired`; 401 `auth.unauthenticated`; 403 `auth.session_required`, `auth.csrf_refused` | browser session |
 | `POST /oauth/token` | form: `grant_type=authorization_code, code, redirect_uri, client_id, code_verifier` or `grant_type=refresh_token, refresh_token, client_id` | 200 `{access_token, token_type: "Bearer", expires_in: 900, refresh_token}` | `invalid_request`, `invalid_client`, `invalid_grant`, `unsupported_grant_type` (format Q13), `auth.rate_limited` | none (client is public) |
 | `POST /oauth/revoke` | form: `token, token_type_hint?, client_id` | 200 | `invalid_request`, `auth.rate_limited` | none |
 | `GET /api/v1/admin/service-accounts` | cursor pagination, by id | 200 page of `{id, name, kind, scopes, owner_user_id, created_at, last_used_at}`, never the key | `auth.unauthenticated`, `entitlement.feature_unavailable`, `permission.denied` | `Require<ApiKeys>`, `perm::ServiceAccountManage`, organization |

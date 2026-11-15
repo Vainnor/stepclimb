@@ -8,6 +8,7 @@
 //! `test-support` header of `request_org`, so a test can hold two. The rate limit walk over
 //! every `/oauth/` route is `tests/enrollment.rs`'s. Needs `DATABASE_URL` (`just up`).
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
@@ -48,6 +49,8 @@ const PASSWORD: &str = "correct horse battery staple";
 const CHALLENGE: &str = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
 const REDIRECT: &str = "http://127.0.0.1:43210/oauth/callback";
 const STATE: &str = "app state/1";
+/// The issuer every answer to the redirect URI names (RFC 9207): the public URL.
+const ISSUER: &str = "https://lms.example.org";
 const CLIENT: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)), 50_000);
 
 /// 2025-11-13T02:13:20Z.
@@ -157,6 +160,48 @@ struct Fixture {
     clock: ManualClock,
     app: Router,
     org: Uuid,
+    /// Every confirmation page the browser was shown, by the flow cookie it set.
+    pages: Mutex<HashMap<String, Shown>>,
+}
+
+/// What a browser keeps from a confirmation page to answer it: the form's hidden `request` and
+/// the page's `Referrer-Policy`, which decides the `Origin` of the form post.
+#[derive(Clone, Debug)]
+struct Shown {
+    request: String,
+    referrer_policy: String,
+}
+
+impl Shown {
+    fn of(page: &Answer) -> Self {
+        let marker = "name=\"request\" value=\"";
+        let start = page.text.find(marker).expect("the hidden request field") + marker.len();
+        let end = start + page.text[start..].find('"').expect("the value's end");
+        Self {
+            request: page.text[start..end].to_owned(),
+            referrer_policy: page.headers[header::REFERRER_POLICY]
+                .to_str()
+                .expect("ASCII")
+                .to_owned(),
+        }
+    }
+
+    /// The `Origin` a browser sends with a form post from the page (Fetch, "serializing a request
+    /// origin"): `null` under `no-referrer`, the page's origin under the other policies a
+    /// same-origin post keeps it under.
+    fn origin(&self) -> &'static str {
+        match self.referrer_policy.as_str() {
+            "no-referrer" => "null",
+            "same-origin"
+            | "origin"
+            | "strict-origin"
+            | "origin-when-cross-origin"
+            | "strict-origin-when-cross-origin"
+            | "no-referrer-when-downgrade"
+            | "unsafe-url" => "https://lms.example.org",
+            other => panic!("an unknown Referrer-Policy {other:?}"),
+        }
+    }
 }
 
 impl Fixture {
@@ -183,6 +228,7 @@ impl Fixture {
             clock,
             app: router(state),
             org,
+            pages: Mutex::new(HashMap::new()),
         }
     }
 
@@ -279,8 +325,14 @@ impl Fixture {
         } else {
             vec![("cookie", cookie.as_str())]
         };
-        self.send(Method::GET, uri, org, &headers, Body::empty())
-            .await
+        let page = self
+            .send(Method::GET, uri, org, &headers, Body::empty())
+            .await;
+        if let (StatusCode::OK, Some(cookie)) = (page.status, page.cookie(flow::COOKIE_NAME)) {
+            let shown = Shown::of(&page);
+            self.pages.lock().expect("the pages").insert(cookie, shown);
+        }
+        page
     }
 
     async fn open(&self, uri: &str, cookies: &[&str]) -> Answer {
@@ -288,14 +340,32 @@ impl Fixture {
     }
 
     /// The confirmation form's `POST` in `org` with `cookies`.
+    /// The confirmation form's `POST` in `org` with `cookies`, as the browser sends it from the
+    /// page whose flow cookie is among them.
     async fn answer_in(&self, org: Uuid, decision: &str, cookies: &[&str]) -> Answer {
+        let flow_cookie = cookies
+            .iter()
+            .find(|c| c.starts_with(&format!("{}=", flow::COOKIE_NAME)))
+            .expect("a flow cookie");
+        let shown = self.pages.lock().expect("the pages")[*flow_cookie].clone();
+        self.answer_from(org, decision, &shown, cookies).await
+    }
+
+    /// The form `POST` the page `shown` sends, with `cookies`.
+    async fn answer_from(
+        &self,
+        org: Uuid,
+        decision: &str,
+        shown: &Shown,
+        cookies: &[&str],
+    ) -> Answer {
         let cookie = cookies.join("; ");
         let headers = [
             ("cookie", cookie.as_str()),
             ("content-type", "application/x-www-form-urlencoded"),
-            ("origin", "https://lms.example.org"),
+            ("origin", shown.origin()),
         ];
-        let body = Body::from(format!("decision={decision}"));
+        let body = Body::from(format!("decision={decision}&request={}", shown.request));
         self.send(Method::POST, AUTHORIZE, org, &headers, body)
             .await
     }
@@ -404,7 +474,8 @@ async fn t27_no_pkce_s256_and_no_implicit_grant(pool: PgPool) {
             assert_eq!(pairs[0], ("error".to_owned(), error.to_owned()), "{uri}");
             assert_eq!(pairs[1].0, "error_description");
             assert_eq!(pairs[2], ("state".to_owned(), STATE.to_owned()));
-            assert_eq!(pairs.len(), 3);
+            assert_eq!(pairs[3], ("iss".to_owned(), ISSUER.to_owned()));
+            assert_eq!(pairs.len(), 4);
             assert!(answer.cookie(flow::COOKIE_NAME).is_none());
         }
     }
@@ -477,6 +548,7 @@ async fn t29_sign_in_then_confirm_then_a_code_at_the_redirect_uri(pool: PgPool) 
     );
     assert_eq!(page.headers[header::CACHE_CONTROL], "no-store");
     assert_eq!(page.headers[header::X_FRAME_OPTIONS], "DENY");
+    assert_eq!(page.headers[header::REFERRER_POLICY], "same-origin");
     let flow_cookie = page.cookie(flow::COOKIE_NAME).expect("a flow cookie");
     assert!(f.codes().await.is_empty(), "no code before the answer");
 
@@ -486,9 +558,10 @@ async fn t29_sign_in_then_confirm_then_a_code_at_the_redirect_uri(pool: PgPool) 
     assert_eq!(allowed.headers[header::REFERRER_POLICY], "no-referrer");
     assert!(allowed.clears(flow::COOKIE_NAME));
     let pairs = allowed.redirect_query();
-    assert_eq!(pairs.len(), 2, "{pairs:?}");
+    assert_eq!(pairs.len(), 3, "{pairs:?}");
     assert_eq!(pairs[0].0, "code");
     assert_eq!(pairs[1], ("state".to_owned(), STATE.to_owned()));
+    assert_eq!(pairs[2], ("iss".to_owned(), ISSUER.to_owned()));
     let code = &pairs[0].1;
     assert_eq!(code.len(), 43);
 
@@ -518,6 +591,62 @@ async fn t29_sign_in_then_confirm_then_a_code_at_the_redirect_uri(pool: PgPool) 
     assert_eq!(f.flows().await, 0, "the answer used the flow");
 }
 
+/// B14, B45: the confirmation page's `Referrer-Policy` lets the browser send the page's origin
+/// with the form post. Under `no-referrer` the browser would send `Origin: null`, which the CSRF
+/// check refuses even with `Sec-Fetch-Site: same-origin`: the user could never answer.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_page_lets_the_browser_send_its_origin_with_the_answer(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let sam = f.user("sam@example.test").await;
+    let session = f.session(sam).await;
+    let flow_cookie = f.confirmation(&session).await;
+    let shown = f.pages.lock().expect("the pages")[&flow_cookie].clone();
+    assert_eq!(shown.referrer_policy, "same-origin");
+    assert_eq!(shown.origin(), "https://lms.example.org");
+    let under_no_referrer = Shown {
+        referrer_policy: "no-referrer".into(),
+        ..shown.clone()
+    };
+    assert_eq!(under_no_referrer.origin(), "null");
+    let refused = f
+        .answer_from(
+            f.org,
+            "allow",
+            &under_no_referrer,
+            &[&session, &flow_cookie],
+        )
+        .await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN, "{refused:?}");
+    assert_eq!(refused.json()["code"], "auth.csrf_refused");
+    assert_eq!(f.flows().await, 1, "the refused post reached no handler");
+    let allowed = f.answer("allow", &[&session, &flow_cookie]).await;
+    assert_eq!(allowed.status, StatusCode::SEE_OTHER, "{allowed:?}");
+}
+
+/// B45: an answer counts only for the page that showed it. Opening the request again replaces
+/// the flow cookie; the first page's Allow then names a flow that is not the cookie's, shows
+/// `auth.flow_invalid` and issues nothing.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_answer_from_a_replaced_page_is_refused(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let sam = f.user("sam@example.test").await;
+    let session = f.session(sam).await;
+    let first_cookie = f.confirmation(&session).await;
+    let first = f.pages.lock().expect("the pages")[&first_cookie].clone();
+    let second_cookie = f.confirmation(&session).await;
+    let second = f.pages.lock().expect("the pages")[&second_cookie].clone();
+    assert_ne!(first.request, second.request);
+    let stale = f
+        .answer_from(f.org, "allow", &first, &[&session, &second_cookie])
+        .await;
+    assert!(
+        stale.is_page(StatusCode::BAD_REQUEST, "auth.flow_invalid"),
+        "{stale:?}"
+    );
+    assert!(stale.clears(flow::COOKIE_NAME));
+    assert!(f.codes().await.is_empty());
+}
+
 /// Q10: "Cancel" sends the browser back with `access_denied` and the `state`, and issues no
 /// code.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
@@ -531,6 +660,7 @@ async fn declining_sends_access_denied_and_issues_no_code(pool: PgPool) {
     let pairs = declined.redirect_query();
     assert_eq!(pairs[0], ("error".to_owned(), "access_denied".to_owned()));
     assert_eq!(pairs[2], ("state".to_owned(), STATE.to_owned()));
+    assert_eq!(pairs[3], ("iss".to_owned(), ISSUER.to_owned()));
     assert!(f.codes().await.is_empty());
     assert_eq!(f.flows().await, 0);
 }

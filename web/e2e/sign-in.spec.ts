@@ -486,6 +486,57 @@ test.describe
       }
     });
 
+    // An app's sign-in (08 B31, B45, T29) in a real browser: the authorization request without a
+    // session goes through the sign-in screen, which loads the request again as a page; the
+    // confirmation form posts with the page's origin (its Referrer-Policy), and Allow sends the
+    // browser to the app's loopback URI with a code, the state and the issuer.
+    test("an app's sign-in reaches its loopback redirect with a code (08 T29)", async ({
+      browser,
+    }) => {
+      const context = await browser.newContext();
+      const learner = await context.newPage();
+      const redirect = "http://127.0.0.1:43210/oauth/callback";
+      try {
+        const query = new URLSearchParams({
+          response_type: "code",
+          client_id: "stepclimb-app",
+          redirect_uri: redirect,
+          code_challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+          code_challenge_method: "S256",
+          state: "e2e-state",
+        });
+        await learner.goto(`/oauth/authorize?${query}`);
+        expect(new URL(learner.url()).pathname).toBe("/sign-in");
+        await learner.getByRole("textbox", { name: "Email" }).fill(PASSWORD_USER);
+        await learner.getByRole("button", { name: "Continue" }).click();
+        await learner.getByRole("link", { name: "Sign in with a password instead" }).click();
+        await learner.getByLabel("Password").fill(PHRASE);
+        await learner.getByRole("button", { name: "Sign in" }).click();
+        await expect(
+          learner.getByRole("heading", { level: 1, name: "Sign in to the Stepclimb app?" }),
+        ).toBeVisible();
+
+        const issuer = new URL(learner.url()).origin;
+        // Playwright does not route a request a redirect makes, so the browser's request to the
+        // loopback address is only observed; it fails, as nothing listens there.
+        const arrived = learner.waitForRequest((r) => r.url().startsWith(`${redirect}?`));
+        const answered = learner.waitForResponse(
+          (r) =>
+            r.request().method() === "POST" && new URL(r.url()).pathname === "/oauth/authorize",
+        );
+        await learner.getByRole("button", { name: "Allow" }).click();
+        const answer = await answered;
+        expect(answer.status()).toBe(303);
+        const target = new URL((await arrived).url());
+        expect(`${target.origin}${target.pathname}`).toBe(redirect);
+        expect(target.searchParams.get("code")).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        expect(target.searchParams.get("state")).toBe("e2e-state");
+        expect(target.searchParams.get("iss")).toBe(issuer);
+      } finally {
+        await context.close();
+      }
+    });
+
     // TOTP after the password (04 B15, B19 to B21) end to end: the password test's user turns TOTP
     // on through the public API, then signs in with a wrong code (back to the password), the
     // app's code, and a recovery code.

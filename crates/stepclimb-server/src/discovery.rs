@@ -15,7 +15,8 @@
 //! - `theme`, the absolute URL of the organization's stylesheet fingerprinted with its hash, as
 //!   the page the server serves links it (`spa`);
 //! - `oauth`, the absolute URLs of the OAuth 2.1 endpoints the apps sign in through: today the
-//!   authorization endpoint. The token and revocation endpoints join it with spec 08 I8.
+//!   authorization endpoint, with the `issuer` its redirects carry as `iss` (RFC 9207). The token
+//!   and revocation endpoints join it with spec 08 I8.
 //!
 //! The organization comes from `RequestOrg`, and every read is scoped to it. The answer is
 //! `Cache-Control: no-cache`: it changes whenever an admin switches a method or saves branding,
@@ -68,9 +69,13 @@ pub struct Discovery {
     pub oauth: DiscoveryOauth,
 }
 
-/// The OAuth 2.1 server's endpoints, as absolute URLs on the public URL.
+/// The OAuth 2.1 server's issuer and endpoints, as absolute URLs on the public URL.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct DiscoveryOauth {
+    /// The server's issuer identifier, the public URL. Every answer the authorization endpoint
+    /// sends to a redirect URI carries it as `iss` (RFC 9207); an app checks the two agree, and
+    /// that this value is the URL it fetched the document from.
+    pub issuer: String,
     /// `<public URL>/oauth/authorize`, which the app opens in the system browser with its PKCE
     /// challenge.
     pub authorization_endpoint: String,
@@ -170,6 +175,7 @@ pub async fn get_discovery(
             stylesheet: stylesheet_url(&state.public_url, &served.css_hash),
         },
         oauth: DiscoveryOauth {
+            issuer: crate::oauth_authorize::issuer(&state),
             authorization_endpoint: public_endpoint(&state.public_url, AUTHORIZE_PATH),
         },
     };
