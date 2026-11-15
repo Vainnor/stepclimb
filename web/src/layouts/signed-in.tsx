@@ -18,7 +18,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Outlet, useMatches } from "@tanstack/react-router";
 import { type ReactNode, useEffect } from "react";
 import { isUnauthorized } from "../api";
-import { applyAppearance } from "../appearance";
+import { applyAppearance, shownTheme } from "../appearance";
 import type { ViewInfo } from "../context";
 import { navRoutes, visibleNavEntries } from "../navigation";
 import { type Me, meQuery } from "../session";
@@ -57,9 +57,10 @@ export function SignedInShell({ me, title, current, children }: SignedInShellPro
   const { t } = useStepclimbStrings();
   useDocumentTitle(title, me.organization.name);
   const entries = visibleNavEntries(navRoutes, me, t);
-  const { theme, density } = me.appearance;
+  const theme = shownTheme(me.appearance, me.default_appearance);
+  const density = me.appearance.density;
   // The server wrote the choice into the page; this keeps a page it did not write in step.
-  useEffect(() => applyAppearance({ theme, density }), [theme, density]);
+  useEffect(() => applyAppearance(theme, density), [theme, density]);
   return (
     <AppShell
       sideNav={
@@ -73,7 +74,13 @@ export function SignedInShell({ me, title, current, children }: SignedInShellPro
       topBar={
         <TopBar
           title={title}
-          actions={<UserMenu name={me.user.display_name} appearance={me.appearance} />}
+          actions={
+            <UserMenu
+              name={me.user.display_name}
+              appearance={me.appearance}
+              organizationDefault={me.default_appearance}
+            />
+          }
         />
       }
     >

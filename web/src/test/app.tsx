@@ -96,7 +96,8 @@ export function meFixture(permissions: string[] = []): Me {
     grants:
       permissions.length === 0 ? [] : [{ scope: { type: "organization", id: orgId }, permissions }],
     features: [],
-    appearance: { theme: "system", density: "comfortable" },
+    appearance: { theme: null, density: "comfortable" },
+    default_appearance: "system",
   };
 }
 

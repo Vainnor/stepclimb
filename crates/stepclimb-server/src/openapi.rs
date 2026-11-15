@@ -168,6 +168,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             branding::ReadingFont,
             branding::CornerStyle,
             branding::Branding,
+            branding::BrandingFallback,
             branding::Appearance,
             branding::ContrastReport,
             branding::ContrastPair,

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The appearance choice, the page the server writes and the fingerprinted `/theme.css`
-//! (docs/specs/m0/11-app-shell.md B20, B21, Q4, Q6; T20). The permission suite's 401, 2xx and
+//! (docs/specs/m0/11-app-shell.md B20, B21, Q4, Q6; T20) and the organization's default
+//! appearance (docs/specs/m0/12-tokens-and-theme-generator.md B27). The permission suite's 401, 2xx and
 //! cross-organization cases for `PUT /api/v1/me/appearance` are in `tests/permissions.rs`; these
 //! tests cover what it cannot: the stored choice, its cookie, `index.html` for a signed-in and a
 //! signed-out browser, and one organization's page and stylesheet against another's.
@@ -24,6 +25,7 @@ use sqlx::PgPool;
 use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{
     OrgScope, Source,
+    appearance::Theme,
     audit::Actor,
     branding::{self, css_hash},
     clock::ManualClock,
@@ -152,16 +154,29 @@ impl World {
 
     /// Saves `primary` as the organization's brand: the stylesheet's hash.
     async fn brand(&self, org: Uuid, primary: &str) -> String {
+        self.brand_with(org, primary, Theme::System).await
+    }
+
+    /// Saves `primary` and `default_appearance` as the organization's branding: the stylesheet's
+    /// hash.
+    async fn brand_with(&self, org: Uuid, primary: &str, default_appearance: Theme) -> String {
         let brand = Brand::parse(&BrandInputs {
             primary: primary.into(),
             ..BrandInputs::default()
         })
         .expect("a valid brand");
         let rendered = theme::render(&brand).expect("the brand renders");
-        branding::save(&self.pool, scope(org), &rendered, now(), Actor::Instance)
-            .await
-            .expect("save the branding")
-            .css_hash
+        branding::save(
+            &self.pool,
+            scope(org),
+            &rendered,
+            default_appearance,
+            now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("save the branding")
+        .css_hash
     }
 
     async fn send(
@@ -241,7 +256,7 @@ impl World {
         me.json()
     }
 
-    async fn stored(&self, user: Uuid) -> (String, String, i64) {
+    async fn stored(&self, user: Uuid) -> (Option<String>, String, i64) {
         sqlx::query_as(
             "SELECT theme, density, (extract(epoch FROM updated_at) * 1000000)::bigint
              FROM users WHERE id = $1",
@@ -260,15 +275,16 @@ fn default_hash() -> String {
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn a_new_user_follows_the_system_and_me_says_so(pool: PgPool) {
+async fn a_new_user_has_chosen_no_theme_and_me_says_so(pool: PgPool) {
     let w = World::new(pool).await;
     let a = w.org("org-a").await;
     let pat = w.user(a).await;
     let me = w.me(a, &pat).await;
     assert_eq!(
         me["appearance"],
-        json!({ "theme": "system", "density": "comfortable" })
+        json!({ "theme": null, "density": "comfortable" })
     );
+    assert_eq!(me["default_appearance"], "system");
     let errors = common::schema_errors(&document(), "Me", &me);
     assert!(errors.is_empty(), "{errors:#?}");
 }
@@ -292,8 +308,8 @@ async fn a_choice_is_stored_returned_in_me_and_set_as_the_cookie(pool: PgPool) {
     assert_eq!(w.me(a, &pat).await["appearance"], choice);
     let (theme, density, _) = w.stored(pat.id).await;
     assert_eq!(
-        (theme.as_str(), density.as_str()),
-        ("high-contrast", "compact")
+        (theme.as_deref(), density.as_str()),
+        (Some("high-contrast"), "compact")
     );
 }
 
@@ -305,11 +321,7 @@ async fn the_same_choice_again_leaves_updated_at(pool: PgPool) {
     let before = w.stored(pat.id).await;
     w.clock.advance(Duration::from_secs(60));
     let same = w
-        .put(
-            a,
-            &pat,
-            json!({ "theme": "system", "density": "comfortable" }),
-        )
+        .put(a, &pat, json!({ "theme": null, "density": "comfortable" }))
         .await;
     assert_eq!(same.status, StatusCode::OK, "{same:?}");
     assert_eq!(w.stored(pat.id).await, before);
@@ -336,7 +348,8 @@ async fn a_value_that_is_not_a_choice_is_400_and_changes_nothing(pool: PgPool) {
         json!({ "theme": "dark", "density": "roomy" }),
         json!({ "theme": "dark" }),
         json!({ "theme": "dark", "density": "compact", "brand": "vzdc" }),
-        json!({ "theme": null, "density": "compact" }),
+        json!({ "density": "compact" }),
+        json!({ "theme": "default", "density": "compact" }),
     ] {
         let answer = w.put(a, &pat, body.clone()).await;
         assert_eq!(answer.status, StatusCode::BAD_REQUEST, "{body}: {answer:?}");
@@ -360,10 +373,7 @@ async fn a_choice_changes_only_the_callers_row(pool: PgPool) {
     assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
     for user in [colleague.id, other.id] {
         let (theme, density, _) = w.stored(user).await;
-        assert_eq!(
-            (theme.as_str(), density.as_str()),
-            ("system", "comfortable")
-        );
+        assert_eq!((theme.as_deref(), density.as_str()), (None, "comfortable"));
     }
     // A's session on a request for B's organization is nobody there.
     let cross = w
@@ -371,7 +381,7 @@ async fn a_choice_changes_only_the_callers_row(pool: PgPool) {
         .await;
     assert_eq!(cross.status, StatusCode::UNAUTHORIZED, "{cross:?}");
     let (theme, _, _) = w.stored(pat.id).await;
-    assert_eq!(theme, "dark");
+    assert_eq!(theme.as_deref(), Some("dark"));
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
@@ -537,4 +547,96 @@ async fn with_two_organizations_and_no_header_the_page_is_unfingerprinted(pool: 
     let css = w.send(None, Method::GET, "/theme.css", None, None).await;
     assert_eq!(css.status, StatusCode::NOT_FOUND);
     assert_eq!(css.json()["code"], "org.not_found");
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t23_the_organizations_default_appearance_applies_until_the_user_chooses(pool: PgPool) {
+    let w = World::new(pool).await;
+    let a = w.org("org-a").await;
+    let b = w.org("org-b").await;
+    w.brand_with(a, "#500E0E", Theme::Dark).await;
+    let pat = w.user(a).await;
+    let dark = r#"<html data-sc-theme="dark" lang="en">"#;
+
+    // No choice yet: signed in, signed out, and a cookie that chose only a density.
+    assert_eq!(w.page(Some(a), Some(&pat.cookie)).await.html_tag(), dark);
+    assert_eq!(w.page(Some(a), None).await.html_tag(), dark);
+    let density_only = "__Host-sc_appearance=default.compact";
+    assert_eq!(
+        w.page(Some(a), Some(density_only)).await.html_tag(),
+        r#"<html data-sc-theme="dark" data-sc-density="compact" lang="en">"#
+    );
+    let me = w.me(a, &pat).await;
+    assert_eq!(me["default_appearance"], "dark");
+    assert_eq!(me["appearance"]["theme"], Value::Null);
+    let errors = common::schema_errors(&document(), "Me", &me);
+    assert!(errors.is_empty(), "{errors:#?}");
+
+    // A density change that keeps no theme keeps following the organization.
+    let answer = w
+        .put(a, &pat, json!({ "theme": null, "density": "compact" }))
+        .await;
+    assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    assert_eq!(
+        answer.header(header::SET_COOKIE).split(';').next(),
+        Some(density_only)
+    );
+    assert_eq!(
+        w.page(Some(a), Some(&pat.cookie)).await.html_tag(),
+        r#"<html data-sc-theme="dark" data-sc-density="compact" lang="en">"#
+    );
+
+    // The user's own choice wins, "Match my device" included.
+    for (theme, tag) in [
+        ("system", r#"<html data-sc-density="compact" lang="en">"#),
+        (
+            "light",
+            r#"<html data-sc-theme="light" data-sc-density="compact" lang="en">"#,
+        ),
+    ] {
+        let answer = w
+            .put(a, &pat, json!({ "theme": theme, "density": "compact" }))
+            .await;
+        assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+        assert_eq!(w.page(Some(a), Some(&pat.cookie)).await.html_tag(), tag);
+        let cookie = format!("__Host-sc_appearance={theme}.compact");
+        assert_eq!(w.page(Some(a), Some(&cookie)).await.html_tag(), tag);
+    }
+
+    // A's default never reaches B's pages.
+    assert_eq!(
+        w.page(Some(b), None).await.html_tag(),
+        r#"<html lang="en">"#
+    );
+    let other = w.user(b).await;
+    assert_eq!(w.me(b, &other).await["default_appearance"], "system");
+    w.brand_with(b, "#0a1030", Theme::HighContrast).await;
+    assert_eq!(w.page(Some(a), None).await.html_tag(), dark);
+    assert_eq!(
+        w.page(Some(b), Some(&other.cookie)).await.html_tag(),
+        r#"<html data-sc-theme="high-contrast" lang="en">"#
+    );
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_unreadable_branding_record_leaves_me_answering_the_system_default(pool: PgPool) {
+    let w = World::new(pool).await;
+    let a = w.org("org-a").await;
+    w.brand_with(a, "#500E0E", Theme::Dark).await;
+    let pat = w.user(a).await;
+    // A record of a format version this release does not read.
+    sqlx::query(
+        "UPDATE organizations SET branding = jsonb_set(branding, '{version}', '99') WHERE id = $1",
+    )
+    .bind(a)
+    .execute(&w.pool)
+    .await
+    .expect("doctor the record");
+    let me = w.me(a, &pat).await;
+    assert_eq!(me["default_appearance"], "system");
+    assert_eq!(me["appearance"]["theme"], Value::Null);
+    assert_eq!(
+        w.page(Some(a), Some(&pat.cookie)).await.html_tag(),
+        r#"<html lang="en">"#
+    );
 }

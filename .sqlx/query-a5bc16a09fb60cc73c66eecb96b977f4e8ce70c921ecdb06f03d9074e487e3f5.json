@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE organizations SET branding = $2::text::jsonb WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a5bc16a09fb60cc73c66eecb96b977f4e8ce70c921ecdb06f03d9074e487e3f5"
+}

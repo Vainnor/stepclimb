@@ -156,9 +156,9 @@ Read on 2026-11-12; the spec builds on it.
 - **B21.** The page sets `data-sc-theme` on `<html>` from the user's appearance choice, and
   leaves it unset to follow `prefers-color-scheme` (theme resolution order, `docs/plan/ui.md` ->
   What we borrow). The choices are light, dark, high contrast and system; the organization's
-  default appearance applies until the user chooses (not built yet: issue #162). Where the
-  choice is stored, and how it is applied before first paint without an inline script, is Open
-  question Q6. Density is set the same way with `data-sc-density`.
+  default appearance (12 B27) applies until the user chooses. Where the choice is stored, and how
+  it is applied before first paint without an inline script, is Open question Q6. Density is set
+  the same way with `data-sc-density`.
 - **B22.** The Vite dev server proxies `/theme.css` (and `/auth`) to `stepclimb serve`, as it
   does `/api`, so development matches production.
 
@@ -220,7 +220,7 @@ This spec adds two routes to the server and consumes others.
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
 | `GET /theme.css` | none; the organization comes from the request's host as 02 resolves it | `200 text/css`, cache headers per Q4 | `404` only if 02 finds no organization for the host | public (the sign-in screen needs it) |
-| `PUT /api/v1/me/appearance` | `{ theme, density }` | `200` the same, and the `__Host-sc_appearance` cookie | `400`, `401`, `403 auth.csrf_refused` | authenticated user (added by the I2 and I6 coordinator decisions, 2026-11-14) |
+| `PUT /api/v1/me/appearance` | `{ theme, density }`, `theme` `null` for no choice | `200` the same, and the `__Host-sc_appearance` cookie | `400`, `401`, `403 auth.csrf_refused` | authenticated user (added by the I2 and I6 coordinator decisions, 2026-11-14) |
 
 `/theme.css` is in the OpenAPI document under the `operations` tag beside `/healthz`, with a
 `text/css` response, so the generated client and the Tauri app (M5) can find it. It is not under
@@ -495,7 +495,7 @@ Coordinator decisions (2026-11-14), on the owner's delegation, while building I2
   `/theme.css` route answers first. Linking a server's theme is M5.
 - **Where the choice lives (Q6), for the owner to confirm.** Two columns of `users`, `theme` (`system`, `light`, `dark`,
   `high-contrast`) and `density` (`comfortable`, `compact`), defaulting to `system` and
-  `comfortable`. `GET /api/v1/me` returns them as `appearance`; `PUT /api/v1/me/appearance` sets
+  `comfortable` (the theme's default became `NULL`, no choice, with #162 below). `GET /api/v1/me` returns them as `appearance`; `PUT /api/v1/me/appearance` sets
   both (authenticated user, no permission, CSRF-checked) and answers them with
   `__Host-sc_appearance=<theme>.<density>` (one year, `HttpOnly`, `SameSite=Lax`), the cookie
   of Q6 (b). `index.html` takes the signed-in user's choice, or without a session the cookie's;
@@ -506,7 +506,7 @@ Coordinator decisions (2026-11-14), on the owner's delegation, while building I2
   has no input: 12's branding inputs do not include one. Until #162 adds it, a user who has not
   chosen follows the operating system (`data-sc-theme` unset). #162 also re-renders stored
   stylesheets when the generator version changes. I6 therefore covers B21 except the
-  organization default.
+  organization default. (Superseded by the 2026-11-15 decision on #162 below.)
 - **The choice is in the user menu,** as two submenus, Theme (Match my device, Light, Dark, High
   contrast) and Density (Comfortable, Compact), each marking the current value. The app saves
   first and applies the answer to `<html>`; a failed save shows an error toast and changes
@@ -736,6 +736,31 @@ list, provider buttons, the callback error and the password step that I5 left):
   documents, in light, dark and high contrast at 1280 and 375 px, in the default brand and in the
   vZDC example brand (its rules from the token build, since changing the stack's branding would
   reach every other test).
+
+Coordinator decisions (2026-11-15), on the owner's delegation, while building issue #162 (the
+organization default appearance, 12 B27):
+
+- **"Not chosen" is stored as `NULL`.** `users.theme` loses its `system` default and becomes
+  nullable: `NULL` is no choice, so the page takes the organization's default appearance, and
+  `system` stays a choice ("Match my device") that wins over it. The migration turns every stored
+  `system` into `NULL`: until now the two drew the same page and nearly every such row held the
+  column default, so a user who did pick "Match my device" picks it again. Density has no
+  organization default and keeps `comfortable`.
+- **The API.** `UserAppearance.theme` is required and nullable: `GET /api/v1/me` answers `null`
+  for no choice, and `PUT /api/v1/me/appearance` takes `null` to keep none, so a density change
+  from the menu does not turn the theme the user sees into a choice. `/me` also answers
+  `default_appearance`, the organization's, so a page the server did not write (Vite, the Tauri
+  shell) applies the same theme. The cookie writes no choice as `default` (`default.compact`).
+- **The menu** marks the theme the page shows: the user's choice, or the organization's default
+  while there is none. Choosing any item stores it as the user's choice; choosing the item
+  already marked changes nothing, so a user whose theme equals the default follows later changes
+  to the default until they pick another item. The menu has no "use the organization's default"
+  item in M0, so a user who chose a theme cannot go back to following the default from the UI;
+  the API's `null` is there for one. Accepted for M0 (review of PR #193).
+- **Old cookies.** A browser that kept a `system.<density>` cookie from before the migration
+  still follows the operating system on signed-out screens, while the migrated user row says no
+  choice and signed-in pages take the organization's default. Accepted: no release has shipped
+  the cookie, and the next save from the menu rewrites it (review of PR #193).
 
 ## Issues
 

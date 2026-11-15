@@ -4,14 +4,17 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { UserAppearance } from "./appearance";
+import type { ThemeChoice, UserAppearance } from "./appearance";
 import { meQuery } from "./session";
 import { json, meFixture, problem, renderApp, stubMatchMedia, stubServer } from "./test/app";
 
 const html = document.documentElement;
 
-function signedIn(appearance: UserAppearance = { theme: "system", density: "comfortable" }) {
-  return () => json({ ...meFixture(), appearance });
+function signedIn(
+  appearance: UserAppearance = { theme: "system", density: "comfortable" },
+  organizationDefault: ThemeChoice = "system",
+) {
+  return () => json({ ...meFixture(), appearance, default_appearance: organizationDefault });
 }
 
 async function choose(submenu: string, item: string) {
@@ -94,6 +97,41 @@ describe("the appearance choice (B21)", () => {
     await waitFor(() => expect(html.getAttribute("data-sc-theme")).toBe("dark"));
     await choose("Theme", "Match my device");
     await waitFor(() => expect(html.hasAttribute("data-sc-theme")).toBe(false));
+  });
+
+  it("takes the organization's default until the user chooses, and marks it", async () => {
+    const bodies: unknown[] = [];
+    stubServer({
+      "GET /api/v1/me": signedIn({ theme: null, density: "comfortable" }, "dark"),
+      "PUT /api/v1/me/appearance": async (request) => {
+        const body = await request.json();
+        bodies.push(body);
+        return json(body);
+      },
+    });
+    renderApp("/");
+    await screen.findByRole("heading", { level: 1, name: "Home" });
+    await waitFor(() => expect(html.getAttribute("data-sc-theme")).toBe("dark"));
+    await userEvent.click(screen.getByRole("button", { name: "Avery Example, account menu" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Theme" }));
+    const menu = await screen.findByRole("menu", { name: "Theme" });
+    expect(within(menu).getByRole("menuitemradio", { name: "Dark" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    // Choosing the marked default sends nothing: the theme stays unchosen.
+    await userEvent.click(within(menu).getByRole("menuitemradio", { name: "Dark" }));
+
+    // A density change leaves the theme unchosen, and is the first request sent.
+    await choose("Density", "Compact");
+    await waitFor(() => expect(html.getAttribute("data-sc-density")).toBe("compact"));
+    expect(html.getAttribute("data-sc-theme")).toBe("dark");
+    expect(bodies).toEqual([{ theme: null, density: "compact" }]);
+
+    // The user's own choice wins over the default.
+    await choose("Theme", "Match my device");
+    await waitFor(() => expect(html.hasAttribute("data-sc-theme")).toBe(false));
+    expect(bodies[1]).toEqual({ theme: "system", density: "compact" });
   });
 
   it("blocks a second choice while the first is saving, and marks the one being saved", async () => {

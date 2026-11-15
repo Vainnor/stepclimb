@@ -1,15 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The branding routes and `/theme.css` over the router
-//! (docs/specs/m0/12-tokens-and-theme-generator.md B21, B24, B25; T14 to T17). The permission
+//! (docs/specs/m0/12-tokens-and-theme-generator.md B21, B24, B25, B27, B28; T14 to T17, T20 to
+//! T23). The permission
 //! suite's four cases and cross-organization case for each route are in `tests/permissions.rs`;
 //! these tests cover what the suite cannot: the stored stylesheet, `/theme.css` before and after
-//! a save, validation, the feature check and one organization's save against another's theme.
+//! a save, validation, the feature check, one organization's save against another's theme, and a
+//! record another generator version wrote.
 //!
 //! Two organizations share the database, so every request names its own with the
 //! `test-support` organization header. `session::start` stands in for the sign-in specs. Needs
 //! `DATABASE_URL` (`just up`).
 
+use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{
@@ -36,7 +40,7 @@ use stepclimb_core::{
 };
 use stepclimb_server::{
     AppState, branding::THEME_CSS_CACHE_CONTROL, request_org::TEST_ORG_HEADER, router, session,
-    web_origin::WebOrigin,
+    startup, web_origin::WebOrigin,
 };
 use tower::ServiceExt;
 
@@ -216,6 +220,38 @@ impl World {
     }
 }
 
+#[derive(Clone, Default)]
+struct Captured(Arc<Mutex<Vec<u8>>>);
+
+impl Write for Captured {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("log buffer").extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Captured {
+    /// The log so far, emptied.
+    fn take(&self) -> String {
+        let bytes = std::mem::take(&mut *self.0.lock().expect("log buffer"));
+        String::from_utf8(bytes).expect("UTF-8 logs")
+    }
+}
+
+/// Every log line of this thread from now until the guard drops.
+fn capture() -> (Captured, tracing::subscriber::DefaultGuard) {
+    let captured = Captured::default();
+    let writer = captured.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(move || writer.clone())
+        .finish();
+    (captured, tracing::subscriber::set_default(subscriber))
+}
+
 fn default_css() -> String {
     theme::render(&Brand::stepclimb_default())
         .expect("the default brand renders")
@@ -246,6 +282,8 @@ async fn t15_theme_css_serves_the_default_then_the_saved_stylesheet(pool: PgPool
     assert_schema("Branding", &read.json());
     assert_eq!(read.json()["css_hash"], css_hash(&before.text));
     assert_eq!(read.json()["inputs"]["primary"], "oklch(0.5 0.09 195)");
+    assert_eq!(read.json()["inputs"]["default_appearance"], "system");
+    assert_eq!(read.json()["fallback"], Value::Null);
 
     let inputs = json!({ "primary": "#500E0E", "ui_font": "Roboto", "corner_style": "round" });
     let saved = w
@@ -261,8 +299,10 @@ async fn t15_theme_css_serves_the_default_then_the_saved_stylesheet(pool: PgPool
             "ui_font": "Roboto",
             "reading_font": "serif",
             "corner_style": "round",
+            "default_appearance": "system",
         })
     );
+    assert_eq!(body["fallback"], Value::Null);
     assert_eq!(body["generator"], theme::GENERATOR_VERSION);
     assert_eq!(body["report"].as_array().map(Vec::len), Some(3));
     assert_eq!(
@@ -340,6 +380,27 @@ async fn t14_an_invalid_input_is_422_naming_it_and_changes_nothing(pool: PgPool)
             "/corner_style",
             "branding.not_a_choice",
         ),
+        (
+            json!({ "primary": "#500E0E", "default_appearance": "Dark" }),
+            "/default_appearance",
+            "branding.not_a_choice",
+        ),
+        (
+            json!({ "primary": "#500E0E", "default_appearance": "default" }),
+            "/default_appearance",
+            "branding.not_a_choice",
+        ),
+        (
+            json!({ "primary": "#500E0E", "default_appearance": "" }),
+            "/default_appearance",
+            "branding.not_a_choice",
+        ),
+        // The generator's inputs are checked first.
+        (
+            json!({ "primary": "dark red", "default_appearance": "sepia" }),
+            "/primary",
+            "branding.invalid_color",
+        ),
     ] {
         let answer = w
             .send(a, Method::PUT, BRANDING, Some(&admin), Some(body.clone()))
@@ -360,6 +421,7 @@ async fn t14_an_invalid_input_is_422_naming_it_and_changes_nothing(pool: PgPool)
         json!({}),
         json!({ "primary": 5 }),
         json!({ "primary": "#fff", "accent": "#000" }),
+        json!({ "primary": "#fff", "default_appearance": 5 }),
     ] {
         let answer = w
             .send(a, Method::PUT, BRANDING, Some(&admin), Some(body.clone()))
@@ -560,4 +622,186 @@ async fn get_answers_the_stored_report_without_generating_it(pool: PgPool) {
     assert_eq!(read.status, StatusCode::OK, "{read:?}");
     assert_eq!(read.json()["report"][0]["warnings"][0]["code"], "stored");
     assert_eq!(read.json()["css_hash"], saved.json()["css_hash"]);
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t20_the_default_appearance_is_saved_answered_and_audited(pool: PgPool) {
+    let w = World::new(pool).await;
+    let a = w.org("org-a").await;
+    let admin = w.user(a, Some("org_admin")).await;
+    let put = |body: Value| w.send(a, Method::PUT, BRANDING, Some(&admin), Some(body));
+    let first = put(json!({ "primary": "#500E0E" })).await;
+    assert_eq!(first.json()["inputs"]["default_appearance"], "system");
+    for theme in ["dark", "high-contrast", "light", "system"] {
+        let saved = put(json!({ "primary": "#500E0E", "default_appearance": theme })).await;
+        assert_eq!(saved.status, StatusCode::OK, "{theme}: {saved:?}");
+        assert_schema("Branding", &saved.json());
+        assert_eq!(saved.json()["inputs"]["default_appearance"], theme);
+        assert_eq!(saved.json()["css_hash"], first.json()["css_hash"]);
+        let read = w.send(a, Method::GET, BRANDING, Some(&admin), None).await;
+        assert_eq!(read.json(), saved.json(), "{theme}");
+    }
+    let entries = audit_entries(&w.pool, a).await;
+    assert_eq!(entries.len(), 5, "{entries:#?}");
+    assert_eq!(
+        entries[1].data["before"]["inputs"]["default_appearance"],
+        "system"
+    );
+    assert_eq!(
+        entries[1].data["after"]["inputs"]["default_appearance"],
+        "dark"
+    );
+}
+
+/// Rewrites `org`'s stored record as another generator version wrote it: `generator` 0, a
+/// stylesheet that lacks this release's tokens, and `primary` when given.
+async fn age_record(pool: &PgPool, org: Uuid, primary: Option<&str>) {
+    let stale = ":root { --sc-brand: red; }";
+    let mut record: Value = serde_json::from_str(
+        &sqlx::query_scalar::<_, String>("SELECT branding::text FROM organizations WHERE id = $1")
+            .bind(org)
+            .fetch_one(pool)
+            .await
+            .expect("the record"),
+    )
+    .expect("JSON");
+    record["generator"] = 0.into();
+    record["css"] = stale.into();
+    record["css_hash"] = css_hash(stale).into();
+    if let Some(primary) = primary {
+        record["inputs"]["primary"] = primary.into();
+    }
+    sqlx::query("UPDATE organizations SET branding = $2::text::jsonb WHERE id = $1")
+        .bind(org)
+        .bind(record.to_string())
+        .execute(pool)
+        .await
+        .expect("age the record");
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t21_another_generators_stylesheet_is_never_served_and_startup_stores_its_rerender(
+    pool: PgPool,
+) {
+    let w = World::new(pool).await;
+    let a = w.org("org-a").await;
+    let b = w.org("org-b").await;
+    let admin = w.user(a, Some("org_admin")).await;
+    let body = json!({ "primary": "#500E0E", "default_appearance": "dark" });
+    let saved = w
+        .send(a, Method::PUT, BRANDING, Some(&admin), Some(body))
+        .await;
+    assert_eq!(saved.status, StatusCode::OK, "{saved:?}");
+    let current_css = w.theme_css(a).await.text;
+    age_record(&w.pool, a, None).await;
+    let b_before = w.stored(b).await;
+
+    // Before startup re-renders it, every read gets this generator's stylesheet anyway: the page
+    // links it by its own hash, and the stale record's hash is never cached as it.
+    let css = w.theme_css(a).await;
+    assert_eq!(css.text, current_css);
+    let page = w.send(a, Method::GET, "/courses", None, None).await;
+    assert_eq!(page.status, StatusCode::OK, "is web/dist built? {page:?}");
+    let link = format!(r#"href="/theme.css?v={}""#, css_hash(&current_css));
+    assert!(page.text.contains(&link), "{}", page.text);
+    let stale_hash = css_hash(":root { --sc-brand: red; }");
+    let stale = w
+        .send(
+            a,
+            Method::GET,
+            &format!("{THEME_CSS}?v={stale_hash}"),
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(stale.text, current_css);
+    assert_eq!(
+        stale.headers[header::CACHE_CONTROL],
+        THEME_CSS_CACHE_CONTROL
+    );
+    let read = w.send(a, Method::GET, BRANDING, Some(&admin), None).await;
+    assert_eq!(read.json()["css_hash"], css_hash(&current_css));
+    assert_eq!(read.json()["generator"], theme::GENERATOR_VERSION);
+    assert_eq!(read.json()["inputs"]["default_appearance"], "dark");
+
+    let entries = audit_entries(&w.pool, a).await.len();
+    let (_, updated_at) = w.stored(a).await;
+    startup::prepare(&w.pool, &ManualClock::new(now()).clock())
+        .await
+        .expect("startup");
+    let (record, after) = w.stored(a).await;
+    let record: Value = serde_json::from_str(&record).unwrap();
+    assert_eq!(record["generator"], theme::GENERATOR_VERSION);
+    assert_eq!(record["css"], current_css.as_str());
+    assert_eq!(record["css_hash"], css_hash(&current_css));
+    assert_eq!(after, updated_at, "nobody changed the branding");
+    assert_eq!(
+        audit_entries(&w.pool, a).await.len(),
+        entries,
+        "no audit entry"
+    );
+    assert_eq!(w.stored(b).await, b_before);
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t22_inputs_this_generator_refuses_are_served_the_default_theme(pool: PgPool) {
+    let w = World::new(pool).await;
+    let a = w.org("org-a").await;
+    let admin = w.user(a, Some("org_admin")).await;
+    let body = json!({ "primary": "#500E0E", "default_appearance": "high-contrast" });
+    let saved = w
+        .send(a, Method::PUT, BRANDING, Some(&admin), Some(body))
+        .await;
+    assert_eq!(saved.status, StatusCode::OK, "{saved:?}");
+    // A chroma above this generator's cap, as a record from a release before the cap.
+    age_record(&w.pool, a, Some("oklch(0.5 0.9 30)")).await;
+
+    let (log, _guard) = capture();
+    for round in ["before startup", "after startup"] {
+        let css = w.theme_css(a).await;
+        assert_eq!(css.text, default_css(), "{round}");
+        let read = w.send(a, Method::GET, BRANDING, Some(&admin), None).await;
+        let body = read.json();
+        assert_schema("Branding", &body);
+        assert_eq!(body["css_hash"], css_hash(&default_css()), "{round}");
+        assert_eq!(body["inputs"]["primary"], "oklch(0.5 0.9 30)", "{round}");
+        assert_eq!(body["inputs"]["default_appearance"], "high-contrast");
+        assert_eq!(body["fallback"], json!({ "report": [] }), "{round}");
+        assert!(
+            body["report"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|r| r["pass"] == true)
+        );
+        startup::prepare(&w.pool, &ManualClock::new(now()).clock())
+            .await
+            .expect("startup");
+        // Each start warns while the fallback is stored, naming the organization and why.
+        let text = log.take();
+        let warnings: Vec<&str> = text
+            .lines()
+            .filter(|line| line.contains("WARN") && line.contains("saved branding fails"))
+            .collect();
+        assert_eq!(warnings.len(), 1, "{round}: {text}");
+        assert!(warnings[0].contains(&a.to_string()), "{}", warnings[0]);
+        assert!(
+            warnings[0].contains("primary") || warnings[0].contains("refused"),
+            "{}",
+            warnings[0]
+        );
+    }
+    // Saving branding again replaces the fallback, and the warning stops.
+    let body = json!({ "primary": "#0a1030" });
+    let saved = w
+        .send(a, Method::PUT, BRANDING, Some(&admin), Some(body))
+        .await;
+    assert_eq!(saved.status, StatusCode::OK, "{saved:?}");
+    assert_eq!(saved.json()["fallback"], Value::Null);
+    assert_ne!(w.theme_css(a).await.text, default_css());
+    startup::prepare(&w.pool, &ManualClock::new(now()).clock())
+        .await
+        .expect("startup");
+    let text = log.take();
+    assert!(!text.contains("saved branding fails"), "{text}");
 }

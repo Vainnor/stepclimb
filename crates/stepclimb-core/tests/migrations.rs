@@ -122,3 +122,52 @@ async fn every_table_has_created_at_and_updated_at(pool: PgPool) {
         "tables without created_at and updated_at as timestamptz NOT NULL DEFAULT now(): {missing:?}"
     );
 }
+
+#[sqlx::test(migrations = false)]
+async fn a_stored_system_theme_becomes_no_choice_and_other_choices_stay(pool: PgPool) {
+    MIGRATOR
+        .run_to(20261115220000, &pool)
+        .await
+        .expect("migrations up to the one before");
+    sqlx::query("INSERT INTO organizations (id, slug, name) VALUES (gen_random_uuid(), 'a', 'A')")
+        .execute(&pool)
+        .await
+        .expect("an organization");
+    for (name, theme) in [("Sam", "system"), ("Lee", "dark")] {
+        sqlx::query(
+            "INSERT INTO users (id, org_id, display_name, tz, source, theme)
+             SELECT gen_random_uuid(), id, $1, 'UTC', 'local', $2 FROM organizations",
+        )
+        .bind(name)
+        .bind(theme)
+        .execute(&pool)
+        .await
+        .expect("a user");
+    }
+    MIGRATOR.run(&pool).await.expect("the rest apply");
+    let themes: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT display_name, theme FROM users ORDER BY display_name")
+            .fetch_all(&pool)
+            .await
+            .expect("the users");
+    assert_eq!(
+        themes,
+        [
+            ("Lee".to_owned(), Some("dark".to_owned())),
+            ("Sam".to_owned(), None)
+        ]
+    );
+    sqlx::query(
+        "INSERT INTO users (id, org_id, display_name, tz, source)
+         SELECT gen_random_uuid(), id, 'New', 'UTC', 'local' FROM organizations",
+    )
+    .execute(&pool)
+    .await
+    .expect("a user without a theme");
+    let new: Option<String> =
+        sqlx::query_scalar("SELECT theme FROM users WHERE display_name = 'New'")
+            .fetch_one(&pool)
+            .await
+            .expect("the new user");
+    assert_eq!(new, None, "a new user has chosen nothing");
+}

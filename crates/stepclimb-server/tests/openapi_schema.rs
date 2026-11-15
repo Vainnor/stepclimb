@@ -29,6 +29,7 @@ fn good() -> Value {
         }],
         "features": ["custom_roles"],
         "appearance": { "theme": "dark", "density": "compact" },
+        "default_appearance": "system",
     })
 }
 
@@ -52,12 +53,43 @@ fn a_wrong_type_enum_value_or_uuid_is_an_error() {
         ("/features", json!("custom_roles")),
         ("/grants/0/permissions/0", json!(7)),
         ("/appearance/theme", json!("sepia")),
+        ("/default_appearance", Value::Null),
     ];
     for (pointer, replacement) in broken {
         let mut value = good();
         *value.pointer_mut(pointer).expect("a member") = replacement;
         assert!(!errors_for(&value).is_empty(), "{pointer} was accepted");
     }
+}
+
+#[test]
+fn a_one_of_takes_exactly_one_branch() {
+    let mut no_theme = good();
+    no_theme["appearance"]["theme"] = Value::Null;
+    let errors = errors_for(&no_theme);
+    assert!(errors.is_empty(), "{errors:#?}");
+    let mut document = document();
+    let theme = &mut document["components"]["schemas"]["UserAppearance"]["properties"]["theme"];
+    let first = theme["oneOf"][0].clone();
+    assert_eq!(first, json!({ "type": "null" }), "{theme}");
+    theme["oneOf"] = json!([first.clone(), first]);
+    let errors = common::schema_errors(&document, "Me", &no_theme);
+    assert!(
+        !errors.is_empty(),
+        "a value matching two branches was accepted"
+    );
+}
+
+#[test]
+fn a_constraint_beside_one_of_is_an_error() {
+    let mut document = document();
+    let theme = &mut document["components"]["schemas"]["UserAppearance"]["properties"]["theme"];
+    assert!(theme.get("oneOf").is_some(), "{theme}");
+    theme["enum"] = json!(["dark"]);
+    let mut value = good();
+    value["appearance"]["theme"] = json!("light");
+    let errors = common::schema_errors(&document, "Me", &value);
+    assert!(!errors.is_empty(), "a constraint beside oneOf was skipped");
 }
 
 #[test]

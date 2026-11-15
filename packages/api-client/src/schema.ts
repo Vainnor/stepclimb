@@ -309,8 +309,9 @@ export interface paths {
         };
         get?: never;
         /**
-         * Set the signed-in user's theme and density. The answer also sets the `__Host-sc_appearance`
-         *     cookie, so this browser's signed-out screens use the same choice.
+         * Set the signed-in user's theme and density; a `null` theme leaves the theme to the
+         *     organization's default appearance. The answer also sets the `__Host-sc_appearance` cookie, so
+         *     this browser's signed-out screens use the same choice.
          */
         put: operations["updateMyAppearance"];
         post?: never;
@@ -1027,6 +1028,7 @@ export interface components {
         Branding: {
             /** @description The SHA-256 of the stylesheet, lowercase hex. */
             css_hash: string;
+            fallback: null | components["schemas"]["BrandingFallback"];
             /**
              * Format: int32
              * @description The version of the theme generator that wrote the stylesheet.
@@ -1036,11 +1038,24 @@ export interface components {
             report: components["schemas"]["ContrastReport"][];
         };
         /**
+         * @description Why `/theme.css` serves the default brand's stylesheet for saved branding: a release with
+         *     another theme generator re-rendered the saved inputs, and they fail its contrast report or its
+         *     input checks. Saving branding again replaces it.
+         */
+        BrandingFallback: {
+            /**
+             * @description The reports of the saved inputs' themes under this generator, failing pairs first; empty
+             *     when the generator refused the inputs or could not build their themes.
+             */
+            report: components["schemas"]["ContrastReport"][];
+        };
+        /**
          * @description The branding inputs. The whole set is replaced; an omitted or `null` choice takes its
          *     default. A value that is not a choice is a 422, not a 400.
          */
         BrandingInputs: {
             corner_style?: null | components["schemas"]["CornerStyle"];
+            default_appearance?: null | components["schemas"]["ThemeChoice"];
             /** @description The primary color: a CSS hex color (`#500E0E`, `#f00`) or `oklch(L C H)`, opaque. */
             primary: string;
             reading_font?: null | components["schemas"]["ReadingFont"];
@@ -1294,6 +1309,11 @@ export interface components {
         Me: {
             /** @description The theme and density the user chose (docs/specs/m0/11-app-shell.md B21, Q6). */
             appearance: components["schemas"]["UserAppearance"];
+            /**
+             * @description The organization's default appearance: the theme the user's pages take while
+             *     `appearance.theme` is `null`.
+             */
+            default_appearance: components["schemas"]["ThemeChoice"];
             /** @description The keys of the catalog features the organization's plan includes, sorted. */
             features: string[];
             /**
@@ -1903,6 +1923,7 @@ export interface components {
         /** @description The saved inputs, every choice made. */
         SavedInputs: {
             corner_style: components["schemas"]["CornerStyle"];
+            default_appearance: components["schemas"]["ThemeChoice"];
             primary: string;
             reading_font: components["schemas"]["ReadingFont"];
             ui_font: components["schemas"]["UiFont"];
@@ -1982,7 +2003,7 @@ export interface components {
             return_to: string;
         };
         /**
-         * @description The theme a user chose. `system` follows the operating system's color and contrast settings.
+         * @description A theme. `system` follows the operating system's color and contrast settings.
          * @enum {string}
          */
         ThemeChoice: "system" | "light" | "dark" | "high-contrast";
@@ -2040,10 +2061,10 @@ export interface components {
              */
             updated_at: string;
         };
-        /** @description The theme and density the signed-in user's pages are drawn in. */
+        /** @description The theme and density the signed-in user chose. */
         UserAppearance: {
             density: components["schemas"]["DensityChoice"];
-            theme: components["schemas"]["ThemeChoice"];
+            theme: null | components["schemas"]["ThemeChoice"];
         };
         /** @description `PublicKeyCredentialUserEntityJSON`. */
         UserInfo: {

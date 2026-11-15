@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! `GET /api/v1/me`: the signed-in user, their organization, their grants and the
-//! organization's features (docs/specs/m0/03-users-and-identities.md B21, B22), and the user's
-//! appearance choice (docs/specs/m0/11-app-shell.md B21, Q6).
+//! organization's features (docs/specs/m0/03-users-and-identities.md B21, B22), the user's
+//! appearance choice and the organization's default appearance (docs/specs/m0/11-app-shell.md
+//! B21, Q6).
 //!
 //! The route needs a principal that is a user and no permission ([`AuthOnly`]). Today the only
 //! such principal is a browser session; the user and the organization are read with the
@@ -24,8 +25,14 @@ use stepclimb_core::{
 use utoipa::ToSchema;
 
 use crate::{
-    AppState, appearance::UserAppearance, entitlements::Entitlements, error::ApiError,
-    organization::Organization, require::AuthOnly, roles::ScopeType,
+    AppState,
+    appearance::{ThemeChoice, UserAppearance},
+    branding,
+    entitlements::Entitlements,
+    error::ApiError,
+    organization::Organization,
+    require::AuthOnly,
+    roles::ScopeType,
 };
 
 /// The path of the route.
@@ -44,6 +51,9 @@ pub struct Me {
     pub features: Vec<String>,
     /// The theme and density the user chose (docs/specs/m0/11-app-shell.md B21, Q6).
     pub appearance: UserAppearance,
+    /// The organization's default appearance: the theme the user's pages take while
+    /// `appearance.theme` is `null`.
+    pub default_appearance: ThemeChoice,
 }
 
 /// The signed-in user.
@@ -179,8 +189,10 @@ pub async fn get_me(
     let appearance = appearance::get(&state.db, scope, principal.user_id)
         .await
         .map_err(|error| ApiError::internal(&error))?;
+    let default_appearance = branding::default_appearance(&state, scope).await;
     Ok(Json(Me {
         appearance: appearance.into(),
+        default_appearance: default_appearance.into(),
         user: user.into(),
         organization: organization.into(),
         grants: me_grants(auth.grants()),

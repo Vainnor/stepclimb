@@ -748,12 +748,16 @@ fn second_identity_of_owner(
     })
 }
 
-/// Branding inputs every brand check passes.
+/// Branding inputs every brand check passes, the default appearance among them.
 fn new_branding(_: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
         Call {
             params: Vec::new(),
-            body: Some(serde_json::json!({ "primary": "#500E0E", "ui_font": "Roboto" })),
+            body: Some(serde_json::json!({
+                "primary": "#500E0E",
+                "ui_font": "Roboto",
+                "default_appearance": "dark",
+            })),
             at: At::Org,
         }
     })

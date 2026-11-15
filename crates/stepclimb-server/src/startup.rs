@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! `stepclimb serve` (connect, migrate, sync the built-in roles and the `unlimited` plan, give
-//! every organization a plan and its local provider row, write the providers of
-//! `stepclimb.toml`, start the sign-in flow cleanup, listen) and `stepclimb migrate` (connect, migrate, exit).
+//! every organization a plan and its local provider row, re-render saved branding an older
+//! generator version wrote, write the providers of `stepclimb.toml`, start the sign-in flow
+//! cleanup, listen) and `stepclimb migrate` (connect, migrate, exit). The branding pass runs in
+//! [`prepare`], before the providers: the two touch different rows, and a re-render is correct
+//! for this release whether or not a bad `[[providers]]` entry then stops it (an older release
+//! started afterwards re-renders the newer record in memory for each read).
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -13,12 +17,14 @@ use sqlx::{PgPool, migrate::Migrator, postgres::PgPoolOptions};
 use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{
     OrgScope,
+    branding::{self, Fallback, Rerendered},
     clock::Clock,
     db::MIGRATOR,
     id::Uuid,
     local_sign_in, org_plans, organizations,
     plans::{self, UnknownKeys},
     roles,
+    theme::{ContrastReport, RenderError},
 };
 use tokio::net::TcpListener;
 
@@ -54,6 +60,11 @@ pub enum StartupError {
     LocalProvider {
         org_id: Uuid,
         source: local_sign_in::Error,
+    },
+    #[error("could not re-render the branding of organization {org_id}: {source}")]
+    Branding {
+        org_id: Uuid,
+        source: branding::Error,
     },
     #[error("could not listen on {addr}: {source}")]
     Bind {
@@ -108,7 +119,8 @@ pub async fn run_migrations(migrator: &Migrator, pool: &PgPool) -> Result<(), St
 /// built-in role rows (spec 09 B6) and the `unlimited` plan (spec 10 B4) from code, log the plan
 /// keys this binary does not know (spec 10 B7), give every organization without a plan the
 /// `unlimited` one (spec 10 B5), and give every organization without one its local provider row
-/// (spec 04 B1). `now` stamps the rows it writes.
+/// (spec 04 B1), and re-render every saved branding another generator version wrote (spec 12
+/// B28). `now` stamps the rows it writes.
 pub async fn prepare(pool: &PgPool, clock: &Clock) -> Result<(), StartupError> {
     migrate(pool).await?;
     tracing::info!("database migrations are up to date");
@@ -126,7 +138,105 @@ pub async fn prepare(pool: &PgPool, clock: &Clock) -> Result<(), StartupError> {
         .map_err(StartupError::SyncPlans)?;
     warn_about_unknown_plan_keys(&unknown);
     ensure_org_plans(pool, now).await?;
-    ensure_local_rows(pool, now).await
+    ensure_local_rows(pool, now).await?;
+    refresh_branding(pool).await
+}
+
+/// Re-render and store every saved branding an older generator version wrote (spec 12, B28), so
+/// each stylesheet declares every token this release's bundle uses and no request renders one.
+/// Inputs that fail this generator get the default brand's stylesheet. Every organization whose
+/// record holds that fallback, made now or by an earlier start, is logged at warn on each start
+/// with the failing pairs, until branding is saved again. A stored record this release cannot
+/// read is logged and left: its organization's branding reads answer 500 as before. A database
+/// error stops startup.
+async fn refresh_branding(pool: &PgPool) -> Result<(), StartupError> {
+    let ids = organizations::ids(pool)
+        .await
+        .map_err(StartupError::ListOrganizations)?;
+    let mut rerendered = 0_usize;
+    for org_id in ids {
+        let scope = startup_scope(org_id);
+        let failed = match branding::refresh(pool, scope).await {
+            Ok(Some(Rerendered::Passed(_))) => {
+                rerendered += 1;
+                None
+            }
+            Ok(Some(Rerendered::FellBack { error, .. })) => {
+                rerendered += 1;
+                Some(failed_pairs(&error))
+            }
+            Ok(None) => branding::get(pool, scope)
+                .await
+                .map(|saved| {
+                    saved
+                        .and_then(|saved| saved.fallback)
+                        .map(|f| stored_pairs(&f))
+                })
+                .map_err(|source| StartupError::Branding { org_id, source })?,
+            Err(error @ branding::Error::StoredBranding(_)) => {
+                tracing::error!(%org_id, %error, "saved branding left as stored");
+                None
+            }
+            Err(source) => return Err(StartupError::Branding { org_id, source }),
+        };
+        if let Some(failed) = failed {
+            warn_about_branding_fallback(org_id, &failed);
+        }
+    }
+    if rerendered > 0 {
+        tracing::info!(
+            organizations = rerendered,
+            "re-rendered saved branding with this release's theme generator"
+        );
+    }
+    Ok(())
+}
+
+/// The warning for an organization whose saved branding fails this generator, naming it and
+/// each failing pair.
+fn warn_about_branding_fallback(org_id: Uuid, failed: &[String]) {
+    tracing::warn!(
+        %org_id,
+        ?failed,
+        "saved branding fails this release's theme generator; its pages use the default theme \
+         until branding is saved again"
+    );
+}
+
+/// Each failing pair of a contrast refusal as `Light fg-soft on bg-canvas 4.40 < 4.5`; any other
+/// refusal as its message.
+fn failed_pairs(error: &RenderError) -> Vec<String> {
+    match error {
+        RenderError::Contrast(reports) => failing(reports),
+        other => vec![other.to_string()],
+    }
+}
+
+/// [`failed_pairs`] for a stored fallback, whose report is empty when the generator refused the
+/// inputs.
+fn stored_pairs(fallback: &Fallback) -> Vec<String> {
+    if fallback.report.is_empty() {
+        vec![REFUSED.to_owned()]
+    } else {
+        failing(&fallback.report)
+    }
+}
+
+/// [`stored_pairs`] for a fallback without a report.
+const REFUSED: &str = "the theme generator refused the saved inputs";
+
+fn failing(reports: &[ContrastReport]) -> Vec<String> {
+    reports
+        .iter()
+        .flat_map(|report| {
+            report.pairs.iter().filter(|pair| !pair.pass).map(|pair| {
+                format!(
+                    "{:?} {} on {} {:.2} < {}",
+                    report.appearance, pair.foreground, pair.background, pair.ratio, pair.minimum
+                )
+            })
+        })
+        .collect()
 }
 
 /// Give every organization without a local provider row its row (spec 04 B1): one created before
@@ -489,5 +599,48 @@ mod tests {
     fn a_ring_without_the_development_key_logs_nothing() {
         let output = warnings_for("prod:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=");
         assert_eq!(output, "");
+    }
+
+    #[test]
+    fn a_branding_fallback_is_warned_about_naming_the_organization_and_each_failing_pair() {
+        let rendered =
+            stepclimb_core::theme::render(&stepclimb_core::theme::Brand::stepclimb_default())
+                .unwrap();
+        let mut reports = rendered.reports().to_vec();
+        let (fg, bg) = {
+            let pair = &mut reports[1].pairs[9];
+            pair.pass = false;
+            pair.ratio = 4.123;
+            (pair.foreground.clone(), pair.background.clone())
+        };
+        let org_id = Uuid::nil();
+        let error = RenderError::Contrast(reports);
+        assert_eq!(
+            failed_pairs(&error),
+            [format!("Dark {fg} on {bg} 4.12 < 4.5")]
+        );
+        let output = captured(|| warn_about_branding_fallback(org_id, &failed_pairs(&error)));
+        assert!(output.contains("WARN"), "{output}");
+        assert!(output.contains(&org_id.to_string()), "{output}");
+        assert!(
+            output.contains(&format!("Dark {fg} on {bg} 4.12 < 4.5")),
+            "{output}"
+        );
+        assert_eq!(output.lines().count(), 1, "{output}");
+        let no_step = RenderError::NoStep("brand");
+        assert_eq!(
+            failed_pairs(&no_step),
+            ["generator invariant: no scale step fits brand"]
+        );
+        let RenderError::Contrast(reports) = error else {
+            unreachable!()
+        };
+        let stored = Fallback { report: reports };
+        assert_eq!(
+            stored_pairs(&stored),
+            [format!("Dark {fg} on {bg} 4.12 < 4.5")]
+        );
+        let refused = Fallback { report: Vec::new() };
+        assert_eq!(stored_pairs(&refused), [REFUSED]);
     }
 }

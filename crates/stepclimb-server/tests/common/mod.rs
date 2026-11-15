@@ -7,7 +7,7 @@
 //! `date-time` as the API writes it, `int32`, `int64`, `double`), `minimum`, `properties` with `required`,
 //! `additionalProperties` (a schema every undeclared member conforms to), `propertyNames`,
 //! `items` and `oneOf` (exactly one of the schemas conforms; utoipa writes no other constraint
-//! beside it), plus the annotations `description`, `title` and `example`, which constrain nothing.
+//! beside it, and one beside it is reported as unread), plus the annotations `description`, `title` and `example`, which constrain nothing.
 //! Any other keyword, another `format`, or a `minimum` that is not a number is reported as an
 //! error rather than skipped, so a schema the checker cannot read never passes by default. A
 //! member the schema does not declare is an error too, so an answer cannot carry more than the
@@ -68,6 +68,15 @@ fn conforms(document: &Value, schema: &Value, value: &Value, at: &str, errors: &
         return conforms(document, resolve(document, reference), value, at, errors);
     }
     if let Some(choices) = schema.get("oneOf") {
+        if let Some(sibling) = schema
+            .keys()
+            .find(|k| *k != "oneOf" && CHECKED.contains(&k.as_str()))
+        {
+            errors.push(format!(
+                "{at}: the checker does not read the keyword {sibling:?} beside oneOf"
+            ));
+            return;
+        }
         return one_of_conforms(document, choices, value, at, errors);
     }
     if !type_conforms(schema, value, at, errors) {

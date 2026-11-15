@@ -6,10 +6,16 @@
 //! organization scope; changing it also needs the plan's `custom_branding` feature (spec 10 Q1).
 //! A change is checked, generated with `stepclimb_core::theme`, refused with 422
 //! `branding.contrast_failed` when any theme has a failing contrast pair, and stored with its
-//! stylesheet. `/theme.css` is public, as the sign-in screen needs it: it serves the request
-//! organization's stored stylesheet, or the default brand's when it has saved none or the
-//! instance has no organization yet. The page the server serves links it as
+//! stylesheet. The inputs also carry the organization's default appearance, the theme its users'
+//! pages take until they choose one (B27). `/theme.css` is public, as the sign-in screen needs it:
+//! it serves the request organization's stored stylesheet, or the default brand's when it has
+//! saved none or the instance has no organization yet. The page the server serves links it as
 //! `/theme.css?v=<hash>` (`spa`), which is cached for a year (docs/specs/m0/11-app-shell.md Q4).
+//!
+//! What is read is the branding `branding::effective` gives: a record another generator version
+//! wrote is re-rendered from its inputs, or replaced by the default brand's stylesheet when they
+//! fail this generator (B28), so no page gets a stylesheet missing a token this release uses.
+//! `startup` stores the re-rendered records before the server listens.
 
 use std::sync::LazyLock;
 
@@ -22,6 +28,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use stepclimb_core::{
     OrgScope,
+    appearance::Theme,
     branding::{self, Branding as Saved},
     feature::CustomBranding,
     perm::BrandingManage,
@@ -34,6 +41,7 @@ use utoipa::{
 
 use crate::{
     AppState,
+    appearance::ThemeChoice,
     audit::ClientAddress,
     error::{ApiError, FieldError, PROBLEM_JSON, Problem},
     extract::{ApiJson, ApiQuery},
@@ -124,6 +132,11 @@ pub struct BrandingInputs {
     #[serde(default)]
     #[schema(value_type = Option<CornerStyle>)]
     pub corner_style: Option<String>,
+    /// The theme a user's pages take until the user chooses one. Defaults to `system`, which
+    /// follows the operating system's color and contrast settings.
+    #[serde(default)]
+    #[schema(value_type = Option<ThemeChoice>)]
+    pub default_appearance: Option<String>,
 }
 
 /// The saved inputs, every choice made.
@@ -140,6 +153,26 @@ pub struct SavedInputs {
     ui_font: UiFont,
     reading_font: ReadingFont,
     corner_style: CornerStyle,
+    default_appearance: ThemeChoice,
+}
+
+/// The saved inputs as the routes answer them.
+#[derive(Serialize)]
+pub struct Inputs {
+    #[serde(flatten)]
+    pub brand: Brand,
+    pub default_appearance: Theme,
+}
+
+/// Why `/theme.css` serves the default brand's stylesheet for saved branding: a release with
+/// another theme generator re-rendered the saved inputs, and they fail its contrast report or its
+/// input checks. Saving branding again replaces it.
+#[derive(Serialize, ToSchema)]
+pub struct BrandingFallback {
+    /// The reports of the saved inputs' themes under this generator, failing pairs first; empty
+    /// when the generator refused the inputs or could not build their themes.
+    #[schema(value_type = Vec<ContrastReport>)]
+    pub report: Vec<CoreReport>,
 }
 
 /// An appearance every brand has.
@@ -201,7 +234,7 @@ pub struct ContrastReport {
 #[derive(Serialize, ToSchema)]
 pub struct Branding {
     #[schema(value_type = SavedInputs)]
-    pub inputs: Brand,
+    pub inputs: Inputs,
     /// The version of the theme generator that wrote the stylesheet.
     #[schema(value_type = i32)]
     pub generator: u32,
@@ -209,15 +242,30 @@ pub struct Branding {
     pub css_hash: String,
     #[schema(value_type = Vec<ContrastReport>)]
     pub report: Vec<CoreReport>,
+    /// `null`, or why the stylesheet and `report` are the default brand's although `inputs` are
+    /// saved.
+    #[schema(required = true)]
+    pub fallback: Option<BrandingFallback>,
 }
 
 impl Branding {
     fn new(saved: &Saved) -> Self {
         Self {
-            inputs: saved.brand.clone(),
+            inputs: Inputs {
+                brand: saved.brand.clone(),
+                default_appearance: saved.default_appearance,
+            },
             generator: saved.generator,
             css_hash: saved.css_hash.clone(),
             report: saved.report.clone(),
+            fallback: saved.fallback.as_ref().map(|fallback| BrandingFallback {
+                report: fallback
+                    .report
+                    .iter()
+                    .cloned()
+                    .map(CoreReport::failing_first)
+                    .collect(),
+            }),
         }
     }
 }
@@ -299,16 +347,31 @@ static DEFAULT: LazyLock<Saved> = LazyLock::new(|| {
     // this module's test check it.
     let rendered = theme::render(&Brand::stepclimb_default())
         .expect("the default brand renders and passes its contrast report");
-    Saved::from_rendered(&rendered)
+    Saved::from_rendered(&rendered, Theme::System)
 });
 
-/// The saved branding of `scope`, as stored with its reports, or the default's. Nothing is
-/// generated: what this answers always describes the stylesheet `/theme.css` serves.
+/// The saved branding of `scope` as `branding::effective` gives it, or the default's. Nothing
+/// is generated for a record this generator wrote: what this answers always describes the
+/// stylesheet `/theme.css` serves.
 async fn current(state: &AppState, scope: OrgScope) -> Result<Saved, ApiError> {
     let saved = branding::get(&state.db, scope)
         .await
         .map_err(branding_error)?;
-    Ok(saved.unwrap_or_else(|| DEFAULT.clone()))
+    Ok(saved.map_or_else(|| DEFAULT.clone(), branding::effective))
+}
+
+/// The theme `scope`'s users' pages take until they choose one: its saved default appearance, or
+/// `system` when it has saved no branding. A record that cannot be read is logged and answers
+/// `system`, as the page the server writes does (`spa`): a display preference never fails the
+/// request that carries it.
+pub async fn default_appearance(state: &AppState, scope: OrgScope) -> Theme {
+    match branding::get(&state.db, scope).await {
+        Ok(saved) => saved.map_or(Theme::System, |saved| saved.default_appearance),
+        Err(error) => {
+            tracing::error!(org_id = %scope.org_id(), %error, "the organization's default appearance");
+            Theme::System
+        }
+    }
 }
 
 /// Read the organization's branding.
@@ -371,21 +434,39 @@ pub async fn update_branding(
         corner_style: body.corner_style,
     })
     .map_err(invalid_input)?;
+    let default_appearance = parse_default_appearance(body.default_appearance.as_deref())?;
     let rendered = theme::render(&brand).map_err(render_error)?;
     let scope = require.principal().scope();
     let actor = client.actor(require.principal());
-    let saved = branding::save(&state.db, scope, &rendered, state.clock.now(), actor)
+    let now = state.clock.now();
+    let saved = branding::save(&state.db, scope, &rendered, default_appearance, now, actor)
         .await
         .map_err(branding_error)?;
     Ok(Json(Branding::new(&saved)))
 }
 
-/// The stylesheet a page of the request's organization uses and its SHA-256: the saved
-/// branding's, or the default brand's when it has saved none (B25) or the instance has no
-/// organization yet (`org.none`), whose pages still draw the setup error in a theme.
+/// `default_appearance` checked after the generator's inputs, as a 422 naming it; absent is
+/// `system`.
+fn parse_default_appearance(value: Option<&str>) -> Result<Theme, BrandingError> {
+    let Some(value) = value else {
+        return Ok(Theme::System);
+    };
+    Theme::parse(value).ok_or_else(|| {
+        invalid_input(theme::InputError {
+            field: "default_appearance",
+            rule: InputRule::NotAChoice,
+        })
+    })
+}
+
+/// The stylesheet a page of the request's organization uses, its SHA-256 and the theme its
+/// users' pages take until they choose one: the saved branding's, or the default brand's when it
+/// has saved none (B25) or the instance has no organization yet (`org.none`), whose pages still
+/// draw the setup error in a theme.
 pub struct Served {
     pub css: String,
     pub css_hash: String,
+    pub default_appearance: Theme,
 }
 
 /// The request organization's [`Served`] stylesheet. `org` is the [`RequestOrg`] extraction,
@@ -401,11 +482,12 @@ pub async fn served(
         Err(error) if error.code() == request_org::code::ORG_NONE => None,
         Err(error) => return Err(error),
     };
-    let (css, css_hash) = match saved {
-        Some(saved) => (saved.css, saved.css_hash),
-        None => (DEFAULT.css.clone(), DEFAULT.css_hash.clone()),
-    };
-    Ok(Served { css, css_hash })
+    let saved = saved.map_or_else(|| DEFAULT.clone(), branding::effective);
+    Ok(Served {
+        css: saved.css,
+        css_hash: saved.css_hash,
+        default_appearance: saved.default_appearance,
+    })
 }
 
 /// The query of `/theme.css`.
