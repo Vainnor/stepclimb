@@ -15,6 +15,9 @@
 //! | `org` | the slug of the organization the provider belongs to; required on an instance with more than one | the instance's one organization |
 //! | `client_secret`, `client_secret_file` | exactly one: the secret, or a file whose trimmed contents are the secret, relative to the directory holding `stepclimb.toml` | refused |
 //!
+//! An entry may not set `admission_rules`: a provider's admission rules are managed through the
+//! admin API only, and startup keeps the ones its row has (spec 07).
+//!
 //! The secret is never written to the database: [`ConfigProvider::stored`] builds a config with
 //! `source: "config"` and no secret, and the server keeps the secret in memory. No error repeats
 //! a value or a `_file` path, and the secret leaves this module only as a [`ClientSecret`].
@@ -48,6 +51,11 @@ const OWN_MEMBERS: [&str; 7] = [
     "client_secret",
     "client_secret_file",
 ];
+
+/// The provider's admission rules (`docs/specs/m0/07-admission.md`), kept in its row's config.
+/// A file entry may not declare them, whatever the kind's validation accepts, and startup keeps
+/// the rules a row already has.
+const ADMISSION_RULES: &str = "admission_rules";
 
 /// The client secret's stand-in when the kind's validation runs: the real secret was checked
 /// already and never enters the config JSON.
@@ -213,6 +221,12 @@ fn parse_entry(
     let enabled = flag(table.get("enabled"), "enabled", true, &mut problems);
     let org = org(table.get("org"), &mut problems);
     let secret = secret(table, file, &mut problems);
+    if table.contains_key(ADMISSION_RULES) {
+        problems.push(
+            "`admission_rules` cannot be declared in stepclimb.toml; set them through the admin API"
+                .to_owned(),
+        );
+    }
     let config = kind_config(table, &mut problems);
     if !problems.is_empty() {
         return Err(fail(problems));

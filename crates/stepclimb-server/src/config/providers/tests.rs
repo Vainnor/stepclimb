@@ -364,6 +364,16 @@ fn a_member_neither_kind_has_is_refused() {
 }
 
 #[test]
+fn admission_rules_cannot_be_declared_in_the_file() {
+    let text = format!("{CANONICAL}\n[providers.admission_rules]\nrules = []\n");
+    let message = refused(&text);
+    assert!(
+        message.contains("`admission_rules` cannot be declared in stepclimb.toml"),
+        "{message}"
+    );
+}
+
+#[test]
 fn http_urls_need_the_insecure_switch() {
     let text = canonical_with("token", "token = \"http://127.0.0.1:9/oauth/token\"");
     let message = refused(&text);
