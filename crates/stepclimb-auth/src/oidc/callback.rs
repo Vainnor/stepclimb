@@ -14,7 +14,8 @@ use super::id_token::{
 use super::jwks::{JwksCache, JwksError};
 use super::userinfo::{UserinfoError, fetch_userinfo, merge_claims};
 use super::{FlowSecrets, ProviderMetadata};
-use crate::oidc_config::{ClientSecret, OidcSettings};
+use crate::claims::{self, MappedSignIn};
+use crate::oidc_config::{ClaimsMapping, ClientSecret, OidcSettings};
 use crate::outbound::OutboundClient;
 
 /// What redeeming one callback's code needs.
@@ -53,13 +54,51 @@ pub struct ProviderSignIn {
     pub subject: String,
     /// The ID token's claims, with userinfo's laid over them when userinfo was called (B11).
     pub claims: Map<String, Value>,
+    /// The ID token's claims alone, before userinfo's were laid over them.
+    pub id_token_claims: Map<String, Value>,
+    /// The userinfo claims, when userinfo was called.
+    pub userinfo_claims: Option<Map<String, Value>>,
 }
 
 impl std::fmt::Debug for ProviderSignIn {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ProviderSignIn")
             .field("claims", &self.claims.keys().collect::<Vec<_>>())
+            .field("userinfo", &self.userinfo_claims.is_some())
             .finish_non_exhaustive()
+    }
+}
+
+impl ProviderSignIn {
+    /// The subject and the profile `mapping` reads from the merged claims (B12, B13), with the
+    /// email kept only when the provider vouched for it:
+    ///
+    /// 1. the merged claims' `email_verified` is exactly `true`, and
+    /// 2. each claims set the server read (the ID token's, and userinfo's when it was called)
+    ///    that gives the same email under the mapping says `email_verified` is exactly `true`
+    ///    there too.
+    ///
+    /// Rule 2 keeps one source from vouching for another's address: an ID token saying its
+    /// email is verified does not make a different, or an unconfirmed, userinfo email look
+    /// verified, and a source that calls the address unverified is never overruled by one that
+    /// does not.
+    #[must_use]
+    pub fn map(self, mapping: &ClaimsMapping) -> MappedSignIn {
+        let pointers = mapping.profile();
+        let mut profile = claims::profile(&Value::Object(self.claims), &pointers);
+        let sources = std::iter::once(self.id_token_claims).chain(self.userinfo_claims);
+        let vouched = profile.email_verified == Some(true)
+            && sources
+                .map(|source| claims::profile(&Value::Object(source), &pointers))
+                .filter(|own| own.email == profile.email)
+                .all(|own| own.email_verified == Some(true));
+        if !vouched {
+            profile.email = None;
+        }
+        MappedSignIn {
+            subject: self.subject,
+            profile,
+        }
     }
 }
 
@@ -97,22 +136,27 @@ pub async fn redeem_code(callback: &CodeCallback<'_>) -> Result<ProviderSignIn, 
         .metadata
         .userinfo_endpoint()
         .filter(|_| callback.settings.userinfo);
-    let claims = match userinfo {
-        Some(endpoint) => {
-            let userinfo = fetch_userinfo(
+    let userinfo_claims = match userinfo {
+        Some(endpoint) => Some(
+            fetch_userinfo(
                 callback.client,
                 endpoint.url(),
                 tokens.access_token(),
                 &verified.subject,
             )
-            .await?;
-            merge_claims(verified.claims, userinfo)
-        }
-        None => verified.claims,
+            .await?,
+        ),
+        None => None,
+    };
+    let claims = match &userinfo_claims {
+        Some(userinfo) => merge_claims(verified.claims.clone(), userinfo.clone()),
+        None => verified.claims.clone(),
     };
     Ok(ProviderSignIn {
         subject: verified.subject,
         claims,
+        id_token_claims: verified.claims,
+        userinfo_claims,
     })
 }
 
