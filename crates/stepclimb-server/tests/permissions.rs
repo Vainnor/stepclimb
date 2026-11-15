@@ -93,6 +93,7 @@ use stepclimb_server::{
     web_origin::WebOrigin,
 };
 use tower::ServiceExt;
+use webauthn_authenticator_rs::WebauthnAuthenticator;
 
 /// The client address every test request comes from (TEST-NET-1); audit entries record it.
 const CLIENT: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)), 50_000);
@@ -107,6 +108,7 @@ const PUBLIC: &[&str] = &[
     "signOut",
     "getThemeCss",
     "startEnrollment",
+    "enrollPasskey",
 ];
 
 /// One entry per operation that needs a principal (B20). The M0 specs' routes add theirs here
@@ -837,20 +839,30 @@ async fn public_operations_answer_without_a_credential(pool: PgPool) {
             .iter()
             .find(|op| op.id == *id)
             .expect("listed operations exist");
-        let body = public_body(&world, &org, id).await;
-        let answer = send(&app, &op.method, &op.path, org.id, None, body.as_ref()).await;
+        let (body, cookie) = public_request(&world, &org, id).await;
+        let answer = send(
+            &app,
+            &op.method,
+            &op.path,
+            org.id,
+            cookie.as_deref(),
+            body.as_ref(),
+        )
+        .await;
         assert!(answer.status.is_success(), "{id}: {answer:?}");
     }
 }
 
-/// The body a public operation needs to succeed: the enrollment start route takes a live
-/// enrollment link of the organization's user; the others take none.
-async fn public_body(world: &World, org: &Org, id: &str) -> Option<Value> {
-    if id != "startEnrollment" {
-        return None;
+/// The body and cookie a public operation needs to succeed: the enrollment start route takes a
+/// live enrollment link of the organization's user, and the passkey route that link, a started
+/// registration's flow cookie and a software passkey's answer to its options; the others take
+/// none.
+async fn public_request(world: &World, org: &Org, id: &str) -> (Option<Value>, Option<String>) {
+    if id != "startEnrollment" && id != "enrollPasskey" {
+        return (None, None);
     }
     let (_, user) = org
-        .named_user("Pat Example".into(), Some("pat@example.test".into()))
+        .named_user("Pat Example".into(), Some(format!("{id}@example.test")))
         .await;
     let link = stepclimb_server::enrollment::create_link(
         &world.pool,
@@ -864,7 +876,39 @@ async fn public_body(world: &World, org: &Org, id: &str) -> Option<Value> {
     .await
     .expect("create an enrollment link");
     let (_, token) = link.expose_url().split_once("#token=").expect("a token");
-    Some(serde_json::json!({ "token": token }))
+    if id == "startEnrollment" {
+        return (Some(serde_json::json!({ "token": token })), None);
+    }
+    let mut conn = world.pool.acquire().await.expect("a connection");
+    let hash = stepclimb_auth::token::TokenHash::of(token);
+    let enrollment = stepclimb_core::local_tokens::check_enrollment(
+        &mut conn,
+        scope(org.id),
+        hash.as_bytes(),
+        now(),
+    )
+    .await
+    .expect("a live link");
+    let begun = stepclimb_server::passkey_enrollment::begin(
+        &world.state(),
+        &mut conn,
+        scope(org.id),
+        &enrollment,
+        now(),
+    )
+    .await
+    .expect("start a registration");
+    let options: webauthn_rs::prelude::CreationChallengeResponse =
+        serde_json::from_value(serde_json::to_value(&begun.options).expect("JSON"))
+            .expect("creation options");
+    let origin = webauthn_rs::prelude::Url::parse("https://lms.example.org").expect("a URL");
+    let credential = webauthn_authenticator_rs::softpasskey::SoftPasskey::new(true)
+        .do_registration(origin, options)
+        .expect("the soft passkey registers");
+    let cookie = begun.set_cookie.to_str().expect("ASCII");
+    let cookie = cookie.split(';').next().expect("a pair").to_owned();
+    let body = serde_json::json!({ "token": token, "credential": credential });
+    (Some(body), Some(cookie))
 }
 
 // The suite over the real router.

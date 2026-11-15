@@ -32,3 +32,4 @@ Decided list (`docs/plan/technical.md` -> Decided, and `docs/plan/ui.md` -> UI d
 | [0023](0023-container-healthcheck-subcommand.md) | Container health checks through `stepclimb healthcheck` | Accepted |
 | [0024](0024-toast-on-unstable-react-aria-exports.md) | Toast on React Aria's unstable toast exports | Accepted |
 | [0025](0025-outbound-http-client.md) | Outbound HTTP: reqwest with rustls, ring and the system trust store | Accepted |
+| [0026](0026-webauthn-rs-for-passkeys.md) | webauthn-rs 0.6 for passkeys | Accepted |

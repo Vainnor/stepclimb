@@ -287,6 +287,7 @@ also writes to:
   | `identity.unlink` | `identity` | `identities::unlink` | `before`: the same |
   | `identity_provider.update` | `identity_provider` | `local_sign_in::update` (`04` issue 1) | `before` and `after`: enabled |
   | `enrollment_link.create` | `enrollment_link` | `local_tokens::create_enrollment` (`04` issue 2) | `after`: user, expiry; never the token or its hash |
+| `passkey.create` | `passkey` | `passkeys::create` (`04` issue 3) | `after`: user, name; never the credential |
 
   A request that changes nothing writes nothing, neither the row (its `updated_at` stays) nor an
   entry, and answers the row as it is: a patch naming no member, a patch naming only values the

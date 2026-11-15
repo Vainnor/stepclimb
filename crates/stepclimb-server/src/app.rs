@@ -20,7 +20,7 @@ use crate::{
     csrf::{self, OriginAllowlist},
     enrollment,
     error::ApiError,
-    health, identities, local_sign_in, me, openapi, organization,
+    health, identities, local_sign_in, me, openapi, organization, passkey_enrollment,
     rate_limit::RateLimiter,
     role_assignments, roles, spa, users,
     web_origin::WebOrigin,
@@ -98,6 +98,10 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         (
             enrollment::ENROLLMENT_START_PATH,
             post(enrollment::start_enrollment),
+        ),
+        (
+            passkey_enrollment::ENROLLMENT_PASSKEY_PATH,
+            post(passkey_enrollment::enroll_passkey),
         ),
         (branding::THEME_CSS_PATH, get(branding::theme_css)),
         (me::ME_PATH, get(me::get_me)),

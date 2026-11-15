@@ -8,7 +8,8 @@
 //! settings and its entitlements, the account tree, the permission catalog, roles and role
 //! assignment routes under `/api/v1/admin`, the user admin routes, users' identities and the
 //! signed-in user's, the organization's branding and its stylesheet (`/theme.css`), the local
-//! sign-in switches, enrollment links and the enrollment start route, and the shared error
+//! sign-in switches, enrollment links, the enrollment start route and passkey registration
+//! through a link, and the shared error
 //! schemas and responses below. The other M0 specs add their endpoints under `/api/v1`.
 //!
 //! Every `/api/v1` operation lists its errors in `#[utoipa::path]` (spec 02 B6). The errors
@@ -27,7 +28,8 @@ use utoipa::{
 use crate::{
     accounts, appearance, auth, branding, enrollment,
     error::{FieldError, PROBLEM_JSON, Problem},
-    health, identities, local_sign_in, me, organization, role_assignments, roles, users,
+    health, identities, local_sign_in, me, organization, passkey_enrollment, passkey_options,
+    role_assignments, roles, users,
 };
 
 /// The operation extension that marks a handler as changing state (spec 08 B12, T17). Every
@@ -49,6 +51,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         health::readyz,
         auth::sign_out,
         enrollment::start_enrollment,
+        passkey_enrollment::enroll_passkey,
         me::get_me,
         appearance::update_my_appearance,
         organization::get_organization,
@@ -142,7 +145,17 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             enrollment::EnrollmentLink,
             enrollment::EnrollmentStart,
             enrollment::EnrollMethod,
-            enrollment::EnrollmentStarted
+            enrollment::EnrollmentStarted,
+            passkey_options::PasskeyCreationOptions,
+            passkey_options::PublicKeyCreationOptions,
+            passkey_options::RelyingPartyInfo,
+            passkey_options::UserInfo,
+            passkey_options::CredentialParameter,
+            passkey_options::CredentialDescriptor,
+            passkey_options::AuthenticatorSelection,
+            passkey_options::RegistrationExtensions,
+            passkey_enrollment::PasskeyEnrollment,
+            passkey_enrollment::SignedIn
         ),
         responses(
             BadRequest,
@@ -201,7 +214,10 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             local_sign_in::LocalSignInInvalid,
             enrollment::EnrollmentLinkConflict,
             enrollment::EnrollmentStartInvalid,
-            enrollment::EnrollmentStartNotFound
+            enrollment::EnrollmentStartNotFound,
+            passkey_enrollment::EnrollPasskeyInvalid,
+            passkey_enrollment::EnrollPasskeyForbidden,
+            passkey_enrollment::EnrollPasskeyNotFound
         )
     ),
     tags(

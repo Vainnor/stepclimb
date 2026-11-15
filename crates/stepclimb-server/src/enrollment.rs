@@ -27,9 +27,11 @@
 //! one past its expiry 400 `auth.enrollment_expired` (B7). A link an admin made answers
 //! `auth.enrollment_invalid` too once that admin could no longer make it: suspended, deleted,
 //! without `user.manage`, or holding less than the link's user now holds
-//! (`local_tokens::check_enrollment`). It uses nothing up: the passkey and
-//! password routes of issues I3 and I6 mark the link used when they store the credential, and
-//! the passkey options and their sign-in flow arrive with issue I3.
+//! (`local_tokens::check_enrollment`). It uses nothing up: the passkey route
+//! (`passkey_enrollment`) and the password route of issue I6 mark the link used when they store
+//! the credential. When the organization offers passkeys it also answers WebAuthn creation
+//! options and sets the flow cookie of the registration they belong to
+//! (`passkey_enrollment::begin`).
 
 use std::time::SystemTime;
 
@@ -60,6 +62,7 @@ use crate::{
     identities::begin_on_user,
     local_sign_in::require_any_method,
     openapi::problem_responses,
+    passkey_enrollment,
     rate_limit::{RateLimited, SignIn},
     request_org::RequestOrg,
     require::Require,
@@ -254,6 +257,12 @@ pub struct EnrollmentStarted {
     pub email: String,
     /// The methods the organization lets the user set up, passkey first. Never empty.
     pub methods: Vec<EnrollMethod>,
+    /// When `methods` lists `passkey`: the creation options for the passkey, bound to the
+    /// sign-in flow whose cookie this answer sets. Finish with `POST
+    /// /auth/local/enrollment/passkey` in this browser within 10 minutes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub passkey_options: Option<crate::passkey_options::PasskeyCreationOptions>,
 }
 
 /// Open an enrollment link: say whose it is and what it can set up, without using it.
@@ -268,7 +277,10 @@ pub struct EnrollmentStarted {
             status = 200,
             description = "The link is live",
             body = EnrollmentStarted,
-            headers(("Cache-Control" = String, description = "`no-store`: the answer holds the user's email"))
+            headers(
+                ("Cache-Control" = String, description = "`no-store`: the answer holds the user's email"),
+                ("Set-Cookie" = String, description = "With `passkey_options`: the `__Host-sc_flow` cookie of the passkey registration")
+            )
         ),
         (status = 400, response = EnrollmentStartInvalid),
         (status = 403, response = crate::openapi::CsrfRefused),
@@ -297,13 +309,25 @@ pub async fn start_enrollment(
     let now = state.clock.now();
     let enrollment = repo::check_enrollment(&mut conn, scope, hash.as_bytes(), now)
         .await
-        .map_err(start_error)?;
+        .map_err(enrollment_error)?;
+    let passkey = if methods.contains(&EnrollMethod::Passkey) {
+        Some(passkey_enrollment::begin(&state, &mut conn, scope, &enrollment, now).await?)
+    } else {
+        None
+    };
+    let (passkey_options, flow_cookie) = passkey.map(|b| (b.options, b.set_cookie)).unzip();
     let started = EnrollmentStarted {
         email: enrollment.email,
         methods,
+        passkey_options,
     };
-    let no_store = [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))];
-    Ok((no_store, Json(started)).into_response())
+    let mut response = Json(started).into_response();
+    let headers = response.headers_mut();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    if let Some(cookie) = flow_cookie {
+        headers.append(header::SET_COOKIE, cookie);
+    }
+    Ok(response)
 }
 
 /// The methods of [`ENROLLABLE`] the organization offers, or 404 `auth.method_disabled` when it
@@ -323,13 +347,19 @@ async fn enrollable_methods(
         .collect())
 }
 
-fn start_error(error: repo::Error) -> ApiError {
+/// 400 `auth.enrollment_invalid`.
+pub(crate) fn invalid_link() -> ApiError {
+    ApiError::new(
+        StatusCode::BAD_REQUEST,
+        code::AUTH_ENROLLMENT_INVALID,
+        "This enrollment link is not valid. It may have been used or replaced; ask an admin for a new one.",
+    )
+}
+
+/// The answer for a link `check_enrollment` or `consume_enrollment` refused.
+pub(crate) fn enrollment_error(error: repo::Error) -> ApiError {
     match error {
-        repo::Error::Invalid => ApiError::new(
-            StatusCode::BAD_REQUEST,
-            code::AUTH_ENROLLMENT_INVALID,
-            "This enrollment link is not valid. It may have been used or replaced; ask an admin for a new one.",
-        ),
+        repo::Error::Invalid => invalid_link(),
         repo::Error::Expired => ApiError::new(
             StatusCode::BAD_REQUEST,
             code::AUTH_ENROLLMENT_EXPIRED,
@@ -358,12 +388,12 @@ mod tests {
 
     #[test]
     fn repository_refusals_map_to_their_codes() {
-        let invalid = start_error(repo::Error::Invalid).problem();
+        let invalid = enrollment_error(repo::Error::Invalid).problem();
         assert_eq!(
             (invalid.status, invalid.code.as_str()),
             (400, "auth.enrollment_invalid")
         );
-        let expired = start_error(repo::Error::Expired).problem();
+        let expired = enrollment_error(repo::Error::Expired).problem();
         assert_eq!(
             (expired.status, expired.code.as_str()),
             (400, "auth.enrollment_expired")
