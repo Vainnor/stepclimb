@@ -37,3 +37,4 @@ Decided list (`docs/plan/technical.md` -> Decided, and `docs/plan/ui.md` -> UI d
 | [0028](0028-oidc-discovery-and-authorization.md) | OIDC discovery and the authorization request on openidconnect's types | Accepted |
 | [0029](0029-id-token-checks.md) | ID token checks on plain JSON claims, signatures by openidconnect's keys | Accepted |
 | [0030](0030-release-merge-commits.md) | Release PRs into main use a merge commit | Accepted |
+| [0031](0031-release-image-signing-and-sbom.md) | The release image: one archive pushed by digest, signed keyless, an SPDX SBOM from syft | Proposed |

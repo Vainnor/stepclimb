@@ -22,11 +22,22 @@ release-version version:
 release-prepare version:
     python3 -X utf8 -B bin/release.py prepare "{{ version }}" "{{ just_executable() }}"
 
-# Run in a clean worktree of the annotated tag on main. Checks the tag against the workspace
-# version and main's first-parent history, regenerates the notes with git-cliff and compares them
-# with CHANGELOG.md, runs `just ci` on the tag, then prints `gh release create`.
-# Check and gate a tagged release (vX.Y.Z), then print the publish command
+# Run in a clean worktree of the annotated tag on main, on an amd64 machine. Checks the tag against
+# the workspace version and main's first-parent history, regenerates the notes with git-cliff and
+# compares them with CHANGELOG.md, runs `just ci` on the tag, then builds the linux/amd64 and
+# linux/arm64 image into an OCI archive with an SPDX SBOM per platform (bin/release_artifacts.py,
+# docs/adr/0031). Publishes nothing; prints the release-publish commands.
+# Check, gate and build a tagged release (vX.Y.Z) locally
 release tag:
     python3 -X utf8 -B bin/release.py verify "{{ tag }}"
     "{{ just_executable() }}" ci
     python3 -X utf8 -B bin/release.py finish "{{ tag }}"
+    python3 -X utf8 -B bin/release_artifacts.py build "{{ tag }}"
+
+# The only recipe that publishes, run by a person after `just release`: pushes the image to GHCR
+# with skopeo, signs it with cosign keyless, attaches the SBOMs as cosign attestations and creates
+# the GitHub Release. `--dry-run` checks the same and prints the commands instead.
+# Publish a built release (vX.Y.Z): GHCR image, cosign signature, SBOMs, GitHub Release
+[positional-arguments]
+release-publish tag *flags:
+    python3 -X utf8 -B bin/release_artifacts.py publish "$@"

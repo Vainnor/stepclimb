@@ -28,10 +28,14 @@ COPY packages packages
 RUN pnpm --filter @stepclimb/tokens build && pnpm --filter web build
 
 FROM --platform=$BUILDPLATFORM rust:1.98-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS server
-ARG BUILDARCH
-ARG TARGETARCH
 WORKDIR /src
 COPY rust-toolchain.toml ./
+# cargo-auditable records the crates compiled into the binary in a `.dep-v0` section, which the
+# release SBOM reads (docs/adr/0031-release-image-signing-and-sbom.md). It is installed before
+# the target arguments, so one layer serves every target.
+RUN cargo install cargo-auditable --version 0.7.7 --locked --root /usr/local/cargo
+ARG BUILDARCH
+ARG TARGETARCH
 # The Rust target for TARGETARCH, in /target.env. A target other than the build machine's gets
 # rustup's standard library for it and the cross C compiler and linker from Debian bookworm's
 # archive (not pinned beyond the base image's release), named in /target.env; the only C code
@@ -73,7 +77,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target,sharing=locked \
     . /target.env \
     && find Cargo.toml Cargo.lock .sqlx crates migrations web/dist -exec touch {} + \
-    && cargo build --release --locked --target "$target" -p stepclimb-server --bin stepclimb \
+    && cargo auditable build --release --locked --target "$target" -p stepclimb-server --bin stepclimb \
     && cp "target/$target/release/stepclimb" /stepclimb
 
 # The mock identity provider for the end-to-end Compose stack only (deploy/compose/ci.yaml, `just

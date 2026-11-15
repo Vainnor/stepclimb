@@ -9,7 +9,8 @@
 # version of `playwright-driver` here. The Linux libraries are what Tauri 2 links (WebKitGTK 4.1,
 # libsoup 3, GTK 3, librsvg). QEMU's user-mode emulators run the arm64 server image's binary on
 # an amd64 machine whose Docker cannot run arm64 containers (bin/check-image.sh). git-cliff writes
-# the release notes (cliff.toml, bin/release.py).
+# the release notes (cliff.toml, bin/release.py); skopeo pushes the release image and cosign signs
+# it (bin/release_artifacts.py, docs/adr/0031-release-image-signing-and-sbom.md).
 {
   description = "Stepclimb dev shell";
 
@@ -45,6 +46,8 @@
                 sqlx-cli
                 gitleaks
                 git-cliff
+                skopeo
+                cosign
                 python3
                 nodejs_26
                 pnpm
