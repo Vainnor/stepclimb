@@ -264,3 +264,12 @@ async fn an_insert_drops_every_document_older_than_the_ttl() {
         .unwrap();
     assert_eq!(cache.len(), 1, "only the new one is left");
 }
+
+#[test]
+fn the_state_matches_only_itself() {
+    let secrets = secrets("abcdef", "n", "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk");
+    assert!(secrets.state_matches("abcdef"));
+    for other in ["abcdeg", "abcde", "abcdefa", "", "ABCDEF"] {
+        assert!(!secrets.state_matches(other), "{other}");
+    }
+}

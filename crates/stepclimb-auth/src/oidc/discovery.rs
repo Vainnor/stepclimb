@@ -108,7 +108,7 @@ pub fn browser_may_go_to(url: &Url, policy: UrlPolicy) -> bool {
 }
 
 /// `Content-Type: application/json`, parameters such as `charset` allowed.
-fn is_json(headers: &http::HeaderMap) -> bool {
+pub(super) fn is_json(headers: &http::HeaderMap) -> bool {
     headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())

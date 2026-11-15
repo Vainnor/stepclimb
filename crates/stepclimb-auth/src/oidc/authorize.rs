@@ -6,6 +6,7 @@ use openidconnect::{
     ClientId, CsrfToken, Nonce, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope,
 };
 use serde::{Deserialize, Serialize};
+use subtle::ConstantTimeEq;
 use url::Url;
 
 use super::ProviderMetadata;
@@ -63,6 +64,13 @@ impl FlowSecrets {
     #[must_use]
     pub fn state(&self) -> &str {
         &self.state
+    }
+
+    /// Whether `presented`, the callback's `state`, is this flow's (B7), compared in constant
+    /// time so the comparison does not reveal how much of it matched.
+    #[must_use]
+    pub fn state_matches(&self, presented: &str) -> bool {
+        self.state.as_bytes().ct_eq(presented.as_bytes()).into()
     }
 
     /// The `nonce` the ID token must carry.
