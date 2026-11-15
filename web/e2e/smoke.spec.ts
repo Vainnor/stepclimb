@@ -54,9 +54,10 @@ test("the release image ignores the test organization header", async ({ request 
       },
     });
   const plain = await signOut({});
-  // The e2e stack has no organization, so the cookie makes the server resolve one and fail.
-  expect(plain.status()).toBe(503);
-  expect((await plain.json()).code).toBe("org.none");
+  // The cookie makes the server resolve the request's organization: the e2e stack's one
+  // organization (`just e2e` creates it), where the unknown session ends nothing. A header the
+  // release image read would name no organization and answer 404 instead.
+  expect(plain.status()).toBe(204);
   const named = await signOut({ "x-stepclimb-test-org": "01900000-0000-7000-8000-000000000000" });
   expect(named.status()).toBe(plain.status());
   expect(await named.text()).toBe(await plain.text());

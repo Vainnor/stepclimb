@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The theme the server writes into the page (docs/specs/m0/11-app-shell.md B20, B21, Q4, Q6; T13).
-// The e2e stack has no organization, so `/theme.css` is the default brand's; the appearance
-// comes from the `__Host-sc_appearance` cookie, as for any signed-out browser. The menu test
-// answers `/api/v1/me` and the save in the browser, as tests/shell.spec.ts does.
+// The e2e stack's organization has no branding, so `/theme.css` is the default brand's; the
+// appearance comes from the `__Host-sc_appearance` cookie, as for any signed-out browser. The menu
+// test answers `/api/v1/me` and the save in the browser, as tests/shell.spec.ts does.
 import AxeBuilder from "@axe-core/playwright";
 import { type Browser, expect, type Page, test } from "@playwright/test";
 

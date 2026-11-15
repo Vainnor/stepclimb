@@ -22,8 +22,10 @@ services:
 
   stepclimb:
     environment:
-      # The address Playwright opens (just e2e), which the CSRF check accepts as an Origin.
-      STEPCLIMB_PUBLIC_URL: http://127.0.0.1:${SC_CI_PORT:?SC_CI_PORT is set by bin/ci_gate.py}
+      # The address Playwright opens (just e2e), which the CSRF check accepts as an Origin. A host
+      # name, not 127.0.0.1: the WebAuthn relying party ID is the public URL's host, which cannot be
+      # an IP address (spec 04 B8), and browsers treat http://localhost as a secure context.
+      STEPCLIMB_PUBLIC_URL: http://localhost:${SC_CI_PORT:?SC_CI_PORT is set by bin/ci_gate.py}
     labels:
       stepclimb.ci.slot: "${SC_CI_SLOT:?SC_CI_SLOT is set by bin/ci_gate.py}"
     ports: !override

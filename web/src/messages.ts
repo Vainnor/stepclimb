@@ -15,6 +15,27 @@ export const webMessages: Catalog = {
     "appearance.theme.system": "Match my device",
     "document.title": "{view} · {organization}",
     "document.titleSignedOut": "{view} · Stepclimb",
+    "enroll.as": "You will sign in as {email}.",
+    "enroll.noBrowserMethod":
+      "Your organization lets this link set up only a password, which this version of Stepclimb cannot do in the browser yet. Ask an administrator to turn on passkeys, then open the link again.",
+    "enroll.noToken":
+      "Open the whole setup link an administrator gave you, including the part after the # sign.",
+    "enroll.noToken.title": "This page needs your setup link",
+    "enroll.passkey.description":
+      "A passkey lets you sign in with your device's fingerprint, face or screen lock instead of a password.",
+    "enroll.passkey.exists":
+      "This device already has a passkey for this account. Sign in with it, or create one on another device.",
+    "enroll.passkey.submit": "Create a passkey",
+    "enroll.problem.expired": "Setup links last 7 days. Ask an administrator for a new one.",
+    "enroll.problem.expiredTitle": "This setup link has expired",
+    "enroll.problem.invalid":
+      "It was already used, replaced by a newer link, or copied incompletely. Ask an administrator for a new one.",
+    "enroll.problem.invalidTitle": "This setup link does not work",
+    "enroll.problem.methodDisabled":
+      "Your organization has turned off passkey and password sign-in. Ask an administrator how to sign in.",
+    "enroll.problem.passkeyInvalid": "Stepclimb could not register that passkey. Try again.",
+    "enroll.problem.title": "This setup link could not be opened",
+    "enroll.title": "Set up your account",
     "home.empty": "You have no {courses} yet.",
     "home.title": "Home",
     "loadError.documentTitle": "Could not load",
@@ -31,13 +52,42 @@ export const webMessages: Catalog = {
     "problem.orgNone.description":
       "An administrator has to create the organization on the server. Try again once that is done.",
     "problem.orgNone.title": "This server has no organization yet",
+    "signIn.continue": "Continue",
+    "signIn.email.label": "Email",
+    "signIn.passkey.as": "Signing in as {email}.",
+    "signIn.passkey.cancelled":
+      "The passkey request was cancelled or timed out. Try again when you are ready.",
+    "signIn.passkey.failed":
+      "This browser could not use a passkey. Try again, or use another browser.",
+    "signIn.passkey.otherEmail": "Use a different email",
+    "signIn.passkey.submit": "Sign in with a passkey",
+    "signIn.passkey.title": "Use your passkey",
+    "signIn.passkey.unsupported":
+      "This browser cannot use passkeys. Update it, or use a current version of Chrome, Edge, Firefox or Safari.",
+    "signIn.problem.flowExpired": "The passkey request expired after 10 minutes. Try again.",
+    "signIn.problem.flowInvalid":
+      "This sign-in was already finished or replaced by one in another tab. Try again.",
+    "signIn.problem.methodDisabled":
+      "Your organization has turned off passkey sign-in. Ask an administrator how to sign in.",
+    "signIn.problem.orgNone":
+      "This server has no organization yet. An administrator has to create it first.",
+    "signIn.problem.passkeyInvalid":
+      "Stepclimb did not accept that passkey. Try again with a passkey saved for this email.",
+    "signIn.problem.rateLimited":
+      "Too many sign-in attempts from your network. Wait a minute, then try again.",
+    "signIn.problem.rateLimitedFor":
+      "Too many sign-in attempts from your network. Try again in {seconds, plural, one {# second} other {# seconds}}.",
+    "signIn.problem.suspended": "Your account is suspended. Ask an administrator to restore it.",
+    "signIn.problem.unknown":
+      "Something went wrong while signing you in. Try again. If it keeps happening, give an administrator this code:",
+    "signIn.problem.unreachable":
+      "Stepclimb could not reach the server. Check your connection, then try again.",
     "signIn.title": "Sign in",
-    "signIn.unavailable": "This version of Stepclimb cannot sign you in from the browser yet.",
     "signOut.failed": "Sign-out failed",
     "signOut.failedHint": "You are still signed in. Try again in a moment.",
+    "userMenu.density": "Density",
     "userMenu.label": "{name}, account menu",
     "userMenu.saving": "{setting}: saving {choice}",
-    "userMenu.density": "Density",
     "userMenu.signOut": "Sign out",
     "userMenu.theme": "Theme",
   },

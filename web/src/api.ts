@@ -17,13 +17,22 @@ export type Problem = components["schemas"]["Problem"];
 export class ApiError extends Error {
   readonly status: number;
   readonly problem: Problem | undefined;
+  /** Seconds from a `Retry-After` header given in seconds (a 429), when the answer had one. */
+  readonly retryAfter: number | undefined;
 
-  constructor(status: number, problem: Problem | undefined) {
+  constructor(status: number, problem: Problem | undefined, retryAfter?: number) {
     super(problem ? `${status} ${problem.code}` : `HTTP ${status}`);
     this.name = "ApiError";
     this.status = status;
     this.problem = problem;
+    this.retryAfter = retryAfter;
   }
+}
+
+/** A `Retry-After` value in whole seconds; the HTTP-date form and anything else is undefined. */
+export function retryAfterSeconds(header: string | null): number | undefined {
+  if (header === null || !/^\d{1,9}$/.test(header.trim())) return undefined;
+  return Number(header.trim());
 }
 
 function isProblem(body: unknown): body is Problem {
@@ -43,7 +52,11 @@ function isProblem(body: unknown): body is Problem {
  */
 export function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T {
   if (!result.response.ok) {
-    throw new ApiError(result.response.status, isProblem(result.error) ? result.error : undefined);
+    throw new ApiError(
+      result.response.status,
+      isProblem(result.error) ? result.error : undefined,
+      retryAfterSeconds(result.response.headers.get("retry-after")),
+    );
   }
   return result.data as T;
 }

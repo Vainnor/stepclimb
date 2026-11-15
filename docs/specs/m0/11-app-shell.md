@@ -516,6 +516,47 @@ Coordinator decisions (2026-11-14), on the owner's delegation, while building I2
   instance (`RequestOrg` answers 404 with two or more), so there is no second session to list.
   A Vitest test checks it is not in the DOM; Q3's behavior is built with 02 Q2's resolution.
 
+Coordinator decisions (2026-11-15), on the owner's delegation, while building I5:
+
+- **Only the methods with server routes.** The screens drive enrollment by link, passkey
+  registration and passkey sign-in (04 I2 to I4). Password, TOTP and the magic link arrive with
+  04 I6 to I8, and provider buttons with 05 and 06; each adds its step route under `/sign-in`.
+- **No discovery document yet.** `/.well-known/stepclimb` (08 I9) does not exist, so the sign-in
+  screen cannot read the organization's methods or name (B13). Until it lands, `/sign-in` offers
+  the local email and passkey steps, and the passkey start route's 404 `auth.method_disabled`
+  tells the screen the method is off, which it shows as B17's message. The signed-out layout keeps
+  the product name. T6 is tested with 08 I9.
+- **The steps (B16).** `/sign-in` takes the email; `/sign-in/passkey` signs in. The address goes
+  to the passkey step in the history entry's state, never in the URL, so it stays out of the
+  server's access log; the email step's own entry keeps it too, so Back finds it filled in. The
+  passkey step opened without one (a typed URL) goes back to the email step with its
+  `return_to`. The step asks the start route for the request options when it opens, so the
+  button goes straight to the browser's passkey prompt, which some browsers allow only right
+  after a press. After `auth.flow_invalid`, `auth.flow_expired` or `auth.passkey_invalid` (the
+  server deleted the flow) it asks for new options.
+- **The enrollment page.** `/enroll` reads the token from the fragment only (a `?token=` query is
+  ignored) and sends it only in request bodies. It asks no passkey name, so the server's
+  `Passkey` applies. A link whose `methods` holds only `password` says the browser cannot set
+  that up yet. `auth.enrollment_invalid` and `auth.enrollment_expired`, from either route, end
+  the page in an ErrorState without "Try again"; so does `auth.method_disabled`. After sign-in
+  the return target replaces the page's history entry, so Back does not reopen the link.
+- **Completing sign-in.** The app clears its query cache and opens the server's `return_to`
+  after checking it again by B15's rule, so a target the server let through but the client
+  refuses opens `/`.
+- **Messages (B17).** Each of `auth.enrollment_invalid`, `auth.enrollment_expired`,
+  `auth.method_disabled`, `auth.suspended`, `auth.flow_invalid`, `auth.flow_expired`,
+  `auth.passkey_invalid`, `auth.rate_limited` (or any 429) and `org.none` has its own message;
+  a 429 names the wait when `Retry-After` gives seconds. A ceremony the browser ends has its own
+  too: cancelled or timed out (`NotAllowedError`, `AbortError`), a passkey this device already
+  holds for the account (`InvalidStateError` while registering), a browser without WebAuthn's
+  JSON methods (`parseCreationOptionsFromJSON`, Baseline 2025), and any other refusal. Any other
+  code shows the general message and the code in mono.
+- **The callback error (B18)** is built with the first flow that redirects with `?error=` (05 or
+  06); nothing does yet.
+- **End to end.** The e2e stack's public URL is `http://localhost:<port>`, since a relying party
+  ID cannot be an IP address (04 B8), and `just e2e` creates its one organization and admin with
+  `stepclimb admin create`, whose printed link the Playwright test opens (04 T20).
+
 ## Issues
 
 In dependency order. Each is one PR.
