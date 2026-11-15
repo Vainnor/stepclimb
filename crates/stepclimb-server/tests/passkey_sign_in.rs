@@ -209,9 +209,49 @@ impl Fixture {
             .id
     }
 
-    /// A user of `org` with `email` and a software passkey registered for them.
+    /// A user of `org` with `email`, a local account (the identity an enrollment creates, which
+    /// lets passkeys sign in, spec 04 Q16) and a software passkey registered for them.
     async fn member_in(&self, org: Uuid, email: &str) -> Member {
         let id = self.user_in(org, email).await;
+        self.link_local(org, id).await;
+        self.passkey_for(org, id, email).await
+    }
+
+    /// A user of the organization with `email` whose only identity is at an enabled OIDC
+    /// provider that allows passkeys (spec 04 B13, Q16), and a software passkey for them: one
+    /// who added a passkey while signed in through the provider.
+    async fn outside_member(&self, email: &str) -> Member {
+        let id = self.user_in(self.org, email).await;
+        let provider = stepclimb_core::id::new_id();
+        sqlx::query(
+            "INSERT INTO identity_providers (id, org_id, key, kind, config)
+             VALUES ($1, $2, 'example', 'oidc', '{\"allow_local_passkeys\": true}')",
+        )
+        .bind(provider)
+        .bind(self.org)
+        .execute(&self.pool)
+        .await
+        .expect("insert provider");
+        let identity = stepclimb_core::identities::NewIdentity {
+            user_id: id,
+            provider_id: provider,
+            subject: "1000001".into(),
+            attributes: serde_json::Map::new(),
+        };
+        stepclimb_core::identities::link(
+            &self.pool,
+            scope(self.org),
+            &identity,
+            now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("link the provider identity");
+        self.passkey_for(self.org, id, email).await
+    }
+
+    /// A software passkey registered for the user `id` of `org`.
+    async fn passkey_for(&self, org: Uuid, id: Uuid, email: &str) -> Member {
         let party = RelyingParty::new(ORIGIN, "Org").expect("a relying party");
         let registrant = Registrant {
             user_id: id,
@@ -246,6 +286,27 @@ impl Fixture {
             authenticator,
             credential_id: registered.credential_id,
         }
+    }
+
+    /// Link the user `id` of `org` to the organization's local provider, as enrollment does.
+    async fn link_local(&self, org: Uuid, id: Uuid) {
+        let local = stepclimb_core::identity_providers::get_by_key(
+            &self.pool,
+            scope(org),
+            local_sign_in::PROVIDER_KEY,
+        )
+        .await
+        .expect("read the local row")
+        .expect("the local row");
+        let identity = stepclimb_core::identities::NewIdentity {
+            user_id: id,
+            provider_id: local.id,
+            subject: id.to_string(),
+            attributes: serde_json::Map::new(),
+        };
+        stepclimb_core::identities::link(&self.pool, scope(org), &identity, now(), Actor::Instance)
+            .await
+            .expect("link the local identity");
     }
 
     async fn member(&self, email: &str) -> Member {
@@ -441,30 +502,39 @@ async fn a_registered_passkey_signs_in_and_its_counter_is_saved(pool: PgPool) {
 
 /// Spec 04 B5, spec 07 B4: a sign-in goes through admission's local entry, keyed by the
 /// passkey's user. A user with a passkey but no local identity (one who signs in through an
-/// outside provider and added a passkey while signed in) signs in, and still has no local
-/// identity afterwards: only an enrollment link creates one.
+/// outside provider that allows passkeys and added a passkey while signed in, spec 04 Q16) signs
+/// in, and still has no local identity afterwards: only an enrollment link creates one.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn a_sign_in_creates_no_local_identity(pool: PgPool) {
     let f = Fixture::new(pool).await;
-    let mut sam = f.member("sam@example.test").await;
+    let mut sam = f.outside_member("sam@example.test").await;
     for _ in 0..2 {
         let started = f.start(&sam.email).await;
         let answer = f.finish(&started, sam.assert(&started)).await;
         assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
     }
     assert_eq!(f.sessions_of(sam.id).await, 2);
+    let local: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM identities i JOIN identity_providers p ON p.id = i.provider_id
+         WHERE i.user_id = $1 AND p.kind = 'local'",
+    )
+    .bind(sam.id)
+    .fetch_one(&f.pool)
+    .await
+    .expect("count local identities");
+    assert_eq!(local, 0);
     let identities: i64 = sqlx::query_scalar("SELECT count(*) FROM identities WHERE user_id = $1")
         .bind(sam.id)
         .fetch_one(&f.pool)
         .await
         .expect("count identities");
-    assert_eq!(identities, 0);
+    assert_eq!(identities, 1, "only the provider identity the setup linked");
     let links: i64 =
         sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE action = 'identity.link'")
             .fetch_one(&f.pool)
             .await
             .expect("count entries");
-    assert_eq!(links, 0);
+    assert_eq!(links, 1, "only the setup's link");
 }
 
 /// T6 (B12, B18): an assertion signed by another key, one by a passkey the organization does

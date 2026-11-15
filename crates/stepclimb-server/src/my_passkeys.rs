@@ -32,7 +32,8 @@
 //! `allow_local_passkeys` to `true`. The member is off unless set exactly to `true`; the `oidc`
 //! config check (`stepclimb_auth::oidc_config`) validates it, and the `oauth2` one of
 //! docs/specs/m0/06-oauth2-and-vatsim-preset.md has the same member. Start and add both apply
-//! it, add under the user's lock.
+//! it, add under the user's lock. Passkey sign-in applies it too ([`passkeys_allowed`], Q16):
+//! while it refuses a user, their passkeys stay stored but sign nobody in.
 //!
 //! Renaming writes `passkey.rename`. Deleting writes `passkey.delete`, and is refused with 409
 //! `local.last_method` when the passkey is the user's last way to sign in
@@ -112,7 +113,7 @@ problem_responses! {
     MyPasskeysNotFound => "`auth.method_disabled`: passkey sign-in is switched off for this organization. `org.not_found`: the request's organization cannot be determined.",
     MyPasskeyNotFound => "`passkey.not_found`: you have no passkey with this id. `auth.method_disabled`: passkey sign-in is switched off for this organization. `org.not_found`: the request's organization cannot be determined.",
     MyPasskeyAddInvalid => "`request.malformed`: the body is not `{credential, name?}`. `auth.flow_invalid`: no passkey registration was started in this browser for you, or it was already finished; start again. `auth.flow_expired`: the registration was started more than 10 minutes ago; start again. `auth.passkey_invalid`: the passkey's response did not verify, or this passkey is already registered; start again and retry.",
-    MyPasskeyDeleteConflict => "`local.last_method`: this passkey is your last way to sign in. Add another passkey, or sign in once with an identity provider, first.",
+    MyPasskeyDeleteConflict => "`local.last_method`: this passkey is your last way to sign in. Add another passkey before you delete this one.",
 }
 
 /// One of the signed-in user's passkeys. The credential itself never leaves the server.
@@ -551,7 +552,7 @@ fn delete_error(error: DeleteError) -> ApiError {
         DeleteError::LastSignInMethod => ApiError::new(
             StatusCode::CONFLICT,
             LOCAL_LAST_METHOD,
-            "This passkey is your last way to sign in. Add another passkey first.",
+            "This passkey is your last way to sign in. Add another passkey before you delete this one.",
         ),
         other => ApiError::internal(&other),
     }
@@ -564,10 +565,7 @@ async fn refuse_unless_allowed(
     scope: OrgScope,
     user_id: Uuid,
 ) -> Result<(), ApiError> {
-    let providers = identity_providers::list_for_user(&mut *conn, scope, user_id)
-        .await
-        .map_err(|e| ApiError::internal(&e))?;
-    if may_add_passkey(&providers) {
+    if passkeys_allowed(conn, scope, user_id).await? {
         return Ok(());
     }
     Err(ApiError::new(
@@ -577,7 +575,20 @@ async fn refuse_unless_allowed(
     ))
 }
 
-/// Whether a user with identities at `providers` may add a passkey: one of them is the local
+/// Whether the provider rule of the module documentation lets the user `user_id` have
+/// passkeys: adding one here, and signing in with one (`crate::passkey_sign_in`, spec 04 Q16).
+pub(crate) async fn passkeys_allowed(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    user_id: Uuid,
+) -> Result<bool, ApiError> {
+    let providers = identity_providers::list_for_user(&mut *conn, scope, user_id)
+        .await
+        .map_err(|e| ApiError::internal(&e))?;
+    Ok(may_add_passkey(&providers))
+}
+
+/// Whether a user with identities at `providers` may have passkeys: one of them is the local
 /// provider, or an enabled outside provider whose config sets `allow_local_passkeys` to `true`.
 /// A user with no identity may not.
 fn may_add_passkey(providers: &[IdentityProvider]) -> bool {

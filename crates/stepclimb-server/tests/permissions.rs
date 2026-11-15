@@ -1133,6 +1133,8 @@ async fn passkey_sign_in_request(world: &World, org: &Org) -> (Option<Value>, Op
     let (_, user) = org
         .named_user("Pat Example".into(), Some(email.into()))
         .await;
+    // A local account, as enrollment leaves: what lets the passkey sign in (spec 04 Q16).
+    org.local_identity(user).await;
     let origin = Url::parse("https://lms.example.org").expect("a URL");
     let party = RelyingParty::new(origin.as_str(), "Org").expect("a relying party");
     let registrant = Registrant {

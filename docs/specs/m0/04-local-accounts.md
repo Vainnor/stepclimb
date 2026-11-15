@@ -331,8 +331,8 @@ creates and hands over.
     the rule, the add again under the user's row lock (`identities::lock_user`), so a provider
     switched off between the two requests refuses the add.
   - Adding a passkey links no local identity, so the provider setting stays the gate for
-    every later passkey too. Switching a provider's setting off later leaves its users'
-    passkeys working for sign-in: pending Q16.
+    every later passkey too. Passkey sign-in applies the same rule (Q16, the owner's
+    decision).
   - The session-only rule: every `/api/v1/me/passkeys` route answers 403
     `auth.session_required` to a request carrying `Authorization: Bearer`, valid or not, before
     it reads anything else. A bearer request is authenticated by its bearer credential alone
@@ -350,7 +350,10 @@ creates and hands over.
     user keeps no other passkey, no password and no identity at an enabled provider that is not
     local. `local::delete_passkey_unless_last` locks the user's row first, as
     `identities::unlink_unless_last` does, so two removals take turns. Issue I6 adds the
-    password to this count.
+    password to this count. A known gap: the count reads each provider's `enabled` without a
+    lock on the provider's row, so a provider disabled in a transaction that commits while the
+    deletion runs can leave the user with no enabled way to sign in, as it can for B19's
+    identity removal. Recovery is an admin's new enrollment link (Q10 (a)).
   - The list, the add and the rename answer one shape, `{id, name, created_at, last_used_at}`,
     with `last_used_at` `null` before the first sign-in. A rename to the stored name (after
     trimming) writes nothing (`09-permissions-and-roles.md` B22). The routes write
@@ -427,7 +430,7 @@ answer the admission refusals of `07-admission.md` as 403.
 | `POST /auth/local/enrollment/passkey` | `{token, credential, name?}` | 200 `{return_to}`; sets `__Host-sc_session` | `auth.enrollment_invalid`, `auth.enrollment_expired`, `auth.flow_invalid`, `auth.flow_expired`, `auth.passkey_invalid` (all 400), `auth.suspended` (403), `request.invalid` (422, `name`) | none |
 | `POST /auth/local/enrollment/password` | `{token, password}` | 200 `{return_to}`; sets the session | `auth.enrollment_invalid`, `auth.enrollment_expired`, `local.password_weak` | none |
 | `POST /auth/local/passkey/start` | `{email, return_to?}` | 200 `{options}`; sets the flow cookie | none beyond the common ones (Q9 (a): every address gets 200) | none |
-| `POST /auth/local/passkey/finish` | `{credential}` | 200 `{return_to}`; sets the session | `auth.flow_invalid`, `auth.flow_expired` (400), `auth.passkey_invalid` (401), `auth.suspended` (403) | none |
+| `POST /auth/local/passkey/finish` | `{credential}` | 200 `{return_to}`; sets the session | `auth.flow_invalid`, `auth.flow_expired` (400), `auth.passkey_invalid` (401), `auth.suspended`, `local.passkeys_not_allowed` (403, Q16) | none |
 | `POST /auth/local/password` | `{email, password, return_to?}` | 200 `{return_to}` with the session, or 200 `{next: "totp"}` with the flow cookie | `auth.credentials_invalid` | none |
 | `POST /auth/local/totp` | `{code}` | 200 `{return_to}`; sets the session | `auth.flow_invalid`, `auth.flow_expired`, `auth.totp_invalid` | none |
 | `POST /auth/local/magic-link` | `{email, return_to?}` | 202 | none beyond the common ones | none |
@@ -691,10 +694,16 @@ overrule one, which then updates this spec.
   the owner's.
 - **Q16. Passkeys after a provider's setting goes off.** Raised by issue I5. Switching a
   provider's `allow_local_passkeys` off stops its users adding passkeys (B13), but the passkeys
-  they already added still sign in. (a) Keep them, as today; (b) refuse sign-in with them while
-  none of the user's providers allows passkeys and they have no local account; (c) delete them
-  when the setting goes off. Recommendation: (b), which fails closed and keeps the rows, so
-  switching the setting back on restores them as B2 does for a method. **Open:** the owner's.
+  they already added still sign in. (a) Keep them; (b) refuse sign-in with them while none of
+  the user's providers allows passkeys and they have no local account; (c) delete them when the
+  setting goes off. Recommendation: (b), which fails closed and keeps the rows, so switching the
+  setting back on restores them as B2 does for a method.
+  **Decided:** (b) (owner, 15 Nov 2026). `POST /auth/local/passkey/finish` applies B13's rule
+  after the assertion verifies and before admission: a user with no identity at the local
+  provider is refused with 403 `local.passkeys_not_allowed` unless they have an identity at an
+  enabled provider whose `allow_local_passkeys` is exactly `true`. Nothing is saved for the
+  refused sign-in; the passkey rows stay and sign in again once the setting is back on. The
+  sign-in screen shows the code's message (`11-app-shell.md` B17).
 
 ## Issues
 
@@ -718,9 +727,9 @@ overrule one, which then updates this spec.
    enumeration behavior of Q9. Covers B11, B12; T6, T7. Depends on: I3, Q9.
 5. **I5. Passkey management.** `/api/v1/me/passkeys` routes, the session-only rule, the
    last-method rule of Q10, the Playwright passkey test. Covers B13; T9, T20. Depends on: I4,
-   `11-app-shell.md` (pages the test drives), Q10. T20 lands in a follow-up commit once
-   `11-app-shell.md`'s sign-in and enrollment pages (issue #70) merge: it drives those pages
-   (coordinator decision, 2026-11-15).
+   `11-app-shell.md` (pages the test drives), Q10. T20 landed with `11-app-shell.md`'s sign-in
+   and enrollment screens (`web/e2e/sign-in.spec.ts`); I5 extends it with a passkey added
+   through `/api/v1/me/passkeys` that then signs in alone (coordinator decision, 2026-11-15).
 6. **I6. Password.** Adds `argon2`; `local_logins` with Q5's `email_normalized` and the
    password columns (pending Q3), hashing with the concurrency
    cap, enrollment by password, sign-in with uniform failures, rehash, change password,

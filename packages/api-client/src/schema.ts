@@ -1933,7 +1933,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `local.last_method`: this passkey is your last way to sign in. Add another passkey, or sign in once with an identity provider, first. */
+        /** @description `local.last_method`: this passkey is your last way to sign in. Add another passkey before you delete this one. */
         MyPasskeyDeleteConflict: {
             headers: {
                 [name: string]: unknown;
@@ -2023,7 +2023,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `auth.suspended`: the account is suspended. `auth.csrf_refused`: the request did not come from this site. */
+        /** @description `auth.suspended`: the account is suspended. `local.passkeys_not_allowed`: the account has no local account and no identity provider it signs in with allows passkeys, so its passkeys do not sign in. `auth.csrf_refused`: the request did not come from this site. */
         PasskeySignInFinishForbidden: {
             headers: {
                 [name: string]: unknown;

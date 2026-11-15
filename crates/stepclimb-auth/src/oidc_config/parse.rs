@@ -4,8 +4,8 @@
 use serde_json::{Map, Value};
 
 use super::{
-    ALLOW_LOCAL_PASSKEYS, ClaimsMapping, ConfigErrors, DEFAULT_SCOPES, OidcConfig, OidcConfigDraft, OidcSettings,
-    SealedSecret, StoredConfigError, code,
+    ALLOW_LOCAL_PASSKEYS, ClaimsMapping, ConfigErrors, DEFAULT_SCOPES, OidcConfig, OidcConfigDraft,
+    OidcSettings, SealedSecret, StoredConfigError, code,
 };
 use crate::json_pointer::JsonPointer;
 use crate::outbound::UrlPolicy;

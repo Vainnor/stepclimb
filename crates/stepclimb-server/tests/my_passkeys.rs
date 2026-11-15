@@ -44,7 +44,7 @@ use stepclimb_server::{
 };
 use tower::ServiceExt;
 use webauthn_authenticator_rs::{WebauthnAuthenticator, softpasskey::SoftPasskey};
-use webauthn_rs::prelude::{CreationChallengeResponse, Url};
+use webauthn_rs::prelude::{CreationChallengeResponse, RequestChallengeResponse, Url};
 
 mod common;
 
@@ -359,6 +359,12 @@ impl Fixture {
     /// Start adding a passkey as `member` and answer it with a new software passkey: the flow
     /// cookie and the registration response.
     async fn started(&self, member: &Member) -> (String, Value) {
+        let (flow, credential, _) = self.started_with(member).await;
+        (flow, credential)
+    }
+
+    /// [`Self::started`], keeping the software passkey so it can sign in later.
+    async fn started_with(&self, member: &Member) -> (String, Value, SoftPasskey) {
         let started = self
             .send(Method::POST, START, Some(&member.cookie), None)
             .await;
@@ -366,13 +372,52 @@ impl Fixture {
         assert_schema("MyPasskeyStarted", &started.body);
         let options: CreationChallengeResponse =
             serde_json::from_value(started.body["options"].clone()).expect("creation options");
-        let credential = SoftPasskey::new(true)
+        let mut authenticator = SoftPasskey::new(true);
+        let credential = authenticator
             .do_registration(Url::parse(ORIGIN).expect("a URL"), options)
             .expect("the soft passkey registers");
         (
             started.flow_cookie(),
             serde_json::to_value(credential).expect("JSON"),
+            authenticator,
         )
+    }
+
+    /// Sign in as `email` through `/auth/local/passkey` with `authenticator`: the finish answer.
+    async fn sign_in(&self, email: &str, authenticator: &mut SoftPasskey) -> Answer {
+        let body = json!({ "email": email });
+        let started = self
+            .send(Method::POST, "/auth/local/passkey/start", None, Some(body))
+            .await;
+        assert_eq!(started.status, StatusCode::OK, "{started:?}");
+        let options: RequestChallengeResponse =
+            serde_json::from_value(started.body["options"].clone()).expect("request options");
+        let assertion = authenticator
+            .do_authentication(Url::parse(ORIGIN).expect("a URL"), options)
+            .expect("the soft passkey signs");
+        let body = json!({ "credential": assertion });
+        let flow = started.flow_cookie();
+        self.send(
+            Method::POST,
+            "/auth/local/passkey/finish",
+            Some(&flow),
+            Some(body),
+        )
+        .await
+    }
+
+    /// Set the provider `id`'s `allow_local_passkeys`, by SQL, since its admin API is not built.
+    async fn allow_passkeys(&self, id: Uuid, on: bool) {
+        sqlx::query(
+            "UPDATE identity_providers
+             SET config = jsonb_set(config, '{allow_local_passkeys}', to_jsonb($2::boolean))
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(on)
+        .execute(&self.pool)
+        .await
+        .expect("set allow_local_passkeys");
     }
 
     async fn finish(&self, member: &Member, flow: &str, credential: &Value) -> Answer {
@@ -854,4 +899,62 @@ async fn another_organizations_registration_does_not_finish_here(pool: PgPool) {
         .await
         .expect("list");
     assert!(robins.is_empty());
+}
+
+/// An outside provider's user adds a passkey while the provider allows it and signs in with it,
+/// with no local identity made on the way; switched off, the provider stops both the add and the
+/// sign-in (spec 04 Q16), the passkey row stays, and switched back on it signs in again.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn q16_an_outside_users_passkey_follows_the_providers_setting(pool: PgPool) {
+    let fx = Fixture::new(pool).await;
+    let email = "sam@example.test";
+    let (sam, provider) = fx
+        .outside(email, true, json!({ "allow_local_passkeys": true }))
+        .await;
+    let (flow, credential, mut authenticator) = fx.started_with(&sam).await;
+    let added = fx.finish(&sam, &flow, &credential).await;
+    assert_eq!(added.status, StatusCode::CREATED, "{added:?}");
+
+    let signed_in = fx.sign_in(email, &mut authenticator).await;
+    assert_eq!(signed_in.status, StatusCode::OK, "{signed_in:?}");
+    let local = identities::list_for_user(&fx.pool, scope(fx.org), sam.id)
+        .await
+        .expect("identities");
+    assert!(
+        local.iter().all(|i| i.provider_key != PROVIDER_KEY),
+        "a local identity appeared: {local:?}"
+    );
+
+    fx.allow_passkeys(provider, false).await;
+    let start = fx.send(Method::POST, START, Some(&sam.cookie), None).await;
+    start.expect(StatusCode::FORBIDDEN, "local.passkeys_not_allowed");
+    let refused = fx.sign_in(email, &mut authenticator).await;
+    refused.expect(StatusCode::FORBIDDEN, "local.passkeys_not_allowed");
+    assert!(
+        refused
+            .pairs()
+            .iter()
+            .all(|p| !p.starts_with("__Host-sc_session="))
+    );
+    assert!(refused.clears_the_flow_cookie());
+    assert_eq!(fx.count(sam.id).await, 1, "the passkey row stays");
+
+    fx.allow_passkeys(provider, true).await;
+    let again = fx.sign_in(email, &mut authenticator).await;
+    assert_eq!(again.status, StatusCode::OK, "{again:?}");
+}
+
+/// A local account's passkey signs in whatever its other providers say (spec 04 Q16).
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn q16_a_local_accounts_passkey_signs_in_beside_a_closed_provider(pool: PgPool) {
+    let fx = Fixture::new(pool).await;
+    let email = "pat@example.test";
+    let pat = fx.local(email).await;
+    let closed = fx.provider(true, json!({})).await;
+    fx.link(fx.org, pat.id, closed).await;
+    let (flow, credential, mut authenticator) = fx.started_with(&pat).await;
+    let added = fx.finish(&pat, &flow, &credential).await;
+    assert_eq!(added.status, StatusCode::CREATED, "{added:?}");
+    let signed_in = fx.sign_in(email, &mut authenticator).await;
+    assert_eq!(signed_in.status, StatusCode::OK, "{signed_in:?}");
 }

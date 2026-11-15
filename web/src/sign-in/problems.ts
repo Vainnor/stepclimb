@@ -66,6 +66,8 @@ function codeMessage(code: string, screen: SignInScreen, t: Strings["t"]): strin
       return enroll ? t("enroll.problem.methodDisabled") : t("signIn.problem.methodDisabled");
     case "auth.suspended":
       return t("signIn.problem.suspended");
+    case "local.passkeys_not_allowed":
+      return t("signIn.problem.passkeysNotAllowed");
     case "auth.flow_expired":
       return t("signIn.problem.flowExpired");
     case "auth.flow_invalid":

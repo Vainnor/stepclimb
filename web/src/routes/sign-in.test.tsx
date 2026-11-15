@@ -283,6 +283,11 @@ describe("problem codes on the passkey step (B17, T8)", () => {
 
   it.each([
     [403, "auth.suspended", "Your account is suspended. Ask an administrator to restore it."],
+    [
+      403,
+      "local.passkeys_not_allowed",
+      "Your organization does not let you sign in with a passkey. Sign in with your identity provider instead.",
+    ],
     [404, "auth.method_disabled", "Your organization has turned off passkey sign-in."],
     [503, "org.none", "This server has no organization yet."],
   ])("%i %s says so and keeps the flow", async (status, code, message) => {

@@ -405,3 +405,55 @@ async fn only_the_owner_renames_or_deletes_a_passkey(pool: PgPool) {
         json!({ "before": { "user_id": sam, "name": "Laptop" } })
     );
 }
+
+/// Waits until a session of this test's database waits on a row or transaction lock, so the
+/// test knows the second call is blocked behind the first.
+async fn until_a_call_waits_on_a_lock(pool: &PgPool) {
+    for _ in 0..500 {
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("read pg_stat_activity");
+        if waiting > 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("no session waited on a lock within 5 s");
+}
+
+/// Two deletions of a user's last two passkeys, on two connections, take turns (Q10): the
+/// second waits on the first's lock of the user, then counts what it left and keeps the last
+/// passkey.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn concurrent_deletions_of_the_last_two_passkeys_keep_one(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    let sam = user(&pool, a).await;
+    let first = store(&pool, a, sam, &[4; 16]).await.expect("store").id;
+    let second = store(&pool, a, sam, &[5; 16]).await.expect("store").id;
+    let mut deleting = pool.begin().await.expect("begin");
+    local::delete_passkey_unless_last(&mut *deleting, scope(a), sam, first, now(), Actor::Instance)
+        .await
+        .expect("the first deletion");
+    let racing = tokio::spawn({
+        let pool = pool.clone();
+        async move {
+            local::delete_passkey_unless_last(&pool, scope(a), sam, second, now(), Actor::Instance)
+                .await
+                .map_err(|e| format!("{e:?}"))
+        }
+    });
+    until_a_call_waits_on_a_lock(&pool).await;
+    deleting.commit().await.expect("commit");
+
+    let raced = racing.await.expect("the second deletion ran");
+
+    assert_eq!(raced, Err("LastSignInMethod".to_owned()));
+    let left = passkeys::list_for_user(&pool, scope(a), sam)
+        .await
+        .expect("list");
+    assert_eq!(left.iter().map(|p| p.id).collect::<Vec<_>>(), [second]);
+}
