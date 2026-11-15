@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Laid over compose.yaml for one gate run (bin/ci_gate.py), as the project
 # `stepclimb-ci-<id>`: nothing here is shared with the development stack or another worktree's run.
-# PostgreSQL keeps its data in memory. Both published ports are the run's slot's (SC_CI_PG_PORT,
-# SC_CI_PORT), which no other run holds; the run reads them back with `docker compose port`. The
-# gate sets SC_IMAGE to a tag of its own, so that one run never starts another's build. Each
+# PostgreSQL keeps its data in memory. The published ports are the run's slot's (SC_CI_PG_PORT,
+# SC_CI_PORT, SC_CI_IDP_PORT), which no other run holds; the gate and `just e2e` read each back
+# with `docker compose port`. The gate sets SC_IMAGE to a tag of its own, and the mock identity
+# provider's image is that tag with `-mock-idp`, so that one run never starts another's build. Each
 # container carries the slot's number, so that a later run on the slot can remove what a killed run
 # left on those ports. MinIO is not started.
 services:
@@ -29,7 +30,42 @@ services:
       # The end-to-end tests come from one address and start a dozen sign-in flows within a
       # minute; the default of 20 a minute (spec 08 B40) would leave them little headroom.
       STEPCLIMB_SIGN_IN_RATE_LIMIT: "200"
+      # One provider, the mock below, and the insecure-providers switch it needs (e2e/).
+      STEPCLIMB_CONFIG: /etc/stepclimb/stepclimb.toml
+    volumes:
+      - ./e2e:/etc/stepclimb:ro
+    depends_on:
+      mock-idp:
+        condition: service_healthy
     labels:
       stepclimb.ci.slot: "${SC_CI_SLOT:?SC_CI_SLOT is set by bin/ci_gate.py}"
     ports: !override
       - "127.0.0.1:${SC_CI_PORT:?SC_CI_PORT is set by bin/ci_gate.py}:8080"
+
+  # The mock identity provider (docs/specs/m0/06-oauth2-and-vatsim-preset.md B3), built from the
+  # workspace crate stepclimb-mock-idp, for this stack only. The server reaches it by its service
+  # name, the issuer's host; the browser is sent to its published port on 127.0.0.1 for the
+  # authorize step only. It shares the client secret file the server's stepclimb.toml names.
+  mock-idp:
+    profiles: ["stack"]
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile
+      target: mock-idp
+    image: ${SC_IMAGE:?SC_IMAGE is set by bin/ci_gate.py}-mock-idp
+    environment:
+      SC_MOCK_IDP_BIND: 0.0.0.0:8080
+      SC_MOCK_IDP_BASE_URL: http://mock-idp:8080
+      SC_MOCK_IDP_BROWSER_URL: http://127.0.0.1:${SC_CI_IDP_PORT:?SC_CI_IDP_PORT is set by bin/ci_gate.py}
+      SC_MOCK_IDP_CLIENT_SECRET_FILE: /etc/mock-idp/mock-idp-client-secret
+    volumes:
+      - ./e2e/mock-idp-client-secret:/etc/mock-idp/mock-idp-client-secret:ro
+    labels:
+      stepclimb.ci.slot: "${SC_CI_SLOT:?SC_CI_SLOT is set by bin/ci_gate.py}"
+    ports:
+      - "127.0.0.1:${SC_CI_IDP_PORT:?SC_CI_IDP_PORT is set by bin/ci_gate.py}:8080"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/stepclimb-mock-idp", "healthcheck"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

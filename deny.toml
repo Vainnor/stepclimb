@@ -14,7 +14,8 @@ unmaintained = "workspace"
 #   webauthn-rs only verifies RS256 passkey signatures, a public-key operation with no secret to
 #   leak (docs/adr/0026-webauthn-rs-for-passkeys.md);
 # - 0.9.10, through openidconnect 4.1.0, which needs ^0.9 and only verifies ID tokens, and the
-#   test-only mock identity provider, whose throwaway keys on 127.0.0.1 are the only private keys
+#   test-only mock identity provider, whose throwaway keys are the only private keys: on 127.0.0.1
+#   in tests, and in the `just e2e` stack's mock-idp container, published on 127.0.0.1 only
 #   (docs/adr/0027-mock-identity-provider.md).
 # A further dependent of `rsa` must be judged on its own before it lands. Remove this entry when
 # `cargo tree --target all -e all -i rsa` shows only rsa 0.10.0 or later (issue #164).

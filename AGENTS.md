@@ -62,7 +62,7 @@ The plan's layout (`docs/plan/technical.md` -> Architecture and stack).
 | `crates/stepclimb-integrations` | lib | Sync API, SCIM, permission modes, reports and exports. Placeholder (M4). |
 | `crates/stepclimb-connectors` | lib | Optional connectors on the public API: vatsim, vatusa. Placeholder (M4). |
 | `crates/stepclimb-jobs` | lib | Postgres queue, outbox, email, webhooks, push, auto-submit. Placeholder (M1, M4). |
-| `crates/stepclimb-mock-idp` | lib | The mock OIDC and OAuth 2 identity provider every sign-in test runs against, on 127.0.0.1 (spec 06 I1, ADR 0027). Dev-dependency only. |
+| `crates/stepclimb-mock-idp` | lib + bin | The mock OIDC and OAuth 2 identity provider every sign-in test runs against, on 127.0.0.1 (spec 06 I1, ADR 0027). Dev-dependency only. The `stepclimb-mock-idp` binary runs it as the `mock-idp` service of the `just e2e` stack only (`deploy/compose/ci.yaml`, Dockerfile target `mock-idp`; spec 06 B3). |
 | `crates/stepclimb-media` | lib | tus uploads, ffmpeg transcode, captions, signed delivery. Placeholder (M1). |
 | `migrations/` | | SQL migrations, forward-only, embedded and run at startup. |
 | `openapi/stepclimb.json` | | The committed OpenAPI document (`just openapi`). |
@@ -188,7 +188,7 @@ just changeset-check  # a changeset for any change to packages/ui or packages/to
 just web-audit     # pnpm audit (prod, then all) fails on high or critical outside pnpm-audit-allowlist.json; SKIPPED offline
 just typecheck     # tsc in every package
 just test-web      # Vitest in every package
-just e2e           # Playwright smoke test against this worktree's own Compose stack (builds the image)
+just e2e           # Playwright tests against this worktree's own Compose stack, with the mock identity provider as a service (builds both images)
 just ui-visual     # Storybook story screenshots and axe in Playwright's pinned image (--update-snapshots)
 just compose-check # the production Compose example booted with generated secrets on the slot's port, then removed
 just compose-ops-check  # the same with Caddy (internal CA) on the slot's ports: TLS, forwarded headers, dumps, a restore
@@ -213,8 +213,8 @@ merge gate, and every "done" names that machine's OS. `bin/ci-stamp.sh` records 
 Run the gate as plain `just ci` (`nix develop -c just ci`), from as many worktrees as you like:
 no `flock` wrapper. `bin/ci_gate.py` holds one of `SC_CI_SLOTS` (default 3) slots in `/tmp`, so
 the rest wait their turn, and one run per worktree. Each run gets its own PostgreSQL and Compose
-projects (`stepclimb-ci-<id>`, `stepclimb-prodcheck-<id>`, `stepclimb-opscheck-<id>`, image
-`stepclimb:ci-<id>`, `<id>` from the worktree path) and its slot's ports (`20000 + 10 * slot`
+projects (`stepclimb-ci-<id>`, `stepclimb-prodcheck-<id>`, `stepclimb-opscheck-<id>`, images
+`stepclimb:ci-<id>` and `stepclimb:ci-<id>-mock-idp`, `<id>` from the worktree path) and its slot's ports (`20000 + 10 * slot`
 and up) and proxy subnets (`10.201.(100 + slot)`, `10.201.(150 + slot)`), so checkouts with
 different migrations never share a database and runs never share a port or subnet.
 
@@ -226,7 +226,7 @@ such as an outgoing connection's source port in TIME-WAIT can hold a port, and r
 cannot see that when it picks one. The shared `just up` stack's fixed ports (55432, 58080,
 59000, 59001) are inside that range, so `just up` can occasionally hit it; no gate binds them.
 
-The run removes its projects and image when it ends, whether it passed, failed or was stopped by
+The run removes its projects and images when it ends, whether it passed, failed or was stopped by
 SIGTERM, SIGHUP or SIGINT. At its start it removes what a killed run of the worktree left, any
 such project whose worktree no longer exists, and any gate project labelled with its slot or on
 its slot's subnets (a killed run's, since the slot is exclusive); a project that is not a gate's

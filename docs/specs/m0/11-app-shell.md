@@ -728,12 +728,14 @@ list, provider buttons, the callback error and the password step that I5 left):
   email step. The step does not check the code's form: the server takes six digits with spaces,
   or a recovery code in any letter case.
 - **The magic link (04 I8, #28)** has no server routes yet, so no step is drawn for it.
-- **End to end.** `just e2e` inserts one `oidc` provider, `example-id`, whose config holds only a
-  `label`, into the stack's organization, since no route creates providers yet (06 I5). Its start
-  route answers `/sign-in?error=auth.provider_unavailable` without contacting any server, so the
-  test checks the button's full-page navigation, the 303 and the message after it. Sign-in at a
-  real provider (T16) waits for the mock OpenID Connect server in the e2e stack (06 I7, #39). The password
-  test adds a user through `POST /api/v1/users`, sets a password through an enrollment link and
+- **End to end.** The stack's one provider is `mock`, the mock OpenID Connect server the stack
+  runs (06 B3, #39), declared in `deploy/compose/e2e/stepclimb.toml`. Until the admin turns sign-up
+  on, a sign-in there comes back as `/sign-in?error=auth.signup_closed`, so the method-list test
+  checks the button's full-page navigation, the round trip through the mock, the 303 and the
+  message after it. T16 runs in the serial sign-in file: the admin turns sign-up on through
+  `/api/v1/admin/admission`, and a new browser signs in at the mock from
+  `/sign-in?return_to=%2Faccount`, lands on `/account` with `/me` loaded as "Test Student", signs
+  out, and signs in again into the same account. The password test adds a user through `POST /api/v1/users`, sets a password through an enrollment link and
   signs in on the screen; a second test turns TOTP on for that user through `/api/v1/me/totp`,
   computing codes from the secret as an app would (RFC 6238), and signs in with a wrong code (back
   to the password), the app's code and a recovery code. The method list's other states run axe in the browser with synthetic

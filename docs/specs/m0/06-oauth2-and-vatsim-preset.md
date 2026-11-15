@@ -62,6 +62,22 @@ server every sign-in test and the Playwright stack use instead of a real provide
   configures an OIDC provider pointing at it. A Playwright test signs in through it from the
   sign-in page and lands signed in on the app shell (the plan's "mock-OIDC sign-in").
 
+  Coordinator decision (2026-11-15), for I7. The binary `stepclimb-mock-idp` (the same crate,
+  `src/main.rs`) runs as the `mock-idp` service of `deploy/compose/ci.yaml`, built from
+  `deploy/Dockerfile`'s `mock-idp` target, which the release image's default target never
+  builds. The production example has no such service. The mock is named two ways: its issuer,
+  `http://mock-idp:8080/oidc`, is the address the server reaches it at by service name, and its
+  ID tokens' `iss`; the discovery document's `authorization_endpoint` is the port of the gate
+  slot published on `127.0.0.1` (`SC_CI_IDP_PORT`), where the browser goes, since a browser on
+  the host cannot resolve the service name. The stack's server reads
+  `deploy/compose/e2e/stepclimb.toml`: one `[[providers]]` entry, `mock`, with a client secret
+  file the mock reads too, and `allow_insecure_providers = "true"`, which only that file sets;
+  the mock's network address is private, which a single-organization instance allows (`05-oidc.md`
+  Q4). `just e2e` runs `stepclimb admin create` before the server starts, so the server writes
+  the provider to that organization at startup (B12). Admission refuses the mock's user
+  (`auth.signup_closed`, `07-admission.md`) until the admin turns sign-up on through
+  `/api/v1/admin/admission`; the Playwright tests check both.
+
 ### Generic OAuth 2 provider
 
 - **B4.** A generic OAuth 2 provider is an `identity_providers` row with `kind = 'oauth2'`, a
@@ -501,4 +517,5 @@ overrule one, which then updates this spec.
 7. **I7. Mock-OIDC sign-in in the Playwright stack.** The mock as a Compose service for
    `just e2e`, a provider row (or `[[providers]]` entry) pointing at it, the Playwright test.
    Covers B3; T19, T20. Depends on: I1, `05-oidc.md` I4, `14-compose-deploy.md` (Compose
-   stack), `11-app-shell.md` (sign-in page).
+   stack), `11-app-shell.md` (sign-in page). Built as B3's coordinator decision says; it adds no
+   route, so T20 holds as before.

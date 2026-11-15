@@ -76,6 +76,23 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && cargo build --release --locked --target "$target" -p stepclimb-server --bin stepclimb \
     && cp "target/$target/release/stepclimb" /stepclimb
 
+# The mock identity provider for the end-to-end Compose stack only (deploy/compose/ci.yaml, `just
+# e2e`; docs/specs/m0/06-oauth2-and-vatsim-preset.md B3), built with `--target mock-idp`. These two
+# stages sit before the server's runtime stage, so the default target never builds or contains them.
+FROM server AS mock-idp-build
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target,sharing=locked \
+    . /target.env \
+    && find Cargo.toml Cargo.lock crates -exec touch {} + \
+    && cargo build --release --locked --target "$target" -p stepclimb-mock-idp --bin stepclimb-mock-idp \
+    && cp "target/$target/release/stepclimb-mock-idp" /stepclimb-mock-idp
+
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS mock-idp
+COPY --from=mock-idp-build /stepclimb-mock-idp /usr/local/bin/stepclimb-mock-idp
+USER nonroot
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/stepclimb-mock-idp"]
+
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
 COPY --from=server /stepclimb /usr/local/bin/stepclimb
 USER nonroot
