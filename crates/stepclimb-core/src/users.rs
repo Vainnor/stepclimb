@@ -326,6 +326,84 @@ pub async fn find_by_email(
     .transpose()
 }
 
+/// The one user email matching may link an unknown identity at the provider `provider_id` with
+/// the verified address `email` to (docs/specs/m0/07-admission.md B5, spec 03 Q2 (a)), or
+/// `None`, with its row locked `FOR NO KEY UPDATE` (the lock [`set_status`] takes) until the
+/// caller's transaction ends. Both addresses are ASCII only, and compared with ASCII letter
+/// case folded (the "C" collation), so no Unicode case rule (the Kelvin sign, a dotted capital
+/// I) can make two addresses equal. The user's email is recorded as verified, the user's source
+/// is `Local` or `Idp` (a user an outside source owns is never matched), and the user has no
+/// identity at `provider_id` yet: a second account at the same provider is not matched to them.
+/// Emails are unique per organization (B12), so at most one user has the address. The status is
+/// not filtered: the caller refuses a suspended user.
+pub async fn find_email_match(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    email: &str,
+    provider_id: Uuid,
+) -> Result<Option<User>, Error> {
+    let email = no_nul("email", email)?.trim();
+    if !email.is_ascii() {
+        return Ok(None);
+    }
+    sqlx::query_as!(
+        Row,
+        r#"SELECT id, display_name, given_name, family_name, email, locale, tz, status, source,
+                  external_id,
+                  (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM users
+           WHERE org_id = $1
+             AND lower(email COLLATE "C") = lower($2 COLLATE "C")
+             AND octet_length(email) = char_length(email)
+             AND verified_email = lower(email COLLATE "C")
+             AND source = ANY($3::text[])
+             AND NOT EXISTS (
+                 SELECT 1 FROM identities i
+                 WHERE i.org_id = users.org_id AND i.user_id = users.id AND i.provider_id = $4
+             )
+           FOR NO KEY UPDATE"#,
+        scope.org_id(),
+        email,
+        &MATCHABLE_SOURCES.map(|source| source.as_str().to_owned())[..],
+        provider_id,
+    )
+    .fetch_optional(db)
+    .await?
+    .map(User::try_from)
+    .transpose()
+}
+
+/// The sources whose users email matching may link: users made in Stepclimb, by an admin or
+/// just-in-time at sign-in. A user an outside source owns is that source's to link
+/// (docs/specs/m0/07-admission.md B5, coordinator decision).
+pub const MATCHABLE_SOURCES: [Source; 2] = [Source::Local, Source::Idp];
+
+/// Record that a verified source vouched for `email` as the address of the user `id` of the
+/// scope's organization: a sign-in through a provider trusted for matching that marked the
+/// address verified (docs/specs/m0/07-admission.md B5). It records only when the user's stored
+/// email is `email` with ASCII letter case folded and is not recorded yet, and returns whether it wrote.
+/// It changes no profile field and leaves `updated_at` as it is.
+pub async fn record_verified_email(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    id: Uuid,
+    email: &str,
+) -> Result<bool, Error> {
+    let email = no_nul("email", email)?.trim();
+    let recorded = sqlx::query!(
+        r#"UPDATE users SET verified_email = lower(email COLLATE "C")
+           WHERE org_id = $1 AND id = $2 AND lower(email COLLATE "C") = lower($3 COLLATE "C")
+             AND verified_email IS DISTINCT FROM lower(email COLLATE "C")"#,
+        scope.org_id(),
+        id,
+        email,
+    )
+    .execute(db)
+    .await?;
+    Ok(recorded.rows_affected() == 1)
+}
+
 /// The scope's users matching `filter`, sorted by display name then id, starting after `after`
 /// (the sort key of the previous page's last user) and at most `limit` of them.
 ///
@@ -369,7 +447,9 @@ pub async fn list(
 }
 
 /// Create a user in the scope's organization, `active`, with `created_at` and `updated_at` set
-/// to `now`.
+/// to `now`. A `Local` user's email is recorded as verified ([`find_email_match`]): every local
+/// user is an admin's ([`Source::Local`]), and the admin vouches for the address they enter. Any
+/// other user's email starts unverified; [`record_verified_email`] records a verification.
 pub async fn create(
     db: impl PgExecutor<'_>,
     scope: OrgScope,
@@ -381,8 +461,10 @@ pub async fn create(
     let row = sqlx::query_as!(
         Row,
         r#"INSERT INTO users (id, org_id, external_id, source, display_name, given_name,
-                              family_name, email, locale, tz, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                              family_name, email, verified_email, locale, tz, created_at,
+                              updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+                   CASE WHEN $4 = 'local' THEN lower($8 COLLATE "C") END, $9, $10,
                    timestamptz 'epoch' + $11::bigint * interval '1 microsecond',
                    timestamptz 'epoch' + $11::bigint * interval '1 microsecond')
            RETURNING id, display_name, given_name, family_name, email, locale, tz, status, source,
@@ -407,6 +489,9 @@ pub async fn create(
 }
 
 /// Apply `patch` to the user `id` of the scope's organization and set `updated_at` to `now`.
+/// An email changed to another address (compared case-insensitively) drops the record of a
+/// verified email, except for a `Local` user, whose new address the admin vouches for as at
+/// [`create`].
 pub async fn update(
     db: impl PgExecutor<'_>,
     scope: OrgScope,
@@ -423,6 +508,12 @@ pub async fn update(
                given_name = COALESCE($4, given_name),
                family_name = COALESCE($5, family_name),
                email = CASE WHEN $6 THEN $7 ELSE email END,
+               verified_email = CASE
+                   WHEN NOT $6
+                       OR lower($7 COLLATE "C") IS NOT DISTINCT FROM lower(email COLLATE "C")
+                       THEN verified_email
+                   WHEN source = 'local' THEN lower($7 COLLATE "C")
+               END,
                locale = COALESCE($8, locale),
                tz = COALESCE($9, tz),
                updated_at = timestamptz 'epoch' + $10::bigint * interval '1 microsecond'

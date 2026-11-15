@@ -161,6 +161,7 @@ impl Fixture {
             provider: &self.provider,
             subject,
             profile,
+            email_verified: false,
             attributes: attributes(attrs),
         }
     }
@@ -521,6 +522,7 @@ async fn a_local_sign_in_never_creates_a_user(pool: PgPool) {
         provider: &local,
         subject: &subject,
         profile: Profile::default(),
+        email_verified: false,
         attributes: Map::new(),
     };
     let mut tx = f.pool.begin().await.expect("begin");
@@ -619,6 +621,7 @@ async fn step_1_waits_for_a_suspension_and_refuses(pool: PgPool) {
             provider: &provider,
             subject: "sub-pat",
             profile: Profile::default(),
+            email_verified: false,
             attributes: Map::new(),
         };
         let mut tx = pool.begin().await.expect("begin");
@@ -696,6 +699,7 @@ async fn two_first_sign_ins_at_once_make_one_user(pool: PgPool) {
             provider: &provider,
             subject: "sub-new",
             profile: Profile::default(),
+            email_verified: false,
             attributes: Map::new(),
         };
         let mut tx = pool.begin().await.expect("begin");
@@ -783,6 +787,7 @@ async fn q6_other_users_keep_their_profile(pool: PgPool) {
         provider: &second,
         subject: "sub-second",
         profile: changed,
+        email_verified: false,
         attributes: Map::new(),
     };
     let user = f.admitted(&sign_in).await;

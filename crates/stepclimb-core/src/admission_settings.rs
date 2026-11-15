@@ -6,11 +6,8 @@
 //! generic settings patch cannot name `admission` ([`crate::OrgSettingsPatch::WRITTEN_ELSEWHERE`]).
 //! It takes an [`AdmissionPatch`] naming only the switches to change, so a change of one switch
 //! never writes back a stale value of the other that another admin changed in the meantime.
-//!
-//! `sync_only` is stored and read, but [`update`] refuses to turn it on
-//! ([`Error::SyncOnlyUnavailable`]) until admission applies it (spec 07 issue 4): a `true` that
-//! no sign-in reads would tell an admin that only provisioned users get in when anyone with an
-//! identity still can while sign-up is allowed. Every query filters by the scope's organization.
+//! Admission reads both at each sign-in (spec 07 B11, B20). Every query filters by the scope's
+//! organization.
 
 use std::time::SystemTime;
 
@@ -49,9 +46,6 @@ pub enum Error {
     /// The scope's organization has no row.
     #[error("the organization does not exist")]
     NotFound,
-    /// The change turns sync-only mode on, which admission does not apply yet (spec 07 issue 4).
-    #[error("sync-only mode cannot be turned on yet")]
-    SyncOnlyUnavailable,
     /// The stored settings object does not parse as [`OrgSettings`].
     #[error("the stored organization settings do not parse")]
     StoredSettings(#[source] serde_json::Error),
@@ -99,10 +93,9 @@ fn parse(stored: &str) -> Result<AdmissionSwitches, Error> {
 /// Change the switches `patch` names in the scope's organization, by `actor` at `now`, and
 /// return every switch after the change.
 ///
-/// A `patch` setting `sync_only` to `true` is refused with [`Error::SyncOnlyUnavailable`] before
-/// anything is read. Otherwise the call locks the organization's row and applies `patch` to the
-/// switches read under the lock, so a switch it does not name keeps the value stored then.
-/// Unchanged (an empty patch, or only current values), it writes nothing, neither the settings, nor `updated_at`, nor an
+/// The call locks the organization's row and applies `patch` to the switches read under the
+/// lock, so a switch it does not name keeps the value stored then. Unchanged (an empty patch,
+/// or only current values), it writes nothing, neither the settings, nor `updated_at`, nor an
 /// audit entry. Different, it merges the switches into the stored `admission` object, so a
 /// member this release does not know stays, sets `updated_at` to `now` and writes the
 /// `organization.update_settings` entry with `admission` before and after (spec 09 B22). Runs
@@ -114,9 +107,6 @@ pub async fn update<'c>(
     now: SystemTime,
     actor: Actor,
 ) -> Result<AdmissionSwitches, Error> {
-    if patch.sync_only == Some(true) {
-        return Err(Error::SyncOnlyUnavailable);
-    }
     let now = epoch_micros(now)?;
     let mut tx = db.begin().await?;
     let current = get_for_update(&mut tx, scope).await?;

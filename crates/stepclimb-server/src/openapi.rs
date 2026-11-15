@@ -233,6 +233,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             Unauthenticated,
             PermissionDenied,
             organization::OrgWriteForbidden,
+            organization::SettingsWriteForbidden,
             organization::SettingsInvalid,
             accounts::AccountNotFound,
             accounts::ParentNotFound,

@@ -171,3 +171,67 @@ async fn a_stored_system_theme_becomes_no_choice_and_other_choices_stay(pool: Pg
             .expect("the new user");
     assert_eq!(new, None, "a new user has chosen nothing");
 }
+
+/// The `verified_email` migration (spec 07 I4) records the email of every existing local user,
+/// whose email an admin wrote, and of no user of another source. The migrations before it run
+/// first, rows are inserted, and then it runs.
+#[sqlx::test(migrations = false)]
+async fn the_verified_email_migration_records_only_local_users(pool: PgPool) {
+    const VERSION: i64 = 20261116040000;
+    let run = |sql| sqlx::raw_sql(sql).execute(&pool);
+    for migration in MIGRATOR.iter().filter(|m| m.version < VERSION) {
+        run(migration.sql.clone())
+            .await
+            .expect("an earlier migration");
+    }
+    let org = stepclimb_core::id::new_id();
+    sqlx::query("INSERT INTO organizations (id, slug, name) VALUES ($1, 'org-a', 'Org A')")
+        .bind(org)
+        .execute(&pool)
+        .await
+        .expect("insert organization");
+    for (source, email) in [
+        ("local", Some("Local@Example.test")),
+        ("local", None),
+        ("idp", Some("idp@example.test")),
+        ("sync", Some("sync@example.test")),
+    ] {
+        sqlx::query(
+            "INSERT INTO users (id, org_id, source, display_name, email, tz)
+             VALUES ($1, $2, $3, 'Pat', $4, 'UTC')",
+        )
+        .bind(stepclimb_core::id::new_id())
+        .bind(org)
+        .bind(source)
+        .bind(email)
+        .execute(&pool)
+        .await
+        .expect("insert user");
+    }
+    let target = MIGRATOR
+        .iter()
+        .find(|m| m.version == VERSION)
+        .expect("the verified_email migration");
+    run(target.sql.clone()).await.expect("the migration");
+
+    let records: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT source, email, verified_email FROM users ORDER BY source, email NULLS LAST",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("read users");
+    let record = |email: &str| Some(email.to_owned());
+    assert_eq!(
+        records,
+        [
+            ("idp".into(), record("idp@example.test"), None),
+            (
+                "local".into(),
+                record("Local@Example.test"),
+                record("local@example.test")
+            ),
+            ("local".into(), None, None),
+            ("sync".into(), record("sync@example.test"), None),
+        ]
+    );
+}

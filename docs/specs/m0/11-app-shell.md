@@ -692,9 +692,10 @@ list, provider buttons, the callback error and the password step that I5 left):
   and admission send today has its own message: `auth.rate_limited`, `auth.provider_not_found`,
   `auth.provider_unavailable`, `auth.provider_denied`, `auth.provider_error`,
   `auth.id_token_invalid`, `auth.subject_missing`, `auth.flow_expired`, `auth.flow_invalid`,
-  `auth.suspended`, `auth.admission_refused`, `auth.signup_closed` and
-  `entitlement.limit_reached`; `auth.admission_refused` (07, the organization's rules) has the
-  same message where a local sign-in answers it as a problem. Anyone can write a link to
+  `auth.suspended`, `auth.admission_refused`, `auth.not_provisioned`, `auth.signup_closed` and
+  `entitlement.limit_reached`; `auth.admission_refused` (07, the organization's rules) and
+  `auth.not_provisioned` (07 B11, sync-only mode) have the same message where a JSON route
+  answers them as a problem. Anyone can write a link to
   `/sign-in?error=...`, so an unknown value is shown in `Code` only when it has a sign-in code's
   shape: two or three lowercase words joined by dots, the first `auth`, `admission`,
   `entitlement`, `local` or `org`, at most 64 characters. Anything else gets the general message

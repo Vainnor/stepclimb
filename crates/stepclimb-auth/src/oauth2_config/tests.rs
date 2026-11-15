@@ -207,6 +207,7 @@ fn defaults_fill_scopes_pkce_passkeys_and_leave_profile_fields_unmapped() {
     assert!(settings.scopes.is_empty());
     assert!(settings.pkce);
     assert!(!settings.allow_local_passkeys);
+    assert!(!settings.trusted_for_email_matching);
     assert_eq!(settings.claims.subject.as_str(), "/data/id");
     assert_eq!(settings.claims.profile, ProfileMapping::default());
 }
@@ -222,6 +223,7 @@ fn vatsim_shaped() -> Value {
         "client_secret": SECRET,
         "pkce": false,
         "allow_local_passkeys": true,
+        "trusted_for_email_matching": true,
         "claims": {
             "subject": "/data/cid",
             "given_name": "/data/personal/name_first",
@@ -252,6 +254,7 @@ fn a_full_config_is_read_member_by_member() {
     assert_eq!(settings.scopes, ["full_name", "vatsim_details", "email"]);
     assert!(!settings.pkce);
     assert!(settings.allow_local_passkeys);
+    assert!(settings.trusted_for_email_matching);
     let claims = &settings.claims;
     assert_eq!(claims.subject.as_str(), "/data/cid");
     let pointer = |p: &Option<JsonPointer>| p.as_ref().map(|p| p.as_str().to_owned());
@@ -330,6 +333,10 @@ fn flags_and_scopes_must_have_their_types() {
     assert_eq!(
         problems(&with("allow_local_passkeys", json!(1))),
         one("/allow_local_passkeys", code::FIELD_TYPE)
+    );
+    assert_eq!(
+        problems(&with("trusted_for_email_matching", json!("yes"))),
+        one("/trusted_for_email_matching", code::FIELD_TYPE)
     );
     assert_eq!(
         problems(&with("scopes", json!("email"))),

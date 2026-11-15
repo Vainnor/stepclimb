@@ -758,7 +758,7 @@ export interface paths {
         };
         /**
          * Finish a sign-in with an outside identity provider.
-         * @description A browser navigation: the provider's redirect back after sign-in, with `code` and `state` or with `error` and `state`. It needs the `__Host-sc_flow` cookie of the flow the start route began, and clears it. Every refusal is a 303 to `/sign-in?error=<code>`: `auth.provider_not_found` (no enabled provider with this key), `auth.flow_invalid` (no flow cookie, a used or unknown flow, a flow for another provider, or another `state`), `auth.flow_expired` (the flow is older than 10 minutes), `auth.provider_denied` (the person declined at the provider), `auth.provider_error` (the provider reported an error, or its token, key set or userinfo answer could not be used), `auth.id_token_invalid` (the ID token failed a check), `auth.subject_missing` (the ID token's `sub` or the OAuth 2 userinfo subject is missing, empty, holds NUL or is longer than 255 characters), the admission refusals `auth.suspended`, `auth.admission_refused`, `auth.signup_closed` and `entitlement.limit_reached`, or `auth.rate_limited` (with `Retry-After`). An admitted sign-in sets `__Host-sc_session` and is a 303 to the flow's `return_to`.
+         * @description A browser navigation: the provider's redirect back after sign-in, with `code` and `state` or with `error` and `state`. It needs the `__Host-sc_flow` cookie of the flow the start route began, and clears it. Every refusal is a 303 to `/sign-in?error=<code>`: `auth.provider_not_found` (no enabled provider with this key), `auth.flow_invalid` (no flow cookie, a used or unknown flow, a flow for another provider, or another `state`), `auth.flow_expired` (the flow is older than 10 minutes), `auth.provider_denied` (the person declined at the provider), `auth.provider_error` (the provider reported an error, or its token, key set or userinfo answer could not be used), `auth.id_token_invalid` (the ID token failed a check), `auth.subject_missing` (the ID token's `sub` or the OAuth 2 userinfo subject is missing, empty, holds NUL or is longer than 255 characters), the admission refusals `auth.suspended`, `auth.admission_refused`, `auth.not_provisioned`, `auth.signup_closed` and `entitlement.limit_reached`, or `auth.rate_limited` (with `Retry-After`). An admitted sign-in sets `__Host-sc_session` and is a 303 to the flow's `return_to`.
          */
         get: operations["finishProviderSignIn"];
         put?: never;
@@ -989,8 +989,9 @@ export interface components {
              */
             signup_allowed: boolean;
             /**
-             * @description Whether only users already provisioned may sign in. This release accepts only `false`:
-             *     `true` answers 422 with `admission.sync_only_unavailable`.
+             * @description Whether only users already provisioned may sign in: on, a person with no user of the
+             *     organization (no linked identity, no email match) is refused with `auth.not_provisioned`
+             *     even when sign-up is allowed; `false` unless set.
              */
             sync_only: boolean;
         };
@@ -1007,8 +1008,9 @@ export interface components {
              */
             signup_allowed?: boolean;
             /**
-             * @description Whether only users already provisioned may sign in. This release accepts only `false`:
-             *     `true` answers 422 with `admission.sync_only_unavailable`.
+             * @description Whether only users already provisioned may sign in: on, a person with no user of the
+             *     organization (no linked identity, no email match) is refused with `auth.not_provisioned`
+             *     even when sign-up is allowed; `false` unless set.
              */
             sync_only?: boolean;
         };
@@ -1545,8 +1547,10 @@ export interface components {
             default_tz: string;
             /**
              * @description Whether a sign-in through an identity the organization does not know yet may be linked
-             *     to the existing user with the same email address. `false` unless set, and this release
-             *     refuses to set it to `true`.
+             *     to the existing user with the same email address: only through a provider whose config
+             *     sets `trusted_for_email_matching`, only when that provider marked the address verified,
+             *     and only to a local or just-in-time user whose stored email is recorded as verified.
+             *     `false` unless set.
              */
             email_matching: boolean;
             /**
@@ -1564,8 +1568,8 @@ export interface components {
             /** @description An IANA time zone, matched in any letter case and stored in the database's spelling. */
             default_tz?: string;
             /**
-             * @description Only `false` is accepted: `true` answers 422 with
-             *     `settings.email_matching_unavailable`.
+             * @description `true` needs `provider.manage` and every catalog permission at organization scope, as
+             *     well as `organization.manage`.
              */
             email_matching?: boolean;
         };
@@ -2162,7 +2166,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `request.invalid`: the change breaks a rule; `errors` lists each one (at most 20), each with a JSON Pointer to the member. `admission.sync_only_unavailable` marks `sync_only` turned on, which this release refuses. `admission.rule_invalid` marks a rule that is not one of the documented forms or breaks a limit; `admission.attribute_unknown` an attribute no provider the list applies to maps; `admission.provider_unknown` a key in `rules.providers` that is not an outside provider of the organization. */
+        /** @description `request.invalid`: the change breaks a rule; `errors` lists each one (at most 20), each with a JSON Pointer to the member. `admission.rule_invalid` marks a rule that is not one of the documented forms or breaks a limit; `admission.attribute_unknown` an attribute no provider the list applies to maps; `admission.provider_unknown` a key in `rules.providers` that is not an outside provider of the organization. */
         AdmissionInvalid: {
             headers: {
                 [name: string]: unknown;
@@ -2902,8 +2906,17 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting this route does not change (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`; `admission`: `PUT /api/v1/admin/admission`); `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses. */
+        /** @description `request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting this route does not change (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`; `admission`: `PUT /api/v1/admin/admission`); `tz.unknown` a `default_tz` that is no IANA time zone. */
         SettingsInvalid: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: the caller does not hold `organization.manage` at organization scope, or the patch sets `email_matching` to `true` and the caller does not hold `provider.manage` there. `permission.escalation`: the patch sets `email_matching` to `true`, which changes how people sign in, and the caller does not hold every catalog permission at organization scope. `auth.csrf_refused`: the request did not come from this site. */
+        SettingsWriteForbidden: {
             headers: {
                 [name: string]: unknown;
             };
@@ -4372,7 +4385,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
-            403: components["responses"]["OrgWriteForbidden"];
+            403: components["responses"]["SettingsWriteForbidden"];
             404: components["responses"]["OrganizationNotFound"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];

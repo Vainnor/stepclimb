@@ -90,7 +90,10 @@ server every sign-in test and the Playwright stack use instead of a real provide
   `email_verified` would trust a member the admin never chose. The config also holds
   `allow_local_passkeys` (boolean, default `false`): whether users who sign in through the
   provider may also add passkeys (owner decision on issue #25, 2026-11-15 UTC;
-  `04-local-accounts.md` B13 enforces it).
+  `04-local-accounts.md` B13 enforces it), and `trusted_for_email_matching` (boolean, default
+  `false`): whether the provider is trusted for matching users by email (`07-admission.md` B5,
+  added by `07` issue I4). An `oauth2` sign-in's email counts as verified for matching only when
+  the mapping names an `email_verified` pointer and the body says `true` there.
 
   The server reads `allow_local_passkeys` from the stored config of every enabled `oidc` or
   `oauth2` provider the user has an identity at, exactly `true` counting as on: adding a passkey
@@ -241,6 +244,10 @@ server every sign-in test and the Playwright stack use instead of a real provide
   organization and the member; nothing is written. The same holds between restarts for a row the
   file already owns. With no identity at the row, it goes ahead and a startup warning says what
   changed. A new path on the same origin, a label, scopes or profile claims are not anchors.
+  So the file may turn `trusted_for_email_matching` on, or change `claims.email` or
+  `claims.email_verified`, on a row that has identities (`07-admission.md` I4): the operator
+  owns the file and the instance, and that change decides which existing users a new identity
+  can be linked to by email.
 
   Coordinator decision (2026-11-15, same review): every server of an instance must read the
   same `stepclimb.toml`. Each in-memory secret is kept with a SHA-256 fingerprint of the config
@@ -258,6 +265,14 @@ server every sign-in test and the Playwright stack use instead of a real provide
   B1 for `oidc`, answering 422 `provider.config_invalid` with a JSON Pointer to the bad field.
   Client secrets are write-only: no response contains them, only `client_secret_set: true`.
   Each response includes the provider's `redirect_uri` for registration at the provider.
+
+  Coordinator decision (2026-11-15, overnight, security review of PR #199, for I5): a create or
+  update that leaves the provider trusted for email matching (`07-admission.md` B5) is refused
+  with 403 `permission.escalation` unless the caller holds every catalog permission at
+  organization scope, the rule of `PUT /api/v1/admin/local-sign-in`: creating a provider with
+  `trusted_for_email_matching: true`, turning it on, or, while it is on, changing
+  `claims.email`, `claims.email_verified` or the `oidc` `issuer`. Each decides which existing
+  users a new identity can reach by email.
 - **B15.** A `key` already used in the organization answers 409 `provider.key_taken`. Key
   format: pending Q5.
 - **B16.** Deleting a provider that has identities: pending Q5. Disabling (`enabled: false`)
@@ -315,6 +330,7 @@ No new table. This spec defines the `config` shape for `kind = 'oauth2'` rows of
   "scopes": ["profile", "email"],
   "pkce": true,
   "allow_local_passkeys": false,
+  "trusted_for_email_matching": false,
   "claims": {
     "subject": "/data/id",
     "given_name": "/data/first_name",

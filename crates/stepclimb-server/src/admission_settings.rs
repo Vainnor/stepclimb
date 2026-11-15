@@ -11,9 +11,7 @@
 //!
 //! The switches go through the repository's `admission_settings::update`, which applies them
 //! under the organization row's lock and writes, with its `organization.update_settings`
-//! entry, only a change; it refuses to turn `sync_only` on (422
-//! `admission.sync_only_unavailable`) until admission applies it. No escalation rule applies to
-//! them: they decide whether a person the organization has no user for is let in, and never
+//! entry, only a change. No escalation rule applies to them: they decide whether a person the organization has no user for is let in, and never
 //! how an existing user signs in or what they may do, since a just-in-time user gets no role.
 //!
 //! The rules go through `admission_rules`: the lists are read under the organization row's and
@@ -65,8 +63,6 @@ pub const MAX_ERRORS: usize = 20;
 
 /// The codes this module produces.
 pub mod code {
-    /// In a 422's `errors`: `sync_only` cannot be turned on before admission applies it.
-    pub const SYNC_ONLY_UNAVAILABLE: &str = "admission.sync_only_unavailable";
     pub use stepclimb_core::admission_rules::code::{
         ATTRIBUTE_UNKNOWN, PROVIDER_UNKNOWN, RULE_INVALID,
     };
@@ -74,7 +70,7 @@ pub mod code {
 
 problem_responses! {
     AdmissionWriteForbidden => "`permission.denied`: the caller does not hold `admission.manage` at organization scope. `permission.escalation`: the body names a rule list, which applies to every user who signs in through an outside provider, and the caller does not hold every catalog permission at organization scope. `auth.csrf_refused`: the request did not come from this site.",
-    AdmissionInvalid => "`request.invalid`: the change breaks a rule; `errors` lists each one (at most 20), each with a JSON Pointer to the member. `admission.sync_only_unavailable` marks `sync_only` turned on, which this release refuses. `admission.rule_invalid` marks a rule that is not one of the documented forms or breaks a limit; `admission.attribute_unknown` an attribute no provider the list applies to maps; `admission.provider_unknown` a key in `rules.providers` that is not an outside provider of the organization.",
+    AdmissionInvalid => "`request.invalid`: the change breaks a rule; `errors` lists each one (at most 20), each with a JSON Pointer to the member. `admission.rule_invalid` marks a rule that is not one of the documented forms or breaks a limit; `admission.attribute_unknown` an attribute no provider the list applies to maps; `admission.provider_unknown` a key in `rules.providers` that is not an outside provider of the organization.",
 }
 
 /// Who admission lets in.
@@ -83,8 +79,9 @@ pub struct AdmissionSettings {
     /// Whether a person the organization has no user for is created as a user when they first
     /// sign in through an identity provider. Off, they are refused with `auth.signup_closed`.
     pub signup_allowed: bool,
-    /// Whether only users already provisioned may sign in. This release accepts only `false`:
-    /// `true` answers 422 with `admission.sync_only_unavailable`.
+    /// Whether only users already provisioned may sign in: on, a person with no user of the
+    /// organization (no linked identity, no email match) is refused with `auth.not_provisioned`
+    /// even when sign-up is allowed; `false` unless set.
     pub sync_only: bool,
     pub rules: AdmissionRules,
 }
@@ -233,8 +230,9 @@ pub struct AdmissionSettingsPatch {
     #[serde(default, deserialize_with = "present")]
     #[schema(value_type = bool)]
     pub signup_allowed: Option<bool>,
-    /// Whether only users already provisioned may sign in. This release accepts only `false`:
-    /// `true` answers 422 with `admission.sync_only_unavailable`.
+    /// Whether only users already provisioned may sign in: on, a person with no user of the
+    /// organization (no linked identity, no email match) is refused with `auth.not_provisioned`
+    /// even when sign-up is allowed; `false` unless set.
     #[serde(default, deserialize_with = "present")]
     #[schema(value_type = bool)]
     pub sync_only: Option<bool>,
@@ -454,10 +452,6 @@ fn org_not_found() -> ApiError {
 /// The answer for an admission settings repository error.
 fn admission_error(error: repo::Error) -> ApiError {
     match error {
-        repo::Error::SyncOnlyUnavailable => ApiError::invalid(vec![FieldError::at(
-            &["sync_only"],
-            code::SYNC_ONLY_UNAVAILABLE,
-        )]),
         repo::Error::NotFound => org_not_found(),
         other => ApiError::internal(&other),
     }
@@ -504,10 +498,6 @@ mod tests {
 
     #[test]
     fn repository_refusals_map_to_their_status_code_and_field() {
-        let sync = admission_error(repo::Error::SyncOnlyUnavailable).problem();
-        assert_eq!((sync.status, sync.code.as_str()), (422, "request.invalid"));
-        assert_eq!(sync.errors[0].field, "/sync_only");
-        assert_eq!(sync.errors[0].code, "admission.sync_only_unavailable");
         let missing = admission_error(repo::Error::NotFound).problem();
         assert_eq!(
             (missing.status, missing.code.as_str()),

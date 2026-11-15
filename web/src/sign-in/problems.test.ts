@@ -4,7 +4,7 @@
 import type { Strings } from "@stepclimb/ui";
 import { describe, expect, it } from "vitest";
 import { ApiError, UnreachableError } from "../api";
-import { signInProblem } from "./problems";
+import { navigationProblem, signInProblem } from "./problems";
 
 const t = ((id: string) => id) as Strings["t"];
 
@@ -18,6 +18,24 @@ describe("signInProblem", () => {
   it("gives a fault in the page the general message, not an unreachable server", () => {
     expect(signInProblem(new Error("a fault"), "signIn", t)).toEqual({
       message: "signIn.problem.failed",
+    });
+  });
+
+  it("explains a sync-only refusal on every screen and in a browser flow's redirect", () => {
+    const problem = {
+      type: "about:blank",
+      title: "Forbidden",
+      status: 403,
+      detail: "x",
+      code: "auth.not_provisioned",
+    };
+    for (const screenName of ["signIn", "password", "totp", "enroll"] as const) {
+      expect(signInProblem(new ApiError(403, problem), screenName, t)).toEqual({
+        message: "signIn.problem.notProvisioned",
+      });
+    }
+    expect(navigationProblem("auth.not_provisioned", t)).toEqual({
+      message: "signIn.problem.notProvisioned",
     });
   });
 

@@ -51,8 +51,8 @@ just-in-time user creation only when the organization allows sign-up. Every sign
      identity and is handled by B4);
   2. when the organization's `email_matching` setting (`03-users-and-identities.md` B17, off by
      default as the plan says) is on, a user in the organization with the same email, under the
-     conditions `03-users-and-identities.md` Q2 sets (decided: option A; until issue 4 builds
-     the matching, the setting cannot be turned on, `03-users-and-identities.md` B17).
+     conditions `03-users-and-identities.md` Q2 sets (option A; built by issue 4, whose
+     decisions list the conditions).
   A match creates the `identities` row linking `(provider_id, subject)` to that user, inside
   B3's transaction, so it is rolled back if a later step refuses.
 - **B6.** With email matching off, an identity is never linked by email, whatever the provider
@@ -169,6 +169,12 @@ does not name; Q2 proposes it. Proposed, pending Q2:
   plan's `webhook_endpoints` table is for outgoing events (M4) with delivery retries, which do
   not fit a synchronous call that must answer within 3 seconds.
 
+- **Verified email** (I4): `users.verified_email text`, the lowercased address a verified source
+  vouched for, held to `lower(email COLLATE "C")` by a check constraint (migration
+  `20261116040000_verified_email.sql`, `03-users-and-identities.md` Data). The trust flag is
+  the provider config member `trusted_for_email_matching` (`05-oidc.md` B1,
+  `06-oauth2-and-vatsim-preset.md` B4); no migration.
+
 - **Refusal marker** (I3): `users.admission_refused_at timestamptz` and
   `users.admission_refused_provider text`, both NULL or both set (migration
   `20261115140000_admission_refusal.sql`); I3's decisions say how they are used.
@@ -199,8 +205,9 @@ test on `127.0.0.1`, never the network. Time-dependent tests use the controllabl
   email is treated as new (and with sign-up off, refused `auth.signup_closed`); no identity is
   linked.
 - **T4.** (B5) With email matching on and `03-users-and-identities.md` Q2's conditions met, the
-  identity is linked to the existing user; with them unmet (for example `email_verified` false), it
-  is not.
+  identity is linked to the existing user; with any one unmet (`email_verified` false, a
+  provider not trusted for matching, a stored email not recorded as verified, a user an
+  outside source owns), it is not, and a suspended match is refused `auth.suspended`.
 - **T5.** (B5) The provisioned-user match of Q4 links a synced user's first sign-in to that user.
 - **T6.** (B7) A second sign-in with changed attributes replaces the stored `attributes`.
 - **T7.** (B8, B9) A rule requiring attribute `subdivision` to equal `USA` (synthetic data)
@@ -405,9 +412,9 @@ overrule one, which then updates this spec.
      B4 and B5), and a just-in-time user gets no role. The API table lists no
      `permission.escalation` for this route. I3's rules run on every sign-in (Q3), so they
      can lock out an existing user, and I3 decides whether its rule writes take the rule.
-   - `sync_only` is stored and returned, but the `PUT` refuses to set it to `true` (422
+   - `sync_only` was stored and returned, but the `PUT` refused to set it to `true` (422
      `request.invalid`, `errors[].code = "admission.sync_only_unavailable"` at `/sync_only`)
-     until I4 makes admission apply it, and I4 lifts the refusal. A `true` that no sign-in
+     until I4 made admission apply it; I4 lifted the refusal and removed the code. A `true` that no sign-in
      reads would tell an admin that only provisioned users get in while anyone with an
      identity still does when sign-up is on. This is `03-users-and-identities.md` B17's rule
      for `email_matching`. In M0 sign-up off already refuses every person with no user.
@@ -545,7 +552,79 @@ overrule one, which then updates this spec.
      reads the key as `AdmissionSwitches` does (a stored member is kept and its value read),
      but its admission never applies it, so after a rollback a person with no user is
      admitted again whenever sign-up is allowed. The release notes of I4's release say so,
-     and an operator who rolls back with sync-only mode on turns sign-up off first.
+     and an operator who rolls back with sync-only mode on turns sign-up off first. The same
+     holds for `email_matching: true`: an older release never matches, which fails closed.
+
+   Coordinator decisions (2026-11-15, overnight), for this issue:
+
+   - Q4 (b) needs no code here: a user an admin pre-provisioned an identity for
+     (`03-users-and-identities.md` B18) is a known identity at step 1, so T5 tests that a
+     synced user's pre-provisioned identity signs in, in sync-only mode.
+   - B5's email match, in `stepclimb_server::admission`, runs only for an outside provider's
+     sign-in that no identity matches, with `email_matching` on, and only when all of these
+     hold. The incoming side: the provider marked the address verified (OIDC `email_verified`
+     exactly `true`, `05-oidc.md` B13; for `oauth2` only a mapped `email_verified` pointer
+     whose value is `true`, `06-oauth2-and-vatsim-preset.md` B10), carried as
+     `Verified::email_verified`; and the provider, as stored when admission reads it again
+     before step 1, sets `trusted_for_email_matching` to exactly `true` (Q2 (a)'s trust flag,
+     a config member of either kind, default `false`). The stored side: the user's email is
+     recorded as verified (`users.verified_email = lower(email COLLATE "C")`); and the user's source is
+     `local` or `idp`. A user owned by sync, SCIM or a connector is never matched (coordinator
+     decision on #43, 2026-11-14), even with a verified email. A user who already has an
+     identity at the signing-in provider is not a candidate for another subject there: a
+     second account at the same provider is a new person (security review of #199).
+   - Addresses are compared ASCII only (security review of #199): an incoming or stored
+     address with any non-ASCII character is never matched, and the comparison and the record
+     use `lower(x COLLATE "C")`, which folds only ASCII A to Z whatever the database's locale.
+     Unicode case rules (the Kelvin sign U+212A lowercases to `k`, U+0130 to `i` with a dot)
+     can therefore never make two addresses equal.
+   - What counts as a verified source for the stored side, failing closed. An admin: every
+     `local` user's email is an admin's (`POST` and `PATCH /api/v1/users`, `stepclimb admin
+     create`), so `users::create` and `users::update` record it for `local` users, and the
+     migration records it for existing local users. This makes an admin's address an accepted
+     admin power: an admin who creates an account with someone else's address, and holds its
+     enrollment link, gets that person's first sign-in through a trusted provider linked to the
+     account. Holders of `user.manage` can already create accounts and enrollment links; email
+     matching adds the link by address, which is why turning it on needs every permission. A sign-in: a just-in-time user's email, or
+     a new address Q6 writes, is recorded only when the provider is trusted for matching and
+     marked the address verified. This is stricter than "a provider sign-in with
+     `email_verified` true": a provider not trusted for matching may assert `email_verified`
+     for any address, and its users would otherwise become match candidates for a trusted
+     provider's sign-ins. When the identity that owns an `idp` user's profile (Q6) signs in
+     through a trusted provider with the user's current address marked verified, the address
+     is recorded too. Every other email starts unrecorded, and a change
+     to another address drops the record (the check constraint holds it to `lower(email COLLATE "C")`).
+     Sync, SCIM and connectors come in M4 and record nothing yet; their users are not
+     candidates anyway.
+   - A match locks the user's row (`users::find_email_match`, `FOR NO KEY UPDATE`, the lock of
+     `users::set_status`). A suspended match is refused with `auth.suspended` at step 1, rather
+     than treated as no match: otherwise a suspended person with sign-up allowed would get a
+     second user. Q2's "single active user" is then the only user with the address (emails
+     are unique, `03-users-and-identities.md` Q1).
+   - A matched user is a candidate for steps 2 and 3 like a known identity's user: the rules
+     run with them as the known user, so a refusal by the rules records the refusal marker on
+     them (I3's decision) and passing clears it, and sync-only mode admits them. The
+     `identities` row is linked after the rules pass, in the savepoint, by the matched user
+     from the request's address (`identity.link`, `09-permissions-and-roles.md` B22), so any
+     refusal leaves no link (T2). Two first sign-ins of one subject matched at once: the second
+     waits on the user's row lock, its link fails as taken, and it is admitted as the user the
+     identity now belongs to, as step 5 does. A link by email logs at info the provider key
+     and the user id, never the address.
+   - Step 3 runs for every sign-in with no candidate after step 1, logs `sync_only` at debug
+     like the other steps (T21), and refuses with `auth.not_provisioned` when `sync_only` is
+     on, before step 5 reads `signup_allowed`. A known or matched user is never refused by it.
+   - Writing `email_matching: true` through `PATCH /api/v1/organization/settings` needs
+     `perm::ProviderManage` and every catalog permission at organization scope
+     (`03-users-and-identities.md` B17's decision). `sync_only` keeps I2's rule
+     (`perm::AdmissionManage` alone): it refuses only people the organization has no user for.
+   - The trust flag's admin surface is the provider config, written by `stepclimb.toml`
+     providers (`06-oauth2-and-vatsim-preset.md` I4) and the provider administration API (06
+     I5) through `identity_providers::replace_config`; I4 adds no route of its own. The file
+     may change the flag and the email claims on a row with identities (06 I4's anchors do not
+     cover them; the operator owns the file). The API needs every permission for any change
+     that leaves a provider trusted (06 B14's decision for I5). Turning
+     the flag off stops matching through that provider at its next sign-in; links already made
+     stay.
 5. **I5. Webhook administration.** Migration for `admission_webhooks` (pending Q2), the four
    webhook routes, server-generated secret returned once, rotation, encryption at rest. Covers
    B24; T18, T19 and T20 (for these routes). Depends on: I2, `08-sessions-and-csrf.md` I1

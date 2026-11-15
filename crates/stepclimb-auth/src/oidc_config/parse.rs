@@ -5,14 +5,14 @@ use serde_json::{Map, Value};
 
 use super::{
     ALLOW_LOCAL_PASSKEYS, ClaimsMapping, ConfigErrors, DEFAULT_SCOPES, OidcConfig, OidcConfigDraft,
-    OidcSettings, SealedSecret, StoredConfigError, code,
+    OidcSettings, SealedSecret, StoredConfigError, TRUSTED_FOR_EMAIL_MATCHING, code,
 };
 use crate::json_pointer::JsonPointer;
 use crate::outbound::UrlPolicy;
 use crate::provider_config::walk::{self, Walk};
 
 /// The members of an `oidc` config.
-const MEMBERS: [&str; 7] = [
+const MEMBERS: [&str; 8] = [
     "issuer",
     "client_id",
     "client_secret",
@@ -20,6 +20,7 @@ const MEMBERS: [&str; 7] = [
     "claims",
     "userinfo",
     ALLOW_LOCAL_PASSKEYS,
+    TRUSTED_FOR_EMAIL_MATCHING,
 ];
 
 /// The members of `claims`.
@@ -78,6 +79,12 @@ fn settings(
         map.get(ALLOW_LOCAL_PASSKEYS),
         false,
     );
+    let trusted_for_email_matching = walk::flag(
+        walk,
+        TRUSTED_FOR_EMAIL_MATCHING,
+        map.get(TRUSTED_FOR_EMAIL_MATCHING),
+        false,
+    );
     Some(OidcSettings {
         issuer: issuer?,
         client_id: client_id?,
@@ -85,6 +92,7 @@ fn settings(
         claims: claims?,
         userinfo: userinfo?,
         allow_local_passkeys: allow_local_passkeys?,
+        trusted_for_email_matching: trusted_for_email_matching?,
     })
 }
 

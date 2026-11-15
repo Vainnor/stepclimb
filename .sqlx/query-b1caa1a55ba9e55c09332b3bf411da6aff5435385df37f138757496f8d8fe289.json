@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE users SET verified_email = lower(email COLLATE \"C\")\n           WHERE org_id = $1 AND id = $2 AND lower(email COLLATE \"C\") = lower($3 COLLATE \"C\")\n             AND verified_email IS DISTINCT FROM lower(email COLLATE \"C\")",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b1caa1a55ba9e55c09332b3bf411da6aff5435385df37f138757496f8d8fe289"
+}

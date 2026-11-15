@@ -214,6 +214,7 @@ describe("the code a browser flow came back with (B18, T8)", () => {
     ["auth.flow_invalid", "This sign-in was already finished or replaced by one in another tab."],
     ["auth.suspended", "Your account is suspended. Ask an administrator to restore it."],
     ["auth.signup_closed", "There is no account for you in this organization"],
+    ["auth.not_provisioned", "This organization lets in only people it already has an account"],
     ["auth.admission_refused", "Your organization's sign-in rules do not let this account in."],
     ["entitlement.limit_reached", "This organization has no room for another user on its plan"],
   ])("%s has its own message", async (code, message) => {

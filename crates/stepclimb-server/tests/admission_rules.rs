@@ -454,6 +454,7 @@ async fn admit(
         provider,
         subject,
         profile: Profile::default(),
+        email_verified: false,
         attributes: object(attrs),
     };
     let context = Context {
@@ -675,8 +676,8 @@ async fn a_providers_list_applies_to_its_own_sign_ins_and_the_organizations_to_a
     );
 }
 
-/// T21 (B1, steps 1, 2 and 5): with rules and sign-up configured, a new person runs steps 1, 2
-/// and 5 in that order; a refusal at step 2 runs no step 5, and a refusal at step 1 (a
+/// T21 (B1, steps 1, 2, 3 and 5): with rules and sign-up configured, a new person runs steps 1,
+/// 2, 3 and 5 in that order; a refusal at step 2 runs no later step, and a refusal at step 1 (a
 /// suspended user) runs no step 2.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn t21_the_steps_run_in_order_and_stop_at_a_refusal(pool: PgPool) {
@@ -703,7 +704,7 @@ async fn t21_the_steps_run_in_order_and_stop_at_a_refusal(pool: PgPool) {
     );
     assert_eq!(
         captured.steps(),
-        ["known_identity", "rules", "just_in_time"]
+        ["known_identity", "rules", "sync_only", "just_in_time"]
     );
 
     captured.clear();

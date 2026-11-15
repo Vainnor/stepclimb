@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE users\n           SET display_name = COALESCE($3, display_name),\n               given_name = COALESCE($4, given_name),\n               family_name = COALESCE($5, family_name),\n               email = CASE WHEN $6 THEN $7 ELSE email END,\n               locale = COALESCE($8, locale),\n               tz = COALESCE($9, tz),\n               updated_at = timestamptz 'epoch' + $10::bigint * interval '1 microsecond'\n           WHERE org_id = $1 AND id = $2\n           RETURNING id, display_name, given_name, family_name, email, locale, tz, status, source,\n                     external_id,\n                     (extract(epoch FROM created_at) * 1000000)::bigint AS \"created_at_us!\",\n                     (extract(epoch FROM updated_at) * 1000000)::bigint AS \"updated_at_us!\"",
+  "query": "SELECT id, display_name, given_name, family_name, email, locale, tz, status, source,\n                  external_id,\n                  (extract(epoch FROM created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM users\n           WHERE org_id = $1\n             AND lower(email COLLATE \"C\") = lower($2 COLLATE \"C\")\n             AND octet_length(email) = char_length(email)\n             AND verified_email = lower(email COLLATE \"C\")\n             AND source = ANY($3::text[])\n             AND NOT EXISTS (\n                 SELECT 1 FROM identities i\n                 WHERE i.org_id = users.org_id AND i.user_id = users.id AND i.provider_id = $4\n             )\n           FOR NO KEY UPDATE",
   "describe": {
     "columns": [
       {
@@ -129,15 +129,9 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Uuid",
         "Text",
-        "Text",
-        "Text",
-        "Bool",
-        "Text",
-        "Text",
-        "Text",
-        "Int8"
+        "TextArray",
+        "Uuid"
       ]
     },
     "nullable": [
@@ -155,5 +149,5 @@
       null
     ]
   },
-  "hash": "874858d04180067f64871f82308fc074e6c18e55c8144c6218e06150b7f6ae42"
+  "hash": "dd34ee414b69dab8a06495c75ff1903607f5f5f47910e0d3988d2fa4575bda81"
 }

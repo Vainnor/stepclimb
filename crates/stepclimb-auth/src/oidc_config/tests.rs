@@ -449,6 +449,27 @@ fn local_passkeys_are_off_unless_the_config_allows_them() {
     }
 }
 
+/// Spec 07 B5: a provider is not trusted for matching users by email unless the config says
+/// exactly `true`, and the switch survives the stored round trip.
+#[test]
+fn email_matching_trust_is_off_unless_the_config_sets_it() {
+    let absent = validate(&minimal(), POLICY, None).expect("valid").settings;
+    assert!(!absent.trusted_for_email_matching);
+    let config = with(TRUSTED_FOR_EMAIL_MATCHING, json!(true));
+    let draft = validate(&config, POLICY, None).expect("valid");
+    assert!(draft.settings.trusted_for_email_matching);
+    let stored = draft.seal(&ring(), row()).expect("sealed").to_json();
+    assert_eq!(stored[TRUSTED_FOR_EMAIL_MATCHING], json!(true));
+    let read = OidcConfig::from_stored(&stored).expect("readable");
+    assert!(read.settings.trusted_for_email_matching);
+    for value in [json!("true"), json!(1), json!(null)] {
+        assert_eq!(
+            problems(&with(TRUSTED_FOR_EMAIL_MATCHING, value)),
+            one("/trusted_for_email_matching", code::FIELD_TYPE)
+        );
+    }
+}
+
 #[test]
 fn the_local_passkeys_switch_is_stored_and_read_back() {
     let config = with("allow_local_passkeys", json!(true));

@@ -24,8 +24,8 @@ pub struct OrgSettings {
     /// The IANA time zone of a user created without one ([`crate::tz`]; spec 03 B3, Q4).
     pub default_tz: String,
     /// Whether a sign-in through an identity the organization does not know may be linked to
-    /// an existing user with the same email address (spec 03 B17). Off by default; the
-    /// repository refuses to turn it on until spec 07 issue 4 implements the matching.
+    /// an existing user with the same email address (spec 03 B17, Q2 (a); spec 07 B5). Off by
+    /// default.
     pub email_matching: bool,
     /// The local sign-in method switches (spec 04 B1, Q2), written only through
     /// [`crate::local_sign_in::update`].
@@ -56,7 +56,6 @@ pub struct AdmissionSwitches {
     pub signup_allowed: bool,
     /// Whether only users already provisioned may sign in (spec 07 B11, B12); a person no user
     /// matches is then refused with `auth.not_provisioned`, whatever `signup_allowed` says.
-    /// [`crate::admission_settings::update`] refuses to turn it on until admission applies it.
     pub sync_only: bool,
 }
 
@@ -70,7 +69,7 @@ pub struct OrgSettingsPatch {
     /// An IANA time zone name; the repository stores the database's spelling of it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_tz: Option<String>,
-    /// Only `false` is accepted until spec 07 issue 4 implements the matching (spec 03 B17).
+    /// Who may set it to `true` is the settings route's check (spec 07 I4).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email_matching: Option<bool>,
 }
