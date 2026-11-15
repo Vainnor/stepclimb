@@ -286,9 +286,28 @@ async fn the_file_takes_over_a_row_with_its_key(pool: PgPool) {
     .await
     .expect("an API row");
 
-    let secrets = apply(&pool, &oidc("corp", "enabled = false"), start())
-        .await
-        .expect("applies");
+    let file = oidc("corp", "enabled = false");
+    let (secrets, log) = logged(apply(&pool, &file, start())).await;
+    let secrets = secrets.expect("applies");
+    assert!(
+        log.contains(
+            "provider \"corp\" was created through the admin API; stepclimb.toml now owns it"
+        ),
+        "{log}"
+    );
+    assert!(
+        log.contains("provider \"corp\" changes kind")
+            && log.contains("from=\"oauth2\"")
+            && log.contains("to=\"oidc\""),
+        "{log}"
+    );
+    assert!(!log.contains("secret-of-corp"), "{log}");
+
+    // The row is the file's now, and its kind the file's: a restart warns about neither.
+    let (again, log) = logged(apply(&pool, &file, restart())).await;
+    again.expect("applies again");
+    assert!(!log.contains("admin API"), "{log}");
+    assert!(!log.contains("changes kind"), "{log}");
     let rows = rows(&pool).await;
     let [(_, _, kind, enabled, config, _)] = rows.as_slice() else {
         panic!("one row: {rows:?}");
@@ -297,6 +316,39 @@ async fn the_file_takes_over_a_row_with_its_key(pool: PgPool) {
     assert_eq!(config["source"], json!("config"));
     assert_eq!(config.get("client_secret"), None);
     assert_eq!(row_of(&secrets, a, api).as_deref(), Some("secret-of-corp"));
+}
+
+/// A writer that keeps every log line, for the startup warnings.
+#[derive(Clone, Default)]
+struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .expect("not poisoned")
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// `work`'s result and everything it logged, as text. The subscriber is this thread's while
+/// `work` runs; `#[sqlx::test]` runs a current-thread runtime.
+async fn logged<T>(work: impl std::future::Future<Output = T>) -> (T, String) {
+    let captured = Captured::default();
+    let writer = captured.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(move || writer.clone())
+        .finish();
+    let guard = tracing::subscriber::set_default(subscriber);
+    let result = work.await;
+    drop(guard);
+    let text = String::from_utf8(captured.0.lock().expect("not poisoned").clone()).expect("UTF-8");
+    (result, text)
 }
 
 /// Q2 (a), second half: with two organizations an entry must name one by its slug.
