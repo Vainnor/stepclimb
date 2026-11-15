@@ -127,6 +127,12 @@ rsa = { version = "=0.9.10", default-features = false, features = ["std", "u64_d
 # tests, which parse what the mock serves (spec 06 T1). No default features: its reqwest adapter
 # is not used, every provider request goes through `stepclimb_auth::outbound` (ADR 0025).
 openidconnect = { version = "=4.1.0", default-features = false }
+# App access tokens of the OAuth 2.1 server for Stepclimb's own apps (plan, Technical -> Decided:
+# "built on `oauth2`/`jsonwebtoken`"; docs/specs/m0/08-sessions-and-csrf.md Q12, B46): the JWS
+# framing, header and claim checks of HS256 JWTs. No default features (`use_pem`: no PEM keys) and
+# no crypto backend feature: `stepclimb_auth::oauth_server::access_token` installs its own
+# `CryptoProvider`, HS256 only, over the `hmac` and `sha2` pinned here, so no second crypto stack.
+jsonwebtoken = { version = "=11.1.0", default-features = false }
 # OAuth 2 for the relying party (plan, Technical -> Architecture and stack: `oauth2`): the code
 # exchange of a generic OAuth 2 provider's sign-in (docs/specs/m0/06-oauth2-and-vatsim-preset.md
 # I3), the version openidconnect 4.1 already brings. No default features: its reqwest adapter is
