@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The provider's redirect back: `GET /auth/{provider}/callback` (docs/specs/m0/05-oidc.md B7
-//! to B11, B16).
+//! to B11, B16; `06-oauth2-and-vatsim-preset.md` B7 to B10).
 //!
 //! The browser arrives here from the provider's authorization endpoint with `code` and `state`,
 //! or with `error` and `state`. The route needs no credential: it runs before sign-in, in the
-//! organization `RequestOrg` resolves. In order, it:
+//! organization `RequestOrg` resolves. One route serves both provider kinds and picks the flow
+//! by the provider's kind (spec 05, API); steps 1 to 5 are the same for both. In order, it:
 //!
 //! 1. counts the request against the client address's sign-in budget (B16), as the start route
 //!    does;
 //! 2. finds the provider by its key in the request's organization (B3). No provider is
-//!    `auth.provider_not_found` and the flow is left alone; a provider of a kind this release
-//!    does not sign in with (`oauth2`, spec 06) is `auth.provider_unavailable`;
-//! 3. takes the `oidc` sign-in flow the `__Host-sc_flow` cookie names (spec 08 B18). Taking it
+//!    `auth.provider_not_found` and the flow is left alone;
+//! 3. takes the sign-in flow of the provider's kind the `__Host-sc_flow` cookie names (spec 08
+//!    B18). Taking it
 //!    deletes it, so whatever follows, the flow is used once. No cookie, an unknown or used flow
 //!    is `auth.flow_invalid`, an expired one `auth.flow_expired`. A flow started for another
 //!    provider, or a `state` that is missing or not the flow's (compared in constant time), is
@@ -19,11 +20,15 @@
 //! 4. answers a provider's `error` (B8): `access_denied` is `auth.provider_denied`, anything
 //!    else `auth.provider_error`. The `error_description` is logged, cut to 200 characters,
 //!    and never put in the redirect;
-//! 5. redeems the `code` and verifies the result ([`stepclimb_auth::oidc::redeem_code`]): a
-//!    failed exchange, an unreadable key set or a userinfo answer that cannot be used is
-//!    `auth.provider_error` (B9, B11); a refused ID token `auth.id_token_invalid` (B10), except
-//!    a `sub` no identity can hold, which is `auth.subject_missing`;
-//! 6. hands the verified sign-in to [`complete_sign_in`].
+//! 5. refuses a callback with neither `error` nor `code` as `auth.provider_error`;
+//! 6. for `oidc`, redeems the `code` and verifies the result
+//!    ([`stepclimb_auth::oidc::redeem_code`]): a failed exchange, an unreadable key set or a
+//!    userinfo answer that cannot be used is `auth.provider_error` (B9, B11); a refused ID token
+//!    `auth.id_token_invalid` (B10), except a `sub` no identity can hold, which is
+//!    `auth.subject_missing`. It then hands the verified sign-in to [`complete_sign_in`], which
+//!    does not complete it yet (spec 05 I4). For `oauth2`, [`crate::oauth2_sign_in::finish`]
+//!    redeems the code, calls userinfo and passes the mapped sign-in to admission, which creates
+//!    the session (spec 06 B8 to B10).
 //!
 //! A refusal is a 303 to the sign-in page with the code, logged at warn with the provider's key
 //! and never with a URL, a token, the `code` or a secret. A server fault (the flow's payload or
@@ -42,7 +47,8 @@ use axum::{
 };
 use serde::Deserialize;
 use stepclimb_auth::{
-    oidc::{CallbackError, CodeCallback, FlowSecrets, IdTokenError, ProviderSignIn, redeem_code},
+    oauth2_flow,
+    oidc::{self, IdTokenError, ProviderSignIn},
     oidc_config::{OidcConfig, ProviderRow},
 };
 use stepclimb_core::{
@@ -55,9 +61,11 @@ use utoipa::IntoParams;
 
 use crate::{
     AppState,
+    audit::ClientAddress,
     error::ApiError,
     extract::{ApiPath, ApiQuery},
     flow::{self, Finished},
+    oauth2_sign_in,
     provider_sign_in::{
         NavigationLimited, ProviderParam, redirect_uri, sign_in_provider, to_sign_in,
     },
@@ -82,8 +90,9 @@ pub mod code {
     pub const AUTH_PROVIDER_ERROR: &str = "auth.provider_error";
     /// The ID token failed a check of B10.
     pub const AUTH_ID_TOKEN_INVALID: &str = "auth.id_token_invalid";
-    /// The ID token's `sub` is not one an identity can hold (B12; spec 06 B6).
-    pub const AUTH_SUBJECT_MISSING: &str = "auth.subject_missing";
+    /// The ID token's `sub`, or the OAuth 2 userinfo body's subject, is not one an identity can
+    /// hold (B12; spec 06 B6).
+    pub const AUTH_SUBJECT_MISSING: &str = stepclimb_auth::claims::SUBJECT_MISSING;
 }
 
 /// The query the provider sends the browser back with (RFC 6749 4.1.2, 4.1.2.1). Other
@@ -123,18 +132,20 @@ cookie, a used or unknown flow, a flow for another provider, or another `state`)
 `auth.flow_expired` (the flow is older than 10 minutes), `auth.provider_denied` (the person \
 declined at the provider), `auth.provider_error` (the provider reported an error, or its token, \
 key set or userinfo answer could not be used), `auth.id_token_invalid` (the ID token failed a \
-check), `auth.subject_missing` (the ID token's `sub` is empty, holds NUL or is longer than 255 \
-characters), `auth.provider_unavailable` (the provider is of a kind this release does not sign \
-in with, or this release does not complete provider sign-in yet) or `auth.rate_limited` (with \
-`Retry-After`).",
+check), `auth.subject_missing` (the ID token's `sub` or the OAuth 2 userinfo subject is \
+missing, empty, holds NUL or is longer than 255 characters), the admission refusals \
+`auth.suspended`, `auth.signup_closed` and `entitlement.limit_reached` (OAuth 2), \
+`auth.provider_unavailable` (an OIDC sign-in verified, which this release does not complete \
+yet) or `auth.rate_limited` (with `Retry-After`). An admitted OAuth 2 sign-in sets \
+`__Host-sc_session` and is a 303 to the flow's `return_to`.",
     params(ProviderParam, CallbackQuery),
     responses(
         (
             status = 303,
-            description = "To `/sign-in?error=<code>`",
+            description = "To the flow's `return_to`, signed in, or to `/sign-in?error=<code>`",
             headers(
-                ("Location" = String, description = "The sign-in page with the error code"),
-                ("Set-Cookie" = String, description = "Clears the `__Host-sc_flow` cookie"),
+                ("Location" = String, description = "The `return_to` path, or the sign-in page with the error code"),
+                ("Set-Cookie" = String, description = "Clears the `__Host-sc_flow` cookie; signed in, also sets `__Host-sc_session`"),
                 ("Retry-After" = i64, description = "With `auth.rate_limited`: seconds to wait, at least 1"),
                 ("Cache-Control" = String, description = "`no-store`")
             )
@@ -151,26 +162,30 @@ pub async fn finish_provider_sign_in(
     State(state): State<AppState>,
     ApiPath(ProviderParam { provider: key }): ApiPath<ProviderParam>,
     ApiQuery(query): ApiQuery<CallbackQuery>,
+    client: ClientAddress,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let scope = org.scope();
     let Some(provider) = sign_in_provider(&state, scope, &key).await? else {
         return Ok(to_sign_in(code::AUTH_PROVIDER_NOT_FOUND));
     };
-    if provider.kind != Kind::Oidc {
-        tracing::warn!(
-            provider = key,
-            kind = provider.kind.as_str(),
-            "this release signs in only with oidc providers"
-        );
-        return Ok(to_sign_in(code::AUTH_PROVIDER_UNAVAILABLE));
-    }
+    let flow_kind = match provider.kind {
+        Kind::Oidc => FlowKind::Oidc,
+        Kind::Oauth2 => FlowKind::Oauth2,
+        // `sign_in_provider` never returns the local row.
+        Kind::Local => return Ok(to_sign_in(code::AUTH_PROVIDER_NOT_FOUND)),
+    };
     let now = state.clock.now();
-    let taken = flow::finish(&state.db, &state.keys, scope, &headers, FlowKind::Oidc, now).await;
+    let taken = flow::finish(&state.db, &state.keys, scope, &headers, flow_kind, now).await;
+    let request = oauth2_sign_in::Request {
+        scope,
+        client,
+        headers: &headers,
+    };
     // From here on every answer clears the flow cookie, a server fault's 500 included: the flow
     // is taken, or its row is unusable.
     let response = match taken {
-        Ok(flow) => after_flow(&state, scope, &provider, &key, flow, &query)
+        Ok(flow) => after_flow(&state, &request, &provider, &key, flow, &query)
             .await
             .unwrap_or_else(IntoResponse::into_response),
         Err(error) => match error.code() {
@@ -188,10 +203,41 @@ fn clearing_flow_cookie(mut response: Response) -> Response {
     response
 }
 
-/// Steps 3 (the flow's provider and `state`) to 6, on a flow already taken.
+/// A taken flow's secrets, by the provider's kind. Each kind's type lives in its own module.
+enum Secrets {
+    Oidc(oidc::FlowSecrets),
+    Oauth2(oauth2_flow::FlowSecrets),
+}
+
+impl Secrets {
+    /// The secrets of `flow`, a flow of `provider`'s kind; a payload that does not read is a
+    /// fault.
+    fn open(provider: &IdentityProvider, flow: &Finished) -> Result<Self, ApiError> {
+        let internal = |e: &dyn std::error::Error| ApiError::internal(e);
+        match provider.kind {
+            Kind::Oauth2 => oauth2_flow::FlowSecrets::from_payload(&flow.payload)
+                .map(Self::Oauth2)
+                .map_err(|e| internal(&e)),
+            Kind::Oidc | Kind::Local => oidc::FlowSecrets::from_payload(&flow.payload)
+                .map(Self::Oidc)
+                .map_err(|e| internal(&e)),
+        }
+    }
+
+    /// Whether `presented` is the flow's `state`, in constant time (B7).
+    fn state_matches(&self, presented: &str) -> bool {
+        match self {
+            Self::Oidc(secrets) => secrets.state_matches(presented),
+            Self::Oauth2(secrets) => secrets.state_matches(presented),
+        }
+    }
+}
+
+/// Steps 3 (the flow's provider and `state`) to 6, on a flow already taken, in the same order
+/// for both kinds: the provider, the `state`, the provider's `error`, then the `code`.
 async fn after_flow(
     state: &AppState,
-    scope: OrgScope,
+    request: &oauth2_sign_in::Request<'_>,
     provider: &IdentityProvider,
     key: &str,
     flow: Finished,
@@ -204,7 +250,7 @@ async fn after_flow(
         );
         return Ok(to_sign_in(code::AUTH_FLOW_INVALID));
     }
-    let secrets = FlowSecrets::from_payload(&flow.payload).map_err(|e| ApiError::internal(&e))?;
+    let secrets = Secrets::open(provider, &flow)?;
     if !query
         .state
         .as_deref()
@@ -227,15 +273,34 @@ async fn after_flow(
         );
         return Ok(to_sign_in(code::AUTH_PROVIDER_ERROR));
     };
-    match redeem(state, scope, provider, key, &secrets, code).await? {
-        Ok(sign_in) => complete_sign_in(state, scope, provider, &flow.return_to, sign_in).await,
-        Err(refusal) => Ok(to_sign_in(refusal)),
+    let scope = request.scope;
+    match secrets {
+        Secrets::Oidc(secrets) => {
+            match redeem(state, scope, provider, key, &secrets, code).await? {
+                Ok(sign_in) => {
+                    complete_sign_in(state, scope, provider, &flow.return_to, sign_in).await
+                }
+                Err(refusal) => Ok(to_sign_in(refusal)),
+            }
+        }
+        Secrets::Oauth2(secrets) => {
+            oauth2_sign_in::finish(
+                state,
+                request,
+                provider,
+                key,
+                &secrets,
+                code,
+                &flow.return_to,
+            )
+            .await
+        }
     }
 }
 
 /// The provider's `error` (B8): logged with its description, both cut to [`LOGGED_CHARS`], and
 /// answered without either.
-fn provider_refused(key: &str, error: &str, description: Option<&str>) -> Response {
+pub(crate) fn provider_refused(key: &str, error: &str, description: Option<&str>) -> Response {
     let cut = |text: &str| text.chars().take(LOGGED_CHARS).collect::<String>();
     tracing::warn!(
         provider = key,
@@ -250,13 +315,14 @@ fn provider_refused(key: &str, error: &str, description: Option<&str>) -> Respon
     }
 }
 
-/// Redeem `code` for `provider` (B9 to B11): the verified sign-in, or the code to refuse with.
+/// Redeem `code` for the `oidc` `provider` (B9 to B11): the verified sign-in, or the code to
+/// refuse with.
 async fn redeem(
     state: &AppState,
     scope: OrgScope,
     provider: &IdentityProvider,
     key: &str,
-    secrets: &FlowSecrets,
+    secrets: &oidc::FlowSecrets,
     code: &str,
 ) -> Result<Result<ProviderSignIn, &'static str>, ApiError> {
     let config = match OidcConfig::from_stored(&provider.config) {
@@ -290,7 +356,7 @@ async fn redeem(
         .client_secret(&state.keys, row)
         .map_err(|e| ApiError::internal(&e))?;
     let redirect_uri = redirect_uri(&state.public_url, key);
-    let callback = CodeCallback {
+    let callback = oidc::CodeCallback {
         client,
         keys: state.providers.jwks(),
         provider_id: provider.id,
@@ -302,14 +368,15 @@ async fn redeem(
         code,
         now,
     };
-    Ok(redeem_code(&callback).await.map_err(|error| {
+    Ok(oidc::redeem_code(&callback).await.map_err(|error| {
         tracing::warn!(provider = key, %error, "the provider sign-in was refused");
         refusal_code(&error)
     }))
 }
 
 /// The redirect code for a callback that could not be verified.
-fn refusal_code(error: &CallbackError) -> &'static str {
+fn refusal_code(error: &oidc::CallbackError) -> &'static str {
+    use oidc::CallbackError;
     match error {
         CallbackError::IdToken(IdTokenError::Subject) => code::AUTH_SUBJECT_MISSING,
         CallbackError::IdToken(_) => code::AUTH_ID_TOKEN_INVALID,
@@ -319,7 +386,7 @@ fn refusal_code(error: &CallbackError) -> &'static str {
     }
 }
 
-/// Finish a verified provider sign-in: map the claims, pass them to admission, create the
+/// Finish a verified OIDC sign-in: map the claims, pass them to admission, create the
 /// session and answer 303 to `return_to` (B12 to B14, spec 05 I4).
 ///
 /// This release does not complete provider sign-in yet: the sign-in is dropped, no session is
@@ -342,7 +409,7 @@ async fn complete_sign_in(
 #[cfg(test)]
 mod tests {
     use axum::http::HeaderValue;
-    use stepclimb_auth::oidc::{ExchangeError, UserinfoError};
+    use stepclimb_auth::oidc::{CallbackError, ExchangeError, UserinfoError};
 
     use super::*;
 
@@ -364,6 +431,32 @@ mod tests {
             refusal_code(&CallbackError::Userinfo(UserinfoError::SubjectMismatch)),
             "auth.provider_error"
         );
+    }
+
+    #[test]
+    fn access_denied_is_provider_denied_and_any_other_error_provider_error() {
+        let location = |error| {
+            provider_refused("k", error, Some("why"))
+                .headers()
+                .get(header::LOCATION)
+                .cloned()
+        };
+        assert_eq!(
+            location("access_denied").unwrap(),
+            "/sign-in?error=auth.provider_denied"
+        );
+        for other in [
+            "server_error",
+            "Access_Denied",
+            "",
+            "temporarily_unavailable",
+        ] {
+            assert_eq!(
+                location(other).unwrap(),
+                "/sign-in?error=auth.provider_error",
+                "{other}"
+            );
+        }
     }
 
     #[test]

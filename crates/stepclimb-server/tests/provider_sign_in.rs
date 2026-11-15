@@ -486,9 +486,9 @@ async fn without_the_insecure_switch_a_loopback_provider_is_never_contacted(pool
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn an_oauth2_provider_or_an_unreadable_config_is_unavailable(pool: PgPool) {
+async fn a_config_that_does_not_read_for_its_kind_is_unavailable(pool: PgPool) {
     let fixture = Fixture::new(pool).await;
-    // A config an oidc provider could start with, so only the kind refuses it.
+    // An `oidc` config on an `oauth2` row, and an `oidc` row missing its client id.
     fixture
         .provider_of_kind(fixture.org, "plain", &fixture.mock.issuer(), true, "oauth2")
         .await;

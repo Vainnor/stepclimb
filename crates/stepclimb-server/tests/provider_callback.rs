@@ -431,14 +431,6 @@ async fn t2_another_organizations_or_an_unknown_key_is_not_found_and_leaves_the_
     );
 }
 
-#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn an_oauth2_provider_is_unavailable(pool: PgPool) {
-    let fixture = Fixture::new(pool).await;
-    fixture.provider(fixture.org, "plain", "oauth2").await;
-    let answer = fixture.callback("plain", "code=c&state=s", None).await;
-    answer.assert_lands_on_sign_in("auth.provider_unavailable");
-}
-
 /// Collects every log line the server writes while it is the thread's subscriber.
 #[derive(Clone, Default)]
 struct Captured(Arc<Mutex<Vec<u8>>>);

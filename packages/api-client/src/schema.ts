@@ -561,7 +561,7 @@ export interface paths {
         };
         /**
          * Finish a sign-in with an outside identity provider.
-         * @description A browser navigation: the provider's redirect back after sign-in, with `code` and `state` or with `error` and `state`. It needs the `__Host-sc_flow` cookie of the flow the start route began, and clears it. Every refusal is a 303 to `/sign-in?error=<code>`: `auth.provider_not_found` (no enabled provider with this key), `auth.flow_invalid` (no flow cookie, a used or unknown flow, a flow for another provider, or another `state`), `auth.flow_expired` (the flow is older than 10 minutes), `auth.provider_denied` (the person declined at the provider), `auth.provider_error` (the provider reported an error, or its token, key set or userinfo answer could not be used), `auth.id_token_invalid` (the ID token failed a check), `auth.subject_missing` (the ID token's `sub` is empty, holds NUL or is longer than 255 characters), `auth.provider_unavailable` (the provider is of a kind this release does not sign in with, or this release does not complete provider sign-in yet) or `auth.rate_limited` (with `Retry-After`).
+         * @description A browser navigation: the provider's redirect back after sign-in, with `code` and `state` or with `error` and `state`. It needs the `__Host-sc_flow` cookie of the flow the start route began, and clears it. Every refusal is a 303 to `/sign-in?error=<code>`: `auth.provider_not_found` (no enabled provider with this key), `auth.flow_invalid` (no flow cookie, a used or unknown flow, a flow for another provider, or another `state`), `auth.flow_expired` (the flow is older than 10 minutes), `auth.provider_denied` (the person declined at the provider), `auth.provider_error` (the provider reported an error, or its token, key set or userinfo answer could not be used), `auth.id_token_invalid` (the ID token failed a check), `auth.subject_missing` (the ID token's `sub` or the OAuth 2 userinfo subject is missing, empty, holds NUL or is longer than 255 characters), the admission refusals `auth.suspended`, `auth.signup_closed` and `entitlement.limit_reached` (OAuth 2), `auth.provider_unavailable` (an OIDC sign-in verified, which this release does not complete yet) or `auth.rate_limited` (with `Retry-After`). An admitted OAuth 2 sign-in sets `__Host-sc_session` and is a 303 to the flow's `return_to`.
          */
         get: operations["finishProviderSignIn"];
         put?: never;
@@ -581,7 +581,7 @@ export interface paths {
         };
         /**
          * Start a sign-in with an outside identity provider.
-         * @description A browser navigation. Sends the browser to the provider's authorization endpoint with `state`, `nonce` and a PKCE S256 challenge, bound to the sign-in flow whose `__Host-sc_flow` cookie this answer sets. Every refusal is a 303 to `/sign-in?error=<code>`: `auth.provider_not_found` (no enabled provider with this key), `auth.provider_unavailable` (the provider's discovery document could not be read or names another issuer) or `auth.rate_limited` (with `Retry-After`).
+         * @description A browser navigation. Sends the browser to the provider's authorization endpoint with `state` and a PKCE S256 challenge (for an OIDC provider also a `nonce`; for an OAuth 2 provider whose `pkce` is off, no challenge), bound to the sign-in flow whose `__Host-sc_flow` cookie this answer sets. Every refusal is a 303 to `/sign-in?error=<code>`: `auth.provider_not_found` (no enabled provider with this key), `auth.provider_unavailable` (the provider's discovery document could not be read or names another issuer, its stored config does not read, or its authorization URL is refused by the outbound URL policy) or `auth.rate_limited` (with `Retry-After`).
          */
         get: operations["startProviderSignIn"];
         put?: never;
@@ -3687,16 +3687,16 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description To `/sign-in?error=<code>` */
+            /** @description To the flow's `return_to`, signed in, or to `/sign-in?error=<code>` */
             303: {
                 headers: {
                     /** @description `no-store` */
                     "Cache-Control"?: string;
-                    /** @description The sign-in page with the error code */
+                    /** @description The `return_to` path, or the sign-in page with the error code */
                     Location?: string;
                     /** @description With `auth.rate_limited`: seconds to wait, at least 1 */
                     "Retry-After"?: number;
-                    /** @description Clears the `__Host-sc_flow` cookie */
+                    /** @description Clears the `__Host-sc_flow` cookie; signed in, also sets `__Host-sc_session` */
                     "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };

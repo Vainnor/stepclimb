@@ -120,14 +120,43 @@ server every sign-in test and the Playwright stack use instead of a real provide
   handles provider errors as `05-oidc.md` B8 says.
 - **B8.** The server exchanges `code` at the `token` URL with `redirect_uri`, client
   authentication (as `05-oidc.md` Q6) and the PKCE verifier if Q3 sends one. The response must
-  be JSON with an `access_token` and a `token_type` of `bearer` (any case). Anything else, a
-  non-2xx status or a timeout redirects with `error=auth.provider_error`.
+  be status 200 (RFC 6749 5.1), JSON, with an `access_token` and a `token_type` of `bearer`
+  (any case). Anything else, any other status or a timeout redirects with
+  `error=auth.provider_error`.
 - **B9.** The server calls the `userinfo` URL with `Authorization: Bearer <access_token>` and
   `Accept: application/json`. A non-2xx status, a timeout or a body that is not a JSON object
   redirects with `error=auth.provider_error`.
 - **B10.** The mapped sign-in goes to admission (`07-admission.md` B1); the session, final
   redirect and refusal handling are as `05-oidc.md` B14. The provider's tokens are dropped as
   `05-oidc.md` B15 says.
+
+  Coordinator decision (2026-11-15), for I3 (`stepclimb_auth::oauth2_flow`,
+  `stepclimb_server::{provider_callback, oauth2_sign_in}`). B5: the `authorize` URL is checked
+  against the outbound URL policy the instance is under at start (nothing fetches it, and the
+  stored row is not validated again), a refusal being `auth.provider_unavailable`; a stored
+  query parameter named like one the request sets (the I2 list, compared after
+  percent-decoding) is removed and the server's value sent, never both; the provider's other
+  parameters are kept byte for byte; `scope` is left out when `scopes` is `[]` (RFC 6749 3.3
+  makes it optional); with `pkce` on (Q3) the flow keeps a 43-character verifier and the
+  request carries its S256 challenge, with it off neither. B7: as for `05-oidc.md`'s callback,
+  the route takes the flow, in its own statement, before any provider request, and checks the
+  flow's provider and then `state` in constant time. B8: the code exchange uses the `oauth2`
+  crate (5.0.0, already in the tree through `openidconnect`) through the outbound client; an
+  `oauth2` provider has no discovery document, so `05-oidc.md` Q6 (a) is always
+  `client_secret_basic`, the id and secret form-encoded before base64 (RFC 6749 2.3.1); the
+  crate requires status 200 and, when a `Content-Type` is sent, `application/json`. B9: any 2xx
+  is accepted and the response's `Content-Type` is not checked; the body must parse as a JSON
+  object. B10: completion calls `admission::complete`, which admits and creates the session in
+  one transaction. The flow is deleted earlier, when the route takes it, so it is used even
+  when admission refuses or the provider fails. `groups` is not passed: admission's `Verified`
+  has no place for it yet (`07-admission.md` steps 2 to 4).
+
+  Coordinator decision (2026-11-15), fail closed: when the config maps `email_verified` and the
+  userinfo value there is not exactly `true` (absent, `false`, `"true"`, a number), the email is
+  dropped before admission, so admission never sees an address the provider did not vouch for.
+  With no `email_verified` pointer the email is passed as sent: the admin did not ask the
+  provider to vouch for it (`stepclimb_auth::oauth2_config::Oauth2Claims::map`). The OIDC
+  callback's completion is `05-oidc.md` I4, which decides the same rule for `oidc`.
 
 ### Provider configuration
 
@@ -346,6 +375,11 @@ overrule one, which then updates this spec.
   documentation before the preset's value is set. Recommendation: (b), with the preset's value
   set from that check.
   **Decided:** the recommendation (owner, 13 Nov 2026).
+  Turning `pkce` off removes the protection PKCE gives against an injected or stolen
+  authorization code (RFC 9700 2.1.1): an attacker who obtains a code issued to this client for
+  someone else can start their own sign-in, put that code in their own callback, and be signed
+  in as that person, since `state` binds the callback only to the attacker's own flow. Turn it
+  off only for a provider that refuses PKCE.
 - **Q4. Where the VATSIM preset lives and what can be overridden.** The plan calls VATSIM
   Connect both "a preset" and a connector. (a) A TOML data file in `stepclimb-connectors`
   exposed as a constant, compiled into the server behind a `vatsim` cargo feature (the server

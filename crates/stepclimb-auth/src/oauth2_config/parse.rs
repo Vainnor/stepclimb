@@ -97,7 +97,7 @@ fn settings(
 
 /// The parameters the authorization request sets (spec 06 B5; `05-oidc.md` B5 for `nonce`). One
 /// already in the `authorize` URL's query would be sent twice, and a provider may read either.
-const RESERVED_PARAMETERS: [&str; 8] = [
+pub(crate) const RESERVED_PARAMETERS: [&str; 8] = [
     "response_type",
     "client_id",
     "redirect_uri",
