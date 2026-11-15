@@ -67,6 +67,7 @@ async fn create(pool: &PgPool, org: Uuid, seed: u8, kind: Kind, user: Option<Uui
         id,
         kind,
         user_id: user,
+        provider_id: None,
         token_hash: &hash(seed),
         payload: b"sealed bytes",
         return_to: &return_to,
@@ -182,6 +183,7 @@ async fn create_refuses_a_user_of_another_organization(pool: PgPool) {
         id: new_id(),
         kind: Kind::PasskeyRegister,
         user_id: Some(user_b),
+        provider_id: None,
         token_hash: &hash(1),
         payload: b"x",
         return_to: &return_to,
@@ -190,6 +192,90 @@ async fn create_refuses_a_user_of_another_organization(pool: PgPool) {
     let result = auth_flows::create(&pool, scope(a), &flow, start_time()).await;
 
     assert!(matches!(result, Err(Error::UserNotFound)), "{result:?}");
+    assert_eq!(flow_count(&pool).await, 0);
+}
+
+async fn insert_provider(pool: &PgPool, org: Uuid, key: &str) -> Uuid {
+    let id = new_id();
+    sqlx::query(
+        "INSERT INTO identity_providers (id, org_id, key, kind, config) \
+         VALUES ($1, $2, $3, 'oidc', '{}'::jsonb)",
+    )
+    .bind(id)
+    .bind(org)
+    .bind(key)
+    .execute(pool)
+    .await
+    .expect("insert provider");
+    id
+}
+
+fn provider_flow(provider: Uuid, return_to: &ReturnTo) -> NewFlow<'_> {
+    NewFlow {
+        id: new_id(),
+        kind: Kind::Oidc,
+        user_id: None,
+        provider_id: Some(provider),
+        token_hash: &[7; 32],
+        payload: b"x",
+        return_to,
+    }
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_flow_keeps_the_provider_it_was_started_for(pool: PgPool) {
+    let org = insert_org(&pool, "org-a").await;
+    let provider = insert_provider(&pool, org, "idp").await;
+    let return_to = ReturnTo::root();
+    let flow = provider_flow(provider, &return_to);
+    auth_flows::create(&pool, scope(org), &flow, start_time())
+        .await
+        .expect("create flow");
+
+    let consumed = auth_flows::consume(&pool, scope(org), &[7; 32], Kind::Oidc, start_time())
+        .await
+        .expect("consume");
+
+    let Consumed::Valid(found) = consumed else {
+        panic!("expected a live flow, got {consumed:?}");
+    };
+    assert_eq!(found.provider_id, Some(provider));
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn create_refuses_a_provider_of_another_organization(pool: PgPool) {
+    let a = insert_org(&pool, "org-a").await;
+    let b = insert_org(&pool, "org-b").await;
+    let provider_b = insert_provider(&pool, b, "idp").await;
+    let return_to = ReturnTo::root();
+    let flow = provider_flow(provider_b, &return_to);
+
+    let result = auth_flows::create(&pool, scope(a), &flow, start_time()).await;
+
+    assert!(matches!(result, Err(Error::ProviderNotFound)), "{result:?}");
+    assert_eq!(flow_count(&pool).await, 0);
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn deleting_the_provider_deletes_its_flows(pool: PgPool) {
+    let org = insert_org(&pool, "org-a").await;
+    let provider = insert_provider(&pool, org, "idp").await;
+    let return_to = ReturnTo::root();
+    auth_flows::create(
+        &pool,
+        scope(org),
+        &provider_flow(provider, &return_to),
+        start_time(),
+    )
+    .await
+    .expect("create flow");
+
+    sqlx::query("DELETE FROM identity_providers WHERE id = $1")
+        .bind(provider)
+        .execute(&pool)
+        .await
+        .unwrap();
+
     assert_eq!(flow_count(&pool).await, 0);
 }
 

@@ -52,6 +52,9 @@ http-body-util.workspace = true
 # reads the server's options into.
 webauthn-rs.workspace = true
 webauthn-authenticator-rs.workspace = true
+# The mock identity provider on 127.0.0.1 the provider sign-in tests run against (spec 05 Test
+# cases). A dev-dependency only (bin/check-layering.sh rule 5).
+stepclimb-mock-idp.workspace = true
 
 [lints]
 workspace = true

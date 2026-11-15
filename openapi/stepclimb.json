@@ -2339,6 +2339,80 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/auth/{provider}/start": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Start a sign-in with an outside identity provider.",
+        "description": "A browser navigation. Sends the browser to the provider's authorization endpoint with `state`, `nonce` and a PKCE S256 challenge, bound to the sign-in flow whose `__Host-sc_flow` cookie this answer sets. Every refusal is a 303 to `/sign-in?error=<code>`: `auth.provider_not_found` (no enabled provider with this key), `auth.provider_unavailable` (the provider's discovery document could not be read or names another issuer) or `auth.rate_limited` (with `Retry-After`).",
+        "operationId": "startProviderSignIn",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "description": "The provider's key in the organization (`identity_providers.key`).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "return_to",
+            "in": "query",
+            "description": "The path on this site to land on after sign-in. Anything but a safe path on this host\nbecomes `/`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "To the provider's authorization endpoint, or to `/sign-in?error=<code>`",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`no-store`"
+              },
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The authorization URL, or the sign-in page with the error code"
+              },
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "description": "With `auth.rate_limited`: seconds to wait, at least 1"
+              },
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "To the provider: the `__Host-sc_flow` cookie of the sign-in flow"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "tags": [

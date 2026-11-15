@@ -85,6 +85,8 @@ impl Fixture {
             public_url: WebOrigin::parse("https://lms.example.org").expect("a valid origin"),
             allowed_origins: Vec::new(),
             rate_limits: RateLimiter::new(Limits::DEFAULT, trusted),
+            providers: stepclimb_server::providers::Providers::new(false)
+                .expect("provider clients"),
         })
         .layer(Extension(ConnectInfo(SocketAddr::new(PEER, 50_000))));
         Self {
@@ -502,6 +504,7 @@ async fn a_change_without_the_peer_address_is_refused(pool: PgPool) {
         public_url: WebOrigin::parse("https://lms.example.org").expect("a valid origin"),
         allowed_origins: Vec::new(),
         rate_limits: Default::default(),
+        providers: stepclimb_server::providers::Providers::new(false).expect("provider clients"),
     };
     let request = Request::patch("/api/v1/organization")
         .header(header::COOKIE, &cookie)

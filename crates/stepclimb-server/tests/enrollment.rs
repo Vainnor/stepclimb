@@ -288,6 +288,7 @@ fn state(pool: &PgPool, clock: &ManualClock, limits: Limits) -> AppState {
         public_url: WebOrigin::parse("https://lms.example.org").expect("a valid origin"),
         allowed_origins: Vec::new(),
         rate_limits: RateLimiter::new(limits, TrustedProxies::none()),
+        providers: stepclimb_server::providers::Providers::new(false).expect("provider clients"),
     }
 }
 
@@ -863,9 +864,18 @@ fn sign_in_operations() -> Vec<(Method, String)> {
     operations
 }
 
-/// The operations of `operations` that do not answer 429 to a second request within a minute
-/// from one address, naming no organization, on the app `build` makes with a budget of one
-/// request.
+fn is_rate_limited(status: StatusCode, headers: &HeaderMap) -> bool {
+    let redirected = status == StatusCode::SEE_OTHER
+        && headers.get(header::LOCATION).and_then(|v| v.to_str().ok())
+            == Some("/sign-in?error=auth.rate_limited");
+    (status == StatusCode::TOO_MANY_REQUESTS || redirected)
+        && headers.contains_key(header::RETRY_AFTER)
+}
+
+/// The operations of `operations` that do not refuse a second request within a minute from one
+/// address, naming no organization, on the app `build` makes with a budget of one request. A
+/// refusal is 429, or for a browser navigation (spec 05's start route) a 303 to the sign-in page
+/// with `error=auth.rate_limited`; either carries `Retry-After`.
 async fn unlimited(
     pool: &PgPool,
     operations: &[(Method, String)],
@@ -878,7 +888,7 @@ async fn unlimited(
         let mut budget = limits(1);
         budget.token = NonZeroU32::new(1).expect("not zero");
         let app = build(state(pool, &clock, budget)).layer(Extension(ConnectInfo(CLIENT)));
-        let mut second = StatusCode::OK;
+        let mut limited = false;
         for _ in 0..2 {
             let request = Request::builder()
                 .method(method.clone())
@@ -886,14 +896,10 @@ async fn unlimited(
                 .header("sec-fetch-site", "same-origin")
                 .body(Body::empty())
                 .expect("a request");
-            second = app
-                .clone()
-                .oneshot(request)
-                .await
-                .expect("an answer")
-                .status();
+            let answer = app.clone().oneshot(request).await.expect("an answer");
+            limited = is_rate_limited(answer.status(), answer.headers());
         }
-        if second != StatusCode::TOO_MANY_REQUESTS {
+        if !limited {
             unlimited.push(format!("{method} {path}"));
         }
     }

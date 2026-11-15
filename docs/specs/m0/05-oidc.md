@@ -67,6 +67,26 @@ validates the ID token with the `openidconnect` crate, maps claims into an ident
 - **B6.** The `redirect_uri` is the organization's origin followed by `/auth/{key}/callback`
   (origin pending `08-sessions-and-csrf.md` Q1). The admin page shows it so the admin can
   register it at the provider.
+- Coordinator decision (2026-11-15), for I2 (`stepclimb_auth::oidc`,
+  `stepclimb_server::provider_sign_in`, ADR 0028). The server fetches and checks the discovery
+  document itself through the outbound client and parses it with `openidconnect`'s types: it
+  needs 200 and `application/json`, follows no redirect, and refuses an
+  `authorization_endpoint` that is not `https` (`http` only with the insecure switch). The
+  JWKS is not fetched at start; I3 fetches and caches it. A document is cached per provider for
+  Q5's hour, only while the provider's issuer is the one it was fetched for; a failed fetch is
+  not cached. The outbound policy is built per request from the insecure switch and the
+  instance's organization count (Q4: private addresses only with exactly one organization), and
+  the server logs a warning at startup while the switch is on. `state`, `nonce` and the PKCE
+  verifier are each 32 bytes from the OS CSPRNG in base64url, stored sealed in the flow's
+  payload; the flow row names the provider (`auth_flows.provider_id`, `08` Data). The redirect
+  URI is the configured public URL, never the request's `Host`, with the key percent-encoded as
+  one path segment. A key holding NUL and the local row are "not found" (B3). An enabled
+  `oauth2` provider answers `auth.provider_unavailable` until `06` adds its flow. A rate-limited
+  start (B16) is a 303 to the sign-in route with `error=auth.rate_limited` and `Retry-After`,
+  as this spec's API table lists, rather than `08` B22's 429 body, since the route is a browser
+  navigation (recorded in `08` B22 and T20). The 303s carry `Cache-Control: no-store`. The
+  discovery cache keeps a document per provider, issuer and URL policy, and each insert drops
+  every document older than the hour.
 
 ### Callback
 

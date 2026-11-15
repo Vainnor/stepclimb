@@ -219,6 +219,7 @@ pub async fn begin(
     let flow = FlowStart {
         kind: Kind::PasskeySignIn,
         user_id: user.map(|user| user.id),
+        provider_id: None,
         payload: &payload,
         return_to: request.return_to.as_deref(),
     };

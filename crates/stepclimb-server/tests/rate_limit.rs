@@ -122,6 +122,7 @@ fn setup(limits: Limits, trusted: &str) -> Setup {
         public_url: WebOrigin::parse("https://lms.example.org").expect("a valid origin"),
         allowed_origins: Vec::new(),
         rate_limits: RateLimiter::new(limits, trusted),
+        providers: stepclimb_server::providers::Providers::new(false).expect("provider clients"),
     };
     let ran = Arc::new(AtomicUsize::new(0));
     let router = Router::new()

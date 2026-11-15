@@ -33,6 +33,9 @@ pub const MAX_RETURN_TO_LEN: usize = 2048;
 /// The composite foreign key that keeps a flow's user in the flow's organization.
 const USER_FKEY: &str = "auth_flows_org_id_user_id_fkey";
 
+/// The composite foreign key that keeps a flow's provider in the flow's organization.
+const PROVIDER_FKEY: &str = "auth_flows_org_id_provider_id_fkey";
+
 /// What a flow is for. A flow is completed only by the step of its own kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Kind {
@@ -138,6 +141,9 @@ pub struct NewFlow<'a> {
     /// The user the flow is for, when one is known before it completes (a TOTP step, adding a
     /// passkey while signed in). Must be a user of the scope's organization.
     pub user_id: Option<Uuid>,
+    /// The identity provider an OIDC or OAuth 2 flow was started for, so its callback can refuse
+    /// a flow of another provider. Must be a provider of the scope's organization.
+    pub provider_id: Option<Uuid>,
     /// SHA-256 of the token the caller has just generated for the flow cookie.
     pub token_hash: &'a [u8; 32],
     /// The sealed payload.
@@ -151,6 +157,7 @@ pub struct Flow {
     pub id: Uuid,
     pub kind: Kind,
     pub user_id: Option<Uuid>,
+    pub provider_id: Option<Uuid>,
     /// The sealed payload, as stored.
     pub payload: Vec<u8>,
     pub return_to: ReturnTo,
@@ -163,6 +170,7 @@ impl std::fmt::Debug for Flow {
             .field("id", &self.id)
             .field("kind", &self.kind)
             .field("user_id", &self.user_id)
+            .field("provider_id", &self.provider_id)
             .field("return_to", &self.return_to)
             .field("expires_at", &self.expires_at)
             .finish_non_exhaustive()
@@ -187,6 +195,9 @@ pub enum Error {
     /// `user_id` names no user of the scope's organization.
     #[error("the user does not exist")]
     UserNotFound,
+    /// `provider_id` names no identity provider of the scope's organization.
+    #[error("the identity provider does not exist")]
+    ProviderNotFound,
     /// A stored `kind` this release does not know.
     #[error("the stored flow kind {0:?} is not one this release knows")]
     UnknownKind(String),
@@ -202,6 +213,7 @@ impl From<sqlx::Error> for Error {
         let constraint = error.as_database_error().and_then(|e| e.constraint());
         match constraint {
             Some(USER_FKEY) => Self::UserNotFound,
+            Some(PROVIDER_FKEY) => Self::ProviderNotFound,
             _ => Self::Database(error),
         }
     }
@@ -217,9 +229,9 @@ pub async fn create(
 ) -> Result<SystemTime, Error> {
     let expires_at = now.checked_add(LIFETIME).ok_or(TimeOutOfRange)?;
     sqlx::query!(
-        r#"INSERT INTO auth_flows (id, org_id, token_hash, kind, user_id, payload, return_to,
-                                   expires_at, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7,
+        r#"INSERT INTO auth_flows (id, org_id, token_hash, kind, user_id, provider_id, payload,
+                                   return_to, expires_at, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $10, $6, $7,
                    timestamptz 'epoch' + $9::bigint * interval '1 microsecond',
                    timestamptz 'epoch' + $8::bigint * interval '1 microsecond',
                    timestamptz 'epoch' + $8::bigint * interval '1 microsecond')"#,
@@ -232,6 +244,7 @@ pub async fn create(
         flow.return_to.as_str(),
         epoch_micros(now)?,
         epoch_micros(expires_at)?,
+        flow.provider_id,
     )
     .execute(db)
     .await?;
@@ -243,6 +256,7 @@ struct Row {
     id: Uuid,
     kind: String,
     user_id: Option<Uuid>,
+    provider_id: Option<Uuid>,
     payload: Vec<u8>,
     return_to: String,
     expires_at_us: i64,
@@ -266,7 +280,7 @@ pub async fn consume(
         Row,
         r#"DELETE FROM auth_flows
            WHERE org_id = $1 AND token_hash = $2 AND kind = $3
-           RETURNING id, kind, user_id, payload, return_to,
+           RETURNING id, kind, user_id, provider_id, payload, return_to,
                      (extract(epoch FROM expires_at) * 1000000)::bigint AS "expires_at_us!""#,
         scope.org_id(),
         token_hash.as_slice(),
@@ -289,6 +303,7 @@ pub async fn consume(
         id: row.id,
         kind: stored_kind,
         user_id: row.user_id,
+        provider_id: row.provider_id,
         payload: row.payload,
         // The column's check constraint holds stored values to the same rule, so this keeps the
         // value; it is sanitized again so nothing read back can name another host.

@@ -159,6 +159,7 @@ pub async fn begin(
     let flow = FlowStart {
         kind: Kind::PasskeyRegister,
         user_id: Some(user.id),
+        provider_id: None,
         payload: &payload,
         return_to: None,
     };
