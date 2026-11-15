@@ -32,6 +32,7 @@
 
 pub mod accounts;
 pub mod admin;
+pub mod admission;
 pub mod app;
 pub mod appearance;
 pub mod audit;

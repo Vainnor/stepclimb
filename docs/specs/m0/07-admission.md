@@ -324,6 +324,58 @@ overrule one, which then updates this spec.
    `signup_allowed` from `organizations.settings` (default false). Covers B1 to B4, B7, B20,
    B21; T1, T6, T15 to T17. Depends on: `08-sessions-and-csrf.md` I2 and I4,
    `03-users-and-identities.md` (users, identities), Q2 (switch storage), Q6.
+
+   Coordinator decisions (2026-11-15), for this issue:
+
+   - The pipeline is `stepclimb_server::admission`: `admit` decides, `complete` also creates
+     the session on the caller's transaction (B1, `08-sessions-and-csrf.md` B7). A local
+     sign-in (`04-local-accounts.md` B5) uses `complete_local`, keyed by the user the
+     credential belongs to: it runs step 1 (lock the user, refuse a suspended one) and the
+     session, and reads or writes no identity, so a passkey sign-in never creates a local
+     identity. Its input
+     (`Verified`) carries the provider row, the subject, the profile fields and the
+     attributes; `email_verified` and group keys join it with the issues that read them (I4,
+     I7). Steps 2 to 4 and B5's matching are not built, so a known user goes from step 1 to
+     B7's writes and an unknown identity to step 5. The issues that add them insert them in
+     `admit`'s steps, in order.
+   - `admit` runs in a savepoint of the caller's transaction (B3): a refusal rolls back its
+     writes even when the caller commits a flow's deletion. Any error is a 500 that admits no
+     one: a provider that is not an enabled provider of the request's organization (read again
+     before step 1), an invalid subject, a failed query, an `identities` row that cannot be
+     stored.
+   - Two first sign-ins of one subject at once: step 5 inserts the user and the identity in a
+     savepoint of their own. The second insert waits on the identity's unique index; when the
+     first commits it fails as taken, the savepoint is rolled back, and step 1 runs again and
+     admits the first one's user.
+   - Step 1 locks the candidate user's row (`identities::lock_user`, the lock
+     `users::set_status` takes) and reads the status again, so a suspension that commits
+     first is always seen.
+   - `admission.signup_allowed` is stored as `{"admission": {"signup_allowed": bool}}` in
+     `organizations.settings`; `GET /api/v1/organization/settings` shows it and `PATCH` lists
+     it as `settings.read_only` (Q2 (b)); I2 adds the route that writes it and `sync_only`.
+   - A local sign-in (`04-local-accounts.md` B5) never reaches step 5: its account exists first
+     (`04-local-accounts.md` B3, and self sign-up with a local account is M1), so a local
+     subject without an identity is a server fault, never a new user.
+   - Q6 (b) reads "the user's source is that provider" as: the user is `idp` and the identity
+     signing in is their oldest one, the identity just-in-time creation made. `users` records
+     no provider, and with two providers the second would otherwise overwrite the first's
+     values. When the oldest identity is unlinked, the next oldest takes over: the profile
+     then follows that identity's provider. Only fields the provider sent change; the display name is rebuilt from the names
+     when the provider sent either.
+   - A profile value `users` cannot store (over 200 characters, NUL, an email with a control
+     or invisible character) is treated as absent, as `05-oidc.md` B13 treats a value of the
+     wrong type. So is an email another user of the organization has: `users.email` is
+     unique (`03-users-and-identities.md` B12), and with email matching off (B6) the sign-in
+     must neither link nor fail on it. A just-in-time user is created without it; a known
+     user keeps theirs. A display name made from names or the subject is cut to 200
+     characters.
+   - The just-in-time identity's `identity.link` entry names the new user as the actor, from
+     the request's client address (`09-permissions-and-roles.md` B22, B23); creating the user
+     writes no entry (B23). A refusal logs, at info, the provider key, the step
+     (`known_identity`, `just_in_time`) and the code; no line carries the subject, a profile
+     value or an attribute value.
+   - T17's redirect is `Refusal::redirect`: 303 to `/sign-in?error=<code>` with
+     `Cache-Control: no-store`. `entitlement.limit_reached` refusals redirect the same way.
 2. **I2. Admission settings endpoint.** `GET` and `PUT /api/v1/admin/admission` for the three
    switches, with the four-case and cross-organization tests. Covers B12, B23; T19, T20 (for
    these routes). Depends on: I1, `09-permissions-and-roles.md` (`Require<P>`),

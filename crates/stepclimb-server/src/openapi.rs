@@ -114,6 +114,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             organization::OrgSettings,
             organization::OrgSettingsPatch,
             organization::LocalMethods,
+            organization::AdmissionSwitches,
             accounts::Account,
             accounts::NewAccount,
             accounts::AccountPatch,

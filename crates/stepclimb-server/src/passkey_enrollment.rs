@@ -21,13 +21,14 @@
 //! 4. verifies the browser's response against the flow's state (challenge, origin, relying party
 //!    ID, user verification): a failure is 400 `auth.passkey_invalid`;
 //! 5. stores the passkey (`passkey.create`; a credential id the organization already has is
-//!    `auth.passkey_invalid` too) and links the local identity if the user has none
-//!    (`identity.link`, subject the user's id, spec 04 Q4);
-//! 6. admits the user: spec 07's pipeline is not built, and for a known user its only step is
-//!    step 1, which refuses a suspended user with 403 `auth.suspended`;
-//! 7. creates the session (spec 08 B7).
+//!    `auth.passkey_invalid` too);
+//! 6. links the local identity if the user has none (`identity.link`, subject the user's id,
+//!    spec 04 Q4): only this route creates one;
+//! 7. completes the sign-in through admission's local entry (`admission::complete_local`),
+//!    whose step 1 refuses a suspended user with 403 `auth.suspended` and otherwise creates the
+//!    session (spec 08 B7).
 //!
-//! A refusal at steps 2 to 6 rolls the savepoint back, so the link stays usable and nothing is
+//! A refusal at steps 2 to 7 rolls the savepoint back, so the link stays usable and nothing is
 //! stored, and commits the flow's deletion. Every answer after the flow is taken clears the flow
 //! cookie. No step logs the token, the flow token or the ceremony state.
 
@@ -55,13 +56,13 @@ use stepclimb_core::{
     identity_providers,
     local_sign_in::{Method, PROVIDER_KEY},
     local_tokens::{self, Enrollment},
-    organizations, passkeys,
-    users::{self, Status},
+    organizations, passkeys, users,
 };
 use utoipa::ToSchema;
 
 use crate::{
     AppState,
+    admission::{self, Completion},
     audit::ClientAddress,
     enrollment::{enrollment_error, invalid_link},
     error::{ApiError, FieldError},
@@ -87,8 +88,6 @@ pub mod code {
     /// The registration response failed verification, or the authenticator is already
     /// registered (400).
     pub const AUTH_PASSKEY_INVALID: &str = "auth.passkey_invalid";
-    /// The user is suspended: admission refuses them (403, spec 07 B2, B4).
-    pub const AUTH_SUSPENDED: &str = "auth.suspended";
 }
 
 problem_responses! {
@@ -348,6 +347,16 @@ impl Outcome {
     }
 }
 
+impl From<Completion> for Outcome {
+    /// An admission refusal answers its 403 problem details (spec 07 B2).
+    fn from(completion: Completion) -> Self {
+        match completion {
+            Completion::Refused(refusal) => Self::Refused(refusal.into_error()),
+            Completion::Failed(error) => Self::Failed(error),
+        }
+    }
+}
+
 /// Steps 1 to 7 of the module documentation, in a savepoint of `tx` that only a sign-in
 /// releases.
 async fn register(
@@ -402,12 +411,8 @@ async fn register(
         Err(other) => return Err(Outcome::internal(&other)),
     }
     link_local_identity(&mut sp, scope, user.id, attempt.now, actor).await?;
-    if user.status == Status::Suspended {
-        return Err(Outcome::Refused(suspended()));
-    }
-    let started = session::start_on(&mut sp, scope, user.id, attempt.headers, attempt.now)
-        .await
-        .map_err(|e| Outcome::internal(&e))?;
+    let started =
+        admission::complete_local(&mut sp, scope, user.id, attempt.now, attempt.headers).await?;
     sp.commit().await.map_err(|e| Outcome::internal(&e))?;
     Ok(started)
 }
@@ -481,14 +486,6 @@ fn flow_mismatch() -> ApiError {
     )
 }
 
-pub(crate) fn suspended() -> ApiError {
-    ApiError::new(
-        StatusCode::FORBIDDEN,
-        code::AUTH_SUSPENDED,
-        "This account is suspended. Contact an administrator of your organization.",
-    )
-}
-
 /// `response` with the flow cookie cleared, since the flow is gone.
 pub(crate) fn with_flow_cleared(mut response: Response) -> Response {
     response
@@ -543,11 +540,6 @@ mod tests {
         assert_eq!(
             (flow.status, flow.code.as_str()),
             (400, "auth.flow_invalid")
-        );
-        let suspended = suspended().problem();
-        assert_eq!(
-            (suspended.status, suspended.code.as_str()),
-            (403, "auth.suspended")
         );
     }
 }

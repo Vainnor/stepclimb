@@ -12,7 +12,8 @@
 //! `settings.unknown_key`, and a known key whose value does not match its type is a 400
 //! `request.malformed`, as for any body that does not match the schema (B2). `local_sign_in` is
 //! read here but written only through `/api/v1/admin/local-sign-in` with `provider.manage`
-//! (docs/specs/m0/04-local-accounts.md Q2), so a patch naming it is listed in the 422 as
+//! (docs/specs/m0/04-local-accounts.md Q2), and `admission` belongs to the admission settings
+//! (docs/specs/m0/07-admission.md Q2), so a patch naming either is listed in the 422 as
 //! `settings.read_only`.
 //!
 //! `GET /api/v1/organization/entitlements` shows the organization's plan and what it allows, with
@@ -69,13 +70,14 @@ pub mod code {
     pub const SETTINGS_READ_ONLY: &str = "settings.read_only";
 }
 
-/// The settings this route reads but another route writes: the local sign-in switches belong
-/// to `/api/v1/admin/local-sign-in` (spec 04 Q2).
+/// The settings this route reads but does not write: the local sign-in switches belong to
+/// `/api/v1/admin/local-sign-in` (spec 04 Q2), the admission switches to spec 07's admission
+/// settings (Q2).
 pub const READ_ONLY_SETTINGS: &[&str] = CorePatch::WRITTEN_ELSEWHERE;
 
 problem_responses! {
     OrgWriteForbidden => "`permission.denied`: the caller does not hold `organization.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site.",
-    SettingsInvalid => "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting another route changes (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`); `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses.",
+    SettingsInvalid => "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting this route does not change (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`; `admission`: the admission settings); `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses.",
 }
 
 /// The caller's organization.
@@ -135,6 +137,19 @@ pub struct OrgSettings {
     /// The local sign-in method switches; read-only here, changed through
     /// `PUT /api/v1/admin/local-sign-in`.
     pub local_sign_in: LocalMethods,
+    /// Who admission lets in; read-only here.
+    pub admission: AdmissionSwitches,
+}
+
+/// The admission switches as the organization settings show them.
+//
+// The document's form of `stepclimb_core::settings::AdmissionSwitches`.
+#[derive(ToSchema)]
+pub struct AdmissionSwitches {
+    /// Whether a person the organization has no user for is created as a user when they first
+    /// sign in through an identity provider; `false` unless set. Off, they are refused with
+    /// `auth.signup_closed`.
+    pub signup_allowed: bool,
 }
 
 /// The local sign-in method switches as the organization settings show them.
@@ -490,6 +505,16 @@ mod tests {
                 ("/zeta", "settings.unknown_key")
             ]
         );
+    }
+
+    #[test]
+    fn a_patch_naming_the_admission_switches_is_refused() {
+        let body: Map<String, Value> =
+            serde_json::from_value(json!({ "admission": { "signup_allowed": true } })).unwrap();
+        let problem = parse_patch(body).unwrap_err().problem();
+        assert_eq!(problem.status, 422);
+        assert_eq!(problem.errors[0].field, "/admission");
+        assert_eq!(problem.errors[0].code, "settings.read_only");
     }
 
     #[test]

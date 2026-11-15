@@ -21,10 +21,12 @@
 //! 2. refuses it unless it belongs to the flow's user (a flow for no account matches none);
 //! 3. verifies the assertion (`stepclimb_auth::passkey`: challenge, exact origin, relying party
 //!    ID, user verification, signature, user handle, sign counter against the stored one);
-//! 4. admits the user: spec 07's pipeline is not built, and for a known user its only step is
-//!    step 1, which refuses a suspended user with 403 `auth.suspended`;
-//! 5. saves the credential's new counter and backup state and the time it was used;
-//! 6. creates the session (spec 08 B7), ending the sessions the browser's old cookies name.
+//! 4. saves the credential's new counter and backup state and the time it was used;
+//! 5. completes the sign-in through admission's local entry (`admission::complete_local`),
+//!    keyed by the passkey's user: step 1 refuses a suspended user with 403 `auth.suspended`,
+//!    otherwise it creates the session (spec 08 B7), ending the sessions the browser's old
+//!    cookies name. It links no identity: a passkey added from a signed-in session belongs to
+//!    a user who may have no local identity, and signing in with it does not give them one.
 //!
 //! Every refusal at steps 1 to 3 is the same 401 `auth.passkey_invalid`, so the answer does not
 //! say whether the account, the passkey or the signature was wrong. A refusal rolls the
@@ -55,20 +57,19 @@ use stepclimb_core::{
     id::Uuid,
     local_sign_in::Method,
     passkeys::{self, StoredPasskey},
-    users::{self, Status, User},
+    users::{self, User},
 };
 use utoipa::ToSchema;
 
 use crate::{
-    AppState,
+    AppState, admission,
     error::ApiError,
     extract::ApiJson,
     flow::{self, FlowStart},
     local_sign_in::require_method,
     openapi::problem_responses,
     passkey_enrollment::{
-        FlowDetails, Outcome, SignedIn, flow_refused, relying_party, signed_in, suspended,
-        with_flow_cleared,
+        FlowDetails, Outcome, SignedIn, flow_refused, relying_party, signed_in, with_flow_cleared,
     },
     passkey_options::PasskeyRequestOptions,
     rate_limit::{RateLimited, SignIn},
@@ -366,15 +367,11 @@ async fn sign_in(
         }
         Err(other) => return Err(verification_refused(other, stored.id)),
     };
-    if user.status == Status::Suspended {
-        return Err(Outcome::Refused(suspended()));
-    }
     passkeys::record_sign_in(&mut sp, scope, stored.id, &verified.credential, attempt.now)
         .await
         .map_err(|e| Outcome::internal(&e))?;
-    let started = session::start_on(&mut sp, scope, user.id, attempt.headers, attempt.now)
-        .await
-        .map_err(|e| Outcome::internal(&e))?;
+    let started =
+        admission::complete_local(&mut sp, scope, user.id, attempt.now, attempt.headers).await?;
     sp.commit().await.map_err(|e| Outcome::internal(&e))?;
     tracing::info!(user_id = %user.id, passkey_id = %stored.id, "passkey sign-in");
     Ok(started)
