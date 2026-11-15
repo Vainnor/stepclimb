@@ -9,6 +9,7 @@ import {
   composeRenderProps,
 } from "react-aria-components";
 import { tv, type VariantProps } from "../lib/tv";
+import { usePendingAnnouncementId } from "../lib/use-pending-announcement";
 import { Icon, type IconState } from "../theme/icon";
 import { button } from "./button";
 import { Tooltip, TooltipTrigger } from "./tooltip";
@@ -40,13 +41,16 @@ export function IconButton({
   intent,
   size,
   className,
+  id,
   ...props
 }: IconButtonProps) {
+  const buttonId = usePendingAnnouncementId(id);
   return (
     <TooltipTrigger>
       <AriaButton
         data-slot="icon-button"
         {...props}
+        id={buttonId}
         aria-label={label}
         className={composeRenderProps(className, (cls) =>
           iconButton({ intent, size, className: cls }),

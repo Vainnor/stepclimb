@@ -5,6 +5,22 @@ import { describe, expect, it, vi } from "vitest";
 import { renderWithStrings, unmarkedText } from "../test/strings";
 import { Button, button } from "./button";
 
+/** Announcer nodes that name themselves by an id no element in the document has. */
+function danglingAnnouncements() {
+  return [...document.querySelectorAll("[data-live-announcer] [aria-labelledby]")].filter((node) =>
+    (node.getAttribute("aria-labelledby") ?? "")
+      .split(/\s+/)
+      .some((id) => id !== "" && document.getElementById(id) === null),
+  );
+}
+
+/** Announcer nodes that name themselves by `el`'s id. */
+function announcementsOf(el: HTMLElement) {
+  return [...document.querySelectorAll("[data-live-announcer] [aria-labelledby]")].filter((node) =>
+    (node.getAttribute("aria-labelledby") ?? "").split(/\s+/).includes(el.id),
+  );
+}
+
 describe("Button", () => {
   it("renders a native button with its data-slot", () => {
     render(<Button>Start quiz</Button>);
@@ -130,6 +146,58 @@ describe("Button", () => {
       });
       expect(screen.getByRole("progressbar")).toHaveAccessibleName("«button.pending»");
       expect(unmarkedText(container)).toEqual([]);
+    });
+
+    it("announces its label when it turns pending while focused", async () => {
+      const user = userEvent.setup();
+      const { rerender } = renderWithStrings(<Button>Sign in</Button>);
+      await user.tab();
+      rerender(<Button isPending>Sign in</Button>);
+      const el = screen.getByRole("button", { name: /^Sign in/ });
+      expect(announcementsOf(el)).toHaveLength(1);
+    });
+
+    it("leaves no announcement pointing at it once it unmounts while pending", async () => {
+      const user = userEvent.setup();
+      const { rerender, unmount } = renderWithStrings(<Button>Sign in</Button>);
+      await user.tab();
+      rerender(<Button isPending>Sign in</Button>);
+      unmount();
+      expect(danglingAnnouncements()).toEqual([]);
+    });
+
+    it("leaves no announcement pointing at it once it unmounts after the wait ends", async () => {
+      const user = userEvent.setup();
+      const { rerender, unmount } = renderWithStrings(<Button aria-label="Verify">Go</Button>);
+      await user.tab();
+      rerender(
+        <Button aria-label="Verify" isPending>
+          Go
+        </Button>,
+      );
+      rerender(<Button aria-label="Verify">Go</Button>);
+      unmount();
+      expect(danglingAnnouncements()).toEqual([]);
+    });
+
+    it("keeps another button's announcement when it unmounts", async () => {
+      const user = userEvent.setup();
+      const view = (savePending: boolean, signIn: "idle" | "pending" | "gone") => (
+        <>
+          <Button isPending={savePending}>Save</Button>
+          {signIn === "gone" ? null : <Button isPending={signIn === "pending"}>Sign in</Button>}
+        </>
+      );
+      const { rerender } = renderWithStrings(view(false, "idle"));
+      await user.tab();
+      rerender(view(true, "idle"));
+      const save = screen.getByRole("button", { name: /^Save/ });
+      await user.tab();
+      rerender(view(true, "pending"));
+      rerender(view(true, "gone"));
+      expect(screen.getByRole("button", { name: /^Save/ })).toBe(save);
+      expect(announcementsOf(save)).toHaveLength(1);
+      expect(danglingAnnouncements()).toEqual([]);
     });
   });
 });

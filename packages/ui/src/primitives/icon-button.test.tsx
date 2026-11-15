@@ -89,4 +89,19 @@ describe("IconButton", () => {
     await user.click(el);
     expect(onPress).toHaveBeenCalledTimes(3);
   });
+
+  it("leaves no announcement pointing at it once it unmounts while pending", async () => {
+    const user = userEvent.setup();
+    const { rerender, unmount } = render(<IconButton icon={GearIcon} label="Refresh" />);
+    await user.tab();
+    rerender(<IconButton icon={GearIcon} label="Refresh" isPending />);
+    const id = screen.getByRole("button", { name: /Refresh/ }).id;
+    const pointingAt = () =>
+      [...document.querySelectorAll("[data-live-announcer] [aria-labelledby]")].filter((node) =>
+        (node.getAttribute("aria-labelledby") ?? "").split(/\s+/).includes(id),
+      );
+    expect(pointingAt()).toHaveLength(1);
+    unmount();
+    expect(pointingAt()).toEqual([]);
+  });
 });
