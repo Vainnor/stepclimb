@@ -528,6 +528,13 @@ pub fn validate(user: &NewUser) -> Result<(), Error> {
     valid_new_user(user).map(|_| ())
 }
 
+/// Every check [`update`] makes of `patch` before it writes, without a database: sign-in
+/// admission runs it on each profile field a provider sent, to leave out one this table cannot
+/// store (docs/specs/m0/07-admission.md B20, Q6).
+pub fn validate_patch(patch: &UserPatch) -> Result<(), Error> {
+    valid_patch(patch).map(|_| ())
+}
+
 /// A [`NewUser`] after validation, borrowing from it.
 struct ValidNewUser<'a> {
     display_name: &'a str,
@@ -826,6 +833,32 @@ mod tests {
                 field: "email",
                 max: MAX_EMAIL_CHARS
             })
+        ));
+    }
+
+    #[test]
+    fn validate_patch_checks_each_field_it_sets() {
+        assert!(validate_patch(&UserPatch::default()).is_ok());
+        let name = |given: &str| UserPatch {
+            given_name: Some(given.to_owned()),
+            ..UserPatch::default()
+        };
+        assert!(validate_patch(&name("Pat")).is_ok());
+        assert!(matches!(
+            validate_patch(&name(&"a".repeat(MAX_NAME_CHARS + 1))),
+            Err(Error::TooLong {
+                field: "given_name",
+                ..
+            })
+        ));
+        let email = |email: &str| UserPatch {
+            email: Some(Some(email.to_owned())),
+            ..UserPatch::default()
+        };
+        assert!(validate_patch(&email("pat@example.test")).is_ok());
+        assert!(matches!(
+            validate_patch(&email("pat\u{200B}@example.test")),
+            Err(Error::EmailInvalidCharacter)
         ));
     }
 

@@ -618,6 +618,15 @@ export interface components {
             /** @description Trimmed; 1 to 200 characters. */
             name?: string;
         };
+        /** @description The admission switches as the organization settings show them. */
+        AdmissionSwitches: {
+            /**
+             * @description Whether a person the organization has no user for is created as a user when they first
+             *     sign in through an identity provider; `false` unless set. Off, they are refused with
+             *     `auth.signup_closed`.
+             */
+            signup_allowed: boolean;
+        };
         /**
          * @description An appearance every brand has.
          * @enum {string}
@@ -987,6 +996,8 @@ export interface components {
          *     default when none is stored.
          */
         OrgSettings: {
+            /** @description Who admission lets in; read-only here. */
+            admission: components["schemas"]["AdmissionSwitches"];
             /** @description The IANA time zone a user created without one gets; `UTC` unless set. */
             default_tz: string;
             /**
@@ -1940,7 +1951,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting another route changes (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`); `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses. */
+        /** @description `request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting this route does not change (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`; `admission`: the admission settings); `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses. */
         SettingsInvalid: {
             headers: {
                 [name: string]: unknown;

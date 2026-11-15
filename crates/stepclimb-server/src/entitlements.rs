@@ -132,14 +132,20 @@ impl Entitlements {
             .map_err(|error| ApiError::internal(&error))?;
         match room {
             Room::Fits => Ok(()),
-            Room::Full { max } => Err(ApiError::new(
-                StatusCode::FORBIDDEN,
-                code::LIMIT_REACHED,
-                "The organization's plan does not allow more of what this operation adds.",
-            )
-            .with_limit(limit.key(), max)),
+            Room::Full { max } => Err(limit_reached(limit, max)),
         }
     }
+}
+
+/// 403 `entitlement.limit_reached` with `limit` and `max`: the answer of a creation that would
+/// take the organization past `limit`, whose value in the plan is `max`.
+pub(crate) fn limit_reached(limit: Limit, max: u64) -> ApiError {
+    ApiError::new(
+        StatusCode::FORBIDDEN,
+        code::LIMIT_REACHED,
+        "The organization's plan does not allow more of what this operation adds.",
+    )
+    .with_limit(limit.key(), max)
 }
 
 /// A handler with a principal called [`Entitlements::require`]: a bug in the handler.

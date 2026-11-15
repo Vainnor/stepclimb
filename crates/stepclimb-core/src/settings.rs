@@ -4,7 +4,7 @@
 //! The column is read and written only through these types. Each key is owned by the spec that
 //! uses it and is added here with its default in code (`#[serde(default)]` on the struct), so a
 //! stored object missing a key reads as that default and no migration backfills settings. Spec
-//! 03 owns `default_tz` and `email_matching`, spec 04 `local_sign_in`; spec 07 adds its keys.
+//! 03 owns `default_tz` and `email_matching`, spec 04 `local_sign_in`, spec 07 `admission`.
 //!
 //! Stored settings are read tolerantly: a key this code does not know is ignored on read and
 //! kept in the row, because the repository merges a patch into the stored object
@@ -30,6 +30,9 @@ pub struct OrgSettings {
     /// The local sign-in method switches (spec 04 B1, Q2), written only through
     /// [`crate::local_sign_in::update`].
     pub local_sign_in: LocalMethods,
+    /// The admission switches (spec 07 B12, B20, Q2). No patch writes them: spec 07 gives them
+    /// a route of their own, with `admission.manage`.
+    pub admission: AdmissionSwitches,
 }
 
 impl Default for OrgSettings {
@@ -38,8 +41,19 @@ impl Default for OrgSettings {
             default_tz: crate::tz::DEFAULT.to_owned(),
             email_matching: false,
             local_sign_in: LocalMethods::default(),
+            admission: AdmissionSwitches::default(),
         }
     }
+}
+
+/// Who admission lets in (spec 07). Each switch is off unless stored on, so a stored object
+/// missing one reads as off.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AdmissionSwitches {
+    /// Whether a person no user of the organization matches is created as a user at sign-in
+    /// (spec 07 B20); off, they are refused with `auth.signup_closed` (B21).
+    pub signup_allowed: bool,
 }
 
 /// A partial update of [`OrgSettings`]: one optional member per key but those in
@@ -59,8 +73,9 @@ pub struct OrgSettingsPatch {
 
 impl OrgSettingsPatch {
     /// The settings keys no patch can name, because one repository function writes each with
-    /// rules of its own: `local_sign_in` through [`crate::local_sign_in::update`] (spec 04 Q2).
-    pub const WRITTEN_ELSEWHERE: &'static [&'static str] = &["local_sign_in"];
+    /// rules of its own: `local_sign_in` through [`crate::local_sign_in::update`] (spec 04 Q2),
+    /// and `admission`, which spec 07 Q2 gives to the admission settings route.
+    pub const WRITTEN_ELSEWHERE: &'static [&'static str] = &["local_sign_in", "admission"];
 
     /// Whether a patch may name `key`, so the API can report each unknown key by name
     /// (`settings.unknown_key`) instead of failing the whole parse. It asks the type itself:
@@ -127,6 +142,24 @@ mod tests {
         assert!(!settings.email_matching);
         let stored: OrgSettings = serde_json::from_str(r#"{"email_matching": true}"#).unwrap();
         assert!(stored.email_matching);
+    }
+
+    #[test]
+    fn sign_up_is_closed_by_default_and_reads_a_stored_value() {
+        assert!(!OrgSettings::default().admission.signup_allowed);
+        let settings: OrgSettings = serde_json::from_str(r#"{"admission": {}}"#).unwrap();
+        assert!(!settings.admission.signup_allowed);
+        let stored: OrgSettings =
+            serde_json::from_str(r#"{"admission": {"signup_allowed": true, "newer": 1}}"#).unwrap();
+        assert!(stored.admission.signup_allowed);
+    }
+
+    #[test]
+    fn a_patch_naming_the_admission_switches_is_refused() {
+        let parsed =
+            serde_json::from_str::<OrgSettingsPatch>(r#"{"admission": {"signup_allowed": true}}"#);
+        assert!(parsed.is_err());
+        assert!(!OrgSettingsPatch::knows("admission"));
     }
 
     #[test]

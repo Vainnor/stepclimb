@@ -439,6 +439,34 @@ async fn a_registered_passkey_signs_in_and_its_counter_is_saved(pool: PgPool) {
     assert_eq!(f.counter(&sam).await, 2);
 }
 
+/// Spec 04 B5, spec 07 B4: a sign-in goes through admission's local entry, keyed by the
+/// passkey's user. A user with a passkey but no local identity (one who signs in through an
+/// outside provider and added a passkey while signed in) signs in, and still has no local
+/// identity afterwards: only an enrollment link creates one.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_sign_in_creates_no_local_identity(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let mut sam = f.member("sam@example.test").await;
+    for _ in 0..2 {
+        let started = f.start(&sam.email).await;
+        let answer = f.finish(&started, sam.assert(&started)).await;
+        assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    }
+    assert_eq!(f.sessions_of(sam.id).await, 2);
+    let identities: i64 = sqlx::query_scalar("SELECT count(*) FROM identities WHERE user_id = $1")
+        .bind(sam.id)
+        .fetch_one(&f.pool)
+        .await
+        .expect("count identities");
+    assert_eq!(identities, 0);
+    let links: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE action = 'identity.link'")
+            .fetch_one(&f.pool)
+            .await
+            .expect("count entries");
+    assert_eq!(links, 0);
+}
+
 /// T6 (B12, B18): an assertion signed by another key, one by a passkey the organization does
 /// not have, and one from another ceremony all answer the same 401 `auth.passkey_invalid`, sign
 /// nobody in and save nothing; a finished flow cannot be used again.

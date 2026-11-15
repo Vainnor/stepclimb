@@ -198,9 +198,11 @@ creates and hands over.
   - `name` is optional, trimmed, 1 to 200 characters without NUL (the shared name rule), and
     `Passkey` when absent. A bad name answers 422 `request.invalid` before the flow is taken.
   - A credential id the organization already has answers `auth.passkey_invalid`.
-  - Admission (B5): `07-admission.md` I1 is not built. For a known user its only step is step 1,
-    so the route refuses a suspended user with 403 `auth.suspended` itself, after storing and
-    linking in the savepoint it then rolls back. I1 replaces that check with the pipeline call.
+  - Admission (B5): after storing the passkey and linking the local identity, the route
+    completes the sign-in through `07-admission.md`'s local entry (`admission::complete_local`,
+    issue I1 there), keyed by the link's user. Step 1 refuses a suspended user with 403
+    `auth.suspended`, and the route rolls its savepoint back, so the passkey, the link's use
+    and the local identity are not stored.
   - The route writes `passkey.create` (`09-permissions-and-roles.md` B22) with the user and the
     name, and `identity.link` when it creates the local identity, both by the user from the
     client address.
@@ -290,9 +292,14 @@ creates and hands over.
     flag commits although the sign-in is refused. The flag blocks nothing: a flagged passkey
     whose counter goes up again still signs in. Whether a flagged passkey is blocked is pending
     Q15.
-  - Admission (B5): as in B8, a suspended user is refused with 403 `auth.suspended`, checked
-    only after the assertion verified, so the answer reveals the suspension only to the
-    passkey's holder. Nothing is saved for a refused sign-in.
+  - Admission (B5): as in B8, the route completes the sign-in through `07-admission.md`'s
+    local entry, keyed by the passkey's user, only after the assertion verified, so a refusal
+    (403 `auth.suspended`) reveals the suspension only to the passkey's holder. Nothing is
+    saved for a refused sign-in. The route links no identity: a user who signs in through an
+    outside provider and added a passkey while signed in has no local identity, and signing in
+    with that passkey does not give them one, so a rule that gates local accounts by their
+    local identity keeps applying to them (coordinator decision, 2026-11-15). Only the
+    enrollment route (B8) creates a local identity.
   - On success the route saves the credential with its new counter and backup state, sets
     `last_used_at` and `updated_at`, and creates the session with `session::start_on`, which
     ends the sessions the browser's old cookies name (`08-sessions-and-csrf.md` B7).

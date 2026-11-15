@@ -892,10 +892,12 @@ fn the_documented_settings_describe_what_the_routes_serialize() {
     assert_eq!(members("OrgSettingsPatch"), writable);
     assert_eq!(
         organization::READ_ONLY_SETTINGS,
-        ["local_sign_in"],
+        ["local_sign_in", "admission"],
         "a read-only setting is a member of OrgSettings"
     );
-    assert!(members("OrgSettings").contains(&"local_sign_in".to_owned()));
+    for key in organization::READ_ONLY_SETTINGS {
+        assert!(members("OrgSettings").contains(&(*key).to_owned()), "{key}");
+    }
     assert!(schemas["OrgSettingsPatch"].get("required").is_none());
     assert_eq!(schemas["OrgSettingsPatch"]["additionalProperties"], false);
 }
