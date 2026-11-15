@@ -10,8 +10,13 @@
 //! included, passes through unchanged.
 //!
 //! The wrapper cannot reach a value serde buffers and replays with its own deserializer:
-//! fields of a `#[serde(flatten)]` struct and the content of an untagged or internally tagged
-//! enum. No body type of this crate uses them.
+//! fields of a `#[serde(flatten)]` struct, the content of an untagged or internally tagged
+//! enum, and the content of an adjacently tagged enum when it comes before the tag.
+//! `tests/body_shapes.rs` fails on any `Deserialize` type of this crate that uses them. Nor
+//! does it reach a value parsed later from a `serde_json::Value` the body carried: the
+//! settings `PATCH` (`organization.rs`, `parse_patch`) takes a map and reads it into
+//! `OrgSettingsPatch` with `serde_json::from_value`, whose fields are all scalars, and the
+//! passkey routes read their free-form `credential` the same way.
 
 use std::fmt;
 
@@ -340,10 +345,15 @@ mod tests {
     fn a_struct_under_option_newtype_vec_and_map_is_refused_as_an_array() {
         let json = r#"{"user":1,"scope":{"type":"account","id":7},"permissions":[],
             "note":null,"reach":["account",7],"pair":[1,2]}"#;
+        assert!(serde_json::from_str::<Assignment>(json).is_ok());
         assert!(parse::<Assignment>(json).is_err());
+        assert!(serde_json::from_str::<Wrapper>("[true,false]").is_ok());
         assert!(parse::<Wrapper>("[true,false]").is_err());
+        assert!(serde_json::from_str::<Vec<Settings>>("[[true,false]]").is_ok());
         assert!(parse::<Vec<Settings>>("[[true,false]]").is_err());
-        assert!(parse::<BTreeMap<String, Settings>>(r#"{"a":[true,false]}"#).is_err());
+        let map = r#"{"a":[true,false]}"#;
+        assert!(serde_json::from_str::<BTreeMap<String, Settings>>(map).is_ok());
+        assert!(parse::<BTreeMap<String, Settings>>(map).is_err());
     }
 
     #[test]

@@ -29,10 +29,10 @@ These apply to every endpoint in M0, including the ones other specs define.
   `{ "field": "<JSON Pointer>", "code": "<code>" }`. No error response carries a stack trace,
   SQL text, a secret or an id the caller could not otherwise see.
 - **B2.** Request bodies that are not JSON answer 415 `request.unsupported_media_type`; JSON that
-  does not parse or does not match the schema answers 400 `request.malformed`, an array where
-  the schema has an object included, at any depth; a body that parses
-  but breaks a rule (an empty name, an unknown setting) answers 422 `request.invalid`. A body
-  over the server's size limit (axum's default, 2 MiB) answers 413 `request.too_large`. A path or
+  does not parse or does not match the schema (including an array where the schema has an
+  object, at any depth) answers 400 `request.malformed`; a body that parses but breaks a rule
+  (an empty name, an unknown setting) answers 422 `request.invalid`. A body over the server's
+  size limit (axum's default, 2 MiB) answers 413 `request.too_large`. A path or
   query parameter that does not parse (an id that is not a UUID, `limit=abc`) answers 400
   `request.malformed`. A path under `/api/` that no route matches answers 404
   `request.not_found`, and a matched path with a method it does not take answers 405

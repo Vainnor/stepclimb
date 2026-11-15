@@ -1246,53 +1246,135 @@ async fn b20_every_table_entry_passes_its_cases(pool: PgPool) {
 
 // Bodies sent as arrays (`ApiJson` reads every struct from an object only).
 
-/// Each entry's 2xx body with an object, at the top or nested in another, rewritten as an
-/// array of its values: 400 `request.malformed` for every order of the values, so for the
-/// struct's field order too, which serde would otherwise accept. A field the document gives
-/// as a free-form object (a WebAuthn credential) is any JSON to `ApiJson`, so is left as it is.
+/// The most members an object of a suite body may have: every order of its values is one
+/// request, so seven would be 5,040 requests for that object alone.
+const MAX_MEMBERS: usize = 6;
+
+/// The 2xx body of every table entry and public operation, and a user with identities (an
+/// array of structs), each with one object rewritten as an array of its values: the body
+/// itself or an object nested in it, in an object or an array. Every order of the values
+/// answers 400 `request.malformed`, so the struct's field order, which serde would otherwise
+/// accept, does too. A field the document gives as a free-form object (a WebAuthn credential)
+/// is any JSON to `ApiJson`, so is left as it is. Every operation that takes a body is sent.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn every_table_body_sent_as_an_array_is_malformed(pool: PgPool) {
+async fn every_body_sent_as_an_array_is_malformed(pool: PgPool) {
     let world = World::new(pool).await;
     let app = router(world.state()).layer(Extension(ConnectInfo(CLIENT)));
     let doc = document();
-    let operations = operations(&doc).expect("named operations");
-    let mut failures = Vec::new();
-    let mut sent = 0;
+    let mut sender = ArraySender::new(&app, &doc);
     for entry in TABLE {
-        let op = operations
-            .iter()
-            .find(|op| op.id == entry.operation_id)
-            .unwrap_or_else(|| panic!("{} is not in the document", entry.operation_id));
         let org = world.org().await;
         let (call, cookie) = allowed_call(&org, &entry.access).await;
-        let Some(body) = &call.body else { continue };
-        let schema = &doc["paths"][&op.path][op.method.as_str().to_lowercase()]["requestBody"]["content"]
-            ["application/json"]["schema"];
-        for form in array_forms(&doc, schema, body) {
-            sent += 1;
+        sender
+            .send(entry.operation_id, org.id, &call, Some(&cookie))
+            .await;
+    }
+    let public: Vec<&str> = PUBLIC
+        .iter()
+        .copied()
+        .filter(|id| sender.takes_body(id))
+        .collect();
+    for id in public {
+        let org = world.org().await;
+        let (body, cookie) = public_request(&world, &org, id).await;
+        let call = Call {
+            params: Vec::new(),
+            body,
+            at: At::Org,
+        };
+        sender.send(id, org.id, &call, cookie.as_deref()).await;
+    }
+    let org = world.org().await;
+    let (mut call, cookie) = allowed_call(&org, &entry_of("createUser").access).await;
+    call.body = Some(serde_json::json!({
+        "display_name": "Casey Example",
+        "identities": [{ "provider_key": "suite", "subject": "1000002" }],
+    }));
+    sender
+        .send("createUser", org.id, &call, Some(&cookie))
+        .await;
+    let failures = sender.finish();
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// Sends the array forms of bodies and keeps what answered otherwise.
+struct ArraySender<'a> {
+    app: &'a Router,
+    doc: &'a Value,
+    operations: Vec<Operation>,
+    sent: Vec<String>,
+    failures: Vec<String>,
+}
+
+impl<'a> ArraySender<'a> {
+    fn new(app: &'a Router, doc: &'a Value) -> Self {
+        Self {
+            app,
+            doc,
+            operations: operations(doc).expect("named operations"),
+            sent: Vec::new(),
+            failures: Vec::new(),
+        }
+    }
+
+    fn operation(&self, id: &str) -> Operation {
+        self.operations
+            .iter()
+            .find(|op| op.id == id)
+            .unwrap_or_else(|| panic!("{id} is not in the document"))
+            .clone()
+    }
+
+    /// The JSON schema of the operation's request body; `Null` when it takes none.
+    fn body_schema(&self, op: &Operation) -> &'a Value {
+        let method = op.method.as_str().to_lowercase();
+        &self.doc["paths"][&op.path][method]["requestBody"]["content"]["application/json"]["schema"]
+    }
+
+    fn takes_body(&self, id: &str) -> bool {
+        !self.body_schema(&self.operation(id)).is_null()
+    }
+
+    /// Every array form of `call`'s body, if it has one, as `cookie` in `org`.
+    async fn send(&mut self, id: &str, org: Uuid, call: &Call, cookie: Option<&str>) {
+        let op = self.operation(id);
+        let Some(body) = &call.body else { return };
+        for form in array_forms(self.doc, self.body_schema(&op), body) {
             let call = Call {
                 params: call.params.clone(),
                 body: Some(form),
                 at: call.at,
             };
-            let answer = match call_op(&app, op, &call, org.id, Some(&cookie)).await {
-                Ok(answer) => answer,
-                Err(why) => {
-                    failures.push(format!("{}: {why}", op.id));
-                    continue;
-                }
-            };
-            if let Err(why) = answer.expect(StatusCode::BAD_REQUEST, "request.malformed") {
-                failures.push(format!(
-                    "{} with {}: {why}",
-                    op.id,
-                    call.body.expect("a body")
-                ));
+            let answer = call_op(self.app, &op, &call, org, cookie).await;
+            let result =
+                answer.and_then(|a| a.expect(StatusCode::BAD_REQUEST, "request.malformed"));
+            if let Err(why) = result {
+                let body = call.body.expect("a body");
+                self.failures.push(format!("{id} with {body}: {why}"));
             }
         }
+        self.sent.push(id.to_owned());
     }
-    assert!(sent > 0, "no entry has a body");
-    assert!(failures.is_empty(), "{failures:#?}");
+
+    /// The failures, and each operation that takes a body but was not sent.
+    fn finish(self) -> Vec<String> {
+        let unsent = self
+            .operations
+            .iter()
+            .filter(|op| !self.body_schema(op).is_null() && !self.sent.contains(&op.id));
+        let unsent: Vec<String> = unsent
+            .map(|op| format!("{} takes a body but none was sent", op.id))
+            .collect();
+        self.failures.into_iter().chain(unsent).collect()
+    }
+}
+
+/// The table entry of `id`.
+fn entry_of(id: &str) -> &'static Entry {
+    TABLE
+        .iter()
+        .find(|entry| entry.operation_id == id)
+        .unwrap_or_else(|| panic!("{id} has no table entry"))
 }
 
 /// The call of `access`'s 2xx case and the cookie that passes its checks.
@@ -1320,14 +1402,34 @@ async fn allowed_call(org: &Org, access: &Access) -> (Call, String) {
     }
 }
 
-/// `body`, whose schema in `doc` is `schema`, with one of its objects replaced by an array of
-/// its values, in every order: `body` itself, or an object below it that is not in a
-/// free-form field.
-fn array_forms(doc: &Value, schema: &Value, body: &Value) -> Vec<Value> {
-    let Value::Object(fields) = body else {
-        return Vec::new();
-    };
+/// `value`, whose schema in `doc` is `schema`, with one of its objects replaced by an array of
+/// its values, in every order: `value` itself, or an object below it, in an object or an array,
+/// that is not in a free-form field.
+fn array_forms(doc: &Value, schema: &Value, value: &Value) -> Vec<Value> {
     let schema = resolve(doc, schema);
+    match value {
+        Value::Object(fields) => object_forms(doc, schema, fields),
+        Value::Array(items) if !free_form(&schema["items"]) => {
+            let mut forms = Vec::new();
+            for (i, item) in items.iter().enumerate() {
+                for form in array_forms(doc, &schema["items"], item) {
+                    let mut rewritten = items.clone();
+                    rewritten[i] = form;
+                    forms.push(Value::Array(rewritten));
+                }
+            }
+            forms
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// [`array_forms`] of an object: its values in every order, then each field's forms.
+fn object_forms(
+    doc: &Value,
+    schema: &Value,
+    fields: &serde_json::Map<String, Value>,
+) -> Vec<Value> {
     let values: Vec<Value> = fields.values().cloned().collect();
     let mut forms: Vec<Value> = orders(&values).into_iter().map(Value::Array).collect();
     for (key, value) in fields {
@@ -1362,8 +1464,15 @@ fn free_form(schema: &Value) -> bool {
     schema["type"] == "object" && schema.get("properties").is_none() && schema.get("$ref").is_none()
 }
 
-/// Every order of `values`.
+/// Every order of `values`, at most [`MAX_MEMBERS`] of them.
 fn orders(values: &[Value]) -> Vec<Vec<Value>> {
+    assert!(
+        values.len() <= MAX_MEMBERS,
+        "an object of {} members is {}+ requests, one per order of its values: split the body \
+         or send fewer orders (the struct's field order is the one that must be among them)",
+        values.len(),
+        (1..=values.len()).product::<usize>(),
+    );
     if values.is_empty() {
         return vec![Vec::new()];
     }
@@ -1385,18 +1494,35 @@ fn array_forms_cover_every_order_at_every_depth_but_free_form_fields() {
         "Inner": { "type": "object", "properties": { "c": {}, "d": {} } },
     } } });
     let schema = serde_json::json!({ "type": "object", "properties": {
-        "a": { "type": "integer" },
+        "a": { "type": "array", "items": { "$ref": "#/components/schemas/Inner" } },
         "b": { "oneOf": [{ "type": "null" }, { "$ref": "#/components/schemas/Inner" }] },
         "e": { "type": "object" },
     } });
-    let body = serde_json::json!({ "a": 1, "b": { "c": 2, "d": [3] }, "e": { "f": 4 } });
+    let body = serde_json::json!({
+        "a": [{ "c": 5, "d": 6 }],
+        "b": { "c": 2, "d": [3] },
+        "e": { "f": 4 },
+    });
     let forms = array_forms(&doc, &schema, &body);
-    assert_eq!(forms.len(), 6 + 2, "{forms:#?}");
-    assert!(forms.contains(&serde_json::json!([1, { "c": 2, "d": [3] }, { "f": 4 }])));
-    assert!(forms.contains(&serde_json::json!([{ "f": 4 }, { "c": 2, "d": [3] }, 1])));
-    assert!(forms.contains(&serde_json::json!({ "a": 1, "b": [2, [3]], "e": { "f": 4 } })));
-    assert!(forms.contains(&serde_json::json!({ "a": 1, "b": [[3], 2], "e": { "f": 4 } })));
-    assert!(!forms.contains(&serde_json::json!({ "a": 1, "b": { "c": 2, "d": [3] }, "e": [4] })));
+    assert_eq!(forms.len(), 6 + 2 + 2, "{forms:#?}");
+    let a = serde_json::json!([{ "c": 5, "d": 6 }]);
+    let b = serde_json::json!({ "c": 2, "d": [3] });
+    let e = serde_json::json!({ "f": 4 });
+    assert!(forms.contains(&serde_json::json!([a, b, e])));
+    assert!(forms.contains(&serde_json::json!([e, b, a])));
+    assert!(forms.contains(&serde_json::json!({ "a": [[5, 6]], "b": b, "e": e })));
+    assert!(forms.contains(&serde_json::json!({ "a": [[6, 5]], "b": b, "e": e })));
+    assert!(forms.contains(&serde_json::json!({ "a": a, "b": [2, [3]], "e": e })));
+    assert!(forms.contains(&serde_json::json!({ "a": a, "b": [[3], 2], "e": e })));
+    assert!(!forms.contains(&serde_json::json!({ "a": a, "b": b, "e": [4] })));
+}
+
+#[test]
+#[should_panic(expected = "an object of 7 members is 5040+ requests")]
+fn array_forms_refuse_an_object_with_too_many_members() {
+    let body: serde_json::Map<String, Value> =
+        (0..7).map(|i| (format!("m{i}"), Value::from(i))).collect();
+    array_forms(&Value::Null, &Value::Null, &Value::Object(body));
 }
 
 // The runner.
