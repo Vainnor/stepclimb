@@ -79,7 +79,12 @@ function AddPasskeyForm({ onDone }: { onDone: () => void }) {
   const fieldError = nameError(add.error, t);
   const problem = failure && fieldError === undefined ? passkeyProblem(failure, t) : undefined;
   const final = start.isError && isFinalAddRefusal(start.error);
+  const busy = add.isPending || start.isFetching || add.isSuccess;
+  // Without options (the start failed), the button asks for them again.
+  const retry = start.isError && !start.isFetching;
   const submit = () => {
+    // Enter in the name field submits too; one registration at a time.
+    if (busy) return;
     add.reset();
     if (start.data) add.mutate({ name });
     else void start.refetch();
@@ -110,12 +115,8 @@ function AddPasskeyForm({ onDone }: { onDone: () => void }) {
       <DialogFooter>
         <Button onPress={onDone}>{t("account.cancel")}</Button>
         {final ? null : (
-          <Button
-            type="submit"
-            intent="primary"
-            isPending={add.isPending || start.isFetching || add.isSuccess}
-          >
-            {t("account.passkeys.add.submit")}
+          <Button type="submit" intent="primary" isPending={busy}>
+            {retry ? t("loadError.retry") : t("account.passkeys.add.submit")}
           </Button>
         )}
       </DialogFooter>

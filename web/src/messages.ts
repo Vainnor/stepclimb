@@ -35,9 +35,9 @@ export const webMessages: Catalog = {
     "account.passkeys.problem.lastMethod":
       "This passkey is your last way to sign in, so it cannot be deleted. Add another passkey first, then delete this one.",
     "account.passkeys.problem.methodDisabled":
-      "Your organization has turned off passkeys, so they cannot be shown or changed here. Ask an administrator how to sign in.",
+      "Your organization has turned off passkeys, so they cannot be shown or changed here. Ask an administrator if you need them.",
     "account.passkeys.problem.notAllowed":
-      "You sign in through an identity provider that does not let its users add passkeys, so you cannot add one. An administrator can change this in the provider's settings.",
+      "Your organization's sign-in settings for this provider do not allow passkeys, so you cannot add one. An administrator of your organization can allow them in Stepclimb.",
     "account.passkeys.problem.notFound":
       "This passkey no longer exists. It may have been deleted in another tab.",
     "account.passkeys.problem.passkeyInvalid":

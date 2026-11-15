@@ -366,9 +366,14 @@ test.describe
           await page.getByRole("button", { name: `Delete ${name}` }).click();
           const confirm = page.getByRole("alertdialog", { name: `Delete ${name}?` });
           const deleted = page.waitForResponse((r) => r.request().method() === "DELETE");
-          await confirm.getByRole("button", { name: "Delete passkey" }).click();
+          // By keyboard, so the browser would draw a ring on what takes focus next.
+          await confirm.getByRole("button", { name: "Delete passkey" }).press("Enter");
           expect((await deleted).status()).toBe(204);
           await expect(page.getByText(`${name} deleted`)).toBeVisible();
+          // The deleted row held focus; the section's heading takes it, without a ring.
+          const heading = page.getByRole("heading", { level: 2, name: "Passkeys" });
+          await expect(heading).toBeFocused();
+          expect(await heading.evaluate((h) => getComputedStyle(h).boxShadow)).toBe("none");
         }
         await expect(rows).toHaveCount(1);
         await expect(rows.nth(0)).toContainText("Work tablet");

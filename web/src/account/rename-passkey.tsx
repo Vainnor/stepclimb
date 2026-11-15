@@ -57,6 +57,8 @@ function RenameForm({ passkey, onDone }: { passkey: MyPasskey; onDone: () => voi
     <Form
       onSubmit={(event) => {
         event.preventDefault();
+        // Enter in the name field submits too; one rename at a time.
+        if (rename.isPending) return;
         rename.reset();
         rename.mutate();
       }}

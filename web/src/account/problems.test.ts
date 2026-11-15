@@ -24,7 +24,7 @@ function refused(status: number, code: string, errors?: { field: string; code: s
 describe("passkeyProblem", () => {
   it.each([
     [409, "local.last_method", "This passkey is your last way to sign in"],
-    [403, "local.passkeys_not_allowed", "does not let its users add passkeys"],
+    [403, "local.passkeys_not_allowed", "sign-in settings for this provider do not allow passkeys"],
     [404, "auth.method_disabled", "Your organization has turned off passkeys"],
     [400, "auth.flow_invalid", "already finished or replaced by one in another tab"],
     [400, "auth.flow_expired", "The passkey registration expired"],

@@ -88,6 +88,11 @@ export function isFinalAddRefusal(error: unknown): boolean {
   return code === "auth.method_disabled" || code === "local.passkeys_not_allowed";
 }
 
+/** True when the server refused to delete the user's last way to sign in. */
+export function isLastMethod(error: unknown): boolean {
+  return codeOf(error) === "local.last_method";
+}
+
 /** True when the passkey the request named is gone, so the list on screen is out of date. */
 export function isPasskeyGone(error: unknown): boolean {
   return codeOf(error) === "passkey.not_found";

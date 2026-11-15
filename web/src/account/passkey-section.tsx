@@ -26,7 +26,7 @@ import { LoadError } from "../layouts/load-error";
 import { PasskeyError, passkeyUnavailable } from "../sign-in/passkey";
 import { AddPasskey } from "./add-passkey";
 import { deletePasskey, type MyPasskey, myPasskeysQuery } from "./passkeys";
-import { isMethodDisabled, isPasskeyGone, passkeyProblem } from "./problems";
+import { isLastMethod, isMethodDisabled, isPasskeyGone, passkeyProblem } from "./problems";
 import { RenamePasskey } from "./rename-passkey";
 
 export function PasskeySection() {
@@ -36,6 +36,10 @@ export function PasskeySection() {
   const remove = useDeletePasskey(headingId);
   const unavailable = passkeyUnavailable();
   const off = isMethodDisabled(list.error);
+  // The last-method refusal is about the list it was refused against: once the list changes (a
+  // passkey added, renamed or deleted), it no longer holds and goes.
+  const removeError =
+    isLastMethod(remove.error) && remove.variables?.shown !== list.data ? null : remove.error;
 
   return (
     <section aria-labelledby={headingId} className="flex max-w-3xl flex-col gap-4">
@@ -53,7 +57,7 @@ export function PasskeySection() {
       {list.data && unavailable ? (
         <Text elementType="p">{passkeyProblem(new PasskeyError(unavailable), t).message}</Text>
       ) : null}
-      {remove.error ? <Problem error={remove.error} /> : null}
+      {removeError ? <Problem error={removeError} /> : null}
       {off ? <Text elementType="p">{passkeyProblem(list.error, t).message}</Text> : null}
       {list.isError && !off ? (
         <LoadError error={list.error} level={3} onRetry={() => void list.refetch()} />
@@ -63,15 +67,21 @@ export function PasskeySection() {
         <PasskeyList
           passkeys={list.data}
           labelledBy={headingId}
-          deleting={remove.isPending ? remove.variables?.id : undefined}
+          deleting={remove.isPending ? remove.variables?.passkey.id : undefined}
           onDelete={(passkey) => {
             remove.reset();
-            remove.mutate(passkey);
+            remove.mutate({ passkey, shown: list.data });
           }}
         />
       ) : null}
     </section>
   );
+}
+
+interface Removal {
+  passkey: MyPasskey;
+  /** The list on screen when the user asked, which a last-method refusal is about. */
+  shown: MyPasskey[] | undefined;
 }
 
 /** Deletes a passkey; on success the list drops it, a toast says so and focus goes to the heading. */
@@ -80,8 +90,8 @@ function useDeletePasskey(headingId: string) {
   const { toasts } = useAppContext();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (passkey: MyPasskey) => deletePasskey(passkey.id),
-    onSuccess: (_, passkey) => {
+    mutationFn: ({ passkey }: Removal) => deletePasskey(passkey.id),
+    onSuccess: (_, { passkey }) => {
       queryClient.setQueryData<MyPasskey[]>(myPasskeysQuery.queryKey, (list) =>
         list?.filter((item) => item.id !== passkey.id),
       );

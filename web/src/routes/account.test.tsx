@@ -179,11 +179,7 @@ describe("adding a passkey", () => {
   });
 
   it.each([
-    [
-      "local.passkeys_not_allowed",
-      403,
-      /identity provider that does not let its users add passkeys/,
-    ],
+    ["local.passkeys_not_allowed", 403, /sign-in settings for this provider do not allow passkeys/],
     ["auth.method_disabled", 404, /Your organization has turned off passkeys/],
   ])("explains %s from the start route and offers only Cancel", async (code, status, message) => {
     const webauthn = stubWebAuthn();
@@ -402,5 +398,166 @@ describe("deleting a passkey", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Something went wrong. Try again.");
     expect(alert).toHaveTextContent("auth.csrf_refused");
+  });
+});
+
+/** A response the test releases when it chooses. */
+function held() {
+  let release: (response: Response) => void = () => undefined;
+  const answer = new Promise<Response>((resolve) => {
+    release = resolve;
+  });
+  return { answer, release: (response: Response) => release(response) };
+}
+
+describe("the account page's states", () => {
+  it("shows a skeleton, not the list, while the list loads", async () => {
+    stubWebAuthn();
+    const list = held();
+    signedIn([], { "GET /api/v1/me/passkeys": () => list.answer });
+    renderApp("/account");
+    await screen.findByRole("heading", { level: 1, name: "Account" });
+    await waitFor(() =>
+      expect(document.querySelector('[aria-busy="true"] [data-slot="skeleton"]')).not.toBeNull(),
+    );
+    expect(screen.queryByRole("grid")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add a passkey" })).toBeNull();
+    list.release(json([laptop]));
+    expect(
+      within(await screen.findByRole("grid", { name: "Passkeys" })).getAllByRole("row"),
+    ).toHaveLength(1);
+    expect(document.querySelector('[aria-busy="true"]')).toBeNull();
+  });
+
+  it("sends a 401 from the list to the sign-in screen with /account as return target", async () => {
+    stubWebAuthn();
+    signedIn([], {
+      "GET /api/v1/me/passkeys": () => problem(401, "auth.unauthenticated", "Unauthorized"),
+    });
+    const app = renderApp("/account");
+    expect(await screen.findByRole("heading", { level: 1, name: "Sign in" })).toBeInTheDocument();
+    expect(app.router.state.location.search).toEqual({ return_to: "/account" });
+  });
+
+  it("sends a 401 from a delete to the sign-in screen", async () => {
+    stubWebAuthn();
+    signedIn([laptop], {
+      [`DELETE /api/v1/me/passkeys/${laptop.id}`]: () =>
+        problem(401, "auth.unauthenticated", "Unauthorized"),
+    });
+    const app = renderApp("/account");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Delete Work laptop" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Delete Work laptop?" });
+    await user.click(within(dialog).getByRole("button", { name: "Delete passkey" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Sign in" })).toBeInTheDocument();
+    expect(app.router.state.location.search).toEqual({ return_to: "/account" });
+  });
+});
+
+describe("one request at a time", () => {
+  it("ignores Enter in the add dialog while the passkey is being added", async () => {
+    const webauthn = stubWebAuthn();
+    const added = held();
+    const fetch = signedIn([], {
+      "POST /api/v1/me/passkeys/start": () => json({ options: creationOptions }),
+      "POST /api/v1/me/passkeys": () => added.answer,
+    });
+    renderApp("/account");
+    const { user, dialog } = await openAdd();
+    const field = within(dialog).getByRole("textbox", { name: "Name" });
+    await user.type(field, "Tablet");
+    await create(user, dialog);
+    await waitFor(() => expect(requestsTo(fetch, "POST", "/api/v1/me/passkeys")).toHaveLength(1));
+    await user.type(field, "{Enter}");
+    await user.type(field, "{Enter}");
+    expect(webauthn.create).toHaveBeenCalledTimes(1);
+    expect(requestsTo(fetch, "POST", "/api/v1/me/passkeys")).toHaveLength(1);
+    added.release(json({ ...phone, name: "Tablet" }, 201));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("ignores Enter in the rename dialog while the rename is in flight", async () => {
+    stubWebAuthn();
+    const renamed = held();
+    const path = `/api/v1/me/passkeys/${laptop.id}`;
+    const fetch = signedIn([laptop], { [`PATCH ${path}`]: () => renamed.answer });
+    renderApp("/account");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Rename Work laptop" }));
+    const dialog = await screen.findByRole("dialog", { name: "Rename passkey" });
+    const field = within(dialog).getByRole("textbox", { name: "Name" });
+    await user.type(field, "{Enter}");
+    await waitFor(() => expect(requestsTo(fetch, "PATCH", path)).toHaveLength(1));
+    await user.type(field, "{Enter}");
+    await user.type(field, "{Enter}");
+    expect(requestsTo(fetch, "PATCH", path)).toHaveLength(1);
+    renamed.release(json(laptop));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("labels the add button Try again after the start failed, and starts again", async () => {
+    stubWebAuthn();
+    let fail = true;
+    const fetch = signedIn([], {
+      "POST /api/v1/me/passkeys/start": () =>
+        fail
+          ? problem(500, "internal", "Internal Server Error")
+          : json({ options: creationOptions }),
+    });
+    renderApp("/account");
+    const { user, dialog } = await openAdd();
+    const retry = await within(dialog).findByRole("button", { name: "Try again" });
+    fail = false;
+    await user.click(retry);
+    expect(
+      await within(dialog).findByRole("button", { name: "Create the passkey" }),
+    ).toBeInTheDocument();
+    expect(requestsTo(fetch, "POST", "/api/v1/me/passkeys/start")).toHaveLength(2);
+  });
+});
+
+describe("the last-method refusal", () => {
+  async function refuseLast(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(await screen.findByRole("button", { name: "Delete Work laptop" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Delete Work laptop?" });
+    await user.click(within(dialog).getByRole("button", { name: "Delete passkey" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("your last way to sign in");
+  }
+  const refusing = {
+    [`DELETE /api/v1/me/passkeys/${laptop.id}`]: () =>
+      problem(409, "local.last_method", "Conflict"),
+  };
+
+  it("goes once a passkey is added", async () => {
+    stubWebAuthn();
+    signedIn([laptop], {
+      ...refusing,
+      "POST /api/v1/me/passkeys/start": () => json({ options: creationOptions }),
+      "POST /api/v1/me/passkeys": () => json(phone, 201),
+    });
+    renderApp("/account");
+    const user = userEvent.setup();
+    await refuseLast(user);
+    const dialog = await openAdd().then((opened) => opened.dialog);
+    await create(user, dialog);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.queryByText(/your last way to sign in/)).toBeNull();
+  });
+
+  it("goes once a passkey is renamed", async () => {
+    stubWebAuthn();
+    signedIn([laptop], {
+      ...refusing,
+      [`PATCH /api/v1/me/passkeys/${laptop.id}`]: () => json({ ...laptop, name: "Desk" }),
+    });
+    renderApp("/account");
+    const user = userEvent.setup();
+    await refuseLast(user);
+    await user.click(screen.getByRole("button", { name: "Rename Work laptop" }));
+    const dialog = await screen.findByRole("dialog", { name: "Rename passkey" });
+    await user.click(within(dialog).getByRole("button", { name: "Save name" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.queryByText(/your last way to sign in/)).toBeNull();
   });
 });
