@@ -17,7 +17,8 @@ The git hooks already exist; this spec records what they do (checked against the
 files on 12 Nov 2026) so later changes have a baseline. It then specifies what M0 still needs
 for "Repo, CI, releases": the GitHub repository itself, the governance files the plan names, the
 `pnpm audit` gate, the monthly dependency update, one version number with a check, and a
-release recipe. What a release ships beyond a tagged GitHub Release is pending Q1.
+release recipe. Besides the GitHub Release, a release publishes the signed multi-arch server
+image with its SBOMs (Q1 option B, B16).
 
 ## Behavior
 
@@ -145,9 +146,29 @@ release recipe. What a release ships beyond a tagged GitHub Release is pending Q
   previous tag, grouped by type, with `feat` and `fix` first and reverts last; breaking changes
   (a `!` after the type, or a `BREAKING CHANGE:` footer, of which only the first line is kept)
   are listed first under their own heading.
-- **B16. Release artifacts.** What a release publishes besides the GitHub Release is pending Q1.
-  Whatever Q1 decides, artifacts are built by `just release` from a clean worktree of the tagged
-  commit, on the owner's machine or a VM the owner provides, never from a working checkout.
+- **B16. Release artifacts** (Q1 option B; ADR 0031). Besides the GitHub Release, a release
+  publishes the server image `ghcr.io/vainnor/stepclimb:<x.y.z>` for linux/amd64 and
+  linux/arm64, signed with cosign keyless, with an SPDX 2.3 SBOM per platform attached to that
+  platform's image as a signed cosign attestation and to the GitHub Release as a file. Artifacts
+  are built by `just release` from a clean worktree of the tagged commit, on the owner's amd64
+  machine or a VM the owner provides, never from a working checkout. After `just ci` passes on
+  the tag, `bin/release_artifacts.py build` refuses a Docker engine that is not linux/amd64
+  (`deploy/Dockerfile` cross-compiles arm64 from amd64), builds both platforms into one OCI
+  archive with the OCI labels for title, source, version, revision and license, and has syft
+  (a pinned container image, run with `--network none`) write each platform's SBOM. It refuses
+  an archive whose index does not hold exactly the two platforms and an SBOM that lists no
+  Debian package, no crate, or not `stepclimb-server` at the release's version (the binary
+  carries cargo-auditable's dependency list). It writes the release body (the notes and the
+  digests) and `target/release/vX.Y.Z-artifacts.json` with the digests and file hashes, and
+  publishes nothing. `just release-publish vX.Y.Z` is the one step that publishes, run by the
+  owner (D9). It refuses unless the tag is checked out in a clean tree, `just ci` passed on it
+  and every artifact hashes as recorded, and when the registry already serves another image
+  under the version's tag. It pushes the archive with skopeo keeping its digests, refuses to
+  sign when the registry then serves another digest, signs the image index and each platform's
+  image by digest (`cosign sign --recursive`), attests each SBOM to its platform's image, and
+  creates the GitHub Release with the body and the SBOMs (`--prerelease` for a pre-release).
+  `--dry-run` makes the same checks and prints the commands without running any. The musl
+  binaries and the systemd unit come with 1.0.
 - **B17. DCO** (Q5, decided). Opening a pull request certifies the DCO: `CONTRIBUTING.md` says
   so and the PR template has a certification box. No `Signed-off-by` trailer is required, so
   `Closes #N` stays the only trailer and the `commit-msg` hook is unchanged.
@@ -192,6 +213,18 @@ None.
   `main` changed that reads differently on `next` (and goes ahead once `next` has the same
   change), a range with nothing to release and notes that carry AI attribution, and pushes
   nothing.
+- **T9** (B16). With fake `docker`, `skopeo`, `cosign` and `gh` in a scratch repository (the
+  T7 setup), `build` on the tag writes the archive, an SBOM per platform, the release body and
+  the artifacts file and calls no publishing tool; it refuses, before writing the artifacts
+  file, an arm64 engine, an index without exactly the two platforms, an SBOM without Debian
+  packages, crates or the server crate at the version, a non-SPDX-2.3 SBOM, a dirty tree, a HEAD
+  that is not the tag, and missing notes. `publish --dry-run` prints the push, the signature,
+  the two attestations and `gh release create` in that order and runs none; `publish` runs them
+  in that order and signs only the recorded digests. `publish` refuses without a `just ci` pass,
+  after an artifact changed, when the registry holds another image under the tag (pushing
+  nothing), when the registry serves another digest after the push (signing nothing) and on a
+  registry error; run again after a failed step, it skips the push. Once, on an amd64 machine,
+  the build step's commands run for real: both platforms built, both SBOMs checked.
 - **T8** (B11). `docs-reviewer` reviews the three governance files against `anti-ai-slop.md` and
   the plan's License and governance section.
 
@@ -335,6 +368,26 @@ delegation; the owner can overrule either. The owner confirmed D7's merge rule w
   (with `--verify-tag`, the notes file and `--prerelease` for a pre-release version) once its
   checks and `just ci` pass on the tag, and a person runs it. `just release-prepare` prints the
   push, the two `gh pr create` commands and the tag commands. Artifacts (issue 7) come later.
+  D9 moves the `gh release create` command into `just release-publish`.
+
+### Coordinator decisions (2026-11-15, overnight)
+
+Points B16 left open, settled while building issue 7 on the owner's delegation; the owner can
+overrule any of them.
+
+- **D9. One recipe publishes.** `just release` builds the artifacts and prints the
+  `just release-publish` commands; `just release-publish vX.Y.Z` pushes, signs, attests and
+  creates the GitHub Release, so the GitHub Release appears only after the image is signed. It
+  replaces the `gh release create` command D8 had `just release` print. Nothing in `just ci`
+  builds the release archive: `image-check` already builds and checks both platforms, and the
+  recipe's tests run with fake `docker`, `skopeo`, `cosign` and `gh`.
+- **D10. Tags and names.** The image is `ghcr.io/vainnor/stepclimb`, tagged with the version
+  without the `v` (`0.1.0`); no `latest` tag. A published version tag is never replaced; run
+  again after a failed step, `just release-publish` skips the push when the registry already
+  serves the same digest. Each signing is by digest, never by tag.
+- **D11. Tools.** The push tool, the SBOM tool and format, and cargo-auditable in
+  `deploy/Dockerfile` are ADR 0031. skopeo and cosign come from the Nix dev shell; syft runs as
+  a container image pinned by digest, since the dev shell's syft was 13 days old.
 
 ## Issues
 

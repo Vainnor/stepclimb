@@ -87,8 +87,9 @@ value, and `just version-check` (part of `just ci`) fails when one differs.
 ## Releases
 
 The maintainer cuts releases. Versions follow Semantic Versioning; before 1.0 a release is
-`0.<milestone>.<patch>`, so M0 ends at `0.1.0`. No recipe pushes, tags or publishes: each one
-prints the commands to run, and a person runs them. Run the monthly dependency update first.
+`0.<milestone>.<patch>`, so M0 ends at `0.1.0`. One recipe publishes, `just release-publish`,
+and only when the maintainer runs it; the others print the commands to run next. Run the monthly
+dependency update first.
 
 1. From a clean worktree with `git-cliff` on the PATH (the Nix dev shell has it), run
    `just release-prepare 0.1.0`. It fetches `origin`, then refuses when the version is not newer
@@ -117,18 +118,65 @@ prints the commands to run, and a person runs them. Run the monthly dependency u
    PR into `next` is squash-merged.
 5. Tag the merge commit on `main` with an annotated tag and push the tag:
    `git fetch origin && git tag -a v0.1.0 -m "Stepclimb v0.1.0" origin/main && git push origin v0.1.0`.
-6. `git worktree add ../stepclimb-v0.1.0 v0.1.0`, then in that worktree `just release v0.1.0`.
-   It stops unless the tree is clean and the tag is annotated, checked out, equal to the
-   workspace version and a merge commit on `origin/main`'s first-parent history. It also stops
-   when `next` gained anything but `chore(release)` commits after the notes were written, or
-   when git-cliff, run again over the same commits, writes a different section. Then it writes
-   the notes to `target/release/v0.1.0-notes.md`, runs `just ci` on the tag, and prints the
-   `gh release create` command (with `--prerelease` for a version such as `0.1.0-rc.1`). Run that
-   command to publish the GitHub Release.
+6. On an amd64 machine or VM, `git worktree add ../stepclimb-v0.1.0 v0.1.0`, then in that
+   worktree `just release v0.1.0`. It stops unless the tree is clean and the tag is annotated,
+   checked out, equal to the workspace version and a merge commit on `origin/main`'s
+   first-parent history. It also stops when `next` gained anything but `chore(release)` commits
+   after the notes were written, or when git-cliff, run again over the same commits, writes a
+   different section. Then it writes the notes to `target/release/v0.1.0-notes.md` and runs
+   `just ci` on the tag. Last, it builds `deploy/Dockerfile` for linux/amd64 and linux/arm64 into
+   one OCI archive, `target/release/v0.1.0-image.oci.tar`, and has syft write an SPDX SBOM for
+   each platform (`v0.1.0-sbom-linux-amd64.spdx.json`, `-arm64`), refusing one that does not list
+   the image's Debian packages and crates
+   ([ADR 0031](docs/adr/0031-release-image-signing-and-sbom.md)). The digests and file hashes go
+   in `v0.1.0-artifacts.json` and the GitHub Release body in `v0.1.0-release.md`. Nothing is
+   published. The arm64 image is cross-compiled from amd64, so an arm64 machine cannot build the
+   release.
+7. `just release-publish v0.1.0 --dry-run` checks the tag, the `just ci` pass and every artifact
+   against `v0.1.0-artifacts.json`, and prints the commands of the next step without running any.
+8. `just release-publish v0.1.0` runs them: it pushes the archive to
+   `ghcr.io/vainnor/stepclimb:0.1.0` with skopeo, keeping its digests, and refuses to sign when
+   the registry then serves another digest; signs the image index and each platform's image with
+   `cosign sign --recursive` by digest; attaches each platform's SBOM with
+   `cosign attest --type spdxjson`; and creates the GitHub Release with the release body and the
+   two SBOMs (`--prerelease` for a version such as `0.1.0-rc.1`). It refuses a version the
+   registry already holds as another image; run again after a failed step, it skips the push of
+   the same image and repeats the rest. cosign opens a browser for each of its three keyless
+   signings.
 
 Before the first release, the owner changes the repository's settings so `main` takes merge
 commits only and `next` squash merges only (ADR 0030 -> Consequences); until then GitHub refuses
 step 4's merge.
+
+### What publishing needs
+
+The maintainer sets these up once, on the machine that runs step 8:
+
+- A GitHub personal access token (classic) with `write:packages`, and
+  `docker login ghcr.io -u <GitHub user>` with it. skopeo and cosign read `~/.docker/config.json`;
+  when Docker keeps the token in a credential store instead, also run
+  `skopeo login ghcr.io -u <GitHub user>`.
+- `gh auth login` with access to the repository, for the GitHub Release.
+- An account cosign's keyless flow accepts (GitHub, Google or Microsoft). The signing
+  certificate names that account's email address, and the signature, the certificate and the
+  SBOM attestations' digests are recorded in Sigstore's public transparency log (Rekor), so the
+  address and the image digests become public even while the repository is private.
+- A first push creates the package under the account, private. GitHub connects it to the
+  repository from the image's `org.opencontainers.image.source` label. Make it public in the
+  package settings, or every pull needs a token. GitHub's billing docs say Container registry
+  storage and transfer are free for now, with a month's notice before that changes.
+
+To check a published image:
+
+```bash
+cosign verify ghcr.io/vainnor/stepclimb:0.1.0 \
+  --certificate-identity <the signer's email> --certificate-oidc-issuer <its issuer URL>
+cosign verify-attestation --type spdxjson ghcr.io/vainnor/stepclimb@<platform digest> \
+  --certificate-identity <the signer's email> --certificate-oidc-issuer <its issuer URL>
+```
+
+The issuer is `https://github.com/login/oauth` for a GitHub account and
+`https://accounts.google.com` for Google.
 
 ## What we will not merge
 

@@ -8,7 +8,8 @@ version and the notes (whose commit body names the commit the notes end at), wri
 PR's body to target/release/ and prints the commands a person runs next. `verify <vX.Y.Z>` and
 `finish <vX.Y.Z>` run before and after `just ci` in `just release`, in a clean worktree of the
 tag: they check the tag, regenerate the notes and compare them with CHANGELOG.md, write the notes
-file and print the `gh release create` command.
+file and check the `just ci` pass. bin/release_artifacts.py then builds the image and the SBOMs,
+and its `publish` is the one step that publishes.
 
 Nothing here pushes, tags or publishes; it fetches from origin and works on the local checkout.
 `prepare` makes every check before its first change, so a refusal leaves the checkout as it was.
@@ -348,20 +349,22 @@ def verify(root: Path, tag: str) -> int:
     return 0
 
 
-def finish(root: Path, tag: str) -> int:
-    version = tag_version(tag)
-    commit = tag_commit(root, tag)
+def require_ci_pass(root: Path, commit: str) -> None:
+    """Refused unless bin/ci-stamp.sh recorded a `just ci` pass on `commit` in this worktree."""
     stamp = Path(git(root, "rev-parse", "--absolute-git-dir")) / "stepclimb-ci-pass"
     if not stamp.is_file() or stamp.read_text().strip() != commit:
         raise ReleaseError(f"just ci has not passed on {commit[:12]} in this worktree")
+
+
+def finish(root: Path, tag: str) -> int:
+    tag_version(tag)
+    commit = tag_commit(root, tag)
+    require_ci_pass(root, commit)
     notes = root / OUT / f"{tag}-notes.md"
     if not notes.is_file():
         raise ReleaseError(f"{notes} is missing; run just release {tag} again")
-    pre = " --prerelease" if "-" in version else ""
-    print(f"""release: just ci passed on {tag} ({commit[:12]}). Nothing was published.
-Create the GitHub Release with:
-
-  gh release create {tag} --verify-tag --title "Stepclimb {tag}" --notes-file {notes}{pre}""")
+    print(f"release: just ci passed on {tag} ({commit[:12]}); building the release artifacts "
+          "(bin/release_artifacts.py build)")
     return 0
 
 

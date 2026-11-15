@@ -175,7 +175,8 @@ just deny          # cargo deny check
 just version-check # bin/check-versions.sh: one version in Cargo.toml, the app's manifests, tauri.conf.json and the lockfiles
 just release-version <x.y.z>  # write that version everywhere (OpenAPI info.version included), refresh both Cargo lockfiles, add its CHANGELOG.md notes (git-cliff)
 just release-prepare <x.y.z>  # branch from origin/next, run release-version, commit the version and the notes, print the release steps; pushes nothing
-just release <vX.Y.Z>  # in a worktree of the annotated merge tag on main: check it and its notes, just ci, print the gh release command; publishes nothing
+just release <vX.Y.Z>  # in a worktree of the annotated merge tag on main, on amd64: check it and its notes, just ci, build the amd64 and arm64 image archive and SBOMs; publishes nothing
+just release-publish <vX.Y.Z> [--dry-run]  # the owner's step: push the image to GHCR, cosign-sign it, attach the SBOMs, create the GitHub Release; --dry-run prints the commands
 just update-deps   # the monthly update: both Cargo lockfiles, pnpm-lock.yaml and image digests, 14 days old or more (bin/update_deps.py)
 just migrate       # apply migrations to the local database
 just sqlx-prepare  # regenerate .sqlx/ after changing a query (against a database of its own)
@@ -201,7 +202,7 @@ just install-hooks # once per clone: .githooks (secret scan, formatting, no-attr
 
 Needs: the Nix dev shell (`nix develop`, or `use flake` in a local `.envrc`), or the same tools
 installed by hand: Rust via rustup, `just`, `cargo-nextest`, `cargo-deny`, `sqlx-cli`,
-`gitleaks` (or Docker), `git-cliff` (releases), Node 26.13 with pnpm 12.9, Playwright's Chromium, `python3`, Docker with
+`gitleaks` (or Docker), `git-cliff`, `skopeo` and `cosign` (releases), Node 26.13 with pnpm 12.9, Playwright's Chromium, `python3`, Docker with
 Compose (with buildx), and on Linux WebKitGTK 4.1 for the Tauri app and QEMU's user-mode
 emulators (`qemu-aarch64`) for `just image-check`.
 

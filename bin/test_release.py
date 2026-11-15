@@ -445,29 +445,21 @@ class Release(Scratch):
         self.assertIn("just ci has not passed", result.stderr)
         self.assertNotIn("gh release create", result.stdout)
 
-    def test_finish_prints_the_release_command_and_publishes_nothing(self) -> None:
+    def test_finish_checks_the_pass_and_publishes_nothing(self) -> None:
         self.assertEqual(self.run_release("verify", self.TAG, cwd=self.tagged).returncode, 0)
         self.stamp(self.git(self.tagged, "rev-parse", "HEAD"))
         before = self.origin_refs()
         result = self.run_release("finish", self.TAG, cwd=self.tagged)
         self.assertEqual(result.returncode, 0, result.stderr)
-        notes = self.tagged / f"target/release/{self.TAG}-notes.md"
-        self.assertIn(f'gh release create {self.TAG} --verify-tag --title "Stepclimb {self.TAG}" '
-                      f"--notes-file {notes} --prerelease", result.stdout)
+        self.assertIn(f"just ci passed on {self.TAG}", result.stdout)
+        self.assertNotIn("gh release create", result.stdout)
         self.assertEqual(self.origin_refs(), before)
 
-    def test_finish_marks_only_pre_releases(self) -> None:
-        self.land("fix(server): a fix (#5)")
-        self.assertEqual(self.prepare("0.1.0").returncode, 0, "prepare 0.1.0")
-        self.release_into_main("0.1.0")
-        self.tagged = self.checkout_tag("v0.1.0")
-        self.assertEqual(self.run_release("verify", "v0.1.0", cwd=self.tagged).returncode, 0)
+    def test_finish_refuses_without_the_notes(self) -> None:
         self.stamp(self.git(self.tagged, "rev-parse", "HEAD"))
-        result = self.run_release("finish", "v0.1.0", cwd=self.tagged)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("gh release create v0.1.0 ", result.stdout)
-        self.assertNotIn("--prerelease", result.stdout)
-
+        result = self.run_release("finish", self.TAG, cwd=self.tagged)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(f"{self.TAG}-notes.md is missing", result.stderr)
 
 if __name__ == "__main__":
     unittest.main()
