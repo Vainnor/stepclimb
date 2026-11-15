@@ -23,6 +23,7 @@ import { NotFoundView } from "./routes/not-found";
 import { SignInView } from "./routes/sign-in";
 import { SignInPasskeyView } from "./routes/sign-in-passkey";
 import { SignInPasswordView } from "./routes/sign-in-password";
+import { SignInTotpView } from "./routes/sign-in-totp";
 import { safeReturnTarget } from "./session";
 
 const rootRoute = createRootRouteWithContext<AppContext>()({
@@ -78,6 +79,13 @@ const signInPasswordRoute = createRoute({
   component: SignInPasswordView,
 });
 
+const signInTotpRoute = createRoute({
+  getParentRoute: () => signedOutRoute,
+  path: "sign-in/totp",
+  validateSearch: validateSignInSearch,
+  component: SignInTotpView,
+});
+
 const enrollRoute = createRoute({
   getParentRoute: () => signedOutRoute,
   path: "enroll",
@@ -105,7 +113,13 @@ const accountRoute = createRoute({
 });
 
 export const routeTree = rootRoute.addChildren([
-  signedOutRoute.addChildren([signInRoute, signInPasskeyRoute, signInPasswordRoute, enrollRoute]),
+  signedOutRoute.addChildren([
+    signInRoute,
+    signInPasskeyRoute,
+    signInPasswordRoute,
+    signInTotpRoute,
+    enrollRoute,
+  ]),
   signedInRoute.addChildren([homeRoute, accountRoute]),
 ]);
 
@@ -134,6 +148,8 @@ declare module "@tanstack/react-router" {
   interface HistoryState {
     /** The address the email step hands to the passkey or password step (routes/sign-in.tsx). */
     email?: string;
+    /** Why the TOTP step sent the user back to the password step: the server's code. */
+    passwordAgain?: string;
     /** The enrollment link's token, moved out of the fragment (routes/enroll.tsx). */
     enrollToken?: string;
   }

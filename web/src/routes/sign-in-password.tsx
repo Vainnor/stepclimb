@@ -4,7 +4,10 @@
 // is only ever in the form and the request body, never in the URL or the history. A session ends
 // the step at the return target the server answers. Without the address in the history entry (a
 // link opened directly) it goes back to the email step. When the organization offers passkeys
-// too, the step links to the passkey step.
+// too, the step links to the passkey step. A right password for an account with TOTP answers
+// `{next: "totp"}` and no session (04-local-accounts B15): the step goes on to `/sign-in/totp`.
+// When that step needs the password again, it comes back here with the reason in the history
+// entry's state, shown once above the form and focused.
 import {
   Button,
   FormError,
@@ -16,7 +19,7 @@ import {
 } from "@stepclimb/ui";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Navigate, useRouter, useSearch } from "@tanstack/react-router";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { Form } from "react-aria-components";
 import { api, unwrap } from "../api";
 import { useDocumentTitle } from "../layouts/document-title";
@@ -24,7 +27,7 @@ import type { SignInSearch } from "../router";
 import { useCompleteSignIn } from "../sign-in/complete";
 import { discoveryQuery, emailMethods, useOrganizationName } from "../sign-in/discovery";
 import { useLocationHere } from "../sign-in/location-here";
-import { signInProblem } from "../sign-in/problems";
+import { passwordAgainMessage, signInProblem } from "../sign-in/problems";
 
 export function SignInPasswordView() {
   // While the navigation after sign-in is pending, the location's state already holds no address;
@@ -49,6 +52,7 @@ function PasswordStep({ email, search }: { email: string; search: SignInSearch }
   const router = useRouter();
   const complete = useCompleteSignIn();
   const [password, setPassword] = useState("");
+  const carried = useCarriedProblem();
   const offersPasskey = useQuery({
     ...discoveryQuery,
     select: (document) => emailMethods(document).includes("passkey"),
@@ -56,7 +60,13 @@ function PasswordStep({ email, search }: { email: string; search: SignInSearch }
 
   const submit = useMutation({
     mutationFn: (entered: string) => signIn(email, entered, search.return_to),
-    onSuccess: (signedIn) => complete(signedIn.return_to),
+    onSuccess: async (answer) => {
+      if ("next" in answer) {
+        await router.navigate({ to: "/sign-in/totp", search, state: { email } });
+        return;
+      }
+      await complete(answer.return_to);
+    },
   });
 
   const send = (event: FormEvent<HTMLFormElement>) => {
@@ -67,6 +77,8 @@ function PasswordStep({ email, search }: { email: string; search: SignInSearch }
   };
 
   const problem = submit.isError ? signInProblem(submit.error, "password", t) : undefined;
+  // The TOTP step's reason stays until the next attempt.
+  const shownCarried = submit.isIdle ? carried : undefined;
   const otherEmail = router.buildLocation({ to: "/sign-in", search }).href;
   const passkey = router.buildLocation({ to: "/sign-in/passkey", search }).href;
 
@@ -76,6 +88,17 @@ function PasswordStep({ email, search }: { email: string; search: SignInSearch }
       <Text elementType="p" className="wrap-anywhere">
         {t("signIn.password.as", { email })}
       </Text>
+      {shownCarried ? (
+        <div
+          ref={shownCarried.ref}
+          tabIndex={-1}
+          data-slot="password-again"
+          data-focus-on-arrival
+          className="outline-none"
+        >
+          <FormError>{passwordAgainMessage(shownCarried.code, t)}</FormError>
+        </div>
+      ) : null}
       {problem ? <FormError code={problem.code}>{problem.message}</FormError> : null}
       <Form onSubmit={send} className="flex flex-col gap-4">
         {/* The address, hidden and read-only, so a password manager saves and fills the password
@@ -116,4 +139,18 @@ function PasswordStep({ email, search }: { email: string; search: SignInSearch }
       </Link>
     </>
   );
+}
+
+/**
+ * The reason the TOTP step sent the user back, read once from the history entry's state and
+ * focused once, so a screen reader reads it before the form.
+ */
+function useCarriedProblem() {
+  const code = useLocationHere("/sign-in/password", (location) => location.state.passwordAgain);
+  const [kept] = useState(code);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (kept !== undefined) ref.current?.focus();
+  }, [kept]);
+  return kept === undefined ? undefined : { code: kept, ref };
 }

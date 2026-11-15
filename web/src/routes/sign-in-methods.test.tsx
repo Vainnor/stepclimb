@@ -485,3 +485,203 @@ describe("the password step (B16, B17)", () => {
     await screen.findByRole("alert");
   });
 });
+
+describe("the TOTP step (04 B15, B20, B21; 11 B16, B17)", () => {
+  const needsCode = { "POST /auth/local/password": () => json({ next: "totp" }) };
+
+  async function reachTotp(path = "/sign-in") {
+    const app = renderApp(path);
+    const user = await enterEmail();
+    await enterPassword(user, "correct horse battery");
+    await screen.findByRole("heading", { level: 1, name: "Enter your code" });
+    return { app, user };
+  }
+
+  async function enterCode(user: ReturnType<typeof userEvent.setup>, code: string) {
+    await user.type(screen.getByRole("textbox", { name: /^Code/ }), code);
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+  }
+
+  it("does not count {next: totp} as signed in, and asks for the app's code", async () => {
+    const fetch = stubServer({ ...passwordOnly, ...needsCode });
+    const { app } = await reachTotp("/sign-in?return_to=%2Fcourses");
+    expect(app.router.state.location.pathname).toBe("/sign-in/totp");
+    expect(app.router.state.location.search).toEqual({ return_to: "/courses" });
+    expect(requestsTo(fetch, "/api/v1/me")).toEqual([]);
+    expect(screen.getByText("Signing in as avery@example.test.")).toBeInTheDocument();
+    const input = screen.getByRole("textbox", { name: /^Code/ });
+    expect(input).toHaveAttribute("autocomplete", "one-time-code");
+    expect(input).toHaveAttribute("inputmode", "numeric");
+    expect(input).toHaveAccessibleDescription(
+      "Open your authenticator app and enter the 6-digit code it shows for this account.",
+    );
+  });
+
+  it("signs in with the code and opens the return target", async () => {
+    const fetch = stubServer({
+      ...passwordOnly,
+      ...needsCode,
+      "POST /auth/local/totp": () => json({ return_to: "/?tab=2" }),
+      "GET /api/v1/me": me,
+    });
+    const { app, user } = await reachTotp("/sign-in?return_to=%2F%3Ftab%3D2");
+    await enterCode(user, "123456");
+    expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeInTheDocument();
+    expect(app.router.state.location.href).toBe("/?tab=2");
+    expect(await bodyOf(fetch, "/auth/local/totp")).toEqual({ code: "123456" });
+  });
+
+  it("takes a recovery code instead, in a field of its own that takes focus", async () => {
+    const fetch = stubServer({
+      ...passwordOnly,
+      ...needsCode,
+      "POST /auth/local/totp": () => json({ return_to: "/" }),
+      "GET /api/v1/me": me,
+    });
+    const { user } = await reachTotp();
+    await user.type(screen.getByRole("textbox", { name: /^Code/ }), "12");
+    await user.click(screen.getByRole("button", { name: "Use a recovery code instead" }));
+    const recovery = screen.getByRole("textbox", { name: /^Recovery code/ });
+    await waitFor(() => expect(recovery).toHaveFocus());
+    expect(recovery).toHaveValue("");
+    expect(recovery).toHaveAttribute("autocomplete", "off");
+    expect(screen.queryByRole("textbox", { name: /^Code/ })).toBeNull();
+    await user.type(recovery, "abcd-efgh-ijkl-mnop");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await screen.findByRole("heading", { level: 1, name: "Home" });
+    expect(await bodyOf(fetch, "/auth/local/totp")).toEqual({ code: "abcd-efgh-ijkl-mnop" });
+
+    expect(screen.queryByRole("button", { name: "Use a code from your app instead" })).toBeNull();
+  });
+
+  it("switches back to the app's code", async () => {
+    stubServer({ ...passwordOnly, ...needsCode });
+    const { user } = await reachTotp();
+    await user.click(screen.getByRole("button", { name: "Use a recovery code instead" }));
+    await user.click(screen.getByRole("button", { name: "Use a code from your app instead" }));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: /^Code/ })).toHaveFocus());
+  });
+
+  it.each([
+    ["auth.totp_invalid", 401, "That code did not work. Enter your password again"],
+    ["auth.flow_expired", 400, "The sign-in took too long to finish. Enter your password again"],
+    [
+      "auth.flow_invalid",
+      400,
+      "This sign-in was already finished or replaced by one in another tab. Enter your password again.",
+    ],
+  ])(
+    "after %s, goes back to the password step with the reason, focused",
+    async (code, status, message) => {
+      stubServer({
+        ...passwordOnly,
+        ...needsCode,
+        "POST /auth/local/totp": () => problem(status, code, "Refused"),
+      });
+      const { app, user } = await reachTotp();
+      await enterCode(user, "000000");
+      await screen.findByRole("heading", { level: 1, name: "Enter your password" });
+      const reason = screen.getByRole("alert");
+      expect(reason).toHaveTextContent(message);
+      await waitFor(() => expect(reason.closest('[data-slot="password-again"]')).toHaveFocus());
+      expect(app.router.state.location.state.email).toBe("avery@example.test");
+      expect(screen.getByLabelText("Password")).toHaveValue("");
+      // The TOTP step's entry was replaced: Back goes to the earlier password entry, never to the
+      // step of a used flow.
+      const here = app.router.state.location.state.key;
+      app.router.history.back();
+      await waitFor(() => expect(app.router.state.location.state.key).not.toBe(here));
+      expect(app.router.state.location.pathname).toBe("/sign-in/password");
+      expect(app.router.state.location.state.passwordAgain).toBeUndefined();
+    },
+  );
+
+  it("drops the carried reason once the password is sent again", async () => {
+    let password = 0;
+    stubServer({
+      ...passwordOnly,
+      "POST /auth/local/password": () =>
+        ++password === 1
+          ? json({ next: "totp" })
+          : problem(401, "auth.credentials_invalid", "Unauthorized"),
+      "POST /auth/local/totp": () => problem(401, "auth.totp_invalid", "Refused"),
+    });
+    const { user } = await reachTotp();
+    await enterCode(user, "000000");
+    await screen.findByRole("heading", { level: 1, name: "Enter your password" });
+    await enterPassword(user, "wrong");
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("That email and password do not match."),
+    );
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+  });
+
+  it.each([
+    [403, "auth.suspended", "Your account is suspended."],
+    [
+      403,
+      "auth.admission_refused",
+      "Your organization's sign-in rules do not let this account in.",
+    ],
+    [
+      404,
+      "auth.method_disabled",
+      "Your organization has turned off sign-in with a password and code.",
+    ],
+  ])("%i %s stays on the step and says so", async (status, code, message) => {
+    const fetch = stubServer({
+      ...passwordOnly,
+      ...needsCode,
+      "POST /auth/local/totp": () => problem(status, code, "Refused"),
+    });
+    const { app, user } = await reachTotp();
+    await enterCode(user, "123456");
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    expect(app.router.state.location.pathname).toBe("/sign-in/totp");
+    expect(requestsTo(fetch, "/auth/local/password")).toHaveLength(1);
+  });
+
+  it("names the wait a rate limit gives, and stays", async () => {
+    stubServer({
+      ...passwordOnly,
+      ...needsCode,
+      "POST /auth/local/totp": () => {
+        const response = problem(429, "auth.rate_limited", "Too Many Requests");
+        response.headers.set("retry-after", "30");
+        return response;
+      },
+    });
+    const { app, user } = await reachTotp();
+    await enterCode(user, "123456");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Too many sign-in attempts. Try again in 30 seconds.",
+    );
+    expect(app.router.state.location.pathname).toBe("/sign-in/totp");
+  });
+
+  it("sends one request when Enter is pressed again while it is in flight", async () => {
+    let finish: (response: Response) => void = () => undefined;
+    const fetch = stubServer({
+      ...passwordOnly,
+      ...needsCode,
+      "POST /auth/local/totp": () =>
+        new Promise<Response>((resolve) => {
+          finish = resolve;
+        }),
+    });
+    const { user } = await reachTotp();
+    await enterCode(user, "123456");
+    await user.type(screen.getByRole("textbox", { name: /^Code/ }), "{Enter}");
+    expect(requestsTo(fetch, "/auth/local/totp")).toHaveLength(1);
+    finish(problem(403, "auth.suspended", "Forbidden"));
+    await screen.findByRole("alert");
+  });
+
+  it("goes back to the email step when opened without an address", async () => {
+    const fetch = stubServer(passwordOnly);
+    const app = renderApp("/sign-in/totp?return_to=%2Fcourses");
+    expect(await screen.findByRole("textbox", { name: "Email" })).toBeInTheDocument();
+    expect(app.router.state.location.pathname).toBe("/sign-in");
+    expect(apiRequests(fetch)).toEqual([]);
+  });
+});

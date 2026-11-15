@@ -11,7 +11,7 @@ import { PasskeyError } from "./passkey";
  * Which screen the failure is on: some codes read differently while setting up an account or on
  * the password step.
  */
-export type SignInScreen = "enroll" | "signIn" | "password";
+export type SignInScreen = "enroll" | "signIn" | "password" | "totp";
 
 export interface SignInProblem {
   /** What happened and what to do. */
@@ -53,8 +53,9 @@ export function passkeyMessage(error: PasskeyError, screen: SignInScreen, t: Str
 }
 
 function rateLimited(error: ApiError, screen: SignInScreen, t: Strings["t"]): string {
-  // The password route also counts failed checks per account, so its message names no network.
-  if (screen === "password") {
+  // The password and TOTP routes also count failed checks per account, so their message names no
+  // network.
+  if (screen === "password" || screen === "totp") {
     return error.retryAfter === undefined
       ? t("signIn.problem.passwordRateLimited")
       : t("signIn.problem.passwordRateLimitedFor", { seconds: error.retryAfter });
@@ -67,6 +68,7 @@ function rateLimited(error: ApiError, screen: SignInScreen, t: Strings["t"]): st
 function methodDisabled(screen: SignInScreen, t: Strings["t"]): string {
   if (screen === "enroll") return t("enroll.problem.methodDisabled");
   if (screen === "password") return t("signIn.problem.passwordDisabled");
+  if (screen === "totp") return t("signIn.problem.totpDisabled");
   return t("signIn.problem.methodDisabled");
 }
 
@@ -182,4 +184,29 @@ export function navigationProblem(code: string, t: Strings["t"]): SignInProblem 
   if (known !== undefined) return { message: known };
   if (!looksLikeCode(code)) return { message: t("signIn.problem.failed") };
   return { message: t("signIn.problem.unknown"), code };
+}
+
+/**
+ * The codes after which the TOTP step cannot go on: the server used up or never had the second
+ * step's flow, so the password is needed again (04-local-accounts B20). A wrong code ends the flow
+ * too, so every new guess starts from the password.
+ */
+const PASSWORD_AGAIN = new Set(["auth.totp_invalid", "auth.flow_invalid", "auth.flow_expired"]);
+
+/** The code of `error` when the TOTP step must go back to the password step, or undefined. */
+export function passwordAgain(error: unknown): string | undefined {
+  const code = error instanceof ApiError ? error.problem?.code : undefined;
+  return code !== undefined && PASSWORD_AGAIN.has(code) ? code : undefined;
+}
+
+/** What the password step says when the TOTP step sent the user back to it with `code`. */
+export function passwordAgainMessage(code: string, t: Strings["t"]): string {
+  switch (code) {
+    case "auth.totp_invalid":
+      return t("signIn.problem.totpInvalid");
+    case "auth.flow_expired":
+      return t("signIn.problem.totpExpired");
+    default:
+      return t("signIn.problem.totpRestart");
+  }
 }

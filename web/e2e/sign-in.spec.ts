@@ -3,6 +3,7 @@
 // T20; 11-app-shell.md B13 to B17, T14, T19). `just e2e` creates the stack's organization and admin
 // with `stepclimb admin create` and hands this file the printed setup link. Chromium's virtual
 // authenticator (DevTools protocol, WebAuthn domain) stands in for a device with a screen lock.
+import { createHmac } from "node:crypto";
 import AxeBuilder from "@axe-core/playwright";
 import { type Browser, expect, type Page, test } from "@playwright/test";
 
@@ -479,7 +480,132 @@ test.describe
         await context.close();
       }
     });
+
+    // TOTP after the password (04 B15, B19 to B21) end to end: the password test's user turns TOTP
+    // on through the public API, then signs in with a wrong code (back to the password), the
+    // app's code, and a recovery code.
+    test("sign in with a password and a TOTP code or a recovery code (04 B15, B20, B21)", async ({
+      browser,
+    }) => {
+      const context = await browser.newContext();
+      const learner = await context.newPage();
+      try {
+        await signInWithPassword(learner);
+        await expect(learner.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
+        const enrolled = await learner.evaluate(async () => {
+          const started = await fetch("/api/v1/me/totp", { method: "POST" });
+          return { status: started.status, ...(await started.json()) };
+        });
+        expect(enrolled.status).toBe(200);
+        const secret = base32(enrolled.secret);
+        const confirmed = await learner.evaluate(
+          async (code) => {
+            const answer = await fetch("/api/v1/me/totp/confirm", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ code }),
+            });
+            return { status: answer.status, ...(await answer.json()) };
+          },
+          totp(secret, 0),
+        );
+        expect(confirmed.status).toBe(200);
+        expect(confirmed.recovery_codes).toHaveLength(10);
+        const [recoveryCode] = confirmed.recovery_codes as string[];
+        await context.clearCookies();
+
+        await test.step("a wrong code needs the password again", async () => {
+          await signInWithPassword(learner);
+          await expect(
+            learner.getByRole("heading", { level: 1, name: "Enter your code" }),
+          ).toBeVisible();
+          const code = learner.getByRole("textbox", { name: /^Code/ });
+          await expect(code).toHaveAttribute("autocomplete", "one-time-code");
+          const refused = answerOf(learner, "/auth/local/totp");
+          // Six digits that are the code of no step the server accepts now.
+          await code.fill(wrongCode(secret));
+          await learner.getByRole("button", { name: "Sign in" }).click();
+          expect((await refused).status()).toBe(401);
+          await expect(
+            learner.getByRole("heading", { level: 1, name: "Enter your password" }),
+          ).toBeVisible();
+          await expect(learner.getByRole("alert")).toContainText("That code did not work.");
+          await expect(learner.locator('[data-slot="password-again"]')).toBeFocused();
+        });
+
+        await test.step("the app's code signs in", async () => {
+          await learner.getByLabel("Password").fill(PHRASE);
+          await learner.getByRole("button", { name: "Sign in" }).click();
+          // The next step's code: the confirmation used the current one, and a code is used once.
+          await learner.getByRole("textbox", { name: /^Code/ }).fill(totp(secret, 1));
+          const accepted = answerOf(learner, "/auth/local/totp");
+          await learner.getByRole("button", { name: "Sign in" }).click();
+          expect((await accepted).status()).toBe(200);
+          await expect(learner.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
+        });
+
+        await test.step("a recovery code signs in instead", async () => {
+          await context.clearCookies();
+          await signInWithPassword(learner);
+          await learner.getByRole("button", { name: "Use a recovery code instead" }).click();
+          const field = learner.getByRole("textbox", { name: /^Recovery code/ });
+          await expect(field).toBeFocused();
+          await field.fill(recoveryCode ?? "");
+          const accepted = answerOf(learner, "/auth/local/totp");
+          await learner.getByRole("button", { name: "Sign in" }).click();
+          expect((await accepted).status()).toBe(200);
+          await expect(learner.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
+        });
+      } finally {
+        await context.close();
+      }
+    });
   });
+
+/** Signs the password test's user in from the sign-in screen as far as the password takes them. */
+async function signInWithPassword(page: Page) {
+  await page.goto("/sign-in");
+  await page.getByRole("textbox", { name: "Email" }).fill(PASSWORD_USER);
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByRole("link", { name: "Sign in with a password instead" }).click();
+  await page.getByLabel("Password").fill(PHRASE);
+  await page.getByRole("button", { name: "Sign in" }).click();
+}
+
+/** The bytes of a base32 secret (RFC 4648, no padding), as an authenticator app reads it. */
+function base32(text: string): Buffer {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = "";
+  for (const char of text.replace(/=+$/, "").toUpperCase()) {
+    const value = alphabet.indexOf(char);
+    if (value === -1) throw new Error("the secret is not base32");
+    bits += value.toString(2).padStart(5, "0");
+  }
+  const bytes = bits.match(/.{8}/g) ?? [];
+  return Buffer.from(bytes.map((byte) => Number.parseInt(byte, 2)));
+}
+
+/** Six digits that are not `secret`'s code for the step before, at or after now. */
+function wrongCode(secret: Buffer): string {
+  const near = new Set([-1, 0, 1, 2].map((offset) => totp(secret, offset)));
+  let code = 0;
+  while (near.has(String(code).padStart(6, "0"))) code++;
+  return String(code).padStart(6, "0");
+}
+
+/**
+ * The 6-digit code an authenticator app shows for `secret` (RFC 6238: HMAC-SHA-1, 30 s steps),
+ * `offset` steps from now.
+ */
+function totp(secret: Buffer, offset: number): string {
+  const step = Math.floor(Date.now() / 1000 / 30) + offset;
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(step));
+  const mac = createHmac("sha1", secret).update(counter).digest();
+  const at = (mac[mac.length - 1] ?? 0) & 0x0f;
+  const value = mac.readUInt32BE(at) & 0x7fffffff;
+  return String(value % 1_000_000).padStart(6, "0");
+}
 
 const themes = ["light", "dark", "high-contrast"] as const;
 const widths = [

@@ -708,15 +708,31 @@ list, provider buttons, the callback error and the password step that I5 left):
   `auth.credentials_invalid` and the password step's `auth.method_disabled` have their own
   messages; its 429 message names no network, since the route also counts failed checks per
   account (08 B40).
-- **TOTP (04 I7, #27) and the magic link (04 I8, #28)** have no server routes yet, so no step is
-  drawn for either; each adds its step route with its issue.
+- **The TOTP step (B16; 04 B15, B20, B21).** A right password for an account with TOTP answers
+  `{next: "totp"}` and no session; the password step then opens `/sign-in/totp` with the address
+  in the history entry's state (a typed URL without it goes back to the email step). The field
+  asks for the app's code with `autocomplete="one-time-code"` and `inputmode="numeric"`; "Use a
+  recovery code instead" swaps it for a recovery code field (and back), emptying it and moving
+  focus to it. The step posts `{code}` to `POST /auth/local/totp`; while a request is in flight
+  it sends nothing more. The server uses the flow up on a wrong code and refuses a missing,
+  finished or expired one, so after `auth.totp_invalid`, `auth.flow_invalid` or
+  `auth.flow_expired` the step replaces its history entry with the password step, carrying the
+  reason in the entry's state; the password step shows it once above the form, focused (the
+  navigation focuses an element marked `data-focus-on-arrival` in place of the `h1`), until the
+  next attempt. Other failures (`auth.suspended`, `auth.admission_refused`,
+  `auth.method_disabled`, a 429) stay on the step with their messages; "Start again" goes to the
+  email step. The step does not check the code's form: the server takes six digits with spaces,
+  or a recovery code in any letter case.
+- **The magic link (04 I8, #28)** has no server routes yet, so no step is drawn for it.
 - **End to end.** `just e2e` inserts one `oidc` provider, `example-id`, whose config holds only a
   `label`, into the stack's organization, since no route creates providers yet (06 I5). Its start
   route answers `/sign-in?error=auth.provider_unavailable` without contacting any server, so the
   test checks the button's full-page navigation, the 303 and the message after it. Sign-in at a
   real provider (T16) waits for the mock OpenID Connect server in the e2e stack (06 I7, #39). The password
   test adds a user through `POST /api/v1/users`, sets a password through an enrollment link and
-  signs in on the screen. The method list's other states run axe in the browser with synthetic
+  signs in on the screen; a second test turns TOTP on for that user through `/api/v1/me/totp`,
+  computing codes from the secret as an app would (RFC 6238), and signs in with a wrong code (back
+  to the password), the app's code and a recovery code. The method list's other states run axe in the browser with synthetic
   documents, in light, dark and high contrast at 1280 and 375 px, in the default brand and in the
   vZDC example brand (its rules from the token build, since changing the stack's branding would
   reach every other test).
@@ -754,8 +770,8 @@ In dependency order. Each is one PR.
   08 (codes). Narrowed by the coordinator (2026-11-15): the method list (B13), provider buttons
   (B14), the callback error (B18), the password, TOTP and magic-link steps, and T6 and T16 moved
   to issue #171, which depends on 08 I9 (`/.well-known/stepclimb`), 04 I6 to I8, 05 and 06. #171
-  built B13, B14, B18 and the password step, and T6; the TOTP and magic-link steps go with 04 I7
-  and I8, and T16 with the mock OpenID Connect server (#39).
+  built B13, B14, B18, the password and TOTP steps, and T6; the magic-link step goes with 04 I8,
+  and T16 with the mock OpenID Connect server (#39).
 - **I6. Appearance choice and OrgSwitcher.** Deliverable: the appearance and density settings
   applied before first paint as Q6 decides, and a test that the OrgSwitcher stays out of the
   DOM (B19). Covers B19, B21; T9. Depends on: I4; Q6 answered; 12 I4 (high-contrast theme).

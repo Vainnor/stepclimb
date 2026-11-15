@@ -173,12 +173,32 @@ export const webMessages: Catalog = {
     "signIn.problem.subjectMissing":
       "The sign-in service did not say who you are, so Stepclimb cannot sign you in. Tell an administrator.",
     "signIn.problem.suspended": "Your account is suspended. Ask an administrator to restore it.",
+    "signIn.problem.totpDisabled":
+      "Your organization has turned off sign-in with a password and code. Ask an administrator how to sign in.",
+    "signIn.problem.totpExpired":
+      "The sign-in took too long to finish. Enter your password again, then a new code.",
+    "signIn.problem.totpInvalid":
+      "That code did not work. Enter your password again, then the newest code from your app or an unused recovery code.",
+    "signIn.problem.totpRestart":
+      "This sign-in was already finished or replaced by one in another tab. Enter your password again.",
     "signIn.problem.unknown":
       "Something went wrong while signing you in. Try again. If it keeps happening, give an administrator this code:",
     "signIn.problem.unreachable":
       "Stepclimb could not reach the server. Check your connection, then try again.",
     "signIn.provider.unlabeled": "Sign in with {key}",
     "signIn.title": "Sign in",
+    "signIn.totp.as": "Signing in as {email}.",
+    "signIn.totp.description":
+      "Open your authenticator app and enter the 6-digit code it shows for this account.",
+    "signIn.totp.label": "Code",
+    "signIn.totp.recovery.description":
+      "One of the recovery codes you saved when you turned on codes from an app. Each one works once.",
+    "signIn.totp.recovery.label": "Recovery code",
+    "signIn.totp.startAgain": "Start again",
+    "signIn.totp.submit": "Sign in",
+    "signIn.totp.title": "Enter your code",
+    "signIn.totp.useApp": "Use a code from your app instead",
+    "signIn.totp.useRecovery": "Use a recovery code instead",
     "signOut.failed": "Sign-out failed",
     "signOut.failedHint": "You are still signed in. Try again in a moment.",
     "userMenu.density": "Density",
