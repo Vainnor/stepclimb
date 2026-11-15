@@ -32,7 +32,9 @@ use stepclimb_core::{
     id::{Uuid, new_id},
     organizations,
 };
-use stepclimb_mock_idp::{AuthorizeError, Endpoint, Fault, MockIdp, StatusCode as MockStatus};
+use stepclimb_mock_idp::{
+    AuthorizeError, Endpoint, Fault, MockIdp, MockUser, StatusCode as MockStatus,
+};
 use stepclimb_server::{
     AppState,
     client_ip::TrustedProxies,
@@ -247,7 +249,12 @@ impl Fixture {
 
     /// Start at `path`, a start route of `key`, and follow the authorization URL at the mock.
     async fn start_at(&self, path: &str, key: &str) -> Started {
-        let answer = self.get(self.org, path, None).await;
+        self.start_in(self.org, path, key).await
+    }
+
+    /// [`Fixture::start_at`] in `org`.
+    async fn start_in(&self, org: Uuid, path: &str, key: &str) -> Started {
+        let answer = self.get(org, path, None).await;
         assert_eq!(answer.status, StatusCode::SEE_OTHER, "{answer:?}");
         let request = axum::http::Request::get(answer.location())
             .body(Vec::new())
@@ -300,13 +307,18 @@ impl Fixture {
 
     /// The organization's `admission.signup_allowed` (`07-admission.md` B21).
     async fn allow_signup(&self, allowed: bool) {
+        self.allow_signup_in(self.org, allowed).await;
+    }
+
+    /// [`Fixture::allow_signup`] for `org`.
+    async fn allow_signup_in(&self, org: Uuid, allowed: bool) {
         sqlx::query(
             "UPDATE organizations
              SET settings = settings || jsonb_build_object('admission',
                                 jsonb_build_object('signup_allowed', $2::boolean))
              WHERE id = $1",
         )
-        .bind(self.org)
+        .bind(org)
         .bind(allowed)
         .execute(&self.pool)
         .await
@@ -569,8 +581,8 @@ async fn a_suspended_user_is_refused(pool: PgPool) {
 }
 
 /// Cross-organization (T2's callback half, `07-admission.md` B4): organization B's provider of
-/// the same key cannot finish A's flow, and the same `sub` at B's provider is another person
-/// in B, never A's user.
+/// the same key cannot finish A's flow, A's session is not B's, and the same `sub` signing in
+/// at B's provider is another person in B, never A's user.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn another_organization_neither_finishes_the_flow_nor_shares_the_user(pool: PgPool) {
     let fixture = Fixture::new(pool).await;
@@ -605,6 +617,54 @@ async fn another_organization_neither_finishes_the_flow_nor_shares_the_user(pool
         .await
         .unwrap();
     assert_eq!(users, [fixture.org]);
+
+    // The same mock user, the same `sub`, signs in at B.
+    fixture.allow_signup_in(other, true).await;
+    let at_b = fixture.start_in(other, "/auth/mock/start", "mock").await;
+    let answer = fixture
+        .get(
+            other,
+            &format!("/auth/mock/callback?{}", at_b.back),
+            Some(&at_b.cookie),
+        )
+        .await;
+    answer.assert_signed_in("/");
+    let users: Vec<(Uuid, Uuid)> = sqlx::query_as("SELECT id, org_id FROM users ORDER BY org_id")
+        .fetch_all(&fixture.pool)
+        .await
+        .unwrap();
+    let mut orgs: Vec<Uuid> = users.iter().map(|(_, org)| *org).collect();
+    orgs.sort();
+    let mut expected = vec![fixture.org, other];
+    expected.sort();
+    assert_eq!(orgs, expected, "one user in each organization");
+    let identities: Vec<(Uuid, Uuid, Uuid, String)> = sqlx::query_as(
+        "SELECT i.org_id, i.user_id, u.org_id, i.subject FROM identities i \
+         JOIN users u ON u.id = i.user_id ORDER BY i.org_id",
+    )
+    .fetch_all(&fixture.pool)
+    .await
+    .unwrap();
+    assert_eq!(identities.len(), 2, "{identities:?}");
+    for (identity_org, user_id, user_org, subject) in &identities {
+        assert_eq!(subject, "mock-user-1");
+        assert_eq!(
+            identity_org, user_org,
+            "an identity belongs to its own organization's user"
+        );
+        let owner = users
+            .iter()
+            .find(|(id, _)| id == user_id)
+            .expect("the user");
+        assert_eq!(owner.1, *identity_org);
+    }
+    let b_user = users.iter().find(|(_, org)| *org == other).unwrap().0;
+    let b_identity = identities.iter().find(|i| i.0 == other).unwrap();
+    assert_eq!(b_identity.1, b_user, "B's identity is B's user");
+    let cookie = answer.session_cookie().expect("a session");
+    let (status, me) = fixture.me(other, &cookie).await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    assert_eq!(me["user"]["id"], json!(b_user.to_string()));
 }
 
 /// B14, spec 08 B19: the flow's `return_to` is sanitized again when the flow is read, so a
@@ -920,7 +980,25 @@ async fn b16_the_callback_is_rate_limited_before_anything_runs(pool: PgPool) {
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn t15_no_log_line_or_row_carries_a_token_the_code_or_a_secret(pool: PgPool) {
     let fixture = Fixture::new(pool).await;
-    fixture.provider(fixture.org, "mock", "oidc").await;
+    let attributes = json!({ "claims": { "attributes": { "department": "/department" } } });
+    fixture
+        .provider_with(fixture.org, "mock", "oidc", attributes)
+        .await;
+    // Values distinct enough that a hit in the log can only be the claim.
+    let profile = [
+        "zqmail.student@example.test",
+        "Zqgivenname",
+        "Zqfamilyname",
+        "Zqdepartment",
+    ];
+    fixture.mock.set_user(
+        MockUser::new("mock-user-1")
+            .with_claim("email", json!(profile[0]))
+            .with_claim("email_verified", json!(true))
+            .with_claim("given_name", json!(profile[1]))
+            .with_claim("family_name", json!(profile[2]))
+            .with_claim("department", json!(profile[3])),
+    );
     let started = fixture.start("mock").await;
     let (log, guard) = capture();
     let answer = fixture
@@ -960,6 +1038,24 @@ async fn t15_no_log_line_or_row_carries_a_token_the_code_or_a_secret(pool: PgPoo
     }
     for secret in secrets {
         assert!(!log.contains(&secret), "a secret reached the log");
+    }
+    // The claims did reach the user and identity, and still none of them is logged (B4 of
+    // spec 08, `07-admission.md` B2).
+    let (email, department): (Option<String>, Value) = sqlx::query_as(
+        "SELECT u.email, i.attributes -> 'department' FROM users u \
+         JOIN identities i ON i.user_id = u.id WHERE u.org_id = $1",
+    )
+    .bind(fixture.org)
+    .fetch_one(&fixture.pool)
+    .await
+    .expect("the user");
+    assert_eq!(email.as_deref(), Some(profile[0]));
+    assert_eq!(department, json!(profile[3]));
+    for value in profile {
+        assert!(
+            !log.contains(value),
+            "a profile value reached the log: {value}"
+        );
     }
     let rows: Vec<String> = sqlx::query_scalar(
         "SELECT row_to_json(f)::text FROM auth_flows f \

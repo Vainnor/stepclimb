@@ -81,8 +81,7 @@ validates the ID token with the `openidconnect` crate, maps claims into an ident
   verifier are each 32 bytes from the OS CSPRNG in base64url, stored sealed in the flow's
   payload; the flow row names the provider (`auth_flows.provider_id`, `08` Data). The redirect
   URI is the configured public URL, never the request's `Host`, with the key percent-encoded as
-  one path segment. A key holding NUL and the local row are "not found" (B3). An enabled
-  `oauth2` provider answers `auth.provider_unavailable` until `06` adds its flow. A rate-limited
+  one path segment. A key holding NUL and the local row are "not found" (B3). A rate-limited
   start (B16) is a 303 to the sign-in route with `error=auth.rate_limited` and `Retry-After`,
   as this spec's API table lists, rather than `08` B22's 429 body, since the route is a browser
   navigation (recorded in `08` B22 and T20). The 303s carry `Cache-Control: no-store`. The
@@ -124,8 +123,7 @@ validates the ID token with the `openidconnect` crate, maps claims into an ident
   before it contacts the provider, in its own statement rather than in the transaction that later
   creates the session (B14, `08` B18): no database connection waits on the provider, and the
   provider's code is single use, so a flow kept after a failure could not be finished. No provider
-  is `auth.provider_not_found` with the flow left alone; an `oauth2` provider is
-  `auth.provider_unavailable` until `06` adds its flow. After the flow is taken every answer
+  is `auth.provider_not_found` with the flow left alone. After the flow is taken every answer
   clears the flow cookie, and a missing `state` is `auth.flow_invalid` like a different one. A
   callback with neither `code` nor `error`, a stored config that no longer reads and a discovery
   document that is no longer accepted are `auth.provider_error`. The token request accepts any 2xx
