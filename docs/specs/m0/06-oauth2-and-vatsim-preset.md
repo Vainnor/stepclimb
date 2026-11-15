@@ -39,6 +39,25 @@ server every sign-in test and the Playwright stack use instead of a real provide
   responses at any endpoint, and a userinfo `sub` mismatch. It records every request it
   receives so a test can assert what Stepclimb sent, and it refuses a token request whose PKCE
   verifier does not match the challenge.
+
+  Coordinator decision (2026-11-14), for I1. The mock is the library crate
+  `crates/stepclimb-mock-idp` (Q1, ADR 0027), taken as a dev-dependency only; I7 adds the
+  binary for the Compose stack. Its OIDC issuer is `http://127.0.0.1:<port>/oidc` (a path, so a
+  relying party that drops it when joining `/.well-known/openid-configuration` fails) and the
+  OAuth 2 provider is under `/oauth2`. It registers one client with a random secret that
+  contains `+`, `/` and `=`, so a client that skips form-encoding its Basic credentials (RFC
+  6749 2.3.1) fails, and signs
+  RS256 only, as `05-oidc.md` Q8 needs at least. PKCE is S256 only and required by default; a
+  switch makes it optional for a provider with `pkce = false` (Q3), and a verifier sent without
+  a challenge is refused. The token endpoints accept `client_secret_basic` and
+  `client_secret_post` unless a test narrows the list, which the discovery document then
+  advertises (`05-oidc.md` Q6). Authorize accepts any absolute `http` or `https` redirect URI
+  unless a test sets an allowlist, matched as exact strings (400 on a miss), and the token
+  request must repeat the authorize request's `redirect_uri` as the same string. Once the client
+  has authenticated, presenting a code spends it, whether the rest of the token request passes
+  or not. Dropping the mock closes its port and cuts its open connections. Token responses carry a refresh token, but the refresh grant answers
+  `unsupported_grant_type`: nothing in M0 refreshes (`05-oidc.md` B15). Every fault switch lasts
+  until the test sets it back.
 - **B3.** The Compose Playwright stack (`just e2e`) runs the mock as a service, and the stack
   configures an OIDC provider pointing at it. A Playwright test signs in through it from the
   sign-in page and lands signed in on the app shell (the plan's "mock-OIDC sign-in").

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Fails if a workspace crate reaches a crate it must not, through any normal or build dependency
-# on any target. The rules come from the plan (docs/plan/technical.md -> Architecture and stack,
-# Integration platform) and are explained in .claude/rules/architecture.md. Run by
-# `just layering`, which `just ci` runs.
+# on any target, optional ones included (every feature on). The rules come from the plan
+# (docs/plan/technical.md -> Architecture and stack, Integration platform) and are explained in
+# .claude/rules/architecture.md. Run by `just layering`, which `just ci` runs.
 set -euo pipefail
 
 # Rule 1. stepclimb-assess is pure and also builds for wasm32: no other workspace crate and no
@@ -47,7 +47,7 @@ for crate in $members; do
         failed=1
         continue
     fi
-    deps="$(cargo tree --locked -p "$crate" -e normal,build --target all --prefix none --format '{p}' \
+    deps="$(cargo tree --locked -p "$crate" --all-features -e normal,build --target all --prefix none --format '{p}' \
         | awk '{print $1}' | sort -u | grep -vx "$crate" || true)"
     hits="$(grep -E "^($rule)$" <<<"$deps" || true)"
     if [[ -n "$hits" ]]; then

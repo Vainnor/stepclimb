@@ -41,7 +41,7 @@ lookup every `web/` string goes through (spec 11 I1). `apps/app` is a Tauri 2 sh
 `web/`. `stepclimb-core` has UUID v7 ids, the permission catalog, the entitlement catalogs, the
 built-in role lists and the controllable clock; `stepclimb-auth` has tokens, token hashes and the encryption key ring (spec 08
 I1); the browser session (`stepclimb-core` `sessions`, `stepclimb-server` `session`) and the
-request-organization resolver (with its `RequestOrg` extractor for unauthenticated routes) exist and authenticate the `/api/v1` routes, but no sign-in route creates a session yet (specs 04 to 07). Every other crate and package is a documented placeholder. M0's work is specified in
+request-organization resolver (with its `RequestOrg` extractor for unauthenticated routes) exist and authenticate the `/api/v1` routes, but no sign-in route creates a session yet (specs 04 to 07). `stepclimb-mock-idp` is the test-only mock identity provider. Every other crate and package is a documented placeholder. M0's work is specified in
 `docs/specs/m0/` and broken into issues on the GitHub Project.
 
 ## Workspace layout
@@ -60,6 +60,7 @@ The plan's layout (`docs/plan/technical.md` -> Architecture and stack).
 | `crates/stepclimb-integrations` | lib | Sync API, SCIM, permission modes, reports and exports. Placeholder (M4). |
 | `crates/stepclimb-connectors` | lib | Optional connectors on the public API: vatsim, vatusa. Placeholder (M4). |
 | `crates/stepclimb-jobs` | lib | Postgres queue, outbox, email, webhooks, push, auto-submit. Placeholder (M1, M4). |
+| `crates/stepclimb-mock-idp` | lib | The mock OIDC and OAuth 2 identity provider every sign-in test runs against, on 127.0.0.1 (spec 06 I1, ADR 0027). Dev-dependency only. |
 | `crates/stepclimb-media` | lib | tus uploads, ffmpeg transcode, captions, signed delivery. Placeholder (M1). |
 | `migrations/` | | SQL migrations, forward-only, embedded and run at startup. |
 | `openapi/stepclimb.json` | | The committed OpenAPI document (`just openapi`). |
@@ -78,14 +79,16 @@ The plan's layout (`docs/plan/technical.md` -> Architecture and stack).
 | `.claude/`, `.codex/`, `.agents/` | | Agent setup for Claude Code and Codex, one copy of each rule, hook, agent and command (`docs/agents.md`). |
 
 Dependency rules, enforced by `bin/check-layering.sh` (`.claude/rules/architecture.md` ->
-Layering). The plan fixes these four; anything else between library crates is allowed until an
-ADR says otherwise.
+Layering). The plan fixes the first four; ADR 0027 adds the mock IdP's. Anything else between
+library crates is allowed until an ADR says otherwise.
 
 ```
   server          top of the graph: nothing depends on it
   activities-atc  ┐ only the server may depend on these (cargo features, enabled
   connectors      ┘ per organization); connectors depend on no workspace crate
   assess          no workspace crate, no I/O, runtime or HTTP crate (pure, wasm32)
+  mock-idp        no normal or build dependency on a workspace crate; a dev-dependency
+                  only, never a normal or build one
 ```
 
 Rust: edition 2024, stable toolchain pinned in `rust-toolchain.toml` (1.98), `resolver = "3"`.

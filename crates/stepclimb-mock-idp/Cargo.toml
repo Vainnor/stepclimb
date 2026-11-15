@@ -13,7 +13,8 @@ publish.workspace = true
 # release binary or image.
 [dependencies]
 axum.workspace = true
-tokio.workspace = true
+# `sync` for the stop signal that cuts connections when the mock is dropped.
+tokio = { workspace = true, features = ["sync"] }
 serde_json.workspace = true
 base64.workspace = true
 sha2.workspace = true
@@ -23,7 +24,6 @@ url.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["test-util"] }
 stepclimb-auth.workspace = true
 openidconnect.workspace = true
 http.workspace = true
