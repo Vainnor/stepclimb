@@ -1,0 +1,67 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT password_hash IS NOT NULL AS \"has_password!\", password_generation,\n                  totp_secret, totp_confirmed_at IS NOT NULL AS \"confirmed!\", totp_last_step\n           FROM local_logins WHERE org_id = $1 AND user_id = $2\n           FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "has_password!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "password_generation",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "local_logins",
+            "name": "password_generation"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "totp_secret",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "local_logins",
+            "name": "totp_secret"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "confirmed!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "totp_last_step",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "local_logins",
+            "name": "totp_last_step"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      false,
+      true,
+      null,
+      true
+    ]
+  },
+  "hash": "3ff07ec0b028572b788f959bc0ffa9d25a64895057822eddc68c06faa8b80765"
+}

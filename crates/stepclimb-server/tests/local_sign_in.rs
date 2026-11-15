@@ -515,3 +515,38 @@ async fn a_change_leaving_no_way_to_sign_in_is_refused(pool: PgPool) {
     let local = local_sign_in::get(&f.pool, scope(f.org)).await.unwrap();
     assert!(local.offered().is_empty());
 }
+
+/// B2, the coordinator's rule for issue I7: with only TOTP's switch on (an outside provider
+/// keeps a way in), TOTP is not offered, since there is no password for it to follow: its
+/// routes answer 404 `auth.method_disabled` and `offered()` lists nothing. With the password on
+/// it is offered again.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn totp_without_the_password_is_not_offered(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let admin = f.admin().await;
+    f.outside_provider("example-oidc", true).await;
+    let s = scope(f.org);
+    let mut totp_only = defaults();
+    totp_only["passkey"] = false.into();
+    totp_only["password"] = false.into();
+    let answered = f.put(&admin, totp_only.clone()).await;
+    assert_eq!(answered.status, StatusCode::OK, "{answered:?}");
+    assert_eq!(answered.body["totp"], true);
+
+    let refused = require_method(&f.pool, s, LocalMethod::Totp).await;
+    assert_eq!(refused.unwrap_err().code(), "auth.method_disabled");
+    let local = local_sign_in::get(&f.pool, s).await.unwrap();
+    assert!(!local.offers(LocalMethod::Totp));
+    assert!(local.offered().is_empty());
+
+    let mut passkey_and_totp = totp_only;
+    passkey_and_totp["passkey"] = true.into();
+    f.put(&admin, passkey_and_totp).await;
+    let refused = require_method(&f.pool, s, LocalMethod::Totp).await;
+    assert_eq!(refused.unwrap_err().code(), "auth.method_disabled");
+    let local = local_sign_in::get(&f.pool, s).await.unwrap();
+    assert_eq!(local.offered(), [LocalMethod::Passkey]);
+
+    f.put(&admin, defaults()).await;
+    assert!(require_method(&f.pool, s, LocalMethod::Totp).await.is_ok());
+}

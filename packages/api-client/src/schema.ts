@@ -389,6 +389,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/totp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start TOTP enrollment. */
+        post: operations["startMyTotp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/totp/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm TOTP with a code from the app. */
+        post: operations["confirmMyTotp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/totp/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Turn TOTP off with a current code or a recovery code. */
+        post: operations["disableMyTotp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/organization": {
         parameters: {
             query?: never;
@@ -618,6 +669,23 @@ export interface paths {
         put?: never;
         /** Sign in with an email and a password. */
         post: operations["signInWithPassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/local/totp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Finish signing in with a TOTP code after the password. */
+        post: operations["signInWithTotp"];
         delete?: never;
         options?: never;
         head?: never;
@@ -950,6 +1018,11 @@ export interface components {
         BrandingProblem: components["schemas"]["Problem"] & {
             /** @description On `branding.contrast_failed`, every appearance's report, failing pairs first. */
             report?: components["schemas"]["ContrastReport"][] | null;
+        };
+        /** @description A right password whose account also needs a TOTP code: no session exists yet. */
+        CodeRequired: {
+            /** @description Send the code to `POST /auth/local/totp` in this browser within 10 minutes. */
+            next: components["schemas"]["NextStep"];
         };
         /** @description One measured pair: `foreground` on `background`. */
         ContrastPair: {
@@ -1327,6 +1400,11 @@ export interface components {
             subject: string;
         };
         /**
+         * @description The next step a password sign-in needs.
+         * @enum {string}
+         */
+        NextStep: "totp";
+        /**
          * @description Every organization setting with its effective value: the stored one, or the setting's
          *     default when none is stored.
          */
@@ -1562,6 +1640,8 @@ export interface components {
             /** @description The path on this site to open after signing in; anything else becomes `/`. */
             return_to?: string | null;
         };
+        /** @description The answer of a right password: the user is signed in, or TOTP's second step is needed. */
+        PasswordSignedIn: components["schemas"]["SignedIn"] | components["schemas"]["CodeRequired"];
         /** @description One permission of the catalog. */
         PermissionInfo: {
             /** @description The scope types at which a role assignment grants it. */
@@ -1776,6 +1856,26 @@ export interface components {
          * @enum {string}
          */
         ThemeChoice: "system" | "light" | "dark" | "high-contrast";
+        /** @description A TOTP code, or a recovery code where one is accepted. Never logged. */
+        TotpCode: {
+            /**
+             * @description The 6 digits the authenticator app shows (spaces ignored), or, to sign in or disable
+             *     TOTP, one of the recovery codes (`ABCD-EFGH-IJKL-MNOP`, any letter case).
+             */
+            code: string;
+        };
+        /** @description The recovery codes of a confirmed TOTP, shown once. */
+        TotpConfirmed: {
+            /** @description Ten single-use codes that stand in for a TOTP code when the app is lost. */
+            recovery_codes: string[];
+        };
+        /** @description A new TOTP secret, shown once. */
+        TotpEnrollment: {
+            /** @description The URI to show as a QR code for the authenticator app. */
+            otpauth_uri: string;
+            /** @description The secret in base32, for typing into the app instead. */
+            secret: string;
+        };
         /**
          * @description A UI font the instance bundles.
          * @enum {string}
@@ -2312,6 +2412,51 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `local.totp_not_started`: no TOTP enrollment is waiting for a code; start one. `local.totp_enabled`: TOTP is already on. */
+        MyTotpConfirmConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `local.totp_not_enabled`: TOTP is not on. */
+        MyTotpDisableConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `auth.session_required`: the request carries a bearer credential; only a signed-in browser session manages TOTP. `auth.csrf_refused`: the request did not come from this site. */
+        MyTotpForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `local.password_required`: the account has no password, which TOTP follows. `local.totp_enabled`: TOTP is already on; disable it first. */
+        MyTotpStartConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `auth.unauthenticated`, `auth.session_expired`, `auth.suspended`: no valid session. `auth.totp_invalid`: the code is wrong, already used, or not the current one. */
+        MyTotpUnauthorized: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `org.none`: the instance has no organization yet. */
         NoOrganization: {
             headers: {
@@ -2478,6 +2623,42 @@ export interface components {
         };
         /** @description `request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting this route does not change (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`; `admission`: `PUT /api/v1/admin/admission`); `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses. */
         SettingsInvalid: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `auth.method_disabled`: TOTP is switched off for this organization, or password sign-in is, which TOTP follows. `org.not_found`: the request's organization cannot be determined. */
+        TotpNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.malformed`: the body is not `{code}`. `auth.flow_invalid`: no password sign-in is waiting for a code in this browser, it was already finished, or the password or TOTP changed since; sign in with the password again. `auth.flow_expired`: the password was checked more than 10 minutes ago; sign in with the password again. */
+        TotpSignInBadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `auth.suspended`: the account is suspended. `auth.csrf_refused`: the request did not come from this site. */
+        TotpSignInForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `auth.totp_invalid`: the code is wrong, already used, or not the current one, and it is no unused recovery code. Sign in with the password again. */
+        TotpSignInUnauthorized: {
             headers: {
                 [name: string]: unknown;
             };
@@ -3592,6 +3773,102 @@ export interface operations {
             503: components["responses"]["NoOrganization"];
         };
     };
+    startMyTotp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A new unconfirmed secret, shown once; it replaces an unconfirmed one */
+            200: {
+                headers: {
+                    /** @description `no-store` */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TotpEnrollment"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["MyTotpForbidden"];
+            404: components["responses"]["TotpNotFound"];
+            409: components["responses"]["MyTotpStartConflict"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    confirmMyTotp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TotpCode"];
+            };
+        };
+        responses: {
+            /** @description TOTP is on; the recovery codes are shown once */
+            200: {
+                headers: {
+                    /** @description `no-store` */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TotpConfirmed"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["MyTotpUnauthorized"];
+            403: components["responses"]["MyTotpForbidden"];
+            404: components["responses"]["TotpNotFound"];
+            409: components["responses"]["MyTotpConfirmConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    disableMyTotp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TotpCode"];
+            };
+        };
+        responses: {
+            /** @description TOTP is off; its secret and recovery codes are deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["MyTotpUnauthorized"];
+            403: components["responses"]["MyTotpForbidden"];
+            404: components["responses"]["TotpNotFound"];
+            409: components["responses"]["MyTotpDisableConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
     getOrganization: {
         parameters: {
             query?: never;
@@ -4157,12 +4434,49 @@ export interface operations {
             };
         };
         responses: {
+            /** @description The user is signed in (`{return_to}`), or the account also needs a TOTP code (`{next: "totp"}`) and no session exists yet */
+            200: {
+                headers: {
+                    /** @description `no-store` */
+                    "Cache-Control"?: string;
+                    /** @description Signed in: the new `__Host-sc_session` cookie and the `__Host-sc_device` cookie. A code needed: the `__Host-sc_flow` cookie of the second step */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasswordSignedIn"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["PasswordSignInUnauthorized"];
+            403: components["responses"]["PasswordSignInForbidden"];
+            404: components["responses"]["PasswordNotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    signInWithTotp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TotpCode"];
+            };
+        };
+        responses: {
             /** @description The user is signed in */
             200: {
                 headers: {
                     /** @description `no-store` */
                     "Cache-Control"?: string;
-                    /** @description The new `__Host-sc_session` cookie and the `__Host-sc_device` cookie */
+                    /** @description The new `__Host-sc_session` cookie, the `__Host-sc_device` cookie, and `__Host-sc_flow` cleared */
                     "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
@@ -4170,10 +4484,10 @@ export interface operations {
                     "application/json": components["schemas"]["SignedIn"];
                 };
             };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["PasswordSignInUnauthorized"];
-            403: components["responses"]["PasswordSignInForbidden"];
-            404: components["responses"]["PasswordNotFound"];
+            400: components["responses"]["TotpSignInBadRequest"];
+            401: components["responses"]["TotpSignInUnauthorized"];
+            403: components["responses"]["TotpSignInForbidden"];
+            404: components["responses"]["TotpNotFound"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             429: components["responses"]["RateLimited"];

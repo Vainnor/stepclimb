@@ -27,8 +27,10 @@
 //! against a dummy hash, so neither the body nor the time says which. A right password then, in
 //! one transaction, locks the user, refuses the sign-in (401, the same answer) if the password
 //! changed since it was read, swaps in a hash at the current parameters when the stored one is
-//! older (B16), and completes the sign-in through admission's local entry. It links no
-//! identity. Issue I7 inserts B15's TOTP step between the check and the transaction.
+//! older (B16), and then, when the organization offers TOTP and the user confirmed it, starts
+//! the second step instead of a session (B15, [`crate::totp`]): 200 `{next: "totp"}` with the
+//! flow cookie. Otherwise it completes the sign-in through admission's local entry. It links no
+//! identity.
 //!
 //! `PUT /api/v1/me/password` ([`change_my_password`], B17) takes the per-address budget, then a
 //! browser session only (`SessionOnly`), checks the current password the same way with the
@@ -51,7 +53,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use stepclimb_auth::{
     password::{self as policy, StoredHash},
@@ -64,7 +66,7 @@ use stepclimb_core::{
     id::Uuid,
     identities, local_logins,
     local_sign_in::Method,
-    local_tokens,
+    local_tokens, local_totp,
     sessions::{self, Keep},
 };
 use utoipa::ToSchema;
@@ -77,6 +79,7 @@ use crate::{
     enrollment::{enrollment_error, invalid_link},
     error::{ApiError, FieldError},
     extract::ApiJson,
+    flow,
     local_sign_in::require_method,
     openapi::problem_responses,
     passkey_enrollment::{Outcome, SignedIn, link_local_identity},
@@ -86,7 +89,7 @@ use crate::{
     rate_limit::{RateLimited, SignIn},
     request_org::RequestOrg,
     require::SessionOnly,
-    session,
+    session, totp,
 };
 
 /// The route that signs in with an email and a password.
@@ -213,13 +216,14 @@ pub async fn enroll_password(
             Outcome::Refused(error) | Outcome::Failed(error) => error,
         })?;
     let started = complete(&mut tx, scope, user_id, now, &headers).await?;
-    // A new password through a link is a reset: no session from before it outlives it.
+    // A new password through a link is a reset: no session from before it outlives it. TOTP
+    // stays as it is: the link sets the password, not the second step.
     sessions::delete_others_of_user(&mut *tx, scope, user_id, Keep::Session(started.session.id))
         .await
         .map_err(internal)?;
     tx.commit().await.map_err(internal)?;
     tracing::info!(%user_id, "password set through an enrollment link");
-    signed_in(
+    signed_in_with_device(
         &state,
         scope,
         user_id,
@@ -266,11 +270,11 @@ async fn use_link(
     responses(
         (
             status = 200,
-            description = "The user is signed in",
-            body = SignedIn,
+            description = "The user is signed in (`{return_to}`), or the account also needs a TOTP code (`{next: \"totp\"}`) and no session exists yet",
+            body = PasswordSignedIn,
             headers(
                 ("Cache-Control" = String, description = "`no-store`"),
-                ("Set-Cookie" = String, description = "The new `__Host-sc_session` cookie and the `__Host-sc_device` cookie")
+                ("Set-Cookie" = String, description = "Signed in: the new `__Host-sc_session` cookie and the `__Host-sc_device` cookie. A code needed: the `__Host-sc_flow` cookie of the second step")
             )
         ),
         (status = 400, response = crate::openapi::BadRequest),
@@ -310,10 +314,17 @@ pub async fn sign_in_with_password(
         signed_in: None,
     };
     let passed = check_password(&limited, &attempt, subject, &body.password).await?;
-    let started = finish_sign_in(&attempt, &passed).await?;
+    let return_to = body.return_to.as_deref();
+    let started = match finish_sign_in(&attempt, &passed, return_to).await? {
+        Finished::SignedIn(started) => started,
+        Finished::CodeRequired(flow) => {
+            tracing::info!(user_id = %passed.user_id, "password sign-in waits for a TOTP code");
+            return Ok(totp::code_required(flow));
+        }
+    };
     tracing::info!(user_id = %passed.user_id, "password sign-in");
-    let return_to = ReturnTo::sanitize(body.return_to.as_deref());
-    signed_in(
+    let return_to = ReturnTo::sanitize(return_to);
+    signed_in_with_device(
         &state,
         scope,
         passed.user_id,
@@ -325,24 +336,53 @@ pub async fn sign_in_with_password(
     .map_err(Refusal::from)
 }
 
+/// The answer of a right password: the user is signed in, or TOTP's second step is needed.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(untagged)]
+pub enum PasswordSignedIn {
+    SignedIn(SignedIn),
+    CodeRequired(totp::CodeRequired),
+}
+
+/// How [`finish_sign_in`] ended.
+enum Finished {
+    SignedIn(session::Started),
+    /// The second step's flow, started in place of a session.
+    CodeRequired(flow::Started),
+}
+
 /// In one transaction: lock the user, refuse the sign-in if the password changed since
-/// [`check_password`] read it, store the rehash if there is one, and complete the sign-in.
+/// [`check_password`] read it, and store the rehash if there is one. Then start TOTP's second
+/// step if the user needs it (B15), or complete the sign-in.
 async fn finish_sign_in(
     attempt: &Attempt<'_>,
     passed: &Passed,
-) -> Result<session::Started, ApiError> {
-    let scope = attempt.scope;
+    return_to: Option<&str>,
+) -> Result<Finished, ApiError> {
+    let (scope, user_id, now) = (attempt.scope, passed.user_id, attempt.now);
     let mut tx = attempt.state.db.begin().await.map_err(internal)?;
     lock_unchanged(&mut tx, scope, passed).await?;
     if let Some(rehashed) = &passed.rehash {
         let (old, new) = (passed.verified.as_str(), rehashed.as_str());
-        local_logins::replace_hash(&mut tx, scope, passed.user_id, old, new, attempt.now)
+        local_logins::replace_hash(&mut tx, scope, user_id, old, new, now)
             .await
             .map_err(internal)?;
     }
-    let started = complete(&mut tx, scope, passed.user_id, attempt.now, attempt.headers).await?;
+    let totp_state = local_totp::lock(&mut tx, scope, user_id)
+        .await
+        .map_err(internal)?;
+    let finished = if totp::needs_code(&mut *tx, scope, totp_state.as_ref()).await? {
+        let keys = &attempt.state.keys;
+        let generation = passed.generation;
+        let flow =
+            totp::begin_second_step(&mut *tx, keys, scope, user_id, generation, return_to, now)
+                .await?;
+        Finished::CodeRequired(flow)
+    } else {
+        Finished::SignedIn(complete(&mut tx, scope, user_id, now, attempt.headers).await?)
+    };
     tx.commit().await.map_err(internal)?;
-    Ok(started)
+    Ok(finished)
 }
 
 /// Lock the user and refuse (401, the answer of a wrong password) when the password is no longer
@@ -484,7 +524,7 @@ fn refuse_weak(password: &str, field: &str) -> Result<(), ApiError> {
 
 /// 200 `{return_to}` with the session cookie, a new device cookie for `user_id`'s password
 /// generation `generation`, and `no-store`.
-fn signed_in(
+pub(crate) fn signed_in_with_device(
     state: &AppState,
     scope: OrgScope,
     user_id: Uuid,

@@ -293,6 +293,8 @@ also writes to:
   | `passkey.rename` | `passkey` | `passkeys::rename` (`04` issue 5) | `before` and `after`: name |
   | `passkey.delete` | `passkey` | `passkeys::delete` (`04` issue 5) | `before`: user, name |
   | `password.set` | `password` (the user's id: a password has no row id of its own) | `local_logins::set_password` (`04` issue 6) | `after`: user; never the hash |
+  | `totp.enable` | `totp` (the user's id) | `local_totp::confirm` (`04` issue 7) | `after`: user; never the secret or a recovery code |
+  | `totp.disable` | `totp` (the user's id) | `local_totp::disable` (`04` issue 7) | `before`: user |
 
   A request that changes nothing writes nothing, neither the row (its `updated_at` stays) nor an
   entry, and answers the row as it is: a patch naming no member, a patch naming only values the

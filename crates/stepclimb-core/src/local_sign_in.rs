@@ -9,8 +9,9 @@
 //! on ([`LocalSignIn::offers`]); turning a method off keeps its credentials, which work again
 //! once it is turned back on (B2).
 //!
-//! TOTP is a second step after a password, never a way in by itself: local sign-in is offered
-//! only while the passkey, the password or the magic link is ([`LocalSignIn::offered`]).
+//! TOTP is a second step after a password, never a way in by itself: it is offered only while
+//! the password is, and local sign-in is offered only while the passkey, the password or the
+//! magic link is ([`LocalSignIn::offered`]).
 //!
 //! [`update`] is the only writer of the switches: the generic settings patch cannot name
 //! `local_sign_in`. Under the organization row's lock it refuses the magic link (no email before
@@ -108,10 +109,15 @@ pub struct LocalSignIn {
 }
 
 impl LocalSignIn {
-    /// Whether the organization offers `method`: the local row is enabled and the switch is on.
+    /// Whether the organization offers `method`: the local row is enabled and the switch is on,
+    /// and for TOTP, the second step after a password, the password is offered too.
     #[must_use]
     pub fn offers(&self, method: Method) -> bool {
-        self.enabled && self.methods.is_on(method)
+        let needs = match method {
+            Method::Totp => self.methods.password,
+            Method::Passkey | Method::Password | Method::MagicLink => true,
+        };
+        self.enabled && self.methods.is_on(method) && needs
     }
 
     /// Whether the organization offers a primary local method, one that signs in by itself:
@@ -403,7 +409,9 @@ mod tests {
         };
         assert!(on.offers(Method::Passkey));
         assert!(!on.offers(Method::Password));
-        assert_eq!(on.offered(), [Method::Passkey, Method::Totp]);
+        // TOTP's switch is on, but without the password there is no step it could follow.
+        assert!(!on.offers(Method::Totp));
+        assert_eq!(on.offered(), [Method::Passkey]);
         let off = LocalSignIn {
             enabled: false,
             methods,
@@ -423,7 +431,7 @@ mod tests {
                 magic_link: false,
             },
         };
-        assert!(totp_only.offers(Method::Totp));
+        assert!(!totp_only.offers(Method::Totp));
         assert!(!totp_only.has_primary());
         assert!(totp_only.offered().is_empty());
         let with_password = LocalSignIn {
@@ -434,6 +442,7 @@ mod tests {
             ..totp_only
         };
         assert!(with_password.has_primary());
+        assert!(with_password.offers(Method::Totp));
         assert_eq!(with_password.offered(), [Method::Password, Method::Totp]);
     }
 

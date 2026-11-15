@@ -201,3 +201,32 @@ fn a_minimum_that_is_not_a_number_is_an_error() {
         "{errors:#?}"
     );
 }
+
+/// `oneOf`: the password sign-in's answer fits exactly one of its shapes; a value fitting none
+/// is an error, and so is one fitting two, which a schema whose choices overlap would allow.
+#[test]
+fn one_of_needs_exactly_one_fitting_schema() {
+    let document = document();
+    for good in [json!({ "return_to": "/" }), json!({ "next": "totp" })] {
+        let errors = common::schema_errors(&document, "PasswordSignedIn", &good);
+        assert!(errors.is_empty(), "{good}: {errors:#?}");
+    }
+    for bad in [
+        json!({ "next": "sms" }),
+        json!({}),
+        json!({ "return_to": "/", "next": "totp" }),
+    ] {
+        let errors = common::schema_errors(&document, "PasswordSignedIn", &bad);
+        assert!(!errors.is_empty(), "{bad} passed");
+    }
+    let mut overlapping = document;
+    overlapping["components"]["schemas"]["PasswordSignedIn"]["oneOf"] = json!([
+        { "type": "object" },
+        { "type": "object" },
+    ]);
+    let errors = common::schema_errors(&overlapping, "PasswordSignedIn", &json!({}));
+    assert!(
+        errors.iter().any(|e| e.contains("conforms to 2 of the oneOf schemas")),
+        "{errors:#?}"
+    );
+}

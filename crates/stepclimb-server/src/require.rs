@@ -442,7 +442,7 @@ impl FromRequestParts<AppState> for SessionOnly {
             return Err(Rejection::Refused(ApiError::new(
                 StatusCode::FORBIDDEN,
                 session_code::AUTH_SESSION_REQUIRED,
-                "Only a signed-in browser session can change your passkeys or password; API keys and app tokens cannot.",
+                "Only a signed-in browser session can change your passkeys, password or TOTP; API keys and app tokens cannot.",
             )));
         }
         AuthOnly::from_request_parts(parts, state).await.map(Self)

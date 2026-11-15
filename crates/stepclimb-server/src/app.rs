@@ -26,7 +26,7 @@ use crate::{
     provider_callback, provider_sign_in,
     providers::Providers,
     rate_limit::RateLimiter,
-    role_assignments, roles, spa, users,
+    role_assignments, roles, spa, totp, users,
     web_origin::WebOrigin,
 };
 
@@ -142,6 +142,7 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
             password::PASSWORD_SIGN_IN_PATH,
             post(password::sign_in_with_password),
         ),
+        (totp::TOTP_SIGN_IN_PATH, post(totp::sign_in_with_totp)),
         (
             provider_sign_in::START_PATH,
             get(provider_sign_in::start_provider_sign_in),
@@ -160,6 +161,9 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
             password::MY_PASSWORD_PATH,
             put(password::change_my_password),
         ),
+        (totp::MY_TOTP_PATH, post(totp::start_my_totp)),
+        (totp::MY_TOTP_CONFIRM_PATH, post(totp::confirm_my_totp)),
+        (totp::MY_TOTP_DISABLE_PATH, post(totp::disable_my_totp)),
         (
             identities::MY_IDENTITIES_PATH,
             get(identities::list_my_identities),

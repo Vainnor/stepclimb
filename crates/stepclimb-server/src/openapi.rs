@@ -10,8 +10,9 @@
 //! signed-in user's, the organization's branding and its stylesheet (`/theme.css`), the local
 //! sign-in switches, enrollment links, the enrollment start route, passkey registration
 //! through a link and passkey sign-in, the start of sign-in with an outside identity provider,
-//! the signed-in user's passkeys, password enrollment, sign-in and change, the discovery document
-//! (`/.well-known/stepclimb`), and the shared error
+//! the signed-in user's passkeys, password enrollment, sign-in and change, TOTP enrollment,
+//! its sign-in step and disabling, the discovery document (`/.well-known/stepclimb`), and the
+//! shared error
 //! schemas and responses below. The other M0 specs add their endpoints under `/api/v1`.
 //!
 //! Every `/api/v1` operation lists its errors in `#[utoipa::path]` (spec 02 B6). The errors
@@ -32,7 +33,7 @@ use crate::{
     error::{FieldError, PROBLEM_JSON, Problem},
     health, identities, local_sign_in, me, my_passkeys, organization, passkey_enrollment,
     passkey_options, passkey_sign_in, password, provider_callback, provider_sign_in,
-    role_assignments, roles, users,
+    role_assignments, roles, totp, users,
 };
 
 /// The operation extension that marks a handler as changing state (spec 08 B12, T17). Every
@@ -60,11 +61,15 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         passkey_sign_in::finish_passkey_sign_in,
         password::enroll_password,
         password::sign_in_with_password,
+        totp::sign_in_with_totp,
         provider_sign_in::start_provider_sign_in,
         provider_callback::finish_provider_sign_in,
         me::get_me,
         appearance::update_my_appearance,
         password::change_my_password,
+        totp::start_my_totp,
+        totp::confirm_my_totp,
+        totp::disable_my_totp,
         organization::get_organization,
         organization::update_organization,
         organization::get_settings,
@@ -193,7 +198,13 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             my_passkeys::MyPasskeyPatch,
             password::PasswordSignIn,
             password::PasswordEnrollment,
-            password::PasswordChange
+            password::PasswordChange,
+            password::PasswordSignedIn,
+            totp::NextStep,
+            totp::CodeRequired,
+            totp::TotpCode,
+            totp::TotpEnrollment,
+            totp::TotpConfirmed
         ),
         responses(
             BadRequest,
@@ -276,7 +287,16 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             password::EnrollPasswordInvalid,
             password::PasswordWeak,
             password::MyPasswordUnauthorized,
-            password::MyPasswordForbidden
+            password::MyPasswordForbidden,
+            totp::TotpNotFound,
+            totp::TotpSignInBadRequest,
+            totp::TotpSignInUnauthorized,
+            totp::TotpSignInForbidden,
+            totp::MyTotpForbidden,
+            totp::MyTotpStartConflict,
+            totp::MyTotpUnauthorized,
+            totp::MyTotpConfirmConflict,
+            totp::MyTotpDisableConflict
         )
     ),
     tags(

@@ -42,6 +42,12 @@ creates and hands over.
   local, is refused with 409 `local.last_method` and writes nothing; disabling the local row is
   such a change. The check runs under the organization row's lock that the route already
   holds.
+
+  Coordinator decision (2026-11-15), for issue I7: TOTP counts as offered only while the
+  password is offered too (`LocalSignIn::offers`), since there is no step for it to follow
+  otherwise. With TOTP's switch on and the password's off, `require_method(Totp)` answers 404
+  `auth.method_disabled` and `LocalSignIn::offered()` leaves TOTP out, as the discovery document
+  of `08-sessions-and-csrf.md` I9 does.
 - **B3.** A local account is a `users` row plus an `identities` row for the local provider. The
   identity's `subject`: pending Q4. The local row needs `kind = 'local'`, which widens the `kind`
   check of `03-users-and-identities.md` B13 by migration. This spec provides
@@ -409,9 +415,22 @@ creates and hands over.
   `{next: "totp"}` with a sign-in flow, and no session exists yet. Otherwise sign-in completes
   (B5). Whether TOTP is required with a password: pending Q11.
 
-  Issue I6 answers only the "otherwise" case: no TOTP column exists until issue I7, which inserts
-  the `{next: "totp"}` step between the password check and the sign-in transaction
-  (`stepclimb_server::password`).
+  Coordinator decisions (2026-11-15), for issue I7:
+
+  - Q11 (a) as decided, without its organization setting: TOTP is optional per user. The
+    setting that would require it of every password user needs a way to enroll during sign-in,
+    which issue I7 does not list; it is left for a later issue.
+  - The step runs in the sign-in transaction after the user's lock, the "password changed"
+    check and the rehash: when the organization offers TOTP (B2's rule above) and the user's
+    secret is confirmed, the route starts a `password_totp` flow (`08-sessions-and-csrf.md` B17)
+    naming the user, sealing the password's generation and keeping the request's `return_to`,
+    and answers 200 `{next: "totp"}` with the flow cookie and `Cache-Control: no-store`, without a
+    session or a device cookie. The 200 body is `PasswordSignedIn` in the OpenAPI document, one
+    of `SignedIn` and `CodeRequired`.
+  - While TOTP is switched off, a confirmed secret asks for nothing and the password signs in
+    alone; switching TOTP back on asks for the same secret again (B2: credentials of a
+    switched-off method stop working and come back unchanged). The admin who switches it off
+    must hold every catalog permission (B2's escalation rule).
 - **B16.** Passwords are hashed with argon2id using the parameters of Q8, with a per-hash random
   salt, in the PHC string format. When a stored hash uses older parameters, a successful sign-in
   rehashes it. The number of hashes computed at once is capped (pending Q8) so sign-in bursts
@@ -480,13 +499,76 @@ creates and hands over.
   unconfirmed, and returns an `otpauth://` URI and the secret once. `POST
   /api/v1/me/totp/confirm` with a valid code confirms it. Starting again before confirming
   replaces the unconfirmed secret.
+
+  Coordinator decisions (2026-11-15), for issue I7:
+
+  - The secret is 20 bytes (160 bits) from the operating system's CSPRNG, answered in unpadded
+    base32 and in `otpauth://totp/<issuer>:<account>?secret=...&issuer=...&algorithm=SHA1&digits=6&period=30`,
+    where the issuer is the organization's name and the account the user's email (their display
+    name without one), percent-encoded. It is sealed with the key ring bound to
+    `[org_id, "local_logins", user_id, "totp_secret"]`.
+  - The three `/api/v1/me/totp` routes take a browser session only (403 `auth.session_required`
+    to a bearer request, as B13 and B17 do) and answer 404 `auth.method_disabled` unless TOTP is
+    offered. A user without a password answers 409 `local.password_required`. Once TOTP is
+    confirmed, starting again answers 409 `local.totp_enabled`: replacing a working secret needs
+    a code, so the user disables it first.
+  - Confirming checks the code against the waiting secret as sign-in does (B20: the window, the
+    replay step, the budgets of the user and of the account or device cookie, as B17's check
+    does) and answers 200 `{recovery_codes}` (Q11's ten codes, below) with `Cache-Control:
+    no-store`, not 204. No waiting secret answers 409 `local.totp_not_started`; a wrong code 401
+    `auth.totp_invalid` with nothing changed. Confirming writes `totp.enable`
+    (`09-permissions-and-roles.md` B22). Starting writes no entry: an unconfirmed secret signs
+    no one in.
+  - A password reset through an enrollment link (B9) keeps the user's TOTP: the link sets the
+    password, and its sign-in completes without a code, as every enrollment link's does. A user
+    who lost both the app and the recovery codes gets back in through a new enrollment link,
+    which can also register a passkey (Q10 (a)); their TOTP stays on until they disable it.
 - **B20.** `POST /auth/local/totp` with a code and the flow from B15 completes sign-in when the
   code is valid for the current time step, within the window of Q11, read from the
   controllable clock. A code already accepted for that user is refused when presented again,
   as RFC 6238 section 5.2 requires. A wrong code answers 401 `auth.totp_invalid` and counts
   against the account's rate limit (B18).
+
+  Coordinator decisions (2026-11-15), for issue I7:
+
+  - Q11's parameters: HMAC-SHA-1, 6 digits, a 30-second step, and one step either way of the
+    controllable clock's current one. `local_logins.totp_last_step` holds the step of the last
+    code accepted for the user (a sign-in or the confirmation), and a code is accepted only for
+    a later step, so neither the same code nor an older one of the window passes again. The
+    code is compared in constant time against every step of the window. The algorithm is
+    `stepclimb_auth::totp` over `hmac` and `sha1`, checked against RFC 4226 Appendix D and RFC
+    6238 Appendix B; no TOTP crate.
+  - The route takes `RateLimited<SignIn>` first, answers 404 `auth.method_disabled` unless TOTP
+    is offered, then takes the `password_totp` flow and, in a savepoint, locks the flow's user
+    and login. A flow whose password generation is no longer the user's, or whose user's TOTP
+    is no longer confirmed (a change, a reset or disabling in between), answers 400
+    `auth.flow_invalid`. The check counts against the budgets of B18: the account's, or the
+    device cookie's in its place (`08-sessions-and-csrf.md` B42). Admission (B5) then refuses
+    a suspended user with 403 `auth.suspended`. On success the answer is 200 `{return_to}` with
+    the session and a device cookie, the flow cookie cleared and `Cache-Control: no-store`.
+  - The flow is used once whatever the outcome, as a passkey sign-in's is (B12): a wrong code
+    commits the flow's deletion and clears its cookie, so every further guess needs the password
+    again. Only a spent budget (429) and a server fault roll it back and leave the flow usable.
+  - A recovery code (B21) stands in for a code here, in any letter case, with hyphens and spaces
+    ignored, once.
+  - A sign-in writes no audit entry (`08-sessions-and-csrf.md` Q14); the route logs the user id
+    at `info`, and a sign-in with a recovery code says so, never the code.
 - **B21.** Disabling TOTP, recovery codes, and the parameters (algorithm, digits, period):
   pending Q11.
+
+  Coordinator decisions (2026-11-15), for issue I7, Q11 as decided:
+
+  - Recovery codes: ten single-use codes made at confirmation and answered once, each 10 random
+    bytes (80 bits) in base32, shown as `ABCD-EFGH-IJKL-MNOP`. The server stores the SHA-256 of
+    the 16 characters (`totp_recovery_codes.code_hash`); 80 random bits need no slow hash. A
+    used code keeps its row with `used_at`. M0 has no route to make new ones: disabling and
+    enabling again does.
+  - `POST /api/v1/me/totp/disable` with `{code}` (a current code or an unused recovery code)
+    removes the secret, the replay step and every recovery code and writes `totp.disable`; the
+    answer is 204. It takes `RateLimited<SignIn>`, a browser session and the budgets of B17's
+    check. TOTP that is not confirmed answers 409 `local.totp_not_enabled`; a wrong code 401
+    `auth.totp_invalid`. A `POST` with a body rather than `DELETE`, since the request carries a
+    code.
 
 ### Magic link
 
@@ -523,7 +605,7 @@ answer the admission refusals of `07-admission.md` as 403.
 | `POST /auth/local/passkey/start` | `{email, return_to?}` | 200 `{options}`; sets the flow cookie | none beyond the common ones (Q9 (a): every address gets 200) | none |
 | `POST /auth/local/passkey/finish` | `{credential}` | 200 `{return_to}`; sets the session | `auth.flow_invalid`, `auth.flow_expired` (400), `auth.passkey_invalid` (401), `auth.suspended`, `local.passkeys_not_allowed` (403, Q16) | none |
 | `POST /auth/local/password` | `{email, password, return_to?}` | 200 `{return_to}` with the session, or 200 `{next: "totp"}` with the flow cookie | `auth.credentials_invalid` | none |
-| `POST /auth/local/totp` | `{code}` | 200 `{return_to}`; sets the session | `auth.flow_invalid`, `auth.flow_expired`, `auth.totp_invalid` | none |
+| `POST /auth/local/totp` | `{code}` (a code or a recovery code) | 200 `{return_to}`; sets the session | `auth.flow_invalid`, `auth.flow_expired` (400), `auth.totp_invalid` (401), `auth.suspended` (403) | none |
 | `POST /auth/local/magic-link` | `{email, return_to?}` | 202 | none beyond the common ones | none |
 | `POST /auth/local/magic-link/finish` | `{token}` | 200 `{return_to}`; sets the session | `auth.magic_link_invalid` | none |
 | `GET /api/v1/me/passkeys` | none | 200 `[{id, name, created_at, last_used_at}]` | `auth.session_required` (403) | signed in |
@@ -532,11 +614,13 @@ answer the admission refusals of `07-admission.md` as 403.
 | `PATCH /api/v1/me/passkeys/{passkey_id}` | `{name}` | 200 `{id, name, created_at, last_used_at}` | `passkey.not_found`, `auth.session_required` (403), `request.invalid` (422) | signed in |
 | `DELETE /api/v1/me/passkeys/{passkey_id}` | none | 204 | `passkey.not_found`, `local.last_method` (409, Q10), `auth.session_required` (403) | signed in |
 | `PUT /api/v1/me/password` | `{current_password, new_password}` | 204 | `auth.credentials_invalid`, `local.password_weak` | signed in |
-| `POST /api/v1/me/totp` | none | 200 `{otpauth_uri, secret}` | `local.password_required` | signed in |
-| `POST /api/v1/me/totp/confirm` | `{code}` | 204 | `auth.totp_invalid`, `local.totp_not_started` | signed in |
+| `POST /api/v1/me/totp` | none | 200 `{otpauth_uri, secret}` | `local.password_required`, `local.totp_enabled` (409), `auth.session_required` (403) | signed in |
+| `POST /api/v1/me/totp/confirm` | `{code}` | 200 `{recovery_codes}` (B19's decision) | `auth.totp_invalid` (401), `local.totp_not_started`, `local.totp_enabled` (409), `auth.session_required` (403) | signed in |
+| `POST /api/v1/me/totp/disable` | `{code}` (a code or a recovery code) | 204 | `auth.totp_invalid` (401), `local.totp_not_enabled` (409), `auth.session_required` (403) | signed in |
 
-The magic-link routes are built only if Q1 and Q13 put them in M0. Disabling TOTP and recovery
-code routes are added once Q11 is answered.
+The magic-link routes are built only if Q1 and Q13 put them in M0. Issue I7 added the disabling
+route (B21); recovery codes are answered by the confirmation and used by the sign-in step and the
+disabling route, with no route of their own.
 
 ## Data
 
@@ -596,8 +680,14 @@ Proposed, pending Q3 (none of these is in the plan's data model):
   the user has no email: the password stays stored and works again once an email is set.
   `users_email` already keeps `lower(email)` unique per organization, so the unique pair can
   never refuse a row. The TOTP columns arrive with issue I7.
+  Built by issue I7 (`migrations/20261115180000_totp.sql`): `totp_secret`, `totp_confirmed_at`
+  and `totp_last_step` as proposed, with a check that a secret needs a password and one that a
+  confirmation needs a secret.
 - Recovery codes, if Q11 adds them: `totp_recovery_codes(id, user_id, code_hash, used_at,
-  created_at, updated_at)`, organization derived through `user_id`.
+  created_at, updated_at)`, organization derived through `user_id`. Built by issue I7 with an
+  `org_id` column and the composite foreign key `(org_id, user_id) REFERENCES users (org_id, id)
+  ON DELETE CASCADE`, as every table but `organizations` has, `code_hash` checked to 32 bytes,
+  and `UNIQUE (org_id, user_id, code_hash)` (coordinator decision, 2026-11-15).
 
 ## Permissions
 
@@ -841,7 +931,10 @@ overrule one, which then updates this spec.
 7. **I7. TOTP.** TOTP crate after dependency research, TOTP columns (pending Q3), enrollment and
    confirmation, the second sign-in step with replay refusal, and Q11's recovery codes and
    disabling. Covers B15, B19 to B21; T11, T15, T17. Depends on: I6, `08-sessions-and-csrf.md`
-   I1 (encryption), Q11.
+   I1 (encryption), Q11. The dependency research found no TOTP crate worth its size: the
+   algorithm is `stepclimb_auth::totp` over `hmac`, `sha1` and `data-encoding`, which the
+   lockfile already held (coordinator decision, 2026-11-15). The organization setting that
+   would require TOTP (Q11 (a)) is not part of this issue (B15's decision).
 8. **I8. Magic link.** Request and finish routes, token lifetime, the landing-page button rule.
    Covers B22; T16. Depends on: I2, the M1 email spec (`docs/specs/m1.md`), Q13. Scheduled per
    Q1.

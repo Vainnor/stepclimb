@@ -11,7 +11,8 @@
 //! users' identities under `/api/v1/users/{user_id}/identities` and `/api/v1/me/identities`
 //! ([`identities`]), the signed-in user's passkeys under `/api/v1/me/passkeys`
 //! ([`my_passkeys`]), password sign-in, enrollment and change ([`password`], hashed by
-//! [`password_hasher`], with the [`device`] cookie), the signed-in user at
+//! [`password_hasher`], with the [`device`] cookie), TOTP after the password ([`totp`]), the
+//! signed-in user at
 //! `GET /api/v1/me` ([`me`]) and their appearance choice at `PUT /api/v1/me/appearance`
 //! ([`appearance`]), the organization's branding at `/api/v1/admin/branding` and its
 //! stylesheet at `/theme.css` ([`branding`]), the OpenAPI document (`/api/openapi.json`) and its Scalar UI
@@ -83,6 +84,7 @@ pub mod session;
 pub mod spa;
 pub mod startup;
 pub mod timestamp;
+pub mod totp;
 pub mod users;
 pub mod web_origin;
 

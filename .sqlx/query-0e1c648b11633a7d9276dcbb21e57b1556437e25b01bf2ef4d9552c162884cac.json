@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO totp_recovery_codes (id, org_id, user_id, code_hash, created_at,\n                                              updated_at)\n             VALUES ($1, $2, $3, $4,\n                     timestamptz 'epoch' + $5::bigint * interval '1 microsecond',\n                     timestamptz 'epoch' + $5::bigint * interval '1 microsecond')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Bytea",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0e1c648b11633a7d9276dcbb21e57b1556437e25b01bf2ef4d9552c162884cac"
+}

@@ -363,8 +363,8 @@ async fn every_listed_provider_starts_a_sign_in_at_its_authorization_endpoint(po
 }
 
 /// Every local method the document lists passes `require_method`, the check each method's route
-/// makes first, and every method it leaves out fails it, but TOTP: switched on without the
-/// password, it is left out of the document, as it is only the second step after a password.
+/// makes first, and every method it leaves out fails it. TOTP switched on without the password
+/// is neither listed nor offered, as it is only the second step after a password.
 async fn assert_local_methods_are_offered(fx: &Fixture, org: Uuid, expected: &[&str]) {
     let body = fx.discovery(org).await.json();
     let listed: Vec<String> = body["sign_in"]
@@ -379,12 +379,7 @@ async fn assert_local_methods_are_offered(fx: &Fixture, org: Uuid, expected: &[&
     for method in Method::ALL {
         let offered = require_method(&fx.pool, scope(org), method).await.is_ok();
         let is_listed = listed.iter().any(|name| name == method.as_str());
-        let unlisted_totp = method == Method::Totp && !listed.iter().any(|m| m == "password");
-        if unlisted_totp {
-            assert!(!is_listed, "totp listed without the password");
-        } else {
-            assert_eq!(offered, is_listed, "{}: offered {offered}", method.as_str());
-        }
+        assert_eq!(offered, is_listed, "{}: offered {offered}", method.as_str());
     }
 }
 

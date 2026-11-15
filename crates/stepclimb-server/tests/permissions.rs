@@ -120,6 +120,7 @@ const PUBLIC: &[&str] = &[
     "finishPasskeySignIn",
     "enrollPassword",
     "signInWithPassword",
+    "signInWithTotp",
     "startProviderSignIn",
     "finishProviderSignIn",
 ];
@@ -321,6 +322,18 @@ const TABLE: &[Entry] = &[
         access: Access::Mine(password_of_caller),
     },
     Entry {
+        operation_id: "startMyTotp",
+        access: Access::Mine(password_for_totp),
+    },
+    Entry {
+        operation_id: "confirmMyTotp",
+        access: Access::Mine(totp_waiting_for_caller),
+    },
+    Entry {
+        operation_id: "disableMyTotp",
+        access: Access::Mine(totp_of_caller),
+    },
+    Entry {
         operation_id: "getBranding",
         access: permission(BrandingManage::KEY, Target::Org, at_org),
     },
@@ -384,6 +397,81 @@ fn password_of_caller(org: &Org, caller: Uuid) -> Pin<Box<dyn Future<Output = Mi
             at: At::Org,
         })
     })
+}
+
+/// The caller's password, which TOTP follows.
+fn password_for_totp(org: &Org, caller: Uuid) -> Pin<Box<dyn Future<Output = Mine> + Send + '_>> {
+    Box::pin(async move {
+        give_password(org, caller).await;
+        Mine::call(Call {
+            params: Vec::new(),
+            body: None,
+            at: At::Org,
+        })
+    })
+}
+
+/// The caller's password and an unconfirmed TOTP secret, and the body with its current code.
+fn totp_waiting_for_caller(
+    org: &Org,
+    caller: Uuid,
+) -> Pin<Box<dyn Future<Output = Mine> + Send + '_>> {
+    Box::pin(async move {
+        let secret = give_totp(org, caller, false).await;
+        Mine::call(Call {
+            params: Vec::new(),
+            body: Some(serde_json::json!({ "code": secret.code_at_time(now()) })),
+            at: At::Org,
+        })
+    })
+}
+
+/// The caller's password and confirmed TOTP, and the body with its current code.
+fn totp_of_caller(org: &Org, caller: Uuid) -> Pin<Box<dyn Future<Output = Mine> + Send + '_>> {
+    Box::pin(async move {
+        let secret = give_totp(org, caller, true).await;
+        Mine::call(Call {
+            params: Vec::new(),
+            body: Some(serde_json::json!({ "code": secret.code_at_time(now()) })),
+            at: At::Org,
+        })
+    })
+}
+
+/// Store the suite's password for `user` of `org`.
+async fn give_password(org: &Org, user: Uuid) {
+    let hash = stepclimb_auth::password::hash("correct horse battery staple").expect("a hash");
+    stepclimb_core::local_logins::set_password(
+        &org.pool,
+        scope(org.id),
+        user,
+        hash.as_str(),
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .expect("set the password");
+}
+
+/// [`give_password`], then a new TOTP secret for `user`, sealed as the server seals it, and
+/// confirmed when `confirmed`. Returns the secret, to play the app with.
+async fn give_totp(org: &Org, user: Uuid, confirmed: bool) -> stepclimb_auth::totp::Secret {
+    give_password(org, user).await;
+    let secret = stepclimb_auth::totp::Secret::generate().expect("a secret");
+    let keys = state_for(&org.pool).keys;
+    let sealed =
+        stepclimb_server::totp::seal_secret(&keys, scope(org.id), user, &secret).expect("seal");
+    let mut conn = org.pool.acquire().await.expect("a connection");
+    let s = scope(org.id);
+    stepclimb_core::local_totp::start(&mut conn, s, user, &sealed, now())
+        .await
+        .expect("start TOTP");
+    if confirmed {
+        stepclimb_core::local_totp::confirm(&mut conn, s, user, &[], now(), Actor::Instance)
+            .await
+            .expect("confirm TOTP");
+    }
+    secret
 }
 
 /// The caller's local account, the identity an enrollment link creates: what lets them add a
@@ -1142,6 +1230,7 @@ async fn public_request(world: &World, org: &Org, id: &str) -> (Option<Value>, O
         }
         "finishPasskeySignIn" => return passkey_sign_in_request(world, org).await,
         "signInWithPassword" => return password_sign_in_request(org).await,
+        "signInWithTotp" => return totp_sign_in_request(org).await,
         "startEnrollment" | "enrollPasskey" | "enrollPassword" => {}
         _ => return (None, None),
     }
@@ -1219,6 +1308,31 @@ async fn password_sign_in_request(org: &Org) -> (Option<Value>, Option<String>) 
     .expect("set the password");
     let body = serde_json::json!({ "email": email, "password": "correct horse battery staple" });
     (Some(body), None)
+}
+
+/// A user with a password and confirmed TOTP, the second step started for them, and the
+/// current code: the body and flow cookie `signInWithTotp` signs in with.
+async fn totp_sign_in_request(org: &Org) -> (Option<Value>, Option<String>) {
+    let (_, user) = org
+        .named_user("Pat Example".into(), Some("totp@example.test".into()))
+        .await;
+    let secret = give_totp(org, user, true).await;
+    let keys = state_for(&org.pool).keys;
+    let flow = stepclimb_server::totp::begin_second_step(
+        &org.pool,
+        &keys,
+        scope(org.id),
+        user,
+        1,
+        None,
+        now(),
+    )
+    .await
+    .expect("start the second step");
+    let cookie = flow.set_cookie.to_str().expect("ASCII");
+    let cookie = cookie.split(';').next().expect("a pair").to_owned();
+    let body = serde_json::json!({ "code": secret.code_at_time(now()) });
+    (Some(body), Some(cookie))
 }
 
 /// A user with a software passkey, a started sign-in for them, and the passkey's assertion:

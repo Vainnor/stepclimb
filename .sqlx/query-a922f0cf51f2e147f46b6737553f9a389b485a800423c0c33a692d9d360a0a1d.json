@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE local_logins\n         SET totp_last_step = $3,\n             updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond'\n         WHERE org_id = $1 AND user_id = $2\n           AND (totp_last_step IS NULL OR totp_last_step < $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a922f0cf51f2e147f46b6737553f9a389b485a800423c0c33a692d9d360a0a1d"
+}

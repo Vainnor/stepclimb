@@ -16,7 +16,8 @@
 //! - for a signed-in user (a change of password, B17), the user's, by id, always: with or
 //!   without an email, with or without a device cookie.
 //!
-//! A refused budget gives back the ones already taken, since no check ran. Then one argon2id
+//! A refused budget gives back the ones already taken, since no check ran. A TOTP code is
+//! checked against the same budgets ([`take_budgets`], spec 04 B20). Then one argon2id
 //! verification runs whatever the case: against the login's hash, or against the dummy hash
 //! when there is no login or no password, so a wrong password, an unknown address and an
 //! account without a password answer the same 401 `auth.credentials_invalid` after the same
@@ -160,17 +161,30 @@ fn take(
     Ok(taken)
 }
 
+/// Take every failed-check budget of `subject`'s check (see the module documentation), given
+/// the device cookie the request presents, for a password or a TOTP code. Each counts the check
+/// as a failure until [`AccountCheck::passed`]; when one is spent, none is taken. It takes the
+/// request's per-address budget as an argument, so no check runs without it.
+pub(crate) fn take_budgets(
+    _address_budget: &RateLimited<SignIn>,
+    attempt: &Attempt<'_>,
+    subject: &Subject<'_>,
+) -> Result<Vec<AccountCheck>, TooManyRequests> {
+    let keys = &attempt.state.keys;
+    let device = device::presented(keys, attempt.scope, attempt.headers, attempt.now);
+    take(attempt, &budgets(subject, device))
+}
+
 /// Check `password` for `subject` (see the module documentation). A refusal is 401
 /// `auth.credentials_invalid`, 429 `auth.rate_limited`, or a fault.
 pub(crate) async fn check_password(
-    _address_budget: &RateLimited<SignIn>,
+    address_budget: &RateLimited<SignIn>,
     attempt: &Attempt<'_>,
     subject: Subject<'_>,
     password: &str,
 ) -> Result<Passed, Refusal> {
     let state = attempt.state;
-    let device = device::presented(&state.keys, attempt.scope, attempt.headers, attempt.now);
-    let taken = take(attempt, &budgets(&subject, device))?;
+    let taken = take_budgets(address_budget, attempt, &subject)?;
     let login = subject.login;
     let stored = login
         .and_then(|login| login.password_hash.clone())
