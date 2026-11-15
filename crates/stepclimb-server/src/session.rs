@@ -16,7 +16,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header, request::Parts},
     response::{IntoResponse, Response},
 };
-use sqlx::{Acquire, Postgres};
+use sqlx::{Acquire, PgConnection, Postgres};
 use stepclimb_auth::token::{RandomError, Token, TokenHash};
 use stepclimb_core::{
     OrgScope,
@@ -83,6 +83,19 @@ pub async fn start<'c>(
     now: SystemTime,
 ) -> Result<Started, StartError> {
     let mut conn = db.acquire().await?;
+    start_on(&mut conn, scope, user_id, request_headers, now).await
+}
+
+/// [`start`] on a connection the caller holds, such as a sign-in's transaction (`&mut tx`). A
+/// handler calls this one: its future is `Send` for any lifetime of the connection, which the
+/// generic [`start`]'s is not.
+pub async fn start_on(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    user_id: Uuid,
+    request_headers: &HeaderMap,
+    now: SystemTime,
+) -> Result<Started, StartError> {
     for presented in session_cookies(request_headers).into_iter().flatten() {
         sessions::delete_by_token_hash(&mut *conn, scope, TokenHash::of(presented).as_bytes())
             .await?;

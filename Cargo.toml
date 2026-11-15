@@ -106,6 +106,14 @@ rustls = { version = "=0.23.46", default-features = false, features = ["ring", "
 rustls-platform-verifier = "=0.7.1"
 http = "=1.5.0"
 tracing = "=0.1.44"
+# WebAuthn for local passkeys (docs/specs/m0/04-local-accounts.md B8, Q12; plan, Technical ->
+# Architecture and stack: webauthn-rs). 0.6 verifies with RustCrypto (`crypto-glue`) where 0.5
+# needed OpenSSL, which deny.toml refuses. Default features off: `attestation` is for vetting
+# devices, which Q12 does not do. `danger-allow-state-serialisation` lets a ceremony's state be
+# stored, sealed, in the sign-in flow between its two requests (docs/specs/m0/08-sessions-and-csrf.md
+# B17, B20). The soft authenticator is the project's own, for tests only.
+webauthn-rs = { version = "=0.6.2", default-features = false, features = ["danger-allow-state-serialisation"] }
+webauthn-authenticator-rs = { version = "=0.6.2", default-features = false, features = ["softpasskey"] }
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["fmt", "env-filter", "json", "ansi"] }
 
 [workspace.lints.rust]

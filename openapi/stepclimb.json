@@ -2030,6 +2030,73 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/auth/local/enrollment/passkey": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Register a passkey through an enrollment link and sign in with it.",
+        "operationId": "enrollPasskey",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeyEnrollment"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The passkey is registered and the user is signed in",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The new `__Host-sc_session` cookie, and `__Host-sc_flow` cleared"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignedIn"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/EnrollPasskeyInvalid"
+          },
+          "403": {
+            "$ref": "#/components/responses/EnrollPasskeyForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/EnrollPasskeyNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/auth/local/enrollment/start": {
       "post": {
         "tags": [
@@ -2056,6 +2123,12 @@
                   "type": "string"
                 },
                 "description": "`no-store`: the answer holds the user's email"
+              },
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "With `passkey_options`: the `__Host-sc_flow` cookie of the passkey registration"
               }
             },
             "content": {
@@ -2319,6 +2392,30 @@
           "connector"
         ]
       },
+      "AuthenticatorSelection": {
+        "type": "object",
+        "description": "`AuthenticatorSelectionCriteria`.",
+        "required": [
+          "requireResidentKey",
+          "userVerification"
+        ],
+        "properties": {
+          "authenticatorAttachment": {
+            "type": "string"
+          },
+          "requireResidentKey": {
+            "type": "boolean"
+          },
+          "residentKey": {
+            "type": "string"
+          },
+          "userVerification": {
+            "type": "string",
+            "description": "`required`: the authenticator checks a PIN or biometric."
+          }
+        },
+        "additionalProperties": false
+      },
       "Branding": {
         "type": "object",
         "description": "The organization's branding: the saved inputs (the default brand's when it has saved none),\nthe generator version, the hash of the stylesheet `/theme.css` serves, and the contrast\nreport of its light, dark and high-contrast themes.",
@@ -2509,6 +2606,49 @@
           "round"
         ]
       },
+      "CredentialDescriptor": {
+        "type": "object",
+        "description": "`PublicKeyCredentialDescriptorJSON`.",
+        "required": [
+          "id",
+          "type"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The credential id, base64url, unpadded."
+          },
+          "transports": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CredentialParameter": {
+        "type": "object",
+        "description": "`PublicKeyCredentialParameters`.",
+        "required": [
+          "alg",
+          "type"
+        ],
+        "properties": {
+          "alg": {
+            "type": "integer",
+            "format": "int32",
+            "description": "A COSE algorithm identifier, such as -7 (ES256)."
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "DensityChoice": {
         "type": "string",
         "description": "The density a user chose. `compact` sets the shorter control heights.",
@@ -2576,6 +2716,10 @@
               "$ref": "#/components/schemas/EnrollMethod"
             },
             "description": "The methods the organization lets the user set up, passkey first. Never empty."
+          },
+          "passkey_options": {
+            "$ref": "#/components/schemas/PasskeyCreationOptions",
+            "description": "When `methods` lists `passkey`: the creation options for the passkey, bound to the\nsign-in flow whose cookie this answer sets. Finish with `POST\n/auth/local/enrollment/passkey` in this browser within 10 minutes."
           }
         }
       },
@@ -3444,6 +3588,45 @@
           }
         }
       },
+      "PasskeyCreationOptions": {
+        "type": "object",
+        "description": "`CredentialCreationOptions` as JSON: pass `publicKey` to\n`PublicKeyCredential.parseCreationOptionsFromJSON`, then to `navigator.credentials.create`.",
+        "required": [
+          "publicKey"
+        ],
+        "properties": {
+          "publicKey": {
+            "$ref": "#/components/schemas/PublicKeyCreationOptions"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PasskeyEnrollment": {
+        "type": "object",
+        "description": "The browser's registration response for an enrollment link.",
+        "required": [
+          "token",
+          "credential"
+        ],
+        "properties": {
+          "credential": {
+            "type": "object",
+            "description": "The `PublicKeyCredential` `navigator.credentials.create` returned, as JSON\n(`PublicKeyCredential.toJSON()`)."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the user calls this passkey: trimmed, 1 to 200 characters. `Passkey` when absent."
+          },
+          "token": {
+            "type": "string",
+            "description": "The text after `#token=` in the link."
+          }
+        },
+        "additionalProperties": false
+      },
       "PermissionInfo": {
         "type": "object",
         "description": "One permission of the catalog.",
@@ -3550,6 +3733,70 @@
           }
         }
       },
+      "PublicKeyCreationOptions": {
+        "type": "object",
+        "description": "`PublicKeyCredentialCreationOptionsJSON`.",
+        "required": [
+          "rp",
+          "user",
+          "challenge",
+          "pubKeyCredParams"
+        ],
+        "properties": {
+          "attestation": {
+            "type": "string",
+            "description": "`none`: the server does not ask which device this is."
+          },
+          "attestationFormats": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "authenticatorSelection": {
+            "$ref": "#/components/schemas/AuthenticatorSelection"
+          },
+          "challenge": {
+            "type": "string",
+            "description": "base64url, unpadded."
+          },
+          "excludeCredentials": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CredentialDescriptor"
+            },
+            "description": "The user's registered passkeys, which the authenticator must not register again."
+          },
+          "extensions": {
+            "$ref": "#/components/schemas/RegistrationExtensions"
+          },
+          "hints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pubKeyCredParams": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CredentialParameter"
+            }
+          },
+          "rp": {
+            "$ref": "#/components/schemas/RelyingPartyInfo"
+          },
+          "timeout": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Milliseconds.",
+            "minimum": 0
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserInfo"
+          }
+        },
+        "additionalProperties": false
+      },
       "ReadingFont": {
         "type": "string",
         "description": "The reading font: the bundled serif, or the organization's UI font.",
@@ -3557,6 +3804,50 @@
           "serif",
           "sans"
         ]
+      },
+      "RegistrationExtensions": {
+        "type": "object",
+        "description": "`AuthenticationExtensionsClientInputs` for a registration.",
+        "properties": {
+          "credProps": {
+            "type": "boolean"
+          },
+          "credentialProtectionPolicy": {
+            "type": "string"
+          },
+          "enforceCredentialProtectionPolicy": {
+            "type": "boolean"
+          },
+          "hmacCreateSecret": {
+            "type": "boolean"
+          },
+          "minPinLength": {
+            "type": "boolean"
+          },
+          "uvm": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RelyingPartyInfo": {
+        "type": "object",
+        "description": "`PublicKeyCredentialRpEntity`.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The relying party ID: the instance's host name."
+          },
+          "name": {
+            "type": "string",
+            "description": "The organization's name."
+          }
+        },
+        "additionalProperties": false
       },
       "Role": {
         "type": "object",
@@ -3725,6 +4016,19 @@
           "course"
         ]
       },
+      "SignedIn": {
+        "type": "object",
+        "description": "A completed sign-in.",
+        "required": [
+          "return_to"
+        ],
+        "properties": {
+          "return_to": {
+            "type": "string",
+            "description": "The path on this site to open next."
+          }
+        }
+      },
       "ThemeChoice": {
         "type": "string",
         "description": "The theme a user chose. `system` follows the operating system's color and contrast settings.",
@@ -3828,6 +4132,29 @@
           },
           "theme": {
             "$ref": "#/components/schemas/ThemeChoice"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UserInfo": {
+        "type": "object",
+        "description": "`PublicKeyCredentialUserEntityJSON`.",
+        "required": [
+          "id",
+          "name",
+          "displayName"
+        ],
+        "properties": {
+          "displayName": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "description": "The user handle, base64url, unpadded: the user's id."
+          },
+          "name": {
+            "type": "string",
+            "description": "The user's email."
           }
         },
         "additionalProperties": false
@@ -4053,6 +4380,36 @@
       },
       "DeleteNotFound": {
         "description": "`account.not_found`: the account does not exist or you cannot see its parent. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "EnrollPasskeyForbidden": {
+        "description": "`auth.suspended`: the account is suspended. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "EnrollPasskeyInvalid": {
+        "description": "`request.malformed`: the body is not `{token, credential, name?}`. `auth.enrollment_invalid`: the link is unknown, already used, replaced by a newer link, or for another organization. `auth.enrollment_expired`: the link is older than its 7-day lifetime. `auth.flow_invalid`: no registration was started in this browser for this link, or it was already finished; open the link again. `auth.flow_expired`: the registration was started more than 10 minutes ago; open the link again. `auth.passkey_invalid`: the passkey's response did not verify, or this passkey is already registered; open the link again and retry.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "EnrollPasskeyNotFound": {
+        "description": "`auth.method_disabled`: passkey sign-in is switched off for this organization. `org.not_found`: the request's organization cannot be determined.",
         "content": {
           "application/problem+json": {
             "schema": {

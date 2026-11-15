@@ -8,7 +8,18 @@ all-features = true
 [advisories]
 yanked = "deny"
 unmaintained = "workspace"
-ignore = []
+# RUSTSEC-2023-0071 (Marvin attack) is about the timing of RSA private-key operations. `rsa`
+# arrives only through webauthn-rs 0.6.2's `crypto-glue`, at 0.10.0-rc.19, which already computes
+# on crypto-bigint but sorts before the advisory's fixed 0.10.0. webauthn-rs only verifies RS256
+# passkey signatures, a public-key operation that holds no secret to leak
+# (docs/adr/0026-webauthn-rs-for-passkeys.md). This ignore holds only while crypto-glue (through
+# webauthn-rs) is the one crate that depends on `rsa`: a second dependent must be judged on its
+# own before it lands. Remove it on or after 2026-11-22, when `rsa` 0.10.0 and the crypto-bigint
+# 0.7.11 it requires are 14 days old: `cargo update -p rsa` to 0.10.0 or later, then drop this
+# entry (issue #164).
+ignore = [
+    { id = "RUSTSEC-2023-0071", reason = "rsa is used only to verify RS256 passkey signatures; see ADR 0026" },
+]
 
 [licenses]
 confidence-threshold = 0.9

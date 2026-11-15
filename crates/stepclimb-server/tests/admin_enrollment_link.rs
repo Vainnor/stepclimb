@@ -240,3 +240,26 @@ async fn a_user_who_can_sign_in_needs_force(pool: PgPool) {
     let forced = RecoveryRequest { force: true, ..sam };
     assert!(recover(&pool, &forced).await.is_ok());
 }
+
+/// A user with a passkey can sign in already (`local::has_credential`) and is refused unless
+/// `--force`.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_user_with_a_passkey_needs_force(pool: PgPool) {
+    let created = instance(&pool).await;
+    let org = created.organization.id;
+    let credential = json!({ "cred": { "counter": 0 } });
+    let passkey = stepclimb_core::passkeys::NewPasskey {
+        user_id: created.user.id,
+        credential_id: &[9; 16],
+        credential: &credential,
+        name: "Phone",
+    };
+    stepclimb_core::passkeys::create(&pool, scope(org), passkey, now(), Actor::Instance)
+        .await
+        .expect("store a passkey");
+    let sam = request(UserRef::Email("sam@example.test".into()));
+    let error = recover(&pool, &sam).await.unwrap_err();
+    assert!(matches!(error, RecoveryError::HasSignInMethod), "{error:?}");
+    let forced = RecoveryRequest { force: true, ..sam };
+    assert!(recover(&pool, &forced).await.is_ok());
+}

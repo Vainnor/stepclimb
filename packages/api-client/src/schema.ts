@@ -410,6 +410,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/local/enrollment/passkey": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register a passkey through an enrollment link and sign in with it. */
+        post: operations["enrollPasskey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/local/enrollment/start": {
         parameters: {
             query?: never;
@@ -558,6 +575,14 @@ export interface components {
          * @enum {string}
          */
         AssignmentSource: "local" | "idp" | "sync" | "scim" | "connector";
+        /** @description `AuthenticatorSelectionCriteria`. */
+        AuthenticatorSelection: {
+            authenticatorAttachment?: string;
+            requireResidentKey: boolean;
+            residentKey?: string;
+            /** @description `required`: the authenticator checks a PIN or biometric. */
+            userVerification: string;
+        };
         /**
          * @description The organization's branding: the saved inputs (the default brand's when it has saved none),
          *     the generator version, the hash of the stylesheet `/theme.css` serves, and the contrast
@@ -632,6 +657,22 @@ export interface components {
          * @enum {string}
          */
         CornerStyle: "square" | "default" | "round";
+        /** @description `PublicKeyCredentialDescriptorJSON`. */
+        CredentialDescriptor: {
+            /** @description The credential id, base64url, unpadded. */
+            id: string;
+            transports?: string[];
+            type: string;
+        };
+        /** @description `PublicKeyCredentialParameters`. */
+        CredentialParameter: {
+            /**
+             * Format: int32
+             * @description A COSE algorithm identifier, such as -7 (ES256).
+             */
+            alg: number;
+            type: string;
+        };
         /**
          * @description The density a user chose. `compact` sets the shorter control heights.
          * @enum {string}
@@ -666,6 +707,12 @@ export interface components {
             email: string;
             /** @description The methods the organization lets the user set up, passkey first. Never empty. */
             methods: components["schemas"]["EnrollMethod"][];
+            /**
+             * @description When `methods` lists `passkey`: the creation options for the passkey, bound to the
+             *     sign-in flow whose cookie this answer sets. Finish with `POST
+             *     /auth/local/enrollment/passkey` in this browser within 10 minutes.
+             */
+            passkey_options?: components["schemas"]["PasskeyCreationOptions"];
         };
         /** @description The organization's plan and what it allows: every feature and limit of the server's catalogs. */
         Entitlements: {
@@ -1045,6 +1092,25 @@ export interface components {
             /** @description Pass this as `cursor` to get the next page; `null` on the last page. */
             next_cursor: string | null;
         };
+        /**
+         * @description `CredentialCreationOptions` as JSON: pass `publicKey` to
+         *     `PublicKeyCredential.parseCreationOptionsFromJSON`, then to `navigator.credentials.create`.
+         */
+        PasskeyCreationOptions: {
+            publicKey: components["schemas"]["PublicKeyCreationOptions"];
+        };
+        /** @description The browser's registration response for an enrollment link. */
+        PasskeyEnrollment: {
+            /**
+             * @description The `PublicKeyCredential` `navigator.credentials.create` returned, as JSON
+             *     (`PublicKeyCredential.toJSON()`).
+             */
+            credential: Record<string, never>;
+            /** @description What the user calls this passkey: trimmed, 1 to 200 characters. `Passkey` when absent. */
+            name?: string | null;
+            /** @description The text after `#token=` in the link. */
+            token: string;
+        };
         /** @description One permission of the catalog. */
         PermissionInfo: {
             /** @description The scope types at which a role assignment grants it. */
@@ -1093,11 +1159,48 @@ export interface components {
             /** @description `about:blank` until the docs site documents each code. */
             type: string;
         };
+        /** @description `PublicKeyCredentialCreationOptionsJSON`. */
+        PublicKeyCreationOptions: {
+            /** @description `none`: the server does not ask which device this is. */
+            attestation?: string;
+            attestationFormats?: string[];
+            authenticatorSelection?: components["schemas"]["AuthenticatorSelection"];
+            /** @description base64url, unpadded. */
+            challenge: string;
+            /** @description The user's registered passkeys, which the authenticator must not register again. */
+            excludeCredentials?: components["schemas"]["CredentialDescriptor"][];
+            extensions?: components["schemas"]["RegistrationExtensions"];
+            hints?: string[];
+            pubKeyCredParams: components["schemas"]["CredentialParameter"][];
+            rp: components["schemas"]["RelyingPartyInfo"];
+            /**
+             * Format: int32
+             * @description Milliseconds.
+             */
+            timeout?: number;
+            user: components["schemas"]["UserInfo"];
+        };
         /**
          * @description The reading font: the bundled serif, or the organization's UI font.
          * @enum {string}
          */
         ReadingFont: "serif" | "sans";
+        /** @description `AuthenticationExtensionsClientInputs` for a registration. */
+        RegistrationExtensions: {
+            credProps?: boolean;
+            credentialProtectionPolicy?: string;
+            enforceCredentialProtectionPolicy?: boolean;
+            hmacCreateSecret?: boolean;
+            minPinLength?: boolean;
+            uvm?: boolean;
+        };
+        /** @description `PublicKeyCredentialRpEntity`. */
+        RelyingPartyInfo: {
+            /** @description The relying party ID: the instance's host name. */
+            id: string;
+            /** @description The organization's name. */
+            name: string;
+        };
         /** @description A built-in role or a custom role of the organization. */
         Role: {
             /** @description Built-in roles are the same in every organization and cannot be changed or deleted. */
@@ -1168,6 +1271,11 @@ export interface components {
          * @enum {string}
          */
         ScopeType: "organization" | "account" | "course";
+        /** @description A completed sign-in. */
+        SignedIn: {
+            /** @description The path on this site to open next. */
+            return_to: string;
+        };
         /**
          * @description The theme a user chose. `system` follows the operating system's color and contrast settings.
          * @enum {string}
@@ -1211,6 +1319,14 @@ export interface components {
         UserAppearance: {
             density: components["schemas"]["DensityChoice"];
             theme: components["schemas"]["ThemeChoice"];
+        };
+        /** @description `PublicKeyCredentialUserEntityJSON`. */
+        UserInfo: {
+            displayName: string;
+            /** @description The user handle, base64url, unpadded: the user's id. */
+            id: string;
+            /** @description The user's email. */
+            name: string;
         };
         /**
          * @description A change to a user; an omitted member is left as it is. A member sent as `null` is
@@ -1397,6 +1513,33 @@ export interface components {
         };
         /** @description `account.not_found`: the account does not exist or you cannot see its parent. `org.not_found`: the request's organization cannot be determined. */
         DeleteNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `auth.suspended`: the account is suspended. `auth.csrf_refused`: the request did not come from this site. */
+        EnrollPasskeyForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.malformed`: the body is not `{token, credential, name?}`. `auth.enrollment_invalid`: the link is unknown, already used, replaced by a newer link, or for another organization. `auth.enrollment_expired`: the link is older than its 7-day lifetime. `auth.flow_invalid`: no registration was started in this browser for this link, or it was already finished; open the link again. `auth.flow_expired`: the registration was started more than 10 minutes ago; open the link again. `auth.passkey_invalid`: the passkey's response did not verify, or this passkey is already registered; open the link again and retry. */
+        EnrollPasskeyInvalid: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `auth.method_disabled`: passkey sign-in is switched off for this organization. `org.not_found`: the request's organization cannot be determined. */
+        EnrollPasskeyNotFound: {
             headers: {
                 [name: string]: unknown;
             };
@@ -2872,6 +3015,41 @@ export interface operations {
             503: components["responses"]["NoOrganization"];
         };
     };
+    enrollPasskey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasskeyEnrollment"];
+            };
+        };
+        responses: {
+            /** @description The passkey is registered and the user is signed in */
+            200: {
+                headers: {
+                    /** @description The new `__Host-sc_session` cookie, and `__Host-sc_flow` cleared */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignedIn"];
+                };
+            };
+            400: components["responses"]["EnrollPasskeyInvalid"];
+            403: components["responses"]["EnrollPasskeyForbidden"];
+            404: components["responses"]["EnrollPasskeyNotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["UnprocessableEntity"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
     startEnrollment: {
         parameters: {
             query?: never;
@@ -2890,6 +3068,8 @@ export interface operations {
                 headers: {
                     /** @description `no-store`: the answer holds the user's email */
                     "Cache-Control"?: string;
+                    /** @description With `passkey_options`: the `__Host-sc_flow` cookie of the passkey registration */
+                    "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
                 content: {

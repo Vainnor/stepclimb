@@ -9,25 +9,25 @@
 use sqlx::PgConnection;
 use uuid::Uuid;
 
-use crate::OrgScope;
+use crate::{OrgScope, passkeys};
 
 /// Why reading a user's local credentials failed.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
-    Database(#[from] sqlx::Error),
+    Passkeys(#[from] passkeys::Error),
 }
 
 /// Whether the user `user_id` of the scope's organization has a passkey or a password.
 ///
-/// Neither credential can be stored yet: the `passkeys` table arrives with issue I3 and the
-/// password column with issue I6, and each adds its check here with a test that the credential
-/// keeps `identities::unlink_unless_last` from refusing. Until then no user has one, and this
-/// answers `false` without a query.
+/// Today that is a passkey ([`passkeys::exists_for_user`]); the password column arrives with
+/// issue I6, which adds its check here. A credential counts whether or not its method is
+/// switched on: a switched-off method's credentials work again once it is switched back on
+/// (B2), so the user still has them.
 pub async fn has_credential(
-    _conn: &mut PgConnection,
-    _scope: OrgScope,
-    _user_id: Uuid,
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    user_id: Uuid,
 ) -> Result<bool, Error> {
-    Ok(false)
+    Ok(passkeys::exists_for_user(&mut *conn, scope, user_id).await?)
 }

@@ -51,6 +51,10 @@ creates and hands over.
   before issues I3 and I6, so until then it answers `false`; each of those issues adds its
   check and a test that the credential lets the user's last outside identity go
   (coordinator decision, 2026-11-14).
+  Issue I3 added the passkey check: a stored passkey counts whether or not the passkey switch
+  is on, since B2 keeps it and switching the method back on restores it (coordinator decision,
+  2026-11-14). `stepclimb admin enrollment-link` reads the same function, so a user with a
+  passkey needs `--force` there.
 
   Coordinator decisions (2026-11-14), for issue I1:
 
@@ -167,6 +171,42 @@ creates and hands over.
   policy of Q12. On success, in one transaction, it stores a `passkeys` row, marks the token
   used, creates the local identity if absent, and completes sign-in (B5). A failed check
   answers 400 `auth.passkey_invalid` and leaves the token usable.
+
+  Coordinator decisions (2026-11-14), for issue I3:
+
+  - The relying party ID is the public URL's host exactly (`lms.example.org`, not a parent
+    domain), the only accepted origin is the public URL's origin (no subdomain, no other port),
+    and the relying party's name is the organization's name. A public URL whose host is an IP
+    address cannot be a relying party: the passkey routes answer 500 and log why. Changing the
+    public URL's host strands every registered passkey (ADR 0026).
+  - Q12 as recommended: user verification required, attestation `none`, a resident key not
+    required (`residentKey: discouraged`), and the user's existing passkeys in
+    `excludeCredentials`. The WebAuthn user handle is the user's id, the user name the email.
+  - The start route's flow (kind `passkey_register`, the link's user) seals the ceremony state
+    and the link's id. The passkey route takes the flow first and deletes it in its transaction,
+    so a challenge is used once whatever the outcome; every later refusal (`auth.enrollment_*`,
+    `auth.passkey_invalid`, `auth.suspended`, a flow started for another link or user, which is
+    400 `auth.flow_invalid`) rolls back a savepoint, so the link stays usable and nothing is
+    stored, and commits the flow's deletion. `auth.flow_invalid` and `auth.flow_expired` are
+    400 here, like the route's other refusals. Every answer after the flow is taken clears the
+    flow cookie.
+  - The route locks the flow's user (`identities::lock_user`, which refuses any isolation level
+    but `READ COMMITTED`) before `consume_enrollment` locks the link, the order
+    `create_enrollment` takes them in, so a registration and a new link for the same user cannot
+    deadlock; two registrations with one link take turns and the second answers
+    `auth.enrollment_invalid`.
+  - `name` is optional, trimmed, 1 to 200 characters without NUL (the shared name rule), and
+    `Passkey` when absent. A bad name answers 422 `request.invalid` before the flow is taken.
+  - A credential id the organization already has answers `auth.passkey_invalid`.
+  - Admission (B5): `07-admission.md` I1 is not built. For a known user its only step is step 1,
+    so the route refuses a suspended user with 403 `auth.suspended` itself, after storing and
+    linking in the savepoint it then rolls back. I1 replaces that check with the pipeline call.
+  - The route writes `passkey.create` (`09-permissions-and-roles.md` B22) with the user and the
+    name, and `identity.link` when it creates the local identity, both by the user from the
+    client address.
+  - B24: `webauthn-rs` logs a ceremony's state, its challenge included, at `trace`. The server's
+    log subscriber (`logging::subscriber`) keeps events from the `webauthn_rs` crates at `info`
+    and above whatever the `log` setting says.
 - **B9.** `POST /auth/local/enrollment/password`, when password sign-in is on, sets the user's
   password from the token instead (policy pending Q8), marks the token used, creates the local
   identity if absent, and completes sign-in.
@@ -283,8 +323,8 @@ answer the admission refusals of `07-admission.md` as 403.
 | `GET /api/v1/admin/local-sign-in` | none | 200 `{enabled, passkey, password, totp, magic_link}` | `permission.denied` | `perm::ProviderManage`, organization |
 | `PUT /api/v1/admin/local-sign-in` | same shape | 200 | `local.magic_link_needs_email` (on before an email sender exists), `local.last_method` (409, B2), `permission.denied`, `permission.escalation` | `perm::ProviderManage`, organization |
 | `POST /api/v1/admin/users/{user_id}/enrollment-links` | none | 201 `{url, expires_at}` | `user.not_found`, `local.email_required` (409), `permission.denied`, `permission.escalation` | `perm::UserManage`, organization (see Permissions) |
-| `POST /auth/local/enrollment/start` | `{token}` | 200 `{email, methods: [...], passkey_options?}`; sets the flow cookie once I3 adds `passkey_options` | `auth.enrollment_invalid`, `auth.enrollment_expired` | none |
-| `POST /auth/local/enrollment/passkey` | `{token, credential, name?}` | 200 `{return_to}`; sets `__Host-sc_session` | `auth.enrollment_invalid`, `auth.enrollment_expired`, `auth.flow_invalid`, `auth.flow_expired`, `auth.passkey_invalid` | none |
+| `POST /auth/local/enrollment/start` | `{token}` | 200 `{email, methods: [...], passkey_options?}`; with `passkey_options`, sets the flow cookie | `auth.enrollment_invalid`, `auth.enrollment_expired` | none |
+| `POST /auth/local/enrollment/passkey` | `{token, credential, name?}` | 200 `{return_to}`; sets `__Host-sc_session` | `auth.enrollment_invalid`, `auth.enrollment_expired`, `auth.flow_invalid`, `auth.flow_expired`, `auth.passkey_invalid` (all 400), `auth.suspended` (403), `request.invalid` (422, `name`) | none |
 | `POST /auth/local/enrollment/password` | `{token, password}` | 200 `{return_to}`; sets the session | `auth.enrollment_invalid`, `auth.enrollment_expired`, `local.password_weak` | none |
 | `POST /auth/local/passkey/start` | `{email, return_to?}` | 200 `{options}`; sets the flow cookie | (Q9) | none |
 | `POST /auth/local/passkey/finish` | `{credential}` | 200 `{return_to}`; sets the session | `auth.flow_invalid`, `auth.flow_expired`, `auth.passkey_invalid` | none |
@@ -314,7 +354,13 @@ DELETE CASCADE`, `credential jsonb NOT NULL` (the credential `webauthn-rs` seria
 its public key and counter; no secret), `name text NOT NULL`, `created_at`, `updated_at`.
 Proposed, pending Q3: `credential_id bytea NOT NULL UNIQUE` (so one authenticator cannot be
 registered twice, and for discoverable sign-in if Q9 adds it) and `last_used_at timestamptz
-NULL`. Organization: derived through `user_id` -> `users.org_id`.
+NULL`. Organization: derived through `user_id` -> `users.org_id`. Built by issue I3
+(`migrations/20261114180000_passkeys.sql`) with both columns and two changes: an `org_id` column
+with the composite foreign key `(org_id, user_id) REFERENCES users (org_id, id) ON DELETE
+CASCADE`, as every table but `organizations` has, and `UNIQUE (org_id, credential_id)` in place
+of a unique `credential_id`, so one organization's registrations never collide with, or reveal,
+another's (coordinator decision, 2026-11-14). `credential_id` is 1 to 1023 bytes (WebAuthn
+Level 3's limit).
 
 **`identity_providers`** (from `03-users-and-identities.md`): one row per organization with
 `kind = 'local'`, `key = 'local'`; its `config` holds the switches if Q2 chooses that.

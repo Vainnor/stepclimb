@@ -18,9 +18,10 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use stepclimb_server::admin::{self, NewOrganizationAdmin};
+use stepclimb_server::logging;
 use stepclimb_server::recovery::{self, RecoveryRequest, UserRef};
 use stepclimb_server::{Config, healthcheck, startup};
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::util::SubscriberInitExt as _;
 
 #[derive(Parser)]
 #[command(
@@ -273,12 +274,8 @@ fn run(work: impl Future<Output = Result<(), startup::StartupError>>) -> ExitCod
     }
 }
 
-/// JSON logs (plan, Technical -> Hosting and operations) to stderr, filtered by the `log`
-/// setting, which `Config` has already validated.
+/// JSON logs to stderr, filtered by the `log` setting with the floor `logging::subscriber`
+/// keeps under it.
 fn init_logging(filter: &str) {
-    tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(EnvFilter::new(filter))
-        .with_writer(std::io::stderr)
-        .init();
+    logging::subscriber(filter, std::io::stderr).init();
 }

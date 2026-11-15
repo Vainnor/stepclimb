@@ -331,9 +331,13 @@ async fn a_link_is_returned_once_and_only_its_hash_is_stored(pool: PgPool) {
     let started = f.start(&token).await;
     assert_eq!(started.status, StatusCode::OK, "{started:?}");
     assert_schema("EnrollmentStarted", &started.body);
-    assert_eq!(
-        started.body,
-        json!({ "email": "Sam@Example.test", "methods": ["passkey", "password"] })
+    assert_eq!(started.body["email"], "Sam@Example.test");
+    assert_eq!(started.body["methods"], json!(["passkey", "password"]));
+    // Passkeys are on, so the answer carries their creation options (tests/passkey_enrollment.rs).
+    assert!(
+        started.body["passkey_options"]["publicKey"].is_object(),
+        "{:?}",
+        started.body
     );
     assert_eq!(started.headers[header::CACHE_CONTROL], "no-store");
     // Starting uses nothing up.
