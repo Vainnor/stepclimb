@@ -244,6 +244,11 @@ impl Rejection {
         &self.error
     }
 
+    /// Whether the response clears the session cookie: the cookie named no live session.
+    pub(crate) fn clears_cookie(&self) -> bool {
+        self.clear_cookie
+    }
+
     pub(crate) fn keep(error: ApiError) -> Self {
         Self {
             error,
@@ -302,16 +307,22 @@ pub(crate) async fn authenticate(
     if csrf::carries_bearer(&parts.headers) {
         return api_key::authenticate(parts, state).await;
     }
-    let principal = by_cookie(parts, state).await?;
+    let principal = by_cookie(&parts.headers, state).await?;
     Ok(Credentialed {
         principal,
         key_scopes: None,
     })
 }
 
-/// The principal of the request's session cookie (B8 to B11).
-async fn by_cookie(parts: &Parts, state: &AppState) -> Result<Authenticated, Rejection> {
-    let hash = match presented_cookie(&parts.headers) {
+/// The principal of the request's session cookie (B8 to B11), whatever else the request carries.
+/// A route that only a browser session may reach and that answers a missing session itself (the
+/// OAuth 2.1 authorization endpoint sends the browser to sign in) calls this after refusing a
+/// bearer request; every other route takes [`Authenticated`] or `require::Require`.
+pub(crate) async fn by_cookie(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> Result<Authenticated, Rejection> {
+    let hash = match presented_cookie(headers) {
         Presented::Absent => return Err(Rejection::keep(unauthenticated())),
         // Neither can name a session: answered as an unknown token, without a lookup.
         Presented::Ambiguous | Presented::NotAscii => {
@@ -319,7 +330,7 @@ async fn by_cookie(parts: &Parts, state: &AppState) -> Result<Authenticated, Rej
         }
         Presented::One(token) => TokenHash::of(token),
     };
-    let request_org = request_organization(state, &parts.headers)
+    let request_org = request_organization(state, headers)
         .await
         .map_err(Rejection::keep)?;
     let now = state.clock.now();

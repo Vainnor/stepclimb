@@ -49,7 +49,8 @@ pub enum Kind {
     PasskeySignIn,
     /// The TOTP step after a correct password (spec 04 B15, B20).
     PasswordTotp,
-    /// An OAuth 2.1 authorization request waiting for the browser to sign in (spec 08 B31).
+    /// An OAuth 2.1 authorization request of a signed-in user, waiting for their answer on the
+    /// confirmation page (spec 08 B31, Q10).
     OauthAuthorize,
 }
 

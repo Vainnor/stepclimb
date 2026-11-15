@@ -13,7 +13,10 @@
 //!   other member of a provider's config, which holds its sealed client secret, and no row id
 //!   reaches the document;
 //! - `theme`, the absolute URL of the organization's stylesheet fingerprinted with its hash, as
-//!   the page the server serves links it (`spa`).
+//!   the page the server serves links it (`spa`);
+//! - `oauth`, the absolute URLs of the OAuth 2.1 endpoints the apps sign in through: today the
+//!   authorization endpoint, with the `issuer` its redirects carry as `iss` (RFC 9207). The token
+//!   and revocation endpoints join it with spec 08 I8.
 //!
 //! The organization comes from `RequestOrg`, and every read is scoped to it. The answer is
 //! `Cache-Control: no-cache`: it changes whenever an admin switches a method or saves branding,
@@ -38,6 +41,7 @@ use crate::{
     AppState,
     branding::{self, THEME_CSS_PATH, THEME_CSS_VERSION_PARAM},
     error::ApiError,
+    oauth_authorize::AUTHORIZE_PATH,
     request_org::{self, RequestOrg},
     spa::is_css_hash,
     web_origin::WebOrigin,
@@ -61,6 +65,20 @@ pub struct Discovery {
     pub sign_in: Vec<SignInMethod>,
     /// The organization's theme.
     pub theme: DiscoveryTheme,
+    /// The OAuth 2.1 endpoints Stepclimb's own apps sign in through.
+    pub oauth: DiscoveryOauth,
+}
+
+/// The OAuth 2.1 server's issuer and endpoints, as absolute URLs on the public URL.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DiscoveryOauth {
+    /// The server's issuer identifier, the public URL. Every answer the authorization endpoint
+    /// sends to a redirect URI carries it as `iss` (RFC 9207); an app checks the two agree, and
+    /// that this value is the URL it fetched the document from.
+    pub issuer: String,
+    /// `<public URL>/oauth/authorize`, which the app opens in the system browser with its PKCE
+    /// challenge.
+    pub authorization_endpoint: String,
 }
 
 /// One sign-in method the organization offers.
@@ -156,6 +174,10 @@ pub async fn get_discovery(
         theme: DiscoveryTheme {
             stylesheet: stylesheet_url(&state.public_url, &served.css_hash),
         },
+        oauth: DiscoveryOauth {
+            issuer: crate::oauth_authorize::issuer(&state),
+            authorization_endpoint: public_endpoint(&state.public_url, AUTHORIZE_PATH),
+        },
     };
     let cache = [(
         header::CACHE_CONTROL,
@@ -226,6 +248,11 @@ fn stylesheet_url(public_url: &WebOrigin, css_hash: &str) -> String {
     } else {
         format!("{public_url}{THEME_CSS_PATH}")
     }
+}
+
+/// `path` on the public URL, the origin users open the instance at.
+fn public_endpoint(public_url: &WebOrigin, path: &str) -> String {
+    format!("{public_url}{path}")
 }
 
 fn org_not_found() -> ApiError {
@@ -302,6 +329,17 @@ mod tests {
             assert_eq!(
                 stylesheet_url(&origin, bad),
                 "https://lms.example.org/theme.css"
+            );
+        }
+    }
+
+    #[test]
+    fn the_authorization_endpoint_is_on_the_public_url() {
+        for public in ["https://lms.example.org/", "https://lms.example.org"] {
+            let origin = WebOrigin::parse(public).unwrap();
+            assert_eq!(
+                public_endpoint(&origin, AUTHORIZE_PATH),
+                "https://lms.example.org/oauth/authorize"
             );
         }
     }

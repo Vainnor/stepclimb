@@ -32,7 +32,9 @@
 //! provider starts at [`provider_sign_in`] and comes back at [`provider_callback`], with the
 //! generic OAuth 2 steps in [`oauth2_sign_in`]; their requests to the provider go through
 //! [`providers`]. The providers `stepclimb.toml` declares are written to their organizations at
-//! startup by [`config_providers`]. Every unsafe request passes [`csrf`]
+//! startup by [`config_providers`]. The OAuth 2.1 server for Stepclimb's own apps authorizes an
+//! app at `/oauth/authorize` ([`oauth_authorize`], drawing its pages with [`oauth_page`]). Every
+//! unsafe request passes [`csrf`]
 //! first. Sign-in and token routes declare a [`rate_limit`] budget, counted per client address
 //! as [`client_ip`] finds it; a route that changes roles, assignments, accounts or the
 //! organization records that address in the change's audit entry ([`audit`]).
@@ -67,6 +69,8 @@ pub mod logging;
 pub mod me;
 pub mod my_passkeys;
 pub mod oauth2_sign_in;
+pub mod oauth_authorize;
+mod oauth_page;
 pub mod openapi;
 pub mod organization;
 pub mod pagination;

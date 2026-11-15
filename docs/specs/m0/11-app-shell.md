@@ -115,7 +115,10 @@ Read on 2026-11-12; the spec builds on it.
   provider's redirect and the `__Host-sc_session` cookie (08) work as the browser expects.
 - **B15.** The return target is a path on the same origin, carried through sign-in and opened
   after it. The client accepts only a value that starts with a single `/`, and the server
-  endpoints of 04 to 06 validate it again; anything else falls back to `/`.
+  endpoints of 04 to 06 validate it again; anything else falls back to `/`. A target under
+  `/oauth/` is a page the server answers itself (the OAuth 2.1 authorization endpoint,
+  `08-sessions-and-csrf.md` B45), so the client loads it as a new page instead of routing to it
+  (coordinator decision, 2026-11-15).
 - **B16.** The local-account screens follow 04-local-accounts' steps: email entry; passkey
   ceremony through the browser's WebAuthn API; password entry when the user chooses it or has no
   passkey; the TOTP code step after a password; and "check your email" after a magic-link

@@ -82,6 +82,10 @@ async function offer(page: Page, signIn: unknown[]) {
         name: "Example Training",
         sign_in: signIn,
         theme: { stylesheet: "http://localhost/theme.css" },
+        oauth: {
+          issuer: "http://localhost",
+          authorization_endpoint: "http://localhost/oauth/authorize",
+        },
       },
     }),
   );

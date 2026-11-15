@@ -181,6 +181,43 @@ describe("the passkey step", () => {
     expect(app.router.state.location.href).toBe("/?tab=2");
   });
 
+  it("loads a return target the server answers, such as an app's authorization, as a new page", async () => {
+    stubWebAuthn();
+    const target = "/oauth/authorize?client_id=stepclimb-app&state=s1";
+    stubServer({
+      "POST /auth/local/passkey/start": started,
+      "POST /auth/local/passkey/finish": signedIn(target),
+    });
+    const app = renderApp("/sign-in");
+    const user = await enterEmail();
+    // jsdom cannot load a page: the spy stands in for the document navigation.
+    const navigate = vi.spyOn(app.router, "navigate").mockResolvedValue(undefined);
+    await pressSignIn(user);
+    await waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith({ href: target, replace: true, reloadDocument: true }),
+    );
+  });
+
+  it("opens a web app route in place, not as a new page", async () => {
+    stubWebAuthn();
+    stubServer({
+      "POST /auth/local/passkey/start": started,
+      "POST /auth/local/passkey/finish": signedIn("/oauthx"),
+      "GET /api/v1/me": me,
+    });
+    const app = renderApp("/sign-in");
+    const user = await enterEmail();
+    const navigate = vi.spyOn(app.router, "navigate");
+    await pressSignIn(user);
+    await waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith({
+        href: "/oauthx",
+        replace: true,
+        reloadDocument: false,
+      }),
+    );
+  });
+
   it("forgets what it cached while signed out", async () => {
     stubWebAuthn();
     stubServer({

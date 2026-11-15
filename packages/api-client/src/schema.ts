@@ -806,6 +806,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/oauth/authorize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Start an app's sign-in: the authorization request of the OAuth 2.1 code flow with PKCE.
+         * @description A browser navigation the app opens in the system browser. Takes `response_type=code`, `client_id`, `redirect_uri`, `code_challenge`, `code_challenge_method=S256` and `state`; other parameters are ignored and none may be given twice. An unknown `client_id` (`oauth.client_unknown`) or a `redirect_uri` the client has not registered (`oauth.redirect_uri_mismatch`) answers an HTML error page and never redirects. Any other problem is a 303 to the redirect URI with `error` (`invalid_request`, `unsupported_response_type`), `error_description`, `state` and `iss`, the issuer (RFC 9207). Without a browser session, a 303 to `/sign-in?return_to=<this request>`. Signed in, the confirmation page, whose form posts the answer to `POST /oauth/authorize`, with the `__Host-sc_flow` cookie holding the request. Over the sign-in budget, a 303 to `/sign-in?error=auth.rate_limited` with `Retry-After`.
+         */
+        get: operations["authorizeApp"];
+        put?: never;
+        /**
+         * Answer an app's sign-in from the confirmation page.
+         * @description The confirmation page's form: `application/x-www-form-urlencoded` with one `decision`, `allow` or `deny`, and one `request`, the id the page carries, in the browser that opened the page (the request waits in its `__Host-sc_flow` cookie) and signed in as the same user. `allow` is a 303 to the redirect URI with `code` (single use, valid 60 seconds), `state` and `iss` (the issuer, RFC 9207); `deny` a 303 with `error=access_denied`, `state` and `iss`. Every refusal is an HTML error page: `request.malformed` (no single `decision` and `request`), `auth.unauthenticated` (401, no session), `auth.flow_invalid` or `auth.flow_expired` (the request was answered already, expired, is another user's, or is not the one the answered page showed).
+         */
+        post: operations["answerAppAuthorization"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/readyz": {
         parameters: {
             query?: never;
@@ -1163,6 +1187,8 @@ export interface components {
         Discovery: {
             /** @description The organization's name. */
             name: string;
+            /** @description The OAuth 2.1 endpoints Stepclimb's own apps sign in through. */
+            oauth: components["schemas"]["DiscoveryOauth"];
             /**
              * @description The sign-in methods the organization offers, in the order a sign-in screen lists them:
              *     local sign-in first when it is offered, then the outside providers by key. Empty when it
@@ -1171,6 +1197,20 @@ export interface components {
             sign_in: components["schemas"]["SignInMethod"][];
             /** @description The organization's theme. */
             theme: components["schemas"]["DiscoveryTheme"];
+        };
+        /** @description The OAuth 2.1 server's issuer and endpoints, as absolute URLs on the public URL. */
+        DiscoveryOauth: {
+            /**
+             * @description `<public URL>/oauth/authorize`, which the app opens in the system browser with its PKCE
+             *     challenge.
+             */
+            authorization_endpoint: string;
+            /**
+             * @description The server's issuer identifier, the public URL. Every answer the authorization endpoint
+             *     sends to a redirect URI carries it as `iss` (RFC 9207); an app checks the two agree, and
+             *     that this value is the URL it fetched the document from.
+             */
+            issuer: string;
         };
         /** @description The organization's theme, as the apps load it. */
         DiscoveryTheme: {
@@ -2140,6 +2180,15 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `auth.session_required`: the request carries a bearer credential; only a signed-in browser session authorizes an app. `auth.csrf_refused`: the request did not come from this site. */
+        AnswerForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `role_assignment.exists`: the user already holds the role at the scope. `role.unknown_builtin`: the role is a built-in role of another Stepclimb release. */
         AssignmentCreateConflict: {
             headers: {
@@ -2196,6 +2245,15 @@ export interface components {
         };
         /** @description `account.not_found`: the scope filter names no account of the organization, or one you cannot see. `org.not_found`: the scope filter names another organization, or the request's organization cannot be determined. */
         AssignmentListNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `auth.session_required`: the request carries a bearer credential; only a signed-in browser session authorizes an app. */
+        AuthorizeForbidden: {
             headers: {
                 [name: string]: unknown;
             };
@@ -4932,6 +4990,100 @@ export interface operations {
                     "application/json": components["schemas"]["Health"];
                 };
             };
+        };
+    };
+    authorizeApp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The confirmation page naming the app, the user and the organization */
+            200: {
+                headers: {
+                    /** @description `no-store` */
+                    "Cache-Control"?: string;
+                    /** @description The `__Host-sc_flow` cookie of the request */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description To the redirect URI with an RFC 6749 error, to the sign-in page with the request as `return_to`, or to `/sign-in?error=auth.rate_limited` */
+            303: {
+                headers: {
+                    /** @description Where the browser goes */
+                    Location?: string;
+                    /** @description With `auth.rate_limited`: seconds to wait, at least 1 */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An HTML error page: `oauth.client_unknown` or `oauth.redirect_uri_mismatch` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            403: components["responses"]["AuthorizeForbidden"];
+            404: components["responses"]["OrganizationNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    answerAppAuthorization: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description To the redirect URI with `code` and `state`, or with `error=access_denied`; or to `/sign-in?error=auth.rate_limited` */
+            303: {
+                headers: {
+                    /** @description Where the browser goes */
+                    Location?: string;
+                    /** @description With `auth.rate_limited`: seconds to wait, at least 1 */
+                    "Retry-After"?: number;
+                    /** @description Clears `__Host-sc_flow` */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An HTML error page: `request.malformed`, `auth.flow_invalid` or `auth.flow_expired` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description An HTML error page: `auth.unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            403: components["responses"]["AnswerForbidden"];
+            404: components["responses"]["OrganizationNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
         };
     };
     readyz: {

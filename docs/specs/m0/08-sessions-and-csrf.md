@@ -320,6 +320,73 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   request in the `return_to` of the sign-in flow the browser then starts (a path back to the
   authorization endpoint with its query), so flows never nest under the one `__Host-sc_flow`
   cookie name (coordinator decision, 13 Nov 2026).
+- **B45.** How I7 builds B30, B31 and Q10. Coordinator decisions (2026-11-15), for the owner's
+  review; the owner can overrule any of them:
+  - **Clients.** One client in code, `stepclimb-app`, public (no secret), named "the Stepclimb
+    app" on the confirmation page (`stepclimb_auth::oauth_server::clients`). Its redirect URIs
+    are `dev.stepclimb.shell:/oauth/callback`, the private-use scheme of `apps/app`'s bundle
+    identifier (RFC 8252 section 7.1), and the loopback URIs `http://127.0.0.1:<port>/oauth/callback`
+    and `http://[::1]:<port>/oauth/callback`. A presented `redirect_uri` must equal a registered
+    one character for character; the only exception is a loopback URI's port, which may be any
+    port from 1 to 65535, as RFC 8252 section 7.3 and OAuth 2.1 ask for a desktop app's ephemeral
+    listener. No other normalization: `localhost`, a trailing `/` or a query is a mismatch.
+  - **Order of checks.** `GET /oauth/authorize` counts the sign-in budget (B41, a 303 to
+    `/sign-in?error=auth.rate_limited` like B22's navigation routes), refuses any bearer request
+    with 403 `auth.session_required` (an API key or app token never authorizes an app), then
+    checks `client_id` and `redirect_uri`, each given exactly once: either wrong shows the HTML
+    error page (400 `oauth.client_unknown` or `oauth.redirect_uri_mismatch`) and never
+    redirects. After those, every problem is a 303 to the redirect URI with the RFC 6749 section
+    4.1.2.1 `error`, a fixed `error_description` and the request's `state` (Q13 (a)): a missing
+    `response_type` or a repeated parameter is `invalid_request`; any `response_type` but `code`
+    (the implicit grant's `token` included) is `unsupported_response_type`; a missing or `plain`
+    `code_challenge_method`, or a `code_challenge` that is not 43 base64url characters holding
+    32 bytes, is `invalid_request`. So `oauth.pkce_required` is not a code: the RFC's
+    `invalid_request` carries it. Other parameters, `scope` among them, are ignored (RFC 6749
+    section 3.1).
+  - **`state`.** Optional, as OAuth 2.1 allows with PKCE. When given it is returned exactly, and
+    must be at most 256 bytes of RFC 6749's VSCHAR (`0x20` to `0x7E`), so the request always fits
+    B19's 2,048-byte `return_to` after percent-encoding; otherwise `invalid_request` without a
+    `state`.
+  - **Without a session** the browser gets a 303 to `/sign-in?return_to=<the request>`, the path
+    back to the endpoint with only the parameters it reads, in a fixed order. No flow is started
+    there. The web app loads a return target under `/oauth/` as a new page after sign-in, since it
+    has no route for it (`11-app-shell.md` B15). An expired or unknown session cookie is also
+    cleared (B10); a suspended user's session counts as none.
+  - **Consent (Q10).** With a session, the endpoint stores the checked request in an
+    `oauth_authorize` sign-in flow for the user (B17, its payload sealed per B20) and answers 200
+    with a confirmation page naming the app, the user (display name and email) and the
+    organization, with "Allow" and "Cancel". The page names no device: the request carries no
+    trustworthy device name, and a name from the query would be text an attacker chose on a page
+    that asks for trust. The page is plain HTML the server writes, in English, with
+    `Cache-Control: no-store`, `X-Frame-Options: DENY` and a `Content-Security-Policy` that loads
+    nothing and forbids framing. Its policy has no `form-action`, which browsers apply to the
+    redirect after the form is sent to the app's scheme. Its `Referrer-Policy` is `same-origin`:
+    under `no-referrer` a browser sends `Origin: null` with the form post, which B14 refuses, so
+    no one could answer (security review of I7, coordinator decision 2026-11-15). The error pages
+    and every redirect of the endpoint are `no-referrer`. A page drawn with the web app's
+    components through the API is left for later.
+  - **The answer** is `POST /oauth/authorize` with one `decision`, `allow` or `deny`, and one
+    `request`, the flow id the page carries in a hidden field, form encoded. It passes the CSRF check (B14) and the same budget and bearer refusal, needs the
+    browser session (else a 401 page `auth.unauthenticated`), and in one transaction takes the
+    flow (B18: a second answer or a late one shows `auth.flow_invalid` or `auth.flow_expired`),
+    checks the flow is this user's and is the one the answered page was shown for (else
+    `auth.flow_invalid`: opening the request again replaces the flow cookie, and the older page's
+    answer then counts for nothing), and checks its client and redirect URI against the registry
+    again. `deny` is a 303 to the redirect URI with
+    `error=access_denied` and `state`; `allow` stores the code and is a 303 with `code` and
+    `state`. Both clear the flow cookie.
+  - **Issuer (RFC 9207).** Every answer the endpoint sends to a redirect URI, a code or an error,
+    carries `iss`, the server's issuer identifier: `STEPCLIMB_PUBLIC_URL` as the discovery
+    document's `oauth.issuer` writes it. The app must compare `iss` with the issuer it expects
+    for the server it started the sign-in with, and refuse the answer when they differ or `iss`
+    is missing; and when it links a server it must check that the document's `oauth.issuer`
+    equals the URL it fetched the document from. That stops a mix-up between two servers the app
+    is linked to (M5, `docs/specs/m5.md`). Security review of I7, coordinator decision
+    2026-11-15.
+  - **Codes** are `Token`s (Q2), stored as their SHA-256 in `oauth_authorization_codes` with the
+    organization, user, client, redirect URI and challenge, and expire 60 seconds after issue
+    (Q10). The periodic flow cleanup (B21) also deletes expired codes. Single use at the token
+    endpoint is I8's.
 - **B32.** `POST /oauth/token` with `grant_type=authorization_code` exchanges a code once, when
   `client_id` and `redirect_uri` match the code and the S256 challenge computed from
   `code_verifier` (RFC 7636) equals the stored challenge. It returns an access token valid for
@@ -367,9 +434,11 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   - **`label`** is the string `label` member of the provider's config, and `null` when it has
     none or it is not a string, as `03-users-and-identities.md` B23 reads it. Local sign-in's
     labels are the web app's strings, so its `label` is always `null`.
-  - **No `oauth` field yet.** The authorization, token and revocation endpoints are issues I7
-    and I8, which have not landed. Listing URLs that answer 404 would point the M5 app at
-    nothing, so the document leaves `oauth` out and I7 or I8 adds it with the endpoints.
+  - **`oauth`** lists the OAuth 2.1 server's `issuer` (the public URL, B45) and the endpoints
+    that exist, as absolute URLs on `STEPCLIMB_PUBLIC_URL`: I7 added `issuer` and
+    `authorization_endpoint` (`<public URL>/oauth/authorize`);
+    `token_endpoint` and `revocation_endpoint` join it with I8. Listing a URL that answers 404
+    would point the M5 app at nothing.
   - **`theme`** (`11-app-shell.md` Q4) is `{stylesheet}`, the absolute URL
     `<STEPCLIMB_PUBLIC_URL>/theme.css?v=<SHA-256>` of the stylesheet `/theme.css` serves the
     organization, the same hash the served page links; a stored hash that is not 64 lowercase
@@ -389,8 +458,9 @@ Every endpoint has `#[utoipa::path]` and appears in `openapi/stepclimb.json`. Er
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
 | `POST /auth/sign-out` | none (cookie) | 204, cookie cleared | `auth.csrf_refused` | none |
-| `GET /.well-known/stepclimb` | none | 200 `{name, sign_in: [{key, kind, label, methods?}], theme: {stylesheet}}`; `oauth: {authorization_endpoint, token_endpoint, revocation_endpoint}` joins it with I7 and I8 (B38) | `org.not_found`, `org.none` | none |
-| `GET /oauth/authorize` (path pending Q10) | query `client_id, redirect_uri, code_challenge, code_challenge_method, state` | 302 to sign-in, or 302 to `redirect_uri?code&state`; HTML error page on client or redirect mismatch | `oauth.client_unknown`, `oauth.redirect_uri_mismatch`, `oauth.pkce_required` | browser session (or sign-in first) |
+| `GET /.well-known/stepclimb` | none | 200 `{name, sign_in: [{key, kind, label, methods?}], theme: {stylesheet}, oauth: {issuer, authorization_endpoint}}`; `token_endpoint` and `revocation_endpoint` join `oauth` with I8 (B38) | `org.not_found`, `org.none` | none |
+| `GET /oauth/authorize` | query `response_type=code, client_id, redirect_uri, code_challenge, code_challenge_method=S256, state?` | 200 HTML confirmation page with the flow cookie; 303 to `/sign-in?return_to=...` without a session; 303 to `redirect_uri?error&error_description&state&iss` (B45) | HTML page 400 `oauth.client_unknown`, `oauth.redirect_uri_mismatch`; 403 `auth.session_required` | browser session (or sign-in first) |
+| `POST /oauth/authorize` | form `decision=allow\|deny, request` (the confirmation page) | 303 to `redirect_uri?code&state&iss` or `?error=access_denied&state&iss` | HTML page 400 `request.malformed`, `auth.flow_invalid`, `auth.flow_expired`; 401 `auth.unauthenticated`; 403 `auth.session_required`, `auth.csrf_refused` | browser session |
 | `POST /oauth/token` | form: `grant_type=authorization_code, code, redirect_uri, client_id, code_verifier` or `grant_type=refresh_token, refresh_token, client_id` | 200 `{access_token, token_type: "Bearer", expires_in: 900, refresh_token}` | `invalid_request`, `invalid_client`, `invalid_grant`, `unsupported_grant_type` (format Q13), `auth.rate_limited` | none (client is public) |
 | `POST /oauth/revoke` | form: `token, token_type_hint?, client_id` | 200 | `invalid_request`, `auth.rate_limited` | none |
 | `GET /api/v1/admin/service-accounts` | cursor pagination, by id | 200 page of `{id, name, kind, scopes, owner_user_id, created_at, last_used_at}`, never the key | `auth.unauthenticated`, `entitlement.feature_unavailable`, `permission.denied` | `Require<ApiKeys>`, `perm::ServiceAccountManage`, organization |
@@ -448,11 +518,18 @@ was added by the first issue whose flow names a provider (`05-oidc.md` I2, migra
 `20261115090000_auth_flow_provider.sql`), since `identity_providers`
 (`03-users-and-identities.md` I2) did not exist when I4 landed.
 
-**Proposed, pending Q10: `oauth_authorization_codes`**: `id uuid PK`, `user_id uuid NOT NULL
+**`oauth_authorization_codes`** (Q10, as proposed): `id uuid PK`, `user_id uuid NOT NULL
 REFERENCES users(id) ON DELETE CASCADE`, `client_id text NOT NULL`, `code_hash bytea NOT NULL
 UNIQUE`, `redirect_uri text NOT NULL`, `code_challenge text NOT NULL`, `family_id uuid NULL`
 (set on first exchange, for B32's replay revocation), `used_at timestamptz NULL`, `expires_at
 timestamptz NOT NULL`, `created_at`, `updated_at`. Organization: derived through `user_id`.
+As built by I7 (migration `20261116010000_oauth_authorization_codes.sql`, B45; coordinator
+decision 2026-11-15): `org_id uuid NOT NULL REFERENCES organizations(id)` is direct, with `(org_id,
+user_id) REFERENCES users(org_id, id) ON DELETE CASCADE`, as `auth_flows` and `service_accounts`
+have it, so every query filters on the `OrgScope` without a join; `code_hash` is checked to 32
+bytes, `code_challenge` to 43 base64url characters, and an index on `(org_id, expires_at)` serves
+the cleanup. `family_id` and `used_at` are left to I8, which writes them when it exchanges a code
+and can give `family_id` its foreign key to `oauth_refresh_tokens`.
 
 ## Permissions
 
@@ -719,7 +796,7 @@ overrule one, which then updates this spec.
    to B24), in the transaction of the change, with the API key as the actor when a key makes it.
 7. **I7. OAuth 2.1 authorization endpoint and codes.** Client registry, `GET /oauth/authorize`,
    the sign-in round trip through a flow, code issuance and storage. Covers B30, B31, B41 (the
-   authorization endpoint's sign-in steps); T27 to T29. Depends on: I4, `07-admission.md` I1
+   authorization endpoint's sign-in steps), B45; T27 to T29. Depends on: I4, `07-admission.md` I1
    (sign-in completion returns to the flow), Q10.
 8. **I8. OAuth 2.1 token and revoke endpoints.** Migration for `oauth_refresh_tokens`; code
    exchange with PKCE, JWT access tokens, rotation, reuse detection, revocation, access-token
