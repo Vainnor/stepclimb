@@ -134,6 +134,11 @@ tracing = "=0.1.44"
 # B17, B20). The soft authenticator is the project's own, for tests only.
 webauthn-rs = { version = "=0.6.2", default-features = false, features = ["danger-allow-state-serialisation"] }
 webauthn-authenticator-rs = { version = "=0.6.2", default-features = false, features = ["softpasskey"] }
+# Password hashing for local accounts (docs/specs/m0/04-local-accounts.md B16, Q8; plan,
+# Technical -> Architecture and stack: `argon2`): argon2id in the PHC string format. Default
+# features off: `alloc` and `password-hash` for the PHC strings, `getrandom` for each hash's
+# salt, `zeroize` to wipe the working memory. No `parallel`: one lane (Q8), so rayon adds nothing.
+argon2 = { version = "=0.6.0", default-features = false, features = ["alloc", "password-hash", "getrandom", "zeroize"] }
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["fmt", "env-filter", "json", "ansi"] }
 
 [workspace.lints.rust]
@@ -165,4 +170,12 @@ debug = false
 opt-level = 3
 
 [profile.dev.package.rsa]
+opt-level = 3
+
+# Unoptimized, one argon2id hash at Q8's parameters (19 MiB, 2 passes) takes seconds, and the
+# password tests compute dozens (docs/specs/m0/04-local-accounts.md T10, T12).
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
 opt-level = 3
