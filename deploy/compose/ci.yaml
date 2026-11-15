@@ -2,8 +2,8 @@
 # Laid over compose.yaml for one gate run (bin/ci_gate.py), as the project
 # `stepclimb-ci-<id>`: nothing here is shared with the development stack or another worktree's run.
 # PostgreSQL keeps its data in memory. The published ports are the run's slot's (SC_CI_PG_PORT,
-# SC_CI_PORT, SC_CI_IDP_PORT), which no other run holds; the run reads the first two back with
-# `docker compose port`. The gate sets SC_IMAGE to a tag of its own, and the mock identity
+# SC_CI_PORT, SC_CI_IDP_PORT), which no other run holds; the gate and `just e2e` read each back
+# with `docker compose port`. The gate sets SC_IMAGE to a tag of its own, and the mock identity
 # provider's image is that tag with `-mock-idp`, so that one run never starts another's build. Each
 # container carries the slot's number, so that a later run on the slot can remove what a killed run
 # left on those ports. MinIO is not started.

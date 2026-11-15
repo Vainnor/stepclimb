@@ -97,7 +97,10 @@ async fn a_base_url_names_the_issuer_the_endpoints_and_the_id_tokens_iss() {
 
 #[tokio::test]
 async fn a_base_url_that_is_not_an_http_origin_is_refused_before_binding() {
-    let any_port = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 0));
+    // The address is taken, so a mock that bound before checking the base URL would answer
+    // `StartError::Bind` instead.
+    let taken = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).expect("bind");
+    let any_port = taken.local_addr().expect("an address");
     for bad in [
         "mock-idp:8080",
         "ftp://mock-idp",

@@ -84,8 +84,9 @@ pub enum StartError {
     Key(#[from] KeyError),
     #[error("the OS random number generator failed")]
     Random,
-    /// The base URL given to [`MockIdp::start_at`] is not an `http` or `https` origin.
-    #[error("the base URL must be an http or https origin with no path, query or fragment")]
+    /// The base URL given to [`MockIdp::start_at`], or another URL given to [`origin`], is not an
+    /// `http` or `https` origin.
+    #[error("the URL must be an http or https origin with no path, query or fragment")]
     BaseUrl,
 }
 
@@ -118,7 +119,7 @@ impl MockIdp {
     /// `http://mock-idp:8080` (a trailing `/` is dropped); without one, with `http://` and the
     /// address bound.
     pub async fn start_at(addr: SocketAddr, base_url: Option<&str>) -> Result<Self, StartError> {
-        let base_url = base_url.map(origin).transpose()?;
+        let base_url = base_url.map(origin).transpose()?.map(|o| o.0);
         let listener = TcpListener::bind(addr).await?;
         let addr = listener.local_addr()?;
         let base_url = base_url.unwrap_or_else(|| format!("http://{addr}"));
@@ -210,9 +211,14 @@ impl MockIdp {
     }
 }
 
-/// `base_url` as the mock's base: an `http` or `https` URL with a host, no credentials and no
-/// path beyond `/`, query or fragment, written without the trailing `/`.
-fn origin(base_url: &str) -> Result<String, StartError> {
+/// An `http` or `https` origin, written without a trailing `/`: what [`MockIdp::start_at`] takes as
+/// its base URL, and what the binary takes as the address browsers reach the mock at.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Origin(pub String);
+
+/// `base_url` as an [`Origin`]: an `http` or `https` URL with a host, no credentials and no path
+/// beyond `/`, query or fragment. Anything else is [`StartError::BaseUrl`].
+pub fn origin(base_url: &str) -> Result<Origin, StartError> {
     let url = url::Url::parse(base_url).map_err(|_| StartError::BaseUrl)?;
     let plain = matches!(url.scheme(), "http" | "https")
         && url.has_host()
@@ -224,7 +230,7 @@ fn origin(base_url: &str) -> Result<String, StartError> {
     if !plain {
         return Err(StartError::BaseUrl);
     }
-    Ok(url.as_str().trim_end_matches('/').to_owned())
+    Ok(Origin(url.as_str().trim_end_matches('/').to_owned()))
 }
 
 impl Drop for MockIdp {

@@ -634,14 +634,17 @@ test.describe
       await page.getByRole("button", { name: "Sign in with a passkey" }).click();
       await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
       [passkey] = await authenticator.credentials();
-      const signup = await page.evaluate(async () => {
-        const answer = await fetch("/api/v1/admin/admission", {
-          method: "PUT",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ signup_allowed: true }),
-        });
-        return { status: answer.status, ...(await answer.json()) };
-      });
+      /** Turns account creation at sign-in on or off as the admin, through the public API. */
+      const signupAllowed = (allowed: boolean) =>
+        page.evaluate(async (allowed) => {
+          const answer = await fetch("/api/v1/admin/admission", {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ signup_allowed: allowed }),
+          });
+          return { status: answer.status, ...(await answer.json()) };
+        }, allowed);
+      const signup = await signupAllowed(true);
       expect([signup.status, signup.signup_allowed]).toEqual([200, true]);
 
       const context = await browser.newContext();
@@ -680,6 +683,9 @@ test.describe
         expect((await again.json()).user.id).toBe(user.id);
       } finally {
         await context.close();
+        // Back to the organization's default, so no later test meets sign-up turned on.
+        const restored = await signupAllowed(false);
+        expect([restored.status, restored.signup_allowed]).toEqual([200, false]);
       }
     });
   });

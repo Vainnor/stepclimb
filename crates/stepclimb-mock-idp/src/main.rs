@@ -64,7 +64,9 @@ fn config(
 ) -> Result<Config, String> {
     let bind = bind(var)?;
     let base_url = required(var, BASE_URL)?;
-    let browser_url = required(var, BROWSER_URL)?;
+    let browser_url = stepclimb_mock_idp::origin(&required(var, BROWSER_URL)?)
+        .map_err(|e| format!("{BROWSER_URL}: {e}"))?
+        .0;
     let secret_file = required(var, CLIENT_SECRET_FILE)?;
     let client_secret = read(&secret_file)
         .map_err(|e| format!("{CLIENT_SECRET_FILE} could not be read: {e}"))?
@@ -76,7 +78,7 @@ fn config(
     Ok(Config {
         bind,
         base_url,
-        browser_url: browser_url.trim_end_matches('/').to_owned(),
+        browser_url,
         client_secret,
     })
 }
@@ -92,13 +94,20 @@ async fn start(config: &Config) -> Result<MockIdp, String> {
     Ok(mock)
 }
 
-/// Until SIGTERM or SIGINT.
+/// Until SIGINT, or SIGTERM on Unix.
 async fn stopped() -> Result<(), String> {
-    use tokio::signal::unix::{SignalKind, signal};
-    let mut term = signal(SignalKind::terminate()).map_err(|e| e.to_string())?;
-    tokio::select! {
-        _ = term.recv() => Ok(()),
-        result = tokio::signal::ctrl_c() => result.map_err(|e| e.to_string()),
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut term = signal(SignalKind::terminate()).map_err(|e| e.to_string())?;
+        tokio::select! {
+            _ = term.recv() => Ok(()),
+            result = tokio::signal::ctrl_c() => result.map_err(|e| e.to_string()),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await.map_err(|e| e.to_string())
     }
 }
 
@@ -225,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn a_bad_bind_address_or_an_empty_secret_is_refused() {
+    fn a_bad_bind_address_a_browser_url_that_is_not_an_origin_or_an_empty_secret_is_refused() {
         let mut bad = ALL.to_vec();
         bad[0] = (BIND, "mock-idp:8080");
         assert!(
@@ -233,6 +242,16 @@ mod tests {
                 .expect_err("refused")
                 .starts_with(BIND)
         );
+        for browser in [
+            "127.0.0.1:20016",
+            "http://127.0.0.1:20016/oidc",
+            "ftp://127.0.0.1",
+        ] {
+            let mut bad = ALL.to_vec();
+            bad[2] = (BROWSER_URL, browser);
+            let error = config(&vars(&bad), secret).expect_err("refused");
+            assert!(error.starts_with(BROWSER_URL), "{browser}: {error}");
+        }
         let blank = |_: &str| Ok(" \n".to_owned());
         assert_eq!(
             config(&vars(&ALL), blank).expect_err("refused"),
