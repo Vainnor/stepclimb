@@ -1,0 +1,32 @@
+[package]
+name = "stepclimb-mock-idp"
+description = "A mock OpenID Connect and OAuth 2 identity provider on a loopback port, for tests only."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# Test-only: crates take this as a dev-dependency, never a normal or build one
+# (bin/check-layering.sh rule 5, docs/adr/0027-mock-identity-provider.md), so it never reaches the
+# release binary or image.
+[dependencies]
+axum.workspace = true
+# `sync` for the stop signal that cuts connections when the mock is dropped.
+tokio = { workspace = true, features = ["sync"] }
+serde_json.workspace = true
+base64.workspace = true
+sha2.workspace = true
+getrandom.workspace = true
+rsa.workspace = true
+url.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+stepclimb-auth.workspace = true
+openidconnect.workspace = true
+http.workspace = true
+
+[lints]
+workspace = true

@@ -27,6 +27,9 @@ to keep them true.
   `stepclimb-activities-atc` or `stepclimb-connectors`, behind cargo features, enabled per
   organization. A vZDC rule, roster or term belongs in configuration or a data set.
 - Nothing depends on `stepclimb-server`; it is the top of the graph.
+- `stepclimb-mock-idp` is for tests: a dev-dependency only, never a normal or build one, so it
+  never reaches the release binary (ADR 0027). It has no normal or build dependency on a
+  workspace crate.
 - A new crate gets a rule in the script in the same change; the script fails on a crate without one.
 
 ## Server authority
