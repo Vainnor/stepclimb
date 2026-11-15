@@ -38,7 +38,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use sha2::{Digest, Sha256};
-use stepclimb_core::OrgScope;
+use stepclimb_core::{OrgScope, id::Uuid, local_logins::LoginEmail};
 
 use crate::{AppState, client_ip::TrustedProxies, error::ApiError};
 
@@ -131,7 +131,8 @@ impl From<IpAddr> for AddressKey {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Key {
     Address(Class, AddressKey),
-    /// SHA-256 of the organization id's 16 bytes, then the identifier's bytes.
+    /// SHA-256 of what the budget counts ([`Subject`]'s tag byte), the organization id's 16
+    /// bytes, then the identifier's bytes.
     Account([u8; 32]),
 }
 
@@ -144,15 +145,31 @@ impl Key {
         }
     }
 
-    /// The account key: a fixed 32 bytes, so an identifier of any length costs the table the
-    /// same. The organization id has a fixed length, so no two pairs hash the same input.
-    fn account(scope: OrgScope, identifier: &str) -> Self {
+    /// The key of a failed-check budget: a fixed 32 bytes, so an identifier of any length costs
+    /// the table the same. The tag and the organization id have fixed lengths, so no two
+    /// budgets, of one kind or of two, hash the same input.
+    fn account(subject: Subject, scope: OrgScope, identifier: &[u8]) -> Self {
         let digest = Sha256::new()
+            .chain_update([subject as u8])
             .chain_update(scope.org_id().as_bytes())
-            .chain_update(identifier.as_bytes())
+            .chain_update(identifier)
             .finalize();
         Self::Account(digest.into())
     }
+}
+
+/// What a failed-check budget counts against. All share [`Limits::failed_checks`] and
+/// [`FAILED_CHECK_WINDOW`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+enum Subject {
+    /// An account, by the address it signs in with.
+    Email = 1,
+    /// One browser's device cookie (spec 08 B42).
+    Device = 2,
+    /// A user, by id: the signed-in user's checks, which apply with or without an email or a
+    /// device cookie.
+    User = 3,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -228,19 +245,63 @@ impl RateLimiter {
             .map(|_| ())
     }
 
-    /// Start a password or TOTP check for `identifier` in `scope`'s organization. The check
-    /// counts as a failure from now on, so parallel guesses cannot all pass before the first
-    /// failure is recorded; [`AccountCheck::passed`] takes it back after a success. Refused
-    /// when the account's failures in the window have reached the limit: run no check then,
-    /// right or wrong. `identifier` is what the sign-in method matches the account by, already
-    /// normalized the way that match is.
+    /// Start a password or TOTP check for the account `email` names in `scope`'s organization.
+    /// The check counts as a failure from now on, so parallel guesses cannot all pass before the
+    /// first failure is recorded; [`AccountCheck::passed`] takes it back after a success.
+    /// Refused when the account's failures in the window have reached the limit: run no check
+    /// then, right or wrong. The identifier is a [`LoginEmail`], the one normalized form the
+    /// sign-in methods match accounts by (spec 08 B41), so `Ada@example.org` and
+    /// `ada@example.org` share one budget.
     pub fn account_check(
+        &self,
+        scope: OrgScope,
+        email: &LoginEmail,
+        now: SystemTime,
+    ) -> Result<AccountCheck, TooManyRequests> {
+        self.check_identifier(scope, email.as_str(), now)
+    }
+
+    /// [`RateLimiter::account_check`] against the budget of one device cookie, by the random id
+    /// sealed in it (spec 08 B42): a browser the account's device cookie exempts from the
+    /// account's budget still has one of its own, so a stolen cookie gives an attacker no more
+    /// guesses than the account itself would.
+    pub fn device_check(
+        &self,
+        scope: OrgScope,
+        device_id: Uuid,
+        now: SystemTime,
+    ) -> Result<AccountCheck, TooManyRequests> {
+        self.check(
+            Key::account(Subject::Device, scope, device_id.as_bytes()),
+            now,
+        )
+    }
+
+    /// [`RateLimiter::account_check`] against the budget of the user `user_id`, for a check
+    /// a signed-in user makes (spec 04 B17). It applies whether or not the user has an email
+    /// and whether or not a device cookie is presented.
+    pub fn user_check(
+        &self,
+        scope: OrgScope,
+        user_id: Uuid,
+        now: SystemTime,
+    ) -> Result<AccountCheck, TooManyRequests> {
+        self.check(Key::account(Subject::User, scope, user_id.as_bytes()), now)
+    }
+
+    fn check_identifier(
         &self,
         scope: OrgScope,
         identifier: &str,
         now: SystemTime,
     ) -> Result<AccountCheck, TooManyRequests> {
-        let key = Key::account(scope, identifier);
+        self.check(
+            Key::account(Subject::Email, scope, identifier.as_bytes()),
+            now,
+        )
+    }
+
+    fn check(&self, key: Key, now: SystemTime) -> Result<AccountCheck, TooManyRequests> {
         let opened = self.take(key, self.0.limits.failed_checks, now)?;
         Ok(AccountCheck {
             limiter: self.clone(),
@@ -431,8 +492,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use stepclimb_core::id::Uuid;
-
     use super::*;
 
     fn at(secs: u64) -> SystemTime {
@@ -569,15 +628,18 @@ mod tests {
     fn failed_checks_share_the_account_budget_across_addresses() {
         let limiter = limiter(20, 60, 2);
         for _ in 0..2 {
-            drop(limiter.account_check(scope(1), "ada", at(0)).unwrap());
+            drop(limiter.check_identifier(scope(1), "ada", at(0)).unwrap());
         }
-        let refused = limiter.account_check(scope(1), "ada", at(1)).err().unwrap();
+        let refused = limiter
+            .check_identifier(scope(1), "ada", at(1))
+            .err()
+            .unwrap();
         assert_eq!(refused.retry_after(), 899);
         // Another account, or the same name in another organization, is untouched.
-        assert!(limiter.account_check(scope(1), "grace", at(1)).is_ok());
-        assert!(limiter.account_check(scope(2), "ada", at(1)).is_ok());
+        assert!(limiter.check_identifier(scope(1), "grace", at(1)).is_ok());
+        assert!(limiter.check_identifier(scope(2), "ada", at(1)).is_ok());
         // The window closes 15 minutes after the first failure.
-        assert!(limiter.account_check(scope(1), "ada", at(900)).is_ok());
+        assert!(limiter.check_identifier(scope(1), "ada", at(900)).is_ok());
     }
 
     #[test]
@@ -585,39 +647,39 @@ mod tests {
         let limiter = limiter(20, 60, 2);
         for _ in 0..5 {
             limiter
-                .account_check(scope(1), "ada", at(0))
+                .check_identifier(scope(1), "ada", at(0))
                 .unwrap()
                 .passed();
         }
-        drop(limiter.account_check(scope(1), "ada", at(0)).unwrap());
-        drop(limiter.account_check(scope(1), "ada", at(0)).unwrap());
-        assert!(limiter.account_check(scope(1), "ada", at(0)).is_err());
+        drop(limiter.check_identifier(scope(1), "ada", at(0)).unwrap());
+        drop(limiter.check_identifier(scope(1), "ada", at(0)).unwrap());
+        assert!(limiter.check_identifier(scope(1), "ada", at(0)).is_err());
     }
 
     #[test]
     fn checks_in_flight_count_before_they_finish() {
         let limiter = limiter(20, 60, 2);
-        let first = limiter.account_check(scope(1), "ada", at(0)).unwrap();
-        let second = limiter.account_check(scope(1), "ada", at(0)).unwrap();
-        assert!(limiter.account_check(scope(1), "ada", at(0)).is_err());
+        let first = limiter.check_identifier(scope(1), "ada", at(0)).unwrap();
+        let second = limiter.check_identifier(scope(1), "ada", at(0)).unwrap();
+        assert!(limiter.check_identifier(scope(1), "ada", at(0)).is_err());
         first.passed();
-        assert!(limiter.account_check(scope(1), "ada", at(0)).is_ok());
+        assert!(limiter.check_identifier(scope(1), "ada", at(0)).is_ok());
         drop(second);
     }
 
     #[test]
     fn a_pass_after_the_window_reopened_leaves_the_new_window_alone() {
         let limiter = limiter(20, 60, 1);
-        let old = limiter.account_check(scope(1), "ada", at(0)).unwrap();
-        drop(limiter.account_check(scope(1), "ada", at(900)).unwrap());
+        let old = limiter.check_identifier(scope(1), "ada", at(0)).unwrap();
+        drop(limiter.check_identifier(scope(1), "ada", at(900)).unwrap());
         old.passed();
-        assert!(limiter.account_check(scope(1), "ada", at(901)).is_err());
+        assert!(limiter.check_identifier(scope(1), "ada", at(901)).is_err());
     }
 
     #[test]
     fn closed_windows_are_swept_once_the_table_doubles() {
         let limiter = limiter(20, 60, 10);
-        drop(limiter.account_check(scope(1), "ada", at(0)).unwrap());
+        drop(limiter.check_identifier(scope(1), "ada", at(0)).unwrap());
         for n in 1..MIN_SWEEP as u32 {
             let client = IpAddr::V4(Ipv4Addr::from(n));
             limiter.hit_address(Class::SignIn, client, at(0)).unwrap();
@@ -674,22 +736,40 @@ mod tests {
     }
 
     #[test]
+    fn email_device_and_user_budgets_are_apart() {
+        let limiter = limiter(20, 60, 1);
+        let id = Uuid::from_u128(9);
+        drop(limiter.user_check(scope(1), id, at(0)).unwrap());
+        assert!(limiter.user_check(scope(1), id, at(0)).is_err());
+        assert!(limiter.device_check(scope(1), id, at(0)).is_ok());
+        assert!(limiter.user_check(scope(2), id, at(0)).is_ok());
+        let as_text = String::from_utf8_lossy(id.as_bytes()).into_owned();
+        assert!(limiter.check_identifier(scope(1), &as_text, at(0)).is_ok());
+    }
+
+    #[test]
     fn an_account_key_is_32_bytes_whatever_the_identifier() {
         let one = "a".repeat(1 << 20);
         let mut other = one.clone();
         other.push('b');
-        let (first, second) = (Key::account(scope(1), &one), Key::account(scope(1), &other));
+        let (first, second) = (
+            Key::account(Subject::Email, scope(1), one.as_bytes()),
+            Key::account(Subject::Email, scope(1), other.as_bytes()),
+        );
         for key in [first, second] {
             assert!(matches!(key, Key::Account(digest) if digest.len() == 32));
         }
         assert_ne!(first, second);
-        assert_ne!(first, Key::account(scope(2), &one));
+        assert_ne!(
+            first,
+            Key::account(Subject::Email, scope(2), one.as_bytes())
+        );
         // `Key` is `Copy`, so it owns no heap memory, and its size is fixed.
         assert!(std::mem::size_of::<Key>() <= 40);
         // The two long identifiers keep separate budgets.
         let limiter = limiter(20, 60, 1);
-        drop(limiter.account_check(scope(1), &one, at(0)).unwrap());
-        assert!(limiter.account_check(scope(1), &one, at(0)).is_err());
-        assert!(limiter.account_check(scope(1), &other, at(0)).is_ok());
+        drop(limiter.check_identifier(scope(1), &one, at(0)).unwrap());
+        assert!(limiter.check_identifier(scope(1), &one, at(0)).is_err());
+        assert!(limiter.check_identifier(scope(1), &other, at(0)).is_ok());
     }
 }

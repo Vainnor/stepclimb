@@ -114,6 +114,7 @@ fn state(pool: &PgPool, clock: &ManualClock, limits: Limits, insecure: bool) -> 
         public_url: WebOrigin::parse(PUBLIC_URL).expect("a valid origin"),
         allowed_origins: Vec::new(),
         rate_limits: RateLimiter::new(limits, TrustedProxies::none()),
+        passwords: Default::default(),
         providers: Providers::new(insecure).expect("provider clients"),
     }
 }

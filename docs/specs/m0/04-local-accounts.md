@@ -51,8 +51,9 @@ creates and hands over.
   before issues I3 and I6, so until then it answers `false`; each of those issues adds its
   check and a test that the credential lets the user's last outside identity go
   (coordinator decision, 2026-11-14).
-  Issue I3 added the passkey check: a stored passkey counts whether or not the passkey switch
-  is on, since B2 keeps it and switching the method back on restores it (coordinator decision,
+  Issue I6 added the password check (a `local_logins` row with a hash) and counts the password
+  in `local::delete_passkey_unless_last` too (Q10). Issue I3 added the passkey check: a stored
+  passkey counts whether or not the passkey switch is on, since B2 keeps it and switching the method back on restores it (coordinator decision,
   2026-11-14). `stepclimb admin enrollment-link` reads the same function, so a user with a
   passkey needs `--force` there.
 
@@ -212,6 +213,25 @@ creates and hands over.
 - **B9.** `POST /auth/local/enrollment/password`, when password sign-in is on, sets the user's
   password from the token instead (policy pending Q8), marks the token used, creates the local
   identity if absent, and completes sign-in.
+
+  Coordinator decisions (2026-11-15), for issue I6:
+
+  - The route takes `RateLimited<SignIn>` first, answers 404 `auth.method_disabled` while
+    passwords are off, and checks Q8's policy before it reads the link: a weak password is 422
+    `request.invalid` with `local.password_weak` at `/password`, and the link stays usable.
+  - It reads the link (`check_enrollment`), hashes the password outside any transaction, then in
+    one transaction locks the link's user before `consume_enrollment` locks the link (the order
+    `create_enrollment` takes), stores the password, links the local identity if absent and
+    completes the sign-in through `admission::complete_local`. A refusal (an
+    `auth.enrollment_*` code, `auth.suspended`) rolls everything back, so the link stays usable
+    and nothing is stored. The answer is 200 `{return_to: "/"}` with the session and device
+    cookies and `Cache-Control: no-store`.
+  - A user who has a password already gets the new one: an enrollment link is Q10 (a)'s way back
+    in. Such a reset ends every other session of the user in the enrollment's transaction,
+    keeping only the session it creates, and moves the password's generation, which revokes the
+    user's older device cookies (`08-sessions-and-csrf.md` B42).
+  - Storing a password writes `password.set` (`09-permissions-and-roles.md` B22) with the user,
+    never the hash, by the user from the client address; a change through B17 writes it too.
 - **B10.** How the first organization admin of a new instance gets an account (for example
   `stepclimb admin create` printing an enrollment link): pending Q7. Self sign-up with a local
   account needs email verification and waits for email (M1): pending Q6. `stepclimb admin
@@ -368,19 +388,90 @@ creates and hands over.
   password sign-in switched off for the user's organization all answer 401
   `auth.credentials_invalid`, and the server runs one argon2id verification in every case so
   the response time does not reveal which (enumeration handling as a whole: Q9).
+
+  Coordinator decisions (2026-11-15), for issue I6:
+
+  - Password sign-in switched off answers 404 `auth.method_disabled` before the body is read,
+    as B2 and the API section say of every method route and as passkey sign-in does; the
+    request's organization is the user's, so the 401 case above cannot arise.
+  - The account is found through `local_logins.email_normalized` (Q5 (a)), so another
+    organization's address, an address holding NUL and a user without a password are the
+    "unknown email" case. Those verify the password against a fixed argon2id hash at Q8's
+    parameters (`stepclimb_auth::password::verify_dummy`), so every failure costs one
+    verification; the 401 bodies are identical.
+  - After a right password the route locks the user and re-reads the hash; a hash changed since
+    it was read (a concurrent change or enrollment) answers the same 401, so a sign-in cannot
+    outlive the password change that ended the other sessions. Admission (B5) then refuses a
+    suspended user with 403 `auth.suspended`. The route links no identity.
+  - `return_to` is sanitized as a flow's is (`08-sessions-and-csrf.md` B19). A sign-in writes no
+    audit entry (`08-sessions-and-csrf.md` Q14); it logs the user id at `info`.
 - **B15.** When the password is right and the user has confirmed TOTP, the response is 200
   `{next: "totp"}` with a sign-in flow, and no session exists yet. Otherwise sign-in completes
   (B5). Whether TOTP is required with a password: pending Q11.
+
+  Issue I6 answers only the "otherwise" case: no TOTP column exists until issue I7, which inserts
+  the `{next: "totp"}` step between the password check and the sign-in transaction
+  (`stepclimb_server::password`).
 - **B16.** Passwords are hashed with argon2id using the parameters of Q8, with a per-hash random
   salt, in the PHC string format. When a stored hash uses older parameters, a successful sign-in
   rehashes it. The number of hashes computed at once is capped (pending Q8) so sign-in bursts
   cannot exhaust memory on the 1 GB budget (`docs/plan/technical.md` -> Hosting and
   operations).
+
+  Coordinator decisions (2026-11-15), for issue I6:
+
+  - Parameters: argon2id, version 0x13, 19,456 KiB, 2 passes, 1 lane, a 32-byte output and a
+    16-byte salt from the operating system's CSPRNG (Q8, the OWASP minimum). "Older parameters"
+    means any stored string that does not name exactly these; the rehash runs only after a right
+    password, and replaces the hash only if it is still the one that was verified.
+  - The cap is 4 (Q8), a semaphore around tokio's blocking pool
+    (`stepclimb_server::password_hasher`): a request waits for a permit rather than being
+    refused. Every hash and verification, the dummy one included, takes a permit, and the
+    permit moves into the blocking task, so a request dropped mid-hash keeps it until the hash
+    ends and no more than 4 ever run.
+  - Q8's policy (c): 12 to 256 characters counted as Unicode scalar values, no composition rule,
+    and not in a list of 10,000 passwords compared in lowercase. Of SecLists' "10k most common"
+    list only 10 entries have 12 or more characters, so that list alone would refuse 10
+    passwords. The bundled list is those 10, then entries of 12 to 256 characters drawn from
+    SecLists' xato-net one-million list in that file's order, after filters that drop every
+    entry with `@`, a web or mail domain, or a run of 10 or more digits that is not a sequence
+    or repetition (phone-number-like), entries of letters followed by a plausible birth date,
+    and entries matching a short list of offensive substrings; the 10 from the literal list are
+    kept whatever the filters say (five of them are offensive), so the server refuses at least
+    what Q8's literal list would (coordinator decision, 2026-11-15; source and filters in
+    `crates/stepclimb-auth/THIRD_PARTY.md`, MIT). Passwords are not Unicode-normalized before
+    hashing.
 - **B17.** A signed-in user changes their password with `PUT /api/v1/me/password`, giving the
   current one. A wrong current password answers 401 `auth.credentials_invalid`. Whether other
   sessions end: pending Q8.
+
+  Coordinator decisions (2026-11-15), for issue I6: the route takes a browser session only (403
+  `auth.session_required` to a bearer request, as `/api/v1/me/passkeys` does), answers 404
+  `auth.method_disabled` while passwords are off, refuses a weak new password with 422
+  `local.password_weak` at `/new_password`, and checks the current password exactly as sign-in
+  does, the budgets of B18 included. A user without a password answers 401
+  `auth.credentials_invalid` after the dummy verification. On success, under the user's row
+  lock, it re-reads the hash and answers the same 401 if it is no longer the one verified (a
+  change or reset in between); otherwise it stores the new hash (`password.set`) and ends every
+  other session of the user (Q8), keeping the session that asked; the answer is 204.
 - **B18.** Failed password checks are rate limited per client IP and per account
   (`08-sessions-and-csrf.md` B22, B23).
+
+  Coordinator decisions (2026-11-15), for issue I6: the account identifier is
+  `stepclimb_core::local_logins::LoginEmail`, the address trimmed and folded by the database's
+  `lower()`, which `local_logins.email_normalized` and the `users_email` index use too, so the
+  match and the budget fold the same way whatever the locale (`08-sessions-and-csrf.md` B41). An
+  unknown address has a budget of its own. The device cookie of `08-sessions-and-csrf.md` B42
+  replaces the account's budget by the cookie's own.
+
+  Coordinator decisions (2026-11-15), from the security review of I6: `PUT
+  /api/v1/me/password` takes `RateLimited<SignIn>` first, like the `/auth/` routes, and its
+  check counts against a budget of the user (by id, 10 failures per 15 minutes) besides the
+  account's or the device cookie's, so a user without an email or with a device cookie is
+  never unlimited. `password_check::check_password` takes the request's `RateLimited<SignIn>`
+  as an argument, so a route cannot check a password without the per-address budget, and the
+  router walk of `08-sessions-and-csrf.md` B41 covers every operation that documents a 429 as
+  well as every `/auth/` and `/oauth/` route.
 
 ### TOTP
 
@@ -494,6 +585,17 @@ Proposed, pending Q3 (none of these is in the plan's data model):
   and the index is `(org_id, user_id, kind)`; and `created_by_instance boolean NOT NULL`
   marks a link the instance made, with a check that such a link has no `created_by`
   (coordinator decision, 2026-11-14, B6).
+  Built by issue I6 (`migrations/20261115120000_local_logins.sql`, coordinator decision
+  2026-11-15) with the password columns only: the composite foreign key `(org_id, user_id)
+  REFERENCES users (org_id, id) ON DELETE CASCADE`, a check that `password_hash` starts with
+  `$argon2id$`, and one that `password_changed_at` is set exactly when `password_hash` is.
+  `password_generation bigint NOT NULL DEFAULT 1` counts the passwords set (a rehash keeps it),
+  for the device cookies of `08-sessions-and-csrf.md` B42.
+  `email_normalized` is `lower(users.email)`, written on insert and kept equal by an `AFTER
+  UPDATE OF email` trigger on `users`, so every writer of the email keeps it, and is NULL while
+  the user has no email: the password stays stored and works again once an email is set.
+  `users_email` already keeps `lower(email)` unique per organization, so the unique pair can
+  never refuse a row. The TOTP columns arrive with issue I7.
 - Recovery codes, if Q11 adds them: `totp_recovery_codes(id, user_id, code_hash, used_at,
   created_at, updated_at)`, organization derived through `user_id`.
 

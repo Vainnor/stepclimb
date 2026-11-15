@@ -28,6 +28,7 @@ uuid.workspace = true
 webauthn-rs.workspace = true
 openidconnect.workspace = true
 oauth2.workspace = true
+argon2.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["io-util", "test-util"] }

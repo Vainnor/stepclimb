@@ -408,8 +408,9 @@ impl FromRequestParts<AppState> for AuthOnly {
 }
 
 /// [`AuthOnly`] for a route that only a browser session may call: the signed-in user's own
-/// credentials under `/api/v1/me/passkeys` (docs/specs/m0/04-local-accounts.md Permissions), so
-/// an API key cannot add or remove its owner's passkeys. A request carrying an `Authorization:
+/// credentials under `/api/v1/me/passkeys` and `/api/v1/me/password`
+/// (docs/specs/m0/04-local-accounts.md Permissions), so an API key cannot add or remove its
+/// owner's passkeys or change their password. A request carrying an `Authorization:
 /// Bearer` header answers 403 `auth.session_required` before anything else is read, whether the
 /// credential is valid or not: by spec 08 B16 such a request is authenticated by its bearer
 /// credential alone (an API key or an app access token), never by a cookie beside it, so no
@@ -441,7 +442,7 @@ impl FromRequestParts<AppState> for SessionOnly {
             return Err(Rejection::Refused(ApiError::new(
                 StatusCode::FORBIDDEN,
                 session_code::AUTH_SESSION_REQUIRED,
-                "Only a signed-in browser session can change your passkeys; API keys and app tokens cannot.",
+                "Only a signed-in browser session can change your passkeys or password; API keys and app tokens cannot.",
             )));
         }
         AuthOnly::from_request_parts(parts, state).await.map(Self)

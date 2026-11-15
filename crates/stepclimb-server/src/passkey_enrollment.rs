@@ -427,7 +427,7 @@ async fn register(
 
 /// Link the user to the organization's local provider with their id as the subject (spec 04 B3,
 /// Q4), unless they already are.
-async fn link_local_identity(
+pub(crate) async fn link_local_identity(
     conn: &mut PgConnection,
     scope: OrgScope,
     user_id: Uuid,

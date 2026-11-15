@@ -171,6 +171,14 @@ fn presented_cookie(headers: &HeaderMap) -> Presented<'_> {
     cookie::presented(headers, COOKIE_NAME)
 }
 
+/// The hash of the one session token the request presents, if it presents exactly one.
+pub(crate) fn presented_hash(headers: &HeaderMap) -> Option<TokenHash> {
+    match presented_cookie(headers) {
+        Presented::One(token) => Some(TokenHash::of(token)),
+        Presented::Absent | Presented::Ambiguous | Presented::NotAscii => None,
+    }
+}
+
 /// A request a valid browser session authenticates (B8 to B11).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Authenticated {

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Local accounts' credentials (docs/specs/m0/04-local-accounts.md B3, B13, Q10).
 //!
-//! [`has_credential`] says whether a user can sign in with a local credential: a passkey (issue
-//! I3) or a password (issue I6). `identities::unlink_unless_last` counts it as a sign-in method
+//! [`has_credential`] says whether a user can sign in with a local credential: a passkey or a
+//! password. `identities::unlink_unless_last` counts it as a sign-in method
 //! besides the user's identities at enabled providers (docs/specs/m0/03-users-and-identities.md
 //! B19).
 //!
@@ -16,27 +16,31 @@ use std::time::SystemTime;
 use sqlx::{Acquire, PgConnection, Postgres};
 use uuid::Uuid;
 
-use crate::{OrgScope, audit::Actor, identities, passkeys};
+use crate::{OrgScope, audit::Actor, identities, local_logins, passkeys};
 
 /// Why reading a user's local credentials failed.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
     Passkeys(#[from] passkeys::Error),
+    #[error(transparent)]
+    LocalLogins(#[from] local_logins::Error),
 }
 
-/// Whether the user `user_id` of the scope's organization has a passkey or a password.
+/// Whether the user `user_id` of the scope's organization has a passkey
+/// ([`passkeys::exists_for_user`]) or a password ([`local_logins::has_password`]).
 ///
-/// Today that is a passkey ([`passkeys::exists_for_user`]); the password column arrives with
-/// issue I6, which adds its check here and in [`delete_passkey_unless_last`]. A credential counts
-/// whether or not its method is switched on: a switched-off method's credentials work again once
-/// it is switched back on (B2), so the user still has them.
+/// A credential counts whether or not its method is switched on: a switched-off method's
+/// credentials work again once it is switched back on (B2), so the user still has them.
 pub async fn has_credential(
     conn: &mut PgConnection,
     scope: OrgScope,
     user_id: Uuid,
 ) -> Result<bool, Error> {
-    Ok(passkeys::exists_for_user(&mut *conn, scope, user_id).await?)
+    if passkeys::exists_for_user(&mut *conn, scope, user_id).await? {
+        return Ok(true);
+    }
+    Ok(local_logins::has_password(&mut *conn, scope, user_id).await?)
 }
 
 /// Why [`delete_passkey_unless_last`] refused or failed.
@@ -52,6 +56,8 @@ pub enum DeleteError {
     Identities(#[from] identities::Error),
     #[error(transparent)]
     Passkeys(#[from] passkeys::Error),
+    #[error(transparent)]
+    LocalLogins(#[from] local_logins::Error),
     #[error(transparent)]
     Database(#[from] sqlx::Error),
 }
@@ -81,7 +87,10 @@ pub async fn delete_passkey_unless_last<'c>(
         return Err(DeleteError::NotFound);
     }
     let other_passkey = mine.len() > 1;
-    if !other_passkey && !identities::has_enabled_identity(&mut *tx, scope, user_id).await? {
+    if !other_passkey
+        && !local_logins::has_password(&mut *tx, scope, user_id).await?
+        && !identities::has_enabled_identity(&mut *tx, scope, user_id).await?
+    {
         return Err(DeleteError::LastSignInMethod);
     }
     passkeys::delete(&mut *tx, scope, user_id, id, now, actor).await?;

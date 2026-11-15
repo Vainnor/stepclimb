@@ -351,6 +351,23 @@ export interface paths {
         patch: operations["updateMyPasskey"];
         trace?: never;
     };
+    "/api/v1/me/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Change the signed-in user's password. */
+        put: operations["changeMyPassword"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/organization": {
         parameters: {
             query?: never;
@@ -501,6 +518,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/local/enrollment/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set a password through an enrollment link and sign in with it. */
+        post: operations["enrollPassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/local/enrollment/start": {
         parameters: {
             query?: never;
@@ -546,6 +580,23 @@ export interface paths {
         put?: never;
         /** Start signing in with a passkey. */
         post: operations["startPasskeySignIn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/local/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sign in with an email and a password. */
+        post: operations["signInWithPassword"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1370,6 +1421,27 @@ export interface components {
              */
             options: components["schemas"]["PasskeyRequestOptions"];
         };
+        /** @description The signed-in user's current password and the new one. Never logged. */
+        PasswordChange: {
+            current_password: string;
+            /** @description 12 to 256 characters, not on the common-password list. */
+            new_password: string;
+        };
+        /** @description The password to set through an enrollment link. Never logged. */
+        PasswordEnrollment: {
+            /** @description 12 to 256 characters, not on the common-password list. */
+            password: string;
+            /** @description The text after `#token=` in the link. */
+            token: string;
+        };
+        /** @description An email and password to sign in with. Never logged. */
+        PasswordSignIn: {
+            /** @description The account's email, in any letter case. */
+            email: string;
+            password: string;
+            /** @description The path on this site to open after signing in; anything else becomes `/`. */
+            return_to?: string | null;
+        };
         /** @description One permission of the catalog. */
         PermissionInfo: {
             /** @description The scope types at which a role assignment grants it. */
@@ -1843,6 +1915,15 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `request.malformed`: the body is not `{token, password}`. `auth.enrollment_invalid`: the link is unknown, already used, replaced by a newer link, or for another organization. `auth.enrollment_expired`: the link is older than its 7-day lifetime. */
+        EnrollPasswordInvalid: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `local.email_required`: the user has no email address, which local sign-in finds them by; add one first. */
         EnrollmentLinkConflict: {
             headers: {
@@ -2068,6 +2149,24 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `auth.session_required`: the request carries a bearer credential; only a signed-in browser session changes a password. `auth.csrf_refused`: the request did not come from this site. */
+        MyPasswordForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `auth.unauthenticated`, `auth.session_expired`, `auth.suspended`: no valid session. `auth.credentials_invalid`: the current password is wrong. */
+        MyPasswordUnauthorized: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `org.none`: the instance has no organization yet. */
         NoOrganization: {
             headers: {
@@ -2142,6 +2241,42 @@ export interface components {
         };
         /** @description `auth.method_disabled`: passkey sign-in is switched off for this organization. `org.not_found`: the request's organization cannot be determined. */
         PasskeySignInStartNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `auth.method_disabled`: password sign-in is switched off for this organization. `org.not_found`: the request's organization cannot be determined. */
+        PasswordNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `auth.suspended`: the account is suspended. `auth.csrf_refused`: the request did not come from this site. */
+        PasswordSignInForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `auth.credentials_invalid`: the email and password do not match an account of this organization that has a password. */
+        PasswordSignInUnauthorized: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.invalid` with `local.password_weak` at the password: it has fewer than 12 or more than 256 characters, or it is on the server's list of 10,000 common passwords. */
+        PasswordWeak: {
             headers: {
                 [name: string]: unknown;
             };
@@ -3255,6 +3390,38 @@ export interface operations {
             503: components["responses"]["NoOrganization"];
         };
     };
+    changeMyPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordChange"];
+            };
+        };
+        responses: {
+            /** @description The password is changed and every other session of the user has ended */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["MyPasswordUnauthorized"];
+            403: components["responses"]["MyPasswordForbidden"];
+            404: components["responses"]["PasswordNotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["PasswordWeak"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
     getOrganization: {
         parameters: {
             query?: never;
@@ -3663,6 +3830,43 @@ export interface operations {
             503: components["responses"]["NoOrganization"];
         };
     };
+    enrollPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordEnrollment"];
+            };
+        };
+        responses: {
+            /** @description The password is set and the user is signed in */
+            200: {
+                headers: {
+                    /** @description `no-store` */
+                    "Cache-Control"?: string;
+                    /** @description The new `__Host-sc_session` cookie and the `__Host-sc_device` cookie */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignedIn"];
+                };
+            };
+            400: components["responses"]["EnrollPasswordInvalid"];
+            403: components["responses"]["PasswordSignInForbidden"];
+            404: components["responses"]["PasswordNotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["PasswordWeak"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
     startEnrollment: {
         parameters: {
             query?: never;
@@ -3763,6 +3967,43 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             403: components["responses"]["CsrfRefused"];
             404: components["responses"]["PasskeySignInStartNotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    signInWithPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordSignIn"];
+            };
+        };
+        responses: {
+            /** @description The user is signed in */
+            200: {
+                headers: {
+                    /** @description `no-store` */
+                    "Cache-Control"?: string;
+                    /** @description The new `__Host-sc_session` cookie and the `__Host-sc_device` cookie */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignedIn"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["PasswordSignInUnauthorized"];
+            403: components["responses"]["PasswordSignInForbidden"];
+            404: components["responses"]["PasswordNotFound"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             429: components["responses"]["RateLimited"];

@@ -286,6 +286,45 @@ pub async fn delete_by_token_hash(
     Ok(result.rows_affected() > 0)
 }
 
+/// The session [`delete_others_of_user`] keeps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Keep {
+    /// The session with this id, such as the one a sign-in has just created.
+    Session(Uuid),
+    /// The session whose token hashes to this, such as the one a request presents.
+    TokenHash([u8; 32]),
+}
+
+/// Delete every session of the user `user_id` in the scope's organization but the one `keep`
+/// names, for a new password that ends the user's other sessions (a change or a reset through
+/// an enrollment link, docs/specs/m0/04-local-accounts.md B9, B17, Q8). Returns how many were
+/// deleted.
+pub async fn delete_others_of_user(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    user_id: Uuid,
+    keep: Keep,
+) -> Result<u64, Error> {
+    let (id, hash) = match keep {
+        Keep::Session(id) => (Some(id), None),
+        Keep::TokenHash(hash) => (None, Some(hash.to_vec())),
+    };
+    let result = sqlx::query!(
+        r#"DELETE FROM sessions s
+           USING users u
+           WHERE u.id = s.user_id AND u.org_id = $1 AND s.user_id = $2
+             AND ($3::uuid IS NULL OR s.id <> $3)
+             AND ($4::bytea IS NULL OR s.token_hash <> $4)"#,
+        scope.org_id(),
+        user_id,
+        id,
+        hash,
+    )
+    .execute(db)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::UNIX_EPOCH;

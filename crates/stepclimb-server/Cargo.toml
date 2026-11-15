@@ -22,7 +22,8 @@ test-support = []
 stepclimb-core.workspace = true
 stepclimb-auth.workspace = true
 axum.workspace = true
-tokio.workspace = true
+# `sync` for the semaphore that caps concurrent password hashes (spec 04 B16).
+tokio = { workspace = true, features = ["sync"] }
 tower-http.workspace = true
 httpdate.workspace = true
 sqlx.workspace = true

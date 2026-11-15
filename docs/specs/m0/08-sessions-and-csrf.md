@@ -212,7 +212,9 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   fails when a route under `/auth/` or `/oauth/` lacks it, so a route cannot skip its limit
   silently. `04-local-accounts.md` I2 added the first, `POST /auth/local/enrollment/start`, and
   the walk (`tests/enrollment.rs`): with a budget of one request, every such route but
-  `/auth/sign-out`, which adds no sign-in step, must answer 429 to its second POST. A password or TOTP check passes `account_check` its account identifier through one
+  `/auth/sign-out`, which adds no sign-in step, must answer 429 to its second POST.
+  `04-local-accounts.md` I6 widened the walk to every operation that documents a 429, which
+  takes in `PUT /api/v1/me/password`. A password or TOTP check passes `account_check` its account identifier through one
   normalizing type shared by the sign-in methods (for example a newtype built only by the
   function that matches accounts), so `Ada@example.org` and `ada@example.org` cannot get two
   budgets (security review of I5, 13 Nov 2026).
@@ -220,7 +222,22 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   - The per-account budget refuses the right password too while it is spent, so anyone who
     knows an identifier can keep that account signed out for up to 15 minutes at a time. An
     exemption for a browser that signed in to the account before (a device cookie) is deferred
-    to the owner.
+    to the owner. Decided by the owner (13 Nov 2026, issue 26) and built by
+    `04-local-accounts.md` I6: a successful password sign-in or password enrollment sets
+    `__Host-sc_device` (`Path=/`, `Secure`, `HttpOnly`, `SameSite=Strict`, `Max-Age` 30 days),
+    the user's id and the issue time sealed with the key ring and bound to the organization. A
+    password check for that user from a browser presenting a valid one, younger than 30 days, is
+    neither counted against nor refused by the account's budget; the per-address budget still
+    applies. A cookie that does not open, is older, or names another user exempts nothing.
+    Coordinator decisions (2026-11-15): the 30-day lifetime (a session's longest), and only the
+    password routes set it, since only a password check has a per-account budget.
+    Coordinator decisions (2026-11-15), from the security review, following OWASP's device-cookie
+    scheme and failing closed, for the owner to confirm: each cookie carries a random device id
+    and has a failed-check budget of its own (the account's numbers), which replaces the
+    account's budget for that browser, so a stolen cookie gives an attacker no more guesses than
+    the account had; and each cookie seals the password's generation
+    (`local_logins.password_generation`, one more for each password set), so a change of
+    password or a reset through an enrollment link revokes every older cookie.
   - Clients behind one address (a shared NAT, a host-run reverse proxy without the `tls`
     profile, rootless Docker without a port driver that keeps source addresses) share one
     per-address budget. The self-hosting guide documents this when it is written (M4); until

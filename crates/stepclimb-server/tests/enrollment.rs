@@ -288,6 +288,7 @@ fn state(pool: &PgPool, clock: &ManualClock, limits: Limits) -> AppState {
         public_url: WebOrigin::parse("https://lms.example.org").expect("a valid origin"),
         allowed_origins: Vec::new(),
         rate_limits: RateLimiter::new(limits, TrustedProxies::none()),
+        passwords: Default::default(),
         providers: stepclimb_server::providers::Providers::new(false).expect("provider clients"),
     }
 }
@@ -806,8 +807,10 @@ async fn a_link_stops_working_when_its_creator_is_deleted(pool: PgPool) {
     assert_unbacked(&f, &token).await;
 }
 
-/// Spec 08 B41: every operation under `/auth/` or `/oauth/` that adds a sign-in step takes
-/// `RateLimited` first. With a budget of one request a minute, each method of each such path in
+/// Spec 08 B41: every operation under `/auth/` or `/oauth/` that adds a sign-in step, and every
+/// other operation that documents a 429 (the routes that check a password, such as `PUT
+/// /api/v1/me/password`, whose `password_check::check_password` takes the `RateLimited` value),
+/// takes `RateLimited` first. With a budget of one request a minute, each method of each such path in
 /// the OpenAPI document answers 429 the second time, whatever its body. The requests name no
 /// organization while two exist, so the request-organization resolver would refuse every one of
 /// them with 404: a 429 shows the limit ran before it. Sign-out ends a session and adds no step,
@@ -819,10 +822,16 @@ async fn every_sign_in_route_is_rate_limited(pool: PgPool) {
         .await
         .expect("a second organization");
     let operations = sign_in_operations();
-    assert!(
-        operations.contains(&(Method::POST, START.to_owned())),
-        "{operations:?}"
-    );
+    for expected in [
+        (Method::POST, START.to_owned()),
+        (Method::POST, "/auth/local/password".to_owned()),
+        (Method::PUT, "/api/v1/me/password".to_owned()),
+    ] {
+        assert!(
+            operations.contains(&expected),
+            "{expected:?} in {operations:?}"
+        );
+    }
     assert_eq!(
         unlimited(&pool, &operations, router).await,
         Vec::<String>::new()
@@ -846,17 +855,21 @@ async fn the_rate_limit_walk_names_a_route_without_the_extractor(pool: PgPool) {
 }
 
 /// Every method of every path of the OpenAPI document under `/auth/` or `/oauth/`, sign-out
-/// aside.
+/// aside, and every other operation whose responses include a 429.
 fn sign_in_operations() -> Vec<(Method, String)> {
     let document = serde_json::to_value(stepclimb_server::openapi::document()).expect("JSON");
     let paths = document["paths"].as_object().expect("paths");
     let mut operations = Vec::new();
     for (path, item) in paths {
         let sign_in = path.starts_with("/auth/") || path.starts_with("/oauth/");
-        if !sign_in || path == "/auth/sign-out" {
+        if path == "/auth/sign-out" {
             continue;
         }
-        for method in item.as_object().expect("a path item").keys() {
+        for (method, operation) in item.as_object().expect("a path item") {
+            let documents_429 = operation["responses"].get("429").is_some();
+            if !sign_in && !documents_429 {
+                continue;
+            }
             let method = Method::from_bytes(method.to_uppercase().as_bytes()).expect("a method");
             operations.push((method, path.clone()));
         }

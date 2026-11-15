@@ -14,9 +14,9 @@
 //! [`auth_flows`] repository, the state of a sign-in that spans several requests; and the
 //! [`identity_providers`] and [`identities`] repositories, which link a user to an identity
 //! provider by the provider's subject; and [`local_sign_in`], the local provider row and its
-//! method switches, with [`local_tokens`] (enrollment links), [`passkeys`] and [`local`]
-//! (local credentials); and [`admission_settings`], the switches that say who admission lets
-//! in; and the entitlement catalogs ([`feature`]) with the
+//! method switches, with [`local_tokens`] (enrollment links), [`passkeys`], [`local_logins`]
+//! (passwords) and [`local`] (local credentials); and [`admission_settings`], the switches
+//! that say who admission lets in; and the entitlement catalogs ([`feature`]) with the
 //! [`plans`] and [`org_plans`] repositories, which give every organization the `unlimited`
 //! plan, and how a request's plan bounds what it adds ([`org_plans::check_room`]); and
 //! [`requirement`], which lets the server's `Require` check a permission or a feature; and
@@ -41,6 +41,7 @@ pub mod id;
 pub mod identities;
 pub mod identity_providers;
 pub mod local;
+pub mod local_logins;
 pub mod local_sign_in;
 pub mod local_tokens;
 mod name;
