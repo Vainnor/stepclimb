@@ -137,13 +137,18 @@ echo "compose ops: caddy refuses to start without SC_DOMAIN, naming it"
 compose --profile tls up --detach --build --wait --wait-timeout 180 \
     || { compose --profile tls logs >&2; fail "the stack with caddy did not turn healthy"; }
 
-# T9: HTTPS through Caddy's internal CA, verified against its root.
-for _ in $(seq 1 20); do
-    compose cp caddy:/data/caddy/pki/authorities/local/root.crt "$work/root.crt" >/dev/null 2>&1 \
-        && break
+# T9: HTTPS through Caddy's internal CA, verified against its root. Caddy creates the root first
+# and issues the domain's certificate after it, in the background; until that certificate is in
+# storage a handshake for the domain gets a TLS internal_error alert, so wait for it.
+site_cert=/data/caddy/certificates/local/$domain/$domain.crt
+for _ in $(seq 1 60); do
+    compose exec -T caddy test -s "$site_cert" >/dev/null 2>&1 && break
     sleep 0.5
 done
-[[ -s $work/root.crt ]] || fail "caddy did not create its internal root certificate"
+compose exec -T caddy test -s "$site_cert" >/dev/null 2>&1 \
+    || fail "caddy did not issue the certificate for $domain within 30 s ($site_cert)"
+compose cp caddy:/data/caddy/pki/authorities/local/root.crt "$work/root.crt" >/dev/null 2>&1 \
+    && [[ -s $work/root.crt ]] || fail "caddy did not create its internal root certificate"
 mapfile -t answer < <(request "https://127.0.0.1:$https_port/readyz" "$domain" "$work/root.crt")
 [[ ${answer[0]:-} == 200 ]] || fail "/readyz through caddy answered ${answer[0]:-nothing}"
 mapfile -t answer < <(request "http://127.0.0.1:$http_port/readyz" "$domain")
