@@ -225,7 +225,7 @@ No new table. This spec defines the `config` shape for `identity_providers` rows
 {
   "issuer": "https://idp.example.test/realms/acme",
   "client_id": "stepclimb",
-  "client_secret": "<pending Q2: encrypted value or a file reference>",
+  "client_secret": { "sealed": "<base64>" },
   "scopes": ["openid", "email", "profile"],
   "claims": {
     "given_name": "/given_name",
@@ -237,6 +237,9 @@ No new table. This spec defines the `config` shape for `identity_providers` rows
   }
 }
 ```
+
+A provider declared in `stepclimb.toml` has no `client_secret` member and `"source": "config"`
+instead: Q2 (c) keeps its secret out of the database (`06-oauth2-and-vatsim-preset.md` B13).
 
 It writes `identities` (`subject` = `sub`, `attributes` = mapped attributes) through admission,
 and `auth_flows` rows (`08-sessions-and-csrf.md`, pending its Q8). Discovery documents and JWKS

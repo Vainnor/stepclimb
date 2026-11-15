@@ -6,7 +6,8 @@
 //! (spec 04 B10).
 //!
 //! Exit codes: 0 on success; 2 when the command line or the configuration is refused, before
-//! anything connects, or when an `admin` command refuses an argument's value or what it finds
+//! anything connects or, for a `[[providers]]` entry that does not fit the instance's
+//! organizations, once `serve` has connected, or when an `admin` command refuses an argument's value or what it finds
 //! (an organization already there, an unknown user, a user who can sign in already); 1 when the
 //! database, the migrations or the HTTP server fail, when `check-config` or an `admin` command
 //! cannot write its report, or when `healthcheck` finds the server not ready.
@@ -155,6 +156,7 @@ fn check_config(config: &Config) -> ExitCode {
     for (key, value) in config.non_secret_values() {
         report.push_str(&format!("{key}: {value}\n"));
     }
+    report.push_str(&format!("providers: {}\n", config.providers_or_none()));
     write_stdout(&report)
 }
 
@@ -269,7 +271,7 @@ fn run(work: impl Future<Output = Result<(), startup::StartupError>>) -> ExitCod
         Err(error) => {
             tracing::error!(%error, "stopped");
             eprintln!("stepclimb: {error}");
-            ExitCode::FAILURE
+            ExitCode::from(error.exit_code())
         }
     }
 }

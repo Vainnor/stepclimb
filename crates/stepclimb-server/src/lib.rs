@@ -31,7 +31,8 @@
 //! spans several requests keeps its state in a [`flow`]; sign-in with an outside identity
 //! provider starts at [`provider_sign_in`] and comes back at [`provider_callback`], with the
 //! generic OAuth 2 steps in [`oauth2_sign_in`]; their requests to the provider go through
-//! [`providers`]. Every unsafe request passes [`csrf`]
+//! [`providers`]. The providers `stepclimb.toml` declares are written to their organizations at
+//! startup by [`config_providers`]. Every unsafe request passes [`csrf`]
 //! first. Sign-in and token routes declare a [`rate_limit`] budget, counted per client address
 //! as [`client_ip`] finds it; a route that changes roles, assignments, accounts or the
 //! organization records that address in the change's audit entry ([`audit`]).
@@ -48,6 +49,7 @@ pub mod auth;
 pub mod branding;
 pub mod client_ip;
 pub mod config;
+pub mod config_providers;
 mod cookie;
 pub mod csrf;
 pub mod device;

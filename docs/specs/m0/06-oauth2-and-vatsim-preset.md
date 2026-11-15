@@ -175,7 +175,7 @@ server every sign-in test and the Playwright stack use instead of a real provide
   userinfo = "https://auth.vatsim.net/api/user"
   scopes = ["full_name", "vatsim_details", "email"]
   client_id = "..."
-  client_secret_file = "/run/secrets/vatsim_client_secret"   # pending 05-oidc.md Q2
+  client_secret_file = "/run/secrets/vatsim_client_secret"   # 05-oidc.md Q2 (c)
 
   [providers.claims]
   subject = "/data/cid"
@@ -189,10 +189,70 @@ server every sign-in test and the Playwright stack use instead of a real provide
 - **B12.** How TOML-declared providers relate to rows created through the admin API (which is
   the source of truth, whether TOML rows can be edited in the API, what happens when a provider
   is removed from the file, and which organization a TOML provider belongs to in
-  multi-organization mode): pending Q2.
+  multi-organization mode): Q2 answered (a) and (a).
 - **B13.** An invalid `[[providers]]` entry stops startup with an error naming the provider
   `key` (or its position when the key is missing) and the field, as the plan requires for bad
   configuration. `stepclimb check-config`, when it exists, reports the same errors.
+
+  Coordinator decision (2026-11-15), for I4 (`stepclimb_server::config::providers`,
+  `stepclimb_server::config_providers`). An entry's own members are `kind` (`"oidc"` or
+  `"oauth2"`, required), `key` (Q5 (a): 1 to 32 lowercase letters, digits and hyphens, starting
+  with a letter or digit; `local` refused), `label` (required, 1 to 200 characters, no control
+  characters), `enabled` (boolean, default `true`), `org` (an organization's slug) and exactly one
+  of `client_secret` and `client_secret_file`, the secret pair of ADR 0022 (a file's contents
+  trimmed, a relative path resolved against the directory holding `stepclimb.toml`). Every other
+  member belongs to the kind's config and goes through the same validation as the admin API
+  (B4 for `oauth2`, `05-oidc.md` B1 for `oidc`), so a member neither has, `preset` included
+  until I6, is refused. Values use TOML's own types (`scopes` is an array, `enabled` and `pkce`
+  booleans), unlike the top-level settings, which are all strings. The error reads
+  `<file>: [[providers]] entry <n> (key "<key>"): <problems>`, each problem naming the member
+  as TOML writes it (`claims.subject`, `scopes.0`); no problem repeats a value or a
+  `client_secret_file` path. Loading checks every entry, and two entries with the same `key` and
+  the same `org` (or none), under the URL policy of a single-organization instance, since
+  `check-config` has no database; `stepclimb serve` checks them again under the instance's real
+  policy once connected (`05-oidc.md` Q4: no private addresses with several organizations), and
+  also refuses an `org` that names no organization, a missing `org` on an instance with several,
+  and one key twice in an organization. Those refusals exit 2 like any refused configuration,
+  after connecting. `check-config` and the startup log list the providers as `key (kind)`, never
+  a secret.
+
+  Coordinator decision (2026-11-15), for I4, Q2 (a): at startup, in one transaction, `serve`
+  writes each entry to the row of its organization with the same `key`, whoever created that
+  row, taking the file's `kind`, config, `label` and `enabled`, and moving `updated_at` only when
+  one of them changed. The config goes through `identity_providers::replace_config`, so a row
+  keeps the `admission_rules` it has (`07-admission.md` I3), and an entry may not declare
+  `admission_rules` (refused naming the member): rules are set through the admin API only; a row the admin API created is taken over. It disables, and
+  never deletes, every enabled row of the file that the file no longer declares, so identities
+  stay; the row stays the file's, and putting the entry back enables it again. The row records
+  its owner as `config.source = "config"` (the Data section's proposal), and `05-oidc.md` Q2 (c)
+  keeps the secret out of the database: such a row has no `client_secret` member, and the server
+  holds the secret it read in memory for that row (`stepclimb_auth::provider_config::ConfigSecrets`).
+  A stored config whose `source` is anything else, or that has both `source: "config"` and a
+  `client_secret`, does not read (fail closed). On an instance with no organization yet,
+  `serve` writes nothing, logs a warning and starts; the next start after `stepclimb admin
+  create` writes the providers. `stepclimb admin create` itself does not write them: the running
+  server would not hold their secrets until it restarts.
+
+  Coordinator decision (2026-11-15, revised after the security review of PR #195), decision 5:
+  the file may not change who a provider's users are. While a row has identities, an entry that
+  would take over a row the admin API created, or change the row's `kind`, its `issuer`
+  (`oidc`), the origin (scheme, host and port) of its `authorize`, `token` or `userinfo` URL, or
+  its `claims.subject` (`oauth2`), stops startup with exit 2, naming the entry, its key, the
+  organization and the member; nothing is written. The same holds between restarts for a row the
+  file already owns. With no identity at the row, it goes ahead and a startup warning says what
+  changed. A new path on the same origin, a label, scopes or profile claims are not anchors.
+
+  Coordinator decision (2026-11-15, same review): every server of an instance must read the
+  same `stepclimb.toml`. Each in-memory secret is kept with a SHA-256 fingerprint of the config
+  that server wrote (its members sorted, `admission_rules` left out, since an admin changes those
+  through the API); when the row's config no longer matches, because another server wrote it
+  from another file, the callback answers 500, logs why and sends no secret.
+
+  An entry's `org` names its organization by slug, which is fixed once created
+  (`02-organizations-and-accounts.md` Q3). A later spec that lets a slug be renamed, or an
+  organization be deleted, must revisit how file providers find their organization. Startup reads
+  the organization count, the slugs and the organization list on the same transaction that
+  writes the rows, and refuses an organization that is no longer there.
 - **B14.** `/api/v1/admin/providers` lists, creates, reads, updates and deletes the
   organization's `oidc` and `oauth2` providers. Validation is B4 for `oauth2` and `05-oidc.md`
   B1 for `oidc`, answering 422 `provider.config_invalid` with a JSON Pointer to the bad field.
@@ -237,7 +297,8 @@ are those of `05-oidc.md` (303 redirects with `error` codes). Admin routes retur
 | `PATCH /api/v1/admin/providers/{id}` | any of `label, enabled, config` (a `config` patch replaces named fields; an absent secret keeps the stored one) | 200 the provider | `provider.not_found`, `provider.config_invalid`, `provider.config_owned` (pending Q2), `permission.denied` | `perm::ProviderManage`, organization |
 | `DELETE /api/v1/admin/providers/{id}` | none | 204 | `provider.not_found`, `provider.in_use` (pending Q5), `provider.config_owned` (pending Q2), `permission.denied` | `perm::ProviderManage`, organization |
 
-`source` in responses is `api` or `config` (pending Q2).
+`source` in responses is `api` or `config` (Q2): `config` exactly when the row's
+`config.source` is `"config"` (`stepclimb_core::identity_providers::IdentityProvider::is_from_config_file`).
 
 ## Data
 
@@ -263,9 +324,8 @@ No new table. This spec defines the `config` shape for `kind = 'oauth2'` rows of
 }
 ```
 
-`pkce` is pending Q3. Pending Q2, the row also records whether it came from `stepclimb.toml`
-(proposed: `config.source = "config"`, or a new `source text` column if the owner prefers a
-column; the plan's `identity_providers` has none). A preset row stores `preset = "vatsim"` and
+`pkce` is Q3's flag. A row declared in `stepclimb.toml` also has `config.source = "config"` and
+no `client_secret` (Q2, B13's coordinator decision); a row the admin API writes has no `source`. A preset row stores `preset = "vatsim"` and
 only the organization's fields; the preset's values are applied when the row is read, so a
 preset fix in a release reaches every organization.
 

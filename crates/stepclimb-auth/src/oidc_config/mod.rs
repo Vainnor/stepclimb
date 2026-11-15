@@ -16,6 +16,10 @@
 //! | `userinfo` | a boolean: whether sign-in also reads the provider's userinfo endpoint (Q3) | `true` |
 //! | `allow_local_passkeys` | a boolean: whether the provider's users may add a passkey under `/api/v1/me/passkeys` (`04-local-accounts.md` B13) | `false` |
 //!
+//! A provider declared in `stepclimb.toml` is validated the same way, then stored with
+//! [`OidcConfig::from_config_file`]: no secret in the row, `source: "config"` in its place
+//! (`crate::provider_config`).
+//!
 //! Any other member is refused, so a misspelled one cannot be silently ignored. The subject is
 //! always the ID token's `sub` (B12), so `claims.subject` is refused too.
 //!
@@ -32,13 +36,13 @@ use std::fmt;
 use serde_json::{Map, Value};
 
 use crate::claims::ProfileMapping;
-use crate::encryption::{DecryptError, EncryptError, KeyRing};
+use crate::encryption::{EncryptError, KeyRing};
 use crate::json_pointer::JsonPointer;
 use crate::outbound::UrlPolicy;
 use crate::provider_config::walk;
 pub use crate::provider_config::{
-    ClientSecret, ConfigErrors, ConfigProblem, DraftSecret, ProviderRow, SealedSecret,
-    StoredConfigError, code,
+    ClientSecret, ConfigErrors, ConfigProblem, ConfigSecrets, DraftSecret, ProviderRow,
+    SealedSecret, SecretError, StoredConfigError, StoredSecret, code,
 };
 
 /// The member that lets a provider's users add a passkey (`04-local-accounts.md` B13). The
@@ -96,11 +100,11 @@ pub struct OidcConfigDraft {
     pub secret: DraftSecret,
 }
 
-/// A config as stored: its settings and its sealed secret.
+/// A config as stored: its settings and where its secret is.
 #[derive(Clone, PartialEq, Eq)]
 pub struct OidcConfig {
     pub settings: OidcSettings,
-    secret: SealedSecret,
+    secret: StoredSecret,
 }
 
 impl fmt::Debug for OidcConfig {
@@ -127,7 +131,7 @@ impl OidcConfigDraft {
     pub fn seal(self, ring: &KeyRing, row: ProviderRow) -> Result<OidcConfig, EncryptError> {
         Ok(OidcConfig {
             settings: self.settings,
-            secret: SealedSecret::from_draft(self.secret, ring, row)?,
+            secret: StoredSecret::Sealed(SealedSecret::from_draft(self.secret, ring, row)?),
         })
     }
 }
@@ -155,7 +159,7 @@ impl OidcConfig {
         let mut config = Map::new();
         config.insert("issuer".into(), s.issuer.as_str().into());
         config.insert("client_id".into(), s.client_id.as_str().into());
-        config.insert("client_secret".into(), walk::sealed_json(&self.secret));
+        walk::insert_stored_secret(&mut config, &self.secret);
         config.insert("scopes".into(), s.scopes.clone().into());
         config.insert("claims".into(), Value::Object(claims));
         config.insert("userinfo".into(), s.userinfo.into());
@@ -170,20 +174,37 @@ impl OidcConfig {
         parse::stored(config)
     }
 
-    /// The sealed secret, for a change that keeps it ([`validate`]'s `stored`).
+    /// The config of a provider `stepclimb.toml` declares: `settings` validated by [`validate`],
+    /// with the secret left to [`ConfigSecrets`]. Its [`OidcConfig::to_json`] has `source:
+    /// "config"` and no `client_secret`.
     #[must_use]
-    pub fn sealed_secret(&self) -> SealedSecret {
-        self.secret.clone()
+    pub fn from_config_file(settings: OidcSettings) -> Self {
+        Self {
+            settings,
+            secret: StoredSecret::ConfigFile(None),
+        }
     }
 
-    /// Open the client secret, for the token request. It fails when the value was sealed to
-    /// another row or under a key no longer in the ring.
+    /// The sealed secret, for a change that keeps it ([`validate`]'s `stored`); `None` for a
+    /// provider `stepclimb.toml` declares.
+    #[must_use]
+    pub fn sealed_secret(&self) -> Option<SealedSecret> {
+        match &self.secret {
+            StoredSecret::Sealed(sealed) => Some(sealed.clone()),
+            StoredSecret::ConfigFile(_) => None,
+        }
+    }
+
+    /// The client secret, for the token request: opened from the row, or, for a provider
+    /// `stepclimb.toml` declares, taken from `config`. It fails when the value was sealed to
+    /// another row or under a key no longer in the ring, or `config` holds none for the row.
     pub fn client_secret(
         &self,
         ring: &KeyRing,
         row: ProviderRow,
-    ) -> Result<ClientSecret, DecryptError> {
-        self.secret.open(ring, row)
+        config: &ConfigSecrets,
+    ) -> Result<ClientSecret, SecretError> {
+        self.secret.open(ring, row, config)
     }
 }
 

@@ -132,8 +132,9 @@ these rows are in `04` to `07`.
   `06-oauth2-and-vatsim-preset.md`) and `enabled`. The admin API for providers
   (`/api/v1/admin/providers`) and the encryption of secrets inside `config` are in those two
   specs. Whether local accounts are also a provider row is `04-local-accounts.md`'s decision; this
-  spec's `kind` check is widened by migration if it is. How providers declared in
-  `stepclimb.toml` relate to this table is pending Q5.
+  spec's `kind` check is widened by migration if it is. Providers declared in `stepclimb.toml`
+  are upserted into this table at startup (Q5 A), as `06-oauth2-and-vatsim-preset.md` B13
+  describes.
 - **B14.** An identity links one user to one provider by the provider's `subject` (for VATSIM,
   the CID at `/data/cid`). `(provider_id, subject)` is unique, so one external account maps to at
   most one user. A subject holds at most 255 characters (OIDC's limit for `sub`), so it always

@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE identity_providers\n           SET enabled = false, updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond'\n           WHERE org_id = $1 AND enabled AND config ->> $2 = $3 AND NOT (key = ANY($5))\n           RETURNING key",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "identity_providers",
+            "name": "key"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Int8",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7b0250d77279f0d3bcc8c43589790d8115c03b0228a1b046f40859d7b96e2f09"
+}

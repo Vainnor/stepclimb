@@ -6,9 +6,9 @@
 //! when it is parsed, including keys a variable overrides. A relative `_file` path resolves
 //! against the directory holding `stepclimb.toml`.
 //!
-//! A record added later, such as the plan's `[[providers]]`, is a typed field of `FileKeys`. Its
-//! secret fields must be `Spanned<toml::Value>` or a secret newtype whose `Deserialize` error is
-//! fixed text: serde's own type errors quote the value they refused, which would print the secret.
+//! The plan's `[[providers]]` is a record, not a setting: `FileKeys` keeps it as one untyped
+//! value too, since serde's own type errors quote the value they refused, which could print a
+//! secret, and `super::providers` checks it member by member.
 
 use std::path::{Path, PathBuf};
 
@@ -35,6 +35,7 @@ pub(super) struct FileKeys {
     token_rate_limit: Option<Spanned<toml::Value>>,
     failed_sign_in_limit: Option<Spanned<toml::Value>>,
     allow_insecure_providers: Option<Spanned<toml::Value>>,
+    providers: Option<Spanned<toml::Value>>,
 }
 
 impl FileKeys {
@@ -134,6 +135,18 @@ impl ConfigFile {
         &self.path
     }
 
+    /// The `providers` value and where it starts, when the file has one.
+    pub(super) fn providers(&self) -> Option<(&toml::Value, Origin)> {
+        self.keys.providers.as_ref().map(|spanned| {
+            let origin = Origin::Key {
+                key: "providers".to_owned(),
+                path: self.path.clone(),
+                line: line_of(&self.text, spanned.span().start),
+            };
+            (spanned.get_ref(), origin)
+        })
+    }
+
     /// The string at `key` and where it was set, or `None` when the key is absent or empty.
     pub(super) fn string(&self, key: &str) -> Result<Option<(String, Origin)>, ConfigError> {
         let Some(spanned) = self.keys.get(key) else {
@@ -157,10 +170,13 @@ impl ConfigFile {
 
 impl std::fmt::Debug for ConfigFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let present: Vec<String> = all_keys()
+        let mut present: Vec<String> = all_keys()
             .into_iter()
             .filter(|key| self.keys.get(key).is_some())
             .collect();
+        if self.keys.providers.is_some() {
+            present.push("providers".to_owned());
+        }
         f.debug_struct("ConfigFile")
             .field("path", &self.path)
             .field("keys", &present)

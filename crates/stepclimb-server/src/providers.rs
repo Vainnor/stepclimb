@@ -15,11 +15,15 @@
 //! [`Providers`] holds one client per policy the instance can be under and picks one by the
 //! organization count ([`Providers::client`]); a client's policy is fixed when it is built, and
 //! its connection pool is kept across requests. It also holds the caches of discovery documents
-//! and signing keys.
+//! and signing keys, and the client secrets of the providers `stepclimb.toml` declares, which
+//! are never stored ([`Providers::config_secrets`]).
+
+use std::sync::Arc;
 
 use stepclimb_auth::{
     oidc::{DiscoveryCache, JwksCache},
     outbound::{BuildError, OutboundClient, UrlPolicy},
+    provider_config::ConfigSecrets,
 };
 use stepclimb_core::organizations::Tenancy;
 
@@ -30,6 +34,7 @@ pub struct Providers {
     multi_org: OutboundClient,
     discovery: DiscoveryCache,
     jwks: JwksCache,
+    config_secrets: Arc<ConfigSecrets>,
 }
 
 impl Providers {
@@ -41,7 +46,21 @@ impl Providers {
             multi_org: OutboundClient::for_providers(policy(allow_insecure, false))?,
             discovery: DiscoveryCache::default(),
             jwks: JwksCache::default(),
+            config_secrets: Arc::default(),
         })
+    }
+
+    /// These clients with the secrets `stepclimb serve` read for the providers `stepclimb.toml`
+    /// declares (`crate::config_providers`).
+    #[must_use]
+    pub fn with_config_secrets(mut self, secrets: ConfigSecrets) -> Self {
+        self.config_secrets = Arc::new(secrets);
+        self
+    }
+
+    /// The client secrets of the providers `stepclimb.toml` declares, by row.
+    pub fn config_secrets(&self) -> &ConfigSecrets {
+        &self.config_secrets
     }
 
     /// The client for an instance with `tenancy`: private networks allowed only for

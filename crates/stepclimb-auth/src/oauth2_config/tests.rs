@@ -4,6 +4,8 @@ use serde_json::json;
 use uuid::Uuid;
 
 use super::*;
+use crate::encryption::DecryptError;
+use crate::provider_config::Fingerprint;
 
 const POLICY: UrlPolicy = UrlPolicy::new(false, true);
 const SECRET: &str = "test-client-secret-value";
@@ -418,16 +420,12 @@ fn the_secret_is_required_unless_one_is_stored() {
         one("/client_secret", code::FIELD_TYPE)
     );
     let stored = sealed(&minimal());
-    let kept = validate(
-        &without("client_secret"),
-        POLICY,
-        Some(stored.sealed_secret()),
-    )
-    .expect("valid with the stored secret")
-    .seal(&ring(), row())
-    .expect("sealed");
+    let kept = validate(&without("client_secret"), POLICY, stored.sealed_secret())
+        .expect("valid with the stored secret")
+        .seal(&ring(), row())
+        .expect("sealed");
     assert_eq!(
-        kept.client_secret(&ring(), row())
+        kept.client_secret(&ring(), row(), &ConfigSecrets::default())
             .expect("opens")
             .expose_secret(),
         SECRET
@@ -435,14 +433,14 @@ fn the_secret_is_required_unless_one_is_stored() {
     let replaced = validate(
         &with("client_secret", json!("a-new-secret")),
         POLICY,
-        Some(stored.sealed_secret()),
+        stored.sealed_secret(),
     )
     .expect("valid")
     .seal(&ring(), row())
     .expect("sealed");
     assert_eq!(
         replaced
-            .client_secret(&ring(), row())
+            .client_secret(&ring(), row(), &ConfigSecrets::default())
             .expect("opens")
             .expose_secret(),
         "a-new-secret"
@@ -460,7 +458,7 @@ fn the_stored_config_holds_the_secret_only_sealed_and_reads_back() {
         let read = Oauth2Config::from_stored(&stored).expect("reads back");
         assert_eq!(read, config);
         assert_eq!(
-            read.client_secret(&ring(), row())
+            read.client_secret(&ring(), row(), &ConfigSecrets::default())
                 .expect("opens")
                 .expose_secret(),
             SECRET
@@ -481,8 +479,10 @@ fn a_sealed_secret_opens_only_for_its_own_row() {
     };
     for wrong in [other_provider, other_org] {
         assert_eq!(
-            config.client_secret(&ring(), wrong).err(),
-            Some(DecryptError::Inauthentic),
+            config
+                .client_secret(&ring(), wrong, &ConfigSecrets::default())
+                .err(),
+            Some(SecretError::Decrypt(DecryptError::Inauthentic)),
             "{wrong:?}"
         );
     }
@@ -492,7 +492,9 @@ fn a_sealed_secret_opens_only_for_its_own_row() {
 fn nothing_prints_the_secret() {
     let draft = validate(&minimal(), POLICY, None).expect("valid");
     let config = draft.clone().seal(&ring(), row()).expect("sealed");
-    let opened = config.client_secret(&ring(), row()).expect("opens");
+    let opened = config
+        .client_secret(&ring(), row(), &ConfigSecrets::default())
+        .expect("opens");
     let shown = format!("{draft:?} {config:?} {opened:?}");
     assert!(!shown.contains(SECRET), "{shown}");
     assert!(!shown.contains("sealed\""), "{shown}");
@@ -683,4 +685,124 @@ fn b10_an_email_the_provider_does_not_vouch_for_is_dropped() {
         Some("student@example.test"),
         "no email_verified pointer: the email is kept"
     );
+}
+
+/// A provider `stepclimb.toml` declares stores `source: "config"` and no secret
+/// (`05-oidc.md` Q2 (c)); its secret comes only from the server's [`ConfigSecrets`].
+#[test]
+fn a_config_file_provider_stores_no_secret_and_reads_it_from_the_config_secrets() {
+    let settings = validate(&minimal(), POLICY, None).expect("valid").settings;
+    let config = Oauth2Config::from_config_file(settings);
+    let stored = config.to_json();
+    assert_eq!(stored["source"], json!("config"));
+    assert!(!stored.contains_key("client_secret"), "{stored:?}");
+    let text = serde_json::to_string(&stored).expect("json");
+    assert!(!text.contains(SECRET), "{text}");
+
+    let read = Oauth2Config::from_stored(&stored).expect("reads back");
+    assert_eq!(read.settings, config.settings);
+    assert_eq!(read.sealed_secret(), None);
+    assert_eq!(
+        read.client_secret(&ring(), row(), &ConfigSecrets::default())
+            .err(),
+        Some(SecretError::NotInConfig)
+    );
+    let mut secrets = ConfigSecrets::default();
+    secrets.insert(
+        row(),
+        ClientSecret::from_config_file(SECRET.to_owned()).expect("not empty"),
+        Fingerprint::of(&stored),
+    );
+    let opened = read.client_secret(&ring(), row(), &secrets).expect("held");
+    assert_eq!(opened.expose_secret(), SECRET);
+    let other_org = ProviderRow {
+        org_id: Uuid::from_u128(9),
+        ..row()
+    };
+    assert_eq!(
+        read.client_secret(&ring(), other_org, &secrets).err(),
+        Some(SecretError::NotInConfig)
+    );
+    assert!(!format!("{secrets:?}").contains(SECRET));
+    assert!(ClientSecret::from_config_file(String::new()).is_none());
+}
+
+#[test]
+fn a_stored_source_other_than_config_or_a_config_row_with_a_secret_fails_closed() {
+    let settings = validate(&minimal(), POLICY, None).expect("valid").settings;
+    let mut with_secret = Oauth2Config::from_config_file(settings).to_json();
+    with_secret.insert("client_secret".into(), json!({ "sealed": "AAAA" }));
+    assert_eq!(
+        Oauth2Config::from_stored(&with_secret),
+        Err(StoredConfigError::Invalid {
+            pointer: "/client_secret".into(),
+            code: code::FIELD_UNKNOWN,
+        })
+    );
+    let sealed = validate(&minimal(), POLICY, None)
+        .expect("valid")
+        .seal(&ring(), row())
+        .expect("sealed");
+    assert!(sealed.sealed_secret().is_some());
+    for source in [json!("api"), json!(true), json!("Config")] {
+        let mut stored = sealed.to_json();
+        stored.insert("source".into(), source.clone());
+        assert_eq!(
+            Oauth2Config::from_stored(&stored),
+            Err(StoredConfigError::Invalid {
+                pointer: "/source".into(),
+                code: code::FIELD_TYPE,
+            }),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn an_admin_config_cannot_claim_the_config_file_source() {
+    assert_eq!(
+        problems(&with("source", json!("config"))),
+        one("/source", code::FIELD_UNKNOWN)
+    );
+}
+
+/// A replica that read another file wrote the row: its config is not the one this process
+/// holds the secret for, so no secret comes out. The admission rules an admin changes do not
+/// count, and neither does the order `jsonb` gives the members back in.
+#[test]
+fn a_config_file_secret_opens_only_for_the_config_it_was_read_with() {
+    let settings = validate(&minimal(), POLICY, None).expect("valid").settings;
+    let stored = Oauth2Config::from_config_file(settings).to_json();
+    let mut secrets = ConfigSecrets::default();
+    secrets.insert(
+        row(),
+        ClientSecret::from_config_file(SECRET.to_owned()).expect("not empty"),
+        Fingerprint::of(&stored),
+    );
+    let opens = |config: &Map<String, Value>| {
+        Oauth2Config::from_stored(config)
+            .expect("reads")
+            .client_secret(&ring(), row(), &secrets)
+    };
+    assert!(opens(&stored).is_ok());
+
+    let mut with_rules = stored.clone();
+    with_rules.insert(
+        "admission_rules".into(),
+        json!([{ "attribute": "a", "op": "exists" }]),
+    );
+    assert!(
+        opens(&with_rules).is_ok(),
+        "admission rules are not the file's"
+    );
+
+    let reordered: Map<String, Value> = stored.clone().into_iter().rev().collect();
+    assert!(opens(&reordered).is_ok(), "member order does not count");
+
+    let mut other = stored.clone();
+    other.insert("client_id".into(), json!("another-client"));
+    assert_eq!(opens(&other).err(), Some(SecretError::ConfigChanged));
+    let mut relabeled = stored;
+    relabeled.insert("label".into(), json!("Another label"));
+    assert_eq!(opens(&relabeled).err(), Some(SecretError::ConfigChanged));
 }

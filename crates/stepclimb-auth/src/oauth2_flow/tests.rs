@@ -232,7 +232,7 @@ fn debug_output_of_an_exchange_hides_the_secrets() {
         .unwrap()
         .seal(&ring, row)
         .unwrap()
-        .client_secret(&ring, row)
+        .client_secret(&ring, row, &oauth2_config::ConfigSecrets::default())
         .unwrap();
     let exchange = CodeExchange {
         token_url: "https://idp.example.test/token",

@@ -56,7 +56,7 @@ pub(super) fn draft(
 pub(super) fn stored(config: &Map<String, Value>) -> Result<Oauth2Config, StoredConfigError> {
     let mut walk = Walk::default();
     let settings = settings(&mut walk, config, None);
-    let secret = walk::stored_secret(&mut walk, config.get("client_secret"));
+    let secret = walk::stored_secret(&mut walk, config);
     let config = settings
         .zip(secret)
         .map(|(settings, secret)| Oauth2Config { settings, secret });
