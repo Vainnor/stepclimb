@@ -7,7 +7,7 @@ use axum::{
     http::{HeaderValue, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{MethodRouter, delete, get, post, put},
+    routing::{MethodRouter, delete, get, patch, post, put},
 };
 use sqlx::PgPool;
 use stepclimb_auth::encryption::KeyRing;
@@ -20,7 +20,7 @@ use crate::{
     csrf::{self, OriginAllowlist},
     enrollment,
     error::ApiError,
-    health, identities, local_sign_in, me, openapi, organization, passkey_enrollment,
+    health, identities, local_sign_in, me, my_passkeys, openapi, organization, passkey_enrollment,
     passkey_sign_in, provider_sign_in,
     providers::Providers,
     rate_limit::RateLimiter,
@@ -133,6 +133,18 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         (
             "/api/v1/me/identities/{identity_id}",
             delete(identities::delete_my_identity),
+        ),
+        (
+            my_passkeys::MY_PASSKEYS_PATH,
+            get(my_passkeys::list_my_passkeys).post(my_passkeys::create_my_passkey),
+        ),
+        (
+            my_passkeys::MY_PASSKEYS_START_PATH,
+            post(my_passkeys::start_my_passkey),
+        ),
+        (
+            my_passkeys::MY_PASSKEY_PATH,
+            patch(my_passkeys::update_my_passkey).delete(my_passkeys::delete_my_passkey),
         ),
         (
             "/api/v1/users/{user_id}/identities",

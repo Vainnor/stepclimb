@@ -177,6 +177,34 @@ pub async fn list_enabled(
     rows.into_iter().map(IdentityProvider::try_from).collect()
 }
 
+/// The scope's providers, enabled or not and the local one included, at which the user
+/// `user_id` has an identity, sorted by key, each once. Empty for a user the organization does
+/// not have.
+pub async fn list_for_user(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    user_id: Uuid,
+) -> Result<Vec<IdentityProvider>, Error> {
+    let rows = sqlx::query_as!(
+        Row,
+        r#"SELECT p.id, p.key, p.kind, p.config::text AS "config!", p.enabled,
+                  (extract(epoch FROM p.created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM p.updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM identity_providers p
+           WHERE p.org_id = $1
+             AND EXISTS (
+                 SELECT 1 FROM identities i
+                 WHERE i.org_id = p.org_id AND i.provider_id = p.id AND i.user_id = $2
+             )
+           ORDER BY p.key"#,
+        scope.org_id(),
+        user_id,
+    )
+    .fetch_all(db)
+    .await?;
+    rows.into_iter().map(IdentityProvider::try_from).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

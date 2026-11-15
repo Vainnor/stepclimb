@@ -277,6 +277,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/passkeys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List your passkeys, oldest first. */
+        get: operations["listMyPasskeys"];
+        put?: never;
+        /** Add the passkey whose registration `POST /api/v1/me/passkeys/start` began in this browser. */
+        post: operations["createMyPasskey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/passkeys/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start adding a passkey to your account. */
+        post: operations["startMyPasskey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/passkeys/{passkey_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete one of your passkeys. You must keep a way to sign in. */
+        delete: operations["deleteMyPasskey"];
+        options?: never;
+        head?: never;
+        /** Rename one of your passkeys. */
+        patch: operations["updateMyPasskey"];
+        trace?: never;
+    };
     "/api/v1/organization": {
         parameters: {
             query?: never;
@@ -918,6 +971,35 @@ export interface components {
             /** @description The provider's id for you, exactly as the provider sends it. */
             subject: string;
         };
+        /** @description One of the signed-in user's passkeys. The credential itself never leaves the server. */
+        MyPasskey: {
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            created_at: string;
+            /** Format: uuid */
+            id: string;
+            /**
+             * Format: date-time
+             * @description The last sign-in with it, RFC 3339, UTC; `null` before the first.
+             */
+            last_used_at: string | null;
+            name: string;
+        };
+        /** @description A new name for a passkey. */
+        MyPasskeyPatch: {
+            /** @description Trimmed, 1 to 200 characters. */
+            name: string;
+        };
+        /** @description The creation options for the browser. */
+        MyPasskeyStarted: {
+            /**
+             * @description Pass `publicKey` to `navigator.credentials.create`, then send the result to `POST
+             *     /api/v1/me/passkeys` in this browser within 10 minutes.
+             */
+            options: components["schemas"]["PasskeyCreationOptions"];
+        };
         /** @description An account to create. */
         NewAccount: {
             /** @description Trimmed; 1 to 200 characters. */
@@ -934,6 +1016,16 @@ export interface components {
             provider_key: string;
             /** @description The provider's id for the person; stored exactly as given, not empty. */
             subject: string;
+        };
+        /** @description The browser's registration response. */
+        NewMyPasskey: {
+            /**
+             * @description The `PublicKeyCredential` `navigator.credentials.create` returned, as JSON
+             *     (`PublicKeyCredential.toJSON()`).
+             */
+            credential: Record<string, never>;
+            /** @description What you call this passkey: trimmed, 1 to 200 characters. `Passkey` when absent. */
+            name?: string | null;
         };
         /** @description A custom role to create. */
         NewRole: {
@@ -1816,6 +1908,69 @@ export interface components {
         };
         /** @description `identity.not_found`: you have no identity with this id. `org.not_found`: the request's organization cannot be determined. */
         MyIdentityNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `auth.session_required`: the request carries a bearer credential; only a signed-in browser session manages passkeys. `local.passkeys_not_allowed`: you have no local account, and no identity provider you sign in with lets its users add a passkey. `auth.csrf_refused`: the request did not come from this site. */
+        MyPasskeyAddForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.malformed`: the body is not `{credential, name?}`. `auth.flow_invalid`: no passkey registration was started in this browser for you, or it was already finished; start again. `auth.flow_expired`: the registration was started more than 10 minutes ago; start again. `auth.passkey_invalid`: the passkey's response did not verify, or this passkey is already registered; start again and retry. */
+        MyPasskeyAddInvalid: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `local.last_method`: this passkey is your last way to sign in. Add another passkey, or sign in once with an identity provider, first. */
+        MyPasskeyDeleteConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `passkey.not_found`: you have no passkey with this id. `auth.method_disabled`: passkey sign-in is switched off for this organization. `org.not_found`: the request's organization cannot be determined. */
+        MyPasskeyNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `auth.session_required`: the request carries a bearer credential; only a signed-in browser session manages passkeys. `auth.csrf_refused`: the request did not come from this site. */
+        MyPasskeyWriteForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `auth.session_required`: the request carries a bearer credential; only a signed-in browser session manages passkeys. */
+        MyPasskeysForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `auth.method_disabled`: passkey sign-in is switched off for this organization. `org.not_found`: the request's organization cannot be determined. */
+        MyPasskeysNotFound: {
             headers: {
                 [name: string]: unknown;
             };
@@ -2797,6 +2952,157 @@ export interface operations {
             403: components["responses"]["CsrfRefused"];
             404: components["responses"]["MyIdentityNotFound"];
             409: components["responses"]["MyIdentityDeleteConflict"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    listMyPasskeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Your passkeys */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MyPasskey"][];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["MyPasskeysForbidden"];
+            404: components["responses"]["MyPasskeysNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    createMyPasskey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewMyPasskey"];
+            };
+        };
+        responses: {
+            /** @description The passkey is added */
+            201: {
+                headers: {
+                    /** @description `__Host-sc_flow` cleared */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MyPasskey"];
+                };
+            };
+            400: components["responses"]["MyPasskeyAddInvalid"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["MyPasskeyAddForbidden"];
+            404: components["responses"]["MyPasskeysNotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["UnprocessableEntity"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    startMyPasskey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The creation options; the registration is waiting in this browser */
+            200: {
+                headers: {
+                    /** @description The `__Host-sc_flow` cookie of the registration */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MyPasskeyStarted"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["MyPasskeyAddForbidden"];
+            404: components["responses"]["MyPasskeysNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    deleteMyPasskey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The passkey's id. */
+                passkey_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The passkey is deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["MyPasskeyWriteForbidden"];
+            404: components["responses"]["MyPasskeyNotFound"];
+            409: components["responses"]["MyPasskeyDeleteConflict"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    updateMyPasskey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The passkey's id. */
+                passkey_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MyPasskeyPatch"];
+            };
+        };
+        responses: {
+            /** @description The passkey with its new name */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MyPasskey"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["MyPasskeyWriteForbidden"];
+            404: components["responses"]["MyPasskeyNotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["UnprocessableEntity"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };

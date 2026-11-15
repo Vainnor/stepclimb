@@ -11,7 +11,9 @@
 //!
 //! `POST /auth/local/enrollment/passkey` ([`enroll_passkey`]) finishes it. It is rate limited
 //! first and answers 404 `auth.method_disabled` while passkeys are off. In one transaction it
-//! takes the flow (deleting it, so the challenge is used once), then, in a savepoint:
+//! takes the flow (deleting it, so the challenge is used once), refuses one that holds no link
+//! (a registration `POST /api/v1/me/passkeys/start` began, `crate::my_passkeys`) as 400
+//! `auth.flow_invalid` with the deletion committed, then, in a savepoint:
 //!
 //! 1. locks the flow's user (`identities::lock_user`, which also refuses any isolation level
 //!    but `READ COMMITTED`, the level `local_tokens::consume_enrollment` relies on);
@@ -99,6 +101,7 @@ problem_responses! {
 /// What the start route's passkey flow keeps, sealed: the link it was started for and the
 /// ceremony state. Never logged.
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Pending {
     link_id: Uuid,
     state: String,
@@ -246,8 +249,13 @@ pub async fn enroll_passkey(
         Ok(flow) => flow,
         Err(error) => return flow_refused(tx, error, &REGISTRATION_FLOW).await,
     };
-    let pending: Pending =
-        serde_json::from_slice(&flow.payload).map_err(|e| ApiError::internal(&e))?;
+    // A `passkey_register` flow that `POST /api/v1/me/passkeys/start` began holds no link: it
+    // is not this route's to finish.
+    let Ok(pending) = serde_json::from_slice::<Pending>(&flow.payload) else {
+        let refusal = with_flow_cleared(flow_mismatch().into_response());
+        tx.commit().await.map_err(|e| ApiError::internal(&e))?;
+        return Ok(refusal);
+    };
     let attempt = Attempt {
         state: &state,
         scope,
@@ -271,7 +279,7 @@ pub async fn enroll_passkey(
 
 /// The name to store: the request's, checked by the passkey name rule, or [`DEFAULT_NAME`].
 /// Checked before the flow is taken, so a bad name does not use the challenge up.
-fn passkey_name(name: Option<&str>) -> Result<String, ApiError> {
+pub(crate) fn passkey_name(name: Option<&str>) -> Result<String, ApiError> {
     let Some(name) = name else {
         return Ok(DEFAULT_NAME.to_owned());
     };

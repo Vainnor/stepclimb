@@ -1349,6 +1349,272 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/api/v1/me/passkeys": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "List your passkeys, oldest first.",
+        "operationId": "listMyPasskeys",
+        "responses": {
+          "200": {
+            "description": "Your passkeys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MyPasskey"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/MyPasskeysForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/MyPasskeysNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Add the passkey whose registration `POST /api/v1/me/passkeys/start` began in this browser.",
+        "operationId": "createMyPasskey",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewMyPasskey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The passkey is added",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`__Host-sc_flow` cleared"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyPasskey"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/MyPasskeyAddInvalid"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/MyPasskeyAddForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/MyPasskeysNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/me/passkeys/start": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Start adding a passkey to your account.",
+        "operationId": "startMyPasskey",
+        "responses": {
+          "200": {
+            "description": "The creation options; the registration is waiting in this browser",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The `__Host-sc_flow` cookie of the registration"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyPasskeyStarted"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/MyPasskeyAddForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/MyPasskeysNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/me/passkeys/{passkey_id}": {
+      "delete": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Delete one of your passkeys. You must keep a way to sign in.",
+        "operationId": "deleteMyPasskey",
+        "parameters": [
+          {
+            "name": "passkey_id",
+            "in": "path",
+            "description": "The passkey's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The passkey is deleted"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/MyPasskeyWriteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/MyPasskeyNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/MyPasskeyDeleteConflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      },
+      "patch": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Rename one of your passkeys.",
+        "operationId": "updateMyPasskey",
+        "parameters": [
+          {
+            "name": "passkey_id",
+            "in": "path",
+            "description": "The passkey's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MyPasskeyPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The passkey with its new name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyPasskey"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/MyPasskeyWriteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/MyPasskeyNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/api/v1/organization": {
       "get": {
         "tags": [
@@ -3285,6 +3551,65 @@
           }
         }
       },
+      "MyPasskey": {
+        "type": "object",
+        "description": "One of the signed-in user's passkeys. The credential itself never leaves the server.",
+        "required": [
+          "id",
+          "name",
+          "created_at",
+          "last_used_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The last sign-in with it, RFC 3339, UTC; `null` before the first."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "MyPasskeyPatch": {
+        "type": "object",
+        "description": "A new name for a passkey.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Trimmed, 1 to 200 characters."
+          }
+        },
+        "additionalProperties": false
+      },
+      "MyPasskeyStarted": {
+        "type": "object",
+        "description": "The creation options for the browser.",
+        "required": [
+          "options"
+        ],
+        "properties": {
+          "options": {
+            "$ref": "#/components/schemas/PasskeyCreationOptions",
+            "description": "Pass `publicKey` to `navigator.credentials.create`, then send the result to `POST\n/api/v1/me/passkeys` in this browser within 10 minutes."
+          }
+        }
+      },
       "NewAccount": {
         "type": "object",
         "description": "An account to create.",
@@ -3320,6 +3645,27 @@
           "subject": {
             "type": "string",
             "description": "The provider's id for the person; stored exactly as given, not empty."
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewMyPasskey": {
+        "type": "object",
+        "description": "The browser's registration response.",
+        "required": [
+          "credential"
+        ],
+        "properties": {
+          "credential": {
+            "type": "object",
+            "description": "The `PublicKeyCredential` `navigator.credentials.create` returned, as JSON\n(`PublicKeyCredential.toJSON()`)."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What you call this passkey: trimmed, 1 to 200 characters. `Passkey` when absent."
           }
         },
         "additionalProperties": false
@@ -4918,6 +5264,76 @@
       },
       "MyIdentityNotFound": {
         "description": "`identity.not_found`: you have no identity with this id. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "MyPasskeyAddForbidden": {
+        "description": "`auth.session_required`: the request carries a bearer credential; only a signed-in browser session manages passkeys. `local.passkeys_not_allowed`: you have no local account, and no identity provider you sign in with lets its users add a passkey. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "MyPasskeyAddInvalid": {
+        "description": "`request.malformed`: the body is not `{credential, name?}`. `auth.flow_invalid`: no passkey registration was started in this browser for you, or it was already finished; start again. `auth.flow_expired`: the registration was started more than 10 minutes ago; start again. `auth.passkey_invalid`: the passkey's response did not verify, or this passkey is already registered; start again and retry.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "MyPasskeyDeleteConflict": {
+        "description": "`local.last_method`: this passkey is your last way to sign in. Add another passkey, or sign in once with an identity provider, first.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "MyPasskeyNotFound": {
+        "description": "`passkey.not_found`: you have no passkey with this id. `auth.method_disabled`: passkey sign-in is switched off for this organization. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "MyPasskeyWriteForbidden": {
+        "description": "`auth.session_required`: the request carries a bearer credential; only a signed-in browser session manages passkeys. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "MyPasskeysForbidden": {
+        "description": "`auth.session_required`: the request carries a bearer credential; only a signed-in browser session manages passkeys.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "MyPasskeysNotFound": {
+        "description": "`auth.method_disabled`: passkey sign-in is switched off for this organization. `org.not_found`: the request's organization cannot be determined.",
         "content": {
           "application/problem+json": {
             "schema": {

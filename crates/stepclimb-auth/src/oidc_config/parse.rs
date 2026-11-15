@@ -4,7 +4,7 @@
 use serde_json::{Map, Value};
 
 use super::{
-    ClaimsMapping, ConfigErrors, DEFAULT_SCOPES, OidcConfig, OidcConfigDraft, OidcSettings,
+    ALLOW_LOCAL_PASSKEYS, ClaimsMapping, ConfigErrors, DEFAULT_SCOPES, OidcConfig, OidcConfigDraft, OidcSettings,
     SealedSecret, StoredConfigError, code,
 };
 use crate::json_pointer::JsonPointer;
@@ -12,13 +12,14 @@ use crate::outbound::UrlPolicy;
 use crate::provider_config::walk::{self, Walk};
 
 /// The members of an `oidc` config.
-const MEMBERS: [&str; 6] = [
+const MEMBERS: [&str; 7] = [
     "issuer",
     "client_id",
     "client_secret",
     "scopes",
     "claims",
     "userinfo",
+    ALLOW_LOCAL_PASSKEYS,
 ];
 
 /// The members of `claims`.
@@ -71,12 +72,19 @@ fn settings(
     let scopes = scopes(walk, map.get("scopes"));
     let claims = claims(walk, map.get("claims"));
     let userinfo = walk::flag(walk, "userinfo", map.get("userinfo"), true);
+    let allow_local_passkeys = walk::flag(
+        walk,
+        ALLOW_LOCAL_PASSKEYS,
+        map.get(ALLOW_LOCAL_PASSKEYS),
+        false,
+    );
     Some(OidcSettings {
         issuer: issuer?,
         client_id: client_id?,
         scopes: scopes?,
         claims: claims?,
         userinfo: userinfo?,
+        allow_local_passkeys: allow_local_passkeys?,
     })
 }
 

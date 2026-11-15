@@ -430,3 +430,36 @@ fn the_secret_is_sealed_to_the_literal_row_context() {
     ];
     assert!(ring().decrypt(&sealed, &swapped).is_err());
 }
+
+#[test]
+fn local_passkeys_are_off_unless_the_config_allows_them() {
+    let absent = validate(&minimal(), POLICY, None).expect("valid").settings;
+    assert!(!absent.allow_local_passkeys);
+    let allowed = validate(&with("allow_local_passkeys", json!(true)), POLICY, None)
+        .expect("valid")
+        .settings;
+    assert!(allowed.allow_local_passkeys);
+    for value in [json!("true"), json!(1), json!(null)] {
+        assert_eq!(
+            problems(&with("allow_local_passkeys", value)),
+            one("/allow_local_passkeys", code::FIELD_TYPE)
+        );
+    }
+}
+
+#[test]
+fn the_local_passkeys_switch_is_stored_and_read_back() {
+    let config = with("allow_local_passkeys", json!(true));
+    let stored = validate(&config, POLICY, None)
+        .expect("valid")
+        .seal(&ring(), row())
+        .expect("sealed")
+        .to_json();
+    assert_eq!(stored[ALLOW_LOCAL_PASSKEYS], json!(true));
+    let read = OidcConfig::from_stored(&stored).expect("readable");
+    assert!(read.settings.allow_local_passkeys);
+    let mut older = stored;
+    older.remove(ALLOW_LOCAL_PASSKEYS);
+    let read = OidcConfig::from_stored(&older).expect("readable");
+    assert!(!read.settings.allow_local_passkeys);
+}

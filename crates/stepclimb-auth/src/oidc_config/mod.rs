@@ -14,6 +14,7 @@
 //! | `scopes` | scope tokens (RFC 6749 3.3) including `openid` | `["openid", "email", "profile"]` |
 //! | `claims` | an object of JSON Pointers: `given_name`, `family_name`, `email`, `email_verified`, `groups`, and `attributes`, an object of names to pointers | B13's defaults for the four profile fields; no `groups`, no attributes |
 //! | `userinfo` | a boolean: whether sign-in also reads the provider's userinfo endpoint (Q3) | `true` |
+//! | `allow_local_passkeys` | a boolean: whether the provider's users may add a passkey under `/api/v1/me/passkeys` (`04-local-accounts.md` B13) | `false` |
 //!
 //! Any other member is refused, so a misspelled one cannot be silently ignored. The subject is
 //! always the ID token's `sub` (B12), so `claims.subject` is refused too.
@@ -39,6 +40,10 @@ pub use crate::provider_config::{
     ClientSecret, ConfigErrors, ConfigProblem, DraftSecret, ProviderRow, SealedSecret,
     StoredConfigError, code,
 };
+
+/// The member that lets a provider's users add a passkey (`04-local-accounts.md` B13). The
+/// `oauth2` config of `06-oauth2-and-vatsim-preset.md` has the same member with the same rule.
+pub const ALLOW_LOCAL_PASSKEYS: &str = "allow_local_passkeys";
 
 /// The scopes of a config that names none (B1).
 pub const DEFAULT_SCOPES: [&str; 3] = ["openid", "email", "profile"];
@@ -80,6 +85,8 @@ pub struct OidcSettings {
     pub scopes: Vec<String>,
     pub claims: ClaimsMapping,
     pub userinfo: bool,
+    /// Whether the provider's users may add a passkey; off unless the admin says so.
+    pub allow_local_passkeys: bool,
 }
 
 /// A validated config, before its secret is sealed.
@@ -152,6 +159,7 @@ impl OidcConfig {
         config.insert("scopes".into(), s.scopes.clone().into());
         config.insert("claims".into(), Value::Object(claims));
         config.insert("userinfo".into(), s.userinfo.into());
+        config.insert(ALLOW_LOCAL_PASSKEYS.into(), s.allow_local_passkeys.into());
         config
     }
 

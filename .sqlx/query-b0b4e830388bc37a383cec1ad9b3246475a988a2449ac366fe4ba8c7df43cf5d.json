@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE passkeys\n         SET name = $4,\n             updated_at = timestamptz 'epoch' + $5::bigint * interval '1 microsecond'\n         WHERE org_id = $1 AND user_id = $2 AND id = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b0b4e830388bc37a383cec1ad9b3246475a988a2449ac366fe4ba8c7df43cf5d"
+}
