@@ -7,7 +7,8 @@
 //!
 //! - the organization's `name`;
 //! - `sign_in`, the methods the organization offers: the local entry first when local sign-in is
-//!   offered, with the local methods `LocalSignIn::offered()` returns, then each enabled outside
+//!   offered, with the local methods `LocalSignIn::offered()` returns ([`local_methods`]: `totp`
+//!   only beside `password`, as it is a second step after one), then each enabled outside
 //!   provider, sorted by key, with its `key`, `kind` and the `label` member of its config. No
 //!   other member of a provider's config, which holds its sealed client secret, and no row id
 //!   reaches the document;
@@ -74,8 +75,8 @@ pub struct SignInMethod {
     /// holds none, and always for local sign-in, whose labels are the web app's.
     #[schema(required = true)]
     pub label: Option<String>,
-    /// Local sign-in only: the local methods the organization offers. `totp` is only a second
-    /// step after `password`.
+    /// Local sign-in only: the local methods the organization offers. `totp` is the second step
+    /// after `password` and is listed only beside it.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(required = false, nullable = false)]
     pub methods: Option<Vec<LocalMethod>>,
@@ -181,7 +182,7 @@ async fn sign_in_methods(state: &AppState, scope: OrgScope) -> Result<Vec<SignIn
     let providers = identity_providers::list_enabled(&state.db, scope)
         .await
         .map_err(|error| ApiError::internal(&error))?;
-    let offered = local.offered();
+    let offered = local_methods(local.offered());
     let mut methods = Vec::with_capacity(providers.len() + 1);
     if !offered.is_empty() {
         methods.push(SignInMethod {
@@ -193,6 +194,16 @@ async fn sign_in_methods(state: &AppState, scope: OrgScope) -> Result<Vec<SignIn
     }
     methods.extend(providers.iter().filter_map(provider_method));
     Ok(methods)
+}
+
+/// The local methods the document lists, from `offered`: TOTP only when the password is listed
+/// too, since it is the second step after a password and signs no one in by itself.
+fn local_methods(offered: Vec<Method>) -> Vec<Method> {
+    let password = offered.contains(&Method::Password);
+    offered
+        .into_iter()
+        .filter(|method| *method != Method::Totp || password)
+        .collect()
 }
 
 /// A provider's entry: its key, kind and label, and nothing else of its row. `list_enabled`
@@ -282,6 +293,19 @@ mod tests {
             assert_eq!(entry.label, None);
             assert_eq!(entry.kind, SignInKind::Oauth2);
         }
+    }
+
+    #[test]
+    fn totp_is_listed_only_beside_the_password() {
+        use Method::{MagicLink, Passkey, Password, Totp};
+        assert_eq!(
+            local_methods(vec![Passkey, Password, Totp]),
+            [Passkey, Password, Totp]
+        );
+        assert_eq!(local_methods(vec![Passkey, Totp]), [Passkey]);
+        assert_eq!(local_methods(vec![Totp, MagicLink]), [MagicLink]);
+        assert_eq!(local_methods(vec![Password]), [Password]);
+        assert!(local_methods(Vec::new()).is_empty());
     }
 
     #[test]

@@ -21,7 +21,10 @@ use axum::{
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use stepclimb_auth::encryption::KeyRing;
+use stepclimb_auth::{
+    encryption::KeyRing, oauth2_config, oidc_config, outbound::UrlPolicy,
+    provider_config::ProviderRow,
+};
 use stepclimb_core::{
     OrgScope,
     clock::ManualClock,
@@ -29,6 +32,7 @@ use stepclimb_core::{
     local_sign_in::Method,
     organizations,
 };
+use stepclimb_mock_idp::{Endpoint, MockIdp};
 use stepclimb_server::{
     AppState, local_sign_in::require_method, providers::Providers, request_org::TEST_ORG_HEADER,
     router, web_origin::WebOrigin,
@@ -78,24 +82,28 @@ impl Answer {
 
 struct Fixture {
     pool: PgPool,
+    keys: KeyRing,
     app: Router,
 }
 
 impl Fixture {
     fn new(pool: PgPool) -> Self {
         let clock = ManualClock::new(now());
+        let keys = KeyRing::parse("test:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
+            .expect("a valid test key");
         let state = AppState {
             db: pool.clone(),
             clock: clock.clock(),
-            keys: KeyRing::parse("test:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
-                .expect("a valid test key"),
+            keys: keys.clone(),
             public_url: WebOrigin::parse(PUBLIC_URL).expect("a valid origin"),
             allowed_origins: Vec::new(),
             rate_limits: Default::default(),
-            providers: Providers::new(false).expect("provider clients"),
+            // The mock IdP serves plain HTTP on 127.0.0.1.
+            providers: Providers::new(true).expect("provider clients"),
+            passwords: Default::default(),
         };
         let app = router(state).layer(Extension(ConnectInfo(CLIENT)));
-        Self { pool, app }
+        Self { pool, keys, app }
     }
 
     async fn org(&self, slug: &str, name: &str) -> Uuid {
@@ -255,36 +263,108 @@ async fn it_lists_exactly_the_enabled_providers_and_leaks_nothing_else(pool: PgP
     assert!(errors.is_empty(), "{errors:#?}");
 }
 
-/// Every provider the document lists gets past its start route's provider check, and the
-/// disabled one does not: the document never offers a provider the server refuses.
+/// Insert an enabled provider of `kind` named `key`, its config validated and sealed as a written
+/// provider's is and pointing at `mock`.
+async fn mock_provider(fx: &Fixture, mock: &MockIdp, org: Uuid, key: &str, kind: &str) {
+    let id = new_id();
+    let row = ProviderRow {
+        org_id: org,
+        provider_id: id,
+    };
+    let policy = UrlPolicy::new(true, true);
+    let secret = mock.client_secret();
+    let mut stored = if kind == "oidc" {
+        let config = json!({
+            "issuer": mock.issuer(), "client_id": mock.client_id(), "client_secret": secret,
+        });
+        oidc_config::validate(&config, policy, None)
+            .expect("a valid oidc config")
+            .seal(&fx.keys, row)
+            .expect("seal")
+            .to_json()
+    } else {
+        let config = json!({
+            "authorize": mock.url(Endpoint::OAuth2Authorize),
+            "token": mock.url(Endpoint::OAuth2Token),
+            "userinfo": mock.url(Endpoint::OAuth2Userinfo),
+            "client_id": mock.client_id(),
+            "client_secret": secret,
+            "claims": { "subject": "/data/cid" },
+        });
+        oauth2_config::validate(&config, policy, None)
+            .expect("a valid oauth2 config")
+            .seal(&fx.keys, row)
+            .expect("seal")
+            .to_json()
+    };
+    stored.insert("label".into(), json!(format!("Sign in with {key}")));
+    sqlx::query(
+        "INSERT INTO identity_providers (id, org_id, key, kind, config, enabled) \
+         VALUES ($1, $2, $3, $4, $5, true)",
+    )
+    .bind(id)
+    .bind(org)
+    .bind(key)
+    .bind(kind)
+    .bind(Value::Object(stored))
+    .execute(&fx.pool)
+    .await
+    .expect("insert provider");
+}
+
+/// Every provider the document lists starts a sign-in: its start route sends the browser to the
+/// mock IdP's authorization endpoint for that provider's kind. The disabled one is refused as no
+/// provider, and the document never names it.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn every_listed_provider_is_one_its_start_route_accepts(pool: PgPool) {
+async fn every_listed_provider_starts_a_sign_in_at_its_authorization_endpoint(pool: PgPool) {
     let fx = Fixture::new(pool);
     let org = fx.org("org-a", "Org A").await;
-    fx.provider(org, "acme", "oidc", true).await;
-    fx.provider(org, "beta", "oauth2", true).await;
+    let mock = MockIdp::start().await.expect("the mock starts");
+    mock_provider(&fx, &mock, org, "acme", "oidc").await;
+    mock_provider(&fx, &mock, org, "beta", "oauth2").await;
     fx.provider(org, "gamma", "oidc", false).await;
     let body = fx.discovery(org).await.json();
-    let listed: Vec<String> = body["sign_in"]
+    let listed: Vec<(String, String)> = body["sign_in"]
         .as_array()
         .unwrap()
         .iter()
         .filter(|entry| entry["kind"] != "local")
-        .map(|entry| entry["key"].as_str().unwrap().to_owned())
+        .map(|entry| {
+            let field = |name: &str| entry[name].as_str().unwrap().to_owned();
+            (field("key"), field("kind"))
+        })
         .collect();
-    assert_eq!(listed, ["acme", "beta"]);
-    let not_found = "/sign-in?error=auth.provider_not_found";
-    for key in &listed {
+    assert_eq!(
+        listed,
+        [
+            ("acme".into(), "oidc".into()),
+            ("beta".into(), "oauth2".into())
+        ]
+    );
+    for (key, kind) in &listed {
+        let endpoint = if kind == "oidc" {
+            Endpoint::Authorize
+        } else {
+            Endpoint::OAuth2Authorize
+        };
         let start = fx.get(Some(org), &format!("/auth/{key}/start")).await;
         assert_eq!(start.status, StatusCode::SEE_OTHER, "{start:?}");
-        assert_ne!(start.header(header::LOCATION), not_found, "{key}");
+        let location = start.header(header::LOCATION);
+        assert!(
+            location.starts_with(&format!("{}?", mock.url(endpoint))),
+            "{key}: {location}"
+        );
     }
     let start = fx.get(Some(org), "/auth/gamma/start").await;
-    assert_eq!(start.header(header::LOCATION), not_found);
+    assert_eq!(
+        start.header(header::LOCATION),
+        "/sign-in?error=auth.provider_not_found"
+    );
 }
 
 /// Every local method the document lists passes `require_method`, the check each method's route
-/// makes first, and every method it leaves out fails it.
+/// makes first, and every method it leaves out fails it, but TOTP: switched on without the
+/// password, it is left out of the document, as it is only the second step after a password.
 async fn assert_local_methods_are_offered(fx: &Fixture, org: Uuid, expected: &[&str]) {
     let body = fx.discovery(org).await.json();
     let listed: Vec<String> = body["sign_in"]
@@ -299,7 +379,12 @@ async fn assert_local_methods_are_offered(fx: &Fixture, org: Uuid, expected: &[&
     for method in Method::ALL {
         let offered = require_method(&fx.pool, scope(org), method).await.is_ok();
         let is_listed = listed.iter().any(|name| name == method.as_str());
-        assert_eq!(offered, is_listed, "{}: offered {offered}", method.as_str());
+        let unlisted_totp = method == Method::Totp && !listed.iter().any(|m| m == "password");
+        if unlisted_totp {
+            assert!(!is_listed, "totp listed without the password");
+        } else {
+            assert_eq!(offered, is_listed, "{}: offered {offered}", method.as_str());
+        }
     }
 }
 
@@ -313,7 +398,14 @@ async fn a_switched_off_local_method_is_absent(pool: PgPool) {
         json!({ "passkey": true, "password": false, "totp": true, "magic_link": false }),
     )
     .await;
-    assert_local_methods_are_offered(&fx, org, &["passkey", "totp"]).await;
+    // TOTP is a second step after a password, so beside the passkey alone it is not listed.
+    assert_local_methods_are_offered(&fx, org, &["passkey"]).await;
+    fx.switches(
+        org,
+        json!({ "passkey": true, "password": true, "totp": false, "magic_link": false }),
+    )
+    .await;
+    assert_local_methods_are_offered(&fx, org, &["passkey", "password"]).await;
     fx.switches(
         org,
         json!({ "passkey": false, "password": true, "totp": false, "magic_link": false }),

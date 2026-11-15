@@ -527,7 +527,7 @@ Coordinator decisions (2026-11-15), on the owner's delegation, while building I5
   name from it (B13) only with issue #171. Until then, `/sign-in` offers
   the local email and passkey steps, and the passkey start route's 404 `auth.method_disabled`
   tells the screen the method is off, which it shows as B17's message. The signed-out layout keeps
-  the product name. T6 is tested with 08 I9.
+  the product name. T6 is tested with #171.
 - **The steps (B16).** `/sign-in` takes the email; `/sign-in/passkey` signs in. The address goes
   to the passkey step in the history entry's state, never in the URL, so it stays out of the
   server's access log; the email step's own entry keeps it too, so Back finds it filled in. The

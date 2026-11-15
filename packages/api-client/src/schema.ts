@@ -2,6 +2,26 @@
 // Generated from openapi/stepclimb.json by scripts/generate.mjs. Do not edit; run
 // `just openapi` instead.
 export interface paths {
+    "/.well-known/stepclimb": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The discovery document of the request's organization: its name, the sign-in methods it
+         *     offers and its theme.
+         */
+        get: operations["getDiscovery"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/accounts": {
         parameters: {
             query?: never;
@@ -917,6 +937,27 @@ export interface components {
          * @enum {string}
          */
         DensityChoice: "comfortable" | "compact";
+        /** @description The request organization's discovery document. */
+        Discovery: {
+            /** @description The organization's name. */
+            name: string;
+            /**
+             * @description The sign-in methods the organization offers, in the order a sign-in screen lists them:
+             *     local sign-in first when it is offered, then the outside providers by key. Empty when it
+             *     offers none.
+             */
+            sign_in: components["schemas"]["SignInMethod"][];
+            /** @description The organization's theme. */
+            theme: components["schemas"]["DiscoveryTheme"];
+        };
+        /** @description The organization's theme, as the apps load it. */
+        DiscoveryTheme: {
+            /**
+             * @description The absolute URL of the organization's stylesheet, `<public URL>/theme.css?v=<SHA-256>`,
+             *     which is cached for a year; a branding change gives it another hash.
+             */
+            stylesheet: string;
+        };
         /**
          * @description A local method an enrollment link can set up.
          * @enum {string}
@@ -1014,6 +1055,11 @@ export interface components {
              */
             updated_at: string;
         };
+        /**
+         * @description A local sign-in method.
+         * @enum {string}
+         */
+        LocalMethod: "passkey" | "password" | "totp" | "magic_link";
         /** @description The local sign-in method switches as the organization settings show them. */
         LocalMethods: {
             magic_link: boolean;
@@ -1621,6 +1667,31 @@ export interface components {
          * @enum {string}
          */
         ScopeType: "organization" | "account" | "course";
+        /**
+         * @description The protocol of a sign-in method.
+         * @enum {string}
+         */
+        SignInKind: "local" | "oidc" | "oauth2";
+        /** @description One sign-in method the organization offers. */
+        SignInMethod: {
+            /**
+             * @description `local` for local sign-in; otherwise the provider's key, the `{provider}` of
+             *     `/auth/{provider}/start`.
+             */
+            key: string;
+            /** @description What the method speaks. A preset provider is the kind it speaks (`oauth2`). */
+            kind: components["schemas"]["SignInKind"];
+            /**
+             * @description The provider's configured label, such as "Sign in with Example"; `null` when its config
+             *     holds none, and always for local sign-in, whose labels are the web app's.
+             */
+            label: string | null;
+            /**
+             * @description Local sign-in only: the local methods the organization offers. `totp` is the second step
+             *     after `password` and is listed only beside it.
+             */
+            methods?: components["schemas"]["LocalMethod"][];
+        };
         /** @description A completed sign-in. */
         SignedIn: {
             /** @description The path on this site to open next. */
@@ -2438,6 +2509,31 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getDiscovery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The organization's discovery document. `Cache-Control: no-cache`. */
+            200: {
+                headers: {
+                    /** @description `no-cache` */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Discovery"];
+                };
+            };
+            404: components["responses"]["OrganizationNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
     listAccounts: {
         parameters: {
             query?: {

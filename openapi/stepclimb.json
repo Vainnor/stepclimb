@@ -10,6 +10,44 @@
     "version": "0.0.0"
   },
   "paths": {
+    "/.well-known/stepclimb": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "The discovery document of the request's organization: its name, the sign-in methods it\noffers and its theme.",
+        "operationId": "getDiscovery",
+        "responses": {
+          "200": {
+            "description": "The organization's discovery document. `Cache-Control: no-cache`.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`no-cache`"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Discovery"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      }
+    },
     "/api/v1/accounts": {
       "get": {
         "tags": [
@@ -3580,6 +3618,45 @@
           "compact"
         ]
       },
+      "Discovery": {
+        "type": "object",
+        "description": "The request organization's discovery document.",
+        "required": [
+          "name",
+          "sign_in",
+          "theme"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The organization's name."
+          },
+          "sign_in": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SignInMethod"
+            },
+            "description": "The sign-in methods the organization offers, in the order a sign-in screen lists them:\nlocal sign-in first when it is offered, then the outside providers by key. Empty when it\noffers none."
+          },
+          "theme": {
+            "$ref": "#/components/schemas/DiscoveryTheme",
+            "description": "The organization's theme."
+          }
+        }
+      },
+      "DiscoveryTheme": {
+        "type": "object",
+        "description": "The organization's theme, as the apps load it.",
+        "required": [
+          "stylesheet"
+        ],
+        "properties": {
+          "stylesheet": {
+            "type": "string",
+            "description": "The absolute URL of the organization's stylesheet, `<public URL>/theme.css?v=<SHA-256>`,\nwhich is cached for a year; a branding change gives it another hash."
+          }
+        }
+      },
       "EnrollMethod": {
         "type": "string",
         "description": "A local method an enrollment link can set up.",
@@ -3779,6 +3856,16 @@
             "description": "RFC 3339, UTC."
           }
         }
+      },
+      "LocalMethod": {
+        "type": "string",
+        "description": "A local sign-in method.",
+        "enum": [
+          "passkey",
+          "password",
+          "totp",
+          "magic_link"
+        ]
       },
       "LocalMethods": {
         "type": "object",
@@ -5184,6 +5271,48 @@
           "account",
           "course"
         ]
+      },
+      "SignInKind": {
+        "type": "string",
+        "description": "The protocol of a sign-in method.",
+        "enum": [
+          "local",
+          "oidc",
+          "oauth2"
+        ]
+      },
+      "SignInMethod": {
+        "type": "object",
+        "description": "One sign-in method the organization offers.",
+        "required": [
+          "key",
+          "kind",
+          "label"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "`local` for local sign-in; otherwise the provider's key, the `{provider}` of\n`/auth/{provider}/start`."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SignInKind",
+            "description": "What the method speaks. A preset provider is the kind it speaks (`oauth2`)."
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The provider's configured label, such as \"Sign in with Example\"; `null` when its config\nholds none, and always for local sign-in, whose labels are the web app's."
+          },
+          "methods": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LocalMethod"
+            },
+            "description": "Local sign-in only: the local methods the organization offers. `totp` is the second step\nafter `password` and is listed only beside it."
+          }
+        }
       },
       "SignedIn": {
         "type": "object",

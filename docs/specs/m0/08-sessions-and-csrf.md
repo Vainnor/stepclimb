@@ -317,8 +317,12 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
     "local", label: null, methods: [...]}` whose `methods` are `LocalSignIn::offered()`
     (`04-local-accounts.md` B2) in the order `passkey`, `password`, `totp`, `magic_link`. It is
     absent when that list is empty: the local row disabled, or no primary method on (TOTP alone
-    offers nothing). The outside providers follow, sorted by key, each exactly `{key, kind,
-    label}`; only provider entries never carry `methods`. An organization that offers nothing
+    offers nothing). `totp` is listed only when `password` is listed too, since it is the second
+    step after a password and signs no one in by itself: with the passkey and TOTP switched on and
+    the password off, `methods` is `["passkey"]` (coordinator decision, 2026-11-15, after the
+    security review of I9). `require_method` for TOTP does not yet require the password; issue
+    #27 (`04-local-accounts.md` I7) owns that check. The outside providers follow, sorted by key, each exactly `{key, kind,
+    label}`; provider entries never carry `methods`. An organization that offers nothing
     answers `sign_in: []`.
   - **`label`** is the string `label` member of the provider's config, and `null` when it has
     none or it is not a string, as `03-users-and-identities.md` B23 reads it. Local sign-in's
