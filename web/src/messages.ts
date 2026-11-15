@@ -109,6 +109,8 @@ export const webMessages: Catalog = {
     "problem.orgNone.title": "This server has no organization yet",
     "signIn.continue": "Continue",
     "signIn.email.label": "Email",
+    "signIn.empty":
+      "This organization has not turned on a way to sign in from the browser yet. Ask an administrator how to sign in.",
     "signIn.passkey.as": "Signing in as {email}.",
     "signIn.passkey.cancelled":
       "The passkey request was cancelled or timed out. Try again when you are ready.",
@@ -121,10 +123,24 @@ export const webMessages: Catalog = {
     "signIn.passkey.title": "Use your passkey",
     "signIn.passkey.unsupported":
       "This browser cannot use passkeys. Update it, or use a current version of Chrome, Edge, Firefox or Safari.",
+    "signIn.passkey.usePassword": "Sign in with a password instead",
+    "signIn.password.as": "Signing in as {email}.",
+    "signIn.password.label": "Password",
+    "signIn.password.submit": "Sign in",
+    "signIn.password.title": "Enter your password",
+    "signIn.password.usePasskey": "Sign in with a passkey instead",
+    "signIn.problem.admissionRefused":
+      "Your organization's sign-in rules do not let this account in. Ask an administrator.",
+    "signIn.problem.credentialsInvalid":
+      "That email and password do not match. Check both, then try again.",
     "signIn.problem.failed": "Something went wrong while signing you in. Try again.",
     "signIn.problem.flowExpired": "The passkey request expired. Try again.",
     "signIn.problem.flowInvalid":
       "This sign-in was already finished or replaced by one in another tab. Try again.",
+    "signIn.problem.idTokenInvalid":
+      "Stepclimb could not verify the answer from the sign-in service, so you are not signed in. Try again. If it keeps happening, tell an administrator.",
+    "signIn.problem.limitReached":
+      "This organization has no room for another user on its plan, so your account could not be created. Ask an administrator.",
     "signIn.problem.methodDisabled":
       "Your organization has turned off passkey sign-in. Ask an administrator how to sign in.",
     "signIn.problem.orgNone":
@@ -133,16 +149,56 @@ export const webMessages: Catalog = {
       "Stepclimb did not accept that passkey. Try again with a passkey saved for this email.",
     "signIn.problem.passkeysNotAllowed":
       "Your organization does not let you sign in with a passkey. Sign in with your identity provider instead.",
+    "signIn.problem.passwordDisabled":
+      "Your organization has turned off password sign-in. Ask an administrator how to sign in.",
+    "signIn.problem.passwordRateLimited":
+      "Too many sign-in attempts. Wait a few minutes, then try again.",
+    "signIn.problem.passwordRateLimitedFor":
+      "Too many sign-in attempts. Try again in {seconds, plural, one {# second} other {# seconds}}.",
+    "signIn.problem.providerDenied":
+      "The sign-in was declined at the sign-in service, so you are not signed in. Try again, and allow the request when the service asks.",
+    "signIn.problem.providerError":
+      "The sign-in service reported a problem, so you are not signed in. Try again. If it keeps happening, tell an administrator.",
+    "signIn.problem.providerFlowExpired": "The sign-in took too long to finish. Start it again.",
+    "signIn.problem.providerNotFound":
+      "That way to sign in is not available. Choose another one below.",
+    "signIn.problem.providerUnavailable":
+      "Stepclimb could not start the sign-in with that service. Try again in a few minutes. If it keeps happening, tell an administrator.",
     "signIn.problem.rateLimited":
       "Too many sign-in attempts from your network. Wait a minute, then try again.",
     "signIn.problem.rateLimitedFor":
       "Too many sign-in attempts from your network. Try again in {seconds, plural, one {# second} other {# seconds}}.",
+    "signIn.problem.signupClosed":
+      "There is no account for you in this organization, and it does not create accounts at sign-in. Ask an administrator to add you.",
+    "signIn.problem.subjectMissing":
+      "The sign-in service did not say who you are, so Stepclimb cannot sign you in. Tell an administrator.",
     "signIn.problem.suspended": "Your account is suspended. Ask an administrator to restore it.",
+    "signIn.problem.totpDisabled":
+      "Your organization has turned off sign-in with a password and code. Ask an administrator how to sign in.",
+    "signIn.problem.totpExpired":
+      "The sign-in took too long to finish. Enter your password again, then a new code.",
+    "signIn.problem.totpInvalid":
+      "That code did not work. Enter your password again, then the newest code from your app or an unused recovery code.",
+    "signIn.problem.totpRestart":
+      "This sign-in was already finished or replaced by one in another tab. Enter your password again.",
     "signIn.problem.unknown":
       "Something went wrong while signing you in. Try again. If it keeps happening, give an administrator this code:",
     "signIn.problem.unreachable":
       "Stepclimb could not reach the server. Check your connection, then try again.",
+    "signIn.provider.unlabeled": "Sign in with {key}",
     "signIn.title": "Sign in",
+    "signIn.totp.as": "Signing in as {email}.",
+    "signIn.totp.description":
+      "Open your authenticator app and enter the 6-digit code it shows for this account.",
+    "signIn.totp.label": "Code",
+    "signIn.totp.recovery.description":
+      "One of the recovery codes you saved when you turned on codes from an app. Each one works once.",
+    "signIn.totp.recovery.label": "Recovery code",
+    "signIn.totp.startAgain": "Start again",
+    "signIn.totp.submit": "Sign in",
+    "signIn.totp.title": "Enter your code",
+    "signIn.totp.useApp": "Use a code from your app instead",
+    "signIn.totp.useRecovery": "Use a recovery code instead",
     "signOut.failed": "Sign-out failed",
     "signOut.failedHint": "You are still signed in. Try again in a moment.",
     "userMenu.density": "Density",

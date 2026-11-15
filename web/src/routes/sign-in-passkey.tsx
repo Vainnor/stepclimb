@@ -12,6 +12,7 @@ import { api, unwrap } from "../api";
 import { useDocumentTitle } from "../layouts/document-title";
 import type { SignInSearch } from "../router";
 import { useCompleteSignIn } from "../sign-in/complete";
+import { discoveryQuery, emailMethods, useOrganizationName } from "../sign-in/discovery";
 import { useLocationHere } from "../sign-in/location-here";
 import { getPasskey, PasskeyError, passkeyUnavailable } from "../sign-in/passkey";
 import { needsNewCeremony, signInProblem } from "../sign-in/problems";
@@ -34,8 +35,12 @@ async function startSignIn(email: string, returnTo: string | undefined) {
 function PasskeyStep({ email, search }: { email: string; search: SignInSearch }) {
   const { t } = useStepclimbStrings();
   const title = t("signIn.passkey.title");
-  useDocumentTitle(title);
+  useDocumentTitle(title, useOrganizationName());
   const router = useRouter();
+  const offersPassword = useQuery({
+    ...discoveryQuery,
+    select: (document) => emailMethods(document).includes("password"),
+  }).data;
   const complete = useCompleteSignIn();
   const unavailable = passkeyUnavailable();
   const supported = unavailable === undefined;
@@ -74,6 +79,7 @@ function PasskeyStep({ email, search }: { email: string; search: SignInSearch })
     : (finish.error ?? (start.isError ? start.error : null));
   const problem = failure ? signInProblem(failure, "signIn", t) : undefined;
   const otherEmail = router.buildLocation({ to: "/sign-in", search }).href;
+  const password = router.buildLocation({ to: "/sign-in/password", search }).href;
 
   return (
     <>
@@ -90,6 +96,15 @@ function PasskeyStep({ email, search }: { email: string; search: SignInSearch })
         >
           {t("signIn.passkey.submit")}
         </Button>
+      ) : null}
+      {offersPassword ? (
+        <Link
+          href={password}
+          routerOptions={{ state: { email } }}
+          className="inline-flex min-h-11 w-fit items-center"
+        >
+          {t("signIn.passkey.usePassword")}
+        </Link>
       ) : null}
       <Link href={otherEmail} className="inline-flex min-h-11 w-fit items-center">
         {t("signIn.passkey.otherEmail")}

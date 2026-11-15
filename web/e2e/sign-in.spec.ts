@@ -3,11 +3,15 @@
 // T20; 11-app-shell.md B13 to B17, T14, T19). `just e2e` creates the stack's organization and admin
 // with `stepclimb admin create` and hands this file the printed setup link. Chromium's virtual
 // authenticator (DevTools protocol, WebAuthn domain) stands in for a device with a screen lock.
+import { createHmac } from "node:crypto";
 import AxeBuilder from "@axe-core/playwright";
 import { type Browser, expect, type Page, test } from "@playwright/test";
 
 const WCAG = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"];
 const EMAIL = "avery@example.test";
+/** The user the password test adds, and the passphrase they set: a throwaway stack's test data. */
+const PASSWORD_USER = "blake@example.test";
+const PHRASE = "plinth harbor lantern 7342";
 
 /** axe's WCAG 2.2 AA violations on the whole page, one line per node. */
 async function violations(page: Page): Promise<string[]> {
@@ -394,7 +398,214 @@ test.describe
       });
       [passkey] = await authenticator.credentials();
     });
+
+    // Password sign-in (04 B14) end to end: the admin adds a user and makes them a setup link
+    // through the public API, the link sets a password, and the user signs in with it from the
+    // sign-in screen: a wrong password first, then the right one.
+    test("sign in with a password from the sign-in screen (04 B14, 11 B16)", async ({
+      page,
+      browser,
+    }) => {
+      expect(passkey, "an earlier test left the admin a passkey").toBeDefined();
+      const authenticator = await addVirtualAuthenticator(page, passkey);
+      await page.goto("/sign-in");
+      await page.getByRole("textbox", { name: "Email" }).fill(EMAIL);
+      await page.getByRole("button", { name: "Continue" }).click();
+      await page.getByRole("button", { name: "Sign in with a passkey" }).click();
+      await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
+      [passkey] = await authenticator.credentials();
+
+      const link = await page.evaluate(async (email) => {
+        const created = await fetch("/api/v1/users", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ display_name: "Blake Example", email }),
+        });
+        const user = await created.json();
+        const issued = await fetch(`/api/v1/admin/users/${user.id}/enrollment-links`, {
+          method: "POST",
+        });
+        return { created: created.status, issued: issued.status, ...(await issued.json()) };
+      }, PASSWORD_USER);
+      expect([link.created, link.issued]).toEqual([201, 201]);
+
+      const context = await browser.newContext();
+      const learner = await context.newPage();
+      try {
+        // The link's token, set through the enrollment route as a client of the API would.
+        await learner.goto("/sign-in");
+        const token = new URL(link.url).hash.replace(/^#token=/, "");
+        const enrolled = await learner.evaluate(
+          async ({ token, password }) =>
+            (
+              await fetch("/auth/local/enrollment/password", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ token, password }),
+              })
+            ).status,
+          { token, password: PHRASE },
+        );
+        expect(enrolled).toBe(200);
+        await context.clearCookies();
+
+        await learner.goto("/sign-in?return_to=%2Faccount");
+        await learner.getByRole("textbox", { name: "Email" }).fill(PASSWORD_USER);
+        await learner.getByRole("button", { name: "Continue" }).click();
+        // Passkeys come first; the password is the user's choice.
+        await learner.getByRole("link", { name: "Sign in with a password instead" }).click();
+        await expect(
+          learner.getByRole("heading", { level: 1, name: "Enter your password" }),
+        ).toBeVisible();
+
+        const refused = answerOf(learner, "/auth/local/password");
+        await learner.getByLabel("Password").fill(`${PHRASE}-wrong`);
+        await learner.getByRole("button", { name: "Sign in" }).click();
+        expect((await refused).status()).toBe(401);
+        await expect(learner.getByRole("alert")).toContainText(
+          "That email and password do not match.",
+        );
+
+        const accepted = answerOf(learner, "/auth/local/password");
+        await learner.getByLabel("Password").fill(PHRASE);
+        await learner.getByRole("button", { name: "Sign in" }).click();
+        expect((await accepted).status()).toBe(200);
+        await expect(learner.getByRole("heading", { level: 1, name: "Account" })).toBeVisible();
+        expect(new URL(learner.url()).pathname).toBe("/account");
+        await expect(
+          learner.getByRole("button", { name: "Blake Example, account menu" }),
+        ).toBeVisible();
+        expect(learner.url()).not.toContain("lantern");
+      } finally {
+        await context.close();
+      }
+    });
+
+    // TOTP after the password (04 B15, B19 to B21) end to end: the password test's user turns TOTP
+    // on through the public API, then signs in with a wrong code (back to the password), the
+    // app's code, and a recovery code.
+    test("sign in with a password and a TOTP code or a recovery code (04 B15, B20, B21)", async ({
+      browser,
+    }) => {
+      const context = await browser.newContext();
+      const learner = await context.newPage();
+      try {
+        await signInWithPassword(learner);
+        await expect(learner.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
+        const enrolled = await learner.evaluate(async () => {
+          const started = await fetch("/api/v1/me/totp", { method: "POST" });
+          return { status: started.status, ...(await started.json()) };
+        });
+        expect(enrolled.status).toBe(200);
+        const secret = base32(enrolled.secret);
+        const confirmed = await learner.evaluate(
+          async (code) => {
+            const answer = await fetch("/api/v1/me/totp/confirm", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ code }),
+            });
+            return { status: answer.status, ...(await answer.json()) };
+          },
+          totp(secret, 0),
+        );
+        expect(confirmed.status).toBe(200);
+        expect(confirmed.recovery_codes).toHaveLength(10);
+        const [recoveryCode] = confirmed.recovery_codes as string[];
+        await context.clearCookies();
+
+        await test.step("a wrong code needs the password again", async () => {
+          await signInWithPassword(learner);
+          await expect(
+            learner.getByRole("heading", { level: 1, name: "Enter your code" }),
+          ).toBeVisible();
+          const code = learner.getByRole("textbox", { name: /^Code/ });
+          await expect(code).toHaveAttribute("autocomplete", "one-time-code");
+          const refused = answerOf(learner, "/auth/local/totp");
+          // Six digits that are the code of no step the server accepts now.
+          await code.fill(wrongCode(secret));
+          await learner.getByRole("button", { name: "Sign in" }).click();
+          expect((await refused).status()).toBe(401);
+          await expect(
+            learner.getByRole("heading", { level: 1, name: "Enter your password" }),
+          ).toBeVisible();
+          await expect(learner.getByRole("alert")).toContainText("That code did not work.");
+          await expect(learner.locator('[data-slot="password-again"]')).toBeFocused();
+        });
+
+        await test.step("the app's code signs in", async () => {
+          await learner.getByLabel("Password").fill(PHRASE);
+          await learner.getByRole("button", { name: "Sign in" }).click();
+          // The next step's code: the confirmation used the current one, and a code is used once.
+          await learner.getByRole("textbox", { name: /^Code/ }).fill(totp(secret, 1));
+          const accepted = answerOf(learner, "/auth/local/totp");
+          await learner.getByRole("button", { name: "Sign in" }).click();
+          expect((await accepted).status()).toBe(200);
+          await expect(learner.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
+        });
+
+        await test.step("a recovery code signs in instead", async () => {
+          await context.clearCookies();
+          await signInWithPassword(learner);
+          await learner.getByRole("button", { name: "Use a recovery code instead" }).click();
+          const field = learner.getByRole("textbox", { name: /^Recovery code/ });
+          await expect(field).toBeFocused();
+          await field.fill(recoveryCode ?? "");
+          const accepted = answerOf(learner, "/auth/local/totp");
+          await learner.getByRole("button", { name: "Sign in" }).click();
+          expect((await accepted).status()).toBe(200);
+          await expect(learner.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
+        });
+      } finally {
+        await context.close();
+      }
+    });
   });
+
+/** Signs the password test's user in from the sign-in screen as far as the password takes them. */
+async function signInWithPassword(page: Page) {
+  await page.goto("/sign-in");
+  await page.getByRole("textbox", { name: "Email" }).fill(PASSWORD_USER);
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByRole("link", { name: "Sign in with a password instead" }).click();
+  await page.getByLabel("Password").fill(PHRASE);
+  await page.getByRole("button", { name: "Sign in" }).click();
+}
+
+/** The bytes of a base32 secret (RFC 4648, no padding), as an authenticator app reads it. */
+function base32(text: string): Buffer {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = "";
+  for (const char of text.replace(/=+$/, "").toUpperCase()) {
+    const value = alphabet.indexOf(char);
+    if (value === -1) throw new Error("the secret is not base32");
+    bits += value.toString(2).padStart(5, "0");
+  }
+  const bytes = bits.match(/.{8}/g) ?? [];
+  return Buffer.from(bytes.map((byte) => Number.parseInt(byte, 2)));
+}
+
+/** Six digits that are not `secret`'s code for the step before, at or after now. */
+function wrongCode(secret: Buffer): string {
+  const near = new Set([-1, 0, 1, 2].map((offset) => totp(secret, offset)));
+  let code = 0;
+  while (near.has(String(code).padStart(6, "0"))) code++;
+  return String(code).padStart(6, "0");
+}
+
+/**
+ * The 6-digit code an authenticator app shows for `secret` (RFC 6238: HMAC-SHA-1, 30 s steps),
+ * `offset` steps from now.
+ */
+function totp(secret: Buffer, offset: number): string {
+  const step = Math.floor(Date.now() / 1000 / 30) + offset;
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(step));
+  const mac = createHmac("sha1", secret).update(counter).digest();
+  const at = (mac[mac.length - 1] ?? 0) & 0x0f;
+  const value = mac.readUInt32BE(at) & 0x7fffffff;
+  return String(value % 1_000_000).padStart(6, "0");
+}
 
 const themes = ["light", "dark", "high-contrast"] as const;
 const widths = [

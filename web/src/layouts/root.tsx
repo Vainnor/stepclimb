@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The root of the route tree (docs/specs/m0/11-app-shell.md B1, B6): React Aria's RouterProvider
 // sends every Stepclimb UI link through TanStack Router; after a client-side navigation to another
-// path, focus moves to the new view's `h1`; the toast region sits once at the root.
+// path, focus moves to the new view's `h1`, or to the failure the view opened on; the toast region sits once at the root. A link with
+// `routerOptions={{ reloadDocument: true }}` leaves the app instead and loads its address as a page.
 import { type ToastQueue, ToastRegion } from "@stepclimb/ui";
 import { Outlet, useRouter } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { RouterProvider } from "react-aria-components";
+import { openDocument } from "../document-navigation";
 
 /**
  * Focuses the page's `h1`, so a screen reader announces the new view. The heading becomes
@@ -18,6 +20,17 @@ export function focusViewHeading(): void {
   heading.focus();
 }
 
+/**
+ * After a navigation: the failure a view opened on when it marks one with
+ * `data-focus-on-arrival` (a sign-in step that sent the user back, with the reason), so a screen
+ * reader reads why before the form; otherwise the view's `h1`.
+ */
+function focusArrival(): void {
+  const reason = document.querySelector<HTMLElement>("main [data-focus-on-arrival]");
+  if (reason) reason.focus();
+  else focusViewHeading();
+}
+
 export function Root({ toasts }: { toasts: ToastQueue }) {
   const router = useRouter();
   // The first render is a page load, which the browser announces itself: only a later change of
@@ -25,13 +38,15 @@ export function Root({ toasts }: { toasts: ToastQueue }) {
   useEffect(
     () =>
       router.subscribe("onRendered", (event) => {
-        if (event.fromLocation !== undefined && event.pathChanged) focusViewHeading();
+        if (event.fromLocation !== undefined && event.pathChanged) focusArrival();
       }),
     [router],
   );
   return (
     <RouterProvider
-      navigate={(to) => router.navigate({ to })}
+      navigate={(to, options) =>
+        options?.reloadDocument ? openDocument(to) : router.navigate({ to, state: options?.state })
+      }
       useHref={(to) => router.buildLocation({ to }).href}
     >
       <Outlet />

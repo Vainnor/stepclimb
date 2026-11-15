@@ -39,6 +39,7 @@ export {
 } from "./primitives/breadcrumbs";
 export { Button, type ButtonProps, button } from "./primitives/button";
 export { ButtonGroup, type ButtonGroupProps, buttonGroup } from "./primitives/button-group";
+export { ButtonLink, type ButtonLinkProps, buttonLink } from "./primitives/button-link";
 export {
   Checkbox,
   CheckboxGroup,

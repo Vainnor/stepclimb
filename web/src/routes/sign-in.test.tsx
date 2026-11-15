@@ -5,6 +5,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  apiRequests,
   type Handler,
   json,
   meFixture,
@@ -116,7 +117,7 @@ describe("the email step", () => {
     renderApp("/sign-in");
     await user.click(await screen.findByRole("button", { name: "Continue" }));
     expect(screen.getByRole("heading", { level: 1, name: "Sign in" })).toBeInTheDocument();
-    expect(fetch).not.toHaveBeenCalled();
+    expect(apiRequests(fetch)).toEqual([]);
   });
 });
 
@@ -127,7 +128,7 @@ describe("the passkey step", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Sign in" })).toBeInTheDocument();
     expect(app.router.state.location.pathname).toBe("/sign-in");
     expect(app.router.state.location.search).toEqual({ return_to: "/courses" });
-    expect(fetch).not.toHaveBeenCalled();
+    expect(apiRequests(fetch)).toEqual([]);
   });
 
   it("signs in with the passkey and opens the flow's return target", async () => {
@@ -202,7 +203,7 @@ describe("the passkey step", () => {
     await enterEmail();
     expect(screen.getByRole("alert")).toHaveTextContent("This browser cannot use passkeys.");
     expect(screen.queryByRole("button", { name: "Sign in with a passkey" })).toBeNull();
-    expect(fetch).not.toHaveBeenCalled();
+    expect(apiRequests(fetch)).toEqual([]);
   });
 
   it("says to open the https address on a page that is not a secure context", async () => {
@@ -215,7 +216,7 @@ describe("the passkey step", () => {
       "Passkeys work only over a secure connection. Open this page at its https:// address",
     );
     expect(screen.queryByRole("button", { name: "Sign in with a passkey" })).toBeNull();
-    expect(fetch).not.toHaveBeenCalled();
+    expect(apiRequests(fetch)).toEqual([]);
   });
 
   it("counts a browser without credentials.get as one that cannot use passkeys", async () => {
@@ -283,6 +284,11 @@ describe("problem codes on the passkey step (B17, T8)", () => {
 
   it.each([
     [403, "auth.suspended", "Your account is suspended. Ask an administrator to restore it."],
+    [
+      403,
+      "auth.admission_refused",
+      "Your organization's sign-in rules do not let this account in. Ask an administrator.",
+    ],
     [
       403,
       "local.passkeys_not_allowed",

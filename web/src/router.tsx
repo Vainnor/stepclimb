@@ -7,6 +7,7 @@ import {
   createRoute,
   createRouter,
   type ErrorComponentProps,
+  type HistoryState,
   type RouterHistory,
   useMatch,
 } from "@tanstack/react-router";
@@ -21,6 +22,8 @@ import { HomeView } from "./routes/home";
 import { NotFoundView } from "./routes/not-found";
 import { SignInView } from "./routes/sign-in";
 import { SignInPasskeyView } from "./routes/sign-in-passkey";
+import { SignInPasswordView } from "./routes/sign-in-password";
+import { SignInTotpView } from "./routes/sign-in-totp";
 import { safeReturnTarget } from "./session";
 
 const rootRoute = createRootRouteWithContext<AppContext>()({
@@ -45,10 +48,20 @@ function validateSignInSearch(search: Record<string, unknown>): SignInSearch {
   return search.return_to === undefined ? {} : { return_to: safeReturnTarget(search.return_to) };
 }
 
+export interface MethodListSearch extends SignInSearch {
+  /** The code a failed browser flow sent the browser back with (B18); shown, then removed. */
+  error?: string;
+}
+
+function validateMethodListSearch(search: Record<string, unknown>): MethodListSearch {
+  const kept = validateSignInSearch(search);
+  return typeof search.error === "string" ? { ...kept, error: search.error } : kept;
+}
+
 export const signInRoute = createRoute({
   getParentRoute: () => signedOutRoute,
   path: "sign-in",
-  validateSearch: validateSignInSearch,
+  validateSearch: validateMethodListSearch,
   component: SignInView,
 });
 
@@ -57,6 +70,20 @@ const signInPasskeyRoute = createRoute({
   path: "sign-in/passkey",
   validateSearch: validateSignInSearch,
   component: SignInPasskeyView,
+});
+
+const signInPasswordRoute = createRoute({
+  getParentRoute: () => signedOutRoute,
+  path: "sign-in/password",
+  validateSearch: validateSignInSearch,
+  component: SignInPasswordView,
+});
+
+const signInTotpRoute = createRoute({
+  getParentRoute: () => signedOutRoute,
+  path: "sign-in/totp",
+  validateSearch: validateSignInSearch,
+  component: SignInTotpView,
 });
 
 const enrollRoute = createRoute({
@@ -86,7 +113,13 @@ const accountRoute = createRoute({
 });
 
 export const routeTree = rootRoute.addChildren([
-  signedOutRoute.addChildren([signInRoute, signInPasskeyRoute, enrollRoute]),
+  signedOutRoute.addChildren([
+    signInRoute,
+    signInPasskeyRoute,
+    signInPasswordRoute,
+    signInTotpRoute,
+    enrollRoute,
+  ]),
   signedInRoute.addChildren([homeRoute, accountRoute]),
 ]);
 
@@ -113,9 +146,22 @@ declare module "@tanstack/react-router" {
     router: ReturnType<typeof createAppRouter>;
   }
   interface HistoryState {
-    /** The address the email step hands to the passkey step (routes/sign-in.tsx). */
+    /** The address the email step hands to the passkey or password step (routes/sign-in.tsx). */
     email?: string;
+    /** Why the TOTP step sent the user back to the password step: the server's code. */
+    passwordAgain?: string;
     /** The enrollment link's token, moved out of the fragment (routes/enroll.tsx). */
     enrollToken?: string;
+  }
+}
+
+declare module "react-aria-components" {
+  interface RouterConfig {
+    /**
+     * `reloadDocument` opens the link as a new page instead of a client-side navigation: a
+     * server route such as a provider's sign-in start (spec 11 B14). `state` is the new history
+     * entry's, such as the address a sign-in step hands to the next.
+     */
+    routerOptions: { reloadDocument?: boolean; state?: HistoryState };
   }
 }

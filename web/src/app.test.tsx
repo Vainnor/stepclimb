@@ -5,10 +5,30 @@ import { onlineManager } from "@tanstack/react-query";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { json, meFixture, problem, renderApp, stubMatchMedia, stubServer } from "./test/app";
+import type { App } from "./app";
+import {
+  json,
+  meFixture,
+  problem,
+  renderApp,
+  requestsTo,
+  stubMatchMedia,
+  stubServer,
+} from "./test/app";
 
 const unauthenticated = () => problem(401, "auth.unauthenticated", "Unauthorized");
 const signedIn = () => json(meFixture());
+
+/**
+ * The query keys left in the cache. After a session ends only the sign-in screen's public
+ * discovery document may be there: nothing of the user who left.
+ */
+function cachedKeys(app: App): unknown[] {
+  return app.context.queryClient
+    .getQueryCache()
+    .getAll()
+    .map((query) => query.queryKey);
+}
 
 beforeEach(() => stubMatchMedia(true));
 afterEach(() => {
@@ -170,10 +190,9 @@ describe("session expiry (B10, T4)", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Sign in" })).toBeInTheDocument();
     expect(app.router.state.location.search).toEqual({ return_to: "/" });
     expect(screen.queryByText("Avery Example")).toBeNull();
-    expect(screen.queryByText("Example Training")).toBeNull();
-    expect(app.context.queryClient.getQueryCache().getAll()).toEqual([]);
+    expect(cachedKeys(app)).toEqual([["discovery"]]);
     // One expired /me, not a loop of them.
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(requestsTo(fetch, "/api/v1/me")).toHaveLength(2);
   });
 
   it("never draws the expired user when a 401 arrived outside the signed-in layout", async () => {
@@ -244,7 +263,7 @@ describe("session expiry (B10, T4)", () => {
         .catch(() => undefined);
     });
     expect(await screen.findByRole("heading", { level: 1, name: "Sign in" })).toBeInTheDocument();
-    expect(app.context.queryClient.getQueryCache().getAll()).toEqual([]);
+    expect(cachedKeys(app)).toEqual([["discovery"]]);
   });
 });
 
@@ -271,7 +290,7 @@ describe("sign-out (B12, T5)", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Sign in" })).toBeInTheDocument();
     expect(app.router.state.location.search).toEqual({});
     expect(screen.queryByText("Avery Example")).toBeNull();
-    expect(app.context.queryClient.getQueryCache().getAll()).toEqual([]);
+    expect(cachedKeys(app)).toEqual([["discovery"]]);
     const posts = fetch.mock.calls.filter(([request]) => request.method === "POST");
     expect(posts).toHaveLength(1);
   });
