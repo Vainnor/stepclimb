@@ -31,8 +31,12 @@ pub mod code {
     pub const FIELD_TYPE: &str = "provider.field_type";
     /// An empty string where one is required.
     pub const FIELD_EMPTY: &str = "provider.field_empty";
-    /// A string that is not an absolute URL, or has a query, fragment or other scheme.
+    /// A string that is not an absolute `http` or `https` URL, or that has a fragment,
+    /// whitespace or a control character, or a query where the member takes none (an OIDC
+    /// issuer).
     pub const URL_INVALID: &str = "provider.url_invalid";
+    /// An `authorize` URL whose query sets a parameter the sign-in request sets itself.
+    pub const URL_PARAMETER_RESERVED: &str = "provider.url_parameter_reserved";
     /// A URL the outbound URL policy refuses (`05-oidc.md` Q4).
     pub const URL_REFUSED: &str = "provider.url_refused";
     /// `scopes` without `openid`.

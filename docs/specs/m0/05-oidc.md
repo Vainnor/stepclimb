@@ -128,6 +128,13 @@ validates the ID token with the `openidconnect` crate, maps claims into an ident
   admin. A pointer that matches nothing leaves the field absent. A profile field whose value is
   not a string (or for `email_verified`, not a boolean) is treated as absent. An attribute keeps
   the JSON value it points to (string, number, boolean, array or object).
+
+  Coordinator decision (2026-11-15), for `06-oauth2-and-vatsim-preset.md` I2
+  (`stepclimb_auth::claims`, the mapping both kinds share). A text profile field holding an
+  empty string or NUL is absent, and an attribute whose value holds NUL in any string or key is
+  absent: PostgreSQL `text` and `jsonb` cannot store NUL. `groups` is kept only as an array of
+  strings. A subject, the ID token's `sub` included, is usable only when non-empty, without NUL
+  and at most 255 characters (`claims::usable_subject`, the `identities` table's limit).
 - **B14.** The callback passes the mapped sign-in to admission (`07-admission.md` B1). On
   admission it creates the session (`08-sessions-and-csrf.md` B7), deletes the flow in the same
   transaction, and answers 303 to the flow's `return_to`. On refusal it redirects as

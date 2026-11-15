@@ -396,3 +396,37 @@ fn the_oidc_mapping_reads_claims_through_the_shared_claim_mapping() {
         json!({ "department": "training" })
     );
 }
+
+/// The context is written out here, not taken from the code under test, so a change to it
+/// (which would leave every stored secret unreadable) turns this red.
+#[test]
+fn the_secret_is_sealed_to_the_literal_row_context() {
+    use base64::Engine as _;
+    let draft: OidcConfigDraft = validate(&minimal(), POLICY, None).expect("valid");
+    let stored = draft.seal(&ring(), row()).expect("sealed").to_json();
+    let text = stored["client_secret"]["sealed"]
+        .as_str()
+        .expect("a string");
+    let sealed = base64::engine::general_purpose::STANDARD
+        .decode(text)
+        .expect("standard base64");
+    let org = Uuid::from_u128(1);
+    let pid = Uuid::from_u128(2);
+    let context: [&[u8]; 4] = [
+        org.as_bytes(),
+        b"identity_providers",
+        pid.as_bytes(),
+        b"client_secret",
+    ];
+    assert_eq!(
+        ring().decrypt(&sealed, &context).expect("opens"),
+        SECRET.as_bytes()
+    );
+    let swapped: [&[u8]; 4] = [
+        pid.as_bytes(),
+        b"identity_providers",
+        org.as_bytes(),
+        b"client_secret",
+    ];
+    assert!(ring().decrypt(&sealed, &swapped).is_err());
+}

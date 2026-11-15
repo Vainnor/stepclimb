@@ -79,14 +79,18 @@ server every sign-in test and the Playwright stack use instead of a real provide
   and any other member refused as `provider.field_unknown`. `authorize`, `token` and `userinfo`
   are absolute `http(s)` URLs kept exactly as written, with no fragment, whitespace, control
   character or credentials, under the outbound URL policy; unlike an OIDC issuer each may carry
-  a query, which RFC 6749 3.1 and 3.2 allow for the authorization and token endpoints. `scopes`
+  a query, which RFC 6749 3.1 and 3.2 allow for the authorization and token endpoints. The
+  `authorize` query may not set a parameter the authorization request sets itself
+  (`response_type`, `client_id`, `redirect_uri`, `scope`, `state`, `code_challenge`,
+  `code_challenge_method`, `nonce`), compared after percent-decoding:
+  `provider.url_parameter_reserved`. `scopes`
   defaults to `[]` and has no `openid` rule; `pkce` defaults to `true` (Q3); `claims` is
   required. A profile field without a pointer is not mapped: `05-oidc.md` B13's defaults are
   OIDC's standard claim names, which a userinfo body need not use, and a default
   `email_verified` would trust a member the admin never chose. The config also holds
   `allow_local_passkeys` (boolean, default `false`): whether users who sign in through the
-  provider may also add passkeys (owner decision on issue #25, 2026-11-15; `04-local-accounts.md`
-  B13 enforces it).
+  provider may also add passkeys (owner decision on issue #25, 2026-11-15 UTC;
+  `04-local-accounts.md` B13 enforces it).
 - **B5.** `GET /auth/{key}/start` for an `oauth2` provider creates a sign-in flow
   (`08-sessions-and-csrf.md` B17) with a random `state` and `return_to`, and answers 303 to the
   `authorize` URL with `response_type=code`, `client_id`, `redirect_uri` (as `05-oidc.md` B6),
@@ -99,9 +103,12 @@ server every sign-in test and the Playwright stack use instead of a real provide
   `error=auth.subject_missing`. Other fields follow `05-oidc.md` B13.
 
   Coordinator decision (2026-11-15), for I2 (`stepclimb_auth::claims`). An integer is a JSON
-  number without a fraction or exponent; `1000001.0` is not one. A profile field holding an
-  empty string is absent, like one of the wrong type, and `groups` is kept only as an array of
-  strings (`07-admission.md` B1's group keys); anything else leaves it absent. Values are kept
+  number without a fraction or exponent; `1000001.0` is not one. A string subject must also be
+  usable: without NUL and at most 255 characters, the `identities` table's limit; otherwise
+  `auth.subject_missing`. A profile field holding an empty string or NUL is absent, like one of
+  the wrong type, an attribute whose value holds NUL anywhere is absent, and `groups` is kept
+  only as an array of strings (`07-admission.md` B1's group keys); anything else leaves it
+  absent. Values are kept
   as sent, without trimming or case folding. The OIDC mapping reads through the same module
   (`ClaimsMapping::profile`).
 - **B7.** `GET /auth/{key}/callback` checks the flow and `state` as `05-oidc.md` B7 says, and

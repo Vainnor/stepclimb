@@ -850,3 +850,14 @@ async fn identities_linked_at_user_creation_are_audited(pool: PgPool) {
     assert_eq!(entries[0].action, "identity.link");
     assert_eq!(entries[0].data["after"]["subject"], "1000009");
 }
+
+/// The claim mapping refuses a subject longer than the `identities` table takes, so the two
+/// limits must be one number: a longer auth limit would fail at the insert, a shorter one would
+/// refuse subjects the table could store.
+#[test]
+fn the_mapping_subject_limit_is_the_identities_limit() {
+    assert_eq!(
+        stepclimb_auth::claims::MAX_SUBJECT_CHARS,
+        stepclimb_core::identities::MAX_SUBJECT_CHARS
+    );
+}

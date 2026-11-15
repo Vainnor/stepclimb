@@ -7,7 +7,7 @@
 //!
 //! | Member | Rule | When absent |
 //! | --- | --- | --- |
-//! | `authorize`, `token`, `userinfo` | an absolute `https` URL (`http` with the insecure switch) with no fragment or credentials, under the [`UrlPolicy`]; a query is allowed (RFC 6749 3.1, 3.2) and the URL is kept exactly as written | refused |
+//! | `authorize`, `token`, `userinfo` | an absolute `https` URL (`http` with the insecure switch) with no fragment or credentials, under the [`UrlPolicy`]; a query is allowed (RFC 6749 3.1, 3.2), except that the `authorize` query may not set a parameter the authorization request sets (`response_type`, `client_id`, `redirect_uri`, `scope`, `state`, `code_challenge`, `code_challenge_method`, `nonce`); kept exactly as written | refused |
 //! | `client_id` | a non-empty string | refused |
 //! | `client_secret` | a non-empty string, write-only | the stored secret, or refused when there is none |
 //! | `scopes` | scope tokens (RFC 6749 3.3) | `[]` |
@@ -160,8 +160,11 @@ impl Oauth2Config {
     }
 
     /// Read a stored config. Members other than the config's (the row's `label`, for one) are
-    /// left to their readers. The URL policy is not applied here: the client applies it at
-    /// every connection.
+    /// left to their readers. Neither the URL policy nor the `authorize` query rule is applied
+    /// here: the outbound client checks the `token` and `userinfo` URLs at every connection, but
+    /// nothing fetches `authorize`, which the browser is sent to, so the sign-in start must check
+    /// it against the policy again before redirecting (as `05-oidc.md` does for an
+    /// authorization endpoint from discovery).
     pub fn from_stored(config: &Map<String, Value>) -> Result<Self, StoredConfigError> {
         parse::stored(config)
     }

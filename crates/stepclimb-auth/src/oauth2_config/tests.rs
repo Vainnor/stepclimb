@@ -554,3 +554,83 @@ fn a_single_unknown_member_refuses_the_config() {
         one("/claims/given_nmae", code::FIELD_UNKNOWN)
     );
 }
+
+/// The context is written out here, not taken from the code under test, so a change to it
+/// (which would leave every stored secret unreadable) turns this red.
+#[test]
+fn the_secret_is_sealed_to_the_literal_row_context() {
+    use base64::Engine as _;
+    let draft: Oauth2ConfigDraft = validate(&minimal(), POLICY, None).expect("valid");
+    let stored = draft.seal(&ring(), row()).expect("sealed").to_json();
+    let text = stored["client_secret"]["sealed"]
+        .as_str()
+        .expect("a string");
+    let sealed = base64::engine::general_purpose::STANDARD
+        .decode(text)
+        .expect("standard base64");
+    let org = Uuid::from_u128(1);
+    let pid = Uuid::from_u128(2);
+    let context: [&[u8]; 4] = [
+        org.as_bytes(),
+        b"identity_providers",
+        pid.as_bytes(),
+        b"client_secret",
+    ];
+    assert_eq!(
+        ring().decrypt(&sealed, &context).expect("opens"),
+        SECRET.as_bytes()
+    );
+    let swapped: [&[u8]; 4] = [
+        pid.as_bytes(),
+        b"identity_providers",
+        org.as_bytes(),
+        b"client_secret",
+    ];
+    assert!(ring().decrypt(&sealed, &swapped).is_err());
+}
+
+#[test]
+fn an_authorize_query_may_not_set_a_parameter_the_request_sets() {
+    for name in [
+        "response_type",
+        "client_id",
+        "redirect_uri",
+        "scope",
+        "state",
+        "code_challenge",
+        "code_challenge_method",
+        "nonce",
+    ] {
+        let url = format!("https://idp.example.test/oauth/authorize?tenant=a&{name}=x");
+        assert_eq!(
+            problems(&with("authorize", json!(url))),
+            one("/authorize", code::URL_PARAMETER_RESERVED),
+            "{name}"
+        );
+    }
+    // Names are compared decoded; an empty value still sets the parameter.
+    for url in [
+        "https://idp.example.test/oauth/authorize?%73tate=x",
+        "https://idp.example.test/oauth/authorize?scope",
+    ] {
+        assert_eq!(
+            problems(&with("authorize", json!(url))),
+            one("/authorize", code::URL_PARAMETER_RESERVED),
+            "{url}"
+        );
+    }
+    // Other parameters, and the same names on the token and userinfo URLs, are allowed.
+    for (member, url) in [
+        (
+            "authorize",
+            "https://idp.example.test/oauth/authorize?prompt=login&states=1",
+        ),
+        ("token", "https://idp.example.test/oauth/token?client_id=x"),
+        ("userinfo", "https://idp.example.test/api/user?scope=x"),
+    ] {
+        assert!(
+            validate(&with(member, json!(url)), POLICY, None).is_ok(),
+            "{url}"
+        );
+    }
+}

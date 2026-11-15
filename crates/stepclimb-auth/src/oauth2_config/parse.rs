@@ -70,7 +70,7 @@ fn settings(
     policy: Option<UrlPolicy>,
 ) -> Option<Oauth2Settings> {
     let endpoint = |walk: &mut Walk, name| walk::url(walk, name, map.get(name), policy, true);
-    let authorize = endpoint(walk, "authorize");
+    let authorize = endpoint(walk, "authorize").filter(|url| no_reserved_parameter(walk, url));
     let token = endpoint(walk, "token");
     let userinfo = endpoint(walk, "userinfo");
     let client_id = walk::required_text(walk, &["client_id"], map.get("client_id"));
@@ -93,6 +93,32 @@ fn settings(
         claims: claims?,
         allow_local_passkeys: allow_local_passkeys?,
     })
+}
+
+/// The parameters the authorization request sets (spec 06 B5; `05-oidc.md` B5 for `nonce`). One
+/// already in the `authorize` URL's query would be sent twice, and a provider may read either.
+const RESERVED_PARAMETERS: [&str; 8] = [
+    "response_type",
+    "client_id",
+    "redirect_uri",
+    "scope",
+    "state",
+    "code_challenge",
+    "code_challenge_method",
+    "nonce",
+];
+
+/// False, with a problem, when the query of `authorize` (already a valid URL) names a
+/// [`RESERVED_PARAMETERS`] entry, compared after percent-decoding so `%73tate` is `state`.
+fn no_reserved_parameter(walk: &mut Walk, authorize: &str) -> bool {
+    let reserved = url::Url::parse(authorize).is_ok_and(|url| {
+        url.query_pairs()
+            .any(|(name, _)| RESERVED_PARAMETERS.contains(&name.as_ref()))
+    });
+    if reserved {
+        walk.fail(&["authorize"], code::URL_PARAMETER_RESERVED);
+    }
+    !reserved
 }
 
 fn claims(walk: &mut Walk, value: Option<&Value>) -> Option<Oauth2Claims> {
