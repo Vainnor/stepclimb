@@ -119,6 +119,43 @@ validates the ID token with the `openidconnect` crate, maps claims into an ident
   userinfo `sub` must equal the ID token's `sub`, or the callback redirects with
   `error=auth.provider_error`. Userinfo claims are merged over ID token claims, except `sub`,
   `iss` and `aud`, which always come from the ID token.
+- Coordinator decision (2026-11-15), for I3 (`stepclimb_auth::oidc`,
+  `stepclimb_server::provider_callback`, ADR 0029). The callback takes the flow (deleting it)
+  before it contacts the provider, in its own statement rather than in the transaction that later
+  creates the session (B14, `08` B18): no database connection waits on the provider, and the
+  provider's code is single use, so a flow kept after a failure could not be finished. No provider
+  is `auth.provider_not_found` with the flow left alone; an `oauth2` provider is
+  `auth.provider_unavailable` until `06` adds its flow. After the flow is taken every answer
+  clears the flow cookie, and a missing `state` is `auth.flow_invalid` like a different one. A
+  callback with neither `code` nor `error`, a stored config that no longer reads and a discovery
+  document that is no longer accepted are `auth.provider_error`. The token request accepts any 2xx
+  with `application/json`, and refuses a `token_type` other than `Bearer` (case-insensitive) as
+  malformed. Q6: `client_secret_post` only when the document lists it and not
+  `client_secret_basic`; Basic credentials are form-encoded first (RFC 6749 2.3.1). The ID token
+  checks are Stepclimb's on the payload read as plain JSON, so B13's tolerance of odd claim types
+  holds, with the signature and the `at_hash` digest from `openidconnect`'s keys (ADR 0029). They
+  add, failing closed: a header with `crit`, `cty` or `enc` is refused, and so is a `typ` other
+  than `JWT` or `application/jwt`, compared in any case (RFC 7515 4.1.9); an `azp` that is present
+  must equal the `client_id` even with one audience (OIDC Core 3.1.3.7 step 5), and a token with
+  several audiences passes when `azp` is the `client_id`, as B10 3 reads, rather than being
+  refused for audiences the client does not trust as OIDC Core 3.1.3.7 step 3 and
+  `openidconnect`'s verifier do. The coordinator kept that reading on the security review's
+  reasoning: the code is bound to the flow by PKCE, the nonce is sealed in the flow, and `azp`
+  names this client (the owner to confirm); `nbf`, when present, must not be more than the skew
+  after now. The skew is 60 seconds each way: refused when `exp + 60 <= now`, `iat > now + 60` or
+  `nbf > now + 60`. Q8's accepted algorithms are RS256, RS384, RS512, PS256, PS384, PS512, ES256,
+  ES384 and EdDSA, those of them the document lists. A `sub` that is empty, holds NUL or is longer
+  than 255 characters answers `auth.subject_missing` (`06` B6's rule,
+  `stepclimb_auth::claims::usable_subject`), not `auth.id_token_invalid`. The key set is cached
+  per provider, its `jwks_uri` and the URL policy for Q5's hour; "unknown `kid`" means no key of
+  the set fits the token's `kid` and algorithm, and the refetch it triggers happens only when the
+  kept set is at least 60 seconds old, so a token signed with a key the set lacks fails at once
+  after a fresh fetch. A key set that cannot be fetched or parsed is `auth.provider_error`.
+  Userinfo (Q3) is called when the provider's `userinfo` flag is on and the document lists the
+  endpoint, as a `GET` with the access token as a Bearer credential; only a 200 `application/json`
+  object is read, so a signed userinfo response is `auth.provider_error`. The request trace
+  records the path and never the query, which carries `code` and `state` (`08` B4). Until I4, a
+  verified sign-in creates no session: the callback answers `auth.provider_unavailable`.
 - **B12.** The identity's subject is the ID token's `sub`, a non-empty string, and is not
   configurable. Identities are `(provider_id, subject)`; the email address never identifies a
   person (`07-admission.md` B6).
@@ -154,7 +191,7 @@ document lists the codes in each operation's description.
 | Method and path | Request | Response | Error codes (in the redirect) | Permission |
 | --- | --- | --- | --- | --- |
 | `GET /auth/{provider}/start` | path `provider` = `identity_providers.key`; query `return_to?` | 303 to the provider's authorization endpoint; sets the flow cookie | `auth.provider_not_found`, `auth.provider_unavailable`, `auth.rate_limited` | none |
-| `GET /auth/{provider}/callback` | query `code, state` or `error, error_description?, state` | 303 to `return_to`; sets `__Host-sc_session`; clears the flow cookie | `auth.provider_not_found`, `auth.flow_invalid`, `auth.flow_expired`, `auth.provider_denied`, `auth.provider_error`, `auth.id_token_invalid`, `auth.rate_limited`, and the admission refusals of `07-admission.md` | none |
+| `GET /auth/{provider}/callback` | query `code, state` or `error, error_description?, state` | 303 to `return_to`; sets `__Host-sc_session`; clears the flow cookie | `auth.provider_not_found`, `auth.flow_invalid`, `auth.flow_expired`, `auth.provider_denied`, `auth.provider_error`, `auth.id_token_invalid`, `auth.subject_missing`, `auth.provider_unavailable` (an `oauth2` provider, and until I4 every verified sign-in), `auth.rate_limited`, and the admission refusals of `07-admission.md` | none |
 
 The same two routes serve generic OAuth 2 providers (`06-oauth2-and-vatsim-preset.md`); the
 handler picks the flow by the provider's `kind`. Provider administration

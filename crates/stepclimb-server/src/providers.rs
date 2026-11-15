@@ -14,10 +14,11 @@
 //!
 //! [`Providers`] holds one client per policy the instance can be under and picks one by the
 //! organization count ([`Providers::client`]); a client's policy is fixed when it is built, and
-//! its connection pool is kept across requests. It also holds the discovery documents' cache.
+//! its connection pool is kept across requests. It also holds the caches of discovery documents
+//! and signing keys.
 
 use stepclimb_auth::{
-    oidc::DiscoveryCache,
+    oidc::{DiscoveryCache, JwksCache},
     outbound::{BuildError, OutboundClient, UrlPolicy},
 };
 use stepclimb_core::organizations::Tenancy;
@@ -28,6 +29,7 @@ pub struct Providers {
     single_org: OutboundClient,
     multi_org: OutboundClient,
     discovery: DiscoveryCache,
+    jwks: JwksCache,
 }
 
 impl Providers {
@@ -38,6 +40,7 @@ impl Providers {
             single_org: OutboundClient::for_providers(policy(allow_insecure, true))?,
             multi_org: OutboundClient::for_providers(policy(allow_insecure, false))?,
             discovery: DiscoveryCache::default(),
+            jwks: JwksCache::default(),
         })
     }
 
@@ -53,6 +56,11 @@ impl Providers {
     /// The discovery documents, per provider (Q5).
     pub fn discovery(&self) -> &DiscoveryCache {
         &self.discovery
+    }
+
+    /// The providers' signing keys (Q5).
+    pub fn jwks(&self) -> &JwksCache {
+        &self.jwks
     }
 }
 

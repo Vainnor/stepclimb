@@ -200,6 +200,7 @@ async fn the_openapi_document_is_3_1_and_lists_every_route() {
             "/auth/local/passkey/finish",
             "/auth/local/passkey/start",
             "/auth/sign-out",
+            "/auth/{provider}/callback",
             "/auth/{provider}/start",
             "/healthz",
             "/readyz",

@@ -35,3 +35,4 @@ Decided list (`docs/plan/technical.md` -> Decided, and `docs/plan/ui.md` -> UI d
 | [0026](0026-webauthn-rs-for-passkeys.md) | webauthn-rs 0.6 for passkeys | Accepted |
 | [0027](0027-mock-identity-provider.md) | The mock identity provider is a test-only workspace crate | Accepted |
 | [0028](0028-oidc-discovery-and-authorization.md) | OIDC discovery and the authorization request on openidconnect's types | Accepted |
+| [0029](0029-id-token-checks.md) | ID token checks on plain JSON claims, signatures by openidconnect's keys | Accepted |

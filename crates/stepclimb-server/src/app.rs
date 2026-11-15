@@ -21,7 +21,7 @@ use crate::{
     enrollment,
     error::ApiError,
     health, identities, local_sign_in, me, my_passkeys, openapi, organization, passkey_enrollment,
-    passkey_sign_in, provider_sign_in,
+    passkey_sign_in, provider_callback, provider_sign_in,
     providers::Providers,
     rate_limit::RateLimiter,
     role_assignments, roles, spa, users,
@@ -81,8 +81,20 @@ pub fn router(state: AppState) -> Router {
         // Outside the CSRF check, so its refusals carry the header too.
         .layer(middleware::from_fn(no_store_for_api));
     with_hsts(app, https)
-        .layer(TraceLayer::new_for_http())
+        .layer(TraceLayer::new_for_http().make_span_with(request_span))
         .with_state(state)
+}
+
+/// The span every request is traced in: its method, path and HTTP version. The query is left
+/// out, since a provider's callback carries its authorization `code` and `state` there and no
+/// credential may reach a log line (spec 08 B4).
+fn request_span(request: &axum::http::Request<axum::body::Body>) -> tracing::Span {
+    tracing::debug_span!(
+        "request",
+        method = %request.method(),
+        path = %request.uri().path(),
+        version = ?request.version(),
+    )
 }
 
 /// The path of the API document, which is not an operation in itself.
@@ -119,6 +131,10 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         (
             provider_sign_in::START_PATH,
             get(provider_sign_in::start_provider_sign_in),
+        ),
+        (
+            provider_callback::CALLBACK_PATH,
+            get(provider_callback::finish_provider_sign_in),
         ),
         (branding::THEME_CSS_PATH, get(branding::theme_css)),
         (me::ME_PATH, get(me::get_me)),
