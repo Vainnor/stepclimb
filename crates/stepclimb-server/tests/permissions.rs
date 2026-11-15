@@ -72,9 +72,10 @@ use sqlx::PgPool;
 use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{
     OrgScope, Source, accounts,
+    admission_webhooks::{self, Change, Fresh},
     audit::Actor,
     clock::ManualClock,
-    feature::{self, ApiKeys, CustomBranding, CustomRoles, Feature, Limit},
+    feature::{self, AdmissionWebhook, ApiKeys, CustomBranding, CustomRoles, Feature, Limit},
     grants::ScopeId,
     id::{Uuid, new_id},
     identities::{self, NewIdentity},
@@ -392,7 +393,123 @@ const TABLE: &[Entry] = &[
         operation_id: "updateAdmissionSettings",
         access: permission(AdmissionManage::KEY, Target::Org, open_signup),
     },
+    Entry {
+        operation_id: "getAdmissionWebhook",
+        access: permission(AdmissionManage::KEY, WEBHOOK_NOT_FOUND, webhook_of_org),
+    },
+    Entry {
+        operation_id: "updateAdmissionWebhook",
+        access: gated(
+            AdmissionWebhook::KEY,
+            with_every_permission(permission(
+                AdmissionManage::KEY,
+                Target::Org,
+                move_webhook_of_org,
+            )),
+        ),
+    },
+    Entry {
+        operation_id: "rotateAdmissionWebhookSecret",
+        access: gated(
+            AdmissionWebhook::KEY,
+            with_every_permission(permission(
+                AdmissionManage::KEY,
+                WEBHOOK_NOT_FOUND,
+                webhook_of_org,
+            )),
+        ),
+    },
+    Entry {
+        operation_id: "deleteAdmissionWebhook",
+        access: with_every_permission(permission(
+            AdmissionManage::KEY,
+            WEBHOOK_NOT_FOUND,
+            webhook_of_org,
+        )),
+    },
 ];
+
+/// The organization has no admission webhook. The routes act on the caller's organization's
+/// webhook, so org A's admin calling with org B's webhook in place finds none.
+const WEBHOOK_NOT_FOUND: Target = Target::Scoped {
+    not_found: "admission.webhook_not_found",
+    cross_org: "admission.webhook_not_found",
+};
+
+/// Every catalog permission key: the 2xx case of a write that the escalation rule guards
+/// (spec 07 I5) holds them all. `every_permission_lists_the_catalog` keeps it complete.
+const EVERY_PERMISSION: &[&str] = &[
+    "organization.manage",
+    "account.view",
+    "account.manage",
+    "user.view",
+    "user.manage",
+    "role.view",
+    "role.manage",
+    "role.assign",
+    "provider.manage",
+    "admission.manage",
+    "service_account.manage",
+    "branding.manage",
+];
+
+#[test]
+fn every_permission_lists_the_catalog() {
+    let mut listed = EVERY_PERMISSION.to_vec();
+    let mut catalog = all_keys();
+    listed.sort_unstable();
+    catalog.sort_unstable();
+    assert_eq!(listed, catalog);
+}
+
+/// `access`, a [`permission`] entry, whose 2xx case also holds every other catalog permission
+/// ([`with_extra`] leaves out the entry's own key).
+const fn with_every_permission(access: Access) -> Access {
+    match access {
+        Access::Permission {
+            key,
+            target,
+            feature,
+            setup,
+            ..
+        } => Access::Permission {
+            key,
+            target,
+            extra: EVERY_PERMISSION,
+            feature,
+            setup,
+        },
+        Access::AuthOnly(_) | Access::Own { .. } | Access::Mine(_) => {
+            panic!("every permission needs a permission entry")
+        }
+    }
+}
+
+/// An admission webhook of `org`, its URL naming the organization so the cross-organization
+/// case sees it if it leaks.
+fn webhook_of_org(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        org.admission_webhook().await;
+        Call {
+            params: Vec::new(),
+            body: None,
+            at: At::Org,
+        }
+    })
+}
+
+/// [`webhook_of_org`] and a body that moves it: an update, and in an organization without one
+/// (the cross-organization case's org A), a creation.
+fn move_webhook_of_org(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        org.admission_webhook().await;
+        Call {
+            params: Vec::new(),
+            body: Some(serde_json::json!({ "url": "https://suite.example.test/hook" })),
+            at: At::Org,
+        }
+    })
+}
 
 /// A passkey of the caller, so the list has a row to answer.
 fn passkey_of_caller(org: &Org, caller: Uuid) -> Pin<Box<dyn Future<Output = Mine> + Send + '_>> {
@@ -1661,7 +1778,7 @@ async fn allowed_call(org: &Org, access: &Access) -> (Call, String) {
             key, extra, setup, ..
         } => {
             let call = setup(org).await;
-            let keys: Vec<&str> = [*key].iter().chain(*extra).copied().collect();
+            let keys = with_extra(key, extra);
             let cookie = org.holder(&keys, call.at).await;
             (call, cookie)
         }
@@ -1865,7 +1982,7 @@ async fn run(world: &World, app: &Router, op: &Operation, access: &Access) -> Re
             {
                 report.record(op, "404", result);
             }
-            let keys: Vec<&str> = [*key].iter().chain(*extra).copied().collect();
+            let keys = with_extra(key, extra);
             report.record(op, "2xx", allowed(world, app, op, &keys, *setup).await);
             if feature.is_none() {
                 let result = every_feature_off(world, app, op, &keys, *setup).await;
@@ -2292,6 +2409,12 @@ fn identifiers(value: &Value, slug: &str, out: &mut Vec<String>) {
     }
 }
 
+/// `key` and the `extra` keys other than it.
+fn with_extra(key: &'static str, extra: &[&'static str]) -> Vec<&'static str> {
+    let others = extra.iter().copied().filter(|k| *k != key);
+    std::iter::once(key).chain(others).collect()
+}
+
 fn all_keys() -> Vec<&'static str> {
     perm::ALL.iter().map(|p| p.key()).collect()
 }
@@ -2479,6 +2602,29 @@ struct Org {
 }
 
 impl Org {
+    /// An admission webhook with a stand-in sealed secret: the routes never open one.
+    async fn admission_webhook(&self) {
+        let url = format!("https://{}.example.test/hook", self.slug);
+        let change = Change {
+            url: Some(&url),
+            enabled: None,
+        };
+        let fresh = Fresh {
+            id: new_id(),
+            sealed_secret: b"stand-in",
+        };
+        admission_webhooks::save(
+            &self.pool,
+            scope(self.id),
+            change,
+            &fresh,
+            now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("create the admission webhook");
+    }
+
     async fn account(&self, parent: Uuid, name: &str) -> Uuid {
         accounts::create(
             &self.pool,

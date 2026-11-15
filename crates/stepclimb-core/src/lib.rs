@@ -18,7 +18,7 @@
 //! provider by the provider's subject; and [`local_sign_in`], the local provider row and its
 //! method switches, with [`local_tokens`] (enrollment links), [`passkeys`], [`local_logins`]
 //! (passwords), [`local_totp`] (TOTP and recovery codes) and [`local`] (local credentials); and [`admission_settings`], the switches
-//! that say who admission lets in; and the entitlement catalogs ([`feature`]) with the
+//! that say who admission lets in; [`admission_webhooks`], the organization's admission webhook; and the entitlement catalogs ([`feature`]) with the
 //! [`plans`] and [`org_plans`] repositories, which give every organization the `unlimited`
 //! plan, and how a request's plan bounds what it adds ([`org_plans::check_room`]); and
 //! [`requirement`], which lets the server's `Require` check a permission or a feature; and
@@ -32,6 +32,7 @@
 pub mod accounts;
 pub mod admission_rules;
 pub mod admission_settings;
+pub mod admission_webhooks;
 pub mod appearance;
 pub mod audit;
 pub mod auth_flows;

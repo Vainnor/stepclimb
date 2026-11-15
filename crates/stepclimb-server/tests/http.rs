@@ -137,6 +137,7 @@ async fn startup_migrations_create_the_schema_on_an_empty_database(pool: PgPool)
         tables,
         [
             "accounts",
+            "admission_webhooks",
             "audit_events",
             "auth_flows",
             "identities",
@@ -180,6 +181,8 @@ async fn the_openapi_document_is_3_1_and_lists_every_route() {
             "/api/v1/accounts/{account_id}",
             "/api/v1/accounts/{account_id}/move",
             "/api/v1/admin/admission",
+            "/api/v1/admin/admission/webhook",
+            "/api/v1/admin/admission/webhook/rotate-secret",
             "/api/v1/admin/branding",
             "/api/v1/admin/local-sign-in",
             "/api/v1/admin/permissions",

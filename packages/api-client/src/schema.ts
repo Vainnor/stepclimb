@@ -102,6 +102,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/admission/webhook": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the organization's admission webhook. The signing secret is never returned. */
+        get: operations["getAdmissionWebhook"];
+        /**
+         * Create the organization's admission webhook, or change the members the body names. The
+         *     answer of the call that creates it carries the signing secret, once.
+         */
+        put: operations["updateAdmissionWebhook"];
+        post?: never;
+        /** Delete the organization's admission webhook; sign-ins no longer call it. */
+        delete: operations["deleteAdmissionWebhook"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/admission/webhook/rotate-secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replace the webhook's signing secret with a new one, returned once. The old secret stops
+         *     signing at once.
+         */
+        post: operations["rotateAdmissionWebhookSecret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/branding": {
         parameters: {
             query?: never;
@@ -1027,6 +1069,51 @@ export interface components {
         };
         /** @description A condition's value. */
         AdmissionValue: string | number | boolean | components["schemas"]["AdmissionScalar"][];
+        /** @description The organization's admission webhook, without its secret. */
+        AdmissionWebhook: {
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            created_at: string;
+            /**
+             * @description Whether admission calls it. Off, sign-ins skip the webhook. A new webhook is off until
+             *     enabled.
+             */
+            enabled: boolean;
+            /**
+             * @description Where admission POSTs each sign-in through an outside provider. Not a secret: every
+             *     `admission.manage` holder reads it and the audit log records it.
+             */
+            url: string;
+        };
+        /**
+         * @description A change to the webhook: send only what you change. An absent member keeps its stored
+         *     value; creating the webhook needs `url`, and `enabled` is then `false` unless sent, so the
+         *     receiver can be given the secret first. A member sent as `null` is malformed: omit it
+         *     instead. Without the plan's `admission_webhook` feature, only `{"enabled": false}` (or `{}`)
+         *     is accepted.
+         */
+        AdmissionWebhookPatch: {
+            /** @description Whether admission calls the webhook. */
+            enabled?: boolean;
+            /**
+             * @description An absolute `https` URL, at most 2,048 characters, with no fragment, user name or
+             *     password, kept exactly as sent. It is not a secret: it is returned to every
+             *     `admission.manage` holder and written to the audit log. Authenticate the receiver with
+             *     the signing secret, never with a token in a query parameter.
+             */
+            url?: string;
+        };
+        /** @description A new signing secret, shown once. */
+        AdmissionWebhookSecret: {
+            /**
+             * @description The Standard Webhooks signing secret, `whsec_` and 32 bytes in base64. The old one stops
+             *     signing at once: sign-ins through outside providers are refused until the receiver has
+             *     this one.
+             */
+            secret: string;
+        };
         /**
          * @description An appearance every brand has.
          * @enum {string}
@@ -1964,6 +2051,22 @@ export interface components {
              */
             permissions?: string[] | null;
         };
+        /** @description The webhook after a `PUT`, with its signing secret when this call created it. */
+        SavedAdmissionWebhook: {
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            created_at: string;
+            enabled: boolean;
+            /**
+             * @description Present only when this call created the webhook: the Standard Webhooks signing secret,
+             *     `whsec_` and 32 bytes in base64. This is the only answer that carries it: give it to the
+             *     receiver now. Rotate it to get a new one.
+             */
+            secret?: string | null;
+            url: string;
+        };
         /** @description The saved inputs, every choice made. */
         SavedInputs: {
             corner_style: components["schemas"]["CornerStyle"];
@@ -2168,6 +2271,69 @@ export interface components {
         };
         /** @description `request.invalid`: the change breaks a rule; `errors` lists each one (at most 20), each with a JSON Pointer to the member. `admission.rule_invalid` marks a rule that is not one of the documented forms or breaks a limit; `admission.attribute_unknown` an attribute no provider the list applies to maps; `admission.provider_unknown` a key in `rules.providers` that is not an outside provider of the organization. */
         AdmissionInvalid: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: the caller does not hold `admission.manage` at organization scope. `permission.escalation`: the caller does not hold every catalog permission at organization scope; removing the webhook lets in people it refuses. `auth.csrf_refused`: the request did not come from this site. */
+        AdmissionWebhookDeleteForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.invalid`: `errors` names `/url` with `admission.webhook_url_invalid` (not an absolute `https` URL of at most 2,048 characters without a fragment, white space or control character), `admission.webhook_url_refused` (the outbound URL policy refuses it: a user name or password, `http` or a loopback address without the instance's insecure-providers switch, a private network address on an instance with several organizations, or a link-local, multicast or reserved address) or `admission.webhook_url_required` (the organization has no webhook yet and the body names no URL). */
+        AdmissionWebhookInvalid: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `admission.webhook_not_found`: the organization has no admission webhook. `org.not_found`: the request's organization cannot be determined. */
+        AdmissionWebhookNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: the caller does not hold `admission.manage` at organization scope. */
+        AdmissionWebhookReadForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `entitlement.feature_unavailable`: the organization's plan does not include `admission_webhook`. `permission.denied`: the caller does not hold `admission.manage` at organization scope. `permission.escalation`: the caller does not hold every catalog permission at organization scope; until the receiver has the new secret, every sign-in through an outside provider is refused. `auth.csrf_refused`: the request did not come from this site. */
+        AdmissionWebhookRotateForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `admission.webhook_secret_changed`: another rotation replaced the secret while this one ran; its secret is the current one. Rotate again for a new one. */
+        AdmissionWebhookSecretChanged: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: the caller does not hold `admission.manage` at organization scope. `entitlement.feature_unavailable`: the body creates the webhook, sets its URL or enables it, and the organization's plan does not include `admission_webhook`; a body that only disables it needs no feature. `permission.escalation`: the caller does not hold every catalog permission at organization scope; the webhook decides the sign-ins of every user, including users with permissions the caller lacks. `auth.csrf_refused`: the request did not come from this site. */
+        AdmissionWebhookWriteForbidden: {
             headers: {
                 [name: string]: unknown;
             };
@@ -3338,6 +3504,113 @@ export interface operations {
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             422: components["responses"]["AdmissionInvalid"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    getAdmissionWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The admission webhook */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdmissionWebhook"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AdmissionWebhookReadForbidden"];
+            404: components["responses"]["AdmissionWebhookNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    updateAdmissionWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdmissionWebhookPatch"];
+            };
+        };
+        responses: {
+            /** @description The webhook after the change, with `secret` when this call created it */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedAdmissionWebhook"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AdmissionWebhookWriteForbidden"];
+            404: components["responses"]["OrganizationNotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["AdmissionWebhookInvalid"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    deleteAdmissionWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The webhook and its secret are deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AdmissionWebhookDeleteForbidden"];
+            404: components["responses"]["AdmissionWebhookNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    rotateAdmissionWebhookSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The new signing secret */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdmissionWebhookSecret"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AdmissionWebhookRotateForbidden"];
+            404: components["responses"]["AdmissionWebhookNotFound"];
+            409: components["responses"]["AdmissionWebhookSecretChanged"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };

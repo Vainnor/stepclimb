@@ -297,6 +297,10 @@ also writes to:
   | `totp.disable` | `totp` (the user's id) | `local_totp::disable` (`04` issue 7) | `before`: user |
   | `service_account.create` | `service_account` | `service_accounts::create` (`08` I6) | `after`: name, kind, owner, scopes; never the key or its hash |
   | `service_account.delete` | `service_account` | `service_accounts::delete` (`08` I6) | `before`: the same |
+  | `admission_webhook.create` | `admission_webhook` | `admission_webhooks::save` (`07` issue 5) | `after`: url, enabled; never the secret |
+  | `admission_webhook.update` | `admission_webhook` | `admission_webhooks::save` (`07` issue 5) | `before` and `after` of each member that changed |
+  | `admission_webhook.rotate_secret` | `admission_webhook` | `admission_webhooks::rotate_secret` (`07` issue 5) | none: the secret is never recorded |
+  | `admission_webhook.delete` | `admission_webhook` | `admission_webhooks::delete` (`07` issue 5) | `before`: url, enabled |
 
   A request that changes nothing writes nothing, neither the row (its `updated_at` stays) nor an
   entry, and answers the row as it is: a patch naming no member, a patch naming only values the

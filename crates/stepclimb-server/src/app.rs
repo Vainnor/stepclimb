@@ -16,7 +16,7 @@ use tower_http::trace::TraceLayer;
 use utoipa_scalar::{Scalar, Servable};
 
 use crate::{
-    accounts, admission_settings, appearance, auth, branding,
+    accounts, admission_settings, admission_webhook, appearance, auth, branding,
     csrf::{self, OriginAllowlist},
     discovery, enrollment,
     error::ApiError,
@@ -275,6 +275,16 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
             admission_settings::ADMISSION_PATH,
             get(admission_settings::get_admission_settings)
                 .put(admission_settings::update_admission_settings),
+        ),
+        (
+            admission_webhook::WEBHOOK_PATH,
+            get(admission_webhook::get_admission_webhook)
+                .put(admission_webhook::update_admission_webhook)
+                .delete(admission_webhook::delete_admission_webhook),
+        ),
+        (
+            admission_webhook::ROTATE_SECRET_PATH,
+            post(admission_webhook::rotate_admission_webhook_secret),
         ),
     ]
 }

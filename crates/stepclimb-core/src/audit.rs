@@ -66,6 +66,10 @@ pub enum Action {
     TotpDisable,
     ServiceAccountCreate,
     ServiceAccountDelete,
+    AdmissionWebhookCreate,
+    AdmissionWebhookUpdate,
+    AdmissionWebhookRotateSecret,
+    AdmissionWebhookDelete,
 }
 
 impl Action {
@@ -99,6 +103,10 @@ impl Action {
             Self::TotpDisable => "totp.disable",
             Self::ServiceAccountCreate => "service_account.create",
             Self::ServiceAccountDelete => "service_account.delete",
+            Self::AdmissionWebhookCreate => "admission_webhook.create",
+            Self::AdmissionWebhookUpdate => "admission_webhook.update",
+            Self::AdmissionWebhookRotateSecret => "admission_webhook.rotate_secret",
+            Self::AdmissionWebhookDelete => "admission_webhook.delete",
         }
     }
 
@@ -125,6 +133,10 @@ impl Action {
             // Nor has a user's TOTP; the entry names its user.
             Self::TotpEnable | Self::TotpDisable => "totp",
             Self::ServiceAccountCreate | Self::ServiceAccountDelete => "service_account",
+            Self::AdmissionWebhookCreate
+            | Self::AdmissionWebhookUpdate
+            | Self::AdmissionWebhookRotateSecret
+            | Self::AdmissionWebhookDelete => "admission_webhook",
         }
     }
 }
