@@ -40,6 +40,7 @@ describe("ButtonLink", () => {
   it("lets a long label wrap and grow the control instead of a fixed height", () => {
     const classes = buttonLink({ size: "md" }).split(" ");
     expect(classes).toContain("whitespace-normal");
+    expect(classes).toContain("select-none");
     expect(classes).toContain("min-h-(--sc-control-h)");
     expect(classes).not.toContain("whitespace-nowrap");
     expect(classes).not.toContain("h-(--sc-control-h)");

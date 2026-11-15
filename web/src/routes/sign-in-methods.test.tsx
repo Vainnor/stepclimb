@@ -100,7 +100,22 @@ describe("the method list (B13, B14, T6)", () => {
     );
   });
 
-  it("encodes a key as one path segment", async () => {
+  it("leaves out a provider whose key is . or .., which would not stay one path segment", async () => {
+    stubServer({
+      "GET /.well-known/stepclimb": discovery(null, [
+        { key: ".", kind: "oidc", label: "Dot" },
+        { key: "..", kind: "oidc", label: "Dot dot" },
+        vatsim,
+      ]),
+    });
+    renderApp("/sign-in");
+    await screen.findByRole("link", { name: "Sign in with VATSIM" });
+    expect(screen.queryByRole("link", { name: "Dot" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Dot dot" })).toBeNull();
+    expect(screen.getAllByRole("link")).toHaveLength(1);
+  });
+
+  it("percent-encodes / and ? in a key, so it stays one path segment", async () => {
     stubServer({
       "GET /.well-known/stepclimb": discovery(null, [{ key: "a/b?c", kind: "oidc", label: "Odd" }]),
     });
@@ -199,6 +214,7 @@ describe("the code a browser flow came back with (B18, T8)", () => {
     ["auth.flow_invalid", "This sign-in was already finished or replaced by one in another tab."],
     ["auth.suspended", "Your account is suspended. Ask an administrator to restore it."],
     ["auth.signup_closed", "There is no account for you in this organization"],
+    ["auth.admission_refused", "Your organization's sign-in rules do not let this account in."],
     ["entitlement.limit_reached", "This organization has no room for another user on its plan"],
   ])("%s has its own message", async (code, message) => {
     stubServer({ "GET /.well-known/stepclimb": discovery(null, [vatsim]) });
@@ -230,8 +246,40 @@ describe("the code a browser flow came back with (B18, T8)", () => {
     expect(alert.querySelector("code")).toHaveTextContent("auth.something_new");
   });
 
+  it("moves focus to the message once, so it is read first", async () => {
+    stubServer({ "GET /.well-known/stepclimb": discovery(null, [vatsim]) });
+    renderApp("/sign-in?error=auth.provider_denied");
+    const alert = await screen.findByRole("alert");
+    await waitFor(() => expect(alert.closest('[data-slot="callback-error"]')).toHaveFocus());
+    await screen.findByRole("link", { name: "Sign in with VATSIM" });
+    expect(alert.closest('[data-slot="callback-error"]')).toHaveFocus();
+  });
+
+  it("leaves focus alone when the page came with no code", async () => {
+    stubServer({});
+    renderApp("/sign-in");
+    await screen.findByRole("textbox", { name: "Email" });
+    expect(document.querySelector('[data-slot="callback-error"]')).toBeNull();
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it.each([
+    "admission.new_rule",
+    "entitlement.something_else",
+    "local.new_check",
+    "org.moved",
+    "auth.flow.renamed",
+  ])("shows %s, a code in a sign-in namespace, in mono", async (code) => {
+    stubServer({});
+    renderApp(`/sign-in?error=${code}`);
+    expect((await screen.findByRole("alert")).querySelector("code")).toHaveTextContent(code);
+  });
+
   it.each([
     "Call 555-0100 to restore your account",
+    "call.support.now",
+    "auth.a.b.c",
+    "billing.overdue",
     "auth.x<script>",
     `auth.${"a".repeat(64)}`,
     "nodot",
@@ -290,6 +338,20 @@ describe("the password step (B16, B17)", () => {
     expect(requestsTo(fetch, "/auth/local/passkey/start")).toEqual([]);
   });
 
+  it("names the account in a hidden, read-only username field for password managers", async () => {
+    stubServer(passwordOnly);
+    renderApp("/sign-in");
+    await enterEmail();
+    await screen.findByRole("heading", { level: 1, name: "Enter your password" });
+    const username = document.querySelector<HTMLInputElement>('input[autocomplete="username"]');
+    expect(username).not.toBeNull();
+    expect(username?.form).toBe(screen.getByLabelText("Password").closest("form"));
+    expect(username).toHaveValue("avery@example.test");
+    expect(username).toHaveAttribute("readonly");
+    expect(username).toHaveAttribute("hidden");
+    expect(username).not.toBeVisible();
+  });
+
   it("never puts the password in the URL or the history", async () => {
     let finish: (response: Response) => void = () => undefined;
     stubServer({
@@ -327,6 +389,11 @@ describe("the password step (B16, B17)", () => {
     [401, "auth.credentials_invalid", "That email and password do not match."],
     [403, "auth.suspended", "Your account is suspended."],
     [404, "auth.method_disabled", "Your organization has turned off password sign-in."],
+    [
+      403,
+      "auth.admission_refused",
+      "Your organization's sign-in rules do not let this account in.",
+    ],
     [503, "org.none", "This server has no organization yet."],
   ])("%i %s says so", async (status, code, message) => {
     stubServer({

@@ -78,6 +78,17 @@ function PasswordStep({ email, search }: { email: string; search: SignInSearch }
       </Text>
       {problem ? <FormError code={problem.code}>{problem.message}</FormError> : null}
       <Form onSubmit={send} className="flex flex-col gap-4">
+        {/* The address, hidden and read-only, so a password manager saves and fills the password
+            for this account. */}
+        <input
+          type="email"
+          name="username"
+          autoComplete="username"
+          value={email}
+          readOnly
+          hidden
+          data-slot="password-username"
+        />
         <TextField
           label={t("signIn.password.label")}
           type="password"

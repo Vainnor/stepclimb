@@ -129,6 +129,8 @@ export const webMessages: Catalog = {
     "signIn.password.submit": "Sign in",
     "signIn.password.title": "Enter your password",
     "signIn.password.usePasskey": "Sign in with a passkey instead",
+    "signIn.problem.admissionRefused":
+      "Your organization's sign-in rules do not let this account in. Ask an administrator.",
     "signIn.problem.credentialsInvalid":
       "That email and password do not match. Check both, then try again.",
     "signIn.problem.failed": "Something went wrong while signing you in. Try again.",

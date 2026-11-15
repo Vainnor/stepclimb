@@ -286,6 +286,11 @@ describe("problem codes on the passkey step (B17, T8)", () => {
     [403, "auth.suspended", "Your account is suspended. Ask an administrator to restore it."],
     [
       403,
+      "auth.admission_refused",
+      "Your organization's sign-in rules do not let this account in. Ask an administrator.",
+    ],
+    [
+      403,
       "local.passkeys_not_allowed",
       "Your organization does not let you sign in with a passkey. Sign in with your identity provider instead.",
     ],

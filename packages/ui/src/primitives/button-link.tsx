@@ -4,7 +4,8 @@
 // It keeps a link's behavior: an `href` the browser shows and can open in a new tab, and
 // navigation through the app's RouterProvider, which `routerOptions` reach. The label wraps, since
 // it can come from configuration, so the control grows in height instead of overflowing. Under a
-// coarse pointer it is at least the touch size, as base.css makes every button.
+// coarse pointer it is at least the touch size, as base.css makes every button, and like a button
+// its text is not selectable and a long press opens no link menu (base.css, `data-slot`).
 import {
   Link as AriaLink,
   type LinkProps as AriaLinkProps,
@@ -16,7 +17,7 @@ import { button } from "./button";
 export const buttonLink = tv({
   extend: button,
   base: [
-    "h-auto min-h-(--sc-control-h) py-2 whitespace-normal text-center cursor-pointer",
+    "h-auto min-h-(--sc-control-h) py-2 whitespace-normal text-center cursor-pointer select-none",
     "data-[disabled]:cursor-not-allowed",
     // base.css gives buttons the touch size under a coarse pointer; a link needs it here.
     "pointer-coarse:min-h-(--sc-control-touch) pointer-coarse:min-w-(--sc-control-touch)",

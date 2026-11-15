@@ -84,6 +84,8 @@ function codeMessage(code: string, screen: SignInScreen, t: Strings["t"]): strin
       return t("signIn.problem.credentialsInvalid");
     case "auth.suspended":
       return t("signIn.problem.suspended");
+    case "auth.admission_refused":
+      return t("signIn.problem.admissionRefused");
     case "local.passkeys_not_allowed":
       return t("signIn.problem.passkeysNotAllowed");
     case "auth.flow_expired":
@@ -144,6 +146,8 @@ function navigationMessage(code: string, t: Strings["t"]): string | undefined {
       return t("signIn.problem.flowInvalid");
     case "auth.suspended":
       return t("signIn.problem.suspended");
+    case "auth.admission_refused":
+      return t("signIn.problem.admissionRefused");
     case "auth.signup_closed":
       return t("signIn.problem.signupClosed");
     case "entitlement.limit_reached":
@@ -153,16 +157,23 @@ function navigationMessage(code: string, t: Strings["t"]): string | undefined {
   }
 }
 
+/** The namespaces of the codes the sign-in routes send; an unknown code is shown only in one. */
+const SHOWN_NAMESPACES = new Set(["auth", "admission", "entitlement", "local", "org"]);
+
 /** The longest unknown code the screen shows; a longer one is not a server's. */
 const MAX_SHOWN_CODE = 64;
 
 /**
- * True when `code` has the shape of the server's codes, dot-separated lowercase words. Anyone can
- * write a link to `/sign-in?error=...`, so a value of any other shape is never put on the page,
- * where it could pass for a message from the organization.
+ * True when `code` has the shape of a sign-in code the server could send: two or three
+ * lowercase words joined by dots, the first one of `SHOWN_NAMESPACES`. Anyone can write a link to
+ * `/sign-in?error=...`, so a value of any other shape is never put on the page, where it could
+ * pass for a message from the organization.
  */
 function looksLikeCode(code: string): boolean {
-  return code.length <= MAX_SHOWN_CODE && /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/.test(code);
+  if (code.length > MAX_SHOWN_CODE || !/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){1,2}$/.test(code)) {
+    return false;
+  }
+  return SHOWN_NAMESPACES.has(code.slice(0, code.indexOf(".")));
 }
 
 /** What to tell the user about the code a browser flow ended with (B18). */

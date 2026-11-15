@@ -74,8 +74,9 @@
     box-shadow: none;
   }
 
-  /* Controls are not text-selectable (B15). */
+  /* Controls are not text-selectable (B15), a link drawn as a button included. */
   button,
+  [data-slot="button-link"],
   [role="button"],
   [role="checkbox"],
   [role="menuitem"],

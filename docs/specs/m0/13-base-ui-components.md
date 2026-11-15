@@ -116,7 +116,7 @@ names the React Aria Components export each is built on.
 | | Menu | `MenuTrigger`, `Menu`, `MenuItem`, `SubmenuTrigger`, `Popover` | Opens as a bottom Sheet under 768 px if Q10 says so |
 | | Toolbar | `Toolbar` | Arrow-key movement between items |
 | | CopyButton | `Button` | Copies with the Clipboard API and announces the result through a live region; on failure says the copy failed |
-| | ButtonLink | `Link` | Coordinator decision (2026-11-15), added for the sign-in screen's provider buttons (spec 11 B14): a link drawn with Button's intents and sizes, for navigation that reads as an action. It stays an anchor with its `href` and goes through the app's `RouterProvider` with any `routerOptions`; a long label wraps and the control grows; under a coarse pointer it is at least the touch size |
+| | ButtonLink | `Link` | Coordinator decision (2026-11-15), added for the sign-in screen's provider buttons (spec 11 B14): a link drawn with Button's intents and sizes, for navigation that reads as an action. It stays an anchor with its `href` and goes through the app's `RouterProvider` with any `routerOptions`; a long label wraps and the control grows; under a coarse pointer it is at least the touch size; like a button, its text is not selectable and a long press opens no link menu |
 | Forms (M0 part, Q1) | Field | `Label`, `Text slot="description"`, `FieldError` | The shared label, description and error layout every field uses |
 | | TextField, TextArea | `TextField`, `Input`, `TextArea` | Error text says what is wrong and how to fix it |
 | | NumberField | `NumberField` | Tabular numerals; locale formatting from React Aria |

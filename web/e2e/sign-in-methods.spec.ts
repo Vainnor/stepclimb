@@ -6,7 +6,8 @@
 // navigation and the callback error's display; signing in at a real provider needs the mock
 // OpenID Connect server of spec 05 (T16). The states the stack cannot reach are answered in the
 // browser with synthetic discovery documents, each checked by axe in light, dark and high contrast
-// at 1280 and 375 px.
+// at 1280 and 375 px, in the default brand the stack serves and in the vZDC example brand.
+import { readFileSync } from "node:fs";
 import AxeBuilder from "@axe-core/playwright";
 import { type Browser, expect, type Page, test } from "@playwright/test";
 
@@ -88,78 +89,135 @@ async function offer(page: Page, signIn: unknown[]) {
 
 const local = { key: "local", kind: "local", label: null, methods: ["passkey", "password"] };
 
-for (const theme of themes) {
-  for (const viewport of widths) {
-    test(`the method list's states have no axe violations, ${theme} at ${viewport.width} px (T19)`, async ({
-      browser,
-    }) => {
-      const { context, page } = await themed(browser, theme, viewport);
+const brands = ["default", "vzdc"] as const;
 
-      await test.step("local sign-in and three providers", async () => {
-        await offer(page, [local, ...providers]);
-        await page.goto("/sign-in");
-        await expect(page.locator("html")).toHaveAttribute("data-sc-theme", theme);
-        await expect(page.getByRole("link", { name: "Sign in with corp-sso" })).toBeVisible();
-        expect(await violations(page)).toEqual([]);
-      });
+/**
+ * Every brand's stylesheet from the token build (`just web-build` builds it before the tests). The
+ * stack's server serves the default brand; changing the instance's branding would reach every
+ * other test, so the vZDC brand is drawn from the token build's `[data-sc-brand="vzdc"]` rules.
+ */
+const allBrands = readFileSync(
+  new URL("../../packages/tokens/build/css/variables.css", import.meta.url),
+  "utf8",
+);
 
-      await test.step("providers only, with a code the screen does not know", async () => {
-        await page.unrouteAll();
-        await offer(page, providers);
-        await page.goto("/sign-in?error=auth.something_new");
-        await expect(page.getByRole("alert")).toContainText("auth.something_new");
-        await expect(page.getByRole("textbox", { name: "Email" })).toHaveCount(0);
-        expect(await violations(page)).toEqual([]);
-      });
+/** Serves `brand`'s colors in place of the stack's `/theme.css` (the default brand serves as is). */
+async function serveBrand(page: Page, brand: (typeof brands)[number]) {
+  if (brand === "default") return;
+  await page.route("**/theme.css*", (route) =>
+    route.fulfill({ contentType: "text/css", body: allBrands }),
+  );
+}
 
-      await test.step("no way to sign in", async () => {
-        await page.unrouteAll();
-        await offer(page, []);
-        await page.goto("/sign-in");
-        await expect(page.getByText(/has not turned on a way to sign in/)).toBeVisible();
-        expect(await violations(page)).toEqual([]);
-      });
+/**
+ * Marks the loaded page with `brand`, as Storybook does, once `serveBrand` gave it the rules, and
+ * checks that the page's brand color changed with it.
+ */
+async function drawBrand(page: Page, brand: (typeof brands)[number]) {
+  if (brand === "default") return;
+  const brandColor = () =>
+    page.evaluate(() =>
+      getComputedStyle(document.documentElement).getPropertyValue("--sc-brand").trim(),
+    );
+  const before = await brandColor();
+  await page.evaluate((b) => {
+    document.documentElement.dataset.scBrand = b;
+  }, brand);
+  await expect(page.locator("html")).toHaveAttribute("data-sc-brand", brand);
+  expect(await brandColor()).not.toBe(before);
+}
 
-      await test.step("the password step with a refusal", async () => {
-        await page.unrouteAll();
-        await offer(page, [{ ...local, methods: ["password"] }]);
-        await page.route("**/auth/local/password", (route) =>
-          route.fulfill({
-            status: 401,
-            contentType: "application/problem+json",
-            body: JSON.stringify({
-              type: "about:blank",
-              title: "Unauthorized",
-              status: 401,
-              code: "auth.credentials_invalid",
-            }),
-          }),
-        );
-        await page.goto("/sign-in");
-        await page.getByRole("textbox", { name: "Email" }).fill("nobody@example.test");
-        await page.getByRole("button", { name: "Continue" }).click();
-        await page.getByLabel("Password").fill("not the password");
-        await page.getByRole("button", { name: "Sign in" }).click();
-        await expect(page.getByRole("alert")).toContainText(
-          "That email and password do not match.",
-        );
-        await expect(page.locator("html")).toHaveAttribute("data-sc-theme", theme);
-        expect(await violations(page)).toEqual([]);
-      });
-      await context.close();
-    });
+for (const brand of brands) {
+  for (const theme of themes) {
+    for (const viewport of widths) {
+      methodListAxe(brand, theme, viewport);
+    }
   }
+}
+
+function methodListAxe(
+  brand: (typeof brands)[number],
+  theme: (typeof themes)[number],
+  viewport: (typeof widths)[number],
+) {
+  test(`the method list's states have no axe violations, ${brand} ${theme} at ${viewport.width} px (T19)`, async ({
+    browser,
+  }) => {
+    const { context, page } = await themed(browser, theme, viewport);
+    const reroute = async (signIn: unknown[]) => {
+      await page.unrouteAll();
+      await serveBrand(page, brand);
+      await offer(page, signIn);
+    };
+
+    await test.step("local sign-in and three providers", async () => {
+      await reroute([local, ...providers]);
+      await page.goto("/sign-in");
+      await drawBrand(page, brand);
+      await expect(page.locator("html")).toHaveAttribute("data-sc-theme", theme);
+      await expect(page.getByRole("link", { name: "Sign in with corp-sso" })).toBeVisible();
+      expect(await violations(page)).toEqual([]);
+    });
+
+    await test.step("providers only, with a code the screen does not know", async () => {
+      await reroute(providers);
+      await page.goto("/sign-in?error=auth.something_new");
+      await drawBrand(page, brand);
+      await expect(page.getByRole("alert")).toContainText("auth.something_new");
+      await expect(page.getByRole("textbox", { name: "Email" })).toHaveCount(0);
+      expect(await violations(page)).toEqual([]);
+    });
+
+    await test.step("no way to sign in", async () => {
+      await reroute([]);
+      await page.goto("/sign-in");
+      await drawBrand(page, brand);
+      await expect(page.getByText(/has not turned on a way to sign in/)).toBeVisible();
+      expect(await violations(page)).toEqual([]);
+    });
+
+    await test.step("the password step with a refusal", async () => {
+      await reroute([{ ...local, methods: ["password"] }]);
+      await page.route("**/auth/local/password", (route) =>
+        route.fulfill({
+          status: 401,
+          contentType: "application/problem+json",
+          body: JSON.stringify({
+            type: "about:blank",
+            title: "Unauthorized",
+            status: 401,
+            code: "auth.credentials_invalid",
+          }),
+        }),
+      );
+      await page.goto("/sign-in");
+      await drawBrand(page, brand);
+      await page.getByRole("textbox", { name: "Email" }).fill("nobody@example.test");
+      await page.getByRole("button", { name: "Continue" }).click();
+      await page.getByLabel("Password").fill("not the password");
+      await page.getByRole("button", { name: "Sign in" }).click();
+      await expect(page.getByRole("alert")).toContainText("That email and password do not match.");
+      await expect(page.locator("html")).toHaveAttribute("data-sc-theme", theme);
+      expect(await violations(page)).toEqual([]);
+    });
+    await context.close();
+  });
 }
 
 test.describe("on a phone", () => {
   // Touch, so `pointer: coarse` matches as on a device: base.css sizes inputs for touch only.
   test.use({ viewport: { width: 375, height: 740 }, isMobile: true, hasTouch: true });
 
-  test("inputs on the sign-in steps are at least 16 px, so iOS does not zoom on focus", async ({
+  test("inputs are at least 16 px and the provider button 44 px tall on a phone", async ({
     page,
   }) => {
-    await offer(page, [{ ...local, methods: ["password"] }]);
+    await offer(page, [{ ...local, methods: ["password"] }, providers[0]]);
     await page.goto("/sign-in");
+    // A provider's button is a link, which base.css does not size: ButtonLink does.
+    const provider = await page
+      .getByRole("link", { name: "Sign in with Example ID" })
+      .boundingBox();
+    expect(provider?.height).toBeGreaterThanOrEqual(44);
     const email = page.getByRole("textbox", { name: "Email" });
     expect(
       await email.evaluate((el) => Number.parseFloat(getComputedStyle(el).fontSize)),

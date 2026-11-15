@@ -37,9 +37,19 @@ export function emailMethods(document: Discovery): LocalMethod[] {
   return (local?.methods ?? []).filter((method) => method === "passkey" || method === "password");
 }
 
-/** The outside providers, in the document's order. */
+/**
+ * True for a key that names a path segment of its own. A key of `.` or `..` would not: the browser
+ * resolves `/auth/../start` to `/start`, and percent-encoding leaves dots as they are. Spec 06 Q5
+ * decided keys of lowercase letters, digits and hyphens, but nothing on the server enforces it
+ * until providers can be created (06 I4, I5), so the screen leaves such a provider out.
+ */
+function isPathSegment(key: string): boolean {
+  return key !== "." && key !== "..";
+}
+
+/** The outside providers, in the document's order, but for one whose key is `.` or `..`. */
 export function providers(document: Discovery): SignInMethod[] {
-  return document.sign_in.filter((method) => method.kind !== "local");
+  return document.sign_in.filter((method) => method.kind !== "local" && isPathSegment(method.key));
 }
 
 /**

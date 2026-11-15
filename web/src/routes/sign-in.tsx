@@ -8,8 +8,8 @@
 // so Back finds the field filled in. The return target rides along in the search.
 //
 // A browser flow that failed lands here with `?error=<code>` (B18): the screen shows that code's
-// message and removes the parameter from the address bar, so a reload or a shared link does not
-// show it again.
+// message, moves focus to it once, and removes the parameter from the address bar, so a reload or
+// a shared link does not show it again.
 import {
   Button,
   ButtonLink,
@@ -23,7 +23,7 @@ import {
 } from "@stepclimb/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useSearch } from "@tanstack/react-router";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { Form } from "react-aria-components";
 import { useDocumentTitle } from "../layouts/document-title";
 import { LoadError } from "../layouts/load-error";
@@ -45,12 +45,20 @@ export function SignInView() {
   useDocumentTitle(title, useOrganizationName());
   const discovery = useQuery(discoveryQuery);
   const callbackError = useCallbackError();
+  // The page opens on the failure, so a screen reader reads it first: focus moves to it once.
+  const errorBox = useRef<HTMLDivElement>(null);
+  const hasCallbackError = callbackError !== undefined;
+  useEffect(() => {
+    if (hasCallbackError) errorBox.current?.focus();
+  }, [hasCallbackError]);
 
   return (
     <>
       {discovery.isError ? null : <Heading level={1}>{title}</Heading>}
       {callbackError ? (
-        <FormError code={callbackError.code}>{callbackError.message}</FormError>
+        <div ref={errorBox} tabIndex={-1} data-slot="callback-error" className="outline-none">
+          <FormError code={callbackError.code}>{callbackError.message}</FormError>
+        </div>
       ) : null}
       {discovery.isPending ? <MethodsSkeleton /> : null}
       {discovery.isError ? (

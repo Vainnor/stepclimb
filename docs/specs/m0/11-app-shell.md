@@ -676,25 +676,34 @@ list, provider buttons, the callback error and the password step that I5 left):
   steps share one request; every page load asks again.
 - **Provider buttons (B14)** are Stepclimb UI's `ButtonLink` (13, added for this): an anchor to
   `/auth/<key>/start`, the key percent-encoded as one path segment, with `?return_to=` when the
-  page has one. The link passes `routerOptions={{ reloadDocument: true }}`, and the app's React
+  page has one. A provider whose key is `.` or `..` is left out: the browser would resolve
+  `/auth/../start` to another path, and the key rule spec 06 Q5 decided (lowercase letters,
+  digits and hyphens) is not enforced on the server until providers can be created (06 I4, I5).
+  The link passes `routerOptions={{ reloadDocument: true }}`, and the app's React
   Aria `RouterProvider` hands such a link to the browser (`location.assign`) instead of TanStack
   Router. A provider whose `label` is `null` reads "Sign in with <key>".
 - **The callback error (B18).** The route keeps any string `error` from the search, the screen
   reads it once into its own state, shows its message as a `FormError` above the methods, and
-  replaces the history entry without `error` (keeping `return_to`). Each code the provider routes
+  replaces the history entry without `error` (keeping `return_to`). Focus moves to the message
+  once, so a screen reader reads it first. Each code the provider routes
   and admission send today has its own message: `auth.rate_limited`, `auth.provider_not_found`,
   `auth.provider_unavailable`, `auth.provider_denied`, `auth.provider_error`,
   `auth.id_token_invalid`, `auth.subject_missing`, `auth.flow_expired`, `auth.flow_invalid`,
-  `auth.suspended`, `auth.signup_closed` and `entitlement.limit_reached`. Anyone can write a link
-  to `/sign-in?error=...`, so an unknown value is shown in `Code` only when it has a code's shape
-  (lowercase words joined by dots, at most 64 characters); anything else gets the general message
+  `auth.suspended`, `auth.admission_refused`, `auth.signup_closed` and
+  `entitlement.limit_reached`; `auth.admission_refused` (07, the organization's rules) has the
+  same message where a local sign-in answers it as a problem. Anyone can write a link to
+  `/sign-in?error=...`, so an unknown value is shown in `Code` only when it has a sign-in code's
+  shape: two or three lowercase words joined by dots, the first `auth`, `admission`,
+  `entitlement`, `local` or `org`, at most 64 characters. Anything else gets the general message
   alone and never reaches the page.
 - **The password step (B16).** The email step goes to `/sign-in/passkey` when passkeys are
   offered and to `/sign-in/password` when only passwords are. Each of the two steps links to the
   other when the document offers both, handing the address on in the history entry's state; the
   passkey step does not guess from the server's options whether the user has a passkey (Q9 may
   change what those reveal). The step posts the address, the password and `return_to` to
-  `POST /auth/local/password` and completes sign-in as the passkey step does. The password lives
+  `POST /auth/local/password` and completes sign-in as the passkey step does. The form holds the
+  address in a hidden, read-only `autocomplete="username"` field, so a password manager files the
+  password under the account. The password lives
   only in the field and the request body; while a request is in flight, Enter sends nothing more.
   `auth.credentials_invalid` and the password step's `auth.method_disabled` have their own
   messages; its 429 message names no network, since the route also counts failed checks per
@@ -708,7 +717,9 @@ list, provider buttons, the callback error and the password step that I5 left):
   real provider (T16) waits for the mock OpenID Connect server in the e2e stack (06 I7, #39). The password
   test adds a user through `POST /api/v1/users`, sets a password through an enrollment link and
   signs in on the screen. The method list's other states run axe in the browser with synthetic
-  documents, in light, dark and high contrast at 1280 and 375 px.
+  documents, in light, dark and high contrast at 1280 and 375 px, in the default brand and in the
+  vZDC example brand (its rules from the token build, since changing the stack's branding would
+  reach every other test).
 
 ## Issues
 
