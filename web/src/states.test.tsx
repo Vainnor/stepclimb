@@ -88,6 +88,10 @@ describe("a route that fails to load (B28, T12)", () => {
     expect(await screen.findByText("loaded Example Training")).toBeInTheDocument();
     expect(org.calls()).toBe(2);
     expect(document.querySelector('[data-slot="error-state"]')).toBeNull();
+    // The button went with the error: focus moves to the view's h1, not the page body.
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { level: 1, name: "Home" })).toHaveFocus(),
+    );
   });
 
   it("says the server could not be reached when it does not answer, and stays signed in", async () => {
@@ -205,6 +209,33 @@ describe("the offline state (B29, T12)", () => {
     down = false;
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(notice).toBeEmptyDOMElement());
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { level: 1, name: "Home" })).toHaveFocus(),
+    );
+  });
+
+  it("forgets a query no view shows any more, so the notice can go", async () => {
+    // Only the organization, which Home alone shows, goes unanswered; `/me` keeps answering.
+    let down = false;
+    stubServer({
+      "GET /api/v1/me": signedIn,
+      "GET /api/v1/organization": () => (down ? unreachable() : organization()),
+    });
+    const app = renderApp("/");
+    await screen.findByText("loaded Example Training");
+    down = true;
+    await act(async () => onlineManager.setOnline(false));
+    await act(async () => {
+      await app.context.queryClient.refetchQueries({ queryKey: ["organization"] });
+    });
+    await screen.findByRole("button", { name: "Try again" });
+
+    await act(async () => app.router.history.push("/nowhere"));
+    await screen.findByRole("heading", { level: 1, name: "Page not found" });
+    await act(async () => onlineManager.setOnline(true));
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="unreachable-notice"]')).toBeEmptyDOMElement(),
+    );
   });
 
   it("goes by itself when the browser's network returns and the queries refetch", async () => {
@@ -243,6 +274,38 @@ describe("the offline state (B29, T12)", () => {
     // A server on the same machine answers whatever the browser thinks of its network.
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByText("loaded Example Training")).toBeInTheDocument();
+  });
+
+  it("counts a proxy's 502 without problem+json as no answer, and says so", async () => {
+    const me = inTurn(
+      () => new Response("Bad Gateway", { status: 502, headers: { "content-type": "text/html" } }),
+      signedIn,
+    );
+    stubServer({ "GET /api/v1/me": me, "GET /api/v1/organization": organization });
+    renderApp("/");
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "The server could not be reached" }),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("loaded Example Training")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { level: 1, name: "Home" })).toHaveFocus(),
+    );
+  });
+
+  it("focuses the next view's h1 even when it arrives after the loading state", async () => {
+    // `/me` has no data, so fetching again shows the skeleton first, which has no h1.
+    const slowly = () =>
+      new Promise<Response>((resolve) => setTimeout(() => resolve(signedIn()), 100));
+    const me = inTurn(unreachable, slowly);
+    stubServer({ "GET /api/v1/me": me, "GET /api/v1/organization": organization });
+    renderApp("/");
+    await userEvent.click(await screen.findByRole("button", { name: "Try again" }));
+    expect(document.querySelector('[data-slot="shell-skeleton"]')).toBeInTheDocument();
+    expect(await screen.findByText("loaded Example Training")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { level: 1, name: "Home" })).toHaveFocus(),
+    );
   });
 
   it("draws no notice for a query that failed with an answer", async () => {

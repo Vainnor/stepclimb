@@ -569,19 +569,26 @@ Coordinator decisions (2026-11-15), on the owner's delegation, while building I5
 Coordinator decisions (2026-11-15), on the owner's delegation, while building I7:
 
 - **What "could not be reached" means (B29).** A request whose `fetch` rejected for any reason but
-  an abort the app made. The API client turns that rejection into its own error, so the views tell
-  it apart from an HTTP error answer and from a fault in the page. A fault in the page shows the
-  general "Could not load" message, never "The server could not be reached".
+  an abort the app made, or that got 502, 503 or 504 without an `application/problem+json` body:
+  a proxy in front of the server said it got no answer (the Caddy example answers 502 for a stopped
+  server), while the server's own 503s, such as `org.none`, are problem+json. The API client turns
+  both into its own error, so the views tell them apart from an HTTP error answer and from a fault
+  in the page. A fault in the page shows the general "Could not load" message (on the sign-in
+  screens, "Something went wrong while signing you in"), never "The server could not be reached".
 - **The server decides, not the browser's network flag.** The query client sends every query and
   mutation whatever `navigator.onLine` says (TanStack Query's `networkMode: "always"`), so a
   browser that thinks it is offline gets the server's answer, or the unreachable state, instead of
   a request paused for good. Queries still refetch when the network returns.
 - **The offline state** is a notice above the view in the signed-in layout. It shows while a query
-  whose data is on screen last refetched without an answer (a tab coming back into view, the
-  network returning). The view keeps its data, the user stays signed in, "Try again" refetches
-  those queries, and the notice goes once they answer, by itself when the network returns. A first
-  load that gets no answer is not this state: it shows the view's error (B28) or, for `/me`, the
-  signed-out layout's.
+  whose data is on screen (a view still observes it) last refetched without an answer (a tab
+  coming back into view, the network returning). The view keeps its data, the user stays signed
+  in, "Try again" refetches those queries, and the notice goes once they answer, by itself when the
+  network returns. A query no view shows any more neither keeps the notice up nor is refetched. A
+  first load that gets no answer is not this state: it shows the view's error (B28) or, for `/me`,
+  the signed-out layout's.
+- **Focus after "Try again" (B6).** When a retry works and the error or notice that held the
+  button goes away, focus moves to the view's `h1`, as after a navigation, instead of falling to
+  the page body.
 - **Route errors (B28)** are the router's error component for every route, drawn inside the
   layout the failed route belongs to: under the TopBar's `h1` in the signed-in layout, as the
   view's `h1` in the signed-out layout, and in the signed-out frame for a failure in a layout
@@ -591,15 +598,16 @@ Coordinator decisions (2026-11-15), on the owner's delegation, while building I7
   M0 has nothing a user can do there.
 - **T19's signed-in home** answers `/me` in the browser, with the theme in its `appearance`, at
   1280 and 375 px; the sign-in screens' half of T19 came with I5. The not-found view in both
-  layouts and the two unreachable states get axe at both widths too.
+  layouts gets axe at both widths, and the two unreachable states in light, dark and high contrast
+  at both widths.
 - **T14** signs in with the passkey the enrollment test registered, changes the organization's
   primary color through `PUT /api/v1/admin/branding`, opens the next page in the same browser and
   restores the branding. Branding is the whole instance's, so `sign-in.spec.ts` runs as its own
   Playwright project after every other file.
-- **The user menu's name (B4).** T19 found that the button's `aria-label` left out text axe counts
-  as visible, the Avatar's initials (WCAG 2.5.3, Label in Name). The button now takes its name,
-  "{name}, account menu", from visually hidden text, and its visible part is hidden from assistive
-  technology.
+- **The user menu's name (B4).** The button's accessible name is unchanged, "{name}, account
+  menu"; it now comes from visually hidden text instead of an `aria-label`. The Avatar and the
+  visible name are decorative and hidden from assistive technology. With the `aria-label`, axe's
+  `label-content-name-mismatch` rule, which T19 runs, read the Avatar's initials as label text.
 
 ## Issues
 

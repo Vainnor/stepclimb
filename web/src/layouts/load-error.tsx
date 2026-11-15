@@ -12,6 +12,7 @@ import {
   useStepclimbStrings,
 } from "@stepclimb/ui";
 import { ApiError, isUnreachable } from "../api";
+import { useRefocusAfterRetry } from "./refocus-after-retry";
 
 interface Message {
   title: string;
@@ -50,11 +51,21 @@ export interface LoadErrorProps {
 export function LoadError({ error, level, onRetry }: LoadErrorProps) {
   const { t } = useStepclimbStrings();
   const { title, description } = messageFor(error, t);
+  const retried = useRefocusAfterRetry();
   return (
     <ErrorState
       title={title}
       level={level}
-      action={<Button onPress={onRetry}>{t("loadError.retry")}</Button>}
+      action={
+        <Button
+          onPress={() => {
+            retried();
+            onRetry();
+          }}
+        >
+          {t("loadError.retry")}
+        </Button>
+      }
     >
       {description}
     </ErrorState>

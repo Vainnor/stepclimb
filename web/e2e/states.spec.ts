@@ -5,7 +5,7 @@
 // shell.spec.ts, `/api/v1/me` is answered in the browser with a synthetic user; the rest is the
 // built binary serving the built SPA.
 import AxeBuilder from "@axe-core/playwright";
-import { expect, type Page, type Route, test } from "@playwright/test";
+import { type Browser, expect, type Page, type Route, test } from "@playwright/test";
 
 const WCAG = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"];
 
@@ -96,49 +96,71 @@ for (const viewport of widths) {
     await expect(page.locator('[data-slot="app-shell"]')).toHaveCount(1);
     expect(await violations(page)).toEqual([]);
   });
+}
 
-  test(`a server that does not answer is said so, and Try again loads the page at ${viewport.width} px (B29)`, async ({
-    page,
-  }) => {
-    await page.setViewportSize(viewport);
-    let up = false;
-    await serveMe(page, "light", () => up);
-    await page.goto("/");
-    await expect(
-      page.getByRole("heading", { level: 1, name: "The server could not be reached" }),
-    ).toBeVisible();
-    expect(new URL(page.url()).pathname).toBe("/");
-    expect(await violations(page)).toEqual([]);
-
-    up = true;
-    await page.getByRole("button", { name: "Try again" }).click();
-    await expect(home(page)).toBeVisible();
+/**
+ * A browser at `viewport` whose appearance cookie picks `theme`, so the page the server writes is
+ * drawn in it before `/me` answers, or when it never does.
+ */
+async function themed(browser: Browser, theme: string, viewport: (typeof widths)[number]) {
+  // The cookie goes in as a header: Playwright's cookie API refuses a `__Host-` cookie for this
+  // `http` origin.
+  const context = await browser.newContext({
+    viewport,
+    extraHTTPHeaders: { cookie: `__Host-sc_appearance=${theme}.comfortable` },
   });
+  return { context, page: await context.newPage() };
+}
 
-  test(`offline, the shell keeps the page and says the server could not be reached at ${viewport.width} px (B29)`, async ({
-    page,
-    context,
-  }) => {
-    await page.setViewportSize(viewport);
-    let up = true;
-    await serveMe(page, "light", () => up);
-    await page.goto("/");
-    await expect(home(page)).toBeVisible();
+for (const theme of themes) {
+  for (const viewport of widths) {
+    test(`a server that does not answer is said so, and Try again loads the page, ${theme} at ${viewport.width} px (B29)`, async ({
+      browser,
+    }) => {
+      const { context, page } = await themed(browser, theme, viewport);
+      let up = false;
+      await serveMe(page, theme, () => up);
+      await page.goto("/");
+      await expect(
+        page.getByRole("heading", { level: 1, name: "The server could not be reached" }),
+      ).toBeVisible();
+      await expect(page.locator("html")).toHaveAttribute("data-sc-theme", theme);
+      expect(new URL(page.url()).pathname).toBe("/");
+      expect(await violations(page)).toEqual([]);
 
-    up = false;
-    await context.setOffline(true);
-    // A tab coming back into view refetches what it shows (TanStack Query listens on `window`).
-    await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
-    const notice = page.locator('[data-slot="unreachable-notice"]');
-    await expect(notice).toContainText("The server could not be reached");
-    await expect(home(page)).toBeVisible();
-    await expect(page.getByRole("button", { name: "Avery Example, account menu" })).toBeVisible();
-    expect(new URL(page.url()).pathname).toBe("/");
-    expect(await violations(page)).toEqual([]);
+      up = true;
+      await page.getByRole("button", { name: "Try again" }).click();
+      await expect(home(page)).toBeVisible();
+      await expect(home(page)).toBeFocused();
+      await context.close();
+    });
 
-    // The network returns: the page asks again by itself and the notice goes.
-    up = true;
-    await context.setOffline(false);
-    await expect(notice).toBeEmpty();
-  });
+    test(`offline, the shell keeps the page and says the server could not be reached, ${theme} at ${viewport.width} px (B29)`, async ({
+      browser,
+    }) => {
+      const { context, page } = await themed(browser, theme, viewport);
+      let up = true;
+      await serveMe(page, theme, () => up);
+      await page.goto("/");
+      await expect(home(page)).toBeVisible();
+
+      up = false;
+      await context.setOffline(true);
+      // A tab coming back into view refetches what it shows (TanStack Query listens on `window`).
+      await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
+      const notice = page.locator('[data-slot="unreachable-notice"]');
+      await expect(notice).toContainText("The server could not be reached");
+      await expect(page.locator("html")).toHaveAttribute("data-sc-theme", theme);
+      await expect(home(page)).toBeVisible();
+      await expect(page.getByRole("button", { name: "Avery Example, account menu" })).toBeVisible();
+      expect(new URL(page.url()).pathname).toBe("/");
+      expect(await violations(page)).toEqual([]);
+
+      // The network returns: the page asks again by itself and the notice goes.
+      up = true;
+      await context.setOffline(false);
+      await expect(notice).toBeEmpty();
+      await context.close();
+    });
+  }
 }

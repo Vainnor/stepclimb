@@ -4,7 +4,7 @@
 // the browser, each saying what happened and what to do next. An unknown code gets a general
 // message and the code itself, so the user can report it.
 import type { Strings } from "@stepclimb/ui";
-import { ApiError } from "../api";
+import { ApiError, isUnreachable } from "../api";
 import { PasskeyError } from "./passkey";
 
 /** Which screen the failure is on: some codes read differently while setting up an account. */
@@ -88,7 +88,8 @@ export function signInProblem(
   t: Strings["t"],
 ): SignInProblem {
   if (error instanceof PasskeyError) return { message: passkeyMessage(error, screen, t) };
-  if (!(error instanceof ApiError)) return { message: t("signIn.problem.unreachable") };
+  if (isUnreachable(error)) return { message: t("signIn.problem.unreachable") };
+  if (!(error instanceof ApiError)) return { message: t("signIn.problem.failed") };
   const code = error.problem?.code;
   if (error.status === 429 || code === "auth.rate_limited") {
     return { message: rateLimited(error, t) };

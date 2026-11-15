@@ -4,9 +4,10 @@
 import { type components, createApiClient } from "@stepclimb/api-client";
 
 /**
- * A request that got no answer at all: `fetch` rejected, because the network or the server is
- * down (docs/specs/m0/11-app-shell.md B29). An HTTP error answer is an `ApiError` instead, and a
- * request the app aborted keeps its `AbortError`.
+ * A request that got no answer from Stepclimb (docs/specs/m0/11-app-shell.md B29): `fetch`
+ * rejected, because the network or the server is down, or a proxy in front of the server answered
+ * 502, 503 or 504 without a problem+json body (see `unwrap`). Any other HTTP error answer is an
+ * `ApiError`, and a request the app aborted keeps its `AbortError`.
  */
 export class UnreachableError extends Error {
   constructor(cause: unknown) {
@@ -68,17 +69,36 @@ function isProblem(body: unknown): body is Problem {
   );
 }
 
+/** The gateway statuses a proxy answers when the server behind it is down or not answering. */
+const GATEWAY_STATUSES = new Set([502, 503, 504]);
+
 /**
- * The data of an openapi-fetch result, or an `ApiError` thrown for its error answer, so TanStack
- * Query sees every failed request as an error.
+ * True for a gateway status without a problem+json body: a proxy in front of the server (the
+ * Caddy example answers 502 for a stopped server) said it got no answer, not Stepclimb. The
+ * server's own 503s, such as `org.none`, are problem+json.
+ */
+function isProxyGatewayError(response: Response): boolean {
+  const type = response.headers.get("content-type") ?? "";
+  return (
+    GATEWAY_STATUSES.has(response.status) &&
+    !type.toLowerCase().startsWith("application/problem+json")
+  );
+}
+
+/**
+ * The data of an openapi-fetch result, or the error for its error answer, so TanStack Query sees
+ * every failed request as an error: an `UnreachableError` for a proxy's gateway error, an
+ * `ApiError` for any other.
  */
 export function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T {
-  if (!result.response.ok) {
-    throw new ApiError(
-      result.response.status,
+  const { response } = result;
+  if (!response.ok) {
+    const error = new ApiError(
+      response.status,
       isProblem(result.error) ? result.error : undefined,
-      retryAfterSeconds(result.response.headers.get("retry-after")),
+      retryAfterSeconds(response.headers.get("retry-after")),
     );
+    throw isProxyGatewayError(response) ? new UnreachableError(error) : error;
   }
   return result.data as T;
 }

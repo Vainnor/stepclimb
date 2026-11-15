@@ -111,9 +111,9 @@ export function UserMenu({ name, appearance }: UserMenuProps) {
   };
   return (
     <MenuTrigger>
-      {/* The name comes from the hidden text, which starts with the visible name, so a voice
-          command naming what the button shows finds it (WCAG 2.5.3). An `aria-label` would make
-          the Avatar's initials visible text that the name lacks. */}
+      {/* The accessible name is "{name}, account menu", from the hidden text. The Avatar and the
+          visible name are decorative and hidden from assistive technology; with an `aria-label`
+          instead, axe's label-content-name-mismatch rule reads the initials as label text. */}
       <Button intent="ghost" isPending={signOutMutation.isPending}>
         <span aria-hidden="true" className="flex items-center gap-2">
           <Avatar name={name} size="sm" />

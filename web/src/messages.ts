@@ -69,6 +69,7 @@ export const webMessages: Catalog = {
     "signIn.passkey.title": "Use your passkey",
     "signIn.passkey.unsupported":
       "This browser cannot use passkeys. Update it, or use a current version of Chrome, Edge, Firefox or Safari.",
+    "signIn.problem.failed": "Something went wrong while signing you in. Try again.",
     "signIn.problem.flowExpired": "The passkey request expired. Try again.",
     "signIn.problem.flowInvalid":
       "This sign-in was already finished or replaced by one in another tab. Try again.",

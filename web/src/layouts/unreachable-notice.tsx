@@ -10,10 +10,14 @@ import { Button, Icon, Text, useStepclimbStrings } from "@stepclimb/ui";
 import { type Query, useIsFetching, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useSyncExternalStore } from "react";
 import { isUnreachable } from "../api";
+import { useRefocusAfterRetry } from "./refocus-after-retry";
 
-/** A query whose data is drawn while its latest fetch got no answer. */
+/**
+ * A query whose data is on screen while its latest fetch got no answer. A query no view observes
+ * any more is not on screen: it neither keeps the notice up nor is fetched by "Try again".
+ */
 export function isStaleAndUnreachable(query: Query): boolean {
-  return query.state.data !== undefined && isUnreachable(query.state.error);
+  return query.isActive() && query.state.data !== undefined && isUnreachable(query.state.error);
 }
 
 /** Whether any query is stale and unreachable, "Try again" for them, and whether it is under way. */
@@ -31,23 +35,34 @@ export function useUnreachable() {
   return { unreachable, retry, retrying };
 }
 
-export function UnreachableNotice() {
+function Notice({ retry, retrying }: { retry: () => void; retrying: boolean }) {
   const { t } = useStepclimbStrings();
+  const retried = useRefocusAfterRetry();
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 pt-4 md:px-6 md:pt-6">
+      <Text className="flex min-w-0 flex-1 items-start gap-2">
+        <Icon icon={WifiSlashIcon} className="mt-[0.2em] shrink-0" />
+        <span>{t("offline.notice")}</span>
+      </Text>
+      <Button
+        onPress={() => {
+          retried();
+          retry();
+        }}
+        isPending={retrying}
+      >
+        {t("loadError.retry")}
+      </Button>
+    </div>
+  );
+}
+
+export function UnreachableNotice() {
   const { unreachable, retry, retrying } = useUnreachable();
   // The live region stays in the page, so a screen reader announces the notice when it appears.
   return (
     <div data-slot="unreachable-notice" role="status">
-      {unreachable ? (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 pt-4 md:px-6 md:pt-6">
-          <Text className="flex min-w-0 flex-1 items-start gap-2">
-            <Icon icon={WifiSlashIcon} className="mt-[0.2em] shrink-0" />
-            <span>{t("offline.notice")}</span>
-          </Text>
-          <Button onPress={retry} isPending={retrying}>
-            {t("loadError.retry")}
-          </Button>
-        </div>
-      ) : null}
+      {unreachable ? <Notice retry={retry} retrying={retrying} /> : null}
     </div>
   );
 }
