@@ -200,3 +200,66 @@ fn a_redirect_uri_that_is_not_a_url_is_refused() {
     );
     assert!(matches!(result, Err(AuthorizeError::RedirectUri)));
 }
+
+#[test]
+fn a_browser_is_sent_only_to_https_or_to_http_with_the_switch() {
+    let url = |text: &str| url::Url::parse(text).unwrap();
+    let on = crate::outbound::UrlPolicy::new(true, false);
+    let off = crate::outbound::UrlPolicy::new(false, true);
+    for (target, with_switch, without_switch) in [
+        ("https://idp.example.test/authorize", true, true),
+        ("http://idp.example.test/authorize", true, false),
+        ("javascript:alert(1)", false, false),
+        ("data:text/html,x", false, false),
+    ] {
+        assert_eq!(
+            browser_may_go_to(&url(target), on),
+            with_switch,
+            "{target} on"
+        );
+        assert_eq!(
+            browser_may_go_to(&url(target), off),
+            without_switch,
+            "{target} off"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_insert_drops_every_document_older_than_the_ttl() {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let mock = stepclimb_mock_idp::MockIdp::start().await.unwrap();
+    let client = crate::outbound::OutboundClient::for_providers(crate::outbound::UrlPolicy::new(
+        true, false,
+    ))
+    .unwrap();
+    let cache = DiscoveryCache::default();
+    let t0 = UNIX_EPOCH + Duration::from_secs(1_763_000_000);
+    let issuer = mock.issuer();
+
+    cache
+        .get(&client, uuid::Uuid::now_v7(), &issuer, t0)
+        .await
+        .unwrap();
+    let within = t0 + DISCOVERY_TTL - Duration::from_secs(1);
+    cache
+        .get(&client, uuid::Uuid::now_v7(), &issuer, within)
+        .await
+        .unwrap();
+    assert_eq!(cache.len(), 2, "both are younger than an hour");
+
+    let later = t0 + DISCOVERY_TTL;
+    cache
+        .get(&client, uuid::Uuid::now_v7(), &issuer, later)
+        .await
+        .unwrap();
+    assert_eq!(cache.len(), 2, "the first, an hour old, is dropped");
+
+    let much_later = later + DISCOVERY_TTL;
+    cache
+        .get(&client, uuid::Uuid::now_v7(), &issuer, much_later)
+        .await
+        .unwrap();
+    assert_eq!(cache.len(), 1, "only the new one is left");
+}

@@ -11,7 +11,7 @@ use openidconnect::core::CoreProviderMetadata;
 use url::Url;
 use uuid::Uuid;
 
-use crate::outbound::{OutboundClient, OutboundError};
+use crate::outbound::{OutboundClient, OutboundError, UrlPolicy};
 
 /// A provider's discovery document, as `openidconnect` reads it.
 pub type ProviderMetadata = CoreProviderMetadata;
@@ -89,12 +89,22 @@ pub async fn discover(
     if metadata.issuer().as_str() != issuer {
         return Err(DiscoveryError::IssuerMismatch);
     }
-    match metadata.authorization_endpoint().url().scheme() {
-        "https" => {}
-        "http" if client.policy().allows_insecure() => {}
-        _ => return Err(DiscoveryError::AuthorizationEndpoint),
+    if !browser_may_go_to(metadata.authorization_endpoint().url(), client.policy()) {
+        return Err(DiscoveryError::AuthorizationEndpoint);
     }
     Ok(metadata)
+}
+
+/// Whether the server may send a browser to `url` under `policy`: `https`, or `http` when the
+/// policy allows insecure providers. Any other scheme (`javascript:`, `data:`, a custom one) is
+/// refused. The server does not fetch this URL, so no address check applies.
+#[must_use]
+pub fn browser_may_go_to(url: &Url, policy: UrlPolicy) -> bool {
+    match url.scheme() {
+        "https" => true,
+        "http" => policy.allows_insecure(),
+        _ => false,
+    }
 }
 
 /// `Content-Type: application/json`, parameters such as `charset` allowed.
@@ -110,14 +120,17 @@ fn is_json(headers: &http::HeaderMap) -> bool {
 /// only, so the server keeps no state between replicas or restarts. Cloning is cheap; clones
 /// share the documents.
 ///
-/// A document is used for its provider only while the provider's issuer is the one it was
-/// fetched for, so changing the issuer fetches again. A failed fetch is not kept: the next
-/// sign-in tries again, at the rate the sign-in limit allows.
+/// A document is used for its provider only while the provider's issuer and the client's URL
+/// policy are the ones it was fetched under, so changing the issuer, or the instance gaining or
+/// losing organizations, fetches again. A failed fetch is not kept: the next sign-in tries
+/// again, at the rate the sign-in limit allows. Each insert drops every document older than
+/// [`DISCOVERY_TTL`], so the map holds at most the providers used within the last hour.
 #[derive(Clone, Default)]
 pub struct DiscoveryCache(Arc<Mutex<HashMap<Uuid, Entry>>>);
 
 struct Entry {
     issuer: String,
+    policy: UrlPolicy,
     fetched_at: SystemTime,
     metadata: Arc<ProviderMetadata>,
 }
@@ -130,8 +143,8 @@ impl std::fmt::Debug for DiscoveryCache {
 
 impl DiscoveryCache {
     /// The discovery document of `provider_id`, whose configured issuer is `issuer`: the kept one
-    /// when it was fetched for this issuer less than [`DISCOVERY_TTL`] before `now`, otherwise a
-    /// new one from [`discover`], kept from `now` on.
+    /// when it was fetched for this issuer under `client`'s policy less than [`DISCOVERY_TTL`]
+    /// before `now`, otherwise a new one from [`discover`], kept from `now` on.
     pub async fn get(
         &self,
         client: &OutboundClient,
@@ -139,37 +152,52 @@ impl DiscoveryCache {
         issuer: &str,
         now: SystemTime,
     ) -> Result<Arc<ProviderMetadata>, DiscoveryError> {
-        if let Some(metadata) = self.fresh(provider_id, issuer, now) {
+        let policy = client.policy();
+        if let Some(metadata) = self.fresh(provider_id, issuer, policy, now) {
             return Ok(metadata);
         }
         let metadata = Arc::new(discover(client, issuer).await?);
         let entry = Entry {
             issuer: issuer.to_owned(),
+            policy,
             fetched_at: now,
             metadata: Arc::clone(&metadata),
         };
-        self.lock().insert(provider_id, entry);
+        let mut entries = self.lock();
+        entries.retain(|_, kept| young(kept, now));
+        entries.insert(provider_id, entry);
         Ok(metadata)
     }
 
-    /// The kept document, when it is for `issuer` and younger than [`DISCOVERY_TTL`] at `now`. A
-    /// document fetched after `now` (the clock went back) is not fresh.
+    /// The kept document, when it is for `issuer` under `policy` and [`young`] at `now`.
     fn fresh(
         &self,
         provider_id: Uuid,
         issuer: &str,
+        policy: UrlPolicy,
         now: SystemTime,
     ) -> Option<Arc<ProviderMetadata>> {
         let entries = self.lock();
         let entry = entries.get(&provider_id)?;
-        let young = now
-            .duration_since(entry.fetched_at)
-            .is_ok_and(|age| age < DISCOVERY_TTL);
-        (entry.issuer == issuer && young).then(|| Arc::clone(&entry.metadata))
+        let matches = entry.issuer == issuer && entry.policy == policy;
+        (matches && young(entry, now)).then(|| Arc::clone(&entry.metadata))
+    }
+
+    /// How many documents are kept.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.lock().len()
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<Uuid, Entry>> {
         // Nothing panics while the lock is held; a poisoned map still holds whole entries.
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// Whether `entry` is younger than [`DISCOVERY_TTL`] at `now`. One fetched after `now` (the
+/// clock went back) is not.
+fn young(entry: &Entry, now: SystemTime) -> bool {
+    now.duration_since(entry.fetched_at)
+        .is_ok_and(|age| age < DISCOVERY_TTL)
 }

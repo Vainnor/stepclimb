@@ -181,6 +181,10 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   password and TOTP checks), `POST /oauth/token` and `POST /oauth/revoke`. A limited request
   answers 429 `auth.rate_limited` with a `Retry-After` header in seconds. Limits, keys (client
   IP, account identifier), storage and how the client IP is found behind a proxy: pending Q7.
+  Coordinator decision (2026-11-15; the owner to confirm): a route the browser opens as a
+  top-level navigation (`GET /auth/{provider}/start`, `05-oidc.md` B16) answers its limit with
+  a 303 to the web app's sign-in route with `error=auth.rate_limited` and the same
+  `Retry-After`, since a navigation would otherwise show a raw problem body.
 - **B23.** Failed password and TOTP checks count against the account identifier as well as the
   client IP, so one address cannot try many passwords for one account and many addresses cannot
   share one account's budget (numbers pending Q7).
@@ -419,7 +423,8 @@ Database tests use `#[sqlx::test]`; time-dependent tests use the controllable cl
   `javascript:x`, `/..//evil.example`, `/.//evil.example`, `/a/..//evil` and `/%2e%2e//evil.example`
   all end at `/`; `/c/s1/m/2` and `/.well-known/x` are kept.
 - **T20.** (B22, B23) The request after the limit answers 429 `auth.rate_limited` with
-  `Retry-After`; the counter resets after the window (clock moved); failures for one account
+  `Retry-After` (a navigation route: a 303 to `/sign-in?error=auth.rate_limited` with
+  `Retry-After`); the counter resets after the window (clock moved); failures for one account
   from two IPs share the account budget.
 - **T21.** (B24, B26) Creating a service account returns a key once; the list endpoint never
   shows it; the key authenticates `GET /api/v1/me`.

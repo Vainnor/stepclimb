@@ -256,7 +256,7 @@ async fn authorize(
     let config = match OidcConfig::from_stored(&provider.config) {
         Ok(config) => config,
         Err(error) => {
-            tracing::error!(provider = key, %error, "the provider's stored config does not read");
+            tracing::warn!(provider = key, %error, "the provider's stored config does not read");
             return Ok(None);
         }
     };

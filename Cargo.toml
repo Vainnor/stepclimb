@@ -110,8 +110,10 @@ http = "=1.5.0"
 # The mock identity provider's ID tokens (docs/specs/m0/06-oauth2-and-vatsim-preset.md I1,
 # docs/adr/0027-mock-identity-provider.md): RS256 keys generated at start and PKCS #1 v1.5
 # signatures. 0.9 is the line openidconnect 4.1 verifies with, so the mock adds no rsa beyond
-# the 0.9 openidconnect brings; webauthn-rs brings 0.10.0-rc.19 beside it.
-# Test-only: no release build reaches it (bin/check-layering.sh rule 5).
+# the 0.9 openidconnect brings; webauthn-rs brings 0.10.0-rc.19 beside it. openidconnect brings
+# rsa 0.9.10 into the release build, where it only verifies ID token signatures; only the
+# test-only mock (bin/check-layering.sh rule 5) uses private keys, and clippy.toml's
+# disallowed-types refuses them anywhere else.
 rsa = { version = "=0.9.10", default-features = false, features = ["std", "u64_digit", "getrandom", "sha2"] }
 # OpenID Connect for the relying party (plan, Technical -> Architecture and stack: `openidconnect`):
 # stepclimb-auth's discovery document, PKCE and authorization request (spec 05 I2), and the mock's

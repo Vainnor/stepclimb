@@ -201,3 +201,22 @@ async fn a_changed_issuer_is_fetched_again_and_a_failure_is_not_kept() {
     assert!(matches!(result, Err(DiscoveryError::IssuerMismatch)));
     assert_eq!(discoveries(&mock), 3, "a refused document is not kept");
 }
+
+#[tokio::test]
+async fn a_document_fetched_under_another_url_policy_is_fetched_again() {
+    let mock = MockIdp::start().await.unwrap();
+    let cache = DiscoveryCache::default();
+    let provider = Uuid::now_v7();
+    let issuer = mock.issuer();
+    let multi = OutboundClient::for_providers(UrlPolicy::new(true, false)).unwrap();
+    let single = OutboundClient::for_providers(UrlPolicy::new(true, true)).unwrap();
+
+    cache.get(&multi, provider, &issuer, t0()).await.unwrap();
+    cache.get(&multi, provider, &issuer, t0()).await.unwrap();
+    assert_eq!(discoveries(&mock), 1);
+
+    cache.get(&single, provider, &issuer, t0()).await.unwrap();
+    assert_eq!(discoveries(&mock), 2, "the policy changed");
+    cache.get(&multi, provider, &issuer, t0()).await.unwrap();
+    assert_eq!(discoveries(&mock), 3, "and changed back");
+}

@@ -3,12 +3,21 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+#[expect(
+    clippy::disallowed_types,
+    reason = "the mock signs ID tokens with throwaway keys on 127.0.0.1; clippy.toml keeps RSA private keys out of every other crate (RUSTSEC-2023-0071)"
+)]
+use rsa::RsaPrivateKey;
+use rsa::RsaPublicKey;
+#[expect(
+    clippy::disallowed_types,
+    reason = "the mock signs ID tokens with throwaway keys on 127.0.0.1; clippy.toml keeps RSA private keys out of every other crate (RUSTSEC-2023-0071)"
+)]
 use rsa::pkcs1v15::SigningKey;
 use rsa::rand_core::OsRng;
 use rsa::sha2::Sha256;
 use rsa::signature::{SignatureEncoding as _, Signer as _};
 use rsa::traits::PublicKeyParts as _;
-use rsa::{RsaPrivateKey, RsaPublicKey};
 use serde_json::{Value, json};
 
 /// The modulus size of every key: 2048 bits, the size RFC 7518 3.3 requires at least.
@@ -25,6 +34,10 @@ pub struct KeyError(#[from] rsa::Error);
 pub struct SignError(#[from] rsa::signature::Error);
 
 /// One RSA key pair with its `kid`, signing RS256 (RSASSA-PKCS1-v1_5 with SHA-256).
+#[expect(
+    clippy::disallowed_types,
+    reason = "the mock signs ID tokens with throwaway keys on 127.0.0.1; clippy.toml keeps RSA private keys out of every other crate (RUSTSEC-2023-0071)"
+)]
 pub(crate) struct Key {
     kid: String,
     signer: SigningKey<Sha256>,
@@ -32,6 +45,10 @@ pub(crate) struct Key {
 }
 
 impl Key {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "the mock signs ID tokens with throwaway keys on 127.0.0.1; clippy.toml keeps RSA private keys out of every other crate (RUSTSEC-2023-0071)"
+    )]
     pub(crate) fn generate(kid: String) -> Result<Self, KeyError> {
         let private = RsaPrivateKey::new(&mut OsRng, BITS)?;
         let public = private.to_public_key();

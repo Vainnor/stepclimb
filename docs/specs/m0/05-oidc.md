@@ -84,7 +84,9 @@ validates the ID token with the `openidconnect` crate, maps claims into an ident
   `oauth2` provider answers `auth.provider_unavailable` until `06` adds its flow. A rate-limited
   start (B16) is a 303 to the sign-in route with `error=auth.rate_limited` and `Retry-After`,
   as this spec's API table lists, rather than `08` B22's 429 body, since the route is a browser
-  navigation. The 303s carry `Cache-Control: no-store`.
+  navigation (recorded in `08` B22 and T20). The 303s carry `Cache-Control: no-store`. The
+  discovery cache keeps a document per provider, issuer and URL policy, and each insert drops
+  every document older than the hour.
 
 ### Callback
 

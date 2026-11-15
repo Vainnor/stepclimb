@@ -24,7 +24,8 @@ mod discovery;
 
 pub use authorize::{AuthorizeError, FlowSecrets, PayloadError, authorization_url};
 pub use discovery::{
-    DISCOVERY_TTL, DiscoveryCache, DiscoveryError, ProviderMetadata, discover, discovery_url,
+    DISCOVERY_TTL, DiscoveryCache, DiscoveryError, ProviderMetadata, browser_may_go_to, discover,
+    discovery_url,
 };
 
 #[cfg(test)]

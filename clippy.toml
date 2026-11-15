@@ -16,3 +16,14 @@ disallowed-methods = [
     { path = "stepclimb_core::OrgScope::instance", reason = "a request's scope comes from its credential; only startup, the CLI, jobs and the unauthenticated organization resolver build an instance scope (spec 02 B9)" },
     { path = "stepclimb_server::request_org::resolve", reason = "a request's organization is resolved only by the session module (extractor, sign-out) and the unauthenticated-route resolver of spec 02 B11; a handler takes its scope from the credential (spec 08 B6)" },
 ]
+
+# RUSTSEC-2023-0071 (deny.toml, ADR 0026, 0027, 0028): `rsa` leaks timing in private-key
+# operations. The shipped code only verifies; the only private keys are the test-only mock's,
+# whose uses carry `#[expect(clippy::disallowed_types, reason = "...")]`. A new private-key use
+# elsewhere fails `just lint` here instead of landing unnoticed.
+disallowed-types = [
+    { path = "rsa::RsaPrivateKey", reason = "RSA private-key operations leak timing (RUSTSEC-2023-0071); only the test-only mock IdP holds private keys" },
+    { path = "rsa::pkcs1v15::SigningKey", reason = "RSA private-key operations leak timing (RUSTSEC-2023-0071); only the test-only mock IdP signs" },
+    { path = "rsa::pss::SigningKey", reason = "RSA private-key operations leak timing (RUSTSEC-2023-0071); only the test-only mock IdP signs" },
+    { path = "openidconnect::core::CoreRsaPrivateSigningKey", reason = "RSA private-key operations leak timing (RUSTSEC-2023-0071); Stepclimb never signs ID tokens" },
+]

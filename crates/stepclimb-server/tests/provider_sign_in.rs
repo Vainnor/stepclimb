@@ -623,3 +623,29 @@ async fn no_log_line_carries_the_flows_secrets_or_cookie(pool: PgPool) {
         assert!(!log.contains(secret), "a secret reached the log");
     }
 }
+
+/// The handler picks the provider client by the organization count (Q4): the cache keeps a
+/// document per URL policy, so a second organization makes the next start fetch again under the
+/// multi-organization policy, and only then.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn q4_the_client_follows_the_organization_count(pool: PgPool) {
+    let fixture = Fixture::new(pool).await;
+    fixture
+        .provider(fixture.org, "mock", &fixture.mock.issuer(), true)
+        .await;
+
+    fixture.start(fixture.org, "/auth/mock/start").await;
+    fixture.start(fixture.org, "/auth/mock/start").await;
+    assert_eq!(fixture.discoveries(), 1, "one organization, one policy");
+
+    fixture.second_org().await;
+    let multi = fixture.start(fixture.org, "/auth/mock/start").await;
+    assert!(multi.flow_cookie().is_some(), "{multi:?}");
+    assert_eq!(
+        fixture.discoveries(),
+        2,
+        "two organizations: the multi-organization client"
+    );
+    fixture.start(fixture.org, "/auth/mock/start").await;
+    assert_eq!(fixture.discoveries(), 2);
+}
