@@ -4709,7 +4709,7 @@
           },
           "new_password": {
             "type": "string",
-            "description": "12 to 256 characters, not one of the most common passwords."
+            "description": "12 to 256 characters, not on the common-password list."
           }
         },
         "additionalProperties": false
@@ -4724,7 +4724,7 @@
         "properties": {
           "password": {
             "type": "string",
-            "description": "12 to 256 characters, not one of the most common passwords."
+            "description": "12 to 256 characters, not on the common-password list."
           },
           "token": {
             "type": "string",
@@ -6008,7 +6008,7 @@
         }
       },
       "PasswordWeak": {
-        "description": "`request.invalid` with `local.password_weak` at the password: it has fewer than 12 or more than 256 characters, or it is one of the 10,000 most common passwords.",
+        "description": "`request.invalid` with `local.password_weak` at the password: it has fewer than 12 or more than 256 characters, or it is on the server's list of 10,000 common passwords.",
         "content": {
           "application/problem+json": {
             "schema": {

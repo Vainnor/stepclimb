@@ -428,9 +428,10 @@ async fn ending_other_sessions_keeps_the_callers(pool: PgPool) {
             .await
             .unwrap();
     }
-    let ended = sessions::delete_others_of_user(&pool, scope(a), sam, &[2; 32])
-        .await
-        .unwrap();
+    let ended =
+        sessions::delete_others_of_user(&pool, scope(a), sam, sessions::Keep::TokenHash([2; 32]))
+            .await
+            .unwrap();
     assert_eq!(ended, 2);
     let left: Vec<Vec<u8>> =
         sqlx::query_scalar("SELECT token_hash FROM sessions ORDER BY token_hash")
@@ -438,10 +439,20 @@ async fn ending_other_sessions_keeps_the_callers(pool: PgPool) {
             .await
             .unwrap();
     assert_eq!(left, [vec![2; 32], vec![4; 32]]);
-    // Another organization's scope ends nothing.
-    let b = org(&pool, "org-b").await;
-    let none = sessions::delete_others_of_user(&pool, scope(b), pat, &[0; 32])
+    // By id: the kept session is the one named.
+    let kept = sessions::create(&pool, scope(a), sam, &[5; 32], now())
         .await
         .unwrap();
+    let ended =
+        sessions::delete_others_of_user(&pool, scope(a), sam, sessions::Keep::Session(kept.id))
+            .await
+            .unwrap();
+    assert_eq!(ended, 1);
+    // Another organization's scope ends nothing.
+    let b = org(&pool, "org-b").await;
+    let none =
+        sessions::delete_others_of_user(&pool, scope(b), pat, sessions::Keep::TokenHash([0; 32]))
+            .await
+            .unwrap();
     assert_eq!(none, 0);
 }

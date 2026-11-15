@@ -863,7 +863,8 @@ async fn a_device_cookie_for_the_account_skips_its_budget(pool: PgPool) {
         "another account's cookie"
     );
 
-    // The owner's browser: a failure is not counted, and the right password signs in.
+    // The owner's browser: a failure counts against the cookie's own budget, not the spent
+    // account's, and the right password signs in.
     let typo = f
         .sign_in_from(
             client(32),
@@ -1072,4 +1073,250 @@ async fn a_password_changed_during_the_check_does_not_sign_in(pool: PgPool) {
         "{answer:?}"
     );
     assert_eq!(f.sessions_of(sam).await, 0);
+}
+
+/// Spec 08 B42 (coordinator decision): a device cookie has a failed-check budget of its own, so
+/// a stolen cookie gives no more guesses than the account had; the account's own budget is not
+/// touched by them.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_device_cookie_has_a_budget_of_its_own(pool: PgPool) {
+    let f = Fixture::with_limits(pool, failed_checks(2)).await;
+    let ada = f.user("ada@example.test").await;
+    f.with_password(ada, PASSWORD).await;
+    let device = f
+        .sign_in("ada@example.test", PASSWORD)
+        .await
+        .device()
+        .unwrap();
+    for n in 0..2 {
+        let wrong = f
+            .sign_in_from(
+                client(70 + n),
+                Some(&device),
+                "ada@example.test",
+                OTHER_PASSWORD,
+            )
+            .await;
+        assert_eq!(wrong.status, StatusCode::UNAUTHORIZED);
+    }
+    let stolen = f
+        .sign_in_from(client(79), Some(&device), "ada@example.test", PASSWORD)
+        .await;
+    assert_eq!(
+        (stolen.status, stolen.code()),
+        (StatusCode::TOO_MANY_REQUESTS, "auth.rate_limited")
+    );
+    // The account's budget was not spent by the cookie's failures.
+    let without = f
+        .sign_in_from(client(80), None, "ada@example.test", PASSWORD)
+        .await;
+    assert_eq!(without.status, StatusCode::OK, "{without:?}");
+}
+
+/// Spec 08 B42 (coordinator decision): a device cookie is good for the password it was issued
+/// with; a change or a reset through an enrollment link revokes it.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_new_password_revokes_older_device_cookies(pool: PgPool) {
+    let f = Fixture::with_limits(pool, failed_checks(1)).await;
+    let ada = f.user("ada@example.test").await;
+    f.with_password(ada, PASSWORD).await;
+    let signed_in = f
+        .sign_in_from(client(81), None, "ada@example.test", PASSWORD)
+        .await;
+    let (session, old_device) = (signed_in.session().unwrap(), signed_in.device().unwrap());
+    assert_eq!(
+        f.change(&session, PASSWORD, OTHER_PASSWORD).await.status,
+        StatusCode::NO_CONTENT
+    );
+    // Spend the account's budget; the cookie from before the change no longer exempts.
+    f.sign_in_from(client(82), None, "ada@example.test", PASSWORD)
+        .await;
+    let old = f
+        .sign_in_from(
+            client(83),
+            Some(&old_device),
+            "ada@example.test",
+            OTHER_PASSWORD,
+        )
+        .await;
+    assert_eq!(old.status, StatusCode::TOO_MANY_REQUESTS, "{old:?}");
+
+    // A reset through a link moves the generation too.
+    f.clock.advance(Duration::from_secs(15 * 60));
+    let fresh = f
+        .sign_in_from(client(84), None, "ada@example.test", OTHER_PASSWORD)
+        .await
+        .device()
+        .unwrap();
+    let token = f.link(ada).await;
+    assert_eq!(
+        f.enroll(&token, "a third long passphrase").await.status,
+        StatusCode::OK
+    );
+    f.sign_in_from(client(85), None, "ada@example.test", OTHER_PASSWORD)
+        .await;
+    let reset = f
+        .sign_in_from(
+            client(86),
+            Some(&fresh),
+            "ada@example.test",
+            "a third long passphrase",
+        )
+        .await;
+    assert_eq!(reset.status, StatusCode::TOO_MANY_REQUESTS, "{reset:?}");
+}
+
+/// B9 (coordinator decision): a password set through an enrollment link is a reset, so every
+/// other session of the user ends in the enrollment's transaction; the one it creates stays.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_reset_through_a_link_ends_every_other_session(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let sam = f.user("sam@example.test").await;
+    f.with_password(sam, PASSWORD).await;
+    let before = f
+        .sign_in("sam@example.test", PASSWORD)
+        .await
+        .session()
+        .unwrap();
+    f.sign_in("sam@example.test", PASSWORD).await;
+    let pat = f.user("pat@example.test").await;
+    f.with_password(pat, PASSWORD).await;
+    f.sign_in("pat@example.test", PASSWORD).await;
+    assert_eq!(f.sessions_of(sam).await, 2);
+
+    let token = f.link(sam).await;
+    let reset = f.enroll(&token, OTHER_PASSWORD).await;
+    assert_eq!(reset.status, StatusCode::OK, "{reset:?}");
+    assert_eq!(f.sessions_of(sam).await, 1);
+    assert_eq!(f.sessions_of(pat).await, 1, "another user's session stays");
+    let new = reset.session().unwrap();
+    let me = |cookie: String| {
+        let f = &f;
+        async move {
+            f.send_from(
+                client(10),
+                Method::GET,
+                "/api/v1/me",
+                f.org,
+                Some(&cookie),
+                Value::Null,
+            )
+            .await
+            .status
+        }
+    };
+    assert_eq!(me(new).await, StatusCode::OK);
+    assert_eq!(me(before).await, StatusCode::UNAUTHORIZED);
+}
+
+/// B17, B18 (coordinator decision): a change of password has a budget per user that holds with
+/// no email and with the user's own device cookie, so neither means no limit.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_change_is_limited_per_user_without_an_email_and_with_a_device_cookie(pool: PgPool) {
+    let f = Fixture::with_limits(pool, failed_checks(2)).await;
+    let sam = f.user("sam@example.test").await;
+    f.with_password(sam, PASSWORD).await;
+    let signed_in = f.sign_in("sam@example.test", PASSWORD).await;
+    let (session, device) = (signed_in.session().unwrap(), signed_in.device().unwrap());
+    let both = format!("{session}; {device}");
+    // The user's email is cleared: the account has no address budget left to count against,
+    // and the failures below, made without the device cookie, fill the user's budget alone.
+    let patch = stepclimb_core::users::UserPatch {
+        email: Some(None),
+        ..Default::default()
+    };
+    users::update(&f.pool, scope(f.org), sam, &patch, now())
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        let wrong = f
+            .change(&session, OTHER_PASSWORD, "another long passphrase")
+            .await;
+        assert_eq!(wrong.status, StatusCode::UNAUTHORIZED, "{wrong:?}");
+    }
+    // The device cookie's own budget is untouched, and the user's still refuses.
+    let before = f.computations();
+    let refused = f.change(&both, PASSWORD, "another long passphrase").await;
+    assert_eq!(
+        (refused.status, refused.code()),
+        (StatusCode::TOO_MANY_REQUESTS, "auth.rate_limited"),
+        "{refused:?}"
+    );
+    assert!(refused.headers.contains_key(header::RETRY_AFTER));
+    assert_eq!(f.computations(), before, "a spent budget runs no check");
+    f.clock.advance(Duration::from_secs(15 * 60));
+    let changed = f.change(&both, PASSWORD, "another long passphrase").await;
+    assert_eq!(changed.status, StatusCode::NO_CONTENT, "{changed:?}");
+}
+
+/// Spec 08 B22: the change takes the per-address budget first, before the session is read.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_change_takes_the_address_budget(pool: PgPool) {
+    let limits = Limits {
+        sign_in: NonZeroU32::new(1).expect("a nonzero limit"),
+        ..Limits::DEFAULT
+    };
+    let f = Fixture::with_limits(pool, limits).await;
+    let body = json!({ "current_password": PASSWORD, "new_password": OTHER_PASSWORD });
+    let first = f
+        .send_from(
+            client(90),
+            Method::PUT,
+            MY_PASSWORD,
+            f.org,
+            None,
+            body.clone(),
+        )
+        .await;
+    assert_eq!(first.status, StatusCode::UNAUTHORIZED);
+    let second = f
+        .send_from(client(90), Method::PUT, MY_PASSWORD, f.org, None, body)
+        .await;
+    assert_eq!(second.status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+/// B17 (MINOR 1): a change whose current password is replaced after it was verified, before
+/// the change takes the user's lock, is refused with the same 401 and stores nothing.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_password_changed_during_a_change_is_not_overwritten(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let sam = f.user("sam@example.test").await;
+    f.with_password(sam, PASSWORD).await;
+    let session = f
+        .sign_in("sam@example.test", PASSWORD)
+        .await
+        .session()
+        .unwrap();
+    let mut tx = f.pool.begin().await.expect("a transaction");
+    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(sam)
+        .execute(&mut *tx)
+        .await
+        .expect("lock the user");
+    let changing = f.change(&session, PASSWORD, "another long passphrase");
+    let reset = async {
+        until_a_call_waits_on_a_lock(&f.pool).await;
+        let hash = password::hash(OTHER_PASSWORD).expect("a hash");
+        local_logins::set_password(
+            &mut *tx,
+            scope(f.org),
+            sam,
+            hash.as_str(),
+            now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("reset the password");
+        tx.commit().await.expect("commit");
+    };
+    let (answer, ()) = tokio::join!(changing, reset);
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::UNAUTHORIZED, "auth.credentials_invalid"),
+        "{answer:?}"
+    );
+    assert_eq!(
+        f.sign_in("sam@example.test", OTHER_PASSWORD).await.status,
+        StatusCode::OK
+    );
 }

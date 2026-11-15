@@ -27,7 +27,7 @@ pub const CAP: NonZeroUsize = NonZeroUsize::new(4).unwrap();
 pub struct PasswordHasher(Arc<Inner>);
 
 struct Inner {
-    permits: Semaphore,
+    permits: Arc<Semaphore>,
     computations: AtomicU64,
     running: AtomicUsize,
     peak: AtomicUsize,
@@ -55,7 +55,7 @@ impl PasswordHasher {
     /// A hasher that runs at most `cap` computations at once.
     pub fn new(cap: NonZeroUsize) -> Self {
         Self(Arc::new(Inner {
-            permits: Semaphore::new(cap.get()),
+            permits: Arc::new(Semaphore::new(cap.get())),
             computations: AtomicU64::new(0),
             running: AtomicUsize::new(0),
             peak: AtomicUsize::new(0),
@@ -94,30 +94,30 @@ impl PasswordHasher {
         self.0.peak.load(Ordering::SeqCst)
     }
 
-    /// Run `work` on the blocking pool under a permit.
+    /// Run `work` on the blocking pool under a permit. The permit moves into the blocking task
+    /// and is released when the computation ends, not when the caller's future does: a request
+    /// dropped mid-hash (the client went away) does not free its permit while its hash still
+    /// runs, so no more than the cap ever run at once.
     async fn run<T: Send + 'static>(
         &self,
         work: impl FnOnce() -> T + Send + 'static,
     ) -> Result<T, tokio::task::JoinError> {
         // Nothing closes the semaphore, so acquiring only waits.
-        let permit = self
-            .0
-            .permits
-            .acquire()
+        let permit = Arc::clone(&self.0.permits)
+            .acquire_owned()
             .await
             .expect("the hasher's semaphore is never closed");
         let inner = self.0.clone();
-        let result = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             let running = inner.running.fetch_add(1, Ordering::SeqCst) + 1;
             inner.peak.fetch_max(running, Ordering::SeqCst);
             inner.computations.fetch_add(1, Ordering::SeqCst);
             let value = work();
             inner.running.fetch_sub(1, Ordering::SeqCst);
+            drop(permit);
             value
         })
-        .await;
-        drop(permit);
-        result
+        .await
     }
 }
 
@@ -153,6 +153,25 @@ mod tests {
             "peak {} with a cap of 2",
             hasher.peak()
         );
+    }
+
+    /// A verification whose caller gave up (its future dropped mid-hash) keeps its permit until
+    /// the hash ends, so the next caller waits instead of running beside it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_dropped_check_keeps_its_permit_until_the_hash_ends() {
+        let hasher = PasswordHasher::new(NonZeroUsize::new(1).unwrap());
+        for _ in 0..6 {
+            let check = hasher.verify("correct horse battery staple".to_owned(), None);
+            // Far shorter than one hash: each future is dropped while its hash still runs.
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(1), check).await;
+        }
+        // Waits for a permit, so it runs after every dropped hash that started.
+        hasher
+            .verify("correct horse battery staple".to_owned(), None)
+            .await
+            .unwrap();
+        assert!(hasher.computations() >= 2, "{}", hasher.computations());
+        assert_eq!(hasher.peak(), 1, "the cap of 1 held across dropped checks");
     }
 
     #[tokio::test]

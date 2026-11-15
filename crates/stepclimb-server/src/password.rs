@@ -14,12 +14,14 @@
 //! link's user, uses the link (`consume_enrollment`, which re-checks it), stores the password
 //! (`password.set`), links the local identity if the user has none (`identity.link`), and
 //! completes the sign-in through admission's local entry (`admission::complete_local`, which
-//! refuses a suspended user with 403 `auth.suspended`). A refusal rolls everything back, so the
-//! link stays usable and nothing is stored.
+//! refuses a suspended user with 403 `auth.suspended`). The new password is a reset: in the same
+//! transaction every other session of the user ends, and the user's older device cookies stop
+//! exempting (the password's generation moved). A refusal rolls everything back, so the link
+//! stays usable and nothing is stored.
 //!
 //! `POST /auth/local/password` ([`sign_in_with_password`], B14) finds the login by the email
 //! (`local_logins::find_for_sign_in`, which also gives the account identifier the rate limit
-//! counts) and checks the password ([`check_password`]). A wrong password, an address with no
+//! counts) and checks the password (`password_check::check_password`). A wrong password, an address with no
 //! account (in this organization or at all), and an account without a password all answer the
 //! same 401 `auth.credentials_invalid` after one argon2id verification each, the last two
 //! against a dummy hash, so neither the body nor the time says which. A right password then, in
@@ -28,17 +30,15 @@
 //! older (B16), and completes the sign-in through admission's local entry. It links no
 //! identity. Issue I7 inserts B15's TOTP step between the check and the transaction.
 //!
-//! `PUT /api/v1/me/password` ([`change_my_password`], B17) takes a browser session only
-//! (`SessionOnly`), checks the current password the same way, stores the new one
-//! (`password.set`) and ends the user's other sessions (Q8), keeping the one that asked.
+//! `PUT /api/v1/me/password` ([`change_my_password`], B17) takes the per-address budget, then a
+//! browser session only (`SessionOnly`), checks the current password the same way with the
+//! user's own budget besides, and under the user's lock, unless the password changed since it
+//! was verified (401), stores the new one (`password.set`) and ends the user's other sessions
+//! (Q8), keeping the one that asked.
 //!
-//! [`check_password`] is B18 and B23: before the verification it takes the account's
-//! failed-check budget (`RateLimiter::account_check`, keyed by the login's [`LoginEmail`]),
-//! which refuses with 429 `auth.rate_limited` once the account's failures fill the window, and
-//! counts the check as a failure until it passes. A browser presenting a device cookie
-//! ([`crate::device`]) for the account's user skips that budget (spec 08 B42, the owner's
-//! decision); the per-address budget, which every `/auth/` route takes first, still applies.
-//! A successful sign-in or enrollment sets a new device cookie.
+//! Every route takes `RateLimited<SignIn>` first, and the password check
+//! ([`crate::password_check`]) takes the failed-check budgets of B18 and spec 08 B40 to B42. A
+//! successful sign-in or enrollment sets a new device cookie for the password it used.
 //!
 //! No step logs a password, a hash, the email or the token. Sign-ins write no audit entry (spec
 //! 08 Q14); setting a password writes `password.set` with the user.
@@ -54,7 +54,7 @@ use axum::{
 use serde::Deserialize;
 use sqlx::{Postgres, Transaction};
 use stepclimb_auth::{
-    password::{self as policy, StoredHash, Verified},
+    password::{self as policy, StoredHash},
     token::TokenHash,
 };
 use stepclimb_core::{
@@ -62,10 +62,10 @@ use stepclimb_core::{
     audit::Actor,
     auth_flows::ReturnTo,
     id::Uuid,
-    identities,
-    local_logins::{self, Login, LoginEmail},
+    identities, local_logins,
     local_sign_in::Method,
-    local_tokens, sessions,
+    local_tokens,
+    sessions::{self, Keep},
 };
 use utoipa::ToSchema;
 
@@ -80,7 +80,10 @@ use crate::{
     local_sign_in::require_method,
     openapi::problem_responses,
     passkey_enrollment::{Outcome, SignedIn, link_local_identity},
-    rate_limit::{RateLimited, SignIn, TooManyRequests},
+    password_check::{
+        Attempt, Passed, Refusal, Subject, check_password, credentials_invalid, internal,
+    },
+    rate_limit::{RateLimited, SignIn},
     request_org::RequestOrg,
     require::SessionOnly,
     session,
@@ -95,10 +98,8 @@ pub const ENROLLMENT_PASSWORD_PATH: &str = "/auth/local/enrollment/password";
 /// The route that changes the signed-in user's password.
 pub const MY_PASSWORD_PATH: &str = "/api/v1/me/password";
 
-/// The codes this module produces.
+/// The codes this module produces besides `password_check`'s.
 pub mod code {
-    /// The email and password did not sign in, or the current password is wrong (401).
-    pub const AUTH_CREDENTIALS_INVALID: &str = "auth.credentials_invalid";
     /// In a 422's `errors`: the new password breaks Q8's policy.
     pub const LOCAL_PASSWORD_WEAK: &str = "local.password_weak";
 }
@@ -108,7 +109,7 @@ problem_responses! {
     PasswordSignInForbidden => "`auth.suspended`: the account is suspended. `auth.csrf_refused`: the request did not come from this site.",
     PasswordNotFound => "`auth.method_disabled`: password sign-in is switched off for this organization. `org.not_found`: the request's organization cannot be determined.",
     EnrollPasswordInvalid => "`request.malformed`: the body is not `{token, password}`. `auth.enrollment_invalid`: the link is unknown, already used, replaced by a newer link, or for another organization. `auth.enrollment_expired`: the link is older than its 7-day lifetime.",
-    PasswordWeak => "`request.invalid` with `local.password_weak` at the password: it has fewer than 12 or more than 256 characters, or it is one of the 10,000 most common passwords.",
+    PasswordWeak => "`request.invalid` with `local.password_weak` at the password: it has fewer than 12 or more than 256 characters, or it is on the server's list of 10,000 common passwords.",
     MyPasswordUnauthorized => "`auth.unauthenticated`, `auth.session_expired`, `auth.suspended`: no valid session. `auth.credentials_invalid`: the current password is wrong.",
     MyPasswordForbidden => "`auth.session_required`: the request carries a bearer credential; only a signed-in browser session changes a password. `auth.csrf_refused`: the request did not come from this site.",
 }
@@ -130,7 +131,7 @@ pub struct PasswordSignIn {
 pub struct PasswordEnrollment {
     /// The text after `#token=` in the link.
     pub token: String,
-    /// 12 to 256 characters, not one of the most common passwords.
+    /// 12 to 256 characters, not on the common-password list.
     pub password: String,
 }
 
@@ -139,7 +140,7 @@ pub struct PasswordEnrollment {
 #[serde(deny_unknown_fields)]
 pub struct PasswordChange {
     pub current_password: String,
-    /// 12 to 256 characters, not one of the most common passwords.
+    /// 12 to 256 characters, not on the common-password list.
     pub new_password: String,
 }
 
@@ -202,21 +203,27 @@ pub async fn enroll_password(
         ip: client.0,
     };
     use_link(&mut tx, scope, user_id, &token_hash, now).await?;
-    local_logins::set_password(&mut *tx, scope, user_id, stored.as_str(), now, actor)
-        .await
-        .map_err(internal)?;
+    let generation =
+        local_logins::set_password(&mut *tx, scope, user_id, stored.as_str(), now, actor)
+            .await
+            .map_err(internal)?;
     link_local_identity(&mut tx, scope, user_id, now, actor)
         .await
         .map_err(|outcome| match outcome {
             Outcome::Refused(error) | Outcome::Failed(error) => error,
         })?;
     let started = complete(&mut tx, scope, user_id, now, &headers).await?;
+    // A new password through a link is a reset: no session from before it outlives it.
+    sessions::delete_others_of_user(&mut *tx, scope, user_id, Keep::Session(started.session.id))
+        .await
+        .map_err(internal)?;
     tx.commit().await.map_err(internal)?;
     tracing::info!(%user_id, "password set through an enrollment link");
     signed_in(
         &state,
         scope,
         user_id,
+        generation,
         started,
         ReturnTo::root().as_str(),
         now,
@@ -278,7 +285,7 @@ async fn use_link(
     )
 )]
 pub async fn sign_in_with_password(
-    _limited: RateLimited<SignIn>,
+    limited: RateLimited<SignIn>,
     org: RequestOrg,
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -297,7 +304,12 @@ pub async fn sign_in_with_password(
         headers: &headers,
         now,
     };
-    let passed = check_password(&attempt, Some(&email), login.as_ref(), &body.password).await?;
+    let subject = Subject {
+        email: Some(&email),
+        login: login.as_ref(),
+        signed_in: None,
+    };
+    let passed = check_password(&limited, &attempt, subject, &body.password).await?;
     let started = finish_sign_in(&attempt, &passed).await?;
     tracing::info!(user_id = %passed.user_id, "password sign-in");
     let return_to = ReturnTo::sanitize(body.return_to.as_deref());
@@ -305,6 +317,7 @@ pub async fn sign_in_with_password(
         &state,
         scope,
         passed.user_id,
+        passed.generation,
         started,
         return_to.as_str(),
         now,
@@ -320,17 +333,7 @@ async fn finish_sign_in(
 ) -> Result<session::Started, ApiError> {
     let scope = attempt.scope;
     let mut tx = attempt.state.db.begin().await.map_err(internal)?;
-    identities::lock_user(&mut tx, scope, passed.user_id)
-        .await
-        .map_err(internal)?;
-    let current = local_logins::get(&mut *tx, scope, passed.user_id)
-        .await
-        .map_err(internal)?
-        .and_then(|login| login.password_hash);
-    if current.as_deref() != Some(passed.verified.as_str()) {
-        tracing::info!(user_id = %passed.user_id, "password sign-in refused: the password changed during the check");
-        return Err(credentials_invalid());
-    }
+    lock_unchanged(&mut tx, scope, passed).await?;
     if let Some(rehashed) = &passed.rehash {
         let (old, new) = (passed.verified.as_str(), rehashed.as_str());
         local_logins::replace_hash(&mut tx, scope, passed.user_id, old, new, attempt.now)
@@ -340,6 +343,27 @@ async fn finish_sign_in(
     let started = complete(&mut tx, scope, passed.user_id, attempt.now, attempt.headers).await?;
     tx.commit().await.map_err(internal)?;
     Ok(started)
+}
+
+/// Lock the user and refuse (401, the answer of a wrong password) when the password is no longer
+/// the one [`check_password`] verified: a change or a reset committed in between.
+async fn lock_unchanged(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: OrgScope,
+    passed: &Passed,
+) -> Result<(), ApiError> {
+    identities::lock_user(tx, scope, passed.user_id)
+        .await
+        .map_err(internal)?;
+    let current = local_logins::get(&mut **tx, scope, passed.user_id)
+        .await
+        .map_err(internal)?
+        .and_then(|login| login.password_hash);
+    if current.as_deref() != Some(passed.verified.as_str()) {
+        tracing::info!(user_id = %passed.user_id, "password check refused: the password changed during the check");
+        return Err(credentials_invalid());
+    }
+    Ok(())
 }
 
 /// Change the signed-in user's password.
@@ -365,6 +389,7 @@ async fn finish_sign_in(
     )
 )]
 pub async fn change_my_password(
+    limited: RateLimited<SignIn>,
     session: SessionOnly,
     client: ClientAddress,
     State(state): State<AppState>,
@@ -385,26 +410,32 @@ pub async fn change_my_password(
         headers: &headers,
         now: state.clock.now(),
     };
-    check_password(&attempt, email, login.as_ref(), &body.current_password).await?;
+    let subject = Subject {
+        email,
+        login: login.as_ref(),
+        signed_in: Some(principal.user_id),
+    };
+    let passed = check_password(&limited, &attempt, subject, &body.current_password).await?;
     let stored = state
         .passwords
         .hash(body.new_password)
         .await
         .map_err(internal)?;
     let actor = client.actor(principal);
-    store_change(&attempt, principal.user_id, &stored, actor).await?;
+    store_change(&attempt, &passed, &stored, actor).await?;
     tracing::info!(user_id = %principal.user_id, "password changed");
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// Store the changed password and end the user's other sessions, under the user's lock.
+/// Under the user's lock, unless the password changed since it was verified: store the changed
+/// password and end the user's other sessions.
 async fn store_change(
     attempt: &Attempt<'_>,
-    user_id: Uuid,
+    passed: &Passed,
     stored: &StoredHash,
     actor: Actor,
 ) -> Result<(), ApiError> {
-    let scope = attempt.scope;
+    let (scope, user_id) = (attempt.scope, passed.user_id);
     // `SessionOnly` let the request in, so it presents exactly one session cookie.
     let keep = session::presented_hash(attempt.headers).ok_or_else(|| {
         internal(std::io::Error::other(
@@ -412,9 +443,7 @@ async fn store_change(
         ))
     })?;
     let mut tx = attempt.state.db.begin().await.map_err(internal)?;
-    identities::lock_user(&mut tx, scope, user_id)
-        .await
-        .map_err(internal)?;
+    lock_unchanged(&mut tx, scope, passed).await?;
     local_logins::set_password(
         &mut *tx,
         scope,
@@ -425,106 +454,11 @@ async fn store_change(
     )
     .await
     .map_err(internal)?;
-    sessions::delete_others_of_user(&mut *tx, scope, user_id, keep.as_bytes())
+    sessions::delete_others_of_user(&mut *tx, scope, user_id, Keep::TokenHash(*keep.as_bytes()))
         .await
         .map_err(internal)?;
     tx.commit().await.map_err(internal)?;
     Ok(())
-}
-
-/// Why a password route refused: problem details, or the account's budget spent (429 with
-/// `Retry-After`).
-pub enum Refusal {
-    Problem(ApiError),
-    Limited(TooManyRequests),
-}
-
-impl From<ApiError> for Refusal {
-    fn from(error: ApiError) -> Self {
-        Self::Problem(error)
-    }
-}
-
-impl From<TooManyRequests> for Refusal {
-    fn from(limited: TooManyRequests) -> Self {
-        Self::Limited(limited)
-    }
-}
-
-impl IntoResponse for Refusal {
-    fn into_response(self) -> Response {
-        match self {
-            Self::Problem(error) => error.into_response(),
-            Self::Limited(limited) => limited.into_response(),
-        }
-    }
-}
-
-/// What a password check needs besides the password.
-struct Attempt<'a> {
-    state: &'a AppState,
-    scope: OrgScope,
-    headers: &'a HeaderMap,
-    now: SystemTime,
-}
-
-/// A password that matched: the user, the hash it matched, and the hash at the current
-/// parameters to store instead when that one is older.
-struct Passed {
-    user_id: Uuid,
-    verified: StoredHash,
-    rehash: Option<StoredHash>,
-}
-
-/// Check `password` against `login`'s hash, or the dummy hash when there is none (B14, B18):
-/// one argon2id verification whatever the case, under the account's failed-check budget unless
-/// the browser's device cookie names the login's user. A refusal is 401
-/// `auth.credentials_invalid`, 429 `auth.rate_limited`, or a fault.
-async fn check_password(
-    attempt: &Attempt<'_>,
-    email: Option<&LoginEmail>,
-    login: Option<&Login>,
-    password: &str,
-) -> Result<Passed, Refusal> {
-    let state = attempt.state;
-    let device_user = device::user(&state.keys, attempt.scope, attempt.headers, attempt.now);
-    let exempt = login.is_some_and(|login| device_user == Some(login.user_id));
-    let budget = match email {
-        Some(email) if !exempt => Some(state.rate_limits.account_check(
-            attempt.scope,
-            email,
-            attempt.now,
-        )?),
-        _ => None,
-    };
-    let stored = login
-        .and_then(|login| login.password_hash.clone())
-        .map(StoredHash::new);
-    let verified = state
-        .passwords
-        .verify(password.to_owned(), stored.clone())
-        .await
-        .map_err(internal)?;
-    let (Verified::Match { rehash }, Some(login), Some(stored)) = (verified, login, stored) else {
-        // The budget, when taken, keeps this failure counted.
-        drop(budget);
-        tracing::info!(user_id = ?login.map(|login| login.user_id), "password check failed");
-        return Err(credentials_invalid().into());
-    };
-    if let Some(budget) = budget {
-        budget.passed();
-    }
-    let rehash = if rehash {
-        let new = state.passwords.hash(password.to_owned()).await;
-        Some(new.map_err(internal)?)
-    } else {
-        None
-    };
-    Ok(Passed {
-        user_id: login.user_id,
-        verified: stored,
-        rehash,
-    })
 }
 
 /// Admission's local entry (spec 07 B1, step 1): the session, or the refusal's 403.
@@ -548,17 +482,19 @@ fn refuse_weak(password: &str, field: &str) -> Result<(), ApiError> {
         .map_err(|_| ApiError::invalid(vec![FieldError::at(&[field], code::LOCAL_PASSWORD_WEAK)]))
 }
 
-/// 200 `{return_to}` with the session cookie, a new device cookie for `user_id` and
-/// `no-store`.
+/// 200 `{return_to}` with the session cookie, a new device cookie for `user_id`'s password
+/// generation `generation`, and `no-store`.
 fn signed_in(
     state: &AppState,
     scope: OrgScope,
     user_id: Uuid,
+    generation: i64,
     started: session::Started,
     return_to: &str,
     now: SystemTime,
 ) -> Result<Response, ApiError> {
-    let device = device::set_cookie(&state.keys, scope, user_id, now).map_err(internal)?;
+    let device =
+        device::set_cookie(&state.keys, scope, user_id, generation, now).map_err(internal)?;
     let body = SignedIn {
         return_to: return_to.to_owned(),
     };
@@ -568,18 +504,6 @@ fn signed_in(
     headers.append(header::SET_COOKIE, device);
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
-}
-
-fn credentials_invalid() -> ApiError {
-    ApiError::new(
-        StatusCode::UNAUTHORIZED,
-        code::AUTH_CREDENTIALS_INVALID,
-        "The email or password is wrong. Check both and try again.",
-    )
-}
-
-fn internal<E: std::error::Error>(error: E) -> ApiError {
-    ApiError::internal(&error)
 }
 
 #[cfg(test)]
@@ -596,14 +520,5 @@ mod tests {
         assert_eq!(problem.errors[0].field, "/new_password");
         assert_eq!(problem.errors[0].code, "local.password_weak");
         assert!(refuse_weak("correct horse battery staple", "password").is_ok());
-    }
-
-    #[test]
-    fn wrong_credentials_are_401() {
-        let problem = credentials_invalid().problem();
-        assert_eq!(
-            (problem.status, problem.code.as_str()),
-            (401, "auth.credentials_invalid")
-        );
     }
 }

@@ -4,24 +4,32 @@
 //! B42; the owner's decision on issue 26, 13 Nov 2026).
 //!
 //! A successful password sign-in or password enrollment sets `__Host-sc_device`, which names the
-//! account's user. A later password check for that same user from a browser presenting a valid
-//! one is neither counted against nor refused by the per-account budget; the per-address budget
-//! still applies to every request. Anyone else, an attacker guessing included, has no such
-//! cookie, so their failures still throttle the account, while its owner keeps signing in.
+//! account's user and the password it signed in with. A later password check for that user
+//! from a browser presenting a valid one is neither counted against nor refused by the
+//! per-account budget; it counts against the cookie's own budget instead (OWASP's device-cookie
+//! scheme), so a stolen cookie lifts no limit, and the per-address budget still applies to
+//! every request. Anyone else, an attacker guessing included, has no such cookie, so their
+//! failures still throttle the account while its owner keeps signing in.
 //!
 //! The value is sealed with the key ring (AES-256-GCM, `stepclimb_auth::encryption`), bound to
-//! the organization: the user's id and the time it was issued, in base64url. Nobody without the
-//! keys can make one, read whose it is, or move one to another organization. It is good for
-//! [`LIFETIME`] after it was issued, a limit the server checks itself; every sign-in issues a
-//! new one. A cookie that does not open, is too old, or names another user exempts nothing and
-//! is not an error.
+//! the organization: the user's id, a random device id (the key of the cookie's budget), the
+//! time it was issued and the password's generation (`local_logins.password_changed_at`), in
+//! base64url. Nobody without the keys can make one, read whose it is, or move one to another
+//! organization. It is good for [`LIFETIME`] after it was issued, a limit the server checks
+//! itself, and only while the account's password is the one it was issued for: a change or a
+//! reset through an enrollment link revokes every older cookie. Every sign-in issues a new one.
+//! A cookie that does not open, is too old, or names another user or password exempts nothing
+//! and is not an error.
 
 use std::time::{Duration, SystemTime};
 
 use axum::http::{HeaderMap, HeaderValue};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use stepclimb_auth::encryption::{EncryptError, KeyRing};
-use stepclimb_core::{OrgScope, id::Uuid};
+use stepclimb_core::{
+    OrgScope,
+    id::{Uuid, new_id},
+};
 
 use crate::cookie::{self, Presented};
 
@@ -37,15 +45,29 @@ const ATTRIBUTES: &str = "Path=/; Secure; HttpOnly; SameSite=Strict";
 /// What the value is sealed for (`stepclimb_auth::encryption` context rules).
 const CONTEXT_NAME: &[u8] = b"device_cookie";
 
-/// The user id's 16 bytes, then the issue time in seconds since the epoch, 8 bytes big-endian.
-const PLAIN_LEN: usize = 24;
+/// The user id's 16 bytes, the device id's 16, the issue time in seconds since the epoch (8
+/// bytes) and the password's generation (8 bytes), integers big-endian.
+const PLAIN_LEN: usize = 48;
 
-/// The `Set-Cookie` value naming the user `user_id` of the scope's organization, issued at
-/// `now`, marked sensitive.
+/// What a valid device cookie says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Device {
+    /// The user it was issued to.
+    pub user_id: Uuid,
+    /// Random per cookie: the key of its failed-check budget.
+    pub device_id: Uuid,
+    /// The password it was issued for: `local_logins.password_changed_at` in microseconds since
+    /// the epoch (`local_logins::Login::password_generation`).
+    pub generation: i64,
+}
+
+/// The `Set-Cookie` value naming the user `user_id` of the scope's organization and the
+/// password generation `generation`, with a new device id, issued at `now`, marked sensitive.
 pub fn set_cookie(
     keys: &KeyRing,
     scope: OrgScope,
     user_id: Uuid,
+    generation: i64,
     now: SystemTime,
 ) -> Result<HeaderValue, EncryptError> {
     let issued = now
@@ -53,7 +75,9 @@ pub fn set_cookie(
         .map_or(0, |since| since.as_secs());
     let mut plain = [0u8; PLAIN_LEN];
     plain[..16].copy_from_slice(user_id.as_bytes());
-    plain[16..].copy_from_slice(&issued.to_be_bytes());
+    plain[16..32].copy_from_slice(new_id().as_bytes());
+    plain[32..40].copy_from_slice(&issued.to_be_bytes());
+    plain[40..].copy_from_slice(&generation.to_be_bytes());
     let org_id = scope.org_id();
     let sealed = keys.encrypt(&plain, &[org_id.as_bytes(), CONTEXT_NAME])?;
     let cookie = format!(
@@ -68,9 +92,15 @@ pub fn set_cookie(
     Ok(value)
 }
 
-/// The user the request's device cookie names in the scope's organization at `now`, if it
-/// presents exactly one that opens and is younger than [`LIFETIME`].
-pub fn user(keys: &KeyRing, scope: OrgScope, headers: &HeaderMap, now: SystemTime) -> Option<Uuid> {
+/// What the request's device cookie says in the scope's organization at `now`, if it presents
+/// exactly one that opens and is younger than [`LIFETIME`]. Whether it names the account's
+/// current password is the caller's comparison.
+pub fn presented(
+    keys: &KeyRing,
+    scope: OrgScope,
+    headers: &HeaderMap,
+    now: SystemTime,
+) -> Option<Device> {
     let Presented::One(value) = cookie::presented(headers, COOKIE_NAME) else {
         return None;
     };
@@ -81,10 +111,16 @@ pub fn user(keys: &KeyRing, scope: OrgScope, headers: &HeaderMap, now: SystemTim
         .ok()?;
     let plain: [u8; PLAIN_LEN] = plain.try_into().ok()?;
     let user_id = Uuid::from_slice(&plain[..16]).ok()?;
-    let issued_secs = u64::from_be_bytes(plain[16..].try_into().ok()?);
+    let device_id = Uuid::from_slice(&plain[16..32]).ok()?;
+    let issued_secs = u64::from_be_bytes(plain[32..40].try_into().ok()?);
+    let generation = i64::from_be_bytes(plain[40..].try_into().ok()?);
     let issued = SystemTime::UNIX_EPOCH + Duration::from_secs(issued_secs);
     let age = now.duration_since(issued).ok()?;
-    (age < LIFETIME).then_some(user_id)
+    (age < LIFETIME).then_some(Device {
+        user_id,
+        device_id,
+        generation,
+    })
 }
 
 #[cfg(test)]
@@ -109,8 +145,29 @@ mod tests {
         SystemTime::UNIX_EPOCH + Duration::from_secs(1_763_000_000 + secs)
     }
 
+    /// The user the presented cookie names.
+    fn named(
+        keys: &KeyRing,
+        scope: OrgScope,
+        headers: &HeaderMap,
+        now: SystemTime,
+    ) -> Option<Uuid> {
+        presented(keys, scope, headers, now).map(|device| device.user_id)
+    }
+
+    #[test]
+    fn a_cookie_carries_its_generation_and_a_device_id_of_its_own() {
+        let user_id = Uuid::from_u128(42);
+        let first = set_cookie(&keys(), scope(1), user_id, 1_234, at(0)).unwrap();
+        let second = set_cookie(&keys(), scope(1), user_id, 1_234, at(0)).unwrap();
+        let first = presented(&keys(), scope(1), &headers_for(&first), at(0)).unwrap();
+        let second = presented(&keys(), scope(1), &headers_for(&second), at(0)).unwrap();
+        assert_eq!((first.user_id, first.generation), (user_id, 1_234));
+        assert_ne!(first.device_id, second.device_id);
+    }
+
     /// The request headers a browser sends back for `set_cookie`.
-    fn presented(set_cookie: &HeaderValue) -> HeaderMap {
+    fn headers_for(set_cookie: &HeaderValue) -> HeaderMap {
         let pair = set_cookie.to_str().unwrap().split(';').next().unwrap();
         let mut headers = HeaderMap::new();
         headers.insert(header::COOKIE, HeaderValue::from_str(pair).unwrap());
@@ -120,25 +177,25 @@ mod tests {
     #[test]
     fn a_cookie_names_its_user_until_its_lifetime_ends() {
         let user_id = Uuid::from_u128(42);
-        let set = set_cookie(&keys(), scope(1), user_id, at(0)).unwrap();
-        let headers = presented(&set);
-        assert_eq!(user(&keys(), scope(1), &headers, at(0)), Some(user_id));
+        let set = set_cookie(&keys(), scope(1), user_id, 7, at(0)).unwrap();
+        let headers = headers_for(&set);
+        assert_eq!(named(&keys(), scope(1), &headers, at(0)), Some(user_id));
         let last = at(LIFETIME.as_secs() - 1);
-        assert_eq!(user(&keys(), scope(1), &headers, last), Some(user_id));
+        assert_eq!(named(&keys(), scope(1), &headers, last), Some(user_id));
         let over = at(LIFETIME.as_secs());
-        assert_eq!(user(&keys(), scope(1), &headers, over), None);
+        assert_eq!(named(&keys(), scope(1), &headers, over), None);
         // Issued in the future (the clock went back): not trusted.
-        let set = set_cookie(&keys(), scope(1), user_id, at(100)).unwrap();
-        assert_eq!(user(&keys(), scope(1), &presented(&set), at(0)), None);
+        let set = set_cookie(&keys(), scope(1), user_id, 7, at(100)).unwrap();
+        assert_eq!(named(&keys(), scope(1), &headers_for(&set), at(0)), None);
     }
 
     #[test]
     fn a_cookie_is_bound_to_its_organization_and_keys() {
-        let set = set_cookie(&keys(), scope(1), Uuid::from_u128(42), at(0)).unwrap();
-        let headers = presented(&set);
-        assert_eq!(user(&keys(), scope(2), &headers, at(0)), None);
+        let set = set_cookie(&keys(), scope(1), Uuid::from_u128(42), 7, at(0)).unwrap();
+        let headers = headers_for(&set);
+        assert_eq!(named(&keys(), scope(2), &headers, at(0)), None);
         let other = KeyRing::parse("other:AQECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=").unwrap();
-        assert_eq!(user(&other, scope(1), &headers, at(0)), None);
+        assert_eq!(named(&other, scope(1), &headers, at(0)), None);
     }
 
     #[test]
@@ -148,18 +205,18 @@ mod tests {
             header::COOKIE,
             HeaderValue::from_static("__Host-sc_device=AAAA"),
         );
-        assert_eq!(user(&keys(), scope(1), &headers, at(0)), None);
-        let set = set_cookie(&keys(), scope(1), Uuid::from_u128(42), at(0)).unwrap();
+        assert_eq!(named(&keys(), scope(1), &headers, at(0)), None);
+        let set = set_cookie(&keys(), scope(1), Uuid::from_u128(42), 7, at(0)).unwrap();
         let pair = set.to_str().unwrap().split(';').next().unwrap().to_owned();
         let mut doubled = HeaderMap::new();
         let both = format!("{pair}; {pair}");
         doubled.insert(header::COOKIE, HeaderValue::from_str(&both).unwrap());
-        assert_eq!(user(&keys(), scope(1), &doubled, at(0)), None);
+        assert_eq!(named(&keys(), scope(1), &doubled, at(0)), None);
     }
 
     #[test]
     fn the_cookie_carries_the_host_attributes_and_hides_its_value() {
-        let set = set_cookie(&keys(), scope(1), Uuid::from_u128(42), at(0)).unwrap();
+        let set = set_cookie(&keys(), scope(1), Uuid::from_u128(42), 7, at(0)).unwrap();
         let text = set.to_str().unwrap();
         assert!(text.starts_with("__Host-sc_device="), "{text}");
         assert!(

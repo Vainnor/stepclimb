@@ -64,6 +64,9 @@ pub struct Login {
     pub password_hash: Option<String>,
     /// The address the login signs in with; `None` while the user has no email.
     pub email: Option<LoginEmail>,
+    /// How many passwords the user has set: a new one adds 1, a rehash does not. A device
+    /// cookie is good only for the generation it was issued for.
+    pub password_generation: i64,
 }
 
 impl std::fmt::Debug for Login {
@@ -71,6 +74,7 @@ impl std::fmt::Debug for Login {
         f.debug_struct("Login")
             .field("user_id", &self.user_id)
             .field("has_password", &self.password_hash.is_some())
+            .field("password_generation", &self.password_generation)
             .finish_non_exhaustive()
     }
 }
@@ -103,7 +107,8 @@ pub async fn find_for_sign_in(
     }
     let row = sqlx::query!(
         r#"SELECT lower($2::text) AS "normalized!", l.user_id AS "user_id?",
-                  l.password_hash AS "password_hash?"
+                  l.password_hash AS "password_hash?",
+                  l.password_generation AS "password_generation?"
            FROM (VALUES (1)) AS one (n)
            LEFT JOIN local_logins l ON l.org_id = $1 AND l.email_normalized = lower($2::text)"#,
         scope.org_id(),
@@ -116,6 +121,7 @@ pub async fn find_for_sign_in(
         user_id,
         password_hash: row.password_hash,
         email: Some(normalized.clone()),
+        password_generation: row.password_generation.unwrap_or_default(),
     });
     Ok((normalized, login))
 }
@@ -127,7 +133,7 @@ pub async fn get(
     user_id: Uuid,
 ) -> Result<Option<Login>, Error> {
     let row = sqlx::query!(
-        "SELECT user_id, password_hash, email_normalized
+        "SELECT user_id, password_hash, email_normalized, password_generation
          FROM local_logins WHERE org_id = $1 AND user_id = $2",
         scope.org_id(),
         user_id,
@@ -138,6 +144,7 @@ pub async fn get(
         user_id: row.user_id,
         password_hash: row.password_hash,
         email: row.email_normalized.map(LoginEmail),
+        password_generation: row.password_generation,
     }))
 }
 
@@ -162,8 +169,9 @@ pub async fn has_password(
 
 /// Store `password_hash` (an argon2id PHC string) as the password of the user `user_id` in the
 /// scope's organization at `now`, creating the login with the user's email if they have none,
-/// and write the `password.set` audit entry by `actor` with the user. Runs in one transaction (a
-/// savepoint when `db` is already one). A user the organization does not have is
+/// and write the `password.set` audit entry by `actor` with the user. Returns the password's
+/// generation: 1 for the first, one more than the last for each after. Runs in one transaction
+/// (a savepoint when `db` is already one). A user the organization does not have is
 /// [`Error::UserNotFound`].
 pub async fn set_password<'c>(
     db: impl Acquire<'c, Database = Postgres>,
@@ -172,10 +180,10 @@ pub async fn set_password<'c>(
     password_hash: &str,
     now: SystemTime,
     actor: Actor,
-) -> Result<(), Error> {
+) -> Result<i64, Error> {
     let now_us = epoch_micros(now)?;
     let mut tx = db.begin().await?;
-    let stored = sqlx::query_scalar!(
+    let generation = sqlx::query_scalar!(
         r#"INSERT INTO local_logins (user_id, org_id, email_normalized, password_hash,
                                      password_changed_at, created_at, updated_at)
            SELECT u.id, u.org_id, lower(u.email), $3,
@@ -187,18 +195,17 @@ pub async fn set_password<'c>(
            ON CONFLICT (user_id) DO UPDATE
            SET password_hash = EXCLUDED.password_hash,
                password_changed_at = EXCLUDED.password_changed_at,
+               password_generation = local_logins.password_generation + 1,
                updated_at = EXCLUDED.updated_at
-           RETURNING user_id"#,
+           RETURNING password_generation"#,
         scope.org_id(),
         user_id,
         password_hash,
         now_us,
     )
     .fetch_optional(&mut *tx)
-    .await?;
-    if stored.is_none() {
-        return Err(Error::UserNotFound);
-    }
+    .await?
+    .ok_or(Error::UserNotFound)?;
     let data = json!({ "after": { "user_id": user_id } });
     audit::record(
         &mut tx,
@@ -211,7 +218,7 @@ pub async fn set_password<'c>(
     )
     .await?;
     tx.commit().await?;
-    Ok(())
+    Ok(generation)
 }
 
 /// Replace the password hash of the user `user_id` in the scope's organization with

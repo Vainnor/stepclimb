@@ -1424,12 +1424,12 @@ export interface components {
         /** @description The signed-in user's current password and the new one. Never logged. */
         PasswordChange: {
             current_password: string;
-            /** @description 12 to 256 characters, not one of the most common passwords. */
+            /** @description 12 to 256 characters, not on the common-password list. */
             new_password: string;
         };
         /** @description The password to set through an enrollment link. Never logged. */
         PasswordEnrollment: {
-            /** @description 12 to 256 characters, not one of the most common passwords. */
+            /** @description 12 to 256 characters, not on the common-password list. */
             password: string;
             /** @description The text after `#token=` in the link. */
             token: string;
@@ -2275,7 +2275,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `request.invalid` with `local.password_weak` at the password: it has fewer than 12 or more than 256 characters, or it is one of the 10,000 most common passwords. */
+        /** @description `request.invalid` with `local.password_weak` at the password: it has fewer than 12 or more than 256 characters, or it is on the server's list of 10,000 common passwords. */
         PasswordWeak: {
             headers: {
                 [name: string]: unknown;

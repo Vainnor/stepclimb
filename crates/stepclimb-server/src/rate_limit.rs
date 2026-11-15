@@ -38,7 +38,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use sha2::{Digest, Sha256};
-use stepclimb_core::{OrgScope, local_logins::LoginEmail};
+use stepclimb_core::{OrgScope, id::Uuid, local_logins::LoginEmail};
 
 use crate::{AppState, client_ip::TrustedProxies, error::ApiError};
 
@@ -131,7 +131,8 @@ impl From<IpAddr> for AddressKey {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Key {
     Address(Class, AddressKey),
-    /// SHA-256 of the organization id's 16 bytes, then the identifier's bytes.
+    /// SHA-256 of what the budget counts ([`Subject`]'s tag byte), the organization id's 16
+    /// bytes, then the identifier's bytes.
     Account([u8; 32]),
 }
 
@@ -144,15 +145,31 @@ impl Key {
         }
     }
 
-    /// The account key: a fixed 32 bytes, so an identifier of any length costs the table the
-    /// same. The organization id has a fixed length, so no two pairs hash the same input.
-    fn account(scope: OrgScope, identifier: &str) -> Self {
+    /// The key of a failed-check budget: a fixed 32 bytes, so an identifier of any length costs
+    /// the table the same. The tag and the organization id have fixed lengths, so no two
+    /// budgets, of one kind or of two, hash the same input.
+    fn account(subject: Subject, scope: OrgScope, identifier: &[u8]) -> Self {
         let digest = Sha256::new()
+            .chain_update([subject as u8])
             .chain_update(scope.org_id().as_bytes())
-            .chain_update(identifier.as_bytes())
+            .chain_update(identifier)
             .finalize();
         Self::Account(digest.into())
     }
+}
+
+/// What a failed-check budget counts against. All share [`Limits::failed_checks`] and
+/// [`FAILED_CHECK_WINDOW`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+enum Subject {
+    /// An account, by the address it signs in with.
+    Email = 1,
+    /// One browser's device cookie (spec 08 B42).
+    Device = 2,
+    /// A user, by id: the signed-in user's checks, which apply with or without an email or a
+    /// device cookie.
+    User = 3,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -244,13 +261,47 @@ impl RateLimiter {
         self.check_identifier(scope, email.as_str(), now)
     }
 
+    /// [`RateLimiter::account_check`] against the budget of one device cookie, by the random id
+    /// sealed in it (spec 08 B42): a browser the account's device cookie exempts from the
+    /// account's budget still has one of its own, so a stolen cookie gives an attacker no more
+    /// guesses than the account itself would.
+    pub fn device_check(
+        &self,
+        scope: OrgScope,
+        device_id: Uuid,
+        now: SystemTime,
+    ) -> Result<AccountCheck, TooManyRequests> {
+        self.check(
+            Key::account(Subject::Device, scope, device_id.as_bytes()),
+            now,
+        )
+    }
+
+    /// [`RateLimiter::account_check`] against the budget of the user `user_id`, for a check
+    /// a signed-in user makes (spec 04 B17). It applies whether or not the user has an email
+    /// and whether or not a device cookie is presented.
+    pub fn user_check(
+        &self,
+        scope: OrgScope,
+        user_id: Uuid,
+        now: SystemTime,
+    ) -> Result<AccountCheck, TooManyRequests> {
+        self.check(Key::account(Subject::User, scope, user_id.as_bytes()), now)
+    }
+
     fn check_identifier(
         &self,
         scope: OrgScope,
         identifier: &str,
         now: SystemTime,
     ) -> Result<AccountCheck, TooManyRequests> {
-        let key = Key::account(scope, identifier);
+        self.check(
+            Key::account(Subject::Email, scope, identifier.as_bytes()),
+            now,
+        )
+    }
+
+    fn check(&self, key: Key, now: SystemTime) -> Result<AccountCheck, TooManyRequests> {
         let opened = self.take(key, self.0.limits.failed_checks, now)?;
         Ok(AccountCheck {
             limiter: self.clone(),
@@ -441,8 +492,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use stepclimb_core::id::Uuid;
-
     use super::*;
 
     fn at(secs: u64) -> SystemTime {
@@ -687,16 +736,34 @@ mod tests {
     }
 
     #[test]
+    fn email_device_and_user_budgets_are_apart() {
+        let limiter = limiter(20, 60, 1);
+        let id = Uuid::from_u128(9);
+        drop(limiter.user_check(scope(1), id, at(0)).unwrap());
+        assert!(limiter.user_check(scope(1), id, at(0)).is_err());
+        assert!(limiter.device_check(scope(1), id, at(0)).is_ok());
+        assert!(limiter.user_check(scope(2), id, at(0)).is_ok());
+        let as_text = String::from_utf8_lossy(id.as_bytes()).into_owned();
+        assert!(limiter.check_identifier(scope(1), &as_text, at(0)).is_ok());
+    }
+
+    #[test]
     fn an_account_key_is_32_bytes_whatever_the_identifier() {
         let one = "a".repeat(1 << 20);
         let mut other = one.clone();
         other.push('b');
-        let (first, second) = (Key::account(scope(1), &one), Key::account(scope(1), &other));
+        let (first, second) = (
+            Key::account(Subject::Email, scope(1), one.as_bytes()),
+            Key::account(Subject::Email, scope(1), other.as_bytes()),
+        );
         for key in [first, second] {
             assert!(matches!(key, Key::Account(digest) if digest.len() == 32));
         }
         assert_ne!(first, second);
-        assert_ne!(first, Key::account(scope(2), &one));
+        assert_ne!(
+            first,
+            Key::account(Subject::Email, scope(2), one.as_bytes())
+        );
         // `Key` is `Copy`, so it owns no heap memory, and its size is fixed.
         assert!(std::mem::size_of::<Key>() <= 40);
         // The two long identifiers keep separate budgets.

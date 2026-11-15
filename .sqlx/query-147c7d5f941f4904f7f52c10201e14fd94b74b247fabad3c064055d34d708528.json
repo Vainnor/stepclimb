@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT user_id, password_hash, email_normalized\n         FROM local_logins WHERE org_id = $1 AND user_id = $2",
+  "query": "SELECT user_id, password_hash, email_normalized, password_generation\n         FROM local_logins WHERE org_id = $1 AND user_id = $2",
   "describe": {
     "columns": [
       {
@@ -35,6 +35,17 @@
             "name": "email_normalized"
           }
         }
+      },
+      {
+        "ordinal": 3,
+        "name": "password_generation",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "local_logins",
+            "name": "password_generation"
+          }
+        }
       }
     ],
     "parameters": {
@@ -46,8 +57,9 @@
     "nullable": [
       false,
       true,
-      true
+      true,
+      false
     ]
   },
-  "hash": "9a017c6aeb124927fa371bb22991b3173c8d24cf9ab739521f98c26f143f6915"
+  "hash": "147c7d5f941f4904f7f52c10201e14fd94b74b247fabad3c064055d34d708528"
 }

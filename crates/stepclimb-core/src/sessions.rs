@@ -286,23 +286,39 @@ pub async fn delete_by_token_hash(
     Ok(result.rows_affected() > 0)
 }
 
-/// Delete every session of the user `user_id` in the scope's organization except the one whose
-/// token hashes to `keep`, for a password change that ends the user's other sessions
-/// (docs/specs/m0/04-local-accounts.md B17, Q8). Returns how many were deleted.
+/// The session [`delete_others_of_user`] keeps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Keep {
+    /// The session with this id, such as the one a sign-in has just created.
+    Session(Uuid),
+    /// The session whose token hashes to this, such as the one a request presents.
+    TokenHash([u8; 32]),
+}
+
+/// Delete every session of the user `user_id` in the scope's organization but the one `keep`
+/// names, for a new password that ends the user's other sessions (a change or a reset through
+/// an enrollment link, docs/specs/m0/04-local-accounts.md B9, B17, Q8). Returns how many were
+/// deleted.
 pub async fn delete_others_of_user(
     db: impl PgExecutor<'_>,
     scope: OrgScope,
     user_id: Uuid,
-    keep: &[u8; 32],
+    keep: Keep,
 ) -> Result<u64, Error> {
+    let (id, hash) = match keep {
+        Keep::Session(id) => (Some(id), None),
+        Keep::TokenHash(hash) => (None, Some(hash.to_vec())),
+    };
     let result = sqlx::query!(
         r#"DELETE FROM sessions s
            USING users u
            WHERE u.id = s.user_id AND u.org_id = $1 AND s.user_id = $2
-             AND s.token_hash <> $3"#,
+             AND ($3::uuid IS NULL OR s.id <> $3)
+             AND ($4::bytea IS NULL OR s.token_hash <> $4)"#,
         scope.org_id(),
         user_id,
-        keep.as_slice(),
+        id,
+        hash,
     )
     .execute(db)
     .await?;

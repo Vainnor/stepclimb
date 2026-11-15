@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT lower($2::text) AS \"normalized!\", l.user_id AS \"user_id?\",\n                  l.password_hash AS \"password_hash?\"\n           FROM (VALUES (1)) AS one (n)\n           LEFT JOIN local_logins l ON l.org_id = $1 AND l.email_normalized = lower($2::text)",
+  "query": "SELECT lower($2::text) AS \"normalized!\", l.user_id AS \"user_id?\",\n                  l.password_hash AS \"password_hash?\",\n                  l.password_generation AS \"password_generation?\"\n           FROM (VALUES (1)) AS one (n)\n           LEFT JOIN local_logins l ON l.org_id = $1 AND l.email_normalized = lower($2::text)",
   "describe": {
     "columns": [
       {
@@ -30,6 +30,17 @@
             "name": "password_hash"
           }
         }
+      },
+      {
+        "ordinal": 3,
+        "name": "password_generation?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "local_logins",
+            "name": "password_generation"
+          }
+        }
       }
     ],
     "parameters": {
@@ -41,8 +52,9 @@
     "nullable": [
       null,
       true,
+      true,
       true
     ]
   },
-  "hash": "79be4c34cde049c4eb017d9f600e2b293e94a060cf99ed8aba55e310ae9b4a3d"
+  "hash": "bf32d2dca9a847cd4820d38f5211d0e7a3088bae263085fb636b014e0f6e6976"
 }

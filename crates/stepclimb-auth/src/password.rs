@@ -3,7 +3,7 @@
 //! verification (`docs/specs/m0/04-local-accounts.md` B9, B14, B16, Q8).
 //!
 //! [`check_policy`] is Q8 (c): 12 to 256 characters, counted as Unicode scalar values, no
-//! composition rule, and not one of the 10,000 common passwords in `password/common-passwords.txt`
+//! composition rule, and not one of the 10,000 passwords in `password/common-passwords.txt`
 //! (compared in lowercase; its source is in this crate's `THIRD_PARTY.md`).
 //!
 //! [`hash`] computes argon2id at [`PARAMS`], Q8's OWASP Password Storage Cheat Sheet minimum
@@ -62,7 +62,7 @@ pub enum Weak {
     TooShort,
     #[error("a password has at most {MAX_CHARS} characters")]
     TooLong,
-    #[error("the password is one of the most common passwords")]
+    #[error("the password is on the list of common passwords")]
     Common,
 }
 
@@ -306,6 +306,36 @@ mod tests {
         assert_eq!(check_policy("QWERTY123456"), Err(Weak::Common));
         assert_eq!(check_policy("1qaz2wsx3edc"), Err(Weak::Common));
         assert_eq!(check_policy("qwerty1234567 not common"), Ok(()));
+    }
+
+    /// The 10 entries of 12 or more characters of SecLists' "10k most common" list, which Q8's
+    /// literal list would refuse (`THIRD_PARTY.md`).
+    const LITERAL: [&str; 10] = [
+        "masterbating",
+        "unbelievable",
+        "businessbabe",
+        "contortionist",
+        "masterbaiting",
+        "masturbation",
+        "pornographic",
+        "scandinavian",
+        "films+pic+galeries",
+        "motherfucker",
+    ];
+
+    #[test]
+    fn the_literal_lists_long_entries_are_refused() {
+        for password in LITERAL {
+            assert_eq!(check_policy(password), Err(Weak::Common), "{password}");
+        }
+    }
+
+    #[test]
+    fn no_entry_looks_like_an_email_or_a_web_address() {
+        for line in COMMON.lines() {
+            assert!(!line.contains('@'), "{line}");
+            assert!(!line.contains("www.") && !line.contains(".com"), "{line}");
+        }
     }
 
     #[test]

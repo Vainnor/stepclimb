@@ -11,13 +11,17 @@
 -- NULL while the user has no email, and such an account cannot sign in by password until an
 -- email is set again (B4).
 --
--- `password_hash` is an argon2id PHC string (Q8). TOTP's columns arrive with issue I7.
+-- `password_hash` is an argon2id PHC string (Q8). `password_generation` counts the passwords
+-- set: each new one (an enrollment link's or a change) adds 1, a rehash of the same password
+-- does not. A device cookie seals the generation it was issued for, so a new password revokes
+-- older cookies (docs/specs/m0/08-sessions-and-csrf.md B42). TOTP's columns arrive with issue I7.
 CREATE TABLE local_logins (
     user_id             uuid        PRIMARY KEY,
     org_id              uuid        NOT NULL REFERENCES organizations (id),
     email_normalized    text,
     password_hash       text        CHECK (password_hash LIKE '$argon2id$%'),
     password_changed_at timestamptz,
+    password_generation bigint      NOT NULL DEFAULT 1 CHECK (password_generation > 0),
     created_at          timestamptz NOT NULL DEFAULT now(),
     updated_at          timestamptz NOT NULL DEFAULT now(),
     FOREIGN KEY (org_id, user_id) REFERENCES users (org_id, id) ON DELETE CASCADE,

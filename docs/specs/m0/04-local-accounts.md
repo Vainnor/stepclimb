@@ -227,7 +227,9 @@ creates and hands over.
     and nothing is stored. The answer is 200 `{return_to: "/"}` with the session and device
     cookies and `Cache-Control: no-store`.
   - A user who has a password already gets the new one: an enrollment link is Q10 (a)'s way back
-    in.
+    in. Such a reset ends every other session of the user in the enrollment's transaction,
+    keeping only the session it creates, and moves the password's generation, which revokes the
+    user's older device cookies (`08-sessions-and-csrf.md` B42).
   - Storing a password writes `password.set` (`09-permissions-and-roles.md` B22) with the user,
     never the hash, by the user from the client address; a change through B17 writes it too.
 - **B10.** How the first organization admin of a new instance gets an account (for example
@@ -424,14 +426,21 @@ creates and hands over.
     password, and replaces the hash only if it is still the one that was verified.
   - The cap is 4 (Q8), a semaphore around tokio's blocking pool
     (`stepclimb_server::password_hasher`): a request waits for a permit rather than being
-    refused. Every hash and verification, the dummy one included, takes a permit.
+    refused. Every hash and verification, the dummy one included, takes a permit, and the
+    permit moves into the blocking task, so a request dropped mid-hash keeps it until the hash
+    ends and no more than 4 ever run.
   - Q8's policy (c): 12 to 256 characters counted as Unicode scalar values, no composition rule,
-    and not in a list of 10,000 common passwords compared in lowercase. Of SecLists' "10k most
-    common" list only 10 entries have 12 or more characters, so that list alone would refuse 10
-    passwords; the bundled list is those 10 followed by the most common other entries of 12 to
-    256 characters of SecLists' xato-net one-million list, 10,000 in all
-    (`crates/stepclimb-auth/THIRD_PARTY.md`, MIT). It refuses more than the literal 10,000 would;
-    the owner may prefer the literal list. Passwords are not Unicode-normalized before hashing.
+    and not in a list of 10,000 passwords compared in lowercase. Of SecLists' "10k most common"
+    list only 10 entries have 12 or more characters, so that list alone would refuse 10
+    passwords. The bundled list is those 10, then entries of 12 to 256 characters drawn from
+    SecLists' xato-net one-million list in that file's order, after filters that drop every
+    entry with `@`, a web or mail domain, or a run of 10 or more digits that is not a sequence
+    or repetition (phone-number-like), entries of letters followed by a plausible birth date,
+    and entries matching a short list of offensive substrings; the 10 from the literal list are
+    kept whatever the filters say (five of them are offensive), so the server refuses at least
+    what Q8's literal list would (coordinator decision, 2026-11-15; source and filters in
+    `crates/stepclimb-auth/THIRD_PARTY.md`, MIT). Passwords are not Unicode-normalized before
+    hashing.
 - **B17.** A signed-in user changes their password with `PUT /api/v1/me/password`, giving the
   current one. A wrong current password answers 401 `auth.credentials_invalid`. Whether other
   sessions end: pending Q8.
@@ -440,10 +449,11 @@ creates and hands over.
   `auth.session_required` to a bearer request, as `/api/v1/me/passkeys` does), answers 404
   `auth.method_disabled` while passwords are off, refuses a weak new password with 422
   `local.password_weak` at `/new_password`, and checks the current password exactly as sign-in
-  does, the account budget of B18 included. A user without a password answers 401
+  does, the budgets of B18 included. A user without a password answers 401
   `auth.credentials_invalid` after the dummy verification. On success, under the user's row
-  lock, it stores the new hash (`password.set`) and ends every other session of the user (Q8),
-  keeping the session that asked; the answer is 204.
+  lock, it re-reads the hash and answers the same 401 if it is no longer the one verified (a
+  change or reset in between); otherwise it stores the new hash (`password.set`) and ends every
+  other session of the user (Q8), keeping the session that asked; the answer is 204.
 - **B18.** Failed password checks are rate limited per client IP and per account
   (`08-sessions-and-csrf.md` B22, B23).
 
@@ -451,10 +461,17 @@ creates and hands over.
   `stepclimb_core::local_logins::LoginEmail`, the address trimmed and folded by the database's
   `lower()`, which `local_logins.email_normalized` and the `users_email` index use too, so the
   match and the budget fold the same way whatever the locale (`08-sessions-and-csrf.md` B41). An
-  unknown address has a budget of its own. A change of password (B17) counts against the
-  account's address; a user without an email has no per-account budget there and cannot sign in
-  by password. The device cookie of `08-sessions-and-csrf.md` B42 exempts the account's own
-  browser.
+  unknown address has a budget of its own. The device cookie of `08-sessions-and-csrf.md` B42
+  replaces the account's budget by the cookie's own.
+
+  Coordinator decisions (2026-11-15), from the security review of I6: `PUT
+  /api/v1/me/password` takes `RateLimited<SignIn>` first, like the `/auth/` routes, and its
+  check counts against a budget of the user (by id, 10 failures per 15 minutes) besides the
+  account's or the device cookie's, so a user without an email or with a device cookie is
+  never unlimited. `password_check::check_password` takes the request's `RateLimited<SignIn>`
+  as an argument, so a route cannot check a password without the per-address budget, and the
+  router walk of `08-sessions-and-csrf.md` B41 covers every operation that documents a 429 as
+  well as every `/auth/` and `/oauth/` route.
 
 ### TOTP
 
@@ -572,6 +589,8 @@ Proposed, pending Q3 (none of these is in the plan's data model):
   2026-11-15) with the password columns only: the composite foreign key `(org_id, user_id)
   REFERENCES users (org_id, id) ON DELETE CASCADE`, a check that `password_hash` starts with
   `$argon2id$`, and one that `password_changed_at` is set exactly when `password_hash` is.
+  `password_generation bigint NOT NULL DEFAULT 1` counts the passwords set (a rehash keeps it),
+  for the device cookies of `08-sessions-and-csrf.md` B42.
   `email_normalized` is `lower(users.email)`, written on insert and kept equal by an `AFTER
   UPDATE OF email` trigger on `users`, so every writer of the email keeps it, and is NULL while
   the user has no email: the password stays stored and works again once an email is set.
