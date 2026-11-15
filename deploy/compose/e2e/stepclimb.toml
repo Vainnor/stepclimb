@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# The configuration file of the end-to-end stack only (deploy/compose/ci.yaml, `just e2e`): one
+# OpenID Connect provider, the mock identity provider the stack runs as the service `mock-idp`
+# (docs/specs/m0/06-oauth2-and-vatsim-preset.md B3). Never copy it into a real instance.
+
+# The mock speaks plain `http` on the stack's own network, which the default policy refuses
+# (05-oidc.md Q4). Only this stack turns the switch on; the stack has one organization, so the
+# mock's private network address is allowed without it.
+allow_insecure_providers = "true"
+
+[[providers]]
+kind = "oidc"
+key = "mock"
+label = "Sign in with Mock ID"
+# The address the server reaches the mock at. The browser is sent to the authorize endpoint the
+# discovery document names instead, on the mock's published port (SC_MOCK_IDP_BROWSER_URL).
+issuer = "http://mock-idp:8080/oidc"
+client_id = "stepclimb-test"
+client_secret_file = "mock-idp-client-secret"

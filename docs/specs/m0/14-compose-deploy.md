@@ -68,7 +68,8 @@ Read on 2026-11-12.
 - **B1.** The development stack stays as it is: local credentials, ports on `127.0.0.1`, MinIO
   for the M1 media work, the server in the `stack` profile, used by `just up` and `just up-stack`.
   `just e2e` starts the same file, with `deploy/compose/ci.yaml` over it, as a project of its own
-  per worktree (`bin/ci_gate.py`).
+  per worktree (`bin/ci_gate.py`); ci.yaml alone adds the mock identity provider service and the
+  server's `stepclimb.toml` for it (`06-oauth2-and-vatsim-preset.md` B3).
 - **B2.** A production example sits beside it for self-hosters: `stepclimb` and `postgres`, with
   Caddy and MinIO as options (`docs/plan/technical.md` -> Hosting: "stepclimb and postgres, with
   optional Caddy (automatic TLS) and MinIO"). It contains no default password: every secret is

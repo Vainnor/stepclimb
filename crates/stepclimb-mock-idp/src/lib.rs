@@ -5,9 +5,11 @@
 //!
 //! [`MockIdp::start`] serves two providers on `127.0.0.1` and an ephemeral port, inside the
 //! test's tokio runtime. Dropping the [`MockIdp`] closes the port and cuts every open
-//! connection.
+//! connection. [`MockIdp::start_at`] binds another address and names the mock by another base
+//! URL, for the binary the end-to-end Compose stack runs as a service (spec 06 B3).
 //!
-//! - an OpenID Connect provider with the issuer `http://127.0.0.1:<port>/oidc`: discovery, a
+//! - an OpenID Connect provider with the issuer `<base URL>/oidc` (`http://127.0.0.1:<port>/oidc`
+//!   from [`MockIdp::start`]): discovery, a
 //!   JWKS, authorize, token and userinfo, and RS256 ID tokens signed with 2048-bit keys it
 //!   generates at start;
 //! - a plain OAuth 2 provider under `/oauth2`: authorize, token, and a userinfo endpoint that
@@ -82,6 +84,9 @@ pub enum StartError {
     Key(#[from] KeyError),
     #[error("the OS random number generator failed")]
     Random,
+    /// The base URL given to [`MockIdp::start_at`] is not an `http` or `https` origin.
+    #[error("the base URL must be an http or https origin with no path, query or fragment")]
+    BaseUrl,
 }
 
 /// A running mock identity provider. Dropping it closes the port and cuts every open
@@ -105,15 +110,25 @@ impl std::fmt::Debug for MockIdp {
 impl MockIdp {
     /// Start the mock on `127.0.0.1` and a port the OS picks, on the current tokio runtime.
     pub async fn start() -> Result<Self, StartError> {
-        let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).await?;
+        Self::start_at(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)), None).await
+    }
+
+    /// Start the mock on `addr`, on the current tokio runtime. Its issuer, endpoint URLs and the
+    /// `iss` of its ID tokens start with `base_url`, an `http` or `https` origin such as
+    /// `http://mock-idp:8080` (a trailing `/` is dropped); without one, with `http://` and the
+    /// address bound.
+    pub async fn start_at(addr: SocketAddr, base_url: Option<&str>) -> Result<Self, StartError> {
+        let base_url = base_url.map(origin).transpose()?;
+        let listener = TcpListener::bind(addr).await?;
         let addr = listener.local_addr()?;
+        let base_url = base_url.unwrap_or_else(|| format!("http://{addr}"));
         let key = Arc::new(Key::generate("mock-key-1".to_owned())?);
         // `+`, `/` and `=` change under form-encoding, so a client that puts the secret into
         // Basic credentials without form-encoding it first (RFC 6749 2.3.1) fails.
         let client_secret = format!("s+/={}", routes::random_token().ok_or(StartError::Random)?);
         let (stop_sender, stop) = Stop::new();
         let shared = Shared::new(State {
-            base_url: format!("http://{addr}"),
+            base_url,
             client_id: "stepclimb-test".to_owned(),
             client_secret,
             auth_methods: vec![ClientAuth::Basic, ClientAuth::Post],
@@ -162,13 +177,14 @@ impl MockIdp {
         self.addr
     }
 
-    /// `http://127.0.0.1:<port>`, without a trailing slash.
+    /// The base URL every endpoint URL starts with, without a trailing slash:
+    /// `http://127.0.0.1:<port>` unless [`MockIdp::start_at`] was given one.
     #[must_use]
     pub fn base_url(&self) -> String {
         self.shared.lock().base_url.clone()
     }
 
-    /// The OIDC provider's issuer, `http://127.0.0.1:<port>/oidc`; its discovery document is at
+    /// The OIDC provider's issuer, `<base URL>/oidc`; its discovery document is at
     /// `<issuer>/.well-known/openid-configuration`.
     #[must_use]
     pub fn issuer(&self) -> String {
@@ -192,6 +208,23 @@ impl MockIdp {
     pub fn client_secret(&self) -> String {
         self.shared.lock().client_secret.clone()
     }
+}
+
+/// `base_url` as the mock's base: an `http` or `https` URL with a host, no credentials and no
+/// path beyond `/`, query or fragment, written without the trailing `/`.
+fn origin(base_url: &str) -> Result<String, StartError> {
+    let url = url::Url::parse(base_url).map_err(|_| StartError::BaseUrl)?;
+    let plain = matches!(url.scheme(), "http" | "https")
+        && url.has_host()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.path() == "/"
+        && url.query().is_none()
+        && url.fragment().is_none();
+    if !plain {
+        return Err(StartError::BaseUrl);
+    }
+    Ok(url.as_str().trim_end_matches('/').to_owned())
 }
 
 impl Drop for MockIdp {

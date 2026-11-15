@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The sign-in screen's method list (docs/specs/m0/11-app-shell.md B13, B14, B18, T19). Against the
-// real server: the stack's organization offers local sign-in and one provider, `example-id`, whose
-// config holds only its label (`just e2e` inserts it), so its start route sends the browser back
-// with `?error=auth.provider_unavailable`. That round trip is the provider button's full-page
-// navigation and the callback error's display; signing in at a real provider needs the mock
-// OpenID Connect server of spec 05 (T16). The states the stack cannot reach are answered in the
-// browser with synthetic discovery documents, each checked by axe in light, dark and high contrast
-// at 1280 and 375 px, in the default brand the stack serves and in the vZDC example brand.
+// real server: the stack's organization offers local sign-in and one provider, `mock`, the mock
+// OpenID Connect server the stack runs (06 B3, deploy/compose/e2e/stepclimb.toml). The organization
+// does not create accounts at sign-in until sign-in.spec.ts, which runs after this file, turns that
+// on, so a sign-in at the mock here comes back with `?error=auth.signup_closed`: the provider
+// button's full-page navigation, the round trip through the mock, and the callback error's
+// display. The states the stack cannot reach are answered in the browser with synthetic discovery
+// documents, each checked by axe in light, dark and high contrast at 1280 and 375 px, in the
+// default brand the stack serves and in the vZDC example brand.
 import { readFileSync } from "node:fs";
 import AxeBuilder from "@axe-core/playwright";
 import { type Browser, expect, type Page, test } from "@playwright/test";
@@ -21,29 +22,43 @@ async function violations(page: Page): Promise<string[]> {
   );
 }
 
-test("a provider button opens its start route as a page and the refusal comes back (B14, B18)", async ({
+/** The mock identity provider's address as the browser reaches it (`just e2e` sets it). */
+function idpUrl(): string {
+  const url = process.env.SC_E2E_IDP_URL;
+  if (!url) throw new Error("SC_E2E_IDP_URL is unset: run the tests with `just e2e`");
+  return url;
+}
+
+test("a provider button signs in at the mock and the server's refusal comes back (B14, B18)", async ({
   page,
 }) => {
   await page.goto("/sign-in?return_to=%2Faccount");
   await expect(page.getByRole("banner")).toContainText("Example Training");
   await expect(page).toHaveTitle("Sign in · Example Training");
   await expect(page.getByRole("textbox", { name: "Email" })).toBeVisible();
-  const button = page.getByRole("link", { name: "Sign in with Example ID" });
-  await expect(button).toHaveAttribute("href", "/auth/example-id/start?return_to=%2Faccount");
+  const button = page.getByRole("link", { name: "Sign in with Mock ID" });
+  await expect(button).toHaveAttribute("href", "/auth/mock/start?return_to=%2Faccount");
 
-  // A document request, not a fetch: the browser itself follows the server's redirects.
-  const start = page.waitForRequest(
-    (request) =>
-      new URL(request.url()).pathname === "/auth/example-id/start" &&
-      request.resourceType() === "document",
-  );
+  // Document requests, not fetches: the browser itself follows every redirect.
+  const document = (pathname: string) =>
+    page.waitForRequest(
+      (request) =>
+        new URL(request.url()).pathname === pathname && request.resourceType() === "document",
+    );
+  const start = document("/auth/mock/start");
+  const callback = document("/auth/mock/callback");
   await button.click();
-  const response = await (await start).response();
-  expect(response?.status()).toBe(303);
-  expect(response?.headers().location).toBe("/sign-in?error=auth.provider_unavailable");
+  const started = await (await start).response();
+  expect(started?.status()).toBe(303);
+  const authorize = new URL(started?.headers().location ?? "");
+  expect(authorize.origin).toBe(idpUrl());
+  expect(authorize.pathname).toBe("/oidc/authorize");
+  const returned = await (await callback).response();
+  expect(returned?.status()).toBe(303);
+  expect(returned?.headers().location).toBe("/sign-in?error=auth.signup_closed");
 
   await expect(page.getByRole("alert")).toContainText(
-    "Stepclimb could not start the sign-in with that service.",
+    "There is no account for you in this organization",
   );
   // The parameter left the address bar; the message stays.
   await expect.poll(() => new URL(page.url()).search).toBe("");

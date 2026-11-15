@@ -360,7 +360,12 @@ class OrphanTest(unittest.TestCase):
             ["docker", "compose", "-p", "stepclimb-opscheck-0123abcd-restore", "down", "--volumes"]
             + ["--remove-orphans", "--timeout", "5"],
         )
-        images = ["stepclimb:ci-0123abcd", "stepclimb:ci-0123abcd-amd64", "stepclimb:ci-0123abcd-arm64"]
+        images = [
+            "stepclimb:ci-0123abcd",
+            "stepclimb:ci-0123abcd-amd64",
+            "stepclimb:ci-0123abcd-arm64",
+            "stepclimb:ci-0123abcd-mock-idp",
+        ]
         self.assertEqual([c.args for c in remove_image.call_args_list], [(i, {}) for i in images])
 
 
@@ -474,7 +479,12 @@ class StackCommandsTest(unittest.TestCase):
         down = [["docker", "compose", "-p", project, *self.down] for project in projects]
         echo = ["docker", "rm", "--force", "stepclimb-opscheck-0123abcd-echo"]
         self.assertEqual(commands, [*down[:2], echo, *down[2:]])
-        images = ["stepclimb:ci-0123abcd", "stepclimb:ci-0123abcd-amd64", "stepclimb:ci-0123abcd-arm64"]
+        images = [
+            "stepclimb:ci-0123abcd",
+            "stepclimb:ci-0123abcd-amd64",
+            "stepclimb:ci-0123abcd-arm64",
+            "stepclimb:ci-0123abcd-mock-idp",
+        ]
         self.assertEqual([c.args for c in remove_image.call_args_list], [(i, self.env) for i in images])
 
     def test_start_database_uses_the_runs_own_postgres(self) -> None:

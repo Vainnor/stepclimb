@@ -25,7 +25,7 @@
 | Contract | `just openapi-diff` | The committed OpenAPI document and the generated client match the code |
 | Known cases | YAML per data set (M3) | Activity verdicts written with the TA; a failing case blocks publishing the data set |
 | Web | Vitest + Testing Library | Component and route behavior |
-| End to end | Playwright against the Compose stack (`just e2e`) | The built binary and SPA together; later mock-OIDC sign-in, a module, a timed quiz, essay grading |
+| End to end | Playwright against the Compose stack (`just e2e`) | The built binary and SPA together, sign-in at the mock OIDC provider; later a module, a timed quiz, essay grading |
 | Accessibility | axe in Storybook and Playwright | Zero violations in every theme |
 | Apps | `just app-build` on each OS the change touches | The shell builds; macOS and Windows on the owner's machines (ADR 0021) |
 | Load | k6 before each minor release | The performance budgets in `docs/plan/technical.md` -> Hosting |

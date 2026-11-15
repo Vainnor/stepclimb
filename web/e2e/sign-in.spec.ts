@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Enrollment and passkey sign-in in Chromium against the real server (docs/specs/m0/04-local-accounts.md
-// T20; 11-app-shell.md B13 to B17, T14, T19). `just e2e` creates the stack's organization and admin
+// T20; 11-app-shell.md B13 to B17, T14, T16, T19), and sign-in at the mock OpenID Connect server
+// the stack runs (06-oauth2-and-vatsim-preset.md B3, T19). `just e2e` creates the stack's organization and admin
 // with `stepclimb admin create` and hands this file the printed setup link. Chromium's virtual
 // authenticator (DevTools protocol, WebAuthn domain) stands in for a device with a screen lock.
 import { createHmac } from "node:crypto";
@@ -612,6 +613,71 @@ test.describe
           expect((await accepted).status()).toBe(200);
           await expect(learner.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
         });
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Sign-in through the mock OpenID Connect server the stack runs (06 B3, T19; 11 B12, T16). The
+    // organization creates no accounts at sign-in by default, so the admin turns that on through
+    // the public API first (07 B12); the mock then signs in as its one user, "Test Student", who
+    // gets an account on the way in.
+    test("sign in through the mock OpenID Connect provider and sign out (06 T19, 11 T16)", async ({
+      page,
+      browser,
+    }) => {
+      expect(passkey, "an earlier test left the admin a passkey").toBeDefined();
+      const authenticator = await addVirtualAuthenticator(page, passkey);
+      await page.goto("/sign-in");
+      await page.getByRole("textbox", { name: "Email" }).fill(EMAIL);
+      await page.getByRole("button", { name: "Continue" }).click();
+      await page.getByRole("button", { name: "Sign in with a passkey" }).click();
+      await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
+      [passkey] = await authenticator.credentials();
+      const signup = await page.evaluate(async () => {
+        const answer = await fetch("/api/v1/admin/admission", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ signup_allowed: true }),
+        });
+        return { status: answer.status, ...(await answer.json()) };
+      });
+      expect([signup.status, signup.signup_allowed]).toEqual([200, true]);
+
+      const context = await browser.newContext();
+      const learner = await context.newPage();
+      try {
+        await learner.goto("/sign-in?return_to=%2Faccount");
+        await expect(learner.getByRole("textbox", { name: "Email" })).toBeVisible();
+        expect(await violations(learner)).toEqual([]);
+        await learner.getByRole("link", { name: "Sign in with Mock ID" }).click();
+
+        // Back from the mock signed in, on the return target, with the real `/me` loaded.
+        await expect(learner.getByRole("heading", { level: 1, name: "Account" })).toBeVisible();
+        expect(new URL(learner.url()).pathname).toBe("/account");
+        const menu = learner.getByRole("button", { name: "Test Student, account menu" });
+        await expect(menu).toBeVisible();
+        const me = await learner.request.get("/api/v1/me");
+        expect(me.status()).toBe(200);
+        const user = (await me.json()).user;
+        expect([user.display_name, user.email, user.source]).toEqual([
+          "Test Student",
+          "test.student@example.test",
+          "idp",
+        ]);
+        expect(await violations(learner)).toEqual([]);
+
+        await menu.click();
+        await learner.getByRole("menuitem", { name: "Sign out" }).click();
+        await expect(learner.getByRole("heading", { level: 1, name: "Sign in" })).toBeVisible();
+        expect((await learner.request.get("/api/v1/me")).status()).toBe(401);
+
+        // The second sign-in finds the account the first one made.
+        await learner.getByRole("link", { name: "Sign in with Mock ID" }).click();
+        await expect(learner.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
+        await expect(menu).toBeVisible();
+        const again = await learner.request.get("/api/v1/me");
+        expect((await again.json()).user.id).toBe(user.id);
       } finally {
         await context.close();
       }

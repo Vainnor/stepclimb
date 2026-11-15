@@ -17,14 +17,14 @@ project, runs CMD with its database in DATABASE_URL, and removes the project wha
    machine.
 
 The project, `stepclimb-ci-<id>` with `<id>` from the worktree path, is the development Compose
-file plus deploy/compose/ci.yaml: PostgreSQL on tmpfs and the server for `just e2e`, each on a port
-of the run's slot (slot_env). Every database the run touches (migrations, `#[sqlx::test]` databases, whose names
+file plus deploy/compose/ci.yaml: PostgreSQL on tmpfs, and the server and the mock identity provider
+for `just e2e`, each on a port of the run's slot (slot_env). Every database the run touches (migrations, `#[sqlx::test]` databases, whose names
 depend only on the test's path, the e2e server) lives in it, so runs from checkouts with different
 migrations never meet. The run also names the production and ops checks' projects
 (`stepclimb-prodcheck-<id>`, `stepclimb-opscheck-<id>` and its `-restore`), gives them its slot's
 ports and proxy subnets (slot_env), and sets SC_IMAGE, the server image
 tag the Compose files use, to `stepclimb:ci-<id>` (bin/check-image.sh adds `-amd64` and `-arm64`
-tags of its own); it removes every project and those images at the end. Before it starts, it removes what a killed run of this worktree left, every such project
+tags of its own, ci.yaml's mock identity provider `-mock-idp`); it removes every project and those images at the end. Before it starts, it removes what a killed run of this worktree left, every such project
 whose worktree no longer exists (Compose labels each container with the directory of its file,
 `<worktree>/deploy/compose`), and any project holding its slot's subnets, which only a killed run
 that had the same slot can.
@@ -67,6 +67,7 @@ SLOT_PORTS = (
     "SC_OPS_CHECK_PORT",
     "SC_OPS_CHECK_HTTP_PORT",
     "SC_OPS_CHECK_HTTPS_PORT",
+    "SC_CI_IDP_PORT",
 )
 POLL_SECONDS = 2.0
 COMPOSE_FILES = ("deploy/compose/compose.yaml", "deploy/compose/ci.yaml")
@@ -266,8 +267,9 @@ def run_projects(env: Mapping[str, str]) -> list[str]:
 
 
 def run_images(image: str) -> list[str]:
-    """The server image a run tags, and the per-architecture tags bin/check-image.sh adds to it."""
-    return [image, f"{image}-amd64", f"{image}-arm64"]
+    """The server image a run tags, the per-architecture tags bin/check-image.sh adds to it, and
+    the mock identity provider's image of `just e2e` (deploy/compose/ci.yaml)."""
+    return [image, f"{image}-amd64", f"{image}-arm64", f"{image}-mock-idp"]
 
 
 def remove_stack(env: Mapping[str, str]) -> None:
