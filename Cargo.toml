@@ -113,9 +113,10 @@ http = "=1.5.0"
 # the 0.9 openidconnect brings; webauthn-rs brings 0.10.0-rc.19 beside it.
 # Test-only: no release build reaches it (bin/check-layering.sh rule 5).
 rsa = { version = "=0.9.10", default-features = false, features = ["std", "u64_digit", "getrandom", "sha2"] }
-# OpenID Connect for the relying party (plan, Technical -> Architecture and stack: `openidconnect`).
-# Today only the mock's tests use it, to parse what the mock serves (spec 06 T1); spec 05 I2 uses
-# it in stepclimb-auth. No default features: its reqwest adapter is not used (ADR 0025).
+# OpenID Connect for the relying party (plan, Technical -> Architecture and stack: `openidconnect`):
+# stepclimb-auth's discovery document, PKCE and authorization request (spec 05 I2), and the mock's
+# tests, which parse what the mock serves (spec 06 T1). No default features: its reqwest adapter
+# is not used, every provider request goes through `stepclimb_auth::outbound` (ADR 0025).
 openidconnect = { version = "=4.1.0", default-features = false }
 tracing = "=0.1.44"
 # WebAuthn for local passkeys (docs/specs/m0/04-local-accounts.md B8, Q12; plan, Technical ->

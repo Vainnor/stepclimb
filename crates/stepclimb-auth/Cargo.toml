@@ -26,12 +26,16 @@ serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 webauthn-rs.workspace = true
+openidconnect.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["io-util", "test-util"] }
 webauthn-authenticator-rs.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+# The OIDC discovery tests run against the mock on 127.0.0.1 (spec 05 Test cases). A
+# dev-dependency only (bin/check-layering.sh rule 5).
+stepclimb-mock-idp.workspace = true
 
 [lints]
 workspace = true
