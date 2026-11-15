@@ -25,7 +25,8 @@
 //! permission check, and `Require<F>`, the feature check of [`entitlements`], which also
 //! holds the limit check). A sign-in that
 //! spans several requests keeps its state in a [`flow`]; sign-in with an outside identity
-//! provider starts at [`provider_sign_in`], whose requests to the provider go through
+//! provider starts at [`provider_sign_in`] and comes back at [`provider_callback`], with the
+//! generic OAuth 2 steps in [`oauth2_sign_in`]; their requests to the provider go through
 //! [`providers`]. Every unsafe request passes [`csrf`]
 //! first. Sign-in and token routes declare a [`rate_limit`] budget, counted per client address
 //! as [`client_ip`] finds it; a route that changes roles, assignments, accounts or the
@@ -55,6 +56,7 @@ pub mod local_sign_in;
 pub mod logging;
 pub mod me;
 pub mod my_passkeys;
+pub mod oauth2_sign_in;
 pub mod openapi;
 pub mod organization;
 pub mod pagination;

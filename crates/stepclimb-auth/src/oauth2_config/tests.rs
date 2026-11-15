@@ -295,6 +295,7 @@ fn a_validated_config_maps_a_userinfo_body() {
                 "name_first": "Test",
                 "name_last": "Student",
                 "email": "student@example.test",
+                "email_verified": true,
             },
             "vatsim": { "rating": { "short": "S1" }, "subdivision": { "id": "USA" } },
         },
@@ -307,7 +308,7 @@ fn a_validated_config_maps_a_userinfo_body() {
         mapped.profile.email.as_deref(),
         Some("student@example.test")
     );
-    assert_eq!(mapped.profile.email_verified, None);
+    assert_eq!(mapped.profile.email_verified, Some(true));
     assert_eq!(mapped.profile.groups, None);
     assert_eq!(
         Value::Object(mapped.profile.attributes),
@@ -633,4 +634,53 @@ fn an_authorize_query_may_not_set_a_parameter_the_request_sets() {
             "{url}"
         );
     }
+}
+
+/// Spec 06 B10: with an `email_verified` pointer mapped, the email is kept only when the value
+/// there is exactly `true`; without one, the email is kept as sent.
+#[test]
+fn b10_an_email_the_provider_does_not_vouch_for_is_dropped() {
+    let mut config = minimal();
+    config["claims"] = json!({
+        "subject": "/id",
+        "email": "/email",
+        "email_verified": "/verified",
+    });
+    let claims = validate(&config, POLICY, None)
+        .expect("valid")
+        .settings
+        .claims;
+    let email = |verified: Option<Value>| {
+        let mut body = json!({ "id": "1", "email": "student@example.test" });
+        if let Some(verified) = verified {
+            body["verified"] = verified;
+        }
+        claims.map(&body).expect("a subject").profile.email
+    };
+    assert_eq!(
+        email(Some(json!(true))).as_deref(),
+        Some("student@example.test")
+    );
+    for refused in [
+        None,
+        Some(json!(false)),
+        Some(json!("true")),
+        Some(json!(1)),
+        Some(Value::Null),
+    ] {
+        assert_eq!(email(refused.clone()), None, "{refused:?}");
+    }
+
+    let unmapped = validate(&minimal(), POLICY, None)
+        .expect("valid")
+        .settings
+        .claims;
+    let mut with_email = unmapped.clone();
+    with_email.profile.email = Some(crate::json_pointer::JsonPointer::parse("/email").unwrap());
+    let body = json!({ "data": { "id": "1" }, "email": "student@example.test" });
+    assert_eq!(
+        with_email.map(&body).unwrap().profile.email.as_deref(),
+        Some("student@example.test"),
+        "no email_verified pointer: the email is kept"
+    );
 }

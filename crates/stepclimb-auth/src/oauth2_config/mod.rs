@@ -11,7 +11,7 @@
 //! | `client_id` | a non-empty string | refused |
 //! | `client_secret` | a non-empty string, write-only | the stored secret, or refused when there is none |
 //! | `scopes` | scope tokens (RFC 6749 3.3) | `[]` |
-//! | `pkce` | a boolean: whether sign-in sends S256 PKCE (Q3) | `true` |
+//! | `pkce` | a boolean: whether sign-in sends S256 PKCE (Q3); `false` removes the protection against an injected authorization code (a code issued for someone else, put into an attacker's own callback), so turn it off only for a provider that refuses PKCE | `true` |
 //! | `claims` | an object with `subject`, a JSON Pointer, and optional `given_name`, `family_name`, `email`, `email_verified`, `groups` pointers and `attributes`, an object of names to pointers | refused |
 //! | `allow_local_passkeys` | a boolean: whether users who sign in through this provider may also add passkeys (`04-local-accounts.md` B13) | `false` |
 //!
@@ -25,6 +25,8 @@
 //! [`crate::provider_config`] says.
 
 mod parse;
+
+pub(crate) use parse::RESERVED_PARAMETERS;
 
 use std::fmt;
 
@@ -57,11 +59,18 @@ pub struct MappedSignIn {
 
 impl Oauth2Claims {
     /// The subject and profile of a userinfo body, or [`SubjectMissing`] when it has no usable
-    /// subject.
+    /// subject. When the mapping names an `email_verified` pointer and the body's value there is
+    /// not exactly `true`, the email is left out (spec 06 B10): the admin said the provider
+    /// vouches for its emails only when that flag is set, so admission never sees an address
+    /// the provider did not vouch for.
     pub fn map(&self, userinfo: &Value) -> Result<MappedSignIn, SubjectMissing> {
+        let mut profile = claims::profile(userinfo, &self.profile);
+        if self.profile.email_verified.is_some() && profile.email_verified != Some(true) {
+            profile.email = None;
+        }
         Ok(MappedSignIn {
             subject: claims::subject(userinfo, &self.subject)?,
-            profile: claims::profile(userinfo, &self.profile),
+            profile,
         })
     }
 }

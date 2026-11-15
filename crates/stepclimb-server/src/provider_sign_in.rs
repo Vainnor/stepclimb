@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Sign-in with an outside identity provider: `GET /auth/{provider}/start`
-//! (docs/specs/m0/05-oidc.md B3 to B6, B16).
+//! (docs/specs/m0/05-oidc.md B3 to B6, B16; `06-oauth2-and-vatsim-preset.md` B5).
 //!
 //! The browser opens the start route; the server answers 303 to the provider's authorization
 //! endpoint and sets the flow cookie, and the provider later sends the browser back to
@@ -15,13 +15,17 @@
 //! 2. finds the provider by its key in the request's organization. No provider, a disabled one,
 //!    or the local row is `auth.provider_not_found` (B3). Another organization's key is no
 //!    provider: the lookup is scoped;
-//! 3. reads its stored config and its discovery document, through the client for the
-//!    instance's organization count ([`crate::providers`]) and the cache of Q5. A config that
-//!    does not read, a refused, failed or mismatched discovery (B4), or a provider of a kind
-//!    this route does not sign in with yet (`oauth2`, spec 06) is `auth.provider_unavailable`;
-//! 4. generates the flow's `state`, `nonce` and PKCE verifier, stores them sealed in a sign-in
-//!    flow of kind `oidc` that names the provider (spec 08 B17, B20), with the sanitized
-//!    `return_to` (B19), and answers 303 to the authorization URL (B5) with the flow cookie.
+//! 3. for an `oidc` provider, reads its stored config and its discovery document, through the
+//!    client for the instance's organization count ([`crate::providers`]) and the cache of Q5.
+//!    A config that does not read or a refused, failed or mismatched discovery (B4) is
+//!    `auth.provider_unavailable`. For an `oauth2` provider, [`crate::oauth2_sign_in`] reads
+//!    the config and checks its `authorize` URL against that client's policy instead (spec 06
+//!    B5);
+//! 4. generates the flow's secrets (for `oidc` the `state`, `nonce` and PKCE verifier; for
+//!    `oauth2` the `state` and, when its `pkce` is on, the verifier), stores them sealed in a
+//!    sign-in flow of the provider's kind that names the provider (spec 08 B17, B20), with the
+//!    sanitized `return_to` (B19), and answers 303 to the authorization URL (B5) with the flow
+//!    cookie.
 //!
 //! A failure a user can cause or see is a 303 to the web app's [`SIGN_IN_PAGE`] with an `error`
 //! query parameter, since the route is a browser navigation; a server fault is 500 problem
@@ -112,7 +116,7 @@ pub(crate) fn to_sign_in(error: &'static str) -> Response {
 }
 
 /// A 303 to `location` that no cache keeps: the authorization URL carries the flow's state.
-fn redirect(location: &str) -> Response {
+pub(crate) fn redirect(location: &str) -> Response {
     let Ok(value) = HeaderValue::from_str(location) else {
         // A URL the url crate serialized is ASCII without control characters.
         return ApiError::internal(&InvalidLocation).into_response();
@@ -162,10 +166,12 @@ impl FromRequestParts<AppState> for NavigationLimited {
     operation_id = "startProviderSignIn",
     tag = "auth",
     description = "A browser navigation. Sends the browser to the provider's authorization \
-endpoint with `state`, `nonce` and a PKCE S256 challenge, bound to the sign-in flow whose \
+endpoint with `state` and a PKCE S256 challenge (for an OIDC provider also a `nonce`; for an \
+OAuth 2 provider whose `pkce` is off, no challenge), bound to the sign-in flow whose \
 `__Host-sc_flow` cookie this answer sets. Every refusal is a 303 to `/sign-in?error=<code>`: \
 `auth.provider_not_found` (no enabled provider with this key), `auth.provider_unavailable` (the \
-provider's discovery document could not be read or names another issuer) or \
+provider's discovery document could not be read or names another issuer, its stored config does \
+not read, or its authorization URL is refused by the outbound URL policy) or \
 `auth.rate_limited` (with `Retry-After`).",
     params(ProviderParam, StartQuery),
     responses(
@@ -200,10 +206,10 @@ pub async fn start_provider_sign_in(
         return Ok(to_sign_in(code::AUTH_PROVIDER_UNAVAILABLE));
     };
     let start = FlowStart {
-        kind: FlowKind::Oidc,
+        kind: authorization.kind,
         user_id: None,
         provider_id: Some(provider.id),
-        payload: &authorization.secrets.to_payload(),
+        payload: &authorization.payload,
         return_to: query.return_to.as_deref(),
     };
     let started = flow::start(&state.db, &state.keys, scope, start, state.clock.now())
@@ -232,10 +238,12 @@ pub(crate) async fn sign_in_provider(
     Ok(provider.filter(|p| p.enabled && p.kind != Kind::Local))
 }
 
-/// What the redirect to the provider needs.
-struct Authorization {
-    url: Url,
-    secrets: FlowSecrets,
+/// What the redirect to the provider needs: the flow's kind, the authorization URL and the
+/// flow's secrets, serialized for the sealed payload.
+pub(crate) struct Authorization {
+    pub(crate) kind: FlowKind,
+    pub(crate) url: Url,
+    pub(crate) payload: Vec<u8>,
 }
 
 /// The authorization URL for `provider` with new flow secrets, or `None` when the provider is
@@ -245,14 +253,20 @@ async fn authorize(
     provider: &IdentityProvider,
     key: &str,
 ) -> Result<Option<Authorization>, ApiError> {
-    if provider.kind != Kind::Oidc {
-        tracing::warn!(
-            provider = key,
-            kind = provider.kind.as_str(),
-            "this release signs in only with oidc providers"
-        );
-        return Ok(None);
+    match provider.kind {
+        Kind::Oidc => authorize_oidc(state, provider, key).await,
+        Kind::Oauth2 => crate::oauth2_sign_in::authorize(state, provider, key).await,
+        // `sign_in_provider` never returns the local row.
+        Kind::Local => Ok(None),
     }
+}
+
+/// [`authorize`] for an `oidc` provider (B4, B5).
+async fn authorize_oidc(
+    state: &AppState,
+    provider: &IdentityProvider,
+    key: &str,
+) -> Result<Option<Authorization>, ApiError> {
     let config = match OidcConfig::from_stored(&provider.config) {
         Ok(config) => config,
         Err(error) => {
@@ -282,7 +296,11 @@ async fn authorize(
     let redirect_uri = redirect_uri(&state.public_url, key);
     let url = authorization_url(&metadata, &config.settings, &redirect_uri, &secrets)
         .map_err(|e| ApiError::internal(&e))?;
-    Ok(Some(Authorization { url, secrets }))
+    Ok(Some(Authorization {
+        kind: FlowKind::Oidc,
+        url,
+        payload: secrets.to_payload(),
+    }))
 }
 
 #[cfg(test)]

@@ -8,7 +8,8 @@
 //! and 06 it has [`outbound`], the HTTP client and URL policy for every request to a URL an admin
 //! entered, [`oidc_config`] and [`oauth2_config`], the validated `oidc` and `oauth2` provider
 //! configs over what they share ([`provider_config`]: problems, the sealed client secret),
-//! [`oidc`], discovery and the authorization request of OIDC sign-in, [`claims`], the claim
+//! [`oidc`], discovery and the authorization request of OIDC sign-in, [`oauth2_flow`], the
+//! authorization request, code exchange and userinfo call of generic OAuth 2 sign-in, [`claims`], the claim
 //! mapping of both kinds, and [`json_pointer`], its pointers. For local
 //! accounts it has [`passkey`], the WebAuthn relying party that registers passkeys
 //! (`docs/specs/m0/04-local-accounts.md` B8). Sessions, CSRF, API-key
@@ -19,6 +20,7 @@ pub mod claims;
 pub mod encryption;
 pub mod json_pointer;
 pub mod oauth2_config;
+pub mod oauth2_flow;
 pub mod oidc;
 pub mod oidc_config;
 pub mod outbound;
