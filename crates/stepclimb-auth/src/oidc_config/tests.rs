@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use serde_json::json;
+use uuid::Uuid;
 
 use super::*;
 
@@ -362,4 +363,36 @@ fn a_stored_config_is_read_without_the_url_policy() {
     .seal(&ring(), row())
     .expect("sealed");
     assert!(OidcConfig::from_stored(&config.to_json()).is_ok());
+}
+
+#[test]
+fn the_oidc_mapping_reads_claims_through_the_shared_claim_mapping() {
+    let config = with(
+        "claims",
+        json!({ "groups": "/groups", "attributes": { "department": "/department" } }),
+    );
+    let mapping = validate(&config, POLICY, None)
+        .expect("valid")
+        .settings
+        .claims
+        .profile();
+    let claims = json!({
+        "sub": "user-1",
+        "given_name": "Test",
+        "family_name": 7,
+        "email": "student@example.test",
+        "email_verified": true,
+        "groups": ["staff"],
+        "department": "training",
+    });
+    let mapped = crate::claims::profile(&claims, &mapping);
+    assert_eq!(mapped.given_name.as_deref(), Some("Test"));
+    assert_eq!(mapped.family_name, None);
+    assert_eq!(mapped.email.as_deref(), Some("student@example.test"));
+    assert_eq!(mapped.email_verified, Some(true));
+    assert_eq!(mapped.groups, Some(vec!["staff".to_owned()]));
+    assert_eq!(
+        Value::Object(mapped.attributes),
+        json!({ "department": "training" })
+    );
 }
