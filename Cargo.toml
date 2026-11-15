@@ -154,6 +154,9 @@ argon2 = { version = "=0.6.0", default-features = false, features = ["alloc", "p
 hmac = { version = "=0.13.0", default-features = false }
 sha1 = { version = "=0.11.0", default-features = false }
 data-encoding = { version = "=2.11.1", default-features = false, features = ["alloc"] }
+# Wipes a TOTP secret's bytes when it is dropped (`stepclimb_auth::totp::Secret`). The version
+# argon2 and the RustCrypto crates already bring; `alloc` for the decrypted `Vec`.
+zeroize = { version = "=1.9.1", default-features = false, features = ["alloc"] }
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["fmt", "env-filter", "json", "ansi"] }
 
 [workspace.lints.rust]
