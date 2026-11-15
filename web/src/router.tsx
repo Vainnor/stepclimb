@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The route tree (docs/specs/m0/11-app-shell.md B2, B7, B16): a signed-out layout for the sign-in
 // steps and the enrollment page, and a signed-in layout for everything else that exists. Any other path, the M1 deep link included,
-// renders the not-found view.
+// renders the not-found view. A route that fails to load renders its error inside its layout (B28).
 import {
   createRootRouteWithContext,
   createRoute,
   createRouter,
+  type ErrorComponentProps,
   type RouterHistory,
+  useMatch,
 } from "@tanstack/react-router";
 import type { AppContext } from "./context";
 import { Root } from "./layouts/root";
+import { type ErrorPlace, RouteError } from "./layouts/route-error";
 import { SignedInLayout } from "./layouts/signed-in";
 import { SignedOutLayout } from "./layouts/signed-out";
 import { EnrollView } from "./routes/enroll";
@@ -79,8 +82,22 @@ export const routeTree = rootRoute.addChildren([
   signedInRoute.addChildren([homeRoute]),
 ]);
 
+/** The layout a route sits in: a route under one draws its error inside it. */
+function errorPlace(routeId: string | undefined): ErrorPlace {
+  if (routeId === undefined) return "bare";
+  if (routeId.startsWith(`${signedInRoute.id}/`)) return "signed-in";
+  if (routeId.startsWith(`${signedOutRoute.id}/`)) return "signed-out";
+  return "bare";
+}
+
+/** Every route's error component: the error of the nearest route that failed, in its place. */
+function RouteErrorInLayout({ error }: ErrorComponentProps) {
+  const routeId = useMatch({ strict: false, select: (match) => match.routeId });
+  return <RouteError error={error} place={errorPlace(routeId)} />;
+}
+
 export function createAppRouter(context: AppContext, history?: RouterHistory) {
-  return createRouter({ routeTree, context, history });
+  return createRouter({ routeTree, context, history, defaultErrorComponent: RouteErrorInLayout });
 }
 
 declare module "@tanstack/react-router" {

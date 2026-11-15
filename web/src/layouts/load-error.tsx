@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // A load that failed, with "Try again" (docs/specs/m0/11-app-shell.md B28, B29). A problem `code`
 // the app knows gets its own message from the catalog: what happened and what to do. Any other
-// answer shows the problem's `title`; no answer at all says the server could not be reached. It
-// never signs the user out.
+// answer shows the problem's `title`; no answer at all says the server could not be reached; a
+// failure that is neither (a fault in the page itself) says only that the page could not load.
+// It never signs the user out.
 import {
   Button,
   ErrorState,
@@ -10,7 +11,8 @@ import {
   type Strings,
   useStepclimbStrings,
 } from "@stepclimb/ui";
-import { ApiError } from "../api";
+import { ApiError, isUnreachable } from "../api";
+import { useRefocusAfterRetry } from "./refocus-after-retry";
 
 interface Message {
   title: string;
@@ -28,12 +30,13 @@ function knownProblem(code: string | undefined, t: Strings["t"]): Message | unde
 }
 
 function messageFor(error: unknown, t: Strings["t"]): Message {
-  if (!(error instanceof ApiError)) {
+  if (isUnreachable(error)) {
     return { title: t("loadError.unreachableTitle"), description: t("loadError.unreachable") };
   }
+  const problem = error instanceof ApiError ? error.problem : undefined;
   return (
-    knownProblem(error.problem?.code, t) ?? {
-      title: error.problem?.title ?? t("loadError.title"),
+    knownProblem(problem?.code, t) ?? {
+      title: problem?.title ?? t("loadError.title"),
       description: t("loadError.failed"),
     }
   );
@@ -48,11 +51,21 @@ export interface LoadErrorProps {
 export function LoadError({ error, level, onRetry }: LoadErrorProps) {
   const { t } = useStepclimbStrings();
   const { title, description } = messageFor(error, t);
+  const retried = useRefocusAfterRetry();
   return (
     <ErrorState
       title={title}
       level={level}
-      action={<Button onPress={onRetry}>{t("loadError.retry")}</Button>}
+      action={
+        <Button
+          onPress={() => {
+            retried();
+            onRetry();
+          }}
+        >
+          {t("loadError.retry")}
+        </Button>
+      }
     >
       {description}
     </ErrorState>

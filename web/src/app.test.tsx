@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The shell end to end in jsdom: routing, layouts, `/me`, session expiry and sign-out
 // (docs/specs/m0/11-app-shell.md T1 to T5, T17, T18).
+import { onlineManager } from "@tanstack/react-query";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -301,6 +302,27 @@ describe("sign-out (B12, T5)", () => {
     await signOutFromMenu();
     expect(await screen.findByText("Sign-out failed")).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 1, name: "Home" })).toBeInTheDocument();
+  });
+
+  it("asks the server even when the browser says it is offline (B29)", async () => {
+    let signedOut = false;
+    stubServer({
+      "GET /api/v1/me": () => (signedOut ? unauthenticated() : signedIn()),
+      "POST /auth/sign-out": () => {
+        signedOut = true;
+        return new Response(null, { status: 204 });
+      },
+    });
+    renderApp("/");
+    await screen.findByRole("heading", { level: 1, name: "Home" });
+    onlineManager.setOnline(false);
+    try {
+      await signOutFromMenu();
+      expect(await screen.findByRole("heading", { level: 1, name: "Sign in" })).toBeInTheDocument();
+      expect(signedOut).toBe(true);
+    } finally {
+      onlineManager.setOnline(true);
+    }
   });
 });
 

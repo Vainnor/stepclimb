@@ -50,6 +50,8 @@ export const webMessages: Catalog = {
     "notFound.heading": "There is no page at {path}",
     "notFound.home": "Go to the home page",
     "notFound.title": "Page not found",
+    "offline.notice":
+      "The server could not be reached, so this page may be out of date. Check your connection, then try again.",
     "problem.orgNone.description":
       "An administrator has to create the organization on the server. Try again once that is done.",
     "problem.orgNone.title": "This server has no organization yet",
@@ -67,6 +69,7 @@ export const webMessages: Catalog = {
     "signIn.passkey.title": "Use your passkey",
     "signIn.passkey.unsupported":
       "This browser cannot use passkeys. Update it, or use a current version of Chrome, Edge, Firefox or Safari.",
+    "signIn.problem.failed": "Something went wrong while signing you in. Try again.",
     "signIn.problem.flowExpired": "The passkey request expired. Try again.",
     "signIn.problem.flowInvalid":
       "This sign-in was already finished or replaced by one in another tab. Try again.",

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Enrollment and passkey sign-in in Chromium against the real server (docs/specs/m0/04-local-accounts.md
-// T20; 11-app-shell.md B13 to B17, T19). `just e2e` creates the stack's organization and admin
+// T20; 11-app-shell.md B13 to B17, T14, T19). `just e2e` creates the stack's organization and admin
 // with `stepclimb admin create` and hands this file the printed setup link. Chromium's virtual
 // authenticator (DevTools protocol, WebAuthn domain) stands in for a device with a screen lock.
 import AxeBuilder from "@axe-core/playwright";
@@ -17,14 +17,37 @@ async function violations(page: Page): Promise<string[]> {
   );
 }
 
-/** The credential ids a virtual authenticator holds, and a way to remove one. */
+/**
+ * A virtual authenticator's credential as DevTools hands it out (WebAuthn.getCredentials). The
+ * object is passed back whole, so the fields this type leaves out (the backup flags) travel too.
+ */
+interface VirtualCredential {
+  credentialId: string;
+  isResidentCredential: boolean;
+  rpId?: string;
+  privateKey: string;
+  userHandle?: string;
+  signCount: number;
+}
+
+/** The passkey the first serial test leaves the account with, for the tests after it. */
+let passkey: VirtualCredential | undefined;
+
+/** The credential ids a virtual authenticator holds, its credentials, and a way to remove one. */
 interface Authenticator {
   ids: () => Promise<string[]>;
+  credentials: () => Promise<VirtualCredential[]>;
   remove: (credentialId: string) => Promise<void>;
 }
 
-/** A platform authenticator that verifies the user and answers every prompt by itself. */
-async function addVirtualAuthenticator(page: Page): Promise<Authenticator> {
+/**
+ * A platform authenticator that verifies the user and answers every prompt by itself, holding
+ * `credential` when one is given.
+ */
+async function addVirtualAuthenticator(
+  page: Page,
+  credential?: VirtualCredential,
+): Promise<Authenticator> {
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("WebAuthn.enable", { enableUI: false });
   const { authenticatorId } = await cdp.send("WebAuthn.addVirtualAuthenticator", {
@@ -37,7 +60,11 @@ async function addVirtualAuthenticator(page: Page): Promise<Authenticator> {
       automaticPresenceSimulation: true,
     },
   });
+  if (credential) await cdp.send("WebAuthn.addCredential", { authenticatorId, credential });
+  const credentials = async () =>
+    (await cdp.send("WebAuthn.getCredentials", { authenticatorId })).credentials;
   return {
+    credentials,
     ids: async () =>
       (await cdp.send("WebAuthn.getCredentials", { authenticatorId })).credentials.map(
         (credential) => credential.credentialId,
@@ -89,9 +116,50 @@ function setupLink(): string {
   return link;
 }
 
+/** The page's `/theme.css` link. */
+function themeHref(page: Page): Promise<string | null> {
+  return page.locator('link[rel="stylesheet"][href^="/theme.css"]').getAttribute("href");
+}
+
+/** The brand color the page is drawn with. */
+function brandColor(page: Page): Promise<string> {
+  return page.evaluate(() =>
+    getComputedStyle(document.documentElement).getPropertyValue("--sc-brand").trim(),
+  );
+}
+
+/** The saved `oklch()` primary at another hue: the same lightness and chroma, another brand. */
+function otherHue(primary: unknown): string {
+  const value = typeof primary === "string" ? primary : "";
+  const hue = /^oklch\([\d.]+ [\d.]+ ([\d.]+)\)$/.exec(value)?.[1];
+  if (hue === undefined) throw new Error(`the saved primary has no L C H hue: ${String(primary)}`);
+  return value.replace(/[\d.]+\)$/, `${(Number(hue) + 150) % 360})`);
+}
+
+interface BrandingAnswer {
+  status: number;
+  body: { css_hash: string; inputs: Record<string, unknown> };
+}
+
+/** Reads or replaces the organization's branding with the page's own `fetch`, as the app would. */
+function branding(page: Page, method: "GET" | "PUT", inputs?: unknown): Promise<BrandingAnswer> {
+  return page.evaluate(
+    async ({ method, inputs }) => {
+      const response = await fetch("/api/v1/admin/branding", {
+        method,
+        headers: inputs === undefined ? {} : { "content-type": "application/json" },
+        body: inputs === undefined ? undefined : JSON.stringify(inputs),
+      });
+      return { status: response.status, body: await response.json() };
+    },
+    { method, inputs },
+  );
+}
+
 const TOKEN_FRAGMENT = /^#token=[A-Za-z0-9_-]{43}$/;
 
-// The second test uses the link the first one used up, so they run in order and stop together.
+// The tests after the first use the link it used up and the passkey it made, so they run in order
+// and stop together.
 test.describe
   .serial("a setup link", () => {
     test("enroll with a passkey, sign out, and sign in with it again (04 T20)", async ({
@@ -167,6 +235,7 @@ test.describe
         expect((await again).status()).toBe(200);
         await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
       });
+      [passkey] = await authenticator.credentials();
     });
 
     test("the used setup link no longer works", async ({ page }) => {
@@ -178,6 +247,43 @@ test.describe
         "href",
         "/sign-in",
       );
+    });
+
+    // Spec 11 T14 needs an admin's session, so it signs in with the passkey the first test made.
+    test("a branding change reaches the next page load without clearing the cache (11 T14)", async ({
+      page,
+    }) => {
+      expect(passkey, "the first test registered a passkey").toBeDefined();
+      await addVirtualAuthenticator(page, passkey);
+      await page.goto("/sign-in");
+      await page.getByRole("textbox", { name: "Email" }).fill(EMAIL);
+      await page.getByRole("button", { name: "Continue" }).click();
+      await page.getByRole("button", { name: "Sign in with a passkey" }).click();
+      await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
+
+      const before = { href: await themeHref(page), brand: await brandColor(page) };
+      expect(before.href).toMatch(/^\/theme\.css\?v=[0-9a-f]{64}$/);
+      const saved = await branding(page, "GET");
+      expect(saved.status).toBe(200);
+      try {
+        const changed = await branding(page, "PUT", {
+          primary: otherHue(saved.body.inputs.primary),
+        });
+        expect(changed.status).toBe(200);
+        expect(`/theme.css?v=${changed.body.css_hash}`).not.toBe(before.href);
+
+        // The same browser, its cache as it was: the next page links the new stylesheet and is
+        // drawn with it.
+        const css = page.waitForResponse((r) => new URL(r.url()).pathname === "/theme.css");
+        await page.goto("/");
+        await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
+        expect(await themeHref(page)).toBe(`/theme.css?v=${changed.body.css_hash}`);
+        expect((await css).status()).toBe(200);
+        expect(await brandColor(page)).not.toBe(before.brand);
+      } finally {
+        const restored = await branding(page, "PUT", saved.body.inputs);
+        expect(restored.status).toBe(200);
+      }
     });
   });
 
