@@ -17,6 +17,12 @@
 //! [`record_sign_in`], or marks it with [`flag_counter_regressed`] when its sign counter did not
 //! go up. Sign-ins write no audit entry: docs/specs/m0/08-sessions-and-csrf.md Q14
 //! keeps routine sign-ins to the log.
+//!
+//! A signed-in user manages their own passkeys (B13): [`list_for_user`] reads them,
+//! [`rename`] writes `passkey.rename` with the name before and after, and [`delete`] writes
+//! `passkey.delete` with the user and the name. Each finds the passkey by its id and its user, so
+//! another user's passkey is [`Error::NotFound`]. [`delete`] does not check that the user keeps
+//! a way to sign in; `local::delete_passkey_unless_last` does.
 
 use std::time::SystemTime;
 
@@ -65,6 +71,8 @@ pub struct Passkey {
     pub user_id: Uuid,
     pub name: String,
     pub created_at: SystemTime,
+    /// The last sign-in with it; `None` before the first.
+    pub last_used_at: Option<SystemTime>,
 }
 
 /// Why a passkeys repository call failed.
@@ -173,7 +181,158 @@ pub async fn create<'c>(
         user_id: passkey.user_id,
         name: name.to_owned(),
         created_at: from_epoch_micros(created_at_us)?,
+        last_used_at: None,
     })
+}
+
+/// A passkey row as the management queries select it.
+struct Row {
+    id: Uuid,
+    user_id: Uuid,
+    name: String,
+    created_at_us: i64,
+    last_used_at_us: Option<i64>,
+}
+
+impl TryFrom<Row> for Passkey {
+    type Error = Error;
+
+    fn try_from(row: Row) -> Result<Self, Error> {
+        Ok(Self {
+            id: row.id,
+            user_id: row.user_id,
+            name: row.name,
+            created_at: from_epoch_micros(row.created_at_us)?,
+            last_used_at: row.last_used_at_us.map(from_epoch_micros).transpose()?,
+        })
+    }
+}
+
+/// The passkeys of the user `user_id` in the scope's organization, oldest first, without their
+/// credentials. Empty for a user the organization does not have.
+pub async fn list_for_user(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    user_id: Uuid,
+) -> Result<Vec<Passkey>, Error> {
+    let rows = sqlx::query_as!(
+        Row,
+        r#"SELECT id, user_id, name,
+                  (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM last_used_at) * 1000000)::bigint AS last_used_at_us
+           FROM passkeys
+           WHERE org_id = $1 AND user_id = $2
+           ORDER BY created_at, id"#,
+        scope.org_id(),
+        user_id,
+    )
+    .fetch_all(db)
+    .await?;
+    rows.into_iter().map(Passkey::try_from).collect()
+}
+
+/// Rename the passkey `id` of the user `user_id` in the scope's organization to `name`, trimmed
+/// ([`valid_name`]), at `now`, and write its `passkey.rename` audit entry by `actor` with the
+/// name before and after. A name equal to the stored one changes nothing and writes no entry. A
+/// passkey of another user or organization is [`Error::NotFound`]. Runs in one transaction (a
+/// savepoint when `db` is already one), with the row locked from the read to the write.
+pub async fn rename<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
+    scope: OrgScope,
+    user_id: Uuid,
+    id: Uuid,
+    name: &str,
+    now: SystemTime,
+    actor: Actor,
+) -> Result<Passkey, Error> {
+    let name = valid_name(name)?;
+    let now_us = epoch_micros(now)?;
+    let mut tx = db.begin().await?;
+    let current = sqlx::query_as!(
+        Row,
+        r#"SELECT id, user_id, name,
+                  (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM last_used_at) * 1000000)::bigint AS last_used_at_us
+           FROM passkeys
+           WHERE org_id = $1 AND user_id = $2 AND id = $3
+           FOR UPDATE"#,
+        scope.org_id(),
+        user_id,
+        id,
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(Error::NotFound)?;
+    let mut passkey = Passkey::try_from(current)?;
+    if passkey.name == name {
+        return Ok(passkey);
+    }
+    sqlx::query!(
+        "UPDATE passkeys
+         SET name = $4,
+             updated_at = timestamptz 'epoch' + $5::bigint * interval '1 microsecond'
+         WHERE org_id = $1 AND user_id = $2 AND id = $3",
+        scope.org_id(),
+        user_id,
+        id,
+        name,
+        now_us,
+    )
+    .execute(&mut *tx)
+    .await?;
+    let data = json!({ "before": { "name": passkey.name }, "after": { "name": name } });
+    audit::record(
+        &mut tx,
+        scope,
+        actor,
+        Action::PasskeyRename,
+        id,
+        &data,
+        now_us,
+    )
+    .await?;
+    tx.commit().await?;
+    name.clone_into(&mut passkey.name);
+    Ok(passkey)
+}
+
+/// Delete the passkey `id` of the user `user_id` in the scope's organization and write its
+/// `passkey.delete` audit entry by `actor` at `now`, with the user and the name. A passkey of
+/// another user or organization is [`Error::NotFound`]. It does not check that the user keeps a
+/// way to sign in: `local::delete_passkey_unless_last` does, and the routes call that. Runs in
+/// one transaction (a savepoint when `db` is already one).
+pub async fn delete<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
+    scope: OrgScope,
+    user_id: Uuid,
+    id: Uuid,
+    now: SystemTime,
+    actor: Actor,
+) -> Result<(), Error> {
+    let now_us = epoch_micros(now)?;
+    let mut tx = db.begin().await?;
+    let name = sqlx::query_scalar!(
+        "DELETE FROM passkeys WHERE org_id = $1 AND user_id = $2 AND id = $3 RETURNING name",
+        scope.org_id(),
+        user_id,
+        id,
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(Error::NotFound)?;
+    let data = json!({ "before": { "user_id": user_id, "name": name } });
+    audit::record(
+        &mut tx,
+        scope,
+        actor,
+        Action::PasskeyDelete,
+        id,
+        &data,
+        now_us,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 /// The credential ids of the passkeys of the user `user_id` in the scope's organization, oldest

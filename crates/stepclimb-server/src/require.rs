@@ -41,7 +41,7 @@ use stepclimb_core::{
 };
 
 use crate::{
-    AppState, entitlements,
+    AppState, csrf, entitlements,
     error::ApiError,
     request_org,
     session::{self, Authenticated},
@@ -404,6 +404,47 @@ impl FromRequestParts<AppState> for AuthOnly {
     ) -> Result<Self, Self::Rejection> {
         let Evaluated { principal, grants } = evaluate(parts, state).await?;
         Ok(Self { principal, grants })
+    }
+}
+
+/// [`AuthOnly`] for a route that only a browser session may call: the signed-in user's own
+/// credentials under `/api/v1/me/passkeys` (docs/specs/m0/04-local-accounts.md Permissions), so
+/// an API key cannot add or remove its owner's passkeys. A request carrying an `Authorization:
+/// Bearer` header answers 403 `auth.session_required` before anything else is read, whether the
+/// credential is valid or not: by spec 08 B16 such a request is authenticated by its bearer
+/// credential alone (an API key or an app access token), never by a cookie beside it, so no
+/// bearer request is a session's. Any other request is [`AuthOnly`]'s.
+pub struct SessionOnly(AuthOnly);
+
+impl SessionOnly {
+    /// The signed-in user.
+    pub fn principal(&self) -> Authenticated {
+        self.0.principal
+    }
+}
+
+/// The codes [`SessionOnly`] produces.
+pub mod session_code {
+    /// The route takes a browser session only, and the request carries a bearer credential
+    /// (403).
+    pub const AUTH_SESSION_REQUIRED: &str = "auth.session_required";
+}
+
+impl FromRequestParts<AppState> for SessionOnly {
+    type Rejection = Rejection;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        if csrf::carries_bearer(&parts.headers) {
+            return Err(Rejection::Refused(ApiError::new(
+                StatusCode::FORBIDDEN,
+                session_code::AUTH_SESSION_REQUIRED,
+                "Only a signed-in browser session can change your passkeys; API keys and app tokens cannot.",
+            )));
+        }
+        AuthOnly::from_request_parts(parts, state).await.map(Self)
     }
 }
 

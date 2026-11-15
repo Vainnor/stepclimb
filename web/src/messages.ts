@@ -76,6 +76,8 @@ export const webMessages: Catalog = {
       "This server has no organization yet. An administrator has to create it first.",
     "signIn.problem.passkeyInvalid":
       "Stepclimb did not accept that passkey. Try again with a passkey saved for this email.",
+    "signIn.problem.passkeysNotAllowed":
+      "Your organization does not let you sign in with a passkey. Sign in with your identity provider instead.",
     "signIn.problem.rateLimited":
       "Too many sign-in attempts from your network. Wait a minute, then try again.",
     "signIn.problem.rateLimitedFor":

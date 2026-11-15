@@ -91,6 +91,11 @@ server every sign-in test and the Playwright stack use instead of a real provide
   `allow_local_passkeys` (boolean, default `false`): whether users who sign in through the
   provider may also add passkeys (owner decision on issue #25, 2026-11-15 UTC;
   `04-local-accounts.md` B13 enforces it).
+
+  The server reads `allow_local_passkeys` from the stored config of every enabled `oidc` or
+  `oauth2` provider the user has an identity at, exactly `true` counting as on: adding a passkey
+  (`04-local-accounts.md` B13) and signing in with one (`04` Q16) both check it. `05-oidc.md` B1
+  gives the `oidc` config the same member (recorded by `04` issue I5).
 - **B5.** `GET /auth/{key}/start` for an `oauth2` provider creates a sign-in flow
   (`08-sessions-and-csrf.md` B17) with a random `state` and `return_to`, and answers 303 to the
   `authorize` URL with `response_type=code`, `client_id`, `redirect_uri` (as `05-oidc.md` B6),
@@ -219,6 +224,7 @@ No new table. This spec defines the `config` shape for `kind = 'oauth2'` rows of
   "client_secret": "<per 05-oidc.md Q2>",
   "scopes": ["profile", "email"],
   "pkce": true,
+  "allow_local_passkeys": false,
   "claims": {
     "subject": "/data/id",
     "given_name": "/data/first_name",

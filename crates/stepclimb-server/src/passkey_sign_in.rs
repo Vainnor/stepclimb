@@ -21,8 +21,13 @@
 //! 2. refuses it unless it belongs to the flow's user (a flow for no account matches none);
 //! 3. verifies the assertion (`stepclimb_auth::passkey`: challenge, exact origin, relying party
 //!    ID, user verification, signature, user handle, sign counter against the stored one);
-//! 4. saves the credential's new counter and backup state and the time it was used;
-//! 5. completes the sign-in through admission's local entry (`admission::complete_local`),
+//! 4. refuses a user whose passkeys the provider rule does not allow (spec 04 Q16, 403
+//!    `local.passkeys_not_allowed`): no local account, and no enabled provider they have an
+//!    identity at sets `allow_local_passkeys` to `true` (`crate::my_passkeys`). Checked after the
+//!    assertion verified, so only the passkey's holder learns it, and before admission; the
+//!    passkey stays stored;
+//! 5. saves the credential's new counter and backup state and the time it was used;
+//! 6. completes the sign-in through admission's local entry (`admission::complete_local`),
 //!    keyed by the passkey's user: step 1 refuses a suspended user with 403 `auth.suspended`,
 //!    otherwise it creates the session (spec 08 B7), ending the sessions the browser's old
 //!    cookies name. It links no identity: a passkey added from a signed-in session belongs to
@@ -67,6 +72,7 @@ use crate::{
     extract::ApiJson,
     flow::{self, FlowStart},
     local_sign_in::require_method,
+    my_passkeys::{code::LOCAL_PASSKEYS_NOT_ALLOWED, passkeys_allowed},
     openapi::problem_responses,
     passkey_enrollment::{
         FlowDetails, Outcome, SignedIn, flow_refused, relying_party, signed_in, with_flow_cleared,
@@ -94,7 +100,7 @@ problem_responses! {
     PasskeySignInStartNotFound => "`auth.method_disabled`: passkey sign-in is switched off for this organization. `org.not_found`: the request's organization cannot be determined.",
     PasskeySignInFinishBadRequest => "`request.malformed`: the body is not `{credential}`. `auth.flow_invalid`: no passkey sign-in was started in this browser, or it was already finished; start again. `auth.flow_expired`: the sign-in was started more than 10 minutes ago; start again.",
     PasskeySignInFinishUnauthorized => "`auth.passkey_invalid`: the passkey did not sign in: it is not a passkey of the account the sign-in was started for, or its answer did not verify. Start again.",
-    PasskeySignInFinishForbidden => "`auth.suspended`: the account is suspended. `auth.csrf_refused`: the request did not come from this site.",
+    PasskeySignInFinishForbidden => "`auth.suspended`: the account is suspended. `local.passkeys_not_allowed`: the account has no local account and no identity provider it signs in with allows passkeys, so its passkeys do not sign in. `auth.csrf_refused`: the request did not come from this site.",
     PasskeySignInFinishNotFound => "`auth.method_disabled`: passkey sign-in is switched off for this organization. `org.not_found`: the request's organization cannot be determined.",
 }
 
@@ -367,6 +373,14 @@ async fn sign_in(
         }
         Err(other) => return Err(verification_refused(other, stored.id)),
     };
+    match passkeys_allowed(&mut sp, scope, user.id).await {
+        Ok(true) => {}
+        Ok(false) => {
+            tracing::info!(user_id = %user.id, passkey_id = %stored.id, "passkey sign-in refused: no provider of the user allows passkeys");
+            return Err(Outcome::Refused(passkeys_not_allowed()));
+        }
+        Err(error) => return Err(Outcome::Failed(error)),
+    }
     passkeys::record_sign_in(&mut sp, scope, stored.id, &verified.credential, attempt.now)
         .await
         .map_err(|e| Outcome::internal(&e))?;
@@ -440,6 +454,16 @@ fn verification_refused(error: webauthn::SignInError, passkey_id: Uuid) -> Outco
         | webauthn::SignInError::Stored(_)
         | webauthn::SignInError::Serialize(_) => Outcome::internal(&error),
     }
+}
+
+/// 403 `local.passkeys_not_allowed`: the passkey verified, but the user has no local account
+/// and no provider they sign in with allows passkeys (spec 04 Q16).
+fn passkeys_not_allowed() -> ApiError {
+    ApiError::new(
+        StatusCode::FORBIDDEN,
+        LOCAL_PASSKEYS_NOT_ALLOWED,
+        "Your organization does not let you sign in with a passkey. Sign in with your identity provider.",
+    )
 }
 
 fn passkey_invalid() -> ApiError {

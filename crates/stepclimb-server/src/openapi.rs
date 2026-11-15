@@ -10,7 +10,7 @@
 //! signed-in user's, the organization's branding and its stylesheet (`/theme.css`), the local
 //! sign-in switches, enrollment links, the enrollment start route, passkey registration
 //! through a link and passkey sign-in, the start of sign-in with an outside identity provider,
-//! and the shared error
+//! the signed-in user's passkeys, and the shared error
 //! schemas and responses below. The other M0 specs add their endpoints under `/api/v1`.
 //!
 //! Every `/api/v1` operation lists its errors in `#[utoipa::path]` (spec 02 B6). The errors
@@ -29,8 +29,8 @@ use utoipa::{
 use crate::{
     accounts, appearance, auth, branding, enrollment,
     error::{FieldError, PROBLEM_JSON, Problem},
-    health, identities, local_sign_in, me, organization, passkey_enrollment, passkey_options,
-    passkey_sign_in, provider_sign_in, role_assignments, roles, users,
+    health, identities, local_sign_in, me, my_passkeys, organization, passkey_enrollment,
+    passkey_options, passkey_sign_in, provider_sign_in, role_assignments, roles, users,
 };
 
 /// The operation extension that marks a handler as changing state (spec 08 B12, T17). Every
@@ -88,6 +88,11 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         identities::delete_user_identity,
         identities::list_my_identities,
         identities::delete_my_identity,
+        my_passkeys::list_my_passkeys,
+        my_passkeys::start_my_passkey,
+        my_passkeys::create_my_passkey,
+        my_passkeys::update_my_passkey,
+        my_passkeys::delete_my_passkey,
         branding::get_branding,
         branding::update_branding,
         branding::theme_css,
@@ -165,7 +170,11 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             passkey_options::PublicKeyRequestOptions,
             passkey_sign_in::PasskeySignInStart,
             passkey_sign_in::PasskeySignInStarted,
-            passkey_sign_in::PasskeySignInFinish
+            passkey_sign_in::PasskeySignInFinish,
+            my_passkeys::MyPasskey,
+            my_passkeys::MyPasskeyStarted,
+            my_passkeys::NewMyPasskey,
+            my_passkeys::MyPasskeyPatch
         ),
         responses(
             BadRequest,
@@ -232,7 +241,14 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             passkey_sign_in::PasskeySignInFinishBadRequest,
             passkey_sign_in::PasskeySignInFinishUnauthorized,
             passkey_sign_in::PasskeySignInFinishForbidden,
-            passkey_sign_in::PasskeySignInFinishNotFound
+            passkey_sign_in::PasskeySignInFinishNotFound,
+            my_passkeys::MyPasskeysForbidden,
+            my_passkeys::MyPasskeyWriteForbidden,
+            my_passkeys::MyPasskeyAddForbidden,
+            my_passkeys::MyPasskeysNotFound,
+            my_passkeys::MyPasskeyNotFound,
+            my_passkeys::MyPasskeyAddInvalid,
+            my_passkeys::MyPasskeyDeleteConflict
         )
     ),
     tags(

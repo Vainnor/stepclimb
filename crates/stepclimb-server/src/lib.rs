@@ -9,7 +9,8 @@
 //! `/api/v1/admin` ([`roles`], with timestamps from [`timestamp`]), the role assignment
 //! routes ([`role_assignments`]), the user admin routes under `/api/v1/users` ([`users`]),
 //! users' identities under `/api/v1/users/{user_id}/identities` and `/api/v1/me/identities`
-//! ([`identities`]), the signed-in user at
+//! ([`identities`]), the signed-in user's passkeys under `/api/v1/me/passkeys`
+//! ([`my_passkeys`]), the signed-in user at
 //! `GET /api/v1/me` ([`me`]) and their appearance choice at `PUT /api/v1/me/appearance`
 //! ([`appearance`]), the organization's branding at `/api/v1/admin/branding` and its
 //! stylesheet at `/theme.css` ([`branding`]), the OpenAPI document (`/api/openapi.json`) and its Scalar UI
@@ -53,6 +54,7 @@ pub mod identities;
 pub mod local_sign_in;
 pub mod logging;
 pub mod me;
+pub mod my_passkeys;
 pub mod openapi;
 pub mod organization;
 pub mod pagination;

@@ -21,6 +21,12 @@
 //! **other-user** case (the same organization's other user's row: 404) and a
 //! cross-organization case that names a row of org B's user (404).
 //!
+//! A `Mine` entry (an `AuthOnly` route whose request needs rows of the caller's own but names
+//! none of them, such as adding a passkey, which needs the caller's local account and the
+//! registration their browser started) gets the 401, 2xx, every-feature-off and
+//! cross-organization cases of an `AuthOnly` entry, with the setup building those rows for the
+//! user who calls: in the cross-organization case, org A's admin, acting on org A.
+//!
 //! An entry made with [`gated`] names the feature its route also takes as `Require<F>`
 //! (docs/specs/m0/10-entitlements-framework.md B9, issue 4) and gets two more cases, run with
 //! the organization on a plan that has every catalog feature but that one:
@@ -281,6 +287,32 @@ const TABLE: &[Entry] = &[
         },
     },
     Entry {
+        operation_id: "listMyPasskeys",
+        access: Access::Mine(passkey_of_caller),
+    },
+    Entry {
+        operation_id: "startMyPasskey",
+        access: Access::Mine(local_account_of_caller),
+    },
+    Entry {
+        operation_id: "createMyPasskey",
+        access: Access::Mine(registration_of_caller),
+    },
+    Entry {
+        operation_id: "updateMyPasskey",
+        access: Access::Own {
+            not_found: "passkey.not_found",
+            setup: rename_passkey_of_owner,
+        },
+    },
+    Entry {
+        operation_id: "deleteMyPasskey",
+        access: Access::Own {
+            not_found: "passkey.not_found",
+            setup: second_passkey_of_owner,
+        },
+    },
+    Entry {
         operation_id: "getBranding",
         access: permission(BrandingManage::KEY, Target::Org, at_org),
     },
@@ -300,6 +332,98 @@ const TABLE: &[Entry] = &[
         access: permission(ProviderManage::KEY, Target::Org, unchanged_local_sign_in),
     },
 ];
+
+/// A passkey of the caller, so the list has a row to answer.
+fn passkey_of_caller(org: &Org, caller: Uuid) -> Pin<Box<dyn Future<Output = Mine> + Send + '_>> {
+    Box::pin(async move {
+        org.passkey(caller).await;
+        Mine::call(Call {
+            params: Vec::new(),
+            body: None,
+            at: At::Org,
+        })
+    })
+}
+
+/// The caller's local account, the identity an enrollment link creates: what lets them add a
+/// passkey (spec 04 B13, the owner's provider rule).
+fn local_account_of_caller(
+    org: &Org,
+    caller: Uuid,
+) -> Pin<Box<dyn Future<Output = Mine> + Send + '_>> {
+    Box::pin(async move {
+        org.local_identity(caller).await;
+        Mine::call(Call {
+            params: Vec::new(),
+            body: None,
+            at: At::Org,
+        })
+    })
+}
+
+/// [`local_account_of_caller`], a registration started for the caller and a software passkey's
+/// answer to it: the body and flow cookie `createMyPasskey` adds the passkey with.
+fn registration_of_caller(
+    org: &Org,
+    caller: Uuid,
+) -> Pin<Box<dyn Future<Output = Mine> + Send + '_>> {
+    Box::pin(async move {
+        org.local_identity(caller).await;
+        let state = state_for(&org.pool);
+        let mut conn = org.pool.acquire().await.expect("a connection");
+        let begun =
+            stepclimb_server::my_passkeys::begin(&state, &mut conn, scope(org.id), caller, now())
+                .await
+                .expect("start a registration");
+        let options: webauthn_rs::prelude::CreationChallengeResponse =
+            serde_json::from_value(serde_json::to_value(&begun.options).expect("JSON"))
+                .expect("creation options");
+        let origin = webauthn_rs::prelude::Url::parse("https://lms.example.org").expect("a URL");
+        let credential = webauthn_authenticator_rs::softpasskey::SoftPasskey::new(true)
+            .do_registration(origin, options)
+            .expect("the soft passkey registers");
+        let flow = begun.set_cookie.to_str().expect("ASCII");
+        let flow = flow.split(';').next().expect("a pair").to_owned();
+        Mine {
+            call: Call {
+                params: Vec::new(),
+                body: Some(serde_json::json!({ "credential": credential })),
+                at: At::Org,
+            },
+            flow: Some(flow),
+        }
+    })
+}
+
+/// A passkey of `owner` named in the path, and a new name for it.
+fn rename_passkey_of_owner(
+    org: &Org,
+    owner: Uuid,
+) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async move {
+        Call {
+            params: vec![("passkey_id", org.passkey(owner).await)],
+            body: Some(serde_json::json!({ "name": "Renamed passkey" })),
+            at: At::Org,
+        }
+    })
+}
+
+/// Two passkeys of `owner`, the second named in the path, so deleting it leaves a way to sign
+/// in.
+fn second_passkey_of_owner(
+    org: &Org,
+    owner: Uuid,
+) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async move {
+        org.passkey(owner).await;
+        Call {
+            params: vec![("passkey_id", org.passkey(owner).await)],
+            body: None,
+            at: At::Org,
+        }
+    })
+}
 
 /// An appearance choice: the caller's own row, so it needs no target.
 fn dark_compact(_: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
@@ -585,6 +709,10 @@ enum Access {
         not_found: &'static str,
         setup: OwnSetup,
     },
+    /// A principal and no permission, with the setup building the caller's own rows the
+    /// request needs but does not name: the 401, 2xx, every-feature-off and cross-organization
+    /// cases.
+    Mine(MineSetup),
     /// `Require<P, T>`: every case.
     Permission {
         /// `P::KEY`.
@@ -623,6 +751,31 @@ type Setup = for<'a> fn(&'a Org) -> Pin<Box<dyn Future<Output = Call> + Send + '
 
 /// Builds what one case calls in a fresh organization, on a row of the user it is given.
 type OwnSetup = for<'a> fn(&'a Org, Uuid) -> Pin<Box<dyn Future<Output = Call> + Send + 'a>>;
+
+/// Builds what one case calls in a fresh organization, for the user it is given, who makes
+/// the call.
+type MineSetup = for<'a> fn(&'a Org, Uuid) -> Pin<Box<dyn Future<Output = Mine> + Send + 'a>>;
+
+/// A call a [`MineSetup`] built, and the flow cookie it sends beside the caller's session.
+struct Mine {
+    call: Call,
+    flow: Option<String>,
+}
+
+impl Mine {
+    fn call(call: Call) -> Self {
+        Self { call, flow: None }
+    }
+
+    /// The `Cookie` value: `session` (when there is one) and the flow cookie.
+    fn cookie(&self, session: Option<&str>) -> Option<String> {
+        match (session, &self.flow) {
+            (Some(session), Some(flow)) => Some(format!("{session}; {flow}")),
+            (Some(session), None) => Some(session.to_owned()),
+            (None, flow) => flow.clone(),
+        }
+    }
+}
 
 /// One call of an operation.
 struct Call {
@@ -980,6 +1133,8 @@ async fn passkey_sign_in_request(world: &World, org: &Org) -> (Option<Value>, Op
     let (_, user) = org
         .named_user("Pat Example".into(), Some(email.into()))
         .await;
+    // A local account, as enrollment leaves: what lets the passkey sign in (spec 04 Q16).
+    org.local_identity(user).await;
     let origin = Url::parse("https://lms.example.org").expect("a URL");
     let party = RelyingParty::new(origin.as_str(), "Org").expect("a relying party");
     let registrant = Registrant {
@@ -1087,6 +1242,7 @@ async fn run(world: &World, app: &Router, op: &Operation, access: &Access) -> Re
         Access::Own { not_found, setup } => {
             run_own(world, app, op, not_found, *setup, &mut report).await
         }
+        Access::Mine(setup) => run_mine(world, app, op, *setup, &mut report).await,
         Access::Permission {
             key,
             target,
@@ -1393,6 +1549,67 @@ async fn run_own(
     report.record(op, "cross-organization", cross.await);
 }
 
+/// The cases of an [`Access::Mine`] entry.
+async fn run_mine(
+    world: &World,
+    app: &Router,
+    op: &Operation,
+    setup: MineSetup,
+    report: &mut Report,
+) {
+    let anonymous = async {
+        let org = world.org().await;
+        let (_, caller) = org.user().await;
+        let mine = setup(&org, caller).await;
+        call_op(app, op, &mine.call, org.id, mine.cookie(None).as_deref())
+            .await?
+            .expect(StatusCode::UNAUTHORIZED, "auth.unauthenticated")
+    };
+    report.record(op, "401", anonymous.await);
+    let caller = async {
+        let org = world.org().await;
+        let (cookie, caller) = org.user().await;
+        let mine = setup(&org, caller).await;
+        call_op(
+            app,
+            op,
+            &mine.call,
+            org.id,
+            mine.cookie(Some(&cookie)).as_deref(),
+        )
+        .await?
+        .expect_success()
+    };
+    report.record(op, "2xx", caller.await);
+    let featureless = async {
+        let org = world.org().await;
+        let (cookie, caller) = org.user().await;
+        let mine = setup(&org, caller).await;
+        org.plan_with(|_| false).await;
+        let cookie = mine.cookie(Some(&cookie));
+        let answer = call_op(app, op, &mine.call, org.id, cookie.as_deref()).await?;
+        if answer.code().as_deref() == Some("entitlement.feature_unavailable") {
+            return Err(format!(
+                "its entry names no feature, but it answered {} {}",
+                answer.status, answer.body
+            ));
+        }
+        Ok(())
+    };
+    report.record(op, "every feature off", featureless.await);
+    let cross = async {
+        let a = world.org().await;
+        let (admin_cookie, admin) = a.admin().await;
+        let b = world.org().await;
+        b.seed().await;
+        let mine = setup(&a, admin).await;
+        let cookie = mine.cookie(Some(&admin_cookie)).expect("a session");
+        let admin = (a.id, cookie.as_str());
+        called_from_org_a(&world.pool, app, op, None, admin, &b, &mine.call).await
+    };
+    report.record(op, "cross-organization", cross.await);
+}
+
 /// Another user of the same organization, an Organization admin, calls with the owner's row:
 /// `not_found`, and the organization's rows unchanged.
 async fn other_users(
@@ -1607,6 +1824,23 @@ fn scope(org_id: Uuid) -> OrgScope {
     OrgScope::instance(org_id)
 }
 
+/// The application state every case's router and setup share: one key ring, so a flow a setup
+/// starts opens in the router.
+fn state_for(pool: &PgPool) -> AppState {
+    AppState {
+        db: pool.clone(),
+        clock: ManualClock::new(now()).clock(),
+        keys: KeyRing::parse("test:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
+            .expect("a valid test key"),
+        public_url: WebOrigin::parse("https://lms.example.org").expect("a valid origin"),
+        allowed_origins: Vec::new(),
+        rate_limits: Default::default(),
+        // The insecure switch on, as the test setup sets it (spec 05 Q4): the mock IdP of the
+        // provider sign-in case listens on http loopback.
+        providers: stepclimb_server::providers::Providers::new(true).expect("provider clients"),
+    }
+}
+
 /// The test's database, with the built-in roles synced.
 struct World {
     pool: PgPool,
@@ -1619,18 +1853,7 @@ impl World {
     }
 
     fn state(&self) -> AppState {
-        AppState {
-            db: self.pool.clone(),
-            clock: ManualClock::new(now()).clock(),
-            keys: KeyRing::parse("test:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
-                .expect("a valid test key"),
-            public_url: WebOrigin::parse("https://lms.example.org").expect("a valid origin"),
-            allowed_origins: Vec::new(),
-            rate_limits: Default::default(),
-            // The insecure switch on, as the test setup sets it (spec 05 Q4): the mock IdP of
-            // the provider sign-in case listens on http loopback.
-            providers: stepclimb_server::providers::Providers::new(true).expect("provider clients"),
-        }
+        state_for(&self.pool)
     }
 
     /// A new organization with Tower under the root and Ground under Tower.
@@ -1872,6 +2095,62 @@ impl Org {
         roles::create_custom(&self.pool, scope(self.id), &role, now(), Actor::Instance)
             .await
             .expect("create role")
+            .id
+    }
+
+    /// A signed-in Organization admin at organization scope: their `Cookie` header value and id.
+    async fn admin(&self) -> (String, Uuid) {
+        let (cookie, user) = self.user().await;
+        let role = sqlx::query_scalar("SELECT id FROM roles WHERE org_id IS NULL AND key = $1")
+            .bind("org_admin")
+            .fetch_one(&self.pool)
+            .await
+            .expect("a built-in role");
+        self.assign(user, role, At::Org).await;
+        (cookie, user)
+    }
+
+    /// Link `user` to the organization's local provider, as an enrollment does.
+    async fn local_identity(&self, user: Uuid) {
+        let local = stepclimb_core::identity_providers::get_by_key(
+            &self.pool,
+            scope(self.id),
+            stepclimb_core::local_sign_in::PROVIDER_KEY,
+        )
+        .await
+        .expect("read the local row")
+        .expect("the local row");
+        let identity = NewIdentity {
+            user_id: user,
+            provider_id: local.id,
+            subject: user.to_string(),
+            attributes: serde_json::Map::new(),
+        };
+        identities::link(
+            &self.pool,
+            scope(self.id),
+            &identity,
+            now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("link the local identity");
+    }
+
+    /// A new passkey of `user` with a placeholder credential, which the management routes never
+    /// read: its id.
+    async fn passkey(&self, user: Uuid) -> Uuid {
+        let credential = serde_json::json!({ "placeholder": true });
+        let credential_id = new_id().as_bytes().to_vec();
+        let new = stepclimb_core::passkeys::NewPasskey {
+            user_id: user,
+            credential_id: &credential_id,
+            credential: &credential,
+            name: "Suite passkey",
+        };
+        stepclimb_core::passkeys::create(&self.pool, scope(self.id), new, now(), Actor::Instance)
+            .await
+            .expect("store a passkey")
             .id
     }
 
@@ -2137,7 +2416,9 @@ const fn gated(feature: &'static str, access: Access) -> Access {
             feature: Some(feature),
             setup,
         },
-        Access::AuthOnly(_) | Access::Own { .. } => panic!("a feature entry needs a permission"),
+        Access::AuthOnly(_) | Access::Own { .. } | Access::Mine(_) => {
+            panic!("a feature entry needs a permission")
+        }
     }
 }
 
@@ -2417,6 +2698,39 @@ async fn an_auth_only_route_answering_org_bs_names_fails_the_cross_organization_
         report.failures[0].contains("the response holds org B's value \"org-"),
         "{report:#?}"
     );
+}
+
+/// Nothing the caller owns: the `Mine` runner's setup for the fixture routes.
+fn nothing_of_caller(_: &Org, _: Uuid) -> Pin<Box<dyn Future<Output = Mine> + Send + '_>> {
+    Box::pin(async {
+        Mine::call(Call {
+            params: Vec::new(),
+            body: None,
+            at: At::Org,
+        })
+    })
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_runner_passes_a_route_that_needs_the_callers_own_rows(pool: PgPool) {
+    let world = World::new(pool).await;
+    let app = fixture_app(&world);
+    let op = fixture_op(Method::GET, "/t/me");
+    let report = run(&world, &app, &op, &Access::Mine(nothing_of_caller)).await;
+    assert!(report.failures.is_empty(), "{:#?}", report.failures);
+    assert_eq!(
+        report.ran,
+        ["401", "2xx", "every feature off", "cross-organization"]
+    );
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_mine_route_answering_org_bs_names_fails_the_cross_organization_case(pool: PgPool) {
+    let world = World::new(pool).await;
+    let app = fixture_app(&world);
+    let op = fixture_op(Method::GET, "/t/names");
+    let report = run(&world, &app, &op, &Access::Mine(nothing_of_caller)).await;
+    assert_eq!(failed_cases(&report), ["cross-organization"], "{report:#?}");
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]

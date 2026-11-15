@@ -33,6 +33,7 @@ fn settings(scopes: &[&str]) -> OidcSettings {
             attributes: BTreeMap::new(),
         },
         userinfo: true,
+        allow_local_passkeys: false,
     }
 }
 

@@ -17,8 +17,14 @@ async function violations(page: Page): Promise<string[]> {
   );
 }
 
+/** The credential ids a virtual authenticator holds, and a way to remove one. */
+interface Authenticator {
+  ids: () => Promise<string[]>;
+  remove: (credentialId: string) => Promise<void>;
+}
+
 /** A platform authenticator that verifies the user and answers every prompt by itself. */
-async function addAuthenticator(page: Page): Promise<() => Promise<number>> {
+async function addVirtualAuthenticator(page: Page): Promise<Authenticator> {
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("WebAuthn.enable", { enableUI: false });
   const { authenticatorId } = await cdp.send("WebAuthn.addVirtualAuthenticator", {
@@ -31,8 +37,42 @@ async function addAuthenticator(page: Page): Promise<() => Promise<number>> {
       automaticPresenceSimulation: true,
     },
   });
-  return async () =>
-    (await cdp.send("WebAuthn.getCredentials", { authenticatorId })).credentials.length;
+  return {
+    ids: async () =>
+      (await cdp.send("WebAuthn.getCredentials", { authenticatorId })).credentials.map(
+        (credential) => credential.credentialId,
+      ),
+    remove: async (credentialId) => {
+      await cdp.send("WebAuthn.removeCredential", { authenticatorId, credentialId });
+    },
+  };
+}
+
+/**
+ * Adds a passkey to the signed-in account through `/api/v1/me/passkeys` (04 B13) from the page,
+ * as a client of the public API does: the start route's options go to the WebAuthn API, and the
+ * credential goes back to the add route. The status of each answer, or the name of the error the
+ * browser's ceremony ended with.
+ */
+async function addPasskeyFromPage(page: Page): Promise<string> {
+  return page.evaluate(async () => {
+    const started = await fetch("/api/v1/me/passkeys/start", { method: "POST" });
+    const { options } = await started.json();
+    const publicKey = PublicKeyCredential.parseCreationOptionsFromJSON(options.publicKey);
+    let credential: Credential | null;
+    try {
+      credential = await navigator.credentials.create({ publicKey });
+    } catch (error) {
+      return `${started.status} ${error instanceof DOMException ? error.name : "error"}`;
+    }
+    if (!(credential instanceof PublicKeyCredential)) return `${started.status} no credential`;
+    const added = await fetch("/api/v1/me/passkeys", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ credential: credential.toJSON(), name: "Second device" }),
+    });
+    return `${started.status} ${added.status}`;
+  });
 }
 
 function answerOf(page: Page, path: string) {
@@ -64,7 +104,8 @@ test.describe
         TOKEN_FRAGMENT.test(linkUrl.hash),
         "the link ends #token= and 43 base64url characters",
       ).toBe(true);
-      const credentials = await addAuthenticator(page);
+      const authenticator = await addVirtualAuthenticator(page);
+      const credentials = async () => (await authenticator.ids()).length;
 
       // The token stays in the fragment: the page request the browser sends carries none of it.
       const pageRequest = page.waitForRequest((request) => request.resourceType() === "document");
@@ -104,6 +145,28 @@ test.describe
       expect((await finished).status()).toBe(200);
       await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
       expect((await page.request.get("/api/v1/me")).status()).toBe(200);
+
+      await test.step("add a passkey while signed in, then sign in with it alone (04 B13)", async () => {
+        const [enrolled] = await authenticator.ids();
+        if (enrolled === undefined) throw new Error("the enrolled passkey is missing");
+        // The options exclude the account's passkeys, so the device that holds one refuses.
+        expect(await addPasskeyFromPage(page)).toBe("200 InvalidStateError");
+        // Without it, the device registers a new passkey, the only one left to sign in with.
+        await authenticator.remove(enrolled);
+        expect(await addPasskeyFromPage(page)).toBe("200 201");
+        expect(await credentials()).toBe(1);
+        expect((await authenticator.ids())[0]).not.toBe(enrolled);
+
+        await page.getByRole("button", { name: "Avery Example, account menu" }).click();
+        await page.getByRole("menuitem", { name: "Sign out" }).click();
+        await expect(page.getByRole("heading", { level: 1, name: "Sign in" })).toBeVisible();
+        await page.getByRole("textbox", { name: "Email" }).fill(EMAIL);
+        await page.getByRole("button", { name: "Continue" }).click();
+        const again = answerOf(page, "/auth/local/passkey/finish");
+        await page.getByRole("button", { name: "Sign in with a passkey" }).click();
+        expect((await again).status()).toBe(200);
+        await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
+      });
     });
 
     test("the used setup link no longer works", async ({ page }) => {

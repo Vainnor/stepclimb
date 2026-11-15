@@ -351,3 +351,109 @@ async fn a_counter_flag_keeps_its_first_time(pool: PgPool) {
     .expect("read the flags");
     assert_eq!(flagged, [true, false]);
 }
+
+/// Renaming and deleting find the passkey by its id and its user, in the scope's organization:
+/// another user's or another organization's passkey is `NotFound` and stays as it was.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn only_the_owner_renames_or_deletes_a_passkey(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    let b = org(&pool, "org-b").await;
+    let sam = user(&pool, a).await;
+    let pat = user(&pool, a).await;
+    let robin = user(&pool, b).await;
+    let sams = store(&pool, a, sam, &[2; 16]).await.expect("store").id;
+    let robins = store(&pool, b, robin, &[3; 16]).await.expect("store").id;
+    let actor = Actor::Instance;
+    for (org, id) in [(a, sams), (b, robins)] {
+        let renamed = passkeys::rename(&pool, scope(org), pat, id, "Mine", now(), actor).await;
+        assert!(matches!(renamed, Err(Error::NotFound)), "{renamed:?}");
+        let deleted = passkeys::delete(&pool, scope(org), pat, id, now(), actor).await;
+        assert!(matches!(deleted, Err(Error::NotFound)), "{deleted:?}");
+    }
+    let across = passkeys::delete(&pool, scope(a), robin, robins, now(), actor).await;
+    assert!(matches!(across, Err(Error::NotFound)), "{across:?}");
+    let names: Vec<String> = sqlx::query_scalar("SELECT name FROM passkeys ORDER BY name")
+        .fetch_all(&pool)
+        .await
+        .expect("names");
+    assert_eq!(names, ["Phone", "Phone"]);
+
+    let renamed = passkeys::rename(&pool, scope(a), sam, sams, " Laptop ", now(), actor)
+        .await
+        .expect("rename");
+    assert_eq!(renamed.name, "Laptop");
+    let listed = passkeys::list_for_user(&pool, scope(a), sam)
+        .await
+        .expect("list");
+    assert_eq!(listed, [renamed]);
+    passkeys::delete(&pool, scope(a), sam, sams, now(), actor)
+        .await
+        .expect("delete");
+    assert!(
+        passkeys::list_for_user(&pool, scope(a), sam)
+            .await
+            .expect("list")
+            .is_empty()
+    );
+    let deleted = audit::list(&pool, scope(a), 100).await.expect("entries");
+    let entry = deleted
+        .iter()
+        .find(|e| e.action == "passkey.delete")
+        .expect("an entry");
+    assert_eq!(
+        entry.data,
+        json!({ "before": { "user_id": sam, "name": "Laptop" } })
+    );
+}
+
+/// Waits until a session of this test's database waits on a row or transaction lock, so the
+/// test knows the second call is blocked behind the first.
+async fn until_a_call_waits_on_a_lock(pool: &PgPool) {
+    for _ in 0..500 {
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("read pg_stat_activity");
+        if waiting > 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("no session waited on a lock within 5 s");
+}
+
+/// Two deletions of a user's last two passkeys, on two connections, take turns (Q10): the
+/// second waits on the first's lock of the user, then counts what it left and keeps the last
+/// passkey.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn concurrent_deletions_of_the_last_two_passkeys_keep_one(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    let sam = user(&pool, a).await;
+    let first = store(&pool, a, sam, &[4; 16]).await.expect("store").id;
+    let second = store(&pool, a, sam, &[5; 16]).await.expect("store").id;
+    let mut deleting = pool.begin().await.expect("begin");
+    local::delete_passkey_unless_last(&mut *deleting, scope(a), sam, first, now(), Actor::Instance)
+        .await
+        .expect("the first deletion");
+    let racing = tokio::spawn({
+        let pool = pool.clone();
+        async move {
+            local::delete_passkey_unless_last(&pool, scope(a), sam, second, now(), Actor::Instance)
+                .await
+                .map_err(|e| format!("{e:?}"))
+        }
+    });
+    until_a_call_waits_on_a_lock(&pool).await;
+    deleting.commit().await.expect("commit");
+
+    let raced = racing.await.expect("the second deletion ran");
+
+    assert_eq!(raced, Err("LastSignInMethod".to_owned()));
+    let left = passkeys::list_for_user(&pool, scope(a), sam)
+        .await
+        .expect("list");
+    assert_eq!(left.iter().map(|p| p.id).collect::<Vec<_>>(), [second]);
+}
