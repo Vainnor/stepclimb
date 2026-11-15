@@ -32,7 +32,8 @@ use std::fmt;
 
 use serde_json::{Map, Value};
 
-use crate::claims::{self, MappedProfile, ProfileMapping, SubjectMissing};
+pub use crate::claims::MappedSignIn;
+use crate::claims::{self, ProfileMapping, SubjectMissing};
 use crate::encryption::{DecryptError, EncryptError, KeyRing};
 use crate::json_pointer::JsonPointer;
 use crate::outbound::UrlPolicy;
@@ -47,14 +48,6 @@ pub use crate::provider_config::{
 pub struct Oauth2Claims {
     pub subject: JsonPointer,
     pub profile: ProfileMapping,
-}
-
-/// A userinfo body mapped by [`Oauth2Claims::map`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MappedSignIn {
-    /// The identity's subject (B6).
-    pub subject: String,
-    pub profile: MappedProfile,
 }
 
 impl Oauth2Claims {

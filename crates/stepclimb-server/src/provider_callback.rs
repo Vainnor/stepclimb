@@ -25,10 +25,17 @@
 //!    ([`stepclimb_auth::oidc::redeem_code`]): a failed exchange, an unreadable key set or a
 //!    userinfo answer that cannot be used is `auth.provider_error` (B9, B11); a refused ID token
 //!    `auth.id_token_invalid` (B10), except a `sub` no identity can hold, which is
-//!    `auth.subject_missing`. It then hands the verified sign-in to [`complete_sign_in`], which
-//!    does not complete it yet (spec 05 I4). For `oauth2`, [`crate::oauth2_sign_in::finish`]
-//!    redeems the code, calls userinfo and passes the mapped sign-in to admission, which creates
-//!    the session (spec 06 B8 to B10).
+//!    `auth.subject_missing`. The verified claims are mapped by the provider's JSON Pointers
+//!    ([`ProviderSignIn::map`], B12, B13), the email dropped unless the provider vouched for it.
+//!    For `oauth2`, [`crate::oauth2_sign_in::finish`] redeems the code, calls userinfo and maps
+//!    the body (spec 06 B8 to B10);
+//! 7. hands the mapped sign-in, of either kind, to [`complete_sign_in`]: admission
+//!    (`07-admission.md` B1) and, for an admitted user, the session in one transaction, then a
+//!    303 to the flow's `return_to` with `__Host-sc_session` (B14). An admission refusal is its
+//!    303 to the sign-in page with its code, and no session.
+//!
+//! The provider's tokens never leave [`stepclimb_auth`]: the callback gets the claims, and the
+//! tokens are dropped when the code is redeemed (B15).
 //!
 //! A refusal is a 303 to the sign-in page with the code, logged at warn with the provider's key
 //! and never with a URL, a token, the `code` or a secret. A server fault (the flow's payload or
@@ -47,6 +54,7 @@ use axum::{
 };
 use serde::Deserialize;
 use stepclimb_auth::{
+    claims::MappedSignIn,
     oauth2_flow,
     oidc::{self, IdTokenError, ProviderSignIn},
     oidc_config::{OidcConfig, ProviderRow},
@@ -61,13 +69,14 @@ use utoipa::IntoParams;
 
 use crate::{
     AppState,
+    admission::{self, Completed, Completion, Context, Profile, Verified},
     audit::ClientAddress,
     error::ApiError,
     extract::{ApiPath, ApiQuery},
     flow::{self, Finished},
     oauth2_sign_in,
     provider_sign_in::{
-        NavigationLimited, ProviderParam, redirect_uri, sign_in_provider, to_sign_in,
+        NavigationLimited, ProviderParam, redirect, redirect_uri, sign_in_provider, to_sign_in,
     },
 };
 
@@ -80,9 +89,7 @@ const LOGGED_CHARS: usize = 200;
 /// The codes the route redirects with, beside the start route's.
 pub mod code {
     pub use crate::flow::code::{AUTH_FLOW_EXPIRED, AUTH_FLOW_INVALID};
-    pub use crate::provider_sign_in::code::{
-        AUTH_PROVIDER_NOT_FOUND, AUTH_PROVIDER_UNAVAILABLE, AUTH_RATE_LIMITED,
-    };
+    pub use crate::provider_sign_in::code::{AUTH_PROVIDER_NOT_FOUND, AUTH_RATE_LIMITED};
     /// The person declined at the provider (`error=access_denied`, B8).
     pub const AUTH_PROVIDER_DENIED: &str = "auth.provider_denied";
     /// The provider answered with another error, or the token, key set or userinfo request
@@ -134,10 +141,9 @@ declined at the provider), `auth.provider_error` (the provider reported an error
 key set or userinfo answer could not be used), `auth.id_token_invalid` (the ID token failed a \
 check), `auth.subject_missing` (the ID token's `sub` or the OAuth 2 userinfo subject is \
 missing, empty, holds NUL or is longer than 255 characters), the admission refusals \
-`auth.suspended`, `auth.signup_closed` and `entitlement.limit_reached` (OAuth 2), \
-`auth.provider_unavailable` (an OIDC sign-in verified, which this release does not complete \
-yet) or `auth.rate_limited` (with `Retry-After`). An admitted OAuth 2 sign-in sets \
-`__Host-sc_session` and is a 303 to the flow's `return_to`.",
+`auth.suspended`, `auth.signup_closed` and `entitlement.limit_reached`, or `auth.rate_limited` \
+(with `Retry-After`). An admitted sign-in sets `__Host-sc_session` and is a 303 to the flow's \
+`return_to`.",
     params(ProviderParam, CallbackQuery),
     responses(
         (
@@ -177,7 +183,7 @@ pub async fn finish_provider_sign_in(
     };
     let now = state.clock.now();
     let taken = flow::finish(&state.db, &state.keys, scope, &headers, flow_kind, now).await;
-    let request = oauth2_sign_in::Request {
+    let request = Request {
         scope,
         client,
         headers: &headers,
@@ -201,6 +207,16 @@ fn clearing_flow_cookie(mut response: Response) -> Response {
         .headers_mut()
         .append(header::SET_COOKIE, flow::clear_cookie());
     response
+}
+
+/// What the callback knows of its request.
+#[derive(Clone, Copy)]
+pub(crate) struct Request<'a> {
+    pub(crate) scope: OrgScope,
+    /// The client address, for the audit entry of a just-in-time identity.
+    pub(crate) client: ClientAddress,
+    /// The request's headers, whose session cookies the new session ends (spec 08 B7).
+    pub(crate) headers: &'a HeaderMap,
 }
 
 /// A taken flow's secrets, by the provider's kind. Each kind's type lives in its own module.
@@ -233,11 +249,11 @@ impl Secrets {
     }
 }
 
-/// Steps 3 (the flow's provider and `state`) to 6, on a flow already taken, in the same order
+/// Steps 3 (the flow's provider and `state`) to 7, on a flow already taken, in the same order
 /// for both kinds: the provider, the `state`, the provider's `error`, then the `code`.
 async fn after_flow(
     state: &AppState,
-    request: &oauth2_sign_in::Request<'_>,
+    request: &Request<'_>,
     provider: &IdentityProvider,
     key: &str,
     flow: Finished,
@@ -278,7 +294,7 @@ async fn after_flow(
         Secrets::Oidc(secrets) => {
             match redeem(state, scope, provider, key, &secrets, code).await? {
                 Ok(sign_in) => {
-                    complete_sign_in(state, scope, provider, &flow.return_to, sign_in).await
+                    complete_sign_in(state, request, provider, &flow.return_to, sign_in).await
                 }
                 Err(refusal) => Ok(to_sign_in(refusal)),
             }
@@ -315,8 +331,8 @@ pub(crate) fn provider_refused(key: &str, error: &str, description: Option<&str>
     }
 }
 
-/// Redeem `code` for the `oidc` `provider` (B9 to B11): the verified sign-in, or the code to
-/// refuse with.
+/// Redeem `code` for the `oidc` `provider` (B9 to B11) and map the verified claims (B12, B13):
+/// the mapped sign-in, or the code to refuse with.
 async fn redeem(
     state: &AppState,
     scope: OrgScope,
@@ -324,7 +340,7 @@ async fn redeem(
     key: &str,
     secrets: &oidc::FlowSecrets,
     code: &str,
-) -> Result<Result<ProviderSignIn, &'static str>, ApiError> {
+) -> Result<Result<MappedSignIn, &'static str>, ApiError> {
     let config = match OidcConfig::from_stored(&provider.config) {
         Ok(config) => config,
         Err(error) => {
@@ -368,10 +384,13 @@ async fn redeem(
         code,
         now,
     };
-    Ok(oidc::redeem_code(&callback).await.map_err(|error| {
-        tracing::warn!(provider = key, %error, "the provider sign-in was refused");
-        refusal_code(&error)
-    }))
+    Ok(oidc::redeem_code(&callback)
+        .await
+        .map(|sign_in: ProviderSignIn| sign_in.map(&config.settings.claims))
+        .map_err(|error| {
+            tracing::warn!(provider = key, %error, "the provider sign-in was refused");
+            refusal_code(&error)
+        }))
 }
 
 /// The redirect code for a callback that could not be verified.
@@ -386,24 +405,53 @@ fn refusal_code(error: &oidc::CallbackError) -> &'static str {
     }
 }
 
-/// Finish a verified OIDC sign-in: map the claims, pass them to admission, create the
-/// session and answer 303 to `return_to` (B12 to B14, spec 05 I4).
+/// Finish a mapped provider sign-in of either kind (B14; spec 06 B10): admission
+/// (`07-admission.md` B1) and, for an admitted user, the session (spec 08 B7) in one
+/// transaction, then a 303 to the flow's `return_to` with the session cookie. A refusal is
+/// admission's 303 to the sign-in page with its code and no session; a fault rolls the
+/// transaction back and is 500.
 ///
-/// This release does not complete provider sign-in yet: the sign-in is dropped, no session is
-/// created and the browser goes to the sign-in page with `auth.provider_unavailable`.
-async fn complete_sign_in(
-    _state: &AppState,
-    _scope: OrgScope,
+/// The flow was deleted when the route took it, before the provider was called, so it is not
+/// in this transaction: a provider's code is single use, and a flow kept after a failure here
+/// could not be finished anyway. `return_to` was sanitized again when the flow was read
+/// (`stepclimb_core::auth_flows::ReturnTo`), so it is a path on this host.
+pub(crate) async fn complete_sign_in(
+    state: &AppState,
+    request: &Request<'_>,
     provider: &IdentityProvider,
-    _return_to: &ReturnTo,
-    sign_in: ProviderSignIn,
+    return_to: &ReturnTo,
+    sign_in: MappedSignIn,
 ) -> Result<Response, ApiError> {
-    drop(sign_in);
-    tracing::warn!(
-        provider_id = %provider.id,
-        "provider sign-in verified, but this release does not complete provider sign-in yet"
-    );
-    Ok(to_sign_in(code::AUTH_PROVIDER_UNAVAILABLE))
+    let MappedSignIn { subject, profile } = sign_in;
+    let verified = Verified {
+        provider,
+        subject: &subject,
+        profile: Profile {
+            given_name: profile.given_name,
+            family_name: profile.family_name,
+            email: profile.email,
+        },
+        attributes: profile.attributes,
+    };
+    let context = Context {
+        scope: request.scope,
+        client: request.client,
+        now: state.clock.now(),
+    };
+    let mut tx = state.db.begin().await.map_err(|e| ApiError::internal(&e))?;
+    match admission::complete(&mut tx, &verified, &context, request.headers).await {
+        Ok(Completed { session, .. }) => {
+            tx.commit().await.map_err(|e| ApiError::internal(&e))?;
+            let mut response = redirect(return_to.as_str());
+            response
+                .headers_mut()
+                .append(header::SET_COOKIE, session.set_cookie);
+            Ok(response)
+        }
+        // Admission rolled its own writes back; the transaction holds nothing else.
+        Err(Completion::Refused(refusal)) => Ok(refusal.redirect()),
+        Err(Completion::Failed(error)) => Err(error),
+    }
 }
 
 #[cfg(test)]

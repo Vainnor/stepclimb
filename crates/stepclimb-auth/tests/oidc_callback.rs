@@ -646,6 +646,16 @@ async fn t11_userinfo_claims_override_the_id_tokens_except_sub_iss_and_aud() {
     assert_eq!(sign_in.claims["iss"], rp.mock.issuer().as_str());
     assert_eq!(sign_in.claims["aud"], rp.mock.client_id().as_str());
     assert_eq!(sign_in.claims["sub"], "mock-user-1");
+    // Each source is kept as it was, for the email rule of `ProviderSignIn::map`.
+    assert_eq!(
+        sign_in.id_token_claims["email"],
+        "test.student@example.test"
+    );
+    let userinfo = sign_in
+        .userinfo_claims
+        .as_ref()
+        .expect("userinfo was called");
+    assert_eq!(userinfo["email"], "other@example.test");
 }
 
 #[tokio::test]
@@ -656,6 +666,7 @@ async fn q3_userinfo_is_called_only_when_the_flag_is_on_and_the_endpoint_exists(
     rp.settings.userinfo = false;
     let sign_in = rp.sign_in().await.unwrap();
     assert_eq!(sign_in.claims["email"], "test.student@example.test");
+    assert_eq!(sign_in.userinfo_claims, None);
     assert!(rp.mock.requests_to(Endpoint::Userinfo).is_empty());
 
     rp.settings.userinfo = true;

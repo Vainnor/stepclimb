@@ -81,8 +81,7 @@ validates the ID token with the `openidconnect` crate, maps claims into an ident
   verifier are each 32 bytes from the OS CSPRNG in base64url, stored sealed in the flow's
   payload; the flow row names the provider (`auth_flows.provider_id`, `08` Data). The redirect
   URI is the configured public URL, never the request's `Host`, with the key percent-encoded as
-  one path segment. A key holding NUL and the local row are "not found" (B3). An enabled
-  `oauth2` provider answers `auth.provider_unavailable` until `06` adds its flow. A rate-limited
+  one path segment. A key holding NUL and the local row are "not found" (B3). A rate-limited
   start (B16) is a 303 to the sign-in route with `error=auth.rate_limited` and `Retry-After`,
   as this spec's API table lists, rather than `08` B22's 429 body, since the route is a browser
   navigation (recorded in `08` B22 and T20). The 303s carry `Cache-Control: no-store`. The
@@ -124,8 +123,7 @@ validates the ID token with the `openidconnect` crate, maps claims into an ident
   before it contacts the provider, in its own statement rather than in the transaction that later
   creates the session (B14, `08` B18): no database connection waits on the provider, and the
   provider's code is single use, so a flow kept after a failure could not be finished. No provider
-  is `auth.provider_not_found` with the flow left alone; an `oauth2` provider is
-  `auth.provider_unavailable` until `06` adds its flow. After the flow is taken every answer
+  is `auth.provider_not_found` with the flow left alone. After the flow is taken every answer
   clears the flow cookie, and a missing `state` is `auth.flow_invalid` like a different one. A
   callback with neither `code` nor `error`, a stored config that no longer reads and a discovery
   document that is no longer accepted are `auth.provider_error`. The token request accepts any 2xx
@@ -154,8 +152,8 @@ validates the ID token with the `openidconnect` crate, maps claims into an ident
   Userinfo (Q3) is called when the provider's `userinfo` flag is on and the document lists the
   endpoint, as a `GET` with the access token as a Bearer credential; only a 200 `application/json`
   object is read, so a signed userinfo response is `auth.provider_error`. The request trace
-  records the path and never the query, which carries `code` and `state` (`08` B4). Until I4, a
-  verified sign-in creates no session: the callback answers `auth.provider_unavailable`.
+  records the path and never the query, which carries `code` and `state` (`08` B4). I4 completes
+  a verified sign-in (B14).
 - **B12.** The identity's subject is the ID token's `sub`, a non-empty string, and is not
   configurable. Identities are `(provider_id, subject)`; the email address never identifies a
   person (`07-admission.md` B6).
@@ -179,6 +177,26 @@ validates the ID token with the `openidconnect` crate, maps claims into an ident
   `07-admission.md` B2 says.
 - **B15.** The provider's access token, refresh token and ID token are used during the callback
   and then dropped. None is stored or logged.
+- Coordinator decision (2026-11-15), for I4 (`stepclimb_auth::oidc::ProviderSignIn::map`,
+  `stepclimb_server::provider_callback::complete_sign_in`). Both provider kinds finish through
+  one function: the mapped subject and profile go to `admission::complete` (`07-admission.md`
+  B1), which admits and creates the session in one transaction, and the callback answers 303 to
+  the flow's `return_to` with `__Host-sc_session`, or admission's refusal redirect. The flow was
+  already deleted when the callback took it (I3's decision), so it is not in that transaction.
+  `return_to` is sanitized again when the flow row is read (`08` B19). `groups` is mapped but
+  not passed: admission's input has no place for it until `07-admission.md` steps 2 to 4. The
+  `email_verified` rule, applying `06-oauth2-and-vatsim-preset.md` B10's fail-closed decision
+  to OIDC: B11's merge decides which value counts, so userinfo's `email` and `email_verified`
+  win over the ID token's, and the email reaches admission only when (1) the merged
+  `email_verified` is exactly `true` and (2) every claims set the server read (the ID token's,
+  and userinfo's when it was called) that gives the same email under the mapping also says
+  `email_verified` is exactly `true`. Otherwise the email is dropped and the sign-in goes on
+  without it. Rule 2 keeps one source from vouching for the other's address: an ID token that
+  calls its email verified does not make a different or unconfirmed userinfo email look
+  verified, and a userinfo `true` does not overrule an ID token `false` for the same address.
+  A provider whose userinfo repeats the email without `email_verified` therefore signs people
+  in without an email; the mapping's `email_verified` pointer cannot be removed for `oidc`
+  (B13's default is always set).
 - **B16.** The start and callback routes are rate limited (`08-sessions-and-csrf.md` B22).
 
 ## API
@@ -191,7 +209,7 @@ document lists the codes in each operation's description.
 | Method and path | Request | Response | Error codes (in the redirect) | Permission |
 | --- | --- | --- | --- | --- |
 | `GET /auth/{provider}/start` | path `provider` = `identity_providers.key`; query `return_to?` | 303 to the provider's authorization endpoint; sets the flow cookie | `auth.provider_not_found`, `auth.provider_unavailable`, `auth.rate_limited` | none |
-| `GET /auth/{provider}/callback` | query `code, state` or `error, error_description?, state` | 303 to `return_to`; sets `__Host-sc_session`; clears the flow cookie | `auth.provider_not_found`, `auth.flow_invalid`, `auth.flow_expired`, `auth.provider_denied`, `auth.provider_error`, `auth.id_token_invalid`, `auth.subject_missing`, `auth.provider_unavailable` (an `oauth2` provider, and until I4 every verified sign-in), `auth.rate_limited`, and the admission refusals of `07-admission.md` | none |
+| `GET /auth/{provider}/callback` | query `code, state` or `error, error_description?, state` | 303 to `return_to`; sets `__Host-sc_session`; clears the flow cookie | `auth.provider_not_found`, `auth.flow_invalid`, `auth.flow_expired`, `auth.provider_denied`, `auth.provider_error`, `auth.id_token_invalid`, `auth.subject_missing`, `auth.rate_limited`, and the admission refusals of `07-admission.md` | none |
 
 The same two routes serve generic OAuth 2 providers (`06-oauth2-and-vatsim-preset.md`); the
 handler picks the flow by the provider's `kind`. Provider administration

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! `GET /auth/{provider}/callback` over the router, against the mock IdP on 127.0.0.1
-//! (docs/specs/m0/05-oidc.md B7 to B11, B16, T5 to T11; spec 08 B18).
+//! (docs/specs/m0/05-oidc.md B7 to B16, T4 to T15; spec 08 B18).
 //!
 //! Each sign-in starts at the start route, follows the authorization URL at the mock, which
 //! approves at once, and brings the mock's redirect back to the callback with the flow cookie.
@@ -17,6 +17,7 @@ use axum::{
     extract::ConnectInfo,
     http::{HeaderMap, Request, StatusCode, header},
 };
+use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use stepclimb_auth::{
@@ -31,7 +32,9 @@ use stepclimb_core::{
     id::{Uuid, new_id},
     organizations,
 };
-use stepclimb_mock_idp::{AuthorizeError, Endpoint, Fault, MockIdp, StatusCode as MockStatus};
+use stepclimb_mock_idp::{
+    AuthorizeError, Endpoint, Fault, MockIdp, MockUser, StatusCode as MockStatus,
+};
 use stepclimb_server::{
     AppState,
     client_ip::TrustedProxies,
@@ -119,6 +122,25 @@ impl Answer {
         self.assert_lands_on_sign_in(code);
         assert_eq!(self.set_cookies(), [CLEARED], "{self:?}");
     }
+
+    /// `name=value` of the session cookie this answer sets.
+    fn session_cookie(&self) -> Option<String> {
+        self.set_cookies()
+            .into_iter()
+            .find(|value| value.starts_with("__Host-sc_session="))
+            .map(|value| value.split(';').next().unwrap_or("").to_owned())
+    }
+
+    /// A completed sign-in (B14): 303 to `return_to`, `no-store`, the flow cookie cleared and a
+    /// session cookie set.
+    fn assert_signed_in(&self, return_to: &str) {
+        assert_eq!(self.status, StatusCode::SEE_OTHER, "{self:?}");
+        assert_eq!(self.location(), return_to, "{self:?}");
+        assert_eq!(self.headers[header::CACHE_CONTROL], "no-store");
+        let cookies = self.set_cookies();
+        assert!(cookies.contains(&CLEARED.to_owned()), "{self:?}");
+        assert!(self.session_cookie().is_some(), "a session: {self:?}");
+    }
 }
 
 /// A started sign-in: the flow cookie and the query the mock sends the browser back with.
@@ -154,23 +176,33 @@ impl Fixture {
         let mock = MockIdp::start().await.expect("the mock starts");
         let mock_clock = clock.clock();
         mock.set_time_source(move || mock_clock.now());
-        Self {
+        let fixture = Self {
             pool,
             clock,
             app,
             mock,
             org,
-        }
+        };
+        fixture.allow_signup(true).await;
+        fixture
     }
 
     /// An enabled provider of `kind` in `org` with `key`, pointing at the mock.
     async fn provider(&self, org: Uuid, key: &str, kind: &str) -> Uuid {
+        self.provider_with(org, key, kind, json!({})).await
+    }
+
+    /// [`Fixture::provider`] with `extra` members laid over the config.
+    async fn provider_with(&self, org: Uuid, key: &str, kind: &str, extra: Value) -> Uuid {
         let id = new_id();
-        let config = json!({
+        let mut config = json!({
             "issuer": self.mock.issuer(),
             "client_id": self.mock.client_id(),
             "client_secret": self.mock.client_secret(),
         });
+        for (name, value) in extra.as_object().expect("an object") {
+            config[name] = value.clone();
+        }
         let stored = oidc_config::validate(&config, UrlPolicy::new(true, true), None)
             .expect("a valid config")
             .seal(
@@ -212,9 +244,17 @@ impl Fixture {
 
     /// Start at `key` and follow the authorization URL at the mock.
     async fn start(&self, key: &str) -> Started {
-        let answer = self
-            .get(self.org, &format!("/auth/{key}/start"), None)
-            .await;
+        self.start_at(&format!("/auth/{key}/start"), key).await
+    }
+
+    /// Start at `path`, a start route of `key`, and follow the authorization URL at the mock.
+    async fn start_at(&self, path: &str, key: &str) -> Started {
+        self.start_in(self.org, path, key).await
+    }
+
+    /// [`Fixture::start_at`] in `org`.
+    async fn start_in(&self, org: Uuid, path: &str, key: &str) -> Started {
+        let answer = self.get(org, path, None).await;
         assert_eq!(answer.status, StatusCode::SEE_OTHER, "{answer:?}");
         let request = axum::http::Request::get(answer.location())
             .body(Vec::new())
@@ -251,6 +291,8 @@ impl Fixture {
         let query = match table {
             "auth_flows" => "SELECT count(*) FROM auth_flows",
             "sessions" => "SELECT count(*) FROM sessions",
+            "users" => "SELECT count(*) FROM users",
+            "identities" => "SELECT count(*) FROM identities",
             other => panic!("no count for {other}"),
         };
         sqlx::query_scalar(query)
@@ -261,6 +303,53 @@ impl Fixture {
 
     fn token_requests(&self) -> usize {
         self.mock.requests_to(Endpoint::Token).len()
+    }
+
+    /// The organization's `admission.signup_allowed` (`07-admission.md` B21).
+    async fn allow_signup(&self, allowed: bool) {
+        self.allow_signup_in(self.org, allowed).await;
+    }
+
+    /// [`Fixture::allow_signup`] for `org`.
+    async fn allow_signup_in(&self, org: Uuid, allowed: bool) {
+        sqlx::query(
+            "UPDATE organizations
+             SET settings = settings || jsonb_build_object('admission',
+                                jsonb_build_object('signup_allowed', $2::boolean))
+             WHERE id = $1",
+        )
+        .bind(org)
+        .bind(allowed)
+        .execute(&self.pool)
+        .await
+        .expect("set sign-up");
+    }
+
+    /// `GET /api/v1/me` in `org` with `cookie`: the status and the body.
+    async fn me(&self, org: Uuid, cookie: &str) -> (StatusCode, Value) {
+        let request = Request::get("/api/v1/me")
+            .header(TEST_ORG_HEADER, org.to_string())
+            .header(header::COOKIE, cookie)
+            .body(Body::empty())
+            .expect("a request");
+        let response = self.app.clone().oneshot(request).await.expect("an answer");
+        let status = response.status();
+        let body = response.into_body().collect().await.expect("a body");
+        let body = serde_json::from_slice(&body.to_bytes()).unwrap_or(Value::Null);
+        (status, body)
+    }
+
+    /// The email of the user whose identity has `subject`, in `org`.
+    async fn email_of(&self, org: Uuid, subject: &str) -> Option<String> {
+        sqlx::query_scalar(
+            "SELECT u.email FROM users u JOIN identities i ON i.user_id = u.id \
+             WHERE i.org_id = $1 AND i.subject = $2",
+        )
+        .bind(org)
+        .bind(subject)
+        .fetch_one(&self.pool)
+        .await
+        .expect("the user")
     }
 }
 
@@ -284,11 +373,16 @@ fn param(query: &str, name: &str) -> String {
         .expect("the parameter")
 }
 
+/// T13, T4: a full sign-in ends with a session cookie and a 303 to `return_to`; the flow is
+/// used, the stored PKCE verifier was sent, and `GET /api/v1/me` with the cookie is the new
+/// user, named and mailed from the ID token's claims (T12's defaults).
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn a_verified_sign_in_reaches_completion_which_creates_no_session_yet(pool: PgPool) {
+async fn t13_a_full_sign_in_creates_the_user_and_the_session(pool: PgPool) {
     let fixture = Fixture::new(pool).await;
-    fixture.provider(fixture.org, "mock", "oidc").await;
-    let started = fixture.start("mock").await;
+    let provider = fixture.provider(fixture.org, "mock", "oidc").await;
+    let started = fixture
+        .start_at("/auth/mock/start?return_to=/c/s1", "mock")
+        .await;
     let flows: Vec<(Uuid, Vec<u8>)> = sqlx::query_as("SELECT id, payload FROM auth_flows")
         .fetch_all(&fixture.pool)
         .await
@@ -306,7 +400,7 @@ async fn a_verified_sign_in_reaches_completion_which_creates_no_session_yet(pool
         .callback("mock", &started.back, Some(&started.cookie))
         .await;
 
-    answer.assert_refused("auth.provider_unavailable");
+    answer.assert_signed_in("/c/s1");
     let token = &fixture.mock.requests_to(Endpoint::Token)[0];
     assert_eq!(
         token.form_param("code_verifier").as_deref(),
@@ -319,7 +413,24 @@ async fn a_verified_sign_in_reaches_completion_which_creates_no_session_yet(pool
     );
     assert_eq!(fixture.mock.requests_to(Endpoint::Userinfo).len(), 1);
     assert_eq!(fixture.count("auth_flows").await, 0, "the flow is used");
-    assert_eq!(fixture.count("sessions").await, 0, "no session yet");
+    assert_eq!(fixture.count("sessions").await, 1);
+    let identities: Vec<(Uuid, String, Value)> =
+        sqlx::query_as("SELECT provider_id, subject, attributes FROM identities WHERE org_id = $1")
+            .bind(fixture.org)
+            .fetch_all(&fixture.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        identities,
+        [(provider, "mock-user-1".to_owned(), json!({}))]
+    );
+    let cookie = answer.session_cookie().expect("a session");
+    let (status, me) = fixture.me(fixture.org, &cookie).await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    assert_eq!(me["user"]["given_name"], "Test");
+    assert_eq!(me["user"]["family_name"], "Student");
+    assert_eq!(me["user"]["email"], "test.student@example.test");
+    assert_eq!(me["user"]["source"], "idp");
 
     // T6: the same callback again finds no flow.
     let replay = fixture
@@ -331,6 +442,250 @@ async fn a_verified_sign_in_reaches_completion_which_creates_no_session_yet(pool
         1,
         "the replay reached no provider"
     );
+
+    // A second sign-in is the same user, through the same identity.
+    fixture.sign_in().await.assert_signed_in("/");
+    assert_eq!(fixture.count("users").await, 1);
+    assert_eq!(fixture.count("identities").await, 1);
+}
+
+/// T12: a custom `attributes.department` stores the claim, a pointer to a missing claim leaves
+/// its attribute out, a numeric `given_name` is ignored, and the subject is `sub`.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t12_claims_are_mapped_by_the_providers_pointers(pool: PgPool) {
+    let fixture = Fixture::new(pool).await;
+    let claims = json!({
+        "claims": { "attributes": { "department": "/department", "team": "/team/name" } },
+    });
+    fixture
+        .provider_with(fixture.org, "mock", "oidc", claims)
+        .await;
+    fixture
+        .mock
+        .set_id_token_claim("department", Some(json!("Operations")));
+    fixture
+        .mock
+        .set_id_token_claim("given_name", Some(json!(7)));
+    fixture
+        .mock
+        .set_userinfo_claim("given_name", Some(json!(7)));
+
+    fixture.sign_in().await.assert_signed_in("/");
+
+    let (subject, attributes, given_name, family_name): (String, Value, String, String) =
+        sqlx::query_as(
+            "SELECT i.subject, i.attributes, u.given_name, u.family_name \
+             FROM identities i JOIN users u ON u.id = i.user_id WHERE i.org_id = $1",
+        )
+        .bind(fixture.org)
+        .fetch_one(&fixture.pool)
+        .await
+        .unwrap();
+    assert_eq!(subject, "mock-user-1");
+    assert_eq!(attributes, json!({ "department": "Operations" }));
+    assert_eq!(given_name, "", "a numeric given_name is absent");
+    assert_eq!(family_name, "Student");
+}
+
+/// B13, B14: when `email_verified` is not exactly `true`, or the email comes from a source
+/// that does not itself vouch for it, the user is created without the email.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_email_the_provider_does_not_vouch_for_never_reaches_admission(pool: PgPool) {
+    let fixture = Fixture::new(pool).await;
+    fixture.provider(fixture.org, "mock", "oidc").await;
+    let sign_in_as = |subject: &'static str| {
+        fixture.mock.set_id_token_claim("sub", Some(json!(subject)));
+        fixture.mock.set_userinfo_claim("sub", Some(json!(subject)));
+        fixture.sign_in()
+    };
+
+    // The ID token and userinfo both say `false`.
+    fixture
+        .mock
+        .set_id_token_claim("email_verified", Some(json!(false)));
+    fixture
+        .mock
+        .set_userinfo_claim("email_verified", Some(json!(false)));
+    sign_in_as("unverified").await.assert_signed_in("/");
+    assert_eq!(fixture.email_of(fixture.org, "unverified").await, None);
+
+    // Userinfo's `true` does not overrule the ID token's `false` for the same address.
+    fixture
+        .mock
+        .set_userinfo_claim("email_verified", Some(json!(true)));
+    sign_in_as("overruled").await.assert_signed_in("/");
+    assert_eq!(fixture.email_of(fixture.org, "overruled").await, None);
+
+    // Userinfo's `false` wins the merge over the ID token's `true`, even without an address.
+    fixture.mock.clear_overrides();
+    fixture.mock.set_userinfo_claim("email", None);
+    fixture
+        .mock
+        .set_userinfo_claim("email_verified", Some(json!(false)));
+    sign_in_as("withdrawn").await.assert_signed_in("/");
+    assert_eq!(fixture.email_of(fixture.org, "withdrawn").await, None);
+
+    // The ID token's `true` does not vouch for a userinfo address that says nothing.
+    fixture.mock.clear_overrides();
+    fixture
+        .mock
+        .set_userinfo_claim("email", Some(json!("other.student@example.test")));
+    fixture.mock.set_userinfo_claim("email_verified", None);
+    sign_in_as("borrowed").await.assert_signed_in("/");
+    assert_eq!(fixture.email_of(fixture.org, "borrowed").await, None);
+
+    // T11: a userinfo address userinfo vouches for overrides the ID token's.
+    fixture
+        .mock
+        .set_userinfo_claim("email_verified", Some(json!(true)));
+    sign_in_as("overridden").await.assert_signed_in("/");
+    assert_eq!(
+        fixture.email_of(fixture.org, "overridden").await.as_deref(),
+        Some("other.student@example.test")
+    );
+}
+
+/// T14: an admission refusal (sign-up off, a new person) redirects with `auth.signup_closed`,
+/// sets no session and creates no user or identity.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t14_sign_up_off_refuses_a_new_person(pool: PgPool) {
+    let fixture = Fixture::new(pool).await;
+    fixture.provider(fixture.org, "mock", "oidc").await;
+    fixture.allow_signup(false).await;
+
+    fixture.sign_in().await.assert_refused("auth.signup_closed");
+
+    assert_eq!(fixture.count("sessions").await, 0);
+    assert_eq!(fixture.count("users").await, 0);
+    assert_eq!(fixture.count("identities").await, 0);
+    assert_eq!(fixture.count("auth_flows").await, 0, "the flow is used");
+}
+
+/// `07-admission.md` B4: a known identity whose user is suspended is refused with
+/// `auth.suspended` and gets no session.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_suspended_user_is_refused(pool: PgPool) {
+    let fixture = Fixture::new(pool).await;
+    fixture.provider(fixture.org, "mock", "oidc").await;
+    fixture.sign_in().await.assert_signed_in("/");
+    sqlx::query("UPDATE users SET status = 'suspended' WHERE org_id = $1")
+        .bind(fixture.org)
+        .execute(&fixture.pool)
+        .await
+        .unwrap();
+    let sessions = fixture.count("sessions").await;
+
+    fixture.sign_in().await.assert_refused("auth.suspended");
+
+    assert_eq!(fixture.count("sessions").await, sessions, "no new session");
+}
+
+/// Cross-organization (T2's callback half, `07-admission.md` B4): organization B's provider of
+/// the same key cannot finish A's flow, A's session is not B's, and the same `sub` signing in
+/// at B's provider is another person in B, never A's user.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn another_organization_neither_finishes_the_flow_nor_shares_the_user(pool: PgPool) {
+    let fixture = Fixture::new(pool).await;
+    fixture.provider(fixture.org, "mock", "oidc").await;
+    let other = organizations::create(&fixture.pool, "org-b", "Org B", now())
+        .await
+        .unwrap()
+        .id;
+    fixture.provider(other, "mock", "oidc").await;
+    let started = fixture.start("mock").await;
+
+    let crossed = fixture
+        .get(
+            other,
+            &format!("/auth/mock/callback?{}", started.back),
+            Some(&started.cookie),
+        )
+        .await;
+    crossed.assert_refused("auth.flow_invalid");
+    assert_eq!(fixture.token_requests(), 0, "nothing reached the provider");
+    assert_eq!(fixture.count("sessions").await, 0);
+
+    let answer = fixture
+        .callback("mock", &started.back, Some(&started.cookie))
+        .await;
+    answer.assert_signed_in("/");
+    let cookie = answer.session_cookie().expect("a session");
+    let (status, _) = fixture.me(other, &cookie).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "A's session is not B's");
+    let users: Vec<Uuid> = sqlx::query_scalar("SELECT org_id FROM users")
+        .fetch_all(&fixture.pool)
+        .await
+        .unwrap();
+    assert_eq!(users, [fixture.org]);
+
+    // The same mock user, the same `sub`, signs in at B.
+    fixture.allow_signup_in(other, true).await;
+    let at_b = fixture.start_in(other, "/auth/mock/start", "mock").await;
+    let answer = fixture
+        .get(
+            other,
+            &format!("/auth/mock/callback?{}", at_b.back),
+            Some(&at_b.cookie),
+        )
+        .await;
+    answer.assert_signed_in("/");
+    let users: Vec<(Uuid, Uuid)> = sqlx::query_as("SELECT id, org_id FROM users ORDER BY org_id")
+        .fetch_all(&fixture.pool)
+        .await
+        .unwrap();
+    let mut orgs: Vec<Uuid> = users.iter().map(|(_, org)| *org).collect();
+    orgs.sort();
+    let mut expected = vec![fixture.org, other];
+    expected.sort();
+    assert_eq!(orgs, expected, "one user in each organization");
+    let identities: Vec<(Uuid, Uuid, Uuid, String)> = sqlx::query_as(
+        "SELECT i.org_id, i.user_id, u.org_id, i.subject FROM identities i \
+         JOIN users u ON u.id = i.user_id ORDER BY i.org_id",
+    )
+    .fetch_all(&fixture.pool)
+    .await
+    .unwrap();
+    assert_eq!(identities.len(), 2, "{identities:?}");
+    for (identity_org, user_id, user_org, subject) in &identities {
+        assert_eq!(subject, "mock-user-1");
+        assert_eq!(
+            identity_org, user_org,
+            "an identity belongs to its own organization's user"
+        );
+        let owner = users
+            .iter()
+            .find(|(id, _)| id == user_id)
+            .expect("the user");
+        assert_eq!(owner.1, *identity_org);
+    }
+    let b_user = users.iter().find(|(_, org)| *org == other).unwrap().0;
+    let b_identity = identities.iter().find(|i| i.0 == other).unwrap();
+    assert_eq!(b_identity.1, b_user, "B's identity is B's user");
+    let cookie = answer.session_cookie().expect("a session");
+    let (status, me) = fixture.me(other, &cookie).await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    assert_eq!(me["user"]["id"], json!(b_user.to_string()));
+}
+
+/// B14, spec 08 B19: the flow's `return_to` is sanitized again when the flow is read, so a
+/// stored one the column's check lets through but a browser would resolve to another host
+/// (`/a/..//evil.example`) lands on `/`.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_return_to_is_sanitized_again_when_the_flow_is_read(pool: PgPool) {
+    let fixture = Fixture::new(pool).await;
+    fixture.provider(fixture.org, "mock", "oidc").await;
+    let started = fixture
+        .start_at("/auth/mock/start?return_to=/c/s1", "mock")
+        .await;
+    sqlx::query("UPDATE auth_flows SET return_to = '/a/..//evil.example/x'")
+        .execute(&fixture.pool)
+        .await
+        .unwrap();
+
+    fixture
+        .callback("mock", &started.back, Some(&started.cookie))
+        .await
+        .assert_signed_in("/");
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
@@ -566,10 +921,7 @@ async fn t9_a_refused_id_token_is_id_token_invalid_and_a_bad_sub_subject_missing
 async fn t10_a_rotated_key_is_found_after_the_refetch_interval(pool: PgPool) {
     let fixture = Fixture::new(pool).await;
     fixture.provider(fixture.org, "mock", "oidc").await;
-    fixture
-        .sign_in()
-        .await
-        .assert_refused("auth.provider_unavailable");
+    fixture.sign_in().await.assert_signed_in("/");
 
     fixture.mock.rotate_signing_key().unwrap();
     fixture
@@ -579,10 +931,7 @@ async fn t10_a_rotated_key_is_found_after_the_refetch_interval(pool: PgPool) {
     fixture
         .clock
         .advance(stepclimb_auth::oidc::JWKS_REFETCH_INTERVAL);
-    fixture
-        .sign_in()
-        .await
-        .assert_refused("auth.provider_unavailable");
+    fixture.sign_in().await.assert_signed_in("/");
     assert_eq!(fixture.mock.requests_to(Endpoint::Jwks).len(), 2);
 }
 
@@ -625,10 +974,31 @@ async fn b16_the_callback_is_rate_limited_before_anything_runs(pool: PgPool) {
     assert_eq!(fixture.token_requests(), 0);
 }
 
+/// T15 (B15): after a sign-in and a refused one, no log line at any level holds a token the
+/// mock issued, the code, the state, the flow cookie, the session cookie or the client secret,
+/// and no column of the flows, sessions, identities or users tables holds a token.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn no_log_line_carries_a_token_the_code_or_a_secret(pool: PgPool) {
+async fn t15_no_log_line_or_row_carries_a_token_the_code_or_a_secret(pool: PgPool) {
     let fixture = Fixture::new(pool).await;
-    fixture.provider(fixture.org, "mock", "oidc").await;
+    let attributes = json!({ "claims": { "attributes": { "department": "/department" } } });
+    fixture
+        .provider_with(fixture.org, "mock", "oidc", attributes)
+        .await;
+    // Values distinct enough that a hit in the log can only be the claim.
+    let profile = [
+        "zqmail.student@example.test",
+        "Zqgivenname",
+        "Zqfamilyname",
+        "Zqdepartment",
+    ];
+    fixture.mock.set_user(
+        MockUser::new("mock-user-1")
+            .with_claim("email", json!(profile[0]))
+            .with_claim("email_verified", json!(true))
+            .with_claim("given_name", json!(profile[1]))
+            .with_claim("family_name", json!(profile[2]))
+            .with_claim("department", json!(profile[3])),
+    );
     let started = fixture.start("mock").await;
     let (log, guard) = capture();
     let answer = fixture
@@ -643,20 +1013,24 @@ async fn no_log_line_carries_a_token_the_code_or_a_secret(pool: PgPool) {
         .await;
     drop(guard);
 
-    answer.assert_refused("auth.provider_unavailable");
+    answer.assert_signed_in("/");
     refused.assert_refused("auth.provider_error");
     let log = log.text();
-    assert!(
-        log.contains("does not complete provider sign-in yet"),
-        "{log}"
-    );
+    assert!(log.contains("admission admitted the sign-in"), "{log}");
     assert!(log.contains("userinfo sub"), "{log}");
-    let mut secrets = vec![fixture.mock.client_secret()];
-    for tokens in fixture.mock.issued_tokens() {
-        secrets.push(tokens.access_token);
-        secrets.push(tokens.refresh_token);
-        secrets.push(tokens.id_token.expect("an ID token"));
+    let session = answer.session_cookie().expect("a session");
+    let mut secrets = vec![
+        fixture.mock.client_secret(),
+        session.trim_start_matches("__Host-sc_session=").to_owned(),
+    ];
+    let mut tokens = Vec::new();
+    for issued in fixture.mock.issued_tokens() {
+        tokens.push(issued.access_token);
+        tokens.push(issued.refresh_token);
+        tokens.push(issued.id_token.expect("an ID token"));
     }
+    assert_eq!(tokens.len(), 6, "two exchanges");
+    secrets.extend(tokens.iter().cloned());
     for run in [&started, &second] {
         secrets.push(param(&run.back, "code"));
         secrets.push(param(&run.back, "state"));
@@ -664,6 +1038,47 @@ async fn no_log_line_carries_a_token_the_code_or_a_secret(pool: PgPool) {
     }
     for secret in secrets {
         assert!(!log.contains(&secret), "a secret reached the log");
+    }
+    // The claims did reach the user and identity, and still none of them is logged (B4 of
+    // spec 08, `07-admission.md` B2).
+    let (email, department): (Option<String>, Value) = sqlx::query_as(
+        "SELECT u.email, i.attributes -> 'department' FROM users u \
+         JOIN identities i ON i.user_id = u.id WHERE u.org_id = $1",
+    )
+    .bind(fixture.org)
+    .fetch_one(&fixture.pool)
+    .await
+    .expect("the user");
+    assert_eq!(email.as_deref(), Some(profile[0]));
+    assert_eq!(department, json!(profile[3]));
+    for value in profile {
+        assert!(
+            !log.contains(value),
+            "a profile value reached the log: {value}"
+        );
+    }
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT row_to_json(f)::text FROM auth_flows f \
+         UNION ALL SELECT row_to_json(s)::text FROM sessions s \
+         UNION ALL SELECT row_to_json(i)::text FROM identities i \
+         UNION ALL SELECT row_to_json(u)::text FROM users u",
+    )
+    .fetch_all(&fixture.pool)
+    .await
+    .expect("read rows");
+    assert!(
+        rows.len() >= 3,
+        "a session, an identity and a user: {rows:?}"
+    );
+    for token in &tokens {
+        // A bytea column shows as hex in `row_to_json`.
+        let hex: String = token.bytes().map(|byte| format!("{byte:02x}")).collect();
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row.contains(token.as_str()) || row.contains(&hex)),
+            "a token reached a row"
+        );
     }
 }
 

@@ -96,6 +96,15 @@ impl fmt::Debug for MappedProfile {
     }
 }
 
+/// A sign-in's subject and mapped profile, what the callback hands admission for either
+/// provider kind (`07-admission.md` B1).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MappedSignIn {
+    /// The identity's subject.
+    pub subject: String,
+    pub profile: MappedProfile,
+}
+
 /// Read `mapping` out of `document`, by the rules of the module table.
 #[must_use]
 pub fn profile(document: &Value, mapping: &ProfileMapping) -> MappedProfile {

@@ -16,16 +16,14 @@
 //!    token or userinfo request is `auth.provider_error`; a body without a usable subject is
 //!    `auth.subject_missing`. When the config maps `email_verified` and the body's value is not
 //!    `true`, the email is dropped (B10);
-//! 2. hands the mapped sign-in to admission, which admits or refuses it; an admitted user gets
-//!    a session and a 303 to the flow's `return_to` ([`complete_sign_in`]).
+//! 2. hands the mapped sign-in to the completion both kinds share
+//!    ([`crate::provider_callback::complete_sign_in`]): admission admits or refuses it, and an
+//!    admitted user gets a session and a 303 to the flow's `return_to`.
 //!
 //! Refusals are logged at warn with the provider's key and the reason, never with a URL, the
 //! `code`, a token or the client secret.
 
-use axum::{
-    http::{HeaderMap, header},
-    response::Response,
-};
+use axum::response::Response;
 use stepclimb_auth::{
     oauth2_config::{MappedSignIn, Oauth2Config, ProviderRow},
     oauth2_flow::{CallbackError, CodeCallback, FlowSecrets, authorization_url, redeem_code},
@@ -39,11 +37,9 @@ use stepclimb_core::{
 
 use crate::{
     AppState,
-    admission::{self, Completed, Completion, Context, Profile, Verified},
-    audit::ClientAddress,
     error::ApiError,
-    provider_callback::code,
-    provider_sign_in::{Authorization, redirect, redirect_uri, to_sign_in},
+    provider_callback::{Request, code, complete_sign_in},
+    provider_sign_in::{Authorization, redirect_uri, to_sign_in},
 };
 
 /// The start's authorization URL and flow secrets for the `oauth2` `provider`, or `None` when
@@ -83,16 +79,6 @@ fn stored_config(provider: &IdentityProvider, key: &str) -> Option<Oauth2Config>
             tracing::warn!(provider = key, %error, "the provider's stored config does not read");
         })
         .ok()
-}
-
-/// What the callback knows of its request.
-#[derive(Clone, Copy)]
-pub(crate) struct Request<'a> {
-    pub(crate) scope: OrgScope,
-    /// The client address, for the audit entry of a just-in-time identity.
-    pub(crate) client: ClientAddress,
-    /// The request's headers, whose session cookies the new session ends (spec 08 B7).
-    pub(crate) headers: &'a HeaderMap,
 }
 
 /// The callback's `oauth2` steps, once the route has checked the flow's provider, the `state`
@@ -155,53 +141,6 @@ fn refusal_code(error: &CallbackError) -> &'static str {
     match error {
         CallbackError::Subject(_) => code::AUTH_SUBJECT_MISSING,
         CallbackError::Exchange(_) | CallbackError::Userinfo(_) => code::AUTH_PROVIDER_ERROR,
-    }
-}
-
-/// Finish a mapped provider sign-in (B10; `05-oidc.md` B14): admission (`07-admission.md` B1)
-/// and, for an admitted user, the session (spec 08 B7) in one transaction, then a 303 to the
-/// flow's `return_to` with the session cookie. A refusal is admission's 303 to the sign-in page
-/// with its code and no session; a fault rolls the transaction back and is 500.
-///
-/// The flow was deleted when the route took it, before the provider was called, so it is not
-/// in this transaction: a provider's code is single use, and a flow kept after a failure here
-/// could not be finished anyway.
-async fn complete_sign_in(
-    state: &AppState,
-    request: &Request<'_>,
-    provider: &IdentityProvider,
-    return_to: &ReturnTo,
-    sign_in: MappedSignIn,
-) -> Result<Response, ApiError> {
-    let MappedSignIn { subject, profile } = sign_in;
-    let verified = Verified {
-        provider,
-        subject: &subject,
-        profile: Profile {
-            given_name: profile.given_name,
-            family_name: profile.family_name,
-            email: profile.email,
-        },
-        attributes: profile.attributes,
-    };
-    let context = Context {
-        scope: request.scope,
-        client: request.client,
-        now: state.clock.now(),
-    };
-    let mut tx = state.db.begin().await.map_err(|e| ApiError::internal(&e))?;
-    match admission::complete(&mut tx, &verified, &context, request.headers).await {
-        Ok(Completed { session, .. }) => {
-            tx.commit().await.map_err(|e| ApiError::internal(&e))?;
-            let mut response = redirect(return_to.as_str());
-            response
-                .headers_mut()
-                .append(header::SET_COOKIE, session.set_cookie);
-            Ok(response)
-        }
-        // Admission rolled its own writes back; the transaction holds nothing else.
-        Err(Completion::Refused(refusal)) => Ok(refusal.redirect()),
-        Err(Completion::Failed(error)) => Err(error),
     }
 }
 

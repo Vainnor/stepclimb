@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::*;
 use crate::json_pointer::JsonPointer;
@@ -272,4 +272,133 @@ fn the_state_matches_only_itself() {
     for other in ["abcdeg", "abcde", "abcdefa", "", "ABCDEF"] {
         assert!(!secrets.state_matches(other), "{other}");
     }
+}
+
+/// A verified sign-in whose ID token carries `id_token` and, when given, whose userinfo answer
+/// carries `userinfo`, merged as `redeem_code` merges them (B11).
+fn sign_in(id_token: Value, userinfo: Option<Value>) -> ProviderSignIn {
+    let object = |value: Value| match value {
+        Value::Object(map) => map,
+        other => panic!("not an object: {other}"),
+    };
+    let mut id_token = object(id_token);
+    id_token.insert("sub".into(), json!("mock-user-1"));
+    let userinfo = userinfo.map(object);
+    let claims = match &userinfo {
+        Some(userinfo) => merge_claims(id_token.clone(), userinfo.clone()),
+        None => id_token.clone(),
+    };
+    ProviderSignIn {
+        subject: "mock-user-1".into(),
+        claims,
+        id_token_claims: id_token,
+        userinfo_claims: userinfo,
+    }
+}
+
+fn mapped_email(id_token: Value, userinfo: Option<Value>) -> Option<String> {
+    sign_in(id_token, userinfo)
+        .map(&settings(&["openid"]).claims)
+        .profile
+        .email
+}
+
+const EMAIL: &str = "test.student@example.test";
+const OTHER: &str = "other.student@example.test";
+
+/// B13, spec 06 B10: an email is kept only when `email_verified` is exactly `true`.
+#[test]
+fn an_email_is_kept_only_when_email_verified_is_exactly_true() {
+    assert_eq!(
+        mapped_email(json!({ "email": EMAIL, "email_verified": true }), None).as_deref(),
+        Some(EMAIL)
+    );
+    for verified in [json!(false), json!("true"), json!(1), Value::Null] {
+        let token = json!({ "email": EMAIL, "email_verified": verified });
+        assert_eq!(mapped_email(token, None), None, "{verified}");
+    }
+    assert_eq!(mapped_email(json!({ "email": EMAIL }), None), None);
+}
+
+/// B11, T11: a userinfo email the userinfo answer itself calls verified overrides the ID
+/// token's.
+#[test]
+fn a_verified_userinfo_email_overrides_the_id_tokens() {
+    let token = json!({ "email": EMAIL, "email_verified": true });
+    let userinfo = json!({ "sub": "mock-user-1", "email": OTHER, "email_verified": true });
+    assert_eq!(mapped_email(token, Some(userinfo)).as_deref(), Some(OTHER));
+    // Userinfo silent on both: the ID token's verified email stands.
+    let token = json!({ "email": EMAIL, "email_verified": true });
+    let userinfo = json!({ "sub": "mock-user-1", "given_name": "Test" });
+    assert_eq!(mapped_email(token, Some(userinfo)).as_deref(), Some(EMAIL));
+}
+
+/// No claim from one source makes another's email look verified, and a source that calls the
+/// address unverified wins over one that calls it verified, whichever it is.
+#[test]
+fn no_source_vouches_for_an_email_another_source_gave_or_doubted() {
+    let sub = "mock-user-1";
+    for (token, userinfo) in [
+        // The ID token's `true` does not carry over to userinfo's different email.
+        (
+            json!({ "email": EMAIL, "email_verified": true }),
+            json!({ "sub": sub, "email": OTHER }),
+        ),
+        // Nor to the same email userinfo sends without vouching for it.
+        (
+            json!({ "email": EMAIL, "email_verified": true }),
+            json!({ "sub": sub, "email": EMAIL }),
+        ),
+        (
+            json!({ "email": EMAIL, "email_verified": true }),
+            json!({ "sub": sub, "email": EMAIL, "email_verified": "true" }),
+        ),
+        // Userinfo saying `true` does not overrule the ID token's `false` for the same email.
+        (
+            json!({ "email": EMAIL, "email_verified": false }),
+            json!({ "sub": sub, "email_verified": true }),
+        ),
+        (
+            json!({ "email": EMAIL, "email_verified": false }),
+            json!({ "sub": sub, "email": EMAIL, "email_verified": true }),
+        ),
+        // Userinfo's `false` wins the merge over the ID token's `true`.
+        (
+            json!({ "email": EMAIL, "email_verified": true }),
+            json!({ "sub": sub, "email_verified": false }),
+        ),
+        // Userinfo's verified flag without an email does not vouch for the ID token's.
+        (
+            json!({ "email": EMAIL }),
+            json!({ "sub": sub, "email_verified": true }),
+        ),
+    ] {
+        assert_eq!(
+            mapped_email(token.clone(), Some(userinfo.clone())),
+            None,
+            "{token} {userinfo}"
+        );
+    }
+}
+
+/// B12, B13 (T12): the subject is the ID token's `sub`; the other fields follow the mapping,
+/// and a field of the wrong type is absent.
+#[test]
+fn the_subject_is_sub_and_the_fields_follow_the_mapping() {
+    let mut mapping = settings(&["openid"]).claims;
+    mapping
+        .attributes
+        .insert("department".into(), pointer("/department"));
+    mapping
+        .attributes
+        .insert("missing".into(), pointer("/nope"));
+    let token = json!({ "given_name": 7, "family_name": "Student", "department": "Ops" });
+    let mapped = sign_in(token, None).map(&mapping);
+    assert_eq!(mapped.subject, "mock-user-1");
+    assert_eq!(mapped.profile.given_name, None);
+    assert_eq!(mapped.profile.family_name.as_deref(), Some("Student"));
+    assert_eq!(
+        Value::Object(mapped.profile.attributes),
+        json!({ "department": "Ops" })
+    );
 }
