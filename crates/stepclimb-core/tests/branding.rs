@@ -359,8 +359,8 @@ async fn refresh_rerenders_another_generators_record_for_the_scope_only(pool: Pg
     )
     .await
     .unwrap();
-    age_record(&pool, a, GENERATOR_VERSION + 1, None).await;
-    age_record(&pool, b, GENERATOR_VERSION + 1, None).await;
+    age_record(&pool, a, GENERATOR_VERSION - 1, None).await;
+    age_record(&pool, b, GENERATOR_VERSION - 1, None).await;
     let (_, a_time) = stored(&pool, a).await;
     let b_before = stored(&pool, b).await;
     let entries = audit_count(&pool).await;
@@ -390,6 +390,12 @@ async fn refresh_rerenders_another_generators_record_for_the_scope_only(pool: Pg
     // This generator's record is left alone.
     let again = branding::refresh(&pool, scope(a)).await.unwrap();
     assert!(again.is_none(), "{again:?}");
+    // So is a newer generator's: that release re-renders its own records.
+    age_record(&pool, a, GENERATOR_VERSION + 1, None).await;
+    let newer = stored(&pool, a).await;
+    let left = branding::refresh(&pool, scope(a)).await.unwrap();
+    assert!(left.is_none(), "{left:?}");
+    assert_eq!(stored(&pool, a).await, newer);
     let missing = branding::refresh(&pool, scope(new_id())).await;
     assert!(matches!(missing, Err(Error::NotFound)), "{missing:?}");
     let none = insert_org(&pool, "org-c").await;

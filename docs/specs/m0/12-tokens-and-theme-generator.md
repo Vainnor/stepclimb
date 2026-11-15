@@ -203,14 +203,15 @@ it at `packages/tokens/tokens/`. See Open question Q1.
 - **B28.** A stylesheet must declare every token the running release's bundle uses (11 Q5), and a
   new generator version may add tokens. Saved branding whose `generator` differs from
   `GENERATOR_VERSION` is never served as stored: the server re-renders it from the stored inputs
-  with the running generator. At startup, before listening, it stores each re-rendered record
-  with its new `css_hash`, writing neither `updated_at` nor an audit entry (nobody changed the
-  branding); a read that still finds such a record (written by another release after this one
-  started) re-renders it for that answer. Stored inputs that fail the running generator, by its
-  contrast guard or its input checks, keep their inputs and default appearance and get the
-  default brand's stylesheet, hash and reports, with the failing reports in `fallback`; startup
-  logs that once at warn, naming the organization and each failing pair. Saving branding again
-  replaces the fallback.
+  with the running generator. At startup, before listening, it stores each re-rendered record an
+  older generator wrote with its new `css_hash`, writing neither `updated_at` nor an audit entry
+  (nobody changed the branding); a record a newer generator wrote is left for that release. A
+  read that finds a record of another version (a newer release's, or one written by another
+  release after this one started) re-renders it for that answer. Stored inputs that fail the
+  running generator, by its contrast guard or its input checks, keep their inputs and default
+  appearance and get the default brand's stylesheet, hash and reports, with the failing reports
+  in `fallback`; every start logs each organization whose record holds a fallback at warn,
+  naming it and each failing pair. Saving branding again replaces the fallback.
 
 ## API
 
@@ -294,7 +295,8 @@ Server (crate `tests/`, `#[sqlx::test]`):
   `/theme.css` and `GET` before startup re-renders it; startup stores it with the new hash and
   writes neither `updated_at` nor an audit entry, and another organization's record is unchanged.
 - **T22.** (B28) Stored inputs the running generator refuses are served the default brand's
-  stylesheet with `fallback` set, before and after startup; saving branding again clears it.
+  stylesheet with `fallback` set, before and after startup; each start warns once naming the
+  organization; saving branding again clears it and the warning.
 - **T23.** (B27, 11 B21) A user with no theme chosen, signed in or not, gets the organization's
   default in `index.html` and in `/me`; their own choice, `system` included, wins; one
   organization's default never reaches another's pages.
@@ -547,6 +549,17 @@ of them.
   The warning names the organization's id and each failing pair. Under today's generator no
   accepted input fails (the 2026-11-14 decision on the guard), so this path is tested with a
   doctored contrast failure and with a stored chroma above the 0.5 cap.
+- **Coordinator decision (2026-11-15, review of PR #193): only older records are stored.**
+  Startup stores re-renders of records an older generator wrote (`generator <
+  GENERATOR_VERSION`); a newer release's record is left alone and re-rendered in memory for each
+  read, so a rollback running beside a newer release never rewrites that release's records. A
+  record with a fallback is warned about on every start, not only the start that made it, so the
+  log keeps saying so until an admin saves branding again; the scan is one read of each
+  organization's record.
+- **Coordinator decision (2026-11-15, review of PR #193): `/me` never fails on branding.** A
+  record `/me` cannot read is logged at error and its `default_appearance` answers `system`, as
+  the page the server writes already did; `GET /api/v1/admin/branding` and `/theme.css` still
+  answer 500 for it.
 - **Coordinator decision (2026-11-15): no `updated_at`.** The re-render leaves
   `organizations.updated_at` alone, as it writes no audit entry: neither an admin nor an API
   client changed the organization.

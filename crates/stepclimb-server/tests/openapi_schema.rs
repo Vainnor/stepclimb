@@ -81,6 +81,18 @@ fn a_one_of_takes_exactly_one_branch() {
 }
 
 #[test]
+fn a_constraint_beside_one_of_is_an_error() {
+    let mut document = document();
+    let theme = &mut document["components"]["schemas"]["UserAppearance"]["properties"]["theme"];
+    assert!(theme.get("oneOf").is_some(), "{theme}");
+    theme["enum"] = json!(["dark"]);
+    let mut value = good();
+    value["appearance"]["theme"] = json!("light");
+    let errors = common::schema_errors(&document, "Me", &value);
+    assert!(!errors.is_empty(), "a constraint beside oneOf was skipped");
+}
+
+#[test]
 fn a_missing_or_undeclared_member_is_an_error() {
     let mut extra = good();
     extra["user"]["external_id"] = json!("E1");

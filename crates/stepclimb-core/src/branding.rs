@@ -13,7 +13,7 @@
 //! A stylesheet must declare every token the running release's bundle uses, and a newer
 //! generator may add tokens. A record written by another generator version is therefore never
 //! served as stored: [`effective`] re-renders it from its inputs, and [`refresh`] stores that at
-//! startup. Inputs that fail the running generator's contrast guard get the default brand's
+//! startup for a record an older generator wrote. Inputs that fail the running generator's contrast guard get the default brand's
 //! stylesheet, with the failing reports in [`Branding::fallback`] (B28).
 
 use std::time::SystemTime;
@@ -332,10 +332,12 @@ pub fn effective(saved: Branding) -> Branding {
     }
 }
 
-/// Re-render the scope's saved branding when another generator version wrote it, and store the
+/// Re-render the scope's saved branding when an older generator version wrote it, and store the
 /// result with its new `css_hash`, under the row's lock. Nobody changed the branding, so neither
-/// `updated_at` nor the audit log is written. Returns what was stored, or `None` when there is no
-/// saved branding or this generator wrote it.
+/// `updated_at` nor the audit log is written. A record from a newer generator (a newer release
+/// shares the database) is left for that release; [`effective`] re-renders it for each read
+/// here. Returns what was stored, or `None` when there is no saved branding or nothing older
+/// wrote it.
 pub async fn refresh<'c>(
     db: impl Acquire<'c, Database = Postgres>,
     scope: OrgScope,
@@ -349,7 +351,7 @@ pub async fn refresh<'c>(
     .fetch_optional(&mut *tx)
     .await?
     .ok_or(Error::NotFound)?;
-    let Some(saved) = parse(&stored)?.filter(|b| b.generator != GENERATOR_VERSION) else {
+    let Some(saved) = parse(&stored)?.filter(|b| b.generator < GENERATOR_VERSION) else {
         return Ok(None);
     };
     let rerendered = rerender(&saved);

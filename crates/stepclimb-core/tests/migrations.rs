@@ -126,7 +126,7 @@ async fn every_table_has_created_at_and_updated_at(pool: PgPool) {
 #[sqlx::test(migrations = false)]
 async fn a_stored_system_theme_becomes_no_choice_and_other_choices_stay(pool: PgPool) {
     MIGRATOR
-        .run_to(20261115120000, &pool)
+        .run_to(20261115220000, &pool)
         .await
         .expect("migrations up to the one before");
     sqlx::query("INSERT INTO organizations (id, slug, name) VALUES (gen_random_uuid(), 'a', 'A')")

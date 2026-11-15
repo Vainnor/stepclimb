@@ -755,7 +755,12 @@ organization default appearance, 12 B27):
   while there is none. Choosing any item stores it as the user's choice; choosing the item
   already marked changes nothing, so a user whose theme equals the default follows later changes
   to the default until they pick another item. The menu has no "use the organization's default"
-  item in M0; the API's `null` is there for one.
+  item in M0, so a user who chose a theme cannot go back to following the default from the UI;
+  the API's `null` is there for one. Accepted for M0 (review of PR #193).
+- **Old cookies.** A browser that kept a `system.<density>` cookie from before the migration
+  still follows the operating system on signed-out screens, while the migrated user row says no
+  choice and signed-in pages take the organization's default. Accepted: no release has shipped
+  the cookie, and the next save from the menu rewrites it (review of PR #193).
 
 ## Issues
 

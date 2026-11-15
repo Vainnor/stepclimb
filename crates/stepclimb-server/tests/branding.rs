@@ -11,7 +11,9 @@
 //! `test-support` organization header. `session::start` stands in for the sign-in specs. Needs
 //! `DATABASE_URL` (`just up`).
 
+use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{
@@ -216,6 +218,38 @@ impl World {
         .await
         .expect("the organization")
     }
+}
+
+#[derive(Clone, Default)]
+struct Captured(Arc<Mutex<Vec<u8>>>);
+
+impl Write for Captured {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("log buffer").extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Captured {
+    /// The log so far, emptied.
+    fn take(&self) -> String {
+        let bytes = std::mem::take(&mut *self.0.lock().expect("log buffer"));
+        String::from_utf8(bytes).expect("UTF-8 logs")
+    }
+}
+
+/// Every log line of this thread from now until the guard drops.
+fn capture() -> (Captured, tracing::subscriber::DefaultGuard) {
+    let captured = Captured::default();
+    let writer = captured.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(move || writer.clone())
+        .finish();
+    (captured, tracing::subscriber::set_default(subscriber))
 }
 
 fn default_css() -> String {
@@ -662,9 +696,29 @@ async fn t21_another_generators_stylesheet_is_never_served_and_startup_stores_it
     age_record(&w.pool, a, None).await;
     let b_before = w.stored(b).await;
 
-    // Before startup re-renders it, every read gets this generator's stylesheet anyway.
+    // Before startup re-renders it, every read gets this generator's stylesheet anyway: the page
+    // links it by its own hash, and the stale record's hash is never cached as it.
     let css = w.theme_css(a).await;
     assert_eq!(css.text, current_css);
+    let page = w.send(a, Method::GET, "/courses", None, None).await;
+    assert_eq!(page.status, StatusCode::OK, "is web/dist built? {page:?}");
+    let link = format!(r#"href="/theme.css?v={}""#, css_hash(&current_css));
+    assert!(page.text.contains(&link), "{}", page.text);
+    let stale_hash = css_hash(":root { --sc-brand: red; }");
+    let stale = w
+        .send(
+            a,
+            Method::GET,
+            &format!("{THEME_CSS}?v={stale_hash}"),
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(stale.text, current_css);
+    assert_eq!(
+        stale.headers[header::CACHE_CONTROL],
+        THEME_CSS_CACHE_CONTROL
+    );
     let read = w.send(a, Method::GET, BRANDING, Some(&admin), None).await;
     assert_eq!(read.json()["css_hash"], css_hash(&current_css));
     assert_eq!(read.json()["generator"], theme::GENERATOR_VERSION);
@@ -702,6 +756,7 @@ async fn t22_inputs_this_generator_refuses_are_served_the_default_theme(pool: Pg
     // A chroma above this generator's cap, as a record from a release before the cap.
     age_record(&w.pool, a, Some("oklch(0.5 0.9 30)")).await;
 
+    let (log, _guard) = capture();
     for round in ["before startup", "after startup"] {
         let css = w.theme_css(a).await;
         assert_eq!(css.text, default_css(), "{round}");
@@ -722,8 +777,21 @@ async fn t22_inputs_this_generator_refuses_are_served_the_default_theme(pool: Pg
         startup::prepare(&w.pool, &ManualClock::new(now()).clock())
             .await
             .expect("startup");
+        // Each start warns while the fallback is stored, naming the organization and why.
+        let text = log.take();
+        let warnings: Vec<&str> = text
+            .lines()
+            .filter(|line| line.contains("WARN") && line.contains("saved branding fails"))
+            .collect();
+        assert_eq!(warnings.len(), 1, "{round}: {text}");
+        assert!(warnings[0].contains(&a.to_string()), "{}", warnings[0]);
+        assert!(
+            warnings[0].contains("primary") || warnings[0].contains("refused"),
+            "{}",
+            warnings[0]
+        );
     }
-    // Saving branding again replaces the fallback.
+    // Saving branding again replaces the fallback, and the warning stops.
     let body = json!({ "primary": "#0a1030" });
     let saved = w
         .send(a, Method::PUT, BRANDING, Some(&admin), Some(body))
@@ -731,4 +799,9 @@ async fn t22_inputs_this_generator_refuses_are_served_the_default_theme(pool: Pg
     assert_eq!(saved.status, StatusCode::OK, "{saved:?}");
     assert_eq!(saved.json()["fallback"], Value::Null);
     assert_ne!(w.theme_css(a).await.text, default_css());
+    startup::prepare(&w.pool, &ManualClock::new(now()).clock())
+        .await
+        .expect("startup");
+    let text = log.take();
+    assert!(!text.contains("saved branding fails"), "{text}");
 }

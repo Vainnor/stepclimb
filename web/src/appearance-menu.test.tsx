@@ -119,9 +119,10 @@ describe("the appearance choice (B21)", () => {
       "aria-checked",
       "true",
     );
-    await userEvent.keyboard("{Escape}{Escape}");
+    // Choosing the marked default sends nothing: the theme stays unchosen.
+    await userEvent.click(within(menu).getByRole("menuitemradio", { name: "Dark" }));
 
-    // A density change leaves the theme unchosen.
+    // A density change leaves the theme unchosen, and is the first request sent.
     await choose("Density", "Compact");
     await waitFor(() => expect(html.getAttribute("data-sc-density")).toBe("compact"));
     expect(html.getAttribute("data-sc-theme")).toBe("dark");

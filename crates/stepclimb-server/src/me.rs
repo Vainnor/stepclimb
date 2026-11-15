@@ -189,7 +189,7 @@ pub async fn get_me(
     let appearance = appearance::get(&state.db, scope, principal.user_id)
         .await
         .map_err(|error| ApiError::internal(&error))?;
-    let default_appearance = branding::default_appearance(&state, scope).await?;
+    let default_appearance = branding::default_appearance(&state, scope).await;
     Ok(Json(Me {
         appearance: appearance.into(),
         default_appearance: default_appearance.into(),

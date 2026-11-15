@@ -361,12 +361,17 @@ async fn current(state: &AppState, scope: OrgScope) -> Result<Saved, ApiError> {
 }
 
 /// The theme `scope`'s users' pages take until they choose one: its saved default appearance, or
-/// `system` when it has saved no branding.
-pub async fn default_appearance(state: &AppState, scope: OrgScope) -> Result<Theme, ApiError> {
-    let saved = branding::get(&state.db, scope)
-        .await
-        .map_err(branding_error)?;
-    Ok(saved.map_or(Theme::System, |saved| saved.default_appearance))
+/// `system` when it has saved no branding. A record that cannot be read is logged and answers
+/// `system`, as the page the server writes does (`spa`): a display preference never fails the
+/// request that carries it.
+pub async fn default_appearance(state: &AppState, scope: OrgScope) -> Theme {
+    match branding::get(&state.db, scope).await {
+        Ok(saved) => saved.map_or(Theme::System, |saved| saved.default_appearance),
+        Err(error) => {
+            tracing::error!(org_id = %scope.org_id(), %error, "the organization's default appearance");
+            Theme::System
+        }
+    }
 }
 
 /// Read the organization's branding.

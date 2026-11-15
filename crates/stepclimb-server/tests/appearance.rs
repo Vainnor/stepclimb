@@ -617,3 +617,26 @@ async fn t23_the_organizations_default_appearance_applies_until_the_user_chooses
         r#"<html data-sc-theme="high-contrast" lang="en">"#
     );
 }
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_unreadable_branding_record_leaves_me_answering_the_system_default(pool: PgPool) {
+    let w = World::new(pool).await;
+    let a = w.org("org-a").await;
+    w.brand_with(a, "#500E0E", Theme::Dark).await;
+    let pat = w.user(a).await;
+    // A record of a format version this release does not read.
+    sqlx::query(
+        "UPDATE organizations SET branding = jsonb_set(branding, '{version}', '99') WHERE id = $1",
+    )
+    .bind(a)
+    .execute(&w.pool)
+    .await
+    .expect("doctor the record");
+    let me = w.me(a, &pat).await;
+    assert_eq!(me["default_appearance"], "system");
+    assert_eq!(me["appearance"]["theme"], Value::Null);
+    assert_eq!(
+        w.page(Some(a), Some(&pat.cookie)).await.html_tag(),
+        r#"<html lang="en">"#
+    );
+}
