@@ -231,6 +231,41 @@ export interface paths {
         patch: operations["updateRole"];
         trace?: never;
     };
+    "/api/v1/admin/service-accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the organization's service accounts, oldest first. Keys are never listed. */
+        get: operations["listServiceAccounts"];
+        put?: never;
+        /** Create a service account owned by the caller, and its API key. */
+        post: operations["createServiceAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/service-accounts/{service_account_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete a service account; its key stops working on the next request. */
+        delete: operations["deleteServiceAccount"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/users/{user_id}/enrollment-links": {
         parameters: {
             query?: never;
@@ -1063,6 +1098,31 @@ export interface components {
          * @enum {string}
          */
         CornerStyle: "square" | "default" | "round";
+        /** @description A service account just created, with its API key. Its `Debug` output leaves the key out. */
+        CreatedServiceAccount: {
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            created_at: string;
+            /** Format: uuid */
+            id: string;
+            /**
+             * @description The API key, `sc_<random>_<checksum>`. This is the only answer that carries it: store it
+             *     now. Send it as `Authorization: Bearer <key>`.
+             */
+            key: string;
+            kind: components["schemas"]["ServiceAccountKind"];
+            /**
+             * Format: date-time
+             * @description Always `null`: the key has not been used.
+             */
+            last_used_at: string | null;
+            name: string;
+            /** Format: uuid */
+            owner_user_id: string;
+            scopes: string[];
+        };
         /** @description `PublicKeyCredentialDescriptorJSON`. */
         CredentialDescriptor: {
             /** @description The credential id, base64url, unpadded. */
@@ -1371,6 +1431,16 @@ export interface components {
             /** Format: uuid */
             user_id: string;
         };
+        /** @description A service account to create. */
+        NewServiceAccount: {
+            /** @description Trimmed; 1 to 200 characters. */
+            name: string;
+            /**
+             * @description Catalog permission keys (`GET /api/v1/admin/permissions`), each at most once and each
+             *     held by the caller at some scope.
+             */
+            scopes: string[];
+        };
         /** @description A user to create. The new user is `local` and `active`, and has no local credential. */
         NewUser: {
             /** @description Trimmed; 1 to 200 characters. */
@@ -1532,6 +1602,36 @@ export interface components {
                 source: components["schemas"]["AssignmentSource"];
                 /** Format: uuid */
                 user_id: string;
+            }[];
+            /** @description Pass this as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
+        };
+        /** @description One page of a list. */
+        Page_ServiceAccount: {
+            /** @description The items, in the list's sort order. */
+            items: {
+                /**
+                 * Format: date-time
+                 * @description RFC 3339, UTC.
+                 */
+                created_at: string;
+                /** Format: uuid */
+                id: string;
+                kind: components["schemas"]["ServiceAccountKind"];
+                /**
+                 * Format: date-time
+                 * @description RFC 3339, UTC: the last request the key authenticated, to the minute; `null` before the
+                 *     first.
+                 */
+                last_used_at: string | null;
+                name: string;
+                /**
+                 * Format: uuid
+                 * @description The user whose current permissions the scopes are narrowed to.
+                 */
+                owner_user_id: string;
+                /** @description The permission keys the key may use, where its owner holds them. */
+                scopes: string[];
             }[];
             /** @description Pass this as `cursor` to get the next page; `null` on the last page. */
             next_cursor: string | null;
@@ -1821,6 +1921,36 @@ export interface components {
          * @enum {string}
          */
         ScopeType: "organization" | "account" | "course";
+        /** @description A service account. Its key is never part of it. */
+        ServiceAccount: {
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            created_at: string;
+            /** Format: uuid */
+            id: string;
+            kind: components["schemas"]["ServiceAccountKind"];
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC: the last request the key authenticated, to the minute; `null` before the
+             *     first.
+             */
+            last_used_at: string | null;
+            name: string;
+            /**
+             * Format: uuid
+             * @description The user whose current permissions the scopes are narrowed to.
+             */
+            owner_user_id: string;
+            /** @description The permission keys the key may use, where its owner holds them. */
+            scopes: string[];
+        };
+        /**
+         * @description The kind of a service account.
+         * @enum {string}
+         */
+        ServiceAccountKind: "api_key";
         /**
          * @description The protocol of a sign-in method.
          * @enum {string}
@@ -2133,7 +2263,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `auth.suspended`: the account is suspended. `auth.csrf_refused`: the request did not come from this site. */
+        /** @description `auth.session_required`: the request carries a bearer credential; an enrollment link is used from a browser. `auth.suspended`: the account is suspended. `auth.csrf_refused`: the request did not come from this site. */
         EnrollPasskeyForbidden: {
             headers: {
                 [name: string]: unknown;
@@ -2160,6 +2290,15 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `auth.session_required`: the request carries a bearer credential; an enrollment link is used from a browser. `auth.suspended`: the account is suspended. `auth.csrf_refused`: the request did not come from this site. */
+        EnrollPasswordForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `request.malformed`: the body is not `{token, password}`. `auth.enrollment_invalid`: the link is unknown, already used, replaced by a newer link, or for another organization. `auth.enrollment_expired`: the link is older than its 7-day lifetime. */
         EnrollPasswordInvalid: {
             headers: {
@@ -2171,6 +2310,24 @@ export interface components {
         };
         /** @description `local.email_required`: the user has no email address, which local sign-in finds them by; add one first. */
         EnrollmentLinkConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `auth.session_required`: the request carries a bearer credential; only a signed-in browser session creates enrollment links. `permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the user holds a permission, at any scope, that the caller does not hold at organization scope. `auth.csrf_refused`: the request did not come from this site. */
+        EnrollmentLinkForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `auth.session_required`: the request carries a bearer credential; an enrollment link is used from a browser. `auth.csrf_refused`: the request did not come from this site. */
+        EnrollmentStartForbidden: {
             headers: {
                 [name: string]: unknown;
             };
@@ -2223,7 +2380,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the user holds a permission, at any scope, that the caller does not hold at organization scope. `auth.csrf_refused`: the request did not come from this site. */
+        /** @description `permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the user holds a permission, at any scope, that the caller does not hold at organization scope. `auth.session_required`: an API key acts on its own owner. `auth.csrf_refused`: the request did not come from this site. */
         IdentityWriteForbidden: {
             headers: {
                 [name: string]: unknown;
@@ -2315,6 +2472,15 @@ export interface components {
         };
         /** @description `identity.last_sign_in_method`: you would be left with no way to sign in. `identity.local`: the identity is your local account, which is not removed here. `identity.externally_managed`: an identity provider, the sync API, SCIM or a connector owns your user record and would link the identity again; ask an admin. */
         MyIdentityDeleteConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `auth.session_required`: the request carries a bearer credential; only a signed-in browser session removes your identities. `auth.csrf_refused`: the request did not come from this site. */
+        MyIdentityDeleteForbidden: {
             headers: {
                 [name: string]: unknown;
             };
@@ -2621,6 +2787,42 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `auth.session_required`: the request carries a bearer credential; only a signed-in browser session creates API keys. `entitlement.feature_unavailable`: the organization's plan does not include API keys. `permission.denied`: the caller does not hold `service_account.manage` at organization scope. `service_account.scope_exceeds_owner`: a scope names a permission the caller does not hold. `auth.csrf_refused`: the request did not come from this site. */
+        ServiceAccountCreateForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `entitlement.feature_unavailable`: the organization's plan does not include API keys. `permission.denied`: the caller does not hold `service_account.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site. */
+        ServiceAccountDeleteForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `service_account.not_found`: no service account of the organization has this id. `org.not_found`: the request's organization cannot be determined. */
+        ServiceAccountNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `entitlement.feature_unavailable`: the organization's plan does not include API keys. `permission.denied`: the caller does not hold `service_account.manage` at organization scope. */
+        ServiceAccountsForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting this route does not change (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`; `admission`: `PUT /api/v1/admin/admission`); `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses. */
         SettingsInvalid: {
             headers: {
@@ -2666,7 +2868,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `auth.unauthenticated`: no credential, or one that names no session of the organization. `auth.session_expired`: the session passed its idle or absolute expiry. `auth.suspended`: the user is suspended. */
+        /** @description `auth.unauthenticated`: no credential, or one that names no session of the organization, or a bearer credential that is not an API key. `auth.session_expired`: the session passed its idle or absolute expiry. `auth.api_key_invalid`: the API key is malformed, fails its checksum, or names no service account of the organization. `auth.suspended`: the user, or the API key's owner, is suspended. */
         Unauthenticated: {
             headers: {
                 [name: string]: unknown;
@@ -2738,7 +2940,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email` or `status` of a user who holds a permission the caller does not hold at organization scope. `auth.csrf_refused`: the request did not come from this site. */
+        /** @description `permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email` or `status` of a user who holds a permission the caller does not hold at organization scope. `auth.session_required`: an API key changes `email` or `status` of its own owner. `auth.csrf_refused`: the request did not come from this site. */
         UserWriteForbidden: {
             headers: {
                 [name: string]: unknown;
@@ -3452,6 +3654,97 @@ export interface operations {
             503: components["responses"]["NoOrganization"];
         };
     };
+    listServiceAccounts: {
+        parameters: {
+            query?: {
+                /** @description The `next_cursor` of the previous page; omit it for the first page. */
+                cursor?: string;
+                /** @description How many items to return, 1 to 200; 50 when omitted. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of service accounts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_ServiceAccount"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ServiceAccountsForbidden"];
+            404: components["responses"]["OrganizationNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    createServiceAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewServiceAccount"];
+            };
+        };
+        responses: {
+            /** @description The service account is created; `key` is shown this once */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedServiceAccount"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ServiceAccountCreateForbidden"];
+            404: components["responses"]["OrganizationNotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["UnprocessableEntity"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    deleteServiceAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The service account's id. */
+                service_account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The service account and its key are deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ServiceAccountDeleteForbidden"];
+            404: components["responses"]["ServiceAccountNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
     createEnrollmentLink: {
         parameters: {
             query?: never;
@@ -3475,7 +3768,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
-            403: components["responses"]["IdentityWriteForbidden"];
+            403: components["responses"]["EnrollmentLinkForbidden"];
             404: components["responses"]["UserNotFound"];
             409: components["responses"]["EnrollmentLinkConflict"];
             500: components["responses"]["InternalError"];
@@ -3583,7 +3876,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
-            403: components["responses"]["CsrfRefused"];
+            403: components["responses"]["MyIdentityDeleteForbidden"];
             404: components["responses"]["MyIdentityNotFound"];
             409: components["responses"]["MyIdentityDeleteConflict"];
             500: components["responses"]["InternalError"];
@@ -4304,7 +4597,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["EnrollPasswordInvalid"];
-            403: components["responses"]["PasswordSignInForbidden"];
+            403: components["responses"]["EnrollPasswordForbidden"];
             404: components["responses"]["PasswordNotFound"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
@@ -4341,7 +4634,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["EnrollmentStartInvalid"];
-            403: components["responses"]["CsrfRefused"];
+            403: components["responses"]["EnrollmentStartForbidden"];
             404: components["responses"]["EnrollmentStartNotFound"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];

@@ -14,14 +14,16 @@
 //! [`password_hasher`], with the [`device`] cookie), TOTP after the password ([`totp`]), the
 //! signed-in user at
 //! `GET /api/v1/me` ([`me`]) and their appearance choice at `PUT /api/v1/me/appearance`
-//! ([`appearance`]), the organization's branding at `/api/v1/admin/branding` and its
+//! ([`appearance`]), service accounts and their API keys under
+//! `/api/v1/admin/service-accounts` ([`service_accounts`]), the organization's branding at `/api/v1/admin/branding` and its
 //! stylesheet at `/theme.css` ([`branding`]), the OpenAPI document (`/api/openapi.json`) and its Scalar UI
 //! (`/docs`), and the built web SPA for every other path, its `index.html` linking the
 //! fingerprinted stylesheet and carrying the appearance ([`spa`]). Every `/api/v1` response carries
 //! `Cache-Control: no-store` ([`app`]). The other M0 specs in `docs/specs/m0/` add their
 //! `/api/v1` endpoints on the conventions in [`error`] (problem details), [`extract`]
 //! (extractors that reject with them) and [`pagination`] (cursor pages), authenticate them with
-//! [`session`] (the browser session cookie and the `Authenticated` extractor) within the
+//! [`session`] (the browser session cookie and the `Authenticated` extractor, which hands bearer
+//! requests to [`api_key`]) within the
 //! organization [`request_org`] resolves (whose `RequestOrg` extractor gives unauthenticated
 //! routes their organization), and protect them with [`require`] (`Require<P, T>`, the
 //! permission check, and `Require<F>`, the feature check of [`entitlements`], which also
@@ -38,6 +40,7 @@ pub mod accounts;
 pub mod admin;
 pub mod admission;
 pub mod admission_settings;
+pub mod api_key;
 pub mod app;
 pub mod appearance;
 pub mod audit;
@@ -80,6 +83,7 @@ pub mod request_org;
 pub mod require;
 pub mod role_assignments;
 pub mod roles;
+pub mod service_accounts;
 pub mod session;
 pub mod spa;
 pub mod startup;

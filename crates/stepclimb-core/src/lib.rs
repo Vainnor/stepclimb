@@ -8,7 +8,8 @@
 //! [`OrgScope`], the organization every repository function acts in; the [`organizations`]
 //! repository with its typed [`OrgSettings`]; the [`accounts`] repository, the tree inside an
 //! organization; the [`users`] repository and [`Source`], where a record came from; and the
-//! [`sessions`] repository with the browser-session credential resolver; and the [`roles`] and
+//! [`sessions`] repository with the browser-session credential resolver, and the
+//! [`service_accounts`] repository with the API-key credential resolver; and the [`roles`] and
 //! [`role_assignments`] repositories, with the startup sync of built-in role rows
 //! ([`roles::sync_builtin`]); the permission evaluator, [`grants::Grants`]; and the
 //! [`auth_flows`] repository, the state of a sign-in that spans several requests; and the
@@ -56,6 +57,7 @@ pub mod requirement;
 pub mod role_assignments;
 pub mod roles;
 mod scope;
+pub mod service_accounts;
 pub mod sessions;
 mod settings;
 mod source;

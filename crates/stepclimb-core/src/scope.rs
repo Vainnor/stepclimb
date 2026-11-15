@@ -97,7 +97,7 @@ pub enum ScopeOrigin {
     not(test),
     expect(
         dead_code,
-        reason = "the API-key and app-token resolvers of spec 08 build the other two"
+        reason = "the app-token resolver of spec 08 builds AppToken"
     )
 )]
 pub(crate) enum Credential {

@@ -11,8 +11,8 @@
 //! sign-in switches, enrollment links, the enrollment start route, passkey registration
 //! through a link and passkey sign-in, the start of sign-in with an outside identity provider,
 //! the signed-in user's passkeys, password enrollment, sign-in and change, TOTP enrollment,
-//! its sign-in step and disabling, the discovery document (`/.well-known/stepclimb`), and the
-//! shared error
+//! its sign-in step and disabling, the discovery document (`/.well-known/stepclimb`), service
+//! accounts and their API keys, and the shared error
 //! schemas and responses below. The other M0 specs add their endpoints under `/api/v1`.
 //!
 //! Every `/api/v1` operation lists its errors in `#[utoipa::path]` (spec 02 B6). The errors
@@ -33,7 +33,7 @@ use crate::{
     error::{FieldError, PROBLEM_JSON, Problem},
     health, identities, local_sign_in, me, my_passkeys, organization, passkey_enrollment,
     passkey_options, passkey_sign_in, password, provider_callback, provider_sign_in,
-    role_assignments, roles, totp, users,
+    role_assignments, roles, service_accounts, totp, users,
 };
 
 /// The operation extension that marks a handler as changing state (spec 08 B12, T17). Every
@@ -111,7 +111,10 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         local_sign_in::get_local_sign_in,
         local_sign_in::update_local_sign_in,
         admission_settings::get_admission_settings,
-        admission_settings::update_admission_settings
+        admission_settings::update_admission_settings,
+        service_accounts::list_service_accounts,
+        service_accounts::create_service_account,
+        service_accounts::delete_service_account
     ),
     components(
         schemas(
@@ -204,7 +207,11 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             totp::CodeRequired,
             totp::TotpCode,
             totp::TotpEnrollment,
-            totp::TotpConfirmed
+            totp::TotpConfirmed,
+            service_accounts::ServiceAccount,
+            service_accounts::ServiceAccountKind,
+            service_accounts::CreatedServiceAccount,
+            service_accounts::NewServiceAccount
         ),
         responses(
             BadRequest,
@@ -255,6 +262,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             identities::IdentityDeleteNotFound,
             identities::IdentityDeleteConflict,
             identities::MyIdentityNotFound,
+            identities::MyIdentityDeleteForbidden,
             identities::MyIdentityDeleteConflict,
             branding::BrandingWriteForbidden,
             branding::BrandingInvalid,
@@ -263,7 +271,9 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             local_sign_in::LocalSignInInvalid,
             admission_settings::AdmissionWriteForbidden,
             admission_settings::AdmissionInvalid,
+            enrollment::EnrollmentLinkForbidden,
             enrollment::EnrollmentLinkConflict,
+            enrollment::EnrollmentStartForbidden,
             enrollment::EnrollmentStartInvalid,
             enrollment::EnrollmentStartNotFound,
             passkey_enrollment::EnrollPasskeyInvalid,
@@ -282,6 +292,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             my_passkeys::MyPasskeyAddInvalid,
             my_passkeys::MyPasskeyDeleteConflict,
             password::PasswordSignInUnauthorized,
+            password::EnrollPasswordForbidden,
             password::PasswordSignInForbidden,
             password::PasswordNotFound,
             password::EnrollPasswordInvalid,
@@ -296,7 +307,11 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             totp::MyTotpStartConflict,
             totp::MyTotpUnauthorized,
             totp::MyTotpConfirmConflict,
-            totp::MyTotpDisableConflict
+            totp::MyTotpDisableConflict,
+            service_accounts::ServiceAccountsForbidden,
+            service_accounts::ServiceAccountCreateForbidden,
+            service_accounts::ServiceAccountDeleteForbidden,
+            service_accounts::ServiceAccountNotFound
         )
     ),
     tags(
@@ -309,7 +324,8 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         (name = "users", description = "The organization's users"),
         (name = "branding", description = "The organization's branding and theme"),
         (name = "local-sign-in", description = "The organization's local sign-in methods"),
-        (name = "admission", description = "Who may sign in to the organization")
+        (name = "admission", description = "Who may sign in to the organization"),
+        (name = "service-accounts", description = "Service accounts and their API keys")
     )
 )]
 struct ApiDoc;
@@ -361,7 +377,7 @@ problem_responses! {
     CsrfRefused => "`auth.csrf_refused`: an unsafe request without a bearer credential did not come from this site: `Sec-Fetch-Site` is not `same-origin`, `Origin` is sent but is not an allowed origin, or neither header is sent.",
     OrganizationNotFound => "`org.not_found`: the request's organization cannot be determined.",
     NoOrganization => "`org.none`: the instance has no organization yet.",
-    Unauthenticated => "`auth.unauthenticated`: no credential, or one that names no session of the organization. `auth.session_expired`: the session passed its idle or absolute expiry. `auth.suspended`: the user is suspended.",
+    Unauthenticated => "`auth.unauthenticated`: no credential, or one that names no session of the organization, or a bearer credential that is not an API key. `auth.session_expired`: the session passed its idle or absolute expiry. `auth.api_key_invalid`: the API key is malformed, fails its checksum, or names no service account of the organization. `auth.suspended`: the user, or the API key's owner, is suspended.",
     PermissionDenied => "`permission.denied`: the caller does not hold the operation's permission at a scope containing its target.",
 }
 

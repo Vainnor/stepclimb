@@ -71,9 +71,10 @@ use crate::{
     openapi::problem_responses,
     organization::present,
     pagination::{Page, PageParams},
-    require::Require,
+    require::{Require, session_required},
     role_assignments::code::{ROLE_ASSIGNMENT_LAST_ORG_ADMIN, USER_NOT_FOUND},
     roles::code::{NAME_EMPTY, PERMISSION_ESCALATION, TEXT_CONTAINS_NUL},
+    session::{Authenticated, Via},
     timestamp,
 };
 
@@ -116,7 +117,7 @@ pub mod code {
 
 problem_responses! {
     UserNotFound => "`user.not_found`: no user of the organization has this id. `org.not_found`: the request's organization cannot be determined.",
-    UserWriteForbidden => "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email` or `status` of a user who holds a permission the caller does not hold at organization scope. `auth.csrf_refused`: the request did not come from this site.",
+    UserWriteForbidden => "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email` or `status` of a user who holds a permission the caller does not hold at organization scope. `auth.session_required`: an API key changes `email` or `status` of its own owner. `auth.csrf_refused`: the request did not come from this site.",
     UserCreateForbidden => "`permission.denied`: the caller does not hold `user.manage` at organization scope. `entitlement.limit_reached`: the organization's plan allows no more users; `limit` and `max` name the limit and its value. `auth.csrf_refused`: the request did not come from this site.",
     UserCreateConflict => "`user.external_id_taken`: another user of the organization has this external id. `user.email_taken`: another user of the organization has this email, in any letter case. `identity.taken`: one of `identities` is already linked to a user.",
     UserUpdateConflict => "`user.externally_managed`: an identity provider, the sync API, SCIM or a connector owns the user's names and email; change them there. `user.cannot_suspend_self`: you cannot suspend yourself. `user.email_taken`: another user of the organization has this email, in any letter case. `role_assignment.last_org_admin`: the user is the organization's last active Organization admin.",
@@ -595,7 +596,7 @@ pub async fn update_user(
     if guarded {
         let detail =
             "This user holds permissions you do not. You cannot change their email or status.";
-        refuse_escalation(&mut tx, require.grants(), user_id, detail).await?;
+        refuse_escalation(&mut tx, principal, require.grants(), user_id, detail).await?;
     }
     // The status first: `set_status` locks the organization row, then the user row, and the
     // field update after it locks only the user row, so every PATCH takes them in that order.
@@ -645,12 +646,19 @@ fn refuse_patch(patch: &UserPatch, user: &repo::User, caller: Uuid) -> Result<()
 /// those roles' permissions waits for, then reads the user's grants: until the PATCH commits,
 /// neither a new or removed assignment nor an edited custom role can change what was checked.
 /// The identity admin routes (`crate::identities`) apply it too, with their own `detail`.
+///
+/// Before anything is read, a request authenticated by an API key whose target is the key's own
+/// owner answers 403 `auth.session_required`, whatever the key's scopes: these writes change how
+/// the user signs in, and a key must not take over or lock out the user it acts for (spec 08
+/// B44).
 pub(crate) async fn refuse_escalation(
     tx: &mut Transaction<'static, Postgres>,
+    principal: Authenticated,
     caller: &Grants,
     user_id: Uuid,
     detail: &'static str,
 ) -> Result<(), ApiError> {
+    refuse_key_on_owner(principal, user_id)?;
     let scope = caller.scope();
     roles::key_share_custom_of_user(tx, scope, user_id)
         .await
@@ -666,6 +674,16 @@ pub(crate) async fn refuse_escalation(
         PERMISSION_ESCALATION,
         detail,
     ))
+}
+
+/// 403 `auth.session_required` when `principal` is an API key and `user_id` is its owner.
+fn refuse_key_on_owner(principal: Authenticated, user_id: Uuid) -> Result<(), ApiError> {
+    if matches!(principal.via(), Via::ApiKey { .. }) && principal.user_id == user_id {
+        return Err(session_required(
+            "An API key cannot change its owner's email, status or sign-in methods. Use a signed-in browser session.",
+        ));
+    }
+    Ok(())
 }
 
 /// Whether `target` has an effective permission, at any scope, that is not effective for

@@ -262,6 +262,46 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
 - **B28.** What a scope string names (one catalog permission, or a named bundle such as the
   plan's `reports:read`): pending Q9.
 - **B29.** Deleting a service account makes its key fail on the next request.
+- **B44.** How I6 builds Q9. Coordinator decision (2026-11-15), for the owner's review; the
+  owner can overrule any of them:
+  - Only a browser session creates a service account: `POST /api/v1/admin/service-accounts`
+    answers any bearer request 403 `auth.session_required` before anything else, so a key
+    cannot mint a key. The creator owns the account. Each scope is a catalog permission key,
+    listed once (422 `request.invalid` with `service_account.scope_unknown` or
+    `service_account.scope_duplicate` at `/scopes/<i>`), that the creator holds at some scope
+    (403 `service_account.scope_exceeds_owner`). Holding a scope only at an account is enough:
+    the intersection of B27 keeps the key's right at that account. An empty list is allowed;
+    such a key can call `GET /api/v1/me`, `GET /api/v1/organization`, `PUT
+    /api/v1/me/appearance` and `GET /api/v1/me/identities` and nothing else under `/api/v1`, which
+    a router walk with such a key checks (`tests/service_accounts.rs`). A key with
+    `service_account.manage` may list and delete service accounts, its own included.
+  - `kind` has one value, `api_key`. `name` is trimmed, 1 to 200 characters, no NUL, as other
+    names. `last_used_at` is written at most once a minute, like a session's `last_seen_at`
+    (Q4), and the list answers it; there is no expiry in M0.
+  - The bearer header must be the request's only `Authorization` header, `Bearer` in any case,
+    one space, then the credential. A credential that starts with `sc_` is an API key and is
+    checked by its shape and CRC-32 before the request's organization is resolved, so a bad
+    checksum costs no query. Any other bearer credential answers 401 `auth.unauthenticated`
+    until I8 adds app access tokens. A cookie beside a bearer header is never read or cleared.
+    A page of the web app (`spa`) never authenticates a bearer header, so a page load does not
+    look a key up or record its use.
+  - A change an API key makes is audited with actor type `api_key` and the service account's
+    id, with the client address as for a user. `audit_events` gains that type: an `api_key`
+    actor has an id and an address, like a user. Deleting an owner deletes their service
+    accounts by the foreign key's cascade, with no `service_account.delete` entry; accepted for
+    M0, since M0 deletes no users.
+  - A key cannot change how its owner signs in. `DELETE /api/v1/me/identities/{identity_id}`
+    takes `SessionOnly`, as the passkey routes and `PUT /api/v1/me/password` do: any bearer
+    request answers 403 `auth.session_required`. Every step of using an enrollment link
+    (`POST /auth/local/enrollment/start`, `.../password` and `.../passkey`) refuses a bearer
+    request the same way. On the admin routes (`PATCH /api/v1/users/{user_id}` with `email` or
+    `status`, `POST` and `DELETE /api/v1/users/{user_id}/identities...`), a key whose target is
+    its own owner answers 403 `auth.session_required`, whatever its scopes; the escalation rule
+    (`03-users-and-identities.md` B6) still applies to other users. `PUT /api/v1/me/appearance`
+    stays open to keys (a display choice only).
+  - Only a browser session creates an enrollment link: `POST
+    /api/v1/admin/users/{user_id}/enrollment-links` answers any bearer request 403
+    `auth.session_required`, for any target user, since a link is a new sign-in credential.
 
 ### Stepclimb's OAuth 2.1 server (for Stepclimb's own apps)
 
@@ -353,9 +393,9 @@ Every endpoint has `#[utoipa::path]` and appears in `openapi/stepclimb.json`. Er
 | `GET /oauth/authorize` (path pending Q10) | query `client_id, redirect_uri, code_challenge, code_challenge_method, state` | 302 to sign-in, or 302 to `redirect_uri?code&state`; HTML error page on client or redirect mismatch | `oauth.client_unknown`, `oauth.redirect_uri_mismatch`, `oauth.pkce_required` | browser session (or sign-in first) |
 | `POST /oauth/token` | form: `grant_type=authorization_code, code, redirect_uri, client_id, code_verifier` or `grant_type=refresh_token, refresh_token, client_id` | 200 `{access_token, token_type: "Bearer", expires_in: 900, refresh_token}` | `invalid_request`, `invalid_client`, `invalid_grant`, `unsupported_grant_type` (format Q13), `auth.rate_limited` | none (client is public) |
 | `POST /oauth/revoke` | form: `token, token_type_hint?, client_id` | 200 | `invalid_request`, `auth.rate_limited` | none |
-| `GET /api/v1/admin/service-accounts` | cursor pagination | 200 list of `{id, name, kind, scopes, owner_user_id, created_at}`, never the key | `auth.unauthenticated`, `permission.denied` | `perm::ServiceAccountManage`, organization |
-| `POST /api/v1/admin/service-accounts` | `{name, scopes: [string]}` | 201 `{id, ..., key}` (the only time `key` is returned) | `permission.denied`, `service_account.scope_unknown`, `service_account.scope_exceeds_owner` | `perm::ServiceAccountManage`, organization |
-| `DELETE /api/v1/admin/service-accounts/{id}` | none | 204 | `permission.denied`, `service_account.not_found` | `perm::ServiceAccountManage`, organization |
+| `GET /api/v1/admin/service-accounts` | cursor pagination, by id | 200 page of `{id, name, kind, scopes, owner_user_id, created_at, last_used_at}`, never the key | `auth.unauthenticated`, `entitlement.feature_unavailable`, `permission.denied` | `Require<ApiKeys>`, `perm::ServiceAccountManage`, organization |
+| `POST /api/v1/admin/service-accounts` | `{name, scopes: [string]}` | 201 `{id, ..., key}` (the only time `key` is returned) | `entitlement.feature_unavailable`, `permission.denied`, `service_account.scope_exceeds_owner` (403), `service_account.scope_unknown`, `service_account.scope_duplicate`, `name.empty`, `name.too_long` (422) | `Require<ApiKeys>`, `perm::ServiceAccountManage`, organization |
+| `DELETE /api/v1/admin/service-accounts/{service_account_id}` | none | 204 | `entitlement.feature_unavailable`, `permission.denied`, `service_account.not_found` | `Require<ApiKeys>`, `perm::ServiceAccountManage`, organization |
 
 Authentication errors any protected `/api/v1` route can answer, from this spec's extractor:
 `auth.unauthenticated`, `auth.session_expired`, `auth.suspended`, `auth.api_key_invalid`,
@@ -388,6 +428,11 @@ row with `rotated_from = its id` exists. Organization: derived through `user_id`
 organizations(id)`, `kind text NOT NULL`, `owner_user_id uuid NULL REFERENCES users(id)`,
 `secret_hash bytea NOT NULL UNIQUE`, `scopes text[] NOT NULL`, `created_at`, `updated_at`.
 `kind` values, owner nullability in M0, and the proposed `name text NOT NULL` column: pending Q9.
+As built by I6 (migration `20261115220000_service_accounts.sql`, B44): `kind text NOT NULL CHECK
+(kind IN ('api_key'))`, `name text NOT NULL`, `owner_user_id uuid NOT NULL` with `(org_id,
+owner_user_id) REFERENCES users(org_id, id) ON DELETE CASCADE` so the owner is in the account's
+organization, `secret_hash` checked to 32 bytes, `last_used_at timestamptz NULL`, and an index on
+`(org_id, owner_user_id)`. The same migration adds `api_key` to `audit_events.actor_type`.
 
 **`auth_flows`** (Q8): `id uuid PK`, `org_id uuid NOT NULL REFERENCES organizations(id)`,
 `token_hash bytea NOT NULL UNIQUE` (SHA-256 of the flow cookie value, 32 bytes), `kind text NOT

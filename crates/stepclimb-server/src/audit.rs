@@ -16,7 +16,12 @@ use axum::{
 };
 use stepclimb_core::audit::Actor;
 
-use crate::{AppState, error::ApiError, rate_limit::client_address, session::Authenticated};
+use crate::{
+    AppState,
+    error::ApiError,
+    rate_limit::client_address,
+    session::{Authenticated, Via},
+};
 
 /// The client address of the request. Without the TCP peer's address (`ConnectInfo`, which
 /// `startup::serve_on` provides) the request is refused with 500: a change with no address
@@ -26,10 +31,18 @@ pub struct ClientAddress(pub IpAddr);
 
 impl ClientAddress {
     /// The audit actor of a change `principal` makes from this address.
+    /// A change an API key makes is the key's (spec 08 I6), recorded by its service account's
+    /// id; the key's owner is on the service account.
     pub fn actor(self, principal: Authenticated) -> Actor {
-        Actor::User {
-            id: principal.user_id,
-            ip: self.0,
+        match principal.via() {
+            Via::Session => Actor::User {
+                id: principal.user_id,
+                ip: self.0,
+            },
+            Via::ApiKey { service_account_id } => Actor::ApiKey {
+                id: service_account_id,
+                ip: self.0,
+            },
         }
     }
 }

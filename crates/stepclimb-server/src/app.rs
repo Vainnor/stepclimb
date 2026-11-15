@@ -26,7 +26,7 @@ use crate::{
     provider_callback, provider_sign_in,
     providers::Providers,
     rate_limit::RateLimiter,
-    role_assignments, roles, spa, totp, users,
+    role_assignments, roles, service_accounts, spa, totp, users,
     web_origin::WebOrigin,
 };
 
@@ -249,6 +249,15 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         (
             "/api/v1/admin/role-assignments/{assignment_id}",
             delete(role_assignments::delete_role_assignment),
+        ),
+        (
+            service_accounts::SERVICE_ACCOUNTS_PATH,
+            get(service_accounts::list_service_accounts)
+                .post(service_accounts::create_service_account),
+        ),
+        (
+            "/api/v1/admin/service-accounts/{service_account_id}",
+            delete(service_accounts::delete_service_account),
         ),
         (
             branding::BRANDING_PATH,

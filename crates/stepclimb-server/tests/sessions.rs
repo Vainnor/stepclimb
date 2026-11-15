@@ -558,18 +558,21 @@ async fn whoami_with_authorization(fixture: &Fixture, cookie: &str, authorizatio
     }
 }
 
-/// T16 (B16): a bearer request is authenticated by the bearer only. No bearer credential is
-/// accepted until API keys and app tokens exist (spec 08 I6, I8), so a valid session cookie
-/// beside one authenticates nothing, and is neither cleared nor deleted.
+/// T16 (B16): a bearer request is authenticated by the bearer only, so a valid session cookie
+/// beside an invalid bearer credential authenticates nothing, and is neither cleared nor
+/// deleted. A valid key beside a cookie is in `tests/service_accounts.rs`.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn t16_a_bearer_header_is_never_answered_with_the_cookie_beside_it(pool: PgPool) {
     let fixture = Fixture::new(pool).await;
     let cookie = cookie_pair(&fixture.sign_in().await);
 
-    for authorization in ["Bearer sc_someone-else_000000", "bearer x"] {
+    for (authorization, code) in [
+        ("Bearer sc_someone-else_000000", "auth.api_key_invalid"),
+        ("bearer x", "auth.unauthenticated"),
+    ] {
         let answer = whoami_with_authorization(&fixture, &cookie, authorization).await;
         assert_eq!(answer.status, StatusCode::UNAUTHORIZED, "{authorization}");
-        assert_eq!(answer.code(), "auth.unauthenticated");
+        assert_eq!(answer.code(), code);
         assert!(answer.set_cookies().is_empty(), "the cookie is not cleared");
     }
     assert_eq!(fixture.session_count().await, 1);

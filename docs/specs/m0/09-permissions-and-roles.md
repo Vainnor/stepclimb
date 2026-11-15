@@ -295,6 +295,8 @@ also writes to:
   | `password.set` | `password` (the user's id: a password has no row id of its own) | `local_logins::set_password` (`04` issue 6) | `after`: user; never the hash |
   | `totp.enable` | `totp` (the user's id) | `local_totp::confirm` (`04` issue 7) | `after`: user; never the secret or a recovery code |
   | `totp.disable` | `totp` (the user's id) | `local_totp::disable` (`04` issue 7) | `before`: user |
+  | `service_account.create` | `service_account` | `service_accounts::create` (`08` I6) | `after`: name, kind, owner, scopes; never the key or its hash |
+  | `service_account.delete` | `service_account` | `service_accounts::delete` (`08` I6) | `before`: the same |
 
   A request that changes nothing writes nothing, neither the row (its `updated_at` stays) nor an
   entry, and answers the row as it is: a patch naming no member, a patch naming only values the
@@ -315,7 +317,8 @@ also writes to:
   CLI does. `stepclimb admin create` writes `organization.create`, the first
   admin's `role_assignment.grant` and their `enrollment_link.create` as the instance; creating the user is not audited (Q5 lists
   status changes only). `08`'s service accounts and app tokens add their own actor type and the
-  API key id when they land.
+  API key id when they land. `08` I6 added actor type `api_key`, recorded with the service
+  account's id and the client address, for every change an API key makes (`08` B44);.
 - **B24.** `stepclimb_core::audit::list` reads the scope's entries in write order. No route
   reads them in M0; Q5 asks for the entries, not a viewer.
 

@@ -6,7 +6,8 @@
 //! new token, stores its hash and returns the `Set-Cookie` value for `__Host-sc_session`. A route
 //! that needs a signed-in user takes the [`Authenticated`] extractor, which reads the cookie,
 //! resolves the request's organization and asks `stepclimb_core::sessions::authenticate` for the
-//! principal. Sign-out calls [`end`]. The cookie's value is the token and never reaches a log line
+//! principal. A request with an `Authorization: Bearer` header is authenticated by that header
+//! alone ([`crate::api_key`]), never by its cookie (B16). Sign-out calls [`end`]. The cookie's value is the token and never reaches a log line
 //! or an error body.
 
 use std::time::SystemTime;
@@ -25,7 +26,7 @@ use stepclimb_core::{
 };
 
 use crate::{
-    AppState,
+    AppState, api_key,
     cookie::{self, Presented},
     csrf,
     error::ApiError,
@@ -179,11 +180,26 @@ pub(crate) fn presented_hash(headers: &HeaderMap) -> Option<TokenHash> {
     }
 }
 
-/// A request a valid browser session authenticates (B8 to B11).
+/// A request a valid browser session (B8 to B11) or API key (B26, B27) authenticates.
+///
+/// `user_id` is the session's user, or the key's owner. This type carries no permissions: a key
+/// acts with its owner's grants narrowed to its scopes, which only `require::Require` and
+/// `require::AuthOnly` compute, so a handler that checks a permission takes one of those, never
+/// this type alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Authenticated {
     pub user_id: Uuid,
     scope: OrgScope,
+    via: Via,
+}
+
+/// The credential that authenticated a request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Via {
+    /// The `__Host-sc_session` cookie.
+    Session,
+    /// An `Authorization: Bearer sc_...` API key of this service account.
+    ApiKey { service_account_id: Uuid },
 }
 
 impl Authenticated {
@@ -191,6 +207,27 @@ impl Authenticated {
     pub fn scope(&self) -> OrgScope {
         self.scope
     }
+
+    /// The credential the request was authenticated by.
+    pub fn via(&self) -> Via {
+        self.via
+    }
+
+    pub(crate) fn by_api_key(user_id: Uuid, scope: OrgScope, service_account_id: Uuid) -> Self {
+        Self {
+            user_id,
+            scope,
+            via: Via::ApiKey { service_account_id },
+        }
+    }
+}
+
+/// An authenticated request and, for an API key, the key's scopes, which its owner's grants are
+/// narrowed to (B27).
+pub(crate) struct Credentialed {
+    pub(crate) principal: Authenticated,
+    /// `None` for a browser session, which acts with all of its user's grants.
+    pub(crate) key_scopes: Option<Vec<String>>,
 }
 
 /// The 401 (or other failure) of [`Authenticated`], with the cookie cleared when the session
@@ -207,7 +244,7 @@ impl Rejection {
         &self.error
     }
 
-    fn keep(error: ApiError) -> Self {
+    pub(crate) fn keep(error: ApiError) -> Self {
         Self {
             error,
             clear_cookie: false,
@@ -234,11 +271,11 @@ impl IntoResponse for Rejection {
     }
 }
 
-fn unauthorized(code: &'static str, detail: &'static str) -> ApiError {
+pub(crate) fn unauthorized(code: &'static str, detail: &'static str) -> ApiError {
     ApiError::new(StatusCode::UNAUTHORIZED, code, detail)
 }
 
-fn unauthenticated() -> ApiError {
+pub(crate) fn unauthenticated() -> ApiError {
     unauthorized(code::AUTH_UNAUTHENTICATED, "Sign in to use this operation.")
 }
 
@@ -249,51 +286,75 @@ impl FromRequestParts<AppState> for Authenticated {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        // B16: a bearer request is authenticated by its bearer credential only, never by a
-        // cookie beside it. Bearer credentials (API keys, app access tokens) are not accepted
-        // yet, so such a request is anonymous; its cookie is left alone.
-        if csrf::carries_bearer(&parts.headers) {
-            return Err(Rejection::keep(unauthenticated()));
-        }
-        let hash = match presented_cookie(&parts.headers) {
-            Presented::Absent => return Err(Rejection::keep(unauthenticated())),
-            // Neither can name a session: answered as an unknown token, without a lookup.
-            Presented::Ambiguous | Presented::NotAscii => {
-                return Err(Rejection::clear(unauthenticated()));
-            }
-            Presented::One(token) => TokenHash::of(token),
-        };
-        let request_org = request_organization(state, &parts.headers)
-            .await
-            .map_err(Rejection::keep)?;
-        let now = state.clock.now();
-        let authentication = sessions::authenticate(&state.db, request_org, hash.as_bytes(), now)
-            .await
-            .map_err(|error| Rejection::keep(ApiError::internal(&error)))?;
-        match authentication {
-            Authentication::Valid(principal) => Ok(Self {
-                user_id: principal.user_id,
-                scope: principal.scope,
-            }),
-            Authentication::Expired => Err(Rejection::clear(unauthorized(
-                code::AUTH_SESSION_EXPIRED,
-                "The session has expired. Sign in again.",
-            ))),
-            Authentication::Suspended => Err(Rejection::keep(unauthorized(
-                code::AUTH_SUSPENDED,
-                "The account is suspended.",
-            ))),
-            Authentication::Unknown => Err(Rejection::clear(unauthenticated())),
-        }
+        Ok(authenticate(parts, state).await?.principal)
     }
 }
 
-/// The organization the session must belong to (B6, B8): the request's.
+/// Authenticate the request by its bearer credential or its session cookie.
+///
+/// B16: a bearer request is authenticated by its bearer credential only, never by a cookie
+/// beside it, and its cookie is left alone; `crate::api_key` answers it. Any other request is
+/// the session cookie's.
+pub(crate) async fn authenticate(
+    parts: &mut Parts,
+    state: &AppState,
+) -> Result<Credentialed, Rejection> {
+    if csrf::carries_bearer(&parts.headers) {
+        return api_key::authenticate(parts, state).await;
+    }
+    let principal = by_cookie(parts, state).await?;
+    Ok(Credentialed {
+        principal,
+        key_scopes: None,
+    })
+}
+
+/// The principal of the request's session cookie (B8 to B11).
+async fn by_cookie(parts: &Parts, state: &AppState) -> Result<Authenticated, Rejection> {
+    let hash = match presented_cookie(&parts.headers) {
+        Presented::Absent => return Err(Rejection::keep(unauthenticated())),
+        // Neither can name a session: answered as an unknown token, without a lookup.
+        Presented::Ambiguous | Presented::NotAscii => {
+            return Err(Rejection::clear(unauthenticated()));
+        }
+        Presented::One(token) => TokenHash::of(token),
+    };
+    let request_org = request_organization(state, &parts.headers)
+        .await
+        .map_err(Rejection::keep)?;
+    let now = state.clock.now();
+    let authentication = sessions::authenticate(&state.db, request_org, hash.as_bytes(), now)
+        .await
+        .map_err(|error| Rejection::keep(ApiError::internal(&error)))?;
+    match authentication {
+        Authentication::Valid(principal) => Ok(Authenticated {
+            user_id: principal.user_id,
+            scope: principal.scope,
+            via: Via::Session,
+        }),
+        Authentication::Expired => Err(Rejection::clear(unauthorized(
+            code::AUTH_SESSION_EXPIRED,
+            "The session has expired. Sign in again.",
+        ))),
+        Authentication::Suspended => Err(Rejection::keep(suspended())),
+        Authentication::Unknown => Err(Rejection::clear(unauthenticated())),
+    }
+}
+
+/// 401 `auth.suspended`: the credential's user, or the API key's owner, is suspended (B11, B27).
+pub(crate) fn suspended() -> ApiError {
+    unauthorized(code::AUTH_SUSPENDED, "The account is suspended.")
+}
+
+/// The organization the session or API key must belong to (B6, B8, B26): the request's.
 #[expect(
     clippy::disallowed_methods,
-    reason = "spec 08 B8, B13: the session extractor and sign-out look the session up within the request's organization"
+    reason = "spec 08 B8, B13, B26: the credential extractor and sign-out look the session or key up within the request's organization"
 )]
-async fn request_organization(state: &AppState, headers: &HeaderMap) -> Result<OrgScope, ApiError> {
+pub(crate) async fn request_organization(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<OrgScope, ApiError> {
     request_org::resolve(&state.db, headers).await
 }
 

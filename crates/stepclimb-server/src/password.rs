@@ -88,7 +88,7 @@ use crate::{
     },
     rate_limit::{RateLimited, SignIn},
     request_org::RequestOrg,
-    require::SessionOnly,
+    require::{NoBearer, SessionOnly},
     session, totp,
 };
 
@@ -109,6 +109,7 @@ pub mod code {
 
 problem_responses! {
     PasswordSignInUnauthorized => "`auth.credentials_invalid`: the email and password do not match an account of this organization that has a password.",
+    EnrollPasswordForbidden => "`auth.session_required`: the request carries a bearer credential; an enrollment link is used from a browser. `auth.suspended`: the account is suspended. `auth.csrf_refused`: the request did not come from this site.",
     PasswordSignInForbidden => "`auth.suspended`: the account is suspended. `auth.csrf_refused`: the request did not come from this site.",
     PasswordNotFound => "`auth.method_disabled`: password sign-in is switched off for this organization. `org.not_found`: the request's organization cannot be determined.",
     EnrollPasswordInvalid => "`request.malformed`: the body is not `{token, password}`. `auth.enrollment_invalid`: the link is unknown, already used, replaced by a newer link, or for another organization. `auth.enrollment_expired`: the link is older than its 7-day lifetime.",
@@ -166,7 +167,7 @@ pub struct PasswordChange {
             )
         ),
         (status = 400, response = EnrollPasswordInvalid),
-        (status = 403, response = PasswordSignInForbidden),
+        (status = 403, response = EnrollPasswordForbidden),
         (status = 404, response = PasswordNotFound),
         (status = 413, response = crate::openapi::PayloadTooLarge),
         (status = 415, response = crate::openapi::UnsupportedMediaType),
@@ -178,6 +179,7 @@ pub struct PasswordChange {
 )]
 pub async fn enroll_password(
     _limited: RateLimited<SignIn>,
+    _: NoBearer,
     org: RequestOrg,
     client: ClientAddress,
     State(state): State<AppState>,

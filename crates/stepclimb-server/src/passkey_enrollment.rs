@@ -75,6 +75,7 @@ use crate::{
     passkey_options::PasskeyCreationOptions,
     rate_limit::{RateLimited, SignIn},
     request_org::RequestOrg,
+    require::NoBearer,
     roles::code::{NAME_EMPTY, NAME_TOO_LONG, TEXT_CONTAINS_NUL},
     session,
 };
@@ -94,7 +95,7 @@ pub mod code {
 
 problem_responses! {
     EnrollPasskeyInvalid => "`request.malformed`: the body is not `{token, credential, name?}`. `auth.enrollment_invalid`: the link is unknown, already used, replaced by a newer link, or for another organization. `auth.enrollment_expired`: the link is older than its 7-day lifetime. `auth.flow_invalid`: no registration was started in this browser for this link, or it was already finished; open the link again. `auth.flow_expired`: the registration was started more than 10 minutes ago; open the link again. `auth.passkey_invalid`: the passkey's response did not verify, or this passkey is already registered; open the link again and retry.",
-    EnrollPasskeyForbidden => "`auth.suspended`: the account is suspended. `auth.csrf_refused`: the request did not come from this site.",
+    EnrollPasskeyForbidden => "`auth.session_required`: the request carries a bearer credential; an enrollment link is used from a browser. `auth.suspended`: the account is suspended. `auth.csrf_refused`: the request did not come from this site.",
     EnrollPasskeyNotFound => "`auth.method_disabled`: passkey sign-in is switched off for this organization. `org.not_found`: the request's organization cannot be determined.",
 }
 
@@ -225,6 +226,7 @@ pub struct SignedIn {
 )]
 pub async fn enroll_passkey(
     _limited: RateLimited<SignIn>,
+    _: NoBearer,
     org: RequestOrg,
     client: ClientAddress,
     State(state): State<AppState>,

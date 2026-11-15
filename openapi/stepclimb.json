@@ -1252,6 +1252,170 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/api/v1/admin/service-accounts": {
+      "get": {
+        "tags": [
+          "service-accounts"
+        ],
+        "summary": "List the organization's service accounts, oldest first. Keys are never listed.",
+        "operationId": "listServiceAccounts",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page; omit it for the first page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many items to return, 1 to 200; 50 when omitted.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 200,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of service accounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_ServiceAccount"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/ServiceAccountsForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "service-accounts"
+        ],
+        "summary": "Create a service account owned by the caller, and its API key.",
+        "operationId": "createServiceAccount",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewServiceAccount"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The service account is created; `key` is shown this once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedServiceAccount"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/ServiceAccountCreateForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/admin/service-accounts/{service_account_id}": {
+      "delete": {
+        "tags": [
+          "service-accounts"
+        ],
+        "summary": "Delete a service account; its key stops working on the next request.",
+        "operationId": "deleteServiceAccount",
+        "parameters": [
+          {
+            "name": "service_account_id",
+            "in": "path",
+            "description": "The service account's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The service account and its key are deleted"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/ServiceAccountDeleteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/ServiceAccountNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/api/v1/admin/users/{user_id}/enrollment-links": {
       "post": {
         "tags": [
@@ -1289,7 +1453,7 @@
             "$ref": "#/components/responses/Unauthenticated"
           },
           "403": {
-            "$ref": "#/components/responses/IdentityWriteForbidden"
+            "$ref": "#/components/responses/EnrollmentLinkForbidden"
           },
           "404": {
             "$ref": "#/components/responses/UserNotFound"
@@ -1462,7 +1626,7 @@
             "$ref": "#/components/responses/Unauthenticated"
           },
           "403": {
-            "$ref": "#/components/responses/CsrfRefused"
+            "$ref": "#/components/responses/MyIdentityDeleteForbidden"
           },
           "404": {
             "$ref": "#/components/responses/MyIdentityNotFound"
@@ -2768,7 +2932,7 @@
             "$ref": "#/components/responses/EnrollPasswordInvalid"
           },
           "403": {
-            "$ref": "#/components/responses/PasswordSignInForbidden"
+            "$ref": "#/components/responses/EnrollPasswordForbidden"
           },
           "404": {
             "$ref": "#/components/responses/PasswordNotFound"
@@ -2841,7 +3005,7 @@
             "$ref": "#/components/responses/EnrollmentStartInvalid"
           },
           "403": {
-            "$ref": "#/components/responses/CsrfRefused"
+            "$ref": "#/components/responses/EnrollmentStartForbidden"
           },
           "404": {
             "$ref": "#/components/responses/EnrollmentStartNotFound"
@@ -4009,6 +4173,59 @@
           "round"
         ]
       },
+      "CreatedServiceAccount": {
+        "type": "object",
+        "description": "A service account just created, with its API key. Its `Debug` output leaves the key out.",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "scopes",
+          "owner_user_id",
+          "created_at",
+          "last_used_at",
+          "key"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "key": {
+            "type": "string",
+            "description": "The API key, `sc_<random>_<checksum>`. This is the only answer that carries it: store it\nnow. Send it as `Authorization: Bearer <key>`."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ServiceAccountKind"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Always `null`: the key has not been used."
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner_user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "CredentialDescriptor": {
         "type": "object",
         "description": "`PublicKeyCredentialDescriptorJSON`.",
@@ -4684,6 +4901,28 @@
         },
         "additionalProperties": false
       },
+      "NewServiceAccount": {
+        "type": "object",
+        "description": "A service account to create.",
+        "required": [
+          "name",
+          "scopes"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Trimmed; 1 to 200 characters."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Catalog permission keys (`GET /api/v1/admin/permissions`), each at most once and each\nheld by the caller at some scope."
+          }
+        },
+        "additionalProperties": false
+      },
       "NewUser": {
         "type": "object",
         "description": "A user to create. The new user is `local` and `active`, and has no local credential.",
@@ -5025,6 +5264,77 @@
                 "user_id": {
                   "type": "string",
                   "format": "uuid"
+                }
+              }
+            },
+            "description": "The items, in the list's sort order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass this as `cursor` to get the next page; `null` on the last page."
+          }
+        }
+      },
+      "Page_ServiceAccount": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A service account. Its key is never part of it.",
+              "required": [
+                "id",
+                "name",
+                "kind",
+                "scopes",
+                "owner_user_id",
+                "created_at",
+                "last_used_at"
+              ],
+              "properties": {
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "RFC 3339, UTC."
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "kind": {
+                  "$ref": "#/components/schemas/ServiceAccountKind"
+                },
+                "last_used_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time",
+                  "description": "RFC 3339, UTC: the last request the key authenticated, to the minute; `null` before the\nfirst."
+                },
+                "name": {
+                  "type": "string"
+                },
+                "owner_user_id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "The user whose current permissions the scopes are narrowed to."
+                },
+                "scopes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The permission keys the key may use, where its owner holds them."
                 }
               }
             },
@@ -5732,6 +6042,63 @@
           "course"
         ]
       },
+      "ServiceAccount": {
+        "type": "object",
+        "description": "A service account. Its key is never part of it.",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "scopes",
+          "owner_user_id",
+          "created_at",
+          "last_used_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ServiceAccountKind"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "RFC 3339, UTC: the last request the key authenticated, to the minute; `null` before the\nfirst."
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner_user_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The user whose current permissions the scopes are narrowed to."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The permission keys the key may use, where its owner holds them."
+          }
+        }
+      },
+      "ServiceAccountKind": {
+        "type": "string",
+        "description": "The kind of a service account.",
+        "enum": [
+          "api_key"
+        ]
+      },
       "SignInKind": {
         "type": "string",
         "description": "The protocol of a sign-in method.",
@@ -6215,7 +6582,7 @@
         }
       },
       "EnrollPasskeyForbidden": {
-        "description": "`auth.suspended`: the account is suspended. `auth.csrf_refused`: the request did not come from this site.",
+        "description": "`auth.session_required`: the request carries a bearer credential; an enrollment link is used from a browser. `auth.suspended`: the account is suspended. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -6244,6 +6611,16 @@
           }
         }
       },
+      "EnrollPasswordForbidden": {
+        "description": "`auth.session_required`: the request carries a bearer credential; an enrollment link is used from a browser. `auth.suspended`: the account is suspended. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "EnrollPasswordInvalid": {
         "description": "`request.malformed`: the body is not `{token, password}`. `auth.enrollment_invalid`: the link is unknown, already used, replaced by a newer link, or for another organization. `auth.enrollment_expired`: the link is older than its 7-day lifetime.",
         "content": {
@@ -6256,6 +6633,26 @@
       },
       "EnrollmentLinkConflict": {
         "description": "`local.email_required`: the user has no email address, which local sign-in finds them by; add one first.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "EnrollmentLinkForbidden": {
+        "description": "`auth.session_required`: the request carries a bearer credential; only a signed-in browser session creates enrollment links. `permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the user holds a permission, at any scope, that the caller does not hold at organization scope. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "EnrollmentStartForbidden": {
+        "description": "`auth.session_required`: the request carries a bearer credential; an enrollment link is used from a browser. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -6315,7 +6712,7 @@
         }
       },
       "IdentityWriteForbidden": {
-        "description": "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the user holds a permission, at any scope, that the caller does not hold at organization scope. `auth.csrf_refused`: the request did not come from this site.",
+        "description": "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the user holds a permission, at any scope, that the caller does not hold at organization scope. `auth.session_required`: an API key acts on its own owner. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -6416,6 +6813,16 @@
       },
       "MyIdentityDeleteConflict": {
         "description": "`identity.last_sign_in_method`: you would be left with no way to sign in. `identity.local`: the identity is your local account, which is not removed here. `identity.externally_managed`: an identity provider, the sync API, SCIM or a connector owns your user record and would link the identity again; ask an admin.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "MyIdentityDeleteForbidden": {
+        "description": "`auth.session_required`: the request carries a bearer credential; only a signed-in browser session removes your identities. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -6762,6 +7169,46 @@
           }
         }
       },
+      "ServiceAccountCreateForbidden": {
+        "description": "`auth.session_required`: the request carries a bearer credential; only a signed-in browser session creates API keys. `entitlement.feature_unavailable`: the organization's plan does not include API keys. `permission.denied`: the caller does not hold `service_account.manage` at organization scope. `service_account.scope_exceeds_owner`: a scope names a permission the caller does not hold. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ServiceAccountDeleteForbidden": {
+        "description": "`entitlement.feature_unavailable`: the organization's plan does not include API keys. `permission.denied`: the caller does not hold `service_account.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ServiceAccountNotFound": {
+        "description": "`service_account.not_found`: no service account of the organization has this id. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ServiceAccountsForbidden": {
+        "description": "`entitlement.feature_unavailable`: the organization's plan does not include API keys. `permission.denied`: the caller does not hold `service_account.manage` at organization scope.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "SettingsInvalid": {
         "description": "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting this route does not change (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`; `admission`: `PUT /api/v1/admin/admission`); `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses.",
         "content": {
@@ -6813,7 +7260,7 @@
         }
       },
       "Unauthenticated": {
-        "description": "`auth.unauthenticated`: no credential, or one that names no session of the organization. `auth.session_expired`: the session passed its idle or absolute expiry. `auth.suspended`: the user is suspended.",
+        "description": "`auth.unauthenticated`: no credential, or one that names no session of the organization, or a bearer credential that is not an API key. `auth.session_expired`: the session passed its idle or absolute expiry. `auth.api_key_invalid`: the API key is malformed, fails its checksum, or names no service account of the organization. `auth.suspended`: the user, or the API key's owner, is suspended.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -6893,7 +7340,7 @@
         }
       },
       "UserWriteForbidden": {
-        "description": "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email` or `status` of a user who holds a permission the caller does not hold at organization scope. `auth.csrf_refused`: the request did not come from this site.",
+        "description": "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email` or `status` of a user who holds a permission the caller does not hold at organization scope. `auth.session_required`: an API key changes `email` or `status` of its own owner. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -6954,6 +7401,10 @@
     {
       "name": "admission",
       "description": "Who may sign in to the organization"
+    },
+    {
+      "name": "service-accounts",
+      "description": "Service accounts and their API keys"
     }
   ]
 }
