@@ -5,8 +5,8 @@ import { useEffect } from "react";
 
 /**
  * Sets the document title for the current view. `organization` is the signed-in user's
- * organization; signed-out screens pass none and get the product name in its place until the
- * sign-in screens read the organization's name (spec 11 I5).
+ * organization; signed-out screens pass none and get the product name in its place, until
+ * `/.well-known/stepclimb` (spec 08 I9) gives them the organization's name.
  */
 export function useDocumentTitle(view: string, organization?: string): void {
   const { t } = useStepclimbStrings();

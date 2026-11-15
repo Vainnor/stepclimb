@@ -19,6 +19,7 @@ export {
 } from "./patterns/data-table";
 export { EmptyState, type EmptyStateProps, emptyState } from "./patterns/empty-state";
 export { ErrorState, type ErrorStateProps, errorState } from "./patterns/error-state";
+export { FormError, type FormErrorProps, formError } from "./patterns/form-error";
 export {
   type Organization,
   OrgSwitcher,
@@ -45,6 +46,7 @@ export {
   type CheckboxProps,
   checkbox,
 } from "./primitives/checkbox";
+export { Code, type CodeProps, code } from "./primitives/code";
 export {
   ComboBox,
   ComboBoxItem,

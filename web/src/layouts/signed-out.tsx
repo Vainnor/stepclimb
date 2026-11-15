@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The signed-out layout (docs/specs/m0/11-app-shell.md B2, B8): no navigation and no TopBar; the
-// organization's name, then the view. Until the sign-in screens read the organization's name and
-// logo from `/.well-known/stepclimb` (spec 11 I5), it shows the product name.
+// organization's name, then the view. A signed-out browser can learn the organization's name only
+// from `/.well-known/stepclimb` (spec 08 I9), which does not exist yet, so it shows the product
+// name.
 import { Text, useStepclimbStrings } from "@stepclimb/ui";
 import { Outlet } from "@tanstack/react-router";
 import type { ReactNode } from "react";

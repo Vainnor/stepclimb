@@ -13,7 +13,10 @@ down:
 up-stack:
     {{ compose }} --profile stack up -d --wait --build
 
-# Playwright smoke test against this run's own stack (bin/ci_gate.py), built from this checkout
+# Playwright end-to-end tests against this run's own stack (bin/ci_gate.py), built from this
+# checkout. The stack gets one organization and its admin from `stepclimb admin create`, whose
+# printed setup link the enrollment test opens (SC_E2E_ENROLL_URL; it is a test credential of a
+# stack that exists only for this run).
 e2e:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -22,7 +25,11 @@ e2e:
     fi
     gate=(python3 -X utf8 -B bin/ci_gate.py compose --)
     "${gate[@]}" up --detach --wait --build stepclimb
-    SC_E2E_URL="http://$("${gate[@]}" port stepclimb 8080)" pnpm --filter web e2e
+    report="$("${gate[@]}" exec -T stepclimb stepclimb admin create --org-slug example \
+      --org-name "Example Training" --email avery@example.test --name "Avery Example")"
+    address="$("${gate[@]}" port stepclimb 8080)"
+    SC_E2E_URL="http://localhost:${address##*:}" SC_E2E_ENROLL_URL="$(tail -n 1 <<<"$report")" \
+      pnpm --filter web e2e
 
 # Boot the production Compose example with generated secrets and check it, then remove it; inside
 # a gate run its project, subnet and image are the run's own
