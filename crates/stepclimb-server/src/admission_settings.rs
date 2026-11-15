@@ -21,9 +21,11 @@
 //! each provider's config maps (422 `request.invalid` listing at most [`MAX_ERRORS`] problems),
 //! and only the lists that differ are written, each with its audit entry. Rules run on every
 //! sign-in through an outside provider (Q3 (a)), so a change can refuse users who hold
-//! permissions the caller lacks: a change that changes any list is refused with 403
-//! `permission.escalation` unless the caller holds every catalog permission at organization
-//! scope, the rule of `PUT /api/v1/admin/local-sign-in`.
+//! permissions the caller lacks: a body that names any list is refused with 403
+//! `permission.escalation`, before the lists are read or checked, unless the caller holds
+//! every catalog permission at organization scope, the rule of `PUT
+//! /api/v1/admin/local-sign-in`. A stored list that does not parse makes `GET` a 500; a `PUT`
+//! that names it replaces it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -34,12 +36,12 @@ use sqlx::PgConnection;
 use stepclimb_auth::{oauth2_config::Oauth2Config, oidc_config::OidcConfig};
 use stepclimb_core::{
     OrgScope,
-    admission_rules::{self as rules_repo, Problem, RuleSets, RulesInput},
+    admission_rules::{self as rules_repo, Problem, RuleSets, RulesInput, Stored, Unreadable},
     admission_settings::{self as repo, AdmissionPatch, AdmissionSwitches},
     audit::Actor,
-    grants::{Grants, Target},
+    grants::Grants,
     identity_providers::{IdentityProvider, Kind},
-    perm::{self, AdmissionManage},
+    perm::AdmissionManage,
 };
 use utoipa::ToSchema;
 
@@ -52,7 +54,7 @@ use crate::{
     organization::present,
     request_org,
     require::Require,
-    roles::code::PERMISSION_ESCALATION,
+    roles::refuse_unless_holds_every_permission,
 };
 
 /// The path of the admission settings.
@@ -71,7 +73,7 @@ pub mod code {
 }
 
 problem_responses! {
-    AdmissionWriteForbidden => "`permission.denied`: the caller does not hold `admission.manage` at organization scope. `permission.escalation`: the change changes a rule list, which applies to every user who signs in through an outside provider, and the caller does not hold every catalog permission at organization scope. `auth.csrf_refused`: the request did not come from this site.",
+    AdmissionWriteForbidden => "`permission.denied`: the caller does not hold `admission.manage` at organization scope. `permission.escalation`: the body names a rule list, which applies to every user who signs in through an outside provider, and the caller does not hold every catalog permission at organization scope. `auth.csrf_refused`: the request did not come from this site.",
     AdmissionInvalid => "`request.invalid`: the change breaks a rule; `errors` lists each one (at most 20), each with a JSON Pointer to the member. `admission.sync_only_unavailable` marks `sync_only` turned on, which this release refuses. `admission.rule_invalid` marks a rule that is not one of the documented forms or breaks a limit; `admission.attribute_unknown` an attribute no provider the list applies to maps; `admission.provider_unknown` a key in `rules.providers` that is not an outside provider of the organization.",
 }
 
@@ -88,16 +90,17 @@ pub struct AdmissionSettings {
 }
 
 impl AdmissionSettings {
-    fn new(switches: AdmissionSwitches, sets: &RuleSets) -> Self {
+    /// The answer for `switches` and `sets`; a 500 when a list in `sets` does not parse.
+    fn new(switches: AdmissionSwitches, sets: &RuleSets) -> Result<Self, ApiError> {
         let AdmissionSwitches {
             signup_allowed,
             sync_only,
         } = switches;
-        Self {
+        Ok(Self {
             signup_allowed,
             sync_only,
-            rules: AdmissionRules::from(sets),
-        }
+            rules: AdmissionRules::of(sets)?,
+        })
     }
 }
 
@@ -116,16 +119,25 @@ pub struct AdmissionRules {
     pub providers: BTreeMap<String, Value>,
 }
 
-impl From<&RuleSets> for AdmissionRules {
-    fn from(sets: &RuleSets) -> Self {
-        Self {
-            organization: rules_repo::to_json(&sets.organization),
-            providers: sets
-                .providers
-                .iter()
-                .map(|p| (p.provider.key.clone(), rules_repo::to_json(&p.rules)))
-                .collect(),
-        }
+impl AdmissionRules {
+    /// The lists of `sets`; a 500 when one does not parse.
+    fn of(sets: &RuleSets) -> Result<Self, ApiError> {
+        sets.check().map_err(rules_error)?;
+        let json = |stored: &Stored| {
+            stored
+                .as_ref()
+                .map(|rules| rules_repo::to_json(rules))
+                .map_err(|Unreadable(at)| rules_error(rules_repo::Error::StoredRules(at.clone())))
+        };
+        let providers = sets
+            .providers
+            .iter()
+            .map(|p| Ok((p.provider.key.clone(), json(&p.rules)?)))
+            .collect::<Result<_, ApiError>>()?;
+        Ok(Self {
+            organization: json(&sets.organization)?,
+            providers,
+        })
     }
 }
 
@@ -144,7 +156,11 @@ pub enum AdmissionRule {
     All(AdmissionAll),
 }
 
-/// A test of one mapped attribute.
+/// A test of one mapped attribute. Rules see attributes exactly as the provider's claims map
+/// them, verified or not: an attribute mapped from an email claim holds the address the
+/// provider sent even when it did not vouch for it. To rely on such a value, map the
+/// provider's verification claim as an attribute too and require it alongside, as in
+/// `{"attribute": "email_verified", "op": "equals", "value": true}`.
 #[derive(ToSchema)]
 pub struct AdmissionCondition {
     /// The attribute's name, as the provider's `claims.attributes` maps it; 1 to 1,000
@@ -273,7 +289,7 @@ pub async fn get_admission_settings(
     let sets = rules_repo::get(&mut conn, scope)
         .await
         .map_err(rules_error)?;
-    Ok(Json(AdmissionSettings::new(switches, &sets)))
+    Ok(Json(AdmissionSettings::new(switches, &sets)?))
 }
 
 /// Change the admission switches and rule lists the body names; send only what you change. A
@@ -329,8 +345,9 @@ pub async fn update_admission_settings(
         }
         None => rules_repo::get(&mut tx, scope).await.map_err(rules_error)?,
     };
+    let answer = AdmissionSettings::new(switches, &sets)?;
     tx.commit().await.map_err(|e| ApiError::internal(&e))?;
-    Ok(Json(AdmissionSettings::new(switches, &sets)))
+    Ok(Json(answer))
 }
 
 /// Who changes the rules, where and when.
@@ -341,14 +358,25 @@ struct RulesWrite {
 }
 
 impl RulesWrite {
-    /// Apply `patch` on `conn`, a transaction: lock the lists, check the change, refuse an
-    /// escalation, write the lists that differ. Returns every list after the change.
+    /// Apply `patch` on `conn`, a transaction: refuse an escalation when the patch names a list,
+    /// before anything is read, so a caller without every permission learns nothing about
+    /// which attributes the providers map; then lock the lists, check the change and write the
+    /// lists that differ. Returns every list after the change; a list that did not parse and
+    /// that the patch replaced reads as its new rules.
     async fn apply(
         &self,
         conn: &mut PgConnection,
         grants: &Grants,
         patch: &AdmissionRulesPatch,
     ) -> Result<RuleSets, ApiError> {
+        let names_a_list = patch.organization.is_some()
+            || patch
+                .providers
+                .as_ref()
+                .is_some_and(|lists| !lists.is_empty());
+        if names_a_list {
+            refuse_unless_holds_every_permission(grants, ESCALATION_DETAIL)?;
+        }
         let current = rules_repo::lock(&mut *conn, self.scope)
             .await
             .map_err(rules_error)?;
@@ -361,7 +389,6 @@ impl RulesWrite {
         if change.is_empty() {
             return Ok(current);
         }
-        refuse_escalation(grants)?;
         rules_repo::update(conn, self.scope, current, change, self.now, self.actor)
             .await
             .map_err(rules_error)
@@ -392,24 +419,8 @@ fn mapped_attributes(provider: &IdentityProvider) -> BTreeSet<String> {
     names.unwrap_or_default()
 }
 
-/// 403 `permission.escalation` unless the caller holds every catalog permission at
-/// organization scope (see the module's documentation).
-//
-// course scopes: like the user routes' check, this counts every catalog permission at
-// organization scope; M1 must revisit it if it adds a permission not grantable there.
-fn refuse_escalation(grants: &Grants) -> Result<(), ApiError> {
-    let holds_all = perm::ALL
-        .iter()
-        .all(|p| grants.holds_key(p.key(), &Target::Organization));
-    if holds_all {
-        return Ok(());
-    }
-    Err(ApiError::new(
-        StatusCode::FORBIDDEN,
-        PERMISSION_ESCALATION,
-        "Admission rules apply to every user who signs in through an outside provider, including users with permissions you do not hold. Only someone holding every permission can change them.",
-    ))
-}
+/// Why a rule change is refused with `permission.escalation`.
+const ESCALATION_DETAIL: &str = "Admission rules apply to every user who signs in through an outside provider, including users with permissions you do not hold. Only someone holding every permission can change them.";
 
 /// The 422 for a rule change's problems, at most [`MAX_ERRORS`] of them.
 fn rule_problems(problems: Vec<Problem>) -> ApiError {

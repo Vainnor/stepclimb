@@ -7,8 +7,9 @@
 //! provider proved: the provider row, the subject, the mapped profile fields and attributes.
 //! A local sign-in (a passkey, spec 04 B5) ends in [`complete_local`], keyed by the user the
 //! credential belongs to: it runs step 1 alone and reads no identity, so signing in with a
-//! local credential never depends on, or creates, a local identity, and it runs no rules (step
-//! 2 reads mapped attributes, which a local sign-in has none of). [`complete`] runs
+//! local credential never depends on, or creates, a local identity. It runs no rules (step 2
+//! reads mapped attributes, which a local sign-in has none of), but it refuses a user carrying
+//! the refusal marker step 2 records. [`complete`] runs
 //! [`admit`] and, only for an admitted user, creates the browser session (spec 08 B7) on the
 //! same transaction. [`admit`] runs in a savepoint of the caller's transaction (B3): a refusal
 //! rolls back every user and identity write it made, even when the caller then commits (a
@@ -29,7 +30,11 @@
 //!    (`stepclimb_core::admission_rules`), read in this transaction. A rule that fails, or that
 //!    cannot be evaluated (an attribute of the wrong type), refuses with
 //!    `auth.admission_refused`; an absent attribute fails its condition (B9). A stored list
-//!    that does not parse is a fault. With no rules, step 2 admits.
+//!    that does not parse is a fault. With no rules, step 2 admits. A refusal of a known user
+//!    records the refusal marker on the user after the savepoint is rolled back (the caller
+//!    commits it), and a known user who passes the rules has it cleared. A local sign-in
+//!    refuses a user who carries the marker, so signing in with a passkey or a password does
+//!    not get round a rule the user's provider sign-in failed.
 //! 3. **Sync-only mode, the admission webhook** (B11 to B19): not built. A known user goes on
 //!    to the writes below, an unknown identity to step 5, and no identity is matched to an
 //!    existing user any other way (B5, B6).
@@ -162,6 +167,9 @@ pub struct Refusal {
     /// The rule that refused at step 2, and whether it failed or could not be evaluated; boxed
     /// to keep the refusal small on the paths that have none.
     rule: Option<Box<(RuleId, Outcome)>>,
+    /// The known user whose refusal at step 2 [`admit`] records as the refusal marker, after
+    /// it rolled the sign-in's writes back.
+    marks: Option<Uuid>,
 }
 
 impl Refusal {
@@ -170,15 +178,24 @@ impl Refusal {
             step,
             error,
             rule: None,
+            marks: None,
         }
     }
 
-    fn by_rule(rule: RuleId, outcome: Outcome) -> Self {
+    /// A refusal at step 2 by `rule`; `known` is the user of a known identity, whom the
+    /// refusal marks.
+    fn by_rule(rule: RuleId, outcome: Outcome, known: Option<Uuid>) -> Self {
         Self {
             step: Step::Rules,
             error: admission_refused(),
             rule: Some(Box::new((rule, outcome))),
+            marks: known,
         }
+    }
+
+    /// A local sign-in's refusal of a user who carries the refusal marker.
+    fn by_marker() -> Self {
+        Self::new(Step::Rules, admission_refused())
     }
 
     /// The step that refused.
@@ -242,9 +259,10 @@ pub enum Completion {
 }
 
 /// Complete a local sign-in of the user `user_id` on `tx` (spec 04 B5): step 1 by the user's
-/// id (lock the user's row, refuse a suspended user), then the session, ending the sessions
-/// `request_headers`' cookies name. It reads and writes no identity. A user the organization
-/// does not have is a fault.
+/// id (lock the user's row, refuse a suspended user), then the refusal marker (a user whose
+/// last refusal by the rules has not been cleared is refused with `auth.admission_refused`),
+/// then the session, ending the sessions `request_headers`' cookies name. It reads and writes
+/// no identity. A user the organization does not have is a fault.
 pub async fn complete_local(
     tx: &mut Transaction<'_, Postgres>,
     scope: OrgScope,
@@ -256,7 +274,13 @@ pub async fn complete_local(
     let user = identities::lock_user(tx, scope, user_id)
         .await
         .map_err(|e| failed(&e))?;
-    if let Some(refusal) = refused_at_step_1(&user) {
+    let refusal = match refused_at_step_1(&user) {
+        Some(refusal) => Some(refusal),
+        None => refused_by_marker(tx, scope, user.id)
+            .await
+            .map_err(Completion::Failed)?,
+    };
+    if let Some(refusal) = refusal {
         log_refusal(LOCAL_PROVIDER_KEY, &refusal);
         return Err(Completion::Refused(refusal));
     }
@@ -270,6 +294,19 @@ pub async fn complete_local(
 /// Step 1's refusal of `user`, read under its row lock: `auth.suspended` for a suspended user.
 fn refused_at_step_1(user: &User) -> Option<Refusal> {
     (user.status == Status::Suspended).then(|| Refusal::new(Step::KnownIdentity, suspended()))
+}
+
+/// The refusal of a local sign-in by the user `user_id`, who carries the refusal marker, or
+/// `None`.
+async fn refused_by_marker(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    user_id: Uuid,
+) -> Result<Option<Refusal>, ApiError> {
+    let marked = admission_rules::refused_by(&mut *conn, scope, user_id)
+        .await
+        .map_err(|e| ApiError::internal(&e))?;
+    Ok(marked.map(|_| Refusal::by_marker()))
 }
 
 /// The log line of a refusal (B2): the provider's key, the step and the code, and a rule's id
@@ -326,8 +363,9 @@ pub async fn complete(
 }
 
 /// Run admission for `sign_in` in a savepoint of `tx` (module documentation): the admitted
-/// user, or a refusal with every write rolled back. An error is a server fault, and the
-/// savepoint is rolled back with it.
+/// user, or a refusal with every write rolled back. A refusal by the rules of a known user's
+/// sign-in then records the refusal marker on `tx` itself, which the caller commits. An error
+/// is a server fault, and the savepoint is rolled back with it.
 pub async fn admit(
     tx: &mut Transaction<'_, Postgres>,
     sign_in: &Verified<'_>,
@@ -345,6 +383,17 @@ pub async fn admit(
         }
         Admission::Refused(refusal) => {
             sp.rollback().await.map_err(|e| ApiError::internal(&e))?;
+            if let Some(user_id) = refusal.marks {
+                admission_rules::mark_refused(
+                    &mut **tx,
+                    context.scope,
+                    user_id,
+                    provider,
+                    context.now,
+                )
+                .await
+                .map_err(|e| ApiError::internal(&e))?;
+            }
             log_refusal(provider, &refusal);
             Ok(Admission::Refused(refusal))
         }
@@ -392,7 +441,8 @@ async fn steps(
         },
         None => None,
     };
-    if let Some(refusal) = rules(sp, provider, &sign_in.attributes, scope).await? {
+    let known_user_id = known.as_ref().map(|(_, user)| user.id);
+    if let Some(refusal) = rules(sp, provider, &sign_in.attributes, scope, known_user_id).await? {
         return Ok(Admission::Refused(refusal));
     }
     match known {
@@ -418,24 +468,36 @@ async fn known_user(
 }
 
 /// Step 2 (B8 to B10): the refusal of the first rule of the organization's or `provider`'s
-/// list that does not hold for `attributes`, or `None`. A local provider has no rules: its
-/// sign-ins carry no mapped attributes.
+/// list that does not hold for `attributes`, or `None`. `known` is the user of a known
+/// identity: a refusal marks them, and passing the rules clears their marker. A local provider
+/// has no rules, since its sign-ins carry no mapped attributes; its known user is checked for
+/// the refusal marker instead, as [`complete_local`] does.
 async fn rules(
     conn: &mut PgConnection,
     provider: &IdentityProvider,
     attributes: &Map<String, Value>,
     scope: OrgScope,
+    known: Option<Uuid>,
 ) -> Result<Option<Refusal>, ApiError> {
     if provider.kind == Kind::Local {
-        return Ok(None);
+        return match known {
+            Some(user_id) => refused_by_marker(conn, scope, user_id).await,
+            None => Ok(None),
+        };
     }
     log_step(Step::Rules);
     let rules = admission_rules::for_sign_in(&mut *conn, scope, provider)
         .await
         .map_err(|e| ApiError::internal(&e))?;
-    Ok(rules
-        .refusal(attributes)
-        .map(|(rule, outcome)| Refusal::by_rule(rule, outcome)))
+    if let Some((rule, outcome)) = rules.refusal(attributes) {
+        return Ok(Some(Refusal::by_rule(rule, outcome, known)));
+    }
+    if let Some(user_id) = known {
+        admission_rules::clear_refused(&mut *conn, scope, user_id)
+            .await
+            .map_err(|e| ApiError::internal(&e))?;
+    }
+    Ok(None)
 }
 
 /// B7 and Q6's writes for the admitted user `user` of the identity `identity_id`.

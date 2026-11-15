@@ -15,7 +15,10 @@
 //!
 //! A value `v` is a string, an integer or a boolean; the values of one `in` or `not_in` list
 //! are all of one of those types. A pattern is anchored at both ends: `S[1-3]` matches `S2`
-//! and not `S20`. [`parse_list`] refuses anything else, every member it does not know
+//! and not `S20`. It must parse as a regular expression on its own before the anchors are put
+//! around it, so a source such as `a)|(b` cannot close the anchoring group and match anything.
+//! A list holds at most [`MAX_RULES`] rules, [`MAX_CONDITIONS`] conditions and
+//! [`MAX_PATTERNS`] patterns; these limits apply when a stored list is read too. [`parse_list`] refuses anything else, every member it does not know
 //! included, and lists every problem it finds as a [`Problem`]: a path to the member and a
 //! code. [`to_json`] writes the form back; parsing what it wrote gives the same rules.
 
@@ -45,8 +48,16 @@ pub const MAX_DEPTH: usize = 4;
 pub const MAX_VALUES: usize = 100;
 /// The most characters in an attribute name, a string value or a pattern.
 pub const MAX_TEXT_CHARS: usize = 1000;
-/// The most memory, in bytes, one compiled pattern may take.
-const MAX_PATTERN_BYTES: usize = 1 << 20;
+/// The most conditions in one list, counted at every depth.
+pub const MAX_CONDITIONS: usize = 200;
+/// The most `matches` patterns in one list.
+pub const MAX_PATTERNS: usize = 20;
+/// The most memory, in bytes, one compiled pattern may take (the `regex` crate's
+/// `size_limit`). A sign-in compiles the patterns of two lists, so this bounds the work at
+/// 2 x [`MAX_PATTERNS`] x 64 KiB = 2.5 MiB; the patterns an attribute check needs (an ID
+/// format, a list of codes, an email domain) compile to a few KiB. A Unicode class repeated
+/// many times does not fit (`\w{1,20}`); an ASCII class does (`[[:alnum:]_]{1,20}`).
+pub const MAX_PATTERN_BYTES: usize = 64 * 1024;
 
 /// One admission rule.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -125,9 +136,10 @@ pub struct Pattern {
 }
 
 impl Pattern {
-    /// `source` compiled with `^(?:` and `)$` around it, or `None` when it is no regular
-    /// expression the `regex` crate accepts within [`MAX_PATTERN_BYTES`].
+    /// `source` compiled with `^(?:` and `)$` around it, or `None` when it does not parse as a
+    /// regular expression by itself, or compiles to more than [`MAX_PATTERN_BYTES`].
     fn compile(source: &str) -> Option<Self> {
+        regex_syntax::Parser::new().parse(source).ok()?;
         let regex = RegexBuilder::new(&format!("^(?:{source})$"))
             .size_limit(MAX_PATTERN_BYTES)
             .build()
@@ -187,6 +199,8 @@ pub fn parse_list(
     let mut walk = Walk {
         problems: Vec::new(),
         known,
+        conditions: 0,
+        patterns: 0,
     };
     if rules.len() > MAX_RULES {
         walk.problem(path, code::RULE_INVALID);
@@ -196,6 +210,9 @@ pub fn parse_list(
         .enumerate()
         .map(|(i, rule)| walk.rule(rule, &child(path, i), 0))
         .collect();
+    if walk.conditions > MAX_CONDITIONS {
+        walk.problem(path, code::RULE_INVALID);
+    }
     if walk.problems.is_empty() {
         Ok(parsed.into_iter().flatten().collect())
     } else {
@@ -243,6 +260,9 @@ fn child(path: &[String], segment: impl ToString) -> Vec<String> {
 struct Walk<'a> {
     problems: Vec<Problem>,
     known: Option<&'a BTreeSet<String>>,
+    /// The conditions and `matches` patterns met so far, at every depth.
+    conditions: usize,
+    patterns: usize,
 }
 
 impl Walk<'_> {
@@ -299,6 +319,7 @@ impl Walk<'_> {
     }
 
     fn condition(&mut self, map: &Map<String, Value>, path: &[String]) -> Option<Condition> {
+        self.conditions += 1;
         self.unknown_members(map, &["attribute", "op", "value"], path);
         let attribute = self.attribute(map.get("attribute"), &child(path, "attribute"));
         let value = map.get("value");
@@ -378,7 +399,13 @@ impl Walk<'_> {
         Some(scalars)
     }
 
+    /// A `matches` pattern; past [`MAX_PATTERNS`] in the list, refused without compiling it.
     fn pattern(&mut self, value: Option<&Value>, path: &[String]) -> Option<Pattern> {
+        self.patterns += 1;
+        if self.patterns > MAX_PATTERNS {
+            self.problem(path, code::RULE_INVALID);
+            return None;
+        }
         let pattern = value
             .and_then(Value::as_str)
             .filter(|source| usable_text(source))
@@ -458,6 +485,35 @@ mod tests {
         assert!(
             Pattern::compile("a{1000}{1000}").is_none(),
             "over the size limit"
+        );
+    }
+
+    #[test]
+    fn a_pattern_that_does_not_parse_alone_cannot_escape_its_anchors() {
+        for escape in ["a)|(b", ")|(", "[0-9]+)|.*(?:", "x)|.*|(?:y", ")"] {
+            assert!(Pattern::compile(escape).is_none(), "{escape}");
+        }
+        assert_eq!(
+            problems(json!([{ "attribute": "a", "op": "matches", "value": "a)|(b" }])),
+            [("rules/0/value".into(), code::RULE_INVALID)]
+        );
+    }
+
+    #[test]
+    fn everyday_patterns_fit_the_size_limit() {
+        for pattern in [
+            "[0-9]{7}",
+            "[A-Z]{3}[0-9]{1,3}",
+            "(?:S1|S2|S3|C1|C3|I1|I3|SUP|ADM)",
+            r"[a-z0-9._%+-]+@example\.org",
+            r"\w+",
+            "[[:alnum:]_]{1,20}",
+        ] {
+            assert!(Pattern::compile(pattern).is_some(), "{pattern}");
+        }
+        assert!(
+            Pattern::compile(r"\w{1,20}").is_none(),
+            "a repeated Unicode class is over 64 KiB"
         );
     }
 
@@ -572,6 +628,22 @@ mod tests {
         assert_eq!(
             problems(json!([{ "attribute": "a", "op": "in", "value": values }])),
             [("rules/0/value".into(), code::RULE_INVALID)]
+        );
+        let conditions: Vec<Value> = (0..5)
+            .map(|_| json!({ "all": vec![exists.clone(); 41] }))
+            .collect();
+        assert_eq!(
+            problems(Value::Array(conditions)),
+            [("rules".into(), code::RULE_INVALID)],
+            "205 conditions in a list"
+        );
+        let matches = json!({ "attribute": "a", "op": "matches", "value": "x" });
+        let at_limit = Value::Array(vec![matches.clone(); MAX_PATTERNS]);
+        assert!(parse(at_limit).is_ok());
+        let over = Value::Array(vec![matches; MAX_PATTERNS + 1]);
+        assert_eq!(
+            problems(over),
+            [(format!("rules/{MAX_PATTERNS}/value"), code::RULE_INVALID)]
         );
         let long = "a".repeat(MAX_TEXT_CHARS + 1);
         assert_eq!(

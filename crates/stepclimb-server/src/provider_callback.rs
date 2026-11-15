@@ -449,8 +449,12 @@ pub(crate) async fn complete_sign_in(
                 .append(header::SET_COOKIE, session.set_cookie);
             Ok(response)
         }
-        // Admission rolled its own writes back; the transaction holds nothing else.
-        Err(Completion::Refused(refusal)) => Ok(refusal.redirect()),
+        // Admission rolled its own writes back; the transaction holds only the refusal marker
+        // a refusal by the rules records (spec 07 I3), which must be kept.
+        Err(Completion::Refused(refusal)) => {
+            tx.commit().await.map_err(|e| ApiError::internal(&e))?;
+            Ok(refusal.redirect())
+        }
         Err(Completion::Failed(error)) => Err(error),
     }
 }

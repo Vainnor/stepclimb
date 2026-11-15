@@ -3314,7 +3314,7 @@
       },
       "AdmissionCondition": {
         "type": "object",
-        "description": "A test of one mapped attribute.",
+        "description": "A test of one mapped attribute. Rules see attributes exactly as the provider's claims map\nthem, verified or not: an attribute mapped from an email claim holds the address the\nprovider sent even when it did not vouch for it. To rely on such a value, map the\nprovider's verification claim as an attribute too and require it alongside, as in\n`{\"attribute\": \"email_verified\", \"op\": \"equals\", \"value\": true}`.",
         "required": [
           "attribute",
           "op"
@@ -5720,7 +5720,7 @@
         }
       },
       "AdmissionWriteForbidden": {
-        "description": "`permission.denied`: the caller does not hold `admission.manage` at organization scope. `permission.escalation`: the change changes a rule list, which applies to every user who signs in through an outside provider, and the caller does not hold every catalog permission at organization scope. `auth.csrf_refused`: the request did not come from this site.",
+        "description": "`permission.denied`: the caller does not hold `admission.manage` at organization scope. `permission.escalation`: the body names a rule list, which applies to every user who signs in through an outside provider, and the caller does not hold every catalog permission at organization scope. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
           "application/problem+json": {
             "schema": {

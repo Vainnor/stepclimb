@@ -792,7 +792,13 @@ export interface components {
         AdmissionAny: {
             any: components["schemas"]["AdmissionRule"][];
         };
-        /** @description A test of one mapped attribute. */
+        /**
+         * @description A test of one mapped attribute. Rules see attributes exactly as the provider's claims map
+         *     them, verified or not: an attribute mapped from an email claim holds the address the
+         *     provider sent even when it did not vouch for it. To rely on such a value, map the
+         *     provider's verification claim as an attribute too and require it alongside, as in
+         *     `{"attribute": "email_verified", "op": "equals", "value": true}`.
+         */
         AdmissionCondition: {
             /**
              * @description The attribute's name, as the provider's `claims.attributes` maps it; 1 to 1,000
@@ -1874,7 +1880,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `permission.denied`: the caller does not hold `admission.manage` at organization scope. `permission.escalation`: the change changes a rule list, which applies to every user who signs in through an outside provider, and the caller does not hold every catalog permission at organization scope. `auth.csrf_refused`: the request did not come from this site. */
+        /** @description `permission.denied`: the caller does not hold `admission.manage` at organization scope. `permission.escalation`: the body names a rule list, which applies to every user who signs in through an outside provider, and the caller does not hold every catalog permission at organization scope. `auth.csrf_refused`: the request did not come from this site. */
         AdmissionWriteForbidden: {
             headers: {
                 [name: string]: unknown;

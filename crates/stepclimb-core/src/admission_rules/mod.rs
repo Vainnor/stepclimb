@@ -58,19 +58,42 @@ pub enum Error {
     Database(#[from] sqlx::Error),
 }
 
+/// A stored list that does not parse, by where it is stored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unreadable(pub String);
+
+/// A stored list as read: its rules, or [`Unreadable`].
+pub type Stored = Result<Vec<Rule>, Unreadable>;
+
 /// One provider and its list.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProviderRules {
     pub provider: IdentityProvider,
-    pub rules: Vec<Rule>,
+    pub rules: Stored,
 }
 
-/// Every list of an organization: its own and each outside provider's, by key.
+/// Every list of an organization: its own and each outside provider's, by key. [`lock`] reads
+/// a list that does not parse as [`Unreadable`], so a change can replace it; [`get`] refuses
+/// one ([`RuleSets::check`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RuleSets {
-    pub organization: Vec<Rule>,
+    pub organization: Stored,
     /// Every outside provider, enabled or not, sorted by key; an empty list for one with none.
     pub providers: Vec<ProviderRules>,
+}
+
+impl RuleSets {
+    /// [`Error::StoredRules`] naming the first list that does not parse, if any.
+    pub fn check(&self) -> Result<(), Error> {
+        let lists =
+            std::iter::once(&self.organization).chain(self.providers.iter().map(|p| &p.rules));
+        for list in lists {
+            if let Err(Unreadable(location)) = list {
+                return Err(Error::StoredRules(location.clone()));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Which rule refused a sign-in: its JSON Pointer in the admin API's `rules`, such as
@@ -141,13 +164,13 @@ pub async fn for_sign_in(
     .await?
     .ok_or(Error::NotFound)?;
     Ok(SignInRules {
-        organization: organization_rules(stored.as_deref())?,
+        organization: organization_rules(stored.as_deref()).map_err(unreadable)?,
         provider_key: provider.key.clone(),
-        provider: provider_rules(provider)?,
+        provider: provider_rules(provider).map_err(unreadable)?,
     })
 }
 
-/// Every list of the scope's organization.
+/// Every list of the scope's organization; [`Error::StoredRules`] when one does not parse.
 pub async fn get(conn: &mut PgConnection, scope: OrgScope) -> Result<RuleSets, Error> {
     let stored = sqlx::query_scalar!(
         r#"SELECT (settings -> 'admission' -> 'rules')::text AS rules FROM organizations
@@ -158,12 +181,15 @@ pub async fn get(conn: &mut PgConnection, scope: OrgScope) -> Result<RuleSets, E
     .await?
     .ok_or(Error::NotFound)?;
     let providers = identity_providers::list_outside(&mut *conn, scope).await?;
-    rule_sets(stored.as_deref(), providers)
+    let sets = rule_sets(stored.as_deref(), providers);
+    sets.check()?;
+    Ok(sets)
 }
 
 /// [`get`], locking the organization's row (the lock every settings write takes) and then
 /// every outside provider's row until the caller's transaction ends, so [`update`] in the same
-/// transaction replaces the lists read here.
+/// transaction replaces the lists read here. A list that does not parse is read as
+/// [`Unreadable`] rather than refused, so a change naming it can replace it.
 pub async fn lock(conn: &mut PgConnection, scope: OrgScope) -> Result<RuleSets, Error> {
     let stored = sqlx::query_scalar!(
         r#"SELECT (settings -> 'admission' -> 'rules')::text AS rules FROM organizations
@@ -175,29 +201,30 @@ pub async fn lock(conn: &mut PgConnection, scope: OrgScope) -> Result<RuleSets, 
     .await?
     .ok_or(Error::NotFound)?;
     let providers = identity_providers::lock_outside(&mut *conn, scope).await?;
-    rule_sets(stored.as_deref(), providers)
+    Ok(rule_sets(stored.as_deref(), providers))
 }
 
-fn rule_sets(
-    organization: Option<&str>,
-    providers: Vec<IdentityProvider>,
-) -> Result<RuleSets, Error> {
+fn rule_sets(organization: Option<&str>, providers: Vec<IdentityProvider>) -> RuleSets {
     let providers = providers
         .into_iter()
         .map(|provider| {
-            let rules = provider_rules(&provider)?;
-            Ok(ProviderRules { provider, rules })
+            let rules = provider_rules(&provider);
+            ProviderRules { provider, rules }
         })
-        .collect::<Result<_, Error>>()?;
-    Ok(RuleSets {
-        organization: organization_rules(organization)?,
+        .collect();
+    RuleSets {
+        organization: organization_rules(organization),
         providers,
-    })
+    }
+}
+
+fn unreadable(Unreadable(location): Unreadable) -> Error {
+    Error::StoredRules(location)
 }
 
 /// The organization's list from its stored JSON text, `None` when there is none.
-fn organization_rules(stored: Option<&str>) -> Result<Vec<Rule>, Error> {
-    let location = || Error::StoredRules("organizations.settings/admission/rules".into());
+fn organization_rules(stored: Option<&str>) -> Stored {
+    let location = || Unreadable("organizations.settings/admission/rules".into());
     let Some(stored) = stored else {
         return Ok(Vec::new());
     };
@@ -206,9 +233,9 @@ fn organization_rules(stored: Option<&str>) -> Result<Vec<Rule>, Error> {
 }
 
 /// `provider`'s list from its config.
-fn provider_rules(provider: &IdentityProvider) -> Result<Vec<Rule>, Error> {
+fn provider_rules(provider: &IdentityProvider) -> Stored {
     stored_list(provider.config.get(PROVIDER_MEMBER)).ok_or_else(|| {
-        Error::StoredRules(format!(
+        Unreadable(format!(
             "identity_providers({})/{PROVIDER_MEMBER}",
             provider.key
         ))
@@ -275,7 +302,9 @@ pub fn validate(
             .collect();
         let path = ["rules".to_owned(), "organization".to_owned()];
         match parse_list(rules, &path, Some(&known)) {
-            Ok(rules) if rules != current.organization => change.organization = Some(rules),
+            Ok(rules) if current.organization.as_ref() != Ok(&rules) => {
+                change.organization = Some(rules);
+            }
             Ok(_) => {}
             Err(found) => problems.extend(found),
         }
@@ -291,7 +320,7 @@ pub fn validate(
         };
         let known = mapped(&stored.provider);
         match parse_list(rules, &path, Some(&known)) {
-            Ok(rules) if rules != stored.rules => {
+            Ok(rules) if stored.rules.as_ref() != Ok(&rules) => {
                 change.providers.insert(key.clone(), rules);
             }
             Ok(_) => {}
@@ -308,8 +337,8 @@ pub fn validate(
 /// Write `change` over `current`, the lists [`lock`] read on the same connection, by `actor`
 /// at `now`, and return the lists after it. Each list that changes gets its own audit entry
 /// (spec 09 B22): `organization.update_settings` with `admission.rules` before and after, or
-/// `identity_provider.update` with the provider's `admission_rules` before and after. An empty
-/// change writes nothing.
+/// `identity_provider.update` with the provider's `admission_rules` before and after; `before`
+/// is `null` for a list that did not parse. An empty change writes nothing.
 pub async fn update(
     conn: &mut PgConnection,
     scope: OrgScope,
@@ -320,7 +349,7 @@ pub async fn update(
 ) -> Result<RuleSets, Error> {
     let now = epoch_micros(now)?;
     if let Some(rules) = change.organization {
-        let (before, after) = (to_json(&current.organization), to_json(&rules));
+        let (before, after) = (stored_json(&current.organization), to_json(&rules));
         sqlx::query!(
             "UPDATE organizations
              SET settings = CASE WHEN $2::text::jsonb = '[]'::jsonb
@@ -343,16 +372,21 @@ pub async fn update(
         });
         let action = Action::OrganizationUpdateSettings;
         audit::record(conn, scope, actor, action, scope.org_id(), &data, now).await?;
-        current.organization = rules;
+        current.organization = Ok(rules);
     }
     for stored in &mut current.providers {
         let Some(rules) = change.providers.get(&stored.provider.key) else {
             continue;
         };
         write_provider(conn, scope, stored, rules, now, actor).await?;
-        stored.rules = rules.clone();
+        stored.rules = Ok(rules.clone());
     }
     Ok(current)
+}
+
+/// A list's `before` in an audit entry: the rules, or `null` for a list that did not parse.
+fn stored_json(stored: &Stored) -> Value {
+    stored.as_ref().map_or(Value::Null, |rules| to_json(rules))
 }
 
 /// Replace `stored`'s list with `rules`, with its audit entry.
@@ -364,7 +398,7 @@ async fn write_provider(
     now: i64,
     actor: Actor,
 ) -> Result<(), Error> {
-    let (before, after) = (to_json(&stored.rules), to_json(rules));
+    let (before, after) = (stored_json(&stored.rules), to_json(rules));
     let id = stored.provider.id;
     sqlx::query!(
         "UPDATE identity_providers
@@ -388,6 +422,68 @@ async fn write_provider(
     let action = Action::IdentityProviderUpdate;
     audit::record(conn, scope, actor, action, id, &data, now).await?;
     Ok(())
+}
+
+/// Record that step 2 refused the user `user_id`'s sign-in through the provider `provider_key`
+/// at `now` (spec 07 I3, the refusal marker). A local sign-in refuses a user with the marker
+/// ([`refused_by`]); the next sign-in through an outside provider that passes the rules clears
+/// it ([`clear_refused`]). It is not a profile change: `updated_at` stays.
+pub async fn mark_refused(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    user_id: uuid::Uuid,
+    provider_key: &str,
+    now: SystemTime,
+) -> Result<(), Error> {
+    let now = epoch_micros(now)?;
+    sqlx::query!(
+        "UPDATE users
+         SET admission_refused_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond',
+             admission_refused_provider = $3
+         WHERE org_id = $1 AND id = $2",
+        scope.org_id(),
+        user_id,
+        provider_key,
+        now,
+    )
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Clear the user `user_id`'s refusal marker, if it has one.
+pub async fn clear_refused(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    user_id: uuid::Uuid,
+) -> Result<(), Error> {
+    sqlx::query!(
+        "UPDATE users SET admission_refused_at = NULL, admission_refused_provider = NULL
+         WHERE org_id = $1 AND id = $2 AND admission_refused_at IS NOT NULL",
+        scope.org_id(),
+        user_id,
+    )
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// The provider key of the user `user_id`'s refusal marker, or `None` when the user has none
+/// (or the organization has no such user).
+pub async fn refused_by(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    user_id: uuid::Uuid,
+) -> Result<Option<String>, Error> {
+    let provider = sqlx::query_scalar!(
+        "SELECT admission_refused_provider FROM users WHERE org_id = $1 AND id = $2",
+        scope.org_id(),
+        user_id,
+    )
+    .fetch_optional(db)
+    .await?
+    .flatten();
+    Ok(provider)
 }
 
 #[cfg(test)]
@@ -470,32 +566,29 @@ mod tests {
 
     #[test]
     fn a_stored_list_that_does_not_parse_is_an_error() {
-        assert_eq!(organization_rules(None).expect("none"), Vec::new());
+        assert_eq!(organization_rules(None), Ok(Vec::new()));
         assert!(organization_rules(Some("{}")).is_err());
         assert!(organization_rules(Some(r#"[{"op": "exists"}]"#)).is_err());
         assert!(organization_rules(Some("not json")).is_err());
         let broken = provider("sso", json!({ PROVIDER_MEMBER: [{ "any": [] }] }));
         assert!(matches!(
             provider_rules(&broken),
-            Err(Error::StoredRules(at)) if at == "identity_providers(sso)/admission_rules"
+            Err(Unreadable(at)) if at == "identity_providers(sso)/admission_rules"
         ));
-        assert_eq!(
-            provider_rules(&provider("sso", json!({}))).expect("none"),
-            Vec::new()
-        );
+        assert_eq!(provider_rules(&provider("sso", json!({}))), Ok(Vec::new()));
     }
 
     fn sets() -> RuleSets {
         RuleSets {
-            organization: rules(json!([{ "attribute": "rating", "op": "exists" }])),
+            organization: Ok(rules(json!([{ "attribute": "rating", "op": "exists" }]))),
             providers: vec![
                 ProviderRules {
                     provider: provider("a", json!({})),
-                    rules: Vec::new(),
+                    rules: Ok(Vec::new()),
                 },
                 ProviderRules {
                     provider: provider("b", json!({})),
-                    rules: rules(json!([{ "attribute": "region", "op": "exists" }])),
+                    rules: Ok(rules(json!([{ "attribute": "region", "op": "exists" }]))),
                 },
             ],
         }
@@ -516,6 +609,27 @@ mod tests {
             .into_iter()
             .map(|p| (p.path.join("/"), p.code))
             .collect()
+    }
+
+    #[test]
+    fn a_list_that_does_not_parse_can_be_replaced_and_fails_the_check() {
+        let mut broken = sets();
+        broken.providers[1].rules = Err(Unreadable("identity_providers(b)/admission_rules".into()));
+        assert!(matches!(broken.check(), Err(Error::StoredRules(at)) if at.contains("(b)")));
+        let same = vec![json!({ "attribute": "region", "op": "exists" })];
+        let providers: BTreeMap<String, Vec<Value>> = [("b".to_owned(), same)].into();
+        let input = RulesInput {
+            organization: None,
+            providers: Some(&providers),
+        };
+        let change = validate(&broken, input, mapped).expect("valid");
+        assert_eq!(
+            change.providers.keys().collect::<Vec<_>>(),
+            ["b"],
+            "an unreadable list differs from any rules"
+        );
+        assert_eq!(stored_json(&broken.providers[1].rules), Value::Null);
+        assert!(sets().check().is_ok());
     }
 
     #[test]

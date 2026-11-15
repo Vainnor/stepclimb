@@ -28,9 +28,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgExecutor;
 use stepclimb_core::{
     OrgScope,
-    grants::{Grants, Target},
     local_sign_in::{self as repo, LocalMethods, LocalSignIn as CoreLocalSignIn, Method},
-    perm::{self, ProviderManage},
+    perm::ProviderManage,
 };
 use utoipa::ToSchema;
 
@@ -42,7 +41,7 @@ use crate::{
     openapi::problem_responses,
     request_org,
     require::Require,
-    roles::code::PERMISSION_ESCALATION,
+    roles::refuse_unless_holds_every_permission,
 };
 
 /// The path of the local sign-in switches.
@@ -176,32 +175,16 @@ pub async fn update_local_sign_in(
     if current == new {
         return Ok(Json(current.into()));
     }
-    refuse_escalation(require.grants())?;
+    refuse_unless_holds_every_permission(
+        require.grants(),
+        "Local sign-in affects every user, including users with permissions you do not hold. Only someone holding every permission can change it.",
+    )?;
     let actor = client.actor(principal);
     let after = repo::update(&mut *tx, scope, new, state.clock.now(), actor)
         .await
         .map_err(local_error)?;
     tx.commit().await.map_err(|e| ApiError::internal(&e))?;
     Ok(Json(after.into()))
-}
-
-/// 403 `permission.escalation` unless the caller holds every catalog permission at organization
-/// scope (see the module's documentation).
-//
-// course scopes: like the user routes' check, this counts every catalog permission at
-// organization scope; M1 must revisit it if it adds a permission not grantable there.
-fn refuse_escalation(grants: &Grants) -> Result<(), ApiError> {
-    let holds_all = perm::ALL
-        .iter()
-        .all(|p| grants.holds_key(p.key(), &Target::Organization));
-    if holds_all {
-        return Ok(());
-    }
-    Err(ApiError::new(
-        StatusCode::FORBIDDEN,
-        PERMISSION_ESCALATION,
-        "Local sign-in affects every user, including users with permissions you do not hold. Only someone holding every permission can change it.",
-    ))
 }
 
 /// 404 `auth.method_disabled` unless the scope's organization offers `method`: its local row is

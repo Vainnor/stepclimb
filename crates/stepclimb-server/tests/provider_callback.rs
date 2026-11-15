@@ -583,7 +583,7 @@ async fn a_suspended_user_is_refused(pool: PgPool) {
 
 /// `07-admission.md` T7 over the whole callback: a rule on a mapped claim admits the person
 /// whose claim matches and refuses one whose claim differs with `auth.admission_refused`,
-/// creating no user, identity or session.
+/// creating no user, identity or session; a refused known user keeps the refusal marker.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn an_admission_rule_on_a_mapped_claim_refuses_at_the_callback(pool: PgPool) {
     let fixture = Fixture::new(pool).await;
@@ -619,6 +619,31 @@ async fn an_admission_rule_on_a_mapped_claim_refuses_at_the_callback(pool: PgPoo
         .set_id_token_claim("division", Some(json!("USA")));
     fixture.sign_in().await.assert_signed_in("/");
     assert_eq!(fixture.count("users").await, 1);
+
+    // The refusal of a known user keeps the refusal marker the callback commits, and the
+    // next sign-in that passes the rules clears it.
+    fixture
+        .mock
+        .set_id_token_claim("division", Some(json!("CAN")));
+    fixture
+        .sign_in()
+        .await
+        .assert_refused("auth.admission_refused");
+    assert_eq!(marker(&fixture).await.as_deref(), Some("mock"));
+    fixture
+        .mock
+        .set_id_token_claim("division", Some(json!("USA")));
+    fixture.sign_in().await.assert_signed_in("/");
+    assert_eq!(marker(&fixture).await, None);
+}
+
+/// The provider key of the refusal marker of the organization's one user.
+async fn marker(fixture: &Fixture) -> Option<String> {
+    sqlx::query_scalar("SELECT admission_refused_provider FROM users WHERE org_id = $1")
+        .bind(fixture.org)
+        .fetch_one(&fixture.pool)
+        .await
+        .expect("read the marker")
 }
 
 /// Cross-organization (T2's callback half, `07-admission.md` B4): organization B's provider of

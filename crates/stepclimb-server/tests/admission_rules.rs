@@ -142,6 +142,7 @@ impl Fixture {
             public_url: WebOrigin::parse("https://lms.example.org").expect("a valid origin"),
             allowed_origins: Vec::new(),
             rate_limits: Default::default(),
+            passwords: Default::default(),
             providers: stepclimb_server::providers::Providers::new(false)
                 .expect("provider clients"),
         };
@@ -809,20 +810,104 @@ async fn the_rules_are_read_at_sign_in(pool: PgPool) {
     );
 }
 
-/// A local sign-in (a passkey) runs no rules: it carries no mapped attributes, so an
-/// organization-wide rule would otherwise refuse every local account.
+/// Coordinator decision (the refusal marker): when the rules refuse a known user's provider
+/// sign-in, the user is marked outside the rolled-back writes; a local sign-in, with or
+/// without a local identity an enrollment link created, then refuses them; a provider sign-in
+/// that passes the rules clears the marker and local sign-in works again. A new person the
+/// rules refuse has no user to mark.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn a_local_sign_in_runs_no_rules(pool: PgPool) {
+async fn a_refused_provider_user_cannot_sign_in_locally_until_the_rules_pass(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    f.allow_signup().await;
+    let pat = member(
+        &f.pool,
+        f.org,
+        &f.sso,
+        "sub-pat",
+        json!({ "subdivision": "USA" }),
+    )
+    .await;
+    let local = local_provider(&f.pool, f.org).await;
+    let identity = NewIdentity {
+        user_id: pat.id,
+        provider_id: local.id,
+        subject: pat.id.to_string(),
+        attributes: Map::new(),
+    };
+    identities::link(&f.pool, scope(f.org), &identity, now(), Actor::Instance)
+        .await
+        .expect("a local identity, as an enrollment link makes");
+    store_org_rules(&f.pool, f.org, json!([usa()])).await;
+    assert!(
+        complete_local(&f.pool, f.org, pat.id).await.is_ok(),
+        "no marker yet"
+    );
+
+    let moved = json!({ "subdivision": "CAN" });
+    assert_eq!(
+        refusal(&f.pool, f.org, &f.sso, "sub-pat", moved).await,
+        REFUSED
+    );
+    let marker = stepclimb_core::admission_rules::refused_by(&f.pool, scope(f.org), pat.id)
+        .await
+        .expect("read the marker");
+    assert_eq!(marker.as_deref(), Some("sso"));
+    assert_eq!(
+        complete_local(&f.pool, f.org, pat.id).await.err(),
+        Some("auth.admission_refused")
+    );
+    let pat_subject = pat.id.to_string();
+    assert_eq!(
+        refusal(&f.pool, f.org, &local, &pat_subject, json!({})).await,
+        Some((Step::Rules, "auth.admission_refused")),
+        "admit at the local provider checks the marker too"
+    );
+
+    let new = json!({ "subdivision": "CAN" });
+    assert_eq!(
+        refusal(&f.pool, f.org, &f.sso, "sub-new", new).await,
+        REFUSED
+    );
+    assert_eq!(
+        count_users(&f.pool, f.org).await,
+        1,
+        "no user for the new person"
+    );
+
+    let back = json!({ "subdivision": "USA" });
+    assert_eq!(refusal(&f.pool, f.org, &f.sso, "sub-pat", back).await, None);
+    let marker = stepclimb_core::admission_rules::refused_by(&f.pool, scope(f.org), pat.id)
+        .await
+        .expect("read the marker");
+    assert_eq!(marker, None);
+    assert!(complete_local(&f.pool, f.org, pat.id).await.is_ok());
+}
+
+/// A local sign-in of `user` through `admission::complete_local`, committed: `Ok` with a
+/// session, or the refusal's code.
+async fn complete_local(pool: &PgPool, org: Uuid, user: Uuid) -> Result<(), &'static str> {
+    let mut tx = pool.begin().await.expect("begin");
+    let completed =
+        admission::complete_local(&mut tx, scope(org), user, now(), &HeaderMap::new()).await;
+    tx.commit().await.expect("commit");
+    match completed {
+        Ok(started) => {
+            assert_eq!(started.session.user_id, user);
+            Ok(())
+        }
+        Err(admission::Completion::Refused(refusal)) => Err(refusal.code()),
+        Err(admission::Completion::Failed(error)) => panic!("a fault: {error:?}"),
+    }
+}
+
+/// A local sign-in runs no rules: it carries no mapped attributes, so an organization-wide rule
+/// would otherwise refuse every local account.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_local_sign_in_without_a_marker_runs_no_rules(pool: PgPool) {
     let f = Fixture::new(pool).await;
     store_org_rules(&f.pool, f.org, json!([usa()])).await;
     let pat = user_in(&f.pool, f.org).await;
-    let mut tx = f.pool.begin().await.expect("begin");
-    let started =
-        admission::complete_local(&mut tx, scope(f.org), pat.id, now(), &HeaderMap::new())
-            .await
-            .expect("admitted");
-    tx.commit().await.expect("commit");
-    assert_eq!(started.session.user_id, pat.id);
+    assert_eq!(complete_local(&f.pool, f.org, pat.id).await, Ok(()));
 }
 
 /// The same through `admit`: a sign-in at the local provider of a local identity runs no
@@ -1004,14 +1089,23 @@ async fn a_put_replaces_only_the_lists_it_names(pool: PgPool) {
     assert!(stored.1.get("admission_rules").is_none(), "{}", stored.1);
 }
 
-/// Spec 09 B22: a `PUT` whose lists equal the stored ones writes nothing, and since it changes
-/// no list it needs no more than `admission.manage`.
+/// Spec 09 B22: a `PUT` whose lists equal the stored ones writes nothing. A body that names no
+/// list needs no more than `admission.manage`.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn a_put_that_changes_no_list_writes_nothing(pool: PgPool) {
     let f = Fixture::new(pool).await;
     store_org_rules(&f.pool, f.org, json!([usa()])).await;
-    let cookie = f.holder(&[AdmissionManage::KEY]).await;
+    let manager = f.holder(&[AdmissionManage::KEY]).await;
+    let cookie = f.admin().await;
     let before = f.snapshot().await;
+    for body in [
+        json!({ "rules": {} }),
+        json!({ "rules": { "providers": {} } }),
+    ] {
+        let unchanged = f.put(&manager, body.clone()).await;
+        assert_eq!(unchanged.status, StatusCode::OK, "{body}: {unchanged:?}");
+        assert_eq!(f.snapshot().await, before, "{body}");
+    }
 
     for body in [
         json!({ "rules": {} }),
@@ -1030,8 +1124,10 @@ async fn a_put_that_changes_no_list_writes_nothing(pool: PgPool) {
 }
 
 /// Coordinator decision (escalation): rules can refuse any user who signs in through an outside
-/// provider, so a holder of `admission.manage` without every catalog permission cannot change a
-/// list. The refusal writes nothing, a switch in the same body included.
+/// provider, so a holder of `admission.manage` without every catalog permission cannot name a
+/// list, even one equal to the stored list or one that would not validate: the check runs
+/// before the lists are read, so the answer says nothing about the attributes providers map.
+/// The refusal writes nothing, a switch in the same body included.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn changing_a_list_needs_every_permission(pool: PgPool) {
     let f = Fixture::new(pool).await;
@@ -1040,6 +1136,9 @@ async fn changing_a_list_needs_every_permission(pool: PgPool) {
 
     for body in [
         json!({ "rules": { "organization": [usa()] } }),
+        json!({ "rules": { "organization": [] } }),
+        json!({ "rules": { "organization": [{ "attribute": "secret_name", "op": "exists" }] } }),
+        json!({ "rules": { "providers": { "nope": [] } } }),
         json!({ "signup_allowed": true, "rules": { "providers": { "sso": [usa()] } } }),
     ] {
         let refused = f.put(&cookie, body.clone()).await;
@@ -1133,6 +1232,52 @@ async fn an_invalid_change_names_each_problem_and_writes_nothing(pool: PgPool) {
         );
     }
     assert_eq!(f.snapshot().await, before);
+}
+
+/// A stored list that does not parse makes `GET` a 500 and blocks a `PUT` that leaves it as it
+/// is, writing nothing; a `PUT` that names it replaces it, with `before: null` in its audit
+/// entry.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_list_that_does_not_parse_can_be_replaced(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let newer = json!([{ "attribute": "region", "op": "starts_with", "value": "e" }]);
+    store_provider_rules(&f.pool, f.org, &f.club, newer).await;
+    let cookie = f.admin().await;
+    let before = f.snapshot().await;
+
+    let read = f.send(Method::GET, &cookie, None).await;
+    assert_eq!(read.status, StatusCode::INTERNAL_SERVER_ERROR, "{read:?}");
+    let elsewhere = f
+        .put(
+            &cookie,
+            json!({ "signup_allowed": true, "rules": { "organization": [usa()] } }),
+        )
+        .await;
+    assert_eq!(
+        elsewhere.status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "{elsewhere:?}"
+    );
+    assert_eq!(f.snapshot().await, before);
+
+    let region = json!({ "attribute": "region", "op": "exists" });
+    let replaced = f
+        .put(
+            &cookie,
+            json!({ "rules": { "providers": { "club": [region] } } }),
+        )
+        .await;
+    assert_eq!(replaced.status, StatusCode::OK, "{replaced:?}");
+    assert_eq!(replaced.body["rules"]["providers"]["club"], json!([region]));
+    let entries = audit::list(&f.pool, scope(f.org), 100).await.unwrap();
+    let entry = entries.last().expect("an entry");
+    assert_eq!(entry.action, "identity_provider.update");
+    assert_eq!(
+        entry.data,
+        json!({ "before": { "admission_rules": null }, "after": { "admission_rules": [region] } })
+    );
+    let read = f.send(Method::GET, &cookie, None).await;
+    assert_eq!(read.status, StatusCode::OK, "{read:?}");
 }
 
 /// T20 for the rules: organization A's admin writes A's lists; organization B, with a provider

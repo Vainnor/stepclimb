@@ -86,6 +86,9 @@ pub enum Error {
     /// A string the caller passed holds NUL, which PostgreSQL `text` cannot store.
     #[error("{field} cannot contain the NUL character")]
     ContainsNul { field: &'static str },
+    /// The scope's organization has no provider with that id.
+    #[error("the provider does not exist")]
+    NotFound,
     /// A stored `kind` this release does not know.
     #[error("the stored provider kind {0:?} is not one this release knows")]
     UnknownKind(String),
@@ -248,6 +251,52 @@ pub async fn lock_outside(
     .fetch_all(db)
     .await?;
     rows.into_iter().map(IdentityProvider::try_from).collect()
+}
+
+/// Replace the config of the scope's provider `id` with `config`, keeping the stored
+/// admission rules (`crate::admission_rules::PROVIDER_MEMBER`, docs/specs/m0/07-admission.md
+/// I3): the member is taken from the stored row in SQL, and one in `config` is dropped, so no
+/// config write can remove, or set, a provider's rules. Every writer of a provider's config
+/// but `admission_rules::update` goes through this. Sets `updated_at` to `now` when the config
+/// changes. [`Error::NotFound`] when the organization has no such provider.
+pub async fn replace_config(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    id: Uuid,
+    config: &Map<String, Value>,
+    now: SystemTime,
+) -> Result<(), Error> {
+    let config = serde_json::to_string(config).map_err(|_| Error::StoredConfig)?;
+    let now = crate::db::epoch_micros(now)?;
+    let updated = sqlx::query!(
+        r#"UPDATE identity_providers p
+           SET config = n.config,
+               updated_at = CASE WHEN p.config IS DISTINCT FROM n.config
+                   THEN timestamptz 'epoch' + $4::bigint * interval '1 microsecond'
+                   ELSE p.updated_at
+               END
+           FROM (
+               SELECT id,
+                      CASE WHEN config ? 'admission_rules'
+                          THEN ($3::text::jsonb - 'admission_rules')
+                               || jsonb_build_object('admission_rules', config -> 'admission_rules')
+                          ELSE $3::text::jsonb - 'admission_rules'
+                      END AS config
+               FROM identity_providers
+               WHERE org_id = $1 AND id = $2
+           ) n
+           WHERE p.org_id = $1 AND p.id = n.id"#,
+        scope.org_id(),
+        id,
+        config,
+        now,
+    )
+    .execute(db)
+    .await?;
+    if updated.rows_affected() == 0 {
+        return Err(Error::NotFound);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
