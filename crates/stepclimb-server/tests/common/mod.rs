@@ -5,8 +5,9 @@
 //! the specs' later "validated against the OpenAPI schema" cases). It reads the subset of JSON
 //! Schema utoipa writes: `$ref`, `type` (one name or a list), `enum`, `format` (`uuid`,
 //! `date-time` as the API writes it, `int32`, `int64`, `double`), `minimum`, `properties` with `required`,
-//! `additionalProperties` (a schema every undeclared member conforms to), `propertyNames` and
-//! `items`, plus the annotations `description`, `title` and `example`, which constrain nothing.
+//! `additionalProperties` (a schema every undeclared member conforms to), `propertyNames`,
+//! `items` and `oneOf` (exactly one of the schemas conforms; utoipa writes no other constraint
+//! beside it), plus the annotations `description`, `title` and `example`, which constrain nothing.
 //! Any other keyword, another `format`, or a `minimum` that is not a number is reported as an
 //! error rather than skipped, so a schema the checker cannot read never passes by default. A
 //! member the schema does not declare is an error too, so an answer cannot carry more than the
@@ -27,6 +28,7 @@ const CHECKED: &[&str] = &[
     "additionalProperties",
     "propertyNames",
     "items",
+    "oneOf",
 ];
 
 /// Keywords that annotate a schema and constrain nothing.
@@ -65,6 +67,9 @@ fn conforms(document: &Value, schema: &Value, value: &Value, at: &str, errors: &
     if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
         return conforms(document, resolve(document, reference), value, at, errors);
     }
+    if let Some(choices) = schema.get("oneOf") {
+        return one_of_conforms(document, choices, value, at, errors);
+    }
     if !type_conforms(schema, value, at, errors) {
         return;
     }
@@ -82,6 +87,33 @@ fn conforms(document: &Value, schema: &Value, value: &Value, at: &str, errors: &
                 errors,
             );
         }
+    }
+}
+
+/// `value` conforms to exactly one of `choices`, an array of schemas.
+fn one_of_conforms(
+    document: &Value,
+    choices: &Value,
+    value: &Value,
+    at: &str,
+    errors: &mut Vec<String>,
+) {
+    let Some(choices) = choices.as_array() else {
+        errors.push(format!("{at}: oneOf is not an array"));
+        return;
+    };
+    let fitting = choices
+        .iter()
+        .filter(|choice| {
+            let mut found = Vec::new();
+            conforms(document, choice, value, at, &mut found);
+            found.is_empty()
+        })
+        .count();
+    if fitting != 1 {
+        errors.push(format!(
+            "{at}: {value} conforms to {fitting} of the oneOf schemas, not exactly one"
+        ));
     }
 }
 

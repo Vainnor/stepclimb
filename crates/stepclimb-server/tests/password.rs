@@ -487,6 +487,45 @@ async fn a_suspended_user_is_refused(pool: PgPool) {
     assert_eq!(f.sessions_of(pat).await, 0);
 }
 
+/// `07-admission.md` I3 (the refusal marker): a user whose last provider sign-in the admission
+/// rules refused can neither sign in with a password nor set one through an enrollment link,
+/// whose local identity does not exempt them; the link stays usable and nothing is stored.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_user_the_admission_rules_refused_is_refused(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let sam = f.user("sam@example.test").await;
+    let token = f.link(sam).await;
+    let pat = f.user("pat@example.test").await;
+    f.with_password(pat, PASSWORD).await;
+    for user in [sam, pat] {
+        stepclimb_core::admission_rules::mark_refused(&f.pool, scope(f.org), user, "sso", now())
+            .await
+            .expect("mark");
+    }
+
+    let enrolled = f.enroll(&token, PASSWORD).await;
+    assert_eq!(
+        (enrolled.status, enrolled.code()),
+        (StatusCode::FORBIDDEN, "auth.admission_refused")
+    );
+    assert!(!f.link_used(&token).await);
+    assert_eq!(f.stored_hash(sam).await, None);
+
+    let signed_in = f.sign_in("pat@example.test", PASSWORD).await;
+    assert_eq!(
+        (signed_in.status, signed_in.code()),
+        (StatusCode::FORBIDDEN, "auth.admission_refused")
+    );
+    assert!(signed_in.session().is_none());
+    assert_eq!(f.sessions_of(pat).await, 0);
+
+    stepclimb_core::admission_rules::clear_refused(&f.pool, scope(f.org), pat)
+        .await
+        .expect("clear");
+    let signed_in = f.sign_in("pat@example.test", PASSWORD).await;
+    assert_eq!(signed_in.status, StatusCode::OK, "{signed_in:?}");
+}
+
 /// B14, B5: the right password signs in with a session, the device cookie and the sanitized
 /// `return_to`, in any letter case of the email.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]

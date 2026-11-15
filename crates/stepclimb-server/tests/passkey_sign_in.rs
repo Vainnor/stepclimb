@@ -943,6 +943,34 @@ async fn a_suspended_users_passkey_is_refused(pool: PgPool) {
     assert_eq!(f.counter(&sam).await, 0);
 }
 
+/// `07-admission.md` I3 (the refusal marker): a user whose last provider sign-in the admission
+/// rules refused cannot sign in with a passkey; once a provider sign-in that passes the rules
+/// clears the marker, the passkey signs in again.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_user_the_admission_rules_refused_cannot_use_a_passkey(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let mut sam = f.member("sam@example.test").await;
+    stepclimb_core::admission_rules::mark_refused(&f.pool, scope(f.org), sam.id, "sso", now())
+        .await
+        .expect("mark");
+    let started = f.start(&sam.email).await;
+    let answer = f.finish(&started, sam.assert(&started)).await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::FORBIDDEN, "auth.admission_refused"),
+        "{answer:?}"
+    );
+    assert!(answer.session_cookie().is_none());
+    assert_eq!(f.sessions_of(sam.id).await, 0);
+
+    stepclimb_core::admission_rules::clear_refused(&f.pool, scope(f.org), sam.id)
+        .await
+        .expect("clear");
+    let started = f.start(&sam.email).await;
+    let answer = f.finish(&started, sam.assert(&started)).await;
+    assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+}
+
 /// Spec 08 B7, T5: a sign-in makes a new session token and ends the session the browser's old
 /// cookie names, so a planted or earlier cookie is never promoted.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]

@@ -509,6 +509,31 @@ fn role_error(error: roles::Error) -> ApiError {
     }
 }
 
+/// 403 `permission.escalation` with `detail` unless the caller holds every catalog permission
+/// at organization scope: the owner's rule for a write that changes how every user signs in
+/// (`PUT /api/v1/admin/local-sign-in`, the admission rules of `PUT /api/v1/admin/admission`).
+/// An Organization admin holds every catalog permission, so in an organization that has one
+/// this is the user routes' rule applied to every user at once.
+//
+// course scopes: like the user routes' check, this counts every catalog permission at
+// organization scope; M1 must revisit it if it adds a permission not grantable there.
+pub(crate) fn refuse_unless_holds_every_permission(
+    grants: &Grants,
+    detail: &'static str,
+) -> Result<(), ApiError> {
+    let holds_all = perm::ALL
+        .iter()
+        .all(|p| grants.holds_key(p.key(), &Target::Organization));
+    if holds_all {
+        return Ok(());
+    }
+    Err(ApiError::new(
+        StatusCode::FORBIDDEN,
+        code::PERMISSION_ESCALATION,
+        detail,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use stepclimb_core::{

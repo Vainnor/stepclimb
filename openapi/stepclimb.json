@@ -430,11 +430,11 @@
         "tags": [
           "admission"
         ],
-        "summary": "Read the organization's admission switches.",
+        "summary": "Read the organization's admission switches and rules.",
         "operationId": "getAdmissionSettings",
         "responses": {
           "200": {
-            "description": "The admission switches",
+            "description": "The admission switches and rules",
             "content": {
               "application/json": {
                 "schema": {
@@ -464,7 +464,7 @@
         "tags": [
           "admission"
         ],
-        "summary": "Change the admission switches the body names; send only what you change. A switch the body\nleaves out keeps its value, and a body naming only current values changes nothing.",
+        "summary": "Change the admission switches and rule lists the body names; send only what you change. A\nmember the body leaves out keeps its value, and a body naming only current values changes\nnothing.",
         "operationId": "updateAdmissionSettings",
         "requestBody": {
           "content": {
@@ -478,7 +478,7 @@
         },
         "responses": {
           "200": {
-            "description": "The switches after the change",
+            "description": "The switches and rules after the change",
             "content": {
               "application/json": {
                 "schema": {
@@ -2943,7 +2943,7 @@
           "auth"
         ],
         "summary": "Finish a sign-in with an outside identity provider.",
-        "description": "A browser navigation: the provider's redirect back after sign-in, with `code` and `state` or with `error` and `state`. It needs the `__Host-sc_flow` cookie of the flow the start route began, and clears it. Every refusal is a 303 to `/sign-in?error=<code>`: `auth.provider_not_found` (no enabled provider with this key), `auth.flow_invalid` (no flow cookie, a used or unknown flow, a flow for another provider, or another `state`), `auth.flow_expired` (the flow is older than 10 minutes), `auth.provider_denied` (the person declined at the provider), `auth.provider_error` (the provider reported an error, or its token, key set or userinfo answer could not be used), `auth.id_token_invalid` (the ID token failed a check), `auth.subject_missing` (the ID token's `sub` or the OAuth 2 userinfo subject is missing, empty, holds NUL or is longer than 255 characters), the admission refusals `auth.suspended`, `auth.signup_closed` and `entitlement.limit_reached`, or `auth.rate_limited` (with `Retry-After`). An admitted sign-in sets `__Host-sc_session` and is a 303 to the flow's `return_to`.",
+        "description": "A browser navigation: the provider's redirect back after sign-in, with `code` and `state` or with `error` and `state`. It needs the `__Host-sc_flow` cookie of the flow the start route began, and clears it. Every refusal is a 303 to `/sign-in?error=<code>`: `auth.provider_not_found` (no enabled provider with this key), `auth.flow_invalid` (no flow cookie, a used or unknown flow, a flow for another provider, or another `state`), `auth.flow_expired` (the flow is older than 10 minutes), `auth.provider_denied` (the person declined at the provider), `auth.provider_error` (the provider reported an error, or its token, key set or userinfo answer could not be used), `auth.id_token_invalid` (the ID token failed a check), `auth.subject_missing` (the ID token's `sub` or the OAuth 2 userinfo subject is missing, empty, holds NUL or is longer than 255 characters), the admission refusals `auth.suspended`, `auth.admission_refused`, `auth.signup_closed` and `entitlement.limit_reached`, or `auth.rate_limited` (with `Retry-After`). An admitted sign-in sets `__Host-sc_session` and is a 303 to the flow's `return_to`.",
         "operationId": "finishProviderSignIn",
         "parameters": [
           {
@@ -3282,14 +3282,173 @@
         },
         "additionalProperties": false
       },
+      "AdmissionAll": {
+        "type": "object",
+        "description": "Holds when every one of its 1 to 50 rules holds. Groups nest at most 4 deep.",
+        "required": [
+          "all"
+        ],
+        "properties": {
+          "all": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdmissionRule"
+            }
+          }
+        }
+      },
+      "AdmissionAny": {
+        "type": "object",
+        "description": "Holds when at least one of its 1 to 50 rules holds. Groups nest at most 4 deep.",
+        "required": [
+          "any"
+        ],
+        "properties": {
+          "any": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdmissionRule"
+            }
+          }
+        }
+      },
+      "AdmissionCondition": {
+        "type": "object",
+        "description": "A test of one mapped attribute. Rules see attributes exactly as the provider's claims map\nthem, verified or not: an attribute mapped from an email claim holds the address the\nprovider sent even when it did not vouch for it. To rely on such a value, map the\nprovider's verification claim as an attribute too and require it alongside, as in\n`{\"attribute\": \"email_verified\", \"op\": \"equals\", \"value\": true}`.",
+        "required": [
+          "attribute",
+          "op"
+        ],
+        "properties": {
+          "attribute": {
+            "type": "string",
+            "description": "The attribute's name, as the provider's `claims.attributes` maps it; 1 to 1,000\ncharacters."
+          },
+          "op": {
+            "$ref": "#/components/schemas/AdmissionOp"
+          },
+          "value": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AdmissionValue",
+                "description": "`equals`: a string, integer or boolean. `in` and `not_in`: 1 to 100 of them, all of one\ntype. `matches`: a regular expression (Rust `regex` syntax, at most 1,000 characters),\nmatched against the whole value. `exists`: absent."
+              }
+            ]
+          }
+        }
+      },
+      "AdmissionOp": {
+        "type": "string",
+        "description": "What a condition asks of its attribute.",
+        "enum": [
+          "equals",
+          "in",
+          "not_in",
+          "exists",
+          "matches"
+        ]
+      },
+      "AdmissionRule": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AdmissionCondition"
+          },
+          {
+            "$ref": "#/components/schemas/AdmissionAny"
+          },
+          {
+            "$ref": "#/components/schemas/AdmissionAll"
+          }
+        ],
+        "description": "One admission rule: a condition on one mapped attribute, or a group of rules. An attribute\nthat is absent or `null` fails its condition, whatever the `op`; one of a type the rule\ncannot compare refuses the sign-in."
+      },
+      "AdmissionRules": {
+        "type": "object",
+        "description": "The rules every sign-in through an outside provider must pass (Q3 (a)): every rule of the\norganization's list and of the provider's own list. A sign-in with a local account runs no\nrules. A refused person is answered `auth.admission_refused`.",
+        "required": [
+          "organization",
+          "providers"
+        ],
+        "properties": {
+          "organization": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdmissionRule"
+            },
+            "description": "The rules every outside provider's sign-ins must pass. Their attributes must be ones\nsome provider maps; a provider that does not map one fails the rule."
+          },
+          "providers": {
+            "type": "object",
+            "description": "Each outside provider of the organization, enabled or not, by key, with the rules its\nsign-ins must pass besides the organization's; `[]` when it has none.",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/AdmissionRule"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "AdmissionRulesPatch": {
+        "type": "object",
+        "description": "The rule lists to replace: each list named replaces the stored one whole, and a list not\nnamed keeps its rules. At most 50 rules per list.",
+        "properties": {
+          "organization": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdmissionRule"
+            },
+            "description": "The organization's list."
+          },
+          "providers": {
+            "type": "object",
+            "description": "Provider lists by provider key; a provider not named keeps its list. `[]` empties one.",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/AdmissionRule"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "AdmissionScalar": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer",
+            "format": "int64"
+          },
+          {
+            "type": "boolean"
+          }
+        ],
+        "description": "One value of an `in` or `not_in` list."
+      },
       "AdmissionSettings": {
         "type": "object",
         "description": "Who admission lets in.",
         "required": [
           "signup_allowed",
-          "sync_only"
+          "sync_only",
+          "rules"
         ],
         "properties": {
+          "rules": {
+            "$ref": "#/components/schemas/AdmissionRules"
+          },
           "signup_allowed": {
             "type": "boolean",
             "description": "Whether a person the organization has no user for is created as a user when they first\nsign in through an identity provider. Off, they are refused with `auth.signup_closed`."
@@ -3302,8 +3461,11 @@
       },
       "AdmissionSettingsPatch": {
         "type": "object",
-        "description": "A change to the admission switches: send only what you change. An absent member keeps its\nstored value, and `{}` changes nothing. A member sent as `null` is malformed: omit it instead.",
+        "description": "A change to the admission switches and rules: send only what you change. An absent member\nkeeps its stored value, and `{}` changes nothing. A member sent as `null` is malformed: omit\nit instead.",
         "properties": {
+          "rules": {
+            "$ref": "#/components/schemas/AdmissionRulesPatch"
+          },
           "signup_allowed": {
             "type": "boolean",
             "description": "Whether a person the organization has no user for is created as a user when they first\nsign in through an identity provider."
@@ -3332,6 +3494,27 @@
             "description": "Whether only users already provisioned may sign in; `false` unless set."
           }
         }
+      },
+      "AdmissionValue": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer",
+            "format": "int64"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdmissionScalar"
+            }
+          }
+        ],
+        "description": "A condition's value."
       },
       "Appearance": {
         "type": "string",
@@ -5527,7 +5710,7 @@
         }
       },
       "AdmissionInvalid": {
-        "description": "`request.invalid`: the change breaks a rule; `errors` lists each one. `admission.sync_only_unavailable` marks `sync_only` turned on, which this release refuses.",
+        "description": "`request.invalid`: the change breaks a rule; `errors` lists each one (at most 20), each with a JSON Pointer to the member. `admission.sync_only_unavailable` marks `sync_only` turned on, which this release refuses. `admission.rule_invalid` marks a rule that is not one of the documented forms or breaks a limit; `admission.attribute_unknown` an attribute no provider the list applies to maps; `admission.provider_unknown` a key in `rules.providers` that is not an outside provider of the organization.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -5537,7 +5720,7 @@
         }
       },
       "AdmissionWriteForbidden": {
-        "description": "`permission.denied`: the caller does not hold `admission.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site.",
+        "description": "`permission.denied`: the caller does not hold `admission.manage` at organization scope. `permission.escalation`: the body names a rule list, which applies to every user who signs in through an outside provider, and the caller does not hold every catalog permission at organization scope. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
           "application/problem+json": {
             "schema": {

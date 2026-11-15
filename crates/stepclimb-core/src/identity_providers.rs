@@ -86,6 +86,9 @@ pub enum Error {
     /// A string the caller passed holds NUL, which PostgreSQL `text` cannot store.
     #[error("{field} cannot contain the NUL character")]
     ContainsNul { field: &'static str },
+    /// The scope's organization has no provider with that id.
+    #[error("the provider does not exist")]
+    NotFound,
     /// A stored `kind` this release does not know.
     #[error("the stored provider kind {0:?} is not one this release knows")]
     UnknownKind(String),
@@ -203,6 +206,97 @@ pub async fn list_for_user(
     .fetch_all(db)
     .await?;
     rows.into_iter().map(IdentityProvider::try_from).collect()
+}
+
+/// The scope's providers but the local one, enabled or not, sorted by key: every provider an
+/// admission rule list can belong to (docs/specs/m0/07-admission.md Q2 (a)).
+pub async fn list_outside(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+) -> Result<Vec<IdentityProvider>, Error> {
+    let rows = sqlx::query_as!(
+        Row,
+        r#"SELECT id, key, kind, config::text AS "config!", enabled,
+                  (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM identity_providers
+           WHERE org_id = $1 AND kind <> $2
+           ORDER BY key"#,
+        scope.org_id(),
+        Kind::Local.as_str(),
+    )
+    .fetch_all(db)
+    .await?;
+    rows.into_iter().map(IdentityProvider::try_from).collect()
+}
+
+/// [`list_outside`], locking each row `FOR NO KEY UPDATE` until the caller's transaction ends,
+/// in key order, so a write of their admission rules replaces the lists read here.
+pub async fn lock_outside(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+) -> Result<Vec<IdentityProvider>, Error> {
+    let rows = sqlx::query_as!(
+        Row,
+        r#"SELECT id, key, kind, config::text AS "config!", enabled,
+                  (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM identity_providers
+           WHERE org_id = $1 AND kind <> $2
+           ORDER BY key
+           FOR NO KEY UPDATE"#,
+        scope.org_id(),
+        Kind::Local.as_str(),
+    )
+    .fetch_all(db)
+    .await?;
+    rows.into_iter().map(IdentityProvider::try_from).collect()
+}
+
+/// Replace the config of the scope's provider `id` with `config`, keeping the stored
+/// admission rules (`crate::admission_rules::PROVIDER_MEMBER`, docs/specs/m0/07-admission.md
+/// I3): the member is taken from the stored row in SQL, and one in `config` is dropped, so no
+/// config write can remove, or set, a provider's rules. Every writer of a provider's config
+/// but `admission_rules::update` goes through this. Sets `updated_at` to `now` when the config
+/// changes. [`Error::NotFound`] when the organization has no such provider.
+pub async fn replace_config(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    id: Uuid,
+    config: &Map<String, Value>,
+    now: SystemTime,
+) -> Result<(), Error> {
+    let config = serde_json::to_string(config).map_err(|_| Error::StoredConfig)?;
+    let now = crate::db::epoch_micros(now)?;
+    let updated = sqlx::query!(
+        r#"UPDATE identity_providers p
+           SET config = n.config,
+               updated_at = CASE WHEN p.config IS DISTINCT FROM n.config
+                   THEN timestamptz 'epoch' + $4::bigint * interval '1 microsecond'
+                   ELSE p.updated_at
+               END
+           FROM (
+               SELECT id,
+                      CASE WHEN config ? 'admission_rules'
+                          THEN ($3::text::jsonb - 'admission_rules')
+                               || jsonb_build_object('admission_rules', config -> 'admission_rules')
+                          ELSE $3::text::jsonb - 'admission_rules'
+                      END AS config
+               FROM identity_providers
+               WHERE org_id = $1 AND id = $2
+           ) n
+           WHERE p.org_id = $1 AND p.id = n.id"#,
+        scope.org_id(),
+        id,
+        config,
+        now,
+    )
+    .execute(db)
+    .await?;
+    if updated.rows_affected() == 0 {
+        return Err(Error::NotFound);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

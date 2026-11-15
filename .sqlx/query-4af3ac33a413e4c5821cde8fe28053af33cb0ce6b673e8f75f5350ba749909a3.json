@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE identity_providers\n         SET config = CASE WHEN $3::text::jsonb = '[]'::jsonb\n                 THEN config - 'admission_rules'\n                 ELSE config || jsonb_build_object('admission_rules', $3::text::jsonb)\n             END,\n             updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond'\n         WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4af3ac33a413e4c5821cde8fe28053af33cb0ce6b673e8f75f5350ba749909a3"
+}

@@ -88,6 +88,13 @@ jiff = { version = "=0.2.38", default-features = false, features = ["std", "tzdb
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
 thiserror = "=2.0.21"
+# The `matches` test of admission rules (docs/specs/m0/07-admission.md Q1): linear-time
+# matching, so a pattern an admin saves cannot make a sign-in run long. Its regex-automata,
+# regex-syntax, aho-corasick and memchr are the versions tracing-subscriber already brings.
+regex = "=1.13.1"
+# Checks that a `matches` pattern parses on its own before admission rules wrap it in anchors
+# (spec 07 Q1); the version regex already brings.
+regex-syntax = "=0.8.11"
 # stepclimb.toml, the optional configuration file under the STEPCLIMB_* variables
 # (docs/specs/m0/14-compose-deploy.md B8 to B10). Parse and serde only; nothing writes TOML.
 toml = { version = "=1.1.8", default-features = false, features = ["std", "parse", "serde"] }

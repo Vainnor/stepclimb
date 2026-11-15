@@ -28,6 +28,7 @@
 //! repositories arrive with the M0 specs in `docs/specs/m0/`.
 
 pub mod accounts;
+pub mod admission_rules;
 pub mod admission_settings;
 pub mod appearance;
 pub mod audit;

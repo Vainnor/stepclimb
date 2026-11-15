@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE identity_providers p\n           SET config = n.config,\n               updated_at = CASE WHEN p.config IS DISTINCT FROM n.config\n                   THEN timestamptz 'epoch' + $4::bigint * interval '1 microsecond'\n                   ELSE p.updated_at\n               END\n           FROM (\n               SELECT id,\n                      CASE WHEN config ? 'admission_rules'\n                          THEN ($3::text::jsonb - 'admission_rules')\n                               || jsonb_build_object('admission_rules', config -> 'admission_rules')\n                          ELSE $3::text::jsonb - 'admission_rules'\n                      END AS config\n               FROM identity_providers\n               WHERE org_id = $1 AND id = $2\n           ) n\n           WHERE p.org_id = $1 AND p.id = n.id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ff02c8b216ba30ab7448035922a99fc3c5b7cd45c23bcfa51e8d687ab5aa87f4"
+}

@@ -581,6 +581,71 @@ async fn a_suspended_user_is_refused(pool: PgPool) {
     assert_eq!(fixture.count("sessions").await, sessions, "no new session");
 }
 
+/// `07-admission.md` T7 over the whole callback: a rule on a mapped claim admits the person
+/// whose claim matches and refuses one whose claim differs with `auth.admission_refused`,
+/// creating no user, identity or session; a refused known user keeps the refusal marker.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_admission_rule_on_a_mapped_claim_refuses_at_the_callback(pool: PgPool) {
+    let fixture = Fixture::new(pool).await;
+    let claims = json!({ "claims": { "attributes": { "subdivision": "/division" } } });
+    fixture
+        .provider_with(fixture.org, "mock", "oidc", claims)
+        .await;
+    let rules = json!([{ "attribute": "subdivision", "op": "equals", "value": "USA" }]);
+    sqlx::query(
+        "UPDATE identity_providers
+         SET config = config || jsonb_build_object('admission_rules', $2::jsonb)
+         WHERE org_id = $1 AND key = 'mock'",
+    )
+    .bind(fixture.org)
+    .bind(rules)
+    .execute(&fixture.pool)
+    .await
+    .unwrap();
+
+    fixture
+        .mock
+        .set_id_token_claim("division", Some(json!("CAN")));
+    fixture
+        .sign_in()
+        .await
+        .assert_refused("auth.admission_refused");
+    assert_eq!(fixture.count("users").await, 0);
+    assert_eq!(fixture.count("identities").await, 0);
+    assert_eq!(fixture.count("sessions").await, 0);
+
+    fixture
+        .mock
+        .set_id_token_claim("division", Some(json!("USA")));
+    fixture.sign_in().await.assert_signed_in("/");
+    assert_eq!(fixture.count("users").await, 1);
+
+    // The refusal of a known user keeps the refusal marker the callback commits, and the
+    // next sign-in that passes the rules clears it.
+    fixture
+        .mock
+        .set_id_token_claim("division", Some(json!("CAN")));
+    fixture
+        .sign_in()
+        .await
+        .assert_refused("auth.admission_refused");
+    assert_eq!(marker(&fixture).await.as_deref(), Some("mock"));
+    fixture
+        .mock
+        .set_id_token_claim("division", Some(json!("USA")));
+    fixture.sign_in().await.assert_signed_in("/");
+    assert_eq!(marker(&fixture).await, None);
+}
+
+/// The provider key of the refusal marker of the organization's one user.
+async fn marker(fixture: &Fixture) -> Option<String> {
+    sqlx::query_scalar("SELECT admission_refused_provider FROM users WHERE org_id = $1")
+        .bind(fixture.org)
+        .fetch_one(&fixture.pool)
+        .await
+        .expect("read the marker")
+}
+
 /// Cross-organization (T2's callback half, `07-admission.md` B4): organization B's provider of
 /// the same key cannot finish A's flow, A's session is not B's, and the same `sub` signing in
 /// at B's provider is another person in B, never A's user.

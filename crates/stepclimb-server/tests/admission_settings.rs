@@ -77,6 +77,14 @@ fn switches(signup_allowed: bool, sync_only: bool) -> Value {
     json!({ "signup_allowed": signup_allowed, "sync_only": sync_only })
 }
 
+/// The route's answer with these switches and no rules (`tests/admission_rules.rs` covers
+/// the rules).
+fn answer(signup_allowed: bool, sync_only: bool) -> Value {
+    let mut answer = switches(signup_allowed, sync_only);
+    answer["rules"] = json!({ "organization": [], "providers": {} });
+    answer
+}
+
 #[derive(Debug)]
 struct Answer {
     status: StatusCode,
@@ -285,7 +293,7 @@ async fn get_answers_both_switches_off_for_a_new_organization(pool: PgPool) {
     let read = f.send(Method::GET, PATH, &cookie, None).await;
 
     assert_eq!(read.status, StatusCode::OK, "{read:?}");
-    assert_eq!(read.body, switches(false, false));
+    assert_eq!(read.body, answer(false, false));
     assert_schema("AdmissionSettings", &read.body);
 }
 
@@ -301,10 +309,10 @@ async fn admission_manage_alone_changes_the_switches_and_each_change_is_audited(
     let opened = f.put(&cookie, json!({ "signup_allowed": true })).await;
 
     assert_eq!(opened.status, StatusCode::OK, "{opened:?}");
-    assert_eq!(opened.body, switches(true, false));
+    assert_eq!(opened.body, answer(true, false));
     assert_schema("AdmissionSettings", &opened.body);
     let read = f.send(Method::GET, PATH, &cookie, None).await;
-    assert_eq!(read.body, switches(true, false));
+    assert_eq!(read.body, answer(true, false));
     let entries = audit::list(&f.pool, scope(f.org), 100).await.unwrap();
     assert_eq!(entries.len() as i64, entries_before + 1);
     let entry = entries.last().expect("an entry");
@@ -324,7 +332,7 @@ async fn admission_manage_alone_changes_the_switches_and_each_change_is_audited(
     );
 
     let closed = f.put(&cookie, json!({ "signup_allowed": false })).await;
-    assert_eq!(closed.body, switches(false, false));
+    assert_eq!(closed.body, answer(false, false));
     let entries = audit::list(&f.pool, scope(f.org), 100).await.unwrap();
     assert_eq!(entries.len() as i64, entries_before + 2);
 }
@@ -362,7 +370,7 @@ async fn a_put_that_changes_nothing_writes_nothing(pool: PgPool) {
         ] {
             let unchanged = f.put(&cookie, body.clone()).await;
             assert_eq!(unchanged.status, StatusCode::OK, "{body}: {unchanged:?}");
-            assert_eq!(unchanged.body, switches(signup, false), "{body}");
+            assert_eq!(unchanged.body, answer(signup, false), "{body}");
             assert_eq!(f.snapshot().await, before, "{body}");
         }
     }
@@ -382,7 +390,7 @@ async fn a_put_keeps_the_switch_it_does_not_name(pool: PgPool) {
     let opened = f.put(&x, json!({ "signup_allowed": true })).await;
 
     assert_eq!(opened.status, StatusCode::OK, "{opened:?}");
-    assert_eq!(opened.body, switches(true, true));
+    assert_eq!(opened.body, answer(true, true));
     let entries = audit::list(&f.pool, scope(f.org), 100).await.unwrap();
     assert_eq!(
         entries.last().expect("an entry").data["after"]["admission"],
@@ -392,9 +400,9 @@ async fn a_put_keeps_the_switch_it_does_not_name(pool: PgPool) {
     let closed = f.put(&y, json!({ "sync_only": false })).await;
 
     assert_eq!(closed.status, StatusCode::OK, "{closed:?}");
-    assert_eq!(closed.body, switches(true, false));
+    assert_eq!(closed.body, answer(true, false));
     let read = f.send(Method::GET, PATH, &x, None).await;
-    assert_eq!(read.body, switches(true, false));
+    assert_eq!(read.body, answer(true, false));
 }
 
 /// Coordinator decision: `sync_only` cannot be turned on until admission applies it; the
@@ -422,8 +430,8 @@ async fn turning_sync_only_on_is_refused(pool: PgPool) {
     }
 }
 
-/// Every field is validated: a body with an unknown member (the rules are spec 07 issue 3's),
-/// a `null` or a string switch is malformed and writes nothing.
+/// Every field is validated: a body with an unknown member, a `rules` that is not an object, a
+/// `null` or a string switch is malformed and writes nothing.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn a_malformed_body_is_refused(pool: PgPool) {
     let f = Fixture::new(pool).await;
@@ -432,6 +440,7 @@ async fn a_malformed_body_is_refused(pool: PgPool) {
 
     for body in [
         json!({ "signup_allowed": true, "rules": [] }),
+        json!({ "signup_allowed": true, "webhook": {} }),
         json!({ "signup_allowed": null }),
         json!({ "sync_only": null }),
         json!({ "signup_allowed": "true" }),
