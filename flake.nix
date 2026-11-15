@@ -8,7 +8,8 @@
 # nixpkgs (`playwright-driver.browsers`), so `@playwright/test` in package.json must stay at the
 # version of `playwright-driver` here. The Linux libraries are what Tauri 2 links (WebKitGTK 4.1,
 # libsoup 3, GTK 3, librsvg). QEMU's user-mode emulators run the arm64 server image's binary on
-# an amd64 machine whose Docker cannot run arm64 containers (bin/check-image.sh).
+# an amd64 machine whose Docker cannot run arm64 containers (bin/check-image.sh). git-cliff writes
+# the release notes (cliff.toml, bin/release.py).
 {
   description = "Stepclimb dev shell";
 
@@ -43,6 +44,7 @@
                 cargo-deny
                 sqlx-cli
                 gitleaks
+                git-cliff
                 python3
                 nodejs_26
                 pnpm

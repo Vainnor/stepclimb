@@ -24,7 +24,7 @@ Decided list (`docs/plan/technical.md` -> Decided, and `docs/plan/ui.md` -> UI d
 | [0015](0015-ui-library-in-repo-only.md) | The UI library lives in the repository only | Accepted |
 | [0016](0016-live-control-out-of-scope.md) | Live control simulation is out of scope | Accepted |
 | [0017](0017-scorm-in-1x.md) | SCORM playback in 1.x | Accepted |
-| [0018](0018-repository-and-ci.md) | Repository setup and CI | Accepted (CI amended by 0021) |
+| [0018](0018-repository-and-ci.md) | Repository setup and CI | Accepted (CI amended by 0021, release merges by 0030) |
 | [0019](0019-minio-image.md) | Which MinIO image the Compose stack uses | Accepted (Chainguard image, revisit in M1) |
 | [0020](0020-american-english.md) | American English in docs, comments and UI copy | Accepted |
 | [0021](0021-no-hosted-ci.md) | No hosted CI: the merge gate runs locally | Accepted |
@@ -36,3 +36,4 @@ Decided list (`docs/plan/technical.md` -> Decided, and `docs/plan/ui.md` -> UI d
 | [0027](0027-mock-identity-provider.md) | The mock identity provider is a test-only workspace crate | Accepted |
 | [0028](0028-oidc-discovery-and-authorization.md) | OIDC discovery and the authorization request on openidconnect's types | Accepted |
 | [0029](0029-id-token-checks.md) | ID token checks on plain JSON claims, signatures by openidconnect's keys | Accepted |
+| [0030](0030-release-merge-commits.md) | Release PRs into main use a merge commit | Accepted |

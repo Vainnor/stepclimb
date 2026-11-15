@@ -7,6 +7,7 @@ differs:
 - each workspace member from `cargo metadata --no-deps`, whose manifest must say
   `version.workspace = true`, and its entry in Cargo.lock;
 - apps/app/src-tauri/Cargo.toml, its Cargo.lock entry and tauri.conf.json;
+- openapi/stepclimb.json `info.version`, which utoipa takes from the server crate's version;
 - any package.json with a `version` that Changesets does not own. The packages Changesets
   versions (those not in .changeset/config.json `ignore`) keep their own number (ADR 0015).
 
@@ -25,8 +26,12 @@ import tomllib
 from pathlib import Path
 
 APP = "apps/app/src-tauri"
+OPENAPI = "openapi/stepclimb.json"
 # Semantic Versioning 2.0.0: MAJOR.MINOR.PATCH and an optional pre-release; no build metadata.
-SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$")
+# A numeric identifier, in the core or the pre-release, has no leading zero (section 9).
+_PRE_ID = r"(0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)"
+SEMVER = re.compile(rf"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-{_PRE_ID}(\.{_PRE_ID})*)?$")
+OPENAPI_VERSION = re.compile(r'^(    "version": )"[^"]*"', re.M)
 TOML_VERSION = re.compile(r'^version\s*=\s*"[^"]*"', re.M)
 JSON_VERSION = re.compile(r'^(  "version": )"[^"]*"', re.M)
 
@@ -113,6 +118,7 @@ def places(root: Path) -> list[tuple[str, str]]:
     app_lock = lock_versions(root / APP / "Cargo.lock")
     found.append((f"{APP}/Cargo.lock ({app.get('name')})", ", ".join(sorted(app_lock.get(app.get("name"), set())))))
     found.append((f"{APP}/tauri.conf.json", read_json(root / APP / "tauri.conf.json").get("version", "")))
+    found.append((f"{OPENAPI} info.version", read_json(root / OPENAPI).get("info", {}).get("version", "")))
     found += [(str(path), data["version"]) for path, data in owned_package_jsons(root)]
     return found
 
@@ -155,11 +161,19 @@ def set_toml(path: Path, section: str, version: str) -> None:
     path.write_text(text[:header.end()] + body + text[end.start() if end else len(text):])
 
 
-def set_json(path: Path, version: str) -> None:
-    """Rewrites the top-level `"version"` line so the file keeps its formatting."""
-    text = replace_once(JSON_VERSION, path.read_text(), rf'\g<1>"{version}"', str(path))
+def set_json(path: Path, version: str, pattern: re.Pattern[str] = JSON_VERSION) -> None:
+    """Rewrites the `"version"` line `pattern` finds (top level by default) so the file keeps its
+    formatting."""
+    text = replace_once(pattern, path.read_text(), rf'\g<1>"{version}"', str(path))
     json.loads(text)
     path.write_text(text)
+
+
+def set_openapi(path: Path, version: str) -> None:
+    """Rewrites `info.version`, the first four-space `"version"` line, and checks that it was."""
+    set_json(path, version, OPENAPI_VERSION)
+    if read_json(path).get("info", {}).get("version") != version:
+        raise VersionError(f"{path}: the first nested \"version\" line is not info.version")
 
 
 def set_version(root: Path, version: str) -> int:
@@ -170,6 +184,7 @@ def set_version(root: Path, version: str) -> int:
     set_toml(root / "Cargo.toml", "workspace.package", version)
     set_toml(root / APP / "Cargo.toml", "package", version)
     set_json(root / APP / "tauri.conf.json", version)
+    set_openapi(root / OPENAPI, version)
     for path, _ in owned:
         set_json(root / path, version)
     print(f"set-version: wrote {version}")

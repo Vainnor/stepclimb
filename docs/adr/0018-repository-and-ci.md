@@ -1,6 +1,6 @@
 # 0018. Repository setup and CI
 
-- **Status:** Accepted (CI amended by 0021)
+- **Status:** Accepted (CI amended by 0021, release merges by 0030)
 - **Date:** 2026-11-12
 - **Decider:** the owner: the plan's Decided list (Repo setup), and the owner's answers on 2026-11-12
 - **Related:** `docs/plan/technical.md` -> Decided (Repo setup), Testing, How it's built; `justfile`; `.github/`
