@@ -146,6 +146,14 @@ webauthn-authenticator-rs = { version = "=0.6.2", default-features = false, feat
 # features off: `alloc` and `password-hash` for the PHC strings, `getrandom` for each hash's
 # salt, `zeroize` to wipe the working memory. No `parallel`: one lane (Q8), so rayon adds nothing.
 argon2 = { version = "=0.6.0", default-features = false, features = ["alloc", "password-hash", "getrandom", "zeroize"] }
+# TOTP for local accounts (docs/specs/m0/04-local-accounts.md B19 to B21, Q11): RFC 6238 over
+# HMAC-SHA-1 in `stepclimb_auth::totp`, and base32 for the secret an authenticator app takes. The
+# versions the lockfile already holds (webauthn-rs-core and sqlx-postgres bring them); no TOTP crate,
+# since the algorithm is a dozen lines checked against the RFCs' own test vectors. sha1's `oid`
+# and `alloc` are not needed.
+hmac = { version = "=0.13.0", default-features = false }
+sha1 = { version = "=0.11.0", default-features = false }
+data-encoding = { version = "=2.11.1", default-features = false, features = ["alloc"] }
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["fmt", "env-filter", "json", "ansi"] }
 
 [workspace.lints.rust]
