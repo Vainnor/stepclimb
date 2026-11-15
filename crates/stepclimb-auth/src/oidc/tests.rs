@@ -34,6 +34,7 @@ fn settings(scopes: &[&str]) -> OidcSettings {
         },
         userinfo: true,
         allow_local_passkeys: false,
+        trusted_for_email_matching: false,
     }
 }
 

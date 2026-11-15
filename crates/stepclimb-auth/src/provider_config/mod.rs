@@ -28,6 +28,12 @@ use uuid::Uuid;
 
 use crate::encryption::{DecryptError, EncryptError, KeyRing};
 
+/// The member, in either kind's config, that marks the provider as trusted for matching users
+/// by email (`docs/specs/m0/03-users-and-identities.md` Q2 (a), `07-admission.md` B5): a
+/// boolean, `false` when absent. Admission reads it from the stored row and counts the provider
+/// as trusted only when the member is exactly `true`.
+pub const TRUSTED_FOR_EMAIL_MATCHING: &str = "trusted_for_email_matching";
+
 /// The codes of [`ConfigProblem`]s.
 pub mod code {
     /// A required member is missing.

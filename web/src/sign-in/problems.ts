@@ -88,6 +88,8 @@ function codeMessage(code: string, screen: SignInScreen, t: Strings["t"]): strin
       return t("signIn.problem.suspended");
     case "auth.admission_refused":
       return t("signIn.problem.admissionRefused");
+    case "auth.not_provisioned":
+      return t("signIn.problem.notProvisioned");
     case "local.passkeys_not_allowed":
       return t("signIn.problem.passkeysNotAllowed");
     case "auth.flow_expired":
@@ -150,6 +152,8 @@ function navigationMessage(code: string, t: Strings["t"]): string | undefined {
       return t("signIn.problem.suspended");
     case "auth.admission_refused":
       return t("signIn.problem.admissionRefused");
+    case "auth.not_provisioned":
+      return t("signIn.problem.notProvisioned");
     case "auth.signup_closed":
       return t("signIn.problem.signupClosed");
     case "entitlement.limit_reached":

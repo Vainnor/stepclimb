@@ -271,53 +271,56 @@ async fn update_settings_refuses_an_unknown_time_zone(pool: PgPool) {
     assert_eq!(stored(&pool, a).await, before);
 }
 
-/// Spec 03 B17, T14: `email_matching` reads `false` by default and cannot be turned on, alone
-/// or beside a valid key; the refusal writes nothing, not even the valid key, and no audit entry.
-/// `false` is accepted and, being the current value, writes nothing either (spec 09 B22).
+/// Spec 03 B17, spec 07 I4: `email_matching` reads `false` by default and the repository turns
+/// it on and off like any other key, with one audit entry per change; who may turn it on is the
+/// route's check. `false` while it is off is the current value and writes nothing (spec 09 B22).
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn update_settings_refuses_to_turn_email_matching_on(pool: PgPool) {
+async fn update_settings_turns_email_matching_on_and_off(pool: PgPool) {
     let a = insert_org(&pool, "org-a", "Org A").await;
     let before = stored(&pool, a).await;
     let settings = organizations::settings(&pool, scope(a)).await.unwrap();
     assert!(!settings.email_matching);
+    let entries = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM audit_events WHERE action = 'organization.update_settings'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+    let set = |on| OrgSettingsPatch {
+        email_matching: Some(on),
+        ..OrgSettingsPatch::default()
+    };
 
-    for default_tz in [None, Some("Europe/Dublin".to_owned())] {
-        let patch = OrgSettingsPatch {
-            default_tz: default_tz.clone(),
-            email_matching: Some(true),
-        };
-        let result = organizations::update_settings(
+    let settings = organizations::update_settings(
+        &pool,
+        scope(a),
+        &set(false),
+        request_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+    assert!(!settings.email_matching);
+    assert_eq!(stored(&pool, a).await, before, "false is the current value");
+    assert_eq!(entries().await, 0);
+
+    for on in [true, false] {
+        let settings = organizations::update_settings(
             &pool,
             scope(a),
-            &patch,
+            &set(on),
             request_time(),
             Actor::Instance,
         )
-        .await;
-        assert!(
-            matches!(result, Err(Error::EmailMatchingUnavailable)),
-            "{default_tz:?}: {result:?}"
-        );
+        .await
+        .unwrap();
+        assert_eq!(settings.email_matching, on);
+        let read = organizations::settings(&pool, scope(a)).await.unwrap();
+        assert_eq!(read.email_matching, on);
     }
-    assert_eq!(stored(&pool, a).await, before, "the refusals wrote nothing");
-
-    let patch = OrgSettingsPatch {
-        email_matching: Some(false),
-        ..OrgSettingsPatch::default()
-    };
-    let settings =
-        organizations::update_settings(&pool, scope(a), &patch, request_time(), Actor::Instance)
-            .await
-            .unwrap();
-    assert!(!settings.email_matching);
-    assert_eq!(stored(&pool, a).await, before, "false is the current value");
-    let entries: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM audit_events WHERE action = 'organization.update_settings'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(entries, 0);
+    assert_eq!(entries().await, 2, "one entry per change");
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]

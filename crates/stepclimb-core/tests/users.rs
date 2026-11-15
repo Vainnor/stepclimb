@@ -1041,3 +1041,200 @@ async fn a_manager_is_another_user_of_the_same_organization(pool: PgPool) {
         .await
         .expect("a manager in the same organization is accepted");
 }
+
+/// The record of a verified email (spec 07 I4): the address, lowercased, while it is the
+/// stored email.
+async fn verified_email(pool: &PgPool, id: Uuid) -> Option<String> {
+    sqlx::query_scalar("SELECT verified_email FROM users WHERE id = $1")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .expect("read the record")
+}
+
+/// Spec 07 I4: a local user's email is recorded as verified when it is created and whenever it
+/// changes (an admin writes it); an `idp` user's starts unrecorded, and a change to another
+/// address drops a record, while a change of letter case keeps it.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_verified_email_record_follows_who_wrote_the_email(pool: PgPool) {
+    let a = insert_org(&pool, "org-a").await;
+    let local = create(&pool, a, with_email("Local", "Pat@Example.test")).await;
+    assert_eq!(
+        verified_email(&pool, local.id).await.as_deref(),
+        Some("pat@example.test")
+    );
+    let mut idp = with_email("Idp", "robin@example.test");
+    idp.source = Source::Idp;
+    let idp = create(&pool, a, idp).await;
+    assert_eq!(verified_email(&pool, idp.id).await, None);
+
+    let email = |email: Option<&str>| UserPatch {
+        email: Some(email.map(str::to_owned)),
+        ..UserPatch::default()
+    };
+    let update = |id, patch: UserPatch| {
+        let pool = pool.clone();
+        async move {
+            users::update(&pool, scope(a), id, &patch, later_time())
+                .await
+                .expect("update")
+        }
+    };
+    update(local.id, email(Some("new@example.test"))).await;
+    assert_eq!(
+        verified_email(&pool, local.id).await.as_deref(),
+        Some("new@example.test")
+    );
+    update(local.id, email(None)).await;
+    assert_eq!(verified_email(&pool, local.id).await, None);
+
+    assert!(
+        users::record_verified_email(&pool, scope(a), idp.id, "ROBIN@example.test")
+            .await
+            .unwrap()
+    );
+    assert!(
+        !users::record_verified_email(&pool, scope(a), idp.id, "robin@example.test")
+            .await
+            .unwrap(),
+        "already recorded"
+    );
+    update(idp.id, email(Some("Robin@Example.test"))).await;
+    assert_eq!(
+        verified_email(&pool, idp.id).await.as_deref(),
+        Some("robin@example.test")
+    );
+    update(idp.id, email(Some("moved@example.test"))).await;
+    assert_eq!(verified_email(&pool, idp.id).await, None);
+}
+
+/// `record_verified_email` records only the user's own stored address, only in the scope's
+/// organization, and never moves `updated_at`.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn record_verified_email_records_only_the_stored_address(pool: PgPool) {
+    let a = insert_org(&pool, "org-a").await;
+    let b = insert_org(&pool, "org-b").await;
+    let mut idp = with_email("Idp", "robin@example.test");
+    idp.source = Source::Idp;
+    let user = create(&pool, a, idp).await;
+    let before = stored(&pool, user.id).await;
+
+    let other = users::record_verified_email(&pool, scope(a), user.id, "other@example.test");
+    assert!(!other.await.unwrap());
+    let cross = users::record_verified_email(&pool, scope(b), user.id, "robin@example.test");
+    assert!(!cross.await.unwrap());
+    assert_eq!(stored(&pool, user.id).await, before);
+
+    assert!(
+        users::record_verified_email(&pool, scope(a), user.id, "robin@example.test")
+            .await
+            .unwrap()
+    );
+    let after = users::get(&pool, scope(a), user.id).await.unwrap().unwrap();
+    assert_eq!(after.updated_at, user.updated_at);
+}
+
+/// The table holds a record to the stored address: one naming another address, or with no
+/// email, is refused by the check constraint.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_database_refuses_a_record_for_another_address(pool: PgPool) {
+    let a = insert_org(&pool, "org-a").await;
+    let user = create(&pool, a, with_email("Pat", "pat@example.test")).await;
+    for sql in [
+        "UPDATE users SET verified_email = 'other@example.test' WHERE id = $1",
+        "UPDATE users SET verified_email = 'Pat@example.test' WHERE id = $1",
+        "UPDATE users SET email = 'moved@example.test' WHERE id = $1",
+        "UPDATE users SET email = NULL WHERE id = $1",
+    ] {
+        let result = sqlx::query(sql).bind(user.id).execute(&pool).await;
+        assert_eq!(sqlstate(result), "23514", "{sql}");
+    }
+}
+
+/// `find_email_match` finds a local or `idp` user whose stored email is recorded as verified,
+/// in any letter case, in the scope's organization only; never another source's user, nor one
+/// whose email is unrecorded.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn find_email_match_finds_only_a_matchable_verified_user(pool: PgPool) {
+    let a = insert_org(&pool, "org-a").await;
+    let b = insert_org(&pool, "org-b").await;
+    // No identity exists, so any provider id excludes no one.
+    let provider = new_id();
+    let local = create(&pool, a, with_email("Local", "local@example.test")).await;
+    let found = users::find_email_match(&pool, scope(a), " LOCAL@example.test ", provider)
+        .await
+        .unwrap();
+    assert_eq!(found.map(|u| u.id), Some(local.id));
+    assert!(
+        users::find_email_match(&pool, scope(b), "local@example.test", provider)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    for source in [Source::Idp, Source::Sync, Source::Scim, Source::Connector] {
+        let email = format!("{}@example.test", source.as_str());
+        let mut new = with_email(source.as_str(), &email);
+        new.source = source;
+        let user = create(&pool, a, new).await;
+        assert!(
+            users::find_email_match(&pool, scope(a), &email, provider)
+                .await
+                .unwrap()
+                .is_none(),
+            "{source:?} unrecorded"
+        );
+        users::record_verified_email(&pool, scope(a), user.id, &email)
+            .await
+            .unwrap();
+        let found = users::find_email_match(&pool, scope(a), &email, provider)
+            .await
+            .unwrap();
+        let matchable = source == Source::Idp;
+        assert_eq!(
+            found.map(|u| u.id),
+            matchable.then_some(user.id),
+            "{source:?}"
+        );
+    }
+}
+
+/// Spec 07 I4 (coordinator decision): matching compares ASCII addresses with ASCII case folded
+/// only. A stored address with a Kelvin sign (U+212A) or a dotted capital I (U+0130), whose
+/// Unicode lowercase is ASCII-like, never matches its ASCII look-alike, nor the other way.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn find_email_match_never_folds_unicode_case(pool: PgPool) {
+    let a = insert_org(&pool, "org-a").await;
+    let provider = new_id();
+    let kelvin = create(&pool, a, with_email("Kelvin", "\u{212A}im@example.test")).await;
+    let dotted = create(&pool, a, with_email("Dotted", "\u{130}vy@example.test")).await;
+    let ascii = create(&pool, a, with_email("Ascii", "mak@example.test")).await;
+    for user in [&kelvin, &dotted, &ascii] {
+        assert!(
+            verified_email(&pool, user.id).await.is_some(),
+            "local users are recorded"
+        );
+    }
+    for email in [
+        "kim@example.test",
+        "Kim@example.test",
+        "ivy@example.test",
+        "i\u{307}vy@example.test",
+        "\u{212A}im@example.test",
+        "\u{130}vy@example.test",
+        "ma\u{212A}@example.test",
+    ] {
+        let found = users::find_email_match(&pool, scope(a), email, provider)
+            .await
+            .unwrap();
+        assert_eq!(found.map(|u| u.id), None, "{email}");
+    }
+    let found = users::find_email_match(&pool, scope(a), "MAK@example.test", provider)
+        .await
+        .unwrap();
+    assert_eq!(
+        found.map(|u| u.id),
+        Some(ascii.id),
+        "ASCII case still folds"
+    );
+}

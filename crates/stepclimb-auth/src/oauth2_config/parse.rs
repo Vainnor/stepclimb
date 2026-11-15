@@ -5,14 +5,14 @@ use serde_json::{Map, Value};
 
 use super::{
     ConfigErrors, Oauth2Claims, Oauth2Config, Oauth2ConfigDraft, Oauth2Settings, SealedSecret,
-    StoredConfigError, code,
+    StoredConfigError, TRUSTED_FOR_EMAIL_MATCHING, code,
 };
 use crate::claims::ProfileMapping;
 use crate::outbound::UrlPolicy;
 use crate::provider_config::walk::{self, Walk};
 
 /// The members of an `oauth2` config.
-const MEMBERS: [&str; 9] = [
+const MEMBERS: [&str; 10] = [
     "authorize",
     "token",
     "userinfo",
@@ -22,6 +22,7 @@ const MEMBERS: [&str; 9] = [
     "pkce",
     "claims",
     "allow_local_passkeys",
+    TRUSTED_FOR_EMAIL_MATCHING,
 ];
 
 /// The members of `claims`.
@@ -83,6 +84,12 @@ fn settings(
         map.get("allow_local_passkeys"),
         false,
     );
+    let trusted_for_email_matching = walk::flag(
+        walk,
+        TRUSTED_FOR_EMAIL_MATCHING,
+        map.get(TRUSTED_FOR_EMAIL_MATCHING),
+        false,
+    );
     Some(Oauth2Settings {
         authorize: authorize?,
         token: token?,
@@ -92,6 +99,7 @@ fn settings(
         pkce: pkce?,
         claims: claims?,
         allow_local_passkeys: allow_local_passkeys?,
+        trusted_for_email_matching: trusted_for_email_matching?,
     })
 }
 

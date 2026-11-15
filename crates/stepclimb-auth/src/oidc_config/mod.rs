@@ -15,6 +15,7 @@
 //! | `claims` | an object of JSON Pointers: `given_name`, `family_name`, `email`, `email_verified`, `groups`, and `attributes`, an object of names to pointers | B13's defaults for the four profile fields; no `groups`, no attributes |
 //! | `userinfo` | a boolean: whether sign-in also reads the provider's userinfo endpoint (Q3) | `true` |
 //! | `allow_local_passkeys` | a boolean: whether the provider's users may add a passkey under `/api/v1/me/passkeys` (`04-local-accounts.md` B13) | `false` |
+//! | `trusted_for_email_matching` | a boolean: whether, with the organization's `email_matching` on, a sign-in whose verified email equals a user's verified email may be linked to that user (`07-admission.md` B5) | `false` |
 //!
 //! A provider declared in `stepclimb.toml` is validated the same way, then stored with
 //! [`OidcConfig::from_config_file`]: no secret in the row, `source: "config"` in its place
@@ -42,7 +43,7 @@ use crate::outbound::UrlPolicy;
 use crate::provider_config::walk;
 pub use crate::provider_config::{
     ClientSecret, ConfigErrors, ConfigProblem, ConfigSecrets, DraftSecret, ProviderRow,
-    SealedSecret, SecretError, StoredConfigError, StoredSecret, code,
+    SealedSecret, SecretError, StoredConfigError, StoredSecret, TRUSTED_FOR_EMAIL_MATCHING, code,
 };
 
 /// The member that lets a provider's users add a passkey (`04-local-accounts.md` B13). The
@@ -91,6 +92,9 @@ pub struct OidcSettings {
     pub userinfo: bool,
     /// Whether the provider's users may add a passkey; off unless the admin says so.
     pub allow_local_passkeys: bool,
+    /// Whether the provider is trusted for matching users by email; off unless the admin says
+    /// so.
+    pub trusted_for_email_matching: bool,
 }
 
 /// A validated config, before its secret is sealed.
@@ -164,6 +168,10 @@ impl OidcConfig {
         config.insert("claims".into(), Value::Object(claims));
         config.insert("userinfo".into(), s.userinfo.into());
         config.insert(ALLOW_LOCAL_PASSKEYS.into(), s.allow_local_passkeys.into());
+        config.insert(
+            TRUSTED_FOR_EMAIL_MATCHING.into(),
+            s.trusted_for_email_matching.into(),
+        );
         config
     }
 

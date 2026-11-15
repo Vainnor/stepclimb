@@ -87,10 +87,6 @@ pub enum Error {
     /// The patch's `default_tz` is no time zone of the IANA database ([`crate::tz`]).
     #[error("the default time zone is not an IANA time zone")]
     DefaultTzUnknown,
-    /// The patch sets `email_matching` to `true`, which no release accepts until matching by
-    /// email is implemented (spec 03 B17).
-    #[error("matching users by email cannot be turned on yet")]
-    EmailMatchingUnavailable,
     /// The stored settings object does not parse as [`OrgSettings`].
     #[error("the stored organization settings do not parse")]
     StoredSettings(#[source] serde_json::Error),
@@ -256,8 +252,8 @@ pub async fn settings(db: impl PgExecutor<'_>, scope: OrgScope) -> Result<OrgSet
 /// a copy read earlier, so a patch cannot write back a stale value for a key it does not name,
 /// and stored keys the patch does not name (including ones this release does not know) stay.
 /// Returns the settings after the merge. A `default_tz` that is no IANA time zone is refused
-/// with [`Error::DefaultTzUnknown`], and `email_matching: true` with
-/// [`Error::EmailMatchingUnavailable`], before anything is read.
+/// with [`Error::DefaultTzUnknown`] before anything is read. Who may turn `email_matching` on is
+/// the route's check (spec 07 I4), not this function's.
 ///
 /// It writes the `organization.update_settings` audit entry by `actor` with the effective
 /// value of each key the patch names, before and after. A patch that names no key, or only keys
@@ -315,20 +311,13 @@ pub async fn update_settings<'c>(
 }
 
 /// `patch` with each value validated and in its stored form: `default_tz` in the time zone
-/// database's spelling, so `utc` stores, and compares with the current value, as `UTC`.
-///
-/// `email_matching` may only be set to `false` (spec 03 B17): nothing links an identity by email
-/// yet, so `true` would be a stored value no code applies, and the conditions spec 03 Q2 sets for
-/// it (a verified address, a provider trusted for matching) would not exist. Spec 07 issue 4
-/// implements the matching and lifts this refusal.
+/// database's spelling, so `utc` stores, and compares with the current value, as `UTC`. A
+/// `default_tz` is the only value that can be refused.
 fn valid_patch(patch: &OrgSettingsPatch) -> Result<OrgSettingsPatch, Error> {
     let default_tz = match patch.default_tz.as_deref() {
         Some(name) => Some(crate::tz::canonical(name).ok_or(Error::DefaultTzUnknown)?),
         None => None,
     };
-    if patch.email_matching == Some(true) {
-        return Err(Error::EmailMatchingUnavailable);
-    }
     Ok(OrgSettingsPatch {
         default_tz,
         email_matching: patch.email_matching,

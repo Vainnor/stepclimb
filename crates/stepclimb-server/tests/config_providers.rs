@@ -21,7 +21,13 @@ use stepclimb_auth::{
     outbound::{OutboundClient, UrlPolicy},
     provider_config::{ConfigSecrets, ProviderRow},
 };
-use stepclimb_core::{clock::ManualClock, id::Uuid, organizations};
+use stepclimb_core::{
+    OrgScope, Source,
+    clock::ManualClock,
+    id::Uuid,
+    identities, organizations,
+    users::{self, NewUser},
+};
 use stepclimb_mock_idp::{Endpoint, MockIdp};
 use stepclimb_server::{
     AppState, Config,
@@ -762,4 +768,65 @@ async fn a_row_rewritten_from_another_file_gets_no_secret_here(pool: PgPool) {
         mock.requests_to(Endpoint::OAuth2Token).is_empty(),
         "no secret was sent"
     );
+}
+
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the test stands in for the admin route that creates the user"
+)]
+fn scope(org_id: Uuid) -> OrgScope {
+    OrgScope::instance(org_id)
+}
+
+/// Spec 07 I4: `trusted_for_email_matching = true` in the file reaches the stored row, and a
+/// sign-in through that provider whose verified email is an existing user's is linked to that
+/// user (email matching on, sign-up off). The mapping names `email` and `email_verified`.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_file_provider_trusted_for_matching_links_by_email(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    sqlx::query("UPDATE organizations SET settings = settings || '{\"email_matching\": true}' WHERE id = $1")
+        .bind(a)
+        .execute(&pool)
+        .await
+        .expect("matching on");
+    let scope = scope(a);
+    let new = NewUser {
+        display_name: "Robin Example".into(),
+        given_name: String::new(),
+        family_name: String::new(),
+        email: Some("robin@example.test".into()),
+        locale: None,
+        tz: "UTC".into(),
+        source: Source::Local,
+        external_id: None,
+    };
+    let robin = users::create(&pool, scope, &new, start())
+        .await
+        .expect("create user");
+    let mock = mock().await;
+    mock.set_oauth2_userinfo(Some(json!({
+        "data": { "cid": 1000001, "email": "Robin@example.test", "verified": true }
+    })));
+    let file = mock_entry(&mock, &mock.client_secret()).replace(
+        "\n[providers.claims]\n",
+        "trusted_for_email_matching = true\n\n[providers.claims]\n",
+    ) + "email = \"/data/email\"\nemail_verified = \"/data/verified\"\n";
+    let secrets = apply(&pool, &file, start()).await.expect("applies");
+    let rows = rows(&pool).await;
+    assert_eq!(rows[0].4["trusted_for_email_matching"], json!(true));
+
+    let answer = sign_in(&pool, a, secrets).await;
+
+    assert!(answer.signed_in(), "{answer:?}");
+    let linked = identities::list_for_user(&pool, scope, robin.id)
+        .await
+        .expect("list identities");
+    assert_eq!(linked.len(), 1);
+    assert_eq!(linked[0].subject, "1000001");
+    let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE org_id = $1")
+        .bind(a)
+        .fetch_one(&pool)
+        .await
+        .expect("count users");
+    assert_eq!(users, 1);
 }

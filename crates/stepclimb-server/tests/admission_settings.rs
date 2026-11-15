@@ -2,9 +2,9 @@
 //! The admission switches over the router (docs/specs/m0/07-admission.md B12, B23, Q2; T19 and
 //! T20 for `/api/v1/admin/admission`). The permission suite's four cases and cross-organization
 //! case for both operations are in `tests/permissions.rs`; these tests cover the values, the
-//! audit entry, a change that changes nothing, a partial body that keeps the other switch, the
-//! `sync_only` refusal, malformed bodies, and that admission reads what the route writes, in its
-//! own organization only.
+//! audit entry, a change that changes nothing, a partial body that keeps the other switch,
+//! malformed bodies, and that admission reads what the route writes (both switches), in its own
+//! organization only.
 //!
 //! Requests name their organization with the `test-support` header of `request_org`, since one
 //! test has two organizations. `session::start` stands in for the sign-in specs.
@@ -25,6 +25,7 @@ use sqlx::PgPool;
 use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{
     OrgScope, Source,
+    admission_settings::{self, AdmissionPatch},
     audit::{self, Actor},
     clock::ManualClock,
     id::{Uuid, new_id},
@@ -212,7 +213,7 @@ impl Fixture {
         self.send(Method::PUT, PATH, cookie, Some(body)).await
     }
 
-    /// Store `sync_only` by SQL, as a release whose admission applies it would let an admin.
+    /// Store `sync_only` by SQL, beside whatever the route wrote.
     async fn store_sync_only(&self) {
         sqlx::query(
             r#"UPDATE organizations
@@ -256,13 +257,18 @@ async fn provider_in(pool: &PgPool, org: Uuid) -> IdentityProvider {
         .expect("the provider exists")
 }
 
-/// Whether admission lets in a person `org` has no user for, through `provider`, as a
-/// provider's callback asks it.
-async fn admits_new_person(pool: &PgPool, org: Uuid, provider: &IdentityProvider) -> bool {
+/// The refusal code admission answers a person `org` has no user for, through `provider`, as a
+/// provider's callback asks it; `None` when it admits them.
+async fn new_person_refused(
+    pool: &PgPool,
+    org: Uuid,
+    provider: &IdentityProvider,
+) -> Option<&'static str> {
     let sign_in = Verified {
         provider,
         subject: "sub-new",
         profile: Profile::default(),
+        email_verified: false,
         attributes: Map::new(),
     };
     let context = Context {
@@ -276,11 +282,8 @@ async fn admits_new_person(pool: &PgPool, org: Uuid, provider: &IdentityProvider
         .expect("admission answers");
     tx.rollback().await.expect("roll back");
     match admission {
-        Admission::Admitted(_) => true,
-        Admission::Refused(refusal) => {
-            assert_eq!(refusal.code(), "auth.signup_closed");
-            false
-        }
+        Admission::Admitted(_) => None,
+        Admission::Refused(refusal) => Some(refusal.code()),
     }
 }
 
@@ -405,31 +408,6 @@ async fn a_put_keeps_the_switch_it_does_not_name(pool: PgPool) {
     assert_eq!(read.body, answer(true, false));
 }
 
-/// Coordinator decision: `sync_only` cannot be turned on until admission applies it; the
-/// refusal names the field and writes nothing, whatever `signup_allowed` says.
-#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn turning_sync_only_on_is_refused(pool: PgPool) {
-    let f = Fixture::new(pool).await;
-    let (cookie, _) = f.holder(&[AdmissionManage::KEY]).await;
-    let before = f.snapshot().await;
-
-    for body in [json!({ "sync_only": true }), switches(true, true)] {
-        let refused = f.put(&cookie, body.clone()).await;
-        assert_eq!(
-            refused.status,
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "{body}: {refused:?}"
-        );
-        assert_eq!(refused.code(), "request.invalid");
-        assert_eq!(refused.body["errors"][0]["field"], "/sync_only");
-        assert_eq!(
-            refused.body["errors"][0]["code"],
-            "admission.sync_only_unavailable"
-        );
-        assert_eq!(f.snapshot().await, before, "{body}");
-    }
-}
-
 /// Every field is validated: a body with an unknown member, a `rules` that is not an object, a
 /// `null` or a string switch is malformed and writes nothing.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
@@ -499,16 +477,72 @@ async fn admission_applies_the_written_switch_in_its_own_organization_only(pool:
         .id;
     let provider_b = provider_in(&f.pool, org_b).await;
     let (cookie, _) = f.holder(&[AdmissionManage::KEY]).await;
-    assert!(!admits_new_person(&f.pool, f.org, &provider_a).await);
-    assert!(!admits_new_person(&f.pool, org_b, &provider_b).await);
+    let closed = Some("auth.signup_closed");
+    assert_eq!(
+        new_person_refused(&f.pool, f.org, &provider_a).await,
+        closed
+    );
+    assert_eq!(
+        new_person_refused(&f.pool, org_b, &provider_b).await,
+        closed
+    );
 
     let opened = f.put(&cookie, json!({ "signup_allowed": true })).await;
     assert_eq!(opened.status, StatusCode::OK, "{opened:?}");
 
-    assert!(admits_new_person(&f.pool, f.org, &provider_a).await);
-    assert!(!admits_new_person(&f.pool, org_b, &provider_b).await);
+    assert_eq!(new_person_refused(&f.pool, f.org, &provider_a).await, None);
+    assert_eq!(
+        new_person_refused(&f.pool, org_b, &provider_b).await,
+        closed
+    );
     let b = organizations::settings(&f.pool, scope(org_b))
         .await
         .unwrap();
     assert!(!b.admission.signup_allowed);
+}
+
+/// B11, B12 and T20 for `sync_only`: `admission.manage` turns it on with one audit entry, and
+/// admission then refuses a new person `auth.not_provisioned` though sign-up is allowed, in the
+/// caller's organization only; organization B, with sign-up allowed too, still admits.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn sync_only_written_by_the_route_refuses_new_people_in_its_organization(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let provider_a = provider_in(&f.pool, f.org).await;
+    let org_b = organizations::create(&f.pool, "org-b", "Org B", now())
+        .await
+        .expect("create organization B")
+        .id;
+    let provider_b = provider_in(&f.pool, org_b).await;
+    let (cookie, _) = f.holder(&[AdmissionManage::KEY]).await;
+    let opened = f.put(&cookie, json!({ "signup_allowed": true })).await;
+    assert_eq!(opened.status, StatusCode::OK, "{opened:?}");
+    let open_b = AdmissionPatch {
+        signup_allowed: Some(true),
+        ..AdmissionPatch::default()
+    };
+    admission_settings::update(&f.pool, scope(org_b), open_b, now(), Actor::Instance)
+        .await
+        .expect("open sign-up in B");
+    let before = audit::list(&f.pool, scope(f.org), 100).await.unwrap().len();
+
+    let on = f.put(&cookie, json!({ "sync_only": true })).await;
+
+    assert_eq!(on.status, StatusCode::OK, "{on:?}");
+    assert_eq!(
+        (&on.body["signup_allowed"], &on.body["sync_only"]),
+        (&json!(true), &json!(true))
+    );
+    let entries = audit::list(&f.pool, scope(f.org), 100).await.unwrap();
+    assert_eq!(entries.len(), before + 1);
+    assert_eq!(
+        entries.last().expect("an entry").data["after"]["admission"],
+        switches(true, true)
+    );
+    let refused = new_person_refused(&f.pool, f.org, &provider_a).await;
+    assert_eq!(refused, Some("auth.not_provisioned"));
+    assert_eq!(new_person_refused(&f.pool, org_b, &provider_b).await, None);
+
+    let off = f.put(&cookie, json!({ "sync_only": false })).await;
+    assert_eq!(off.status, StatusCode::OK, "{off:?}");
+    assert_eq!(new_person_refused(&f.pool, f.org, &provider_a).await, None);
 }

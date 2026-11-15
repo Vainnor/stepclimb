@@ -141,7 +141,7 @@ declined at the provider), `auth.provider_error` (the provider reported an error
 key set or userinfo answer could not be used), `auth.id_token_invalid` (the ID token failed a \
 check), `auth.subject_missing` (the ID token's `sub` or the OAuth 2 userinfo subject is \
 missing, empty, holds NUL or is longer than 255 characters), the admission refusals \
-`auth.suspended`, `auth.admission_refused`, `auth.signup_closed` and \
+`auth.suspended`, `auth.admission_refused`, `auth.not_provisioned`, `auth.signup_closed` and \
 `entitlement.limit_reached`, or `auth.rate_limited` \
 (with `Retry-After`). An admitted sign-in sets `__Host-sc_session` and is a 303 to the flow's \
 `return_to`.",
@@ -424,9 +424,13 @@ pub(crate) async fn complete_sign_in(
     sign_in: MappedSignIn,
 ) -> Result<Response, ApiError> {
     let MappedSignIn { subject, profile } = sign_in;
+    // The mapping already dropped an email the provider did not vouch for (spec 05 B13, spec 06
+    // B10), unless an `oauth2` mapping names no verified flag; this is that flag's value.
+    let email_verified = profile.email.is_some() && profile.email_verified == Some(true);
     let verified = Verified {
         provider,
         subject: &subject,
+        email_verified,
         profile: Profile {
             given_name: profile.given_name,
             family_name: profile.family_name,

@@ -16,6 +16,14 @@
 //! `/api/v1/admin/admission` with `admission.manage` (docs/specs/m0/07-admission.md Q2), so a
 //! patch naming either is listed in the 422 as `settings.read_only`.
 //!
+//! A patch that sets `email_matching` to `true` changes how unknown identities sign in: one may
+//! then be linked to an existing user by email (docs/specs/m0/07-admission.md B5). It needs
+//! `provider.manage` at organization scope (403 `permission.denied`) and, beyond it, every
+//! catalog permission at organization scope (403 `permission.escalation`), the rule of `PUT
+//! /api/v1/admin/local-sign-in`. Both checks run before anything is read, whatever the stored
+//! value, so they apply to `true` alone, not to a change; `false` needs only
+//! `organization.manage`.
+//!
 //! `GET /api/v1/organization/entitlements` shows the organization's plan and what it allows, with
 //! every catalog feature and limit (docs/specs/m0/10-entitlements-framework.md B12). It needs
 //! `organization.manage`, and reads the plan through the request's [`RequestEntitlements`], the
@@ -29,10 +37,11 @@ use serde_json::{Map, Value};
 use stepclimb_core::{
     OrgSettings as CoreSettings, OrgSettingsPatch as CorePatch,
     feature::{self, Limit},
+    grants::{Grants, Target},
     id::Uuid,
     org_plans::{OrgPlan, PlanSource as CoreSource},
     organizations,
-    perm::OrgManage,
+    perm::{OrgManage, ProviderManage},
 };
 use utoipa::ToSchema;
 
@@ -45,7 +54,10 @@ use crate::{
     openapi::problem_responses,
     request_org,
     require::Require,
-    roles::code::{NAME_EMPTY, NAME_TOO_LONG, TEXT_CONTAINS_NUL},
+    roles::{
+        code::{NAME_EMPTY, NAME_TOO_LONG, TEXT_CONTAINS_NUL},
+        refuse_unless_holds_every_permission,
+    },
     session::Authenticated,
     users::code::TZ_UNKNOWN,
 };
@@ -63,9 +75,6 @@ pub const ENTITLEMENTS_PATH: &str = "/api/v1/organization/entitlements";
 pub mod code {
     /// In a 422's `errors`: the patch names a key that is no organization setting.
     pub const SETTINGS_UNKNOWN_KEY: &str = "settings.unknown_key";
-    /// In a 422's `errors`: the patch sets `email_matching` to `true`, which the server refuses
-    /// until matching by email is implemented (spec 03 B17).
-    pub const EMAIL_MATCHING_UNAVAILABLE: &str = "settings.email_matching_unavailable";
     /// In a 422's `errors`: the patch names a setting another route writes.
     pub const SETTINGS_READ_ONLY: &str = "settings.read_only";
 }
@@ -77,7 +86,8 @@ pub const READ_ONLY_SETTINGS: &[&str] = CorePatch::WRITTEN_ELSEWHERE;
 
 problem_responses! {
     OrgWriteForbidden => "`permission.denied`: the caller does not hold `organization.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site.",
-    SettingsInvalid => "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting this route does not change (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`; `admission`: `PUT /api/v1/admin/admission`); `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses.",
+    SettingsWriteForbidden => "`permission.denied`: the caller does not hold `organization.manage` at organization scope, or the patch sets `email_matching` to `true` and the caller does not hold `provider.manage` there. `permission.escalation`: the patch sets `email_matching` to `true`, which changes how people sign in, and the caller does not hold every catalog permission at organization scope. `auth.csrf_refused`: the request did not come from this site.",
+    SettingsInvalid => "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting this route does not change (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`; `admission`: `PUT /api/v1/admin/admission`); `tz.unknown` a `default_tz` that is no IANA time zone.",
 }
 
 /// The caller's organization.
@@ -131,8 +141,10 @@ pub struct OrgSettings {
     /// The IANA time zone a user created without one gets; `UTC` unless set.
     pub default_tz: String,
     /// Whether a sign-in through an identity the organization does not know yet may be linked
-    /// to the existing user with the same email address. `false` unless set, and this release
-    /// refuses to set it to `true`.
+    /// to the existing user with the same email address: only through a provider whose config
+    /// sets `trusted_for_email_matching`, only when that provider marked the address verified,
+    /// and only to a local or just-in-time user whose stored email is recorded as verified.
+    /// `false` unless set.
     pub email_matching: bool,
     /// The local sign-in method switches; read-only here, changed through
     /// `PUT /api/v1/admin/local-sign-in`.
@@ -179,8 +191,8 @@ pub struct OrgSettingsPatch {
     #[serde(default)]
     #[schema(value_type = String)]
     pub default_tz: Option<String>,
-    /// Only `false` is accepted: `true` answers 422 with
-    /// `settings.email_matching_unavailable`.
+    /// `true` needs `provider.manage` and every catalog permission at organization scope, as
+    /// well as `organization.manage`.
     #[serde(default)]
     #[schema(value_type = bool)]
     pub email_matching: Option<bool>,
@@ -287,7 +299,7 @@ pub async fn get_settings(
         (status = 200, description = "Every setting after the change", body = OrgSettings),
         (status = 400, response = crate::openapi::BadRequest),
         (status = 401, response = crate::openapi::Unauthenticated),
-        (status = 403, response = OrgWriteForbidden),
+        (status = 403, response = SettingsWriteForbidden),
         (status = 404, response = crate::openapi::OrganizationNotFound),
         (status = 413, response = crate::openapi::PayloadTooLarge),
         (status = 415, response = crate::openapi::UnsupportedMediaType),
@@ -305,6 +317,7 @@ pub async fn update_settings(
     let scope = require.principal().scope();
     let settings = match parse_patch(body)? {
         Some(patch) => {
+            refuse_email_matching_unless_allowed(&patch, require.grants())?;
             let actor = client.actor(require.principal());
             organizations::update_settings(&state.db, scope, &patch, state.clock.now(), actor).await
         }
@@ -312,6 +325,23 @@ pub async fn update_settings(
     }
     .map_err(org_error)?;
     Ok(Json(settings))
+}
+
+/// The checks of a `patch` that turns `email_matching` on (module documentation): 403
+/// `permission.denied` without `provider.manage` at organization scope, then 403
+/// `permission.escalation` without every catalog permission there. Any other patch passes.
+fn refuse_email_matching_unless_allowed(
+    patch: &CorePatch,
+    grants: &Grants,
+) -> Result<(), ApiError> {
+    if patch.email_matching != Some(true) {
+        return Ok(());
+    }
+    grants.check::<ProviderManage>(&Target::Organization)?;
+    refuse_unless_holds_every_permission(
+        grants,
+        "Matching by email lets a sign-in reach an existing user's account, including users with permissions you do not hold. Only someone holding every permission can turn it on.",
+    )
 }
 
 /// The organization's plan and what it allows: every feature and limit of the server's catalogs.
@@ -453,10 +483,6 @@ fn org_error(error: organizations::Error) -> ApiError {
         E::NameTooLong => invalid(NAME_TOO_LONG),
         E::NameContainsNul => invalid(TEXT_CONTAINS_NUL),
         E::DefaultTzUnknown => ApiError::invalid(vec![FieldError::at(&["default_tz"], TZ_UNKNOWN)]),
-        E::EmailMatchingUnavailable => ApiError::invalid(vec![FieldError::at(
-            &["email_matching"],
-            code::EMAIL_MATCHING_UNAVAILABLE,
-        )]),
         other @ (E::SlugInvalid
         | E::SlugReserved
         | E::SlugTaken
@@ -600,12 +626,6 @@ mod tests {
                 422,
                 "request.invalid",
                 Some(("/default_tz", "tz.unknown")),
-            ),
-            (
-                organizations::Error::EmailMatchingUnavailable,
-                422,
-                "request.invalid",
-                Some(("/email_matching", "settings.email_matching_unavailable")),
             ),
             (organizations::Error::SlugTaken, 500, "internal.error", None),
         ];

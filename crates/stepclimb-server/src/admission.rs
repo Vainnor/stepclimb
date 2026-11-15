@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Admission: after a provider has proved who someone is, whether they may sign in to the
-//! organization, and as which user (docs/specs/m0/07-admission.md B1 to B4, B7 to B10, B20,
-//! B21, Q3, Q6).
+//! organization, and as which user (docs/specs/m0/07-admission.md B1 to B12, B20, B21, Q3, Q4,
+//! Q6).
 //!
 //! A sign-in through an identity provider ends in [`complete`], with the [`Verified`] its
 //! provider proved: the provider row, the subject, the mapped profile fields and attributes.
@@ -25,6 +25,20 @@
 //!    takes) and read again, so a suspension that commits first is seen, and one that comes
 //!    later waits for this sign-in and then ends its session on the next request (spec 03 B7).
 //!    A suspended user is refused with `auth.suspended` before anything is written.
+//!
+//!    With no identity, the person may still be an existing user (B5). A user an admin
+//!    pre-provisioned an identity for is already a known identity (Q4 (b)). Otherwise, with the
+//!    organization's `email_matching` on, the candidate is the user [`users::find_email_match`]
+//!    finds for the sign-in's email, when all of these hold (spec 03 Q2 (a)): the provider
+//!    marked the address verified ([`Verified::email_verified`]); the provider, as stored now,
+//!    sets `trusted_for_email_matching` to exactly `true`; the user's stored email is recorded
+//!    as verified (an admin's, or a verified sign-in through a trusted provider); the user is
+//!    `local` or `idp`, never one an outside source owns, and has no identity at this provider
+//!    yet; and both addresses are ASCII only, compared with ASCII letter case folded. The match locks the user's row; a
+//!    suspended match is refused with `auth.suspended`, so a suspended person cannot get a
+//!    second account by signing up. The identity is linked to the matched user, by that user
+//!    from the request's address, only after the later steps admit them, in the savepoint, so
+//!    a refusal leaves no link (B3).
 //! 2. **Rules** (B8 to B10, Q3 (a)). Every sign-in that passed step 1, known identity or new
 //!    person, must pass every rule of the organization's list and of the provider's list
 //!    (`stepclimb_core::admission_rules`), read in this transaction. A rule that fails, or that
@@ -34,24 +48,29 @@
 //!    records the refusal marker on the user after the savepoint is rolled back (the caller
 //!    commits it), and a known user who passes the rules has it cleared. A local sign-in
 //!    refuses a user who carries the marker, so signing in with a passkey or a password does
-//!    not get round a rule the user's provider sign-in failed.
-//! 3. **Sync-only mode, the admission webhook** (B11 to B19): not built. A known user goes on
-//!    to the writes below, an unknown identity to step 5, and no identity is matched to an
-//!    existing user any other way (B5, B6).
+//!    not get round a rule the user's provider sign-in failed. A user matched by email counts as
+//!    known here: a refusal marks them.
+//! 3. **Sync-only mode** (B11, B12). A person with no candidate is refused with
+//!    `auth.not_provisioned` when the organization's `admission.sync_only` is on, whether or not
+//!    sign-up is allowed. The admission webhook (B13 to B19) is not built.
 //! 4. **Just-in-time creation** (B20, B21). A person no identity matches is created as an `idp`
 //!    user, with one identity, when the organization's `admission.signup_allowed` is on, after
 //!    the users limit check (spec 10 B10). Off, they are refused with `auth.signup_closed`; a
 //!    full plan refuses with `entitlement.limit_reached`. The user and identity are inserted in
 //!    a savepoint of their own: when another first sign-in of the same subject commits its
 //!    identity first, the insert fails as taken, the savepoint is rolled back, and step 1 runs
-//!    again and finds that identity, so both sign-ins are admitted as one user. A local
-//!    provider never gets here: its accounts exist before they sign in (spec 04 B3), so a
-//!    local subject no identity matches is a server fault.
+//!    again and finds that identity, so both sign-ins are admitted as one user; a link by email
+//!    that loses the same race does the same. A local provider never gets past step 1 without a
+//!    candidate: its accounts exist before they sign in (spec 04 B3), so a local subject no
+//!    identity matches is a server fault. When the provider is trusted for matching and marked
+//!    the email verified, the new user's email is recorded as verified.
 //!
 //! An admitted known user's identity gets the newly mapped attributes (B7). Their profile
 //! (names, display name, email) is updated from the provider only when the user is `idp` and
 //! the identity is their oldest one, the one just-in-time creation made (Q6 (b)): a user an
-//! admin or a sync owns keeps its values. When that identity is unlinked, the next oldest
+//! admin or a sync owns keeps its values. An email it changes loses the record of a verified
+//! email, and the email is recorded as verified again when the provider is trusted for matching
+//! and marked it verified. When that identity is unlinked, the next oldest
 //! takes over. A profile value the users table cannot store (too
 //! long, NUL, an email with an invisible character) is left out as if the provider had sent
 //! none, and so is an email another user of the organization has (users' emails are unique,
@@ -74,7 +93,7 @@ use axum::{
 use serde_json::{Map, Value};
 use sqlx::{Acquire, PgConnection, Postgres, Transaction};
 use stepclimb_core::{
-    OrgScope, Source,
+    OrgScope, OrgSettings, Source,
     admission_rules::{self, Outcome, RuleId},
     audit::Actor,
     feature::Limit,
@@ -94,6 +113,7 @@ use crate::{
     provider_sign_in::SIGN_IN_PAGE,
     session,
 };
+use stepclimb_auth::provider_config::TRUSTED_FOR_EMAIL_MATCHING;
 
 /// The refusal codes this module produces (403). A full plan refuses with
 /// `entitlement.limit_reached` (spec 10 B10).
@@ -104,6 +124,8 @@ pub mod code {
     pub const AUTH_SIGNUP_CLOSED: &str = "auth.signup_closed";
     /// A rule of the organization's or the provider's list does not hold (B8, B9).
     pub const AUTH_ADMISSION_REFUSED: &str = "auth.admission_refused";
+    /// The person has no user in the organization, and it admits only provisioned users (B11).
+    pub const AUTH_NOT_PROVISIONED: &str = "auth.not_provisioned";
 }
 
 /// The profile fields a provider mapped (B1); `None` for one it did not send. Never logged.
@@ -121,6 +143,10 @@ pub struct Verified<'a> {
     /// The provider's identifier for the person; matched exactly.
     pub subject: &'a str,
     pub profile: Profile,
+    /// Whether the provider vouched for `profile.email`: the OIDC claims say `email_verified`
+    /// is `true` (spec 05 B13), or the OAuth 2 mapping's verified flag does (spec 06 B10).
+    /// `false` for an OAuth 2 provider that maps no verified flag, and with no email.
+    pub email_verified: bool,
     /// The mapped attributes; empty for a local sign-in (spec 04 B5).
     pub attributes: Map<String, Value>,
 }
@@ -143,6 +169,8 @@ pub enum Step {
     KnownIdentity,
     /// Step 2: the declarative rules (B8 to B10).
     Rules,
+    /// Step 3: sync-only mode (B11).
+    SyncOnly,
     /// Step 5: just-in-time creation (B20, B21).
     JustInTime,
 }
@@ -154,6 +182,7 @@ impl Step {
         match self {
             Self::KnownIdentity => "known_identity",
             Self::Rules => "rules",
+            Self::SyncOnly => "sync_only",
             Self::JustInTime => "just_in_time",
         }
     }
@@ -373,9 +402,17 @@ pub async fn admit(
 ) -> Result<Admission, ApiError> {
     let stored = in_scope(tx, sign_in.provider, context.scope).await?;
     identities::validate_subject(sign_in.subject).map_err(|e| ApiError::internal(&e))?;
+    // The steps read the provider as stored now: its rules and its trust for matching.
+    let sign_in = Verified {
+        provider: &stored,
+        subject: sign_in.subject,
+        profile: sign_in.profile.clone(),
+        email_verified: sign_in.email_verified,
+        attributes: sign_in.attributes.clone(),
+    };
     let mut sp = tx.begin().await.map_err(|e| ApiError::internal(&e))?;
-    let provider = sign_in.provider.key.as_str();
-    match steps(&mut sp, sign_in, &stored, context).await? {
+    let provider = stored.key.as_str();
+    match steps(&mut sp, &sign_in, context).await? {
         Admission::Admitted(user) => {
             sp.commit().await.map_err(|e| ApiError::internal(&e))?;
             tracing::info!(provider, user_id = %user.id, "admission admitted the sign-in");
@@ -401,7 +438,8 @@ pub async fn admit(
 }
 
 /// The row of `provider` as stored now, when it is an enabled provider of the scope's
-/// organization; a fault otherwise. Step 2 reads the provider's rules from this row.
+/// organization; a fault otherwise. Step 2 reads the provider's rules from this row, and B5
+/// its trust for matching.
 async fn in_scope(
     conn: &mut PgConnection,
     provider: &IdentityProvider,
@@ -421,34 +459,136 @@ async fn in_scope(
     }
 }
 
-/// The steps of the module documentation, in order, on the savepoint `sp`. `provider` is the
-/// sign-in's provider as [`in_scope`] read it.
+/// The user a sign-in is for after step 1: the user of its known identity, or the user it was
+/// matched to by email (B5), whose identity is not linked yet.
+enum Candidate {
+    Linked { identity_id: Uuid, user: User },
+    Matched(User),
+}
+
+impl Candidate {
+    fn user_id(&self) -> Uuid {
+        match self {
+            Self::Linked { user, .. } | Self::Matched(user) => user.id,
+        }
+    }
+}
+
+/// The steps of the module documentation, in order, on the savepoint `sp`. The sign-in's
+/// provider is the row [`in_scope`] read.
 async fn steps(
     sp: &mut Transaction<'_, Postgres>,
     sign_in: &Verified<'_>,
-    provider: &IdentityProvider,
     context: &Context,
 ) -> Result<Admission, ApiError> {
     let scope = context.scope;
+    let provider = sign_in.provider;
     log_step(Step::KnownIdentity);
+    let (candidate, settings) = match candidate(sp, sign_in, scope).await? {
+        Ok(found) => found,
+        Err(refusal) => return Ok(Admission::Refused(refusal)),
+    };
+    let known = candidate.as_ref().map(Candidate::user_id);
+    if let Some(refusal) = rules(sp, provider, &sign_in.attributes, scope, known).await? {
+        return Ok(Admission::Refused(refusal));
+    }
+    match (candidate, settings) {
+        (Some(Candidate::Linked { identity_id, user }), _) => {
+            admit_known(sp, sign_in, context, identity_id, user).await
+        }
+        (Some(Candidate::Matched(user)), _) => admit_matched(sp, sign_in, context, user).await,
+        (None, Some(settings)) => new_person(sp, sign_in, context, settings).await,
+        (None, None) => Err(ApiError::internal(&Fault::LocalWithoutIdentity)),
+    }
+}
+
+/// Step 1 (B4, B5): the candidate, or the refusal of a suspended one. For a sign-in no
+/// identity matches, also the organization's settings, read once for the steps that follow; a
+/// local sign-in has none and reads none, since it is matched by its identity alone.
+async fn candidate(
+    sp: &mut Transaction<'_, Postgres>,
+    sign_in: &Verified<'_>,
+    scope: OrgScope,
+) -> Result<Result<(Option<Candidate>, Option<OrgSettings>), Refusal>, ApiError> {
     let linked = identities::find_user(&mut **sp, scope, sign_in.provider.id, sign_in.subject)
         .await
         .map_err(|e| ApiError::internal(&e))?;
-    let known = match linked {
-        Some(linked) => match known_user(sp, scope, linked.user.id).await? {
-            Ok(user) => Some((linked.identity_id, user)),
-            Err(refusal) => return Ok(Admission::Refused(refusal)),
-        },
+    if let Some(linked) = linked {
+        let identity_id = linked.identity_id;
+        return Ok(known_user(sp, scope, linked.user.id)
+            .await?
+            .map(|user| (Some(Candidate::Linked { identity_id, user }), None)));
+    }
+    if sign_in.provider.kind == Kind::Local {
+        return Ok(Ok((None, None)));
+    }
+    let settings = organizations::settings(&mut **sp, scope)
+        .await
+        .map_err(|e| ApiError::internal(&e))?;
+    let matched = match email_match(sp, sign_in, scope, &settings).await? {
+        Some(Ok(user)) => Some(Candidate::Matched(user)),
+        Some(Err(refusal)) => return Ok(Err(refusal)),
         None => None,
     };
-    let known_user_id = known.as_ref().map(|(_, user)| user.id);
-    if let Some(refusal) = rules(sp, provider, &sign_in.attributes, scope, known_user_id).await? {
+    Ok(Ok((matched, Some(settings))))
+}
+
+/// B5's email match for a sign-in no identity matches (module documentation): the matched
+/// user, read under its row lock, or the refusal of a suspended one; `None` when matching is
+/// off, the conditions do not hold, or no user qualifies.
+async fn email_match(
+    conn: &mut PgConnection,
+    sign_in: &Verified<'_>,
+    scope: OrgScope,
+    settings: &OrgSettings,
+) -> Result<Option<Result<User, Refusal>>, ApiError> {
+    if !settings.email_matching {
+        return Ok(None);
+    }
+    let Some(email) = vouched_email(sign_in) else {
+        return Ok(None);
+    };
+    let matched = users::find_email_match(&mut *conn, scope, &email, sign_in.provider.id)
+        .await
+        .map_err(|e| ApiError::internal(&e))?;
+    Ok(matched.map(|user| match refused_at_step_1(&user) {
+        Some(refusal) => Err(refusal),
+        None => Ok(user),
+    }))
+}
+
+/// The sign-in's email when it can be matched or recorded as verified (spec 03 Q2 (a)): the
+/// provider marked it verified, the provider is trusted for matching, the users table can store
+/// it, and it is ASCII only, so no Unicode case rule takes part in a match. `None` otherwise.
+fn vouched_email(sign_in: &Verified<'_>) -> Option<String> {
+    if !sign_in.email_verified || !trusted_for_matching(sign_in.provider) {
+        return None;
+    }
+    storable(&sign_in.profile)
+        .email
+        .filter(|email| email.is_ascii())
+}
+
+/// Whether `provider`'s config sets `trusted_for_email_matching` to exactly `true`. A local
+/// provider never is: its sign-ins are matched by their identity alone.
+fn trusted_for_matching(provider: &IdentityProvider) -> bool {
+    provider.kind != Kind::Local
+        && provider.config.get(TRUSTED_FOR_EMAIL_MATCHING) == Some(&Value::Bool(true))
+}
+
+/// Step 3 (B11), then step 5 (B20, B21), for a person with no candidate.
+async fn new_person(
+    sp: &mut Transaction<'_, Postgres>,
+    sign_in: &Verified<'_>,
+    context: &Context,
+    settings: OrgSettings,
+) -> Result<Admission, ApiError> {
+    log_step(Step::SyncOnly);
+    if settings.admission.sync_only {
+        let refusal = Refusal::new(Step::SyncOnly, not_provisioned());
         return Ok(Admission::Refused(refusal));
     }
-    match known {
-        Some((identity_id, user)) => admit_known(sp, sign_in, context, identity_id, user).await,
-        None => just_in_time(sp, sign_in, context).await,
-    }
+    just_in_time(sp, sign_in, context, settings).await
 }
 
 /// Step 1 for the user `user_id` of a known identity (B4): the user read under its row lock,
@@ -517,20 +657,80 @@ async fn admit_known(
     )
     .await
     .map_err(|e| ApiError::internal(&e))?;
-    let user = update_profile(conn, context, user, identity_id, &sign_in.profile).await?;
+    let user = update_profile(conn, sign_in, context, user, identity_id).await?;
     Ok(Admission::Admitted(user))
 }
 
+/// B5's link of the identity to `user`, the user it was matched to by email, by that user from
+/// the request's address, then Q6's profile writes. When another sign-in of the same subject
+/// linked the identity first, the link fails as taken and the sign-in is admitted as the user
+/// that identity belongs to, as step 5 does.
+async fn admit_matched(
+    sp: &mut Transaction<'_, Postgres>,
+    sign_in: &Verified<'_>,
+    context: &Context,
+    user: User,
+) -> Result<Admission, ApiError> {
+    let identity = NewIdentity {
+        user_id: user.id,
+        provider_id: sign_in.provider.id,
+        subject: sign_in.subject.to_owned(),
+        attributes: sign_in.attributes.clone(),
+    };
+    let actor = Actor::User {
+        id: user.id,
+        ip: context.client.0,
+    };
+    let mut insert = sp.begin().await.map_err(|e| ApiError::internal(&e))?;
+    match identities::link(&mut insert, context.scope, &identity, context.now, actor).await {
+        Ok(linked) => {
+            insert.commit().await.map_err(|e| ApiError::internal(&e))?;
+            let provider = sign_in.provider.key.as_str();
+            tracing::info!(provider, user_id = %user.id, "admission linked the identity by email");
+            let user = update_profile(sp, sign_in, context, user, linked.id).await?;
+            Ok(Admission::Admitted(user))
+        }
+        Err(identities::Error::Taken) => {
+            insert
+                .rollback()
+                .await
+                .map_err(|e| ApiError::internal(&e))?;
+            admit_linked_meanwhile(sp, sign_in, context).await
+        }
+        Err(other) => Err(ApiError::internal(&other)),
+    }
+}
+
+/// The admission of a sign-in whose identity another, concurrent sign-in linked first: step 1
+/// again, for the user that identity belongs to.
+async fn admit_linked_meanwhile(
+    sp: &mut Transaction<'_, Postgres>,
+    sign_in: &Verified<'_>,
+    context: &Context,
+) -> Result<Admission, ApiError> {
+    tracing::info!("admission found the identity created by a concurrent first sign-in");
+    let scope = context.scope;
+    let linked = identities::find_user(&mut **sp, scope, sign_in.provider.id, sign_in.subject)
+        .await
+        .map_err(|e| ApiError::internal(&e))?
+        .ok_or_else(|| ApiError::internal(&Fault::TakenButMissing))?;
+    match known_user(sp, scope, linked.user.id).await? {
+        Ok(user) => admit_known(sp, sign_in, context, linked.identity_id, user).await,
+        Err(refusal) => Ok(Admission::Refused(refusal)),
+    }
+}
+
 /// Q6 (b): `user` with the provider's profile, when the user is `idp` and `identity_id` is
-/// their oldest identity; otherwise `user` as it is. Writes only when a field changes.
+/// their oldest identity; otherwise `user` as it is. Writes only when a field changes, then
+/// records the email as verified when [`vouched_email`] vouches for the one the user now has.
 async fn update_profile(
     conn: &mut PgConnection,
+    sign_in: &Verified<'_>,
     context: &Context,
     user: User,
     identity_id: Uuid,
-    profile: &Profile,
 ) -> Result<User, ApiError> {
-    if user.source != Source::Idp || *profile == Profile::default() {
+    if user.source != Source::Idp || sign_in.profile == Profile::default() {
         return Ok(user);
     }
     let scope = context.scope;
@@ -542,32 +742,50 @@ async fn update_profile(
     if oldest != Some(identity_id) {
         return Ok(user);
     }
-    let mut profile = storable(profile);
+    let mut profile = storable(&sign_in.profile);
     profile.email = free_email(&mut *conn, scope, Some(user.id), profile.email).await?;
     let patch = profile_patch(&user, &profile);
-    if patch == UserPatch::default() {
-        return Ok(user);
+    let user = if patch == UserPatch::default() {
+        user
+    } else {
+        users::update(&mut *conn, scope, user.id, &patch, context.now)
+            .await
+            .map_err(|e| ApiError::internal(&e))?
+    };
+    if profile.email.is_some() {
+        record_vouched_email(conn, sign_in, scope, user.id).await?;
     }
-    users::update(&mut *conn, scope, user.id, &patch, context.now)
-        .await
-        .map_err(|e| ApiError::internal(&e))
+    Ok(user)
 }
 
-/// Step 5 (B20, B21) for a person no identity matches.
+/// Record the sign-in's email as the verified address of the user `user_id` when
+/// [`vouched_email`] vouches for it; [`users::record_verified_email`] records only when it is
+/// the user's stored email.
+async fn record_vouched_email(
+    conn: &mut PgConnection,
+    sign_in: &Verified<'_>,
+    scope: OrgScope,
+    user_id: Uuid,
+) -> Result<(), ApiError> {
+    let Some(email) = vouched_email(sign_in) else {
+        return Ok(());
+    };
+    users::record_verified_email(&mut *conn, scope, user_id, &email)
+        .await
+        .map_err(|e| ApiError::internal(&e))?;
+    Ok(())
+}
+
+/// Step 5 (B20, B21) for a person with no candidate, under the organization's `settings`.
 async fn just_in_time(
     sp: &mut Transaction<'_, Postgres>,
     sign_in: &Verified<'_>,
     context: &Context,
+    settings: OrgSettings,
 ) -> Result<Admission, ApiError> {
-    if sign_in.provider.kind == Kind::Local {
-        return Err(ApiError::internal(&Fault::LocalWithoutIdentity));
-    }
     log_step(Step::JustInTime);
     let scope = context.scope;
     let refused = |error| Ok(Admission::Refused(Refusal::new(Step::JustInTime, error)));
-    let settings = organizations::settings(&mut **sp, scope)
-        .await
-        .map_err(|e| ApiError::internal(&e))?;
     if !settings.admission.signup_allowed {
         return refused(signup_closed());
     }
@@ -586,6 +804,9 @@ async fn just_in_time(
     match create(&mut insert, sign_in, context, &new).await {
         Ok(user) => {
             insert.commit().await.map_err(|e| ApiError::internal(&e))?;
+            if user.email.is_some() {
+                record_vouched_email(sp, sign_in, scope, user.id).await?;
+            }
             Ok(Admission::Admitted(user))
         }
         Err(identities::Error::Taken) => {
@@ -593,16 +814,7 @@ async fn just_in_time(
                 .rollback()
                 .await
                 .map_err(|e| ApiError::internal(&e))?;
-            tracing::info!("admission found the identity created by a concurrent first sign-in");
-            let linked =
-                identities::find_user(&mut **sp, scope, sign_in.provider.id, sign_in.subject)
-                    .await
-                    .map_err(|e| ApiError::internal(&e))?
-                    .ok_or_else(|| ApiError::internal(&Fault::TakenButMissing))?;
-            match known_user(sp, scope, linked.user.id).await? {
-                Ok(user) => admit_known(sp, sign_in, context, linked.identity_id, user).await,
-                Err(refusal) => Ok(Admission::Refused(refusal)),
-            }
+            admit_linked_meanwhile(sp, sign_in, context).await
         }
         Err(other) => Err(ApiError::internal(&other)),
     }
@@ -777,6 +989,14 @@ fn admission_refused() -> ApiError {
     )
 }
 
+fn not_provisioned() -> ApiError {
+    ApiError::new(
+        StatusCode::FORBIDDEN,
+        code::AUTH_NOT_PROVISIONED,
+        "This organization lets in only people it already has an account for, and it has none for you. Ask an administrator of your organization for an account.",
+    )
+}
+
 fn signup_closed() -> ApiError {
     ApiError::new(
         StatusCode::FORBIDDEN,
@@ -933,6 +1153,7 @@ mod tests {
             (suspended(), "auth.suspended"),
             (signup_closed(), "auth.signup_closed"),
             (admission_refused(), "auth.admission_refused"),
+            (not_provisioned(), "auth.not_provisioned"),
         ] {
             let refusal = Refusal::new(Step::KnownIdentity, error);
             assert_eq!(refusal.code(), code);

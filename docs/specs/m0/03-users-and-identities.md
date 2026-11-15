@@ -152,16 +152,20 @@ these rows are in `04` to `07`.
   identity is never linked to an existing user because their email addresses match, whatever the
   provider asserts. This prevents a takeover through another provider that lets anyone claim any
   email. The organization setting `email_matching` (an `OrgSettings` key,
-  `02-organizations-and-accounts.md` B14) is `false` by default. What turning it on does (which
-  providers, whether a verified-email claim is required, what happens with two matching users)
-  is pending Q2; until Q2 is decided the setting is stored and returned but the server refuses to
-  set it to `true` (422, `errors[].code = "settings.email_matching_unavailable"`).
-  **Coordinator decision (2026-11-14).** Q2 is decided (option A), but nothing applies it until
-  `07-admission.md` issue 4 builds the matching and the per-provider trust flag Q2 A needs. The
-  refusal stays until that issue lands, and that issue lifts it: a `true` no code reads would
-  tell an admin their organization matches by email when it does not. `false` is accepted;
-  a change of the value writes the `organization.update_settings` entry like any other key,
-  and a patch equal to the current value writes nothing (spec 09 B22).
+  `02-organizations-and-accounts.md` B14) is `false` by default. Turning it on applies Q2's
+  option A, built by `07-admission.md` issue 4 (B5 there): an unknown identity is linked to the
+  user with the same address only when the provider marked the address verified, the provider's
+  config sets `trusted_for_email_matching` (default `false`), the user's stored email is
+  recorded as verified (`users.verified_email`, Data), and the user is `local` or `idp`.
+  Emails are unique per organization (Q1), so two matching users cannot occur. A change of the
+  value writes the `organization.update_settings` entry like any other key, and a patch equal
+  to the current value writes nothing (spec 09 B22).
+  **Coordinator decision (2026-11-15, `07-admission.md` issue 4).** A patch that sets
+  `email_matching` to `true` needs `perm::ProviderManage` (403 `permission.denied`) and every
+  catalog permission at organization scope (403 `permission.escalation`) besides
+  `perm::OrgManage`, the rule of `PUT /api/v1/admin/local-sign-in`, because it changes how
+  people sign in. The checks run before anything is read and apply to every patch carrying
+  `true`, even when matching is already on; `false` needs only `perm::OrgManage`.
 - **B18.** An admin can pre-provision an identity for a user (`POST
   /api/v1/users/{user_id}/identities` with `provider_key` and `subject`), so that in sync-only
   mode (`07-admission.md`) a known person can sign in the first time. An identity already linked
@@ -359,6 +363,15 @@ CREATE INDEX users_by_name ON users (org_id, display_name, id);
 CREATE UNIQUE INDEX users_email ON users (org_id, lower(email)) WHERE email IS NOT NULL;  -- Q1
 ```
 
+`users.verified_email` (migration `20261116040000_verified_email.sql`, `07-admission.md` issue
+4) records the address a verified source vouched for, lowercased under the "C" collation
+(ASCII letters only): an admin, who writes every
+local user's email (`users::create` and `users::update` record it for `local` users), or a
+sign-in through a provider trusted for matching that marked the address verified. A check
+constraint holds it to `lower(email COLLATE "C")`, so a change to another address must clear or renew it;
+`users::update` clears it for any other source. The migration records the email of every
+existing local user and of no other user.
+
 Migration `migrations/<timestamp>_identities.sql`:
 
 ```sql
@@ -446,8 +459,8 @@ synthetic.
   `(provider, subject)` and none for an unknown one.
 - **T14** (B17). With `email_matching` off (the default), an unknown identity whose email equals
   an existing user's is not linked by `find_user` or any other M0 function; setting
-  `email_matching` to `true` answers 422 `settings.email_matching_unavailable` (until
-  `07-admission.md` issue 4, per B17's coordinator decision).
+  `email_matching` to `true` takes the permissions of B17's coordinator decision
+  (`07-admission.md` T3, T4 test the matching itself).
 - **T15** (B18). Pre-provisioning an identity and then calling `find_user` with it returns the
   user; an unknown `provider_key` answers 422 `identity.unknown_provider`; an org B provider key
   answers the same 422.
@@ -565,8 +578,7 @@ overrule one, which then updates this spec.
    3; until then this issue returns both as empty arrays and the schema says so. Covers B21 (the
    session case), B22, B24, T6, T17 (the anonymous and session cases). Depends on: issue 1; the
    `08-sessions-and-csrf.md` issue that provides the authenticated principal.
-6. **The `email_matching` setting.** Deliver the `OrgSettings` key (default `false`), the refusal
-   to enable it until Q2 is decided, and T14 proving no M0 path links by email. After Q2, a
-   follow-up issue in `07-admission.md` implements the decided matching and lifts the refusal
-   (B17's coordinator decision). Covers B17, T14.
+6. **The `email_matching` setting.** Deliver the `OrgSettings` key (default `false`) and T14
+   proving no M0 path links by email while it is off. `07-admission.md` issue 4 implements Q2's
+   matching and lets the setting be turned on (B17's coordinator decision). Covers B17, T14.
    Depends on: issue 2; `02-organizations-and-accounts.md` issue 4.

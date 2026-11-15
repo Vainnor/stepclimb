@@ -163,6 +163,7 @@ fn the_canonical_example_loads() {
                 },
             },
             "allow_local_passkeys": false,
+            "trusted_for_email_matching": false,
             "label": "Sign in with VATSIM",
         })
     );

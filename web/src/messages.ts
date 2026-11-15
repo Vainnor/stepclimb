@@ -143,6 +143,8 @@ export const webMessages: Catalog = {
       "This organization has no room for another user on its plan, so your account could not be created. Ask an administrator.",
     "signIn.problem.methodDisabled":
       "Your organization has turned off passkey sign-in. Ask an administrator how to sign in.",
+    "signIn.problem.notProvisioned":
+      "This organization lets in only people it already has an account for, and it has none for you. Ask an administrator to add you.",
     "signIn.problem.orgNone":
       "This server has no organization yet. An administrator has to create it first.",
     "signIn.problem.passkeyInvalid":

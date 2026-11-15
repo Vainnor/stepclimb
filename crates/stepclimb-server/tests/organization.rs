@@ -295,6 +295,32 @@ impl Fixture {
         cookie
     }
 
+    /// A signed-in user holding exactly `keys`, at organization scope.
+    async fn holder(&self, keys: &[&str]) -> String {
+        let (cookie, user) = self.user_of(self.org).await;
+        let role = NewRole {
+            key: format!("r{}", new_id().simple()),
+            name: "Holder".into(),
+            permissions: keys.iter().map(|key| (*key).to_owned()).collect(),
+        };
+        let role = roles::create_custom(&self.pool, scope(self.org), &role, now(), Actor::Instance)
+            .await
+            .expect("create role")
+            .id;
+        self.assign(user, role, Scope::Organization).await;
+        cookie
+    }
+
+    /// How many `organization.update_settings` entries the audit log holds.
+    async fn settings_entries(&self) -> i64 {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM audit_events WHERE action = 'organization.update_settings'",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .expect("count entries")
+    }
+
     async fn send(&self, method: Method, uri: &str, cookie: Option<&str>, body: &str) -> Answer {
         let mut request = Request::builder()
             .method(method)
@@ -754,40 +780,22 @@ async fn the_default_time_zone_is_checked_and_stored_in_the_databases_spelling(p
     assert_eq!(read.body["default_tz"], "America/New_York");
 }
 
-/// Spec 03 B17, T14: `email_matching` reads `false` and cannot be turned on. `true`, alone or
-/// beside a valid `default_tz`, answers 422 `settings.email_matching_unavailable` and writes
-/// nothing, not even the valid key, and no audit entry; `false` is accepted and, being the
-/// current value, writes nothing; a value that is no boolean is malformed.
+/// Spec 03 B17, spec 07 I4: an Organization admin turns `email_matching` on and off; each
+/// change writes one `organization.update_settings` entry, and a value that is no boolean is
+/// malformed.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn email_matching_cannot_be_turned_on(pool: PgPool) {
+async fn an_organization_admin_turns_email_matching_on_and_off(pool: PgPool) {
     let f = Fixture::new(pool).await;
     let admin = f.admin().await;
     let read = f.send(Method::GET, SETTINGS, Some(&admin), "").await;
     assert_eq!(read.status, StatusCode::OK, "{read:?}");
     assert_eq!(read.body["email_matching"], false);
-    f.clock.advance(Duration::from_secs(60));
 
-    for body in [
-        json!({ "email_matching": true }),
-        json!({ "email_matching": true, "default_tz": "Europe/Dublin" }),
-    ] {
-        let answer = f
-            .send(Method::PATCH, SETTINGS, Some(&admin), &body.to_string())
-            .await;
-        assert_eq!(
-            (answer.status, answer.code()),
-            (StatusCode::UNPROCESSABLE_ENTITY, "request.invalid"),
-            "{body}"
-        );
-        assert!(answer.is_problem());
-        assert_eq!(
-            answer.errors(),
-            [(
-                "/email_matching".to_owned(),
-                "settings.email_matching_unavailable".to_owned()
-            )]
-        );
-    }
+    let on = r#"{"email_matching": true}"#;
+    let answer = f.send(Method::PATCH, SETTINGS, Some(&admin), on).await;
+    assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    assert_eq!(answer.body["email_matching"], true);
+    assert_schema("OrgSettings", &answer.body);
     for body in [r#"{"email_matching": "true"}"#, r#"{"email_matching": 1}"#] {
         let answer = f.send(Method::PATCH, SETTINGS, Some(&admin), body).await;
         assert_eq!(
@@ -796,37 +804,69 @@ async fn email_matching_cannot_be_turned_on(pool: PgPool) {
             "{body}"
         );
     }
-    let off = f
-        .send(
-            Method::PATCH,
-            SETTINGS,
-            Some(&admin),
-            r#"{"email_matching": false}"#,
-        )
-        .await;
-    assert_eq!(off.status, StatusCode::OK, "{off:?}");
-    assert_eq!(off.body["email_matching"], false);
-    assert_schema("OrgSettings", &off.body);
-
-    assert_eq!(f.updated_at().await, now());
-    let stored: String =
-        sqlx::query_scalar("SELECT settings::text FROM organizations WHERE id = $1")
-            .bind(f.org)
-            .fetch_one(&f.pool)
-            .await
-            .expect("the organization");
-    assert_eq!(stored, "{}");
-    let entries: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM audit_events WHERE action = 'organization.update_settings'",
-    )
-    .fetch_one(&f.pool)
-    .await
-    .expect("count entries");
-    assert_eq!(entries, 0);
+    let off = r#"{"email_matching": false}"#;
+    let answer = f.send(Method::PATCH, SETTINGS, Some(&admin), off).await;
+    assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    assert_eq!(answer.body["email_matching"], false);
+    assert_eq!(f.settings_entries().await, 2);
 }
 
-/// An admin of org B reads org B's `email_matching`, never org A's, even when org A's row holds
-/// a value this release cannot write.
+/// Spec 07 I4 (coordinator decision): `email_matching: true` needs `provider.manage` and every
+/// catalog permission at organization scope beside `organization.manage`. Without
+/// `provider.manage` it is 403 `permission.denied`, with it but without every permission 403
+/// `permission.escalation`, even when matching is already on, and a refused patch writes
+/// nothing, not even a valid key beside it. `false` needs only `organization.manage`.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn turning_email_matching_on_needs_provider_manage_and_every_permission(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let org_manage = <perm::OrgManage as perm::Permission>::KEY;
+    let provider_manage = <perm::ProviderManage as perm::Permission>::KEY;
+    let all_but_role_manage: Vec<&str> = perm::ALL
+        .iter()
+        .map(|p| p.key())
+        .filter(|key| *key != <perm::RoleManage as perm::Permission>::KEY)
+        .collect();
+    let cases = [
+        (vec![org_manage], "permission.denied"),
+        (vec![org_manage, provider_manage], "permission.escalation"),
+        (all_but_role_manage, "permission.escalation"),
+    ];
+    let on = r#"{"email_matching": true, "default_tz": "Europe/Dublin"}"#;
+    for already_on in [false, true] {
+        for (keys, code) in &cases {
+            let cookie = f.holder(keys).await;
+            let answer = f.send(Method::PATCH, SETTINGS, Some(&cookie), on).await;
+            assert_eq!(
+                (answer.status, answer.code()),
+                (StatusCode::FORBIDDEN, *code),
+                "{keys:?}, already on: {already_on}"
+            );
+            assert!(answer.is_problem());
+        }
+        let read = f
+            .send(Method::GET, SETTINGS, Some(&f.admin().await), "")
+            .await;
+        assert_eq!(read.body["default_tz"], "UTC", "the refusals wrote nothing");
+        assert_eq!(read.body["email_matching"], already_on);
+        let admin = f.admin().await;
+        let answer = f
+            .send(
+                Method::PATCH,
+                SETTINGS,
+                Some(&admin),
+                r#"{"email_matching": true}"#,
+            )
+            .await;
+        assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    }
+    let manager = f.holder(&[org_manage]).await;
+    let off = r#"{"email_matching": false}"#;
+    let answer = f.send(Method::PATCH, SETTINGS, Some(&manager), off).await;
+    assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    assert_eq!(answer.body["email_matching"], false);
+}
+
+/// An admin of org B reads org B's `email_matching`, never org A's.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn email_matching_is_read_from_the_callers_organization(pool: PgPool) {
     let f = Fixture::new(pool).await;

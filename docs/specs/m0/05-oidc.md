@@ -35,8 +35,9 @@ validates the ID token with the `openidconnect` crate, maps claims into an ident
 - **B2.** The issuer URL and every URL the server fetches for the provider follow the outbound
   URL policy (pending Q4). Every outbound request has a timeout (pending Q4).
 - Coordinator decision (2026-11-14), for I1 (`stepclimb_auth::oidc_config`): the config also
-  holds `userinfo` (Q3, default `true`) and `allow_local_passkeys` (`04-local-accounts.md` B13,
-  default `false`, added by `04` issue I5 on 15 Nov 2026); any other member, `claims.subject`
+  holds `userinfo` (Q3, default `true`), `allow_local_passkeys` (`04-local-accounts.md` B13,
+  default `false`, added by `04` issue I5 on 15 Nov 2026) and `trusted_for_email_matching`
+  (`07-admission.md` B5, default `false`, added by `07` issue I4); any other member, `claims.subject`
   included (B12), is refused as `provider.field_unknown`, so a misspelled one is not silently dropped. The
   `client_secret` is required when the row has none stored, since both methods of Q6 need it.
   `issuer` is kept exactly as written (B4 compares it character for character) and must be an

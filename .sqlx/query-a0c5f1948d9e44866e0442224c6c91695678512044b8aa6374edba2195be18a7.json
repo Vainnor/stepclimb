@@ -1,0 +1,159 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE users\n           SET display_name = COALESCE($3, display_name),\n               given_name = COALESCE($4, given_name),\n               family_name = COALESCE($5, family_name),\n               email = CASE WHEN $6 THEN $7 ELSE email END,\n               verified_email = CASE\n                   WHEN NOT $6\n                       OR lower($7 COLLATE \"C\") IS NOT DISTINCT FROM lower(email COLLATE \"C\")\n                       THEN verified_email\n                   WHEN source = 'local' THEN lower($7 COLLATE \"C\")\n               END,\n               locale = COALESCE($8, locale),\n               tz = COALESCE($9, tz),\n               updated_at = timestamptz 'epoch' + $10::bigint * interval '1 microsecond'\n           WHERE org_id = $1 AND id = $2\n           RETURNING id, display_name, given_name, family_name, email, locale, tz, status, source,\n                     external_id,\n                     (extract(epoch FROM created_at) * 1000000)::bigint AS \"created_at_us!\",\n                     (extract(epoch FROM updated_at) * 1000000)::bigint AS \"updated_at_us!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "display_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "given_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "given_name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "family_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "family_name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "email",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "email"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "locale",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "locale"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "tz",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "tz"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "source",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "source"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "external_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "external_id"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "created_at_us!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 11,
+        "name": "updated_at_us!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Bool",
+        "Text",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "a0c5f1948d9e44866e0442224c6c91695678512044b8aa6374edba2195be18a7"
+}

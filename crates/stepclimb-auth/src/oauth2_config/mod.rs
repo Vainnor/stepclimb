@@ -14,6 +14,7 @@
 //! | `pkce` | a boolean: whether sign-in sends S256 PKCE (Q3); `false` removes the protection against an injected authorization code (a code issued for someone else, put into an attacker's own callback), so turn it off only for a provider that refuses PKCE | `true` |
 //! | `claims` | an object with `subject`, a JSON Pointer, and optional `given_name`, `family_name`, `email`, `email_verified`, `groups` pointers and `attributes`, an object of names to pointers | refused |
 //! | `allow_local_passkeys` | a boolean: whether users who sign in through this provider may also add passkeys (`04-local-accounts.md` B13) | `false` |
+//! | `trusted_for_email_matching` | a boolean: whether, with the organization's `email_matching` on, a sign-in whose verified email equals a user's verified email may be linked to that user (`07-admission.md` B5); an email counts as verified only when `claims.email_verified` is mapped and says `true` | `false` |
 //!
 //! A provider declared in `stepclimb.toml` is validated the same way, then stored with
 //! [`Oauth2Config::from_config_file`]: no secret in the row, `source: "config"` in its place
@@ -44,7 +45,7 @@ use crate::outbound::UrlPolicy;
 use crate::provider_config::walk;
 pub use crate::provider_config::{
     ClientSecret, ConfigErrors, ConfigProblem, ConfigSecrets, DraftSecret, ProviderRow,
-    SealedSecret, SecretError, StoredConfigError, StoredSecret, code,
+    SealedSecret, SecretError, StoredConfigError, StoredSecret, TRUSTED_FOR_EMAIL_MATCHING, code,
 };
 
 /// Where a config's claims come from: JSON Pointers into the userinfo body (B6).
@@ -86,6 +87,9 @@ pub struct Oauth2Settings {
     pub pkce: bool,
     pub claims: Oauth2Claims,
     pub allow_local_passkeys: bool,
+    /// Whether the provider is trusted for matching users by email; off unless the admin says
+    /// so.
+    pub trusted_for_email_matching: bool,
 }
 
 /// A validated config, before its secret is sealed.
@@ -162,6 +166,10 @@ impl Oauth2Config {
         config.insert("pkce".into(), s.pkce.into());
         config.insert("claims".into(), Value::Object(claims));
         config.insert("allow_local_passkeys".into(), s.allow_local_passkeys.into());
+        config.insert(
+            TRUSTED_FOR_EMAIL_MATCHING.into(),
+            s.trusted_for_email_matching.into(),
+        );
         config
     }
 

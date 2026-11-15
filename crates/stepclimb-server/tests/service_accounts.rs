@@ -1060,3 +1060,34 @@ async fn the_every_permission_rule_reads_a_keys_narrowed_grants(pool: PgPool) {
         assert_eq!(answer.status, StatusCode::OK, "{path}: {answer:?}");
     }
 }
+
+/// Spec 07 I4, spec 03 B17: turning `email_matching` on reads a key's narrowed grants too. A
+/// key scoped to `organization.manage` alone is refused 403 `permission.denied` (no
+/// `provider.manage`), one scoped to both 403 `permission.escalation`, though their owner holds
+/// every permission; a key scoped to every permission turns it on.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn turning_email_matching_on_reads_a_keys_narrowed_grants(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let every: Vec<&str> = stepclimb_core::perm::ALL.iter().map(|p| p.key()).collect();
+    let (_, cookie, _) = f.manager(&every).await;
+    let settings = key_of(
+        &f.create(Auth::Cookie(&cookie), &["organization.manage"])
+            .await,
+    );
+    let both = ["organization.manage", "provider.manage"];
+    let both = key_of(&f.create(Auth::Cookie(&cookie), &both).await);
+    let full = key_of(&f.create(Auth::Cookie(&cookie), &every).await);
+    let path = "/api/v1/organization/settings";
+    let on = || Some(json!({ "email_matching": true }));
+    for (key, code) in [
+        (&settings, "permission.denied"),
+        (&both, "permission.escalation"),
+    ] {
+        send(&f.app, Method::PATCH, path, &[Auth::Key(key)], on())
+            .await
+            .expect(StatusCode::FORBIDDEN, code);
+    }
+    let answer = send(&f.app, Method::PATCH, path, &[Auth::Key(&full)], on()).await;
+    assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    assert_eq!(answer.body["email_matching"], true);
+}
