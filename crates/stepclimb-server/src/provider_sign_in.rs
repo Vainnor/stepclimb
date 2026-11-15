@@ -106,7 +106,7 @@ pub fn redirect_uri(public_url: &WebOrigin, key: &str) -> String {
 }
 
 /// The 303 to the sign-in page with `error=<code>`.
-fn to_sign_in(error: &'static str) -> Response {
+pub(crate) fn to_sign_in(error: &'static str) -> Response {
     let location = format!("{SIGN_IN_PAGE}?error={error}");
     redirect(&location)
 }
@@ -218,7 +218,7 @@ pub async fn start_provider_sign_in(
 
 /// The enabled outside provider with `key` in the scope's organization, or `None` (B3). The
 /// local row is not one: its methods have their own routes.
-async fn sign_in_provider(
+pub(crate) async fn sign_in_provider(
     state: &AppState,
     scope: OrgScope,
     key: &str,

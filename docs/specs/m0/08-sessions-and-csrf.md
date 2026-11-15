@@ -155,6 +155,8 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
 - **B18.** A flow is single use: the request that completes it deletes it in the same
   transaction that creates the session (or authorization code). A second use answers
   `auth.flow_invalid`. An expired flow answers `auth.flow_expired`.
+  An OIDC callback takes its flow before it contacts the provider, in a statement of its own
+  (`05-oidc.md` I3's coordinator decision, 2026-11-15).
 - **B19.** A flow records a `return_to` path. The server accepts only a path that starts with
   one `/` and is not `//` or `/\`, so a sign-in can never redirect to another host; anything
   else becomes `/`. A path is also kept only when every byte is printable ASCII and it is at

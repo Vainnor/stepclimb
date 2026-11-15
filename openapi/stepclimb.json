@@ -2605,6 +2605,107 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/auth/{provider}/callback": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Finish a sign-in with an outside identity provider.",
+        "description": "A browser navigation: the provider's redirect back after sign-in, with `code` and `state` or with `error` and `state`. It needs the `__Host-sc_flow` cookie of the flow the start route began, and clears it. Every refusal is a 303 to `/sign-in?error=<code>`: `auth.provider_not_found` (no enabled provider with this key), `auth.flow_invalid` (no flow cookie, a used or unknown flow, a flow for another provider, or another `state`), `auth.flow_expired` (the flow is older than 10 minutes), `auth.provider_denied` (the person declined at the provider), `auth.provider_error` (the provider reported an error, or its token, key set or userinfo answer could not be used), `auth.id_token_invalid` (the ID token failed a check), `auth.subject_missing` (the ID token's `sub` is empty, holds NUL or is longer than 255 characters), `auth.provider_unavailable` (the provider is of a kind this release does not sign in with, or this release does not complete provider sign-in yet) or `auth.rate_limited` (with `Retry-After`).",
+        "operationId": "finishProviderSignIn",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "description": "The provider's key in the organization (`identity_providers.key`).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code",
+            "in": "query",
+            "description": "The authorization code, on success.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "The `state` the start route sent.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "error",
+            "in": "query",
+            "description": "The provider's error code, on failure.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "error_description",
+            "in": "query",
+            "description": "The provider's description of the error. Logged, never shown.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "To `/sign-in?error=<code>`",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`no-store`"
+              },
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The sign-in page with the error code"
+              },
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "description": "With `auth.rate_limited`: seconds to wait, at least 1"
+              },
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Clears the `__Host-sc_flow` cookie"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      }
+    },
     "/auth/{provider}/start": {
       "get": {
         "tags": [

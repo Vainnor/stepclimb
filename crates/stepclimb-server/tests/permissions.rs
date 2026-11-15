@@ -118,6 +118,7 @@ const PUBLIC: &[&str] = &[
     "startPasskeySignIn",
     "finishPasskeySignIn",
     "startProviderSignIn",
+    "finishProviderSignIn",
 ];
 
 /// One entry per operation that needs a principal (B20). The M0 specs' routes add theirs here
@@ -999,6 +1000,10 @@ async fn public_operations_answer_without_a_credential(pool: PgPool) {
             provider_sign_in_answers_without_a_credential(&world, &app, &org).await;
             continue;
         }
+        if *id == "finishProviderSignIn" {
+            provider_callback_answers_without_a_credential(&app, &org).await;
+            continue;
+        }
         let (body, cookie) = public_request(&world, &org, id).await;
         let answer = send(
             &app,
@@ -1056,6 +1061,19 @@ async fn provider_sign_in_answers_without_a_credential(world: &World, app: &Rout
     let location = answer.headers[header::LOCATION].to_str().expect("ASCII");
     let authorize = mock.url(stepclimb_mock_idp::Endpoint::Authorize);
     assert!(location.starts_with(&authorize), "{location}");
+}
+
+/// The provider callback answers a redirect, not a 2xx: without a flow cookie an anonymous
+/// request lands on the sign-in page with `auth.flow_invalid` (a protected route would answer
+/// 401). The provider the start case inserted is the organization's `mock`.
+async fn provider_callback_answers_without_a_credential(app: &Router, org: &Org) {
+    let path = "/auth/mock/callback?code=c&state=s";
+    let answer = send(app, &Method::GET, path, org.id, None, None).await;
+    assert_eq!(answer.status, StatusCode::SEE_OTHER, "{answer:?}");
+    assert_eq!(
+        answer.headers[header::LOCATION],
+        "/sign-in?error=auth.flow_invalid"
+    );
 }
 
 /// The body and cookie a public operation needs to succeed: the enrollment start route takes a

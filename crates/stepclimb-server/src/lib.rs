@@ -61,6 +61,7 @@ pub mod pagination;
 pub mod passkey_enrollment;
 pub mod passkey_options;
 pub mod passkey_sign_in;
+pub mod provider_callback;
 pub mod provider_sign_in;
 pub mod providers;
 pub mod rate_limit;

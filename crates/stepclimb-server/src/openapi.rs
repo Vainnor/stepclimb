@@ -30,7 +30,8 @@ use crate::{
     accounts, appearance, auth, branding, enrollment,
     error::{FieldError, PROBLEM_JSON, Problem},
     health, identities, local_sign_in, me, my_passkeys, organization, passkey_enrollment,
-    passkey_options, passkey_sign_in, provider_sign_in, role_assignments, roles, users,
+    passkey_options, passkey_sign_in, provider_callback, provider_sign_in, role_assignments, roles,
+    users,
 };
 
 /// The operation extension that marks a handler as changing state (spec 08 B12, T17). Every
@@ -56,6 +57,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         passkey_sign_in::start_passkey_sign_in,
         passkey_sign_in::finish_passkey_sign_in,
         provider_sign_in::start_provider_sign_in,
+        provider_callback::finish_provider_sign_in,
         me::get_me,
         appearance::update_my_appearance,
         organization::get_organization,

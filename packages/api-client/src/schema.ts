@@ -552,6 +552,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/{provider}/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Finish a sign-in with an outside identity provider.
+         * @description A browser navigation: the provider's redirect back after sign-in, with `code` and `state` or with `error` and `state`. It needs the `__Host-sc_flow` cookie of the flow the start route began, and clears it. Every refusal is a 303 to `/sign-in?error=<code>`: `auth.provider_not_found` (no enabled provider with this key), `auth.flow_invalid` (no flow cookie, a used or unknown flow, a flow for another provider, or another `state`), `auth.flow_expired` (the flow is older than 10 minutes), `auth.provider_denied` (the person declined at the provider), `auth.provider_error` (the provider reported an error, or its token, key set or userinfo answer could not be used), `auth.id_token_invalid` (the ID token failed a check), `auth.subject_missing` (the ID token's `sub` is empty, holds NUL or is longer than 255 characters), `auth.provider_unavailable` (the provider is of a kind this release does not sign in with, or this release does not complete provider sign-in yet) or `auth.rate_limited` (with `Retry-After`).
+         */
+        get: operations["finishProviderSignIn"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/{provider}/start": {
         parameters: {
             query?: never;
@@ -3641,6 +3661,48 @@ export interface operations {
                 content?: never;
             };
             403: components["responses"]["CsrfRefused"];
+            404: components["responses"]["OrganizationNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    finishProviderSignIn: {
+        parameters: {
+            query?: {
+                /** @description The authorization code, on success. */
+                code?: string;
+                /** @description The `state` the start route sent. */
+                state?: string;
+                /** @description The provider's error code, on failure. */
+                error?: string;
+                /** @description The provider's description of the error. Logged, never shown. */
+                error_description?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The provider's key in the organization (`identity_providers.key`). */
+                provider: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description To `/sign-in?error=<code>` */
+            303: {
+                headers: {
+                    /** @description `no-store` */
+                    "Cache-Control"?: string;
+                    /** @description The sign-in page with the error code */
+                    Location?: string;
+                    /** @description With `auth.rate_limited`: seconds to wait, at least 1 */
+                    "Retry-After"?: number;
+                    /** @description Clears the `__Host-sc_flow` cookie */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
             404: components["responses"]["OrganizationNotFound"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
