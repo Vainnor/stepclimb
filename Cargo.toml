@@ -92,6 +92,9 @@ thiserror = "=2.0.21"
 # matching, so a pattern an admin saves cannot make a sign-in run long. Its regex-automata,
 # regex-syntax, aho-corasick and memchr are the versions tracing-subscriber already brings.
 regex = "=1.13.1"
+# Checks that a `matches` pattern parses on its own before admission rules wrap it in anchors
+# (spec 07 Q1); the version regex already brings.
+regex-syntax = "=0.8.11"
 # stepclimb.toml, the optional configuration file under the STEPCLIMB_* variables
 # (docs/specs/m0/14-compose-deploy.md B8 to B10). Parse and serde only; nothing writes TOML.
 toml = { version = "=1.1.8", default-features = false, features = ["std", "parse", "serde"] }
