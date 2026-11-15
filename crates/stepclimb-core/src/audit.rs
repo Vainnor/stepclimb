@@ -59,6 +59,8 @@ pub enum Action {
     PasskeyRename,
     PasskeyDelete,
     PasswordSet,
+    TotpEnable,
+    TotpDisable,
 }
 
 impl Action {
@@ -88,6 +90,8 @@ impl Action {
             Self::PasskeyRename => "passkey.rename",
             Self::PasskeyDelete => "passkey.delete",
             Self::PasswordSet => "password.set",
+            Self::TotpEnable => "totp.enable",
+            Self::TotpDisable => "totp.disable",
         }
     }
 
@@ -111,6 +115,8 @@ impl Action {
             Self::PasskeyCreate | Self::PasskeyRename | Self::PasskeyDelete => "passkey",
             // A password has no row id of its own; the entry names its user.
             Self::PasswordSet => "password",
+            // Nor has a user's TOTP; the entry names its user.
+            Self::TotpEnable | Self::TotpDisable => "totp",
         }
     }
 }
@@ -248,7 +254,7 @@ impl TryFrom<Row> for Entry {
 mod tests {
     use super::*;
 
-    const ALL: [Action; 22] = [
+    const ALL: [Action; 24] = [
         Action::RoleCreate,
         Action::RoleUpdate,
         Action::RoleDelete,
@@ -271,6 +277,8 @@ mod tests {
         Action::PasskeyRename,
         Action::PasskeyDelete,
         Action::PasswordSet,
+        Action::TotpEnable,
+        Action::TotpDisable,
     ];
 
     #[test]

@@ -150,6 +150,7 @@ async fn startup_migrations_create_the_schema_on_an_empty_database(pool: PgPool)
             "role_assignments",
             "roles",
             "sessions",
+            "totp_recovery_codes",
             "users"
         ]
     );
@@ -193,6 +194,9 @@ async fn the_openapi_document_is_3_1_and_lists_every_route() {
             "/api/v1/me/passkeys/start",
             "/api/v1/me/passkeys/{passkey_id}",
             "/api/v1/me/password",
+            "/api/v1/me/totp",
+            "/api/v1/me/totp/confirm",
+            "/api/v1/me/totp/disable",
             "/api/v1/organization",
             "/api/v1/organization/entitlements",
             "/api/v1/organization/settings",
@@ -206,6 +210,7 @@ async fn the_openapi_document_is_3_1_and_lists_every_route() {
             "/auth/local/passkey/finish",
             "/auth/local/passkey/start",
             "/auth/local/password",
+            "/auth/local/totp",
             "/auth/sign-out",
             "/auth/{provider}/callback",
             "/auth/{provider}/start",

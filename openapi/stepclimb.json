@@ -1801,6 +1801,179 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/api/v1/me/totp": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Start TOTP enrollment.",
+        "operationId": "startMyTotp",
+        "responses": {
+          "200": {
+            "description": "A new unconfirmed secret, shown once; it replaces an unconfirmed one",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`no-store`"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TotpEnrollment"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/MyTotpForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/TotpNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/MyTotpStartConflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/me/totp/confirm": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Confirm TOTP with a code from the app.",
+        "operationId": "confirmMyTotp",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TotpCode"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "TOTP is on; the recovery codes are shown once",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`no-store`"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TotpConfirmed"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/MyTotpUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/MyTotpForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/TotpNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/MyTotpConfirmConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/me/totp/disable": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Turn TOTP off with a current code or a recovery code.",
+        "operationId": "disableMyTotp",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TotpCode"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "TOTP is off; its secret and recovery codes are deleted"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/MyTotpUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/MyTotpForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/TotpNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/MyTotpDisableConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/api/v1/organization": {
       "get": {
         "tags": [
@@ -2847,7 +3020,7 @@
         },
         "responses": {
           "200": {
-            "description": "The user is signed in",
+            "description": "The user is signed in (`{return_to}`), or the account also needs a TOTP code (`{next: \"totp\"}`) and no session exists yet",
             "headers": {
               "Cache-Control": {
                 "schema": {
@@ -2859,13 +3032,13 @@
                 "schema": {
                   "type": "string"
                 },
-                "description": "The new `__Host-sc_session` cookie and the `__Host-sc_device` cookie"
+                "description": "Signed in: the new `__Host-sc_session` cookie and the `__Host-sc_device` cookie. A code needed: the `__Host-sc_flow` cookie of the second step"
               }
             },
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SignedIn"
+                  "$ref": "#/components/schemas/PasswordSignedIn"
                 }
               }
             }
@@ -2881,6 +3054,79 @@
           },
           "404": {
             "$ref": "#/components/responses/PasswordNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/auth/local/totp": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Finish signing in with a TOTP code after the password.",
+        "operationId": "signInWithTotp",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TotpCode"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The user is signed in",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`no-store`"
+              },
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The new `__Host-sc_session` cookie, the `__Host-sc_device` cookie, and `__Host-sc_flow` cleared"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignedIn"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/TotpSignInBadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/TotpSignInUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/TotpSignInForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/TotpNotFound"
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
@@ -3659,6 +3905,19 @@
           }
         ],
         "description": "A problem details body with the contrast report: `branding.contrast_failed` carries\n`report`, every other code leaves it out."
+      },
+      "CodeRequired": {
+        "type": "object",
+        "description": "A right password whose account also needs a TOTP code: no session exists yet.",
+        "required": [
+          "next"
+        ],
+        "properties": {
+          "next": {
+            "$ref": "#/components/schemas/NextStep",
+            "description": "Send the code to `POST /auth/local/totp` in this browser within 10 minutes."
+          }
+        }
       },
       "ContrastPair": {
         "type": "object",
@@ -4495,6 +4754,13 @@
         },
         "additionalProperties": false
       },
+      "NextStep": {
+        "type": "string",
+        "description": "The next step a password sign-in needs.",
+        "enum": [
+          "totp"
+        ]
+      },
       "OrgSettings": {
         "type": "object",
         "description": "Every organization setting with its effective value: the stored one, or the setting's\ndefault when none is stored.",
@@ -5028,6 +5294,17 @@
         },
         "additionalProperties": false
       },
+      "PasswordSignedIn": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SignedIn"
+          },
+          {
+            "$ref": "#/components/schemas/CodeRequired"
+          }
+        ],
+        "description": "The answer of a right password: the user is signed in, or TOTP's second step is needed."
+      },
       "PermissionInfo": {
         "type": "object",
         "description": "One permission of the catalog.",
@@ -5519,6 +5796,54 @@
           "dark",
           "high-contrast"
         ]
+      },
+      "TotpCode": {
+        "type": "object",
+        "description": "A TOTP code, or a recovery code where one is accepted. Never logged.",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The 6 digits the authenticator app shows (spaces ignored), or, to sign in or disable\nTOTP, one of the recovery codes (`ABCD-EFGH-IJKL-MNOP`, any letter case)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "TotpConfirmed": {
+        "type": "object",
+        "description": "The recovery codes of a confirmed TOTP, shown once.",
+        "required": [
+          "recovery_codes"
+        ],
+        "properties": {
+          "recovery_codes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Ten single-use codes that stand in for a TOTP code when the app is lost."
+          }
+        }
+      },
+      "TotpEnrollment": {
+        "type": "object",
+        "description": "A new TOTP secret, shown once.",
+        "required": [
+          "otpauth_uri",
+          "secret"
+        ],
+        "properties": {
+          "otpauth_uri": {
+            "type": "string",
+            "description": "The URI to show as a QR code for the authenticator app."
+          },
+          "secret": {
+            "type": "string",
+            "description": "The secret in base32, for typing into the app instead."
+          }
+        }
       },
       "UiFont": {
         "type": "string",
@@ -6199,6 +6524,56 @@
           }
         }
       },
+      "MyTotpConfirmConflict": {
+        "description": "`local.totp_not_started`: no TOTP enrollment is waiting for a code; start one. `local.totp_enabled`: TOTP is already on.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "MyTotpDisableConflict": {
+        "description": "`local.totp_not_enabled`: TOTP is not on.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "MyTotpForbidden": {
+        "description": "`auth.session_required`: the request carries a bearer credential; only a signed-in browser session manages TOTP. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "MyTotpStartConflict": {
+        "description": "`local.password_required`: the account has no password, which TOTP follows. `local.totp_enabled`: TOTP is already on; disable it first.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "MyTotpUnauthorized": {
+        "description": "`auth.unauthenticated`, `auth.session_expired`, `auth.suspended`: no valid session. `auth.totp_invalid`: the code is wrong, already used, or not the current one.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "NoOrganization": {
         "description": "`org.none`: the instance has no organization yet.",
         "content": {
@@ -6389,6 +6764,46 @@
       },
       "SettingsInvalid": {
         "description": "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting this route does not change (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`; `admission`: `PUT /api/v1/admin/admission`); `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "TotpNotFound": {
+        "description": "`auth.method_disabled`: TOTP is switched off for this organization, or password sign-in is, which TOTP follows. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "TotpSignInBadRequest": {
+        "description": "`request.malformed`: the body is not `{code}`. `auth.flow_invalid`: no password sign-in is waiting for a code in this browser, it was already finished, or the password or TOTP changed since; sign in with the password again. `auth.flow_expired`: the password was checked more than 10 minutes ago; sign in with the password again.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "TotpSignInForbidden": {
+        "description": "`auth.suspended`: the account is suspended. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "TotpSignInUnauthorized": {
+        "description": "`auth.totp_invalid`: the code is wrong, already used, or not the current one, and it is no unused recovery code. Sign in with the password again.",
         "content": {
           "application/problem+json": {
             "schema": {

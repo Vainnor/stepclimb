@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE local_logins\n         SET totp_confirmed_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond',\n             updated_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond'\n         WHERE org_id = $1 AND user_id = $2\n           AND totp_secret IS NOT NULL AND totp_confirmed_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "276945891b56ed8f1d0d9aec20fd8972615f91fe3bdc859c7689146a09dc5e61"
+}

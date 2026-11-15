@@ -8,6 +8,11 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[features]
+# `totp::Secret::code_at_time`, for tests that play an authenticator app. Enabled by the server's
+# dev-dependency, so a build without dev-dependencies (the release image) never has it.
+test-support = []
+
 [dependencies]
 getrandom.workspace = true
 sha2.workspace = true
@@ -29,6 +34,10 @@ webauthn-rs.workspace = true
 openidconnect.workspace = true
 oauth2.workspace = true
 argon2.workspace = true
+hmac.workspace = true
+sha1.workspace = true
+data-encoding.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["io-util", "test-util"] }

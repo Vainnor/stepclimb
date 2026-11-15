@@ -15,7 +15,7 @@
 //! [`identity_providers`] and [`identities`] repositories, which link a user to an identity
 //! provider by the provider's subject; and [`local_sign_in`], the local provider row and its
 //! method switches, with [`local_tokens`] (enrollment links), [`passkeys`], [`local_logins`]
-//! (passwords) and [`local`] (local credentials); and [`admission_settings`], the switches
+//! (passwords), [`local_totp`] (TOTP and recovery codes) and [`local`] (local credentials); and [`admission_settings`], the switches
 //! that say who admission lets in; and the entitlement catalogs ([`feature`]) with the
 //! [`plans`] and [`org_plans`] repositories, which give every organization the `unlimited`
 //! plan, and how a request's plan bounds what it adds ([`org_plans::check_room`]); and
@@ -45,6 +45,7 @@ pub mod local;
 pub mod local_logins;
 pub mod local_sign_in;
 pub mod local_tokens;
+pub mod local_totp;
 mod name;
 pub mod org_plans;
 pub mod organizations;

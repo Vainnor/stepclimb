@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE totp_recovery_codes\n         SET used_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond',\n             updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond'\n         WHERE org_id = $1 AND user_id = $2 AND code_hash = $3 AND used_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bytea",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d1ef21fcf5f6d7e94b8a7d8e645e57003baa6241bb672002db9d5a54e8508dc4"
+}

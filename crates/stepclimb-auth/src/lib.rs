@@ -13,7 +13,7 @@
 //! mapping of both kinds, and [`json_pointer`], its pointers. For local
 //! accounts it has [`passkey`], the WebAuthn relying party that registers passkeys
 //! (`docs/specs/m0/04-local-accounts.md` B8), and [`password`], the password policy and its
-//! argon2id hashes. Sessions, CSRF, API-key
+//! argon2id hashes, and [`totp`], TOTP codes and recovery codes (B19 to B21). Sessions, CSRF, API-key
 //! authentication, the sign-in methods and the OAuth 2.1 server arrive with the rest of that spec
 //! and specs 04 to 07.
 
@@ -29,3 +29,4 @@ pub mod passkey;
 pub mod password;
 pub mod provider_config;
 pub mod token;
+pub mod totp;
