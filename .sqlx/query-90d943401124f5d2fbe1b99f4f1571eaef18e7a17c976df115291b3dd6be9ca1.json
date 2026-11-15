@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE organizations\n         SET settings = settings || jsonb_build_object(\n                 'admission',\n                 COALESCE(settings -> 'admission', '{}'::jsonb) || $2::text::jsonb),\n             updated_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond'\n         WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "90d943401124f5d2fbe1b99f4f1571eaef18e7a17c976df115291b3dd6be9ca1"
+}

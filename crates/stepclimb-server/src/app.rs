@@ -16,7 +16,7 @@ use tower_http::trace::TraceLayer;
 use utoipa_scalar::{Scalar, Servable};
 
 use crate::{
-    accounts, appearance, auth, branding,
+    accounts, admission_settings, appearance, auth, branding,
     csrf::{self, OriginAllowlist},
     enrollment,
     error::ApiError,
@@ -235,6 +235,11 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         (
             local_sign_in::LOCAL_SIGN_IN_PATH,
             get(local_sign_in::get_local_sign_in).put(local_sign_in::update_local_sign_in),
+        ),
+        (
+            admission_settings::ADMISSION_PATH,
+            get(admission_settings::get_admission_settings)
+                .put(admission_settings::update_admission_settings),
         ),
     ]
 }

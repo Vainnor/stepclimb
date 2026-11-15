@@ -173,6 +173,7 @@ async fn the_openapi_document_is_3_1_and_lists_every_route() {
             "/api/v1/accounts",
             "/api/v1/accounts/{account_id}",
             "/api/v1/accounts/{account_id}/move",
+            "/api/v1/admin/admission",
             "/api/v1/admin/branding",
             "/api/v1/admin/local-sign-in",
             "/api/v1/admin/permissions",

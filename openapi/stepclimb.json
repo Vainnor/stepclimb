@@ -387,6 +387,99 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/api/v1/admin/admission": {
+      "get": {
+        "tags": [
+          "admission"
+        ],
+        "summary": "Read the organization's admission switches.",
+        "operationId": "getAdmissionSettings",
+        "responses": {
+          "200": {
+            "description": "The admission switches",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdmissionSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/PermissionDenied"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "admission"
+        ],
+        "summary": "Change the admission switches the body names; send only what you change. A switch the body\nleaves out keeps its value, and a body naming only current values changes nothing.",
+        "operationId": "updateAdmissionSettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdmissionSettingsPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The switches after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdmissionSettings"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdmissionWriteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/AdmissionInvalid"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/api/v1/admin/branding": {
       "get": {
         "tags": [
@@ -2950,16 +3043,54 @@
         },
         "additionalProperties": false
       },
+      "AdmissionSettings": {
+        "type": "object",
+        "description": "Who admission lets in.",
+        "required": [
+          "signup_allowed",
+          "sync_only"
+        ],
+        "properties": {
+          "signup_allowed": {
+            "type": "boolean",
+            "description": "Whether a person the organization has no user for is created as a user when they first\nsign in through an identity provider. Off, they are refused with `auth.signup_closed`."
+          },
+          "sync_only": {
+            "type": "boolean",
+            "description": "Whether only users already provisioned may sign in. This release accepts only `false`:\n`true` answers 422 with `admission.sync_only_unavailable`."
+          }
+        }
+      },
+      "AdmissionSettingsPatch": {
+        "type": "object",
+        "description": "A change to the admission switches: send only what you change. An absent member keeps its\nstored value, and `{}` changes nothing. A member sent as `null` is malformed: omit it instead.",
+        "properties": {
+          "signup_allowed": {
+            "type": "boolean",
+            "description": "Whether a person the organization has no user for is created as a user when they first\nsign in through an identity provider."
+          },
+          "sync_only": {
+            "type": "boolean",
+            "description": "Whether only users already provisioned may sign in. This release accepts only `false`:\n`true` answers 422 with `admission.sync_only_unavailable`."
+          }
+        },
+        "additionalProperties": false
+      },
       "AdmissionSwitches": {
         "type": "object",
         "description": "The admission switches as the organization settings show them.",
         "required": [
-          "signup_allowed"
+          "signup_allowed",
+          "sync_only"
         ],
         "properties": {
           "signup_allowed": {
             "type": "boolean",
             "description": "Whether a person the organization has no user for is created as a user when they first\nsign in through an identity provider; `false` unless set. Off, they are refused with\n`auth.signup_closed`."
+          },
+          "sync_only": {
+            "type": "boolean",
+            "description": "Whether only users already provisioned may sign in; `false` unless set."
           }
         }
       },
@@ -3905,7 +4036,7 @@
         "properties": {
           "admission": {
             "$ref": "#/components/schemas/AdmissionSwitches",
-            "description": "Who admission lets in; read-only here."
+            "description": "Who admission lets in; read-only here, changed through `PUT /api/v1/admin/admission`."
           },
           "default_tz": {
             "type": "string",
@@ -5003,6 +5134,26 @@
           }
         }
       },
+      "AdmissionInvalid": {
+        "description": "`request.invalid`: the change breaks a rule; `errors` lists each one. `admission.sync_only_unavailable` marks `sync_only` turned on, which this release refuses.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "AdmissionWriteForbidden": {
+        "description": "`permission.denied`: the caller does not hold `admission.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "AssignmentCreateConflict": {
         "description": "`role_assignment.exists`: the user already holds the role at the scope. `role.unknown_builtin`: the role is a built-in role of another Stepclimb release.",
         "content": {
@@ -5592,7 +5743,7 @@
         }
       },
       "SettingsInvalid": {
-        "description": "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting this route does not change (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`; `admission`: the admission settings); `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses.",
+        "description": "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting this route does not change (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`; `admission`: `PUT /api/v1/admin/admission`); `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -5739,6 +5890,10 @@
     {
       "name": "local-sign-in",
       "description": "The organization's local sign-in methods"
+    },
+    {
+      "name": "admission",
+      "description": "Who may sign in to the organization"
     }
   ]
 }

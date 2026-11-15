@@ -12,9 +12,9 @@
 //! `settings.unknown_key`, and a known key whose value does not match its type is a 400
 //! `request.malformed`, as for any body that does not match the schema (B2). `local_sign_in` is
 //! read here but written only through `/api/v1/admin/local-sign-in` with `provider.manage`
-//! (docs/specs/m0/04-local-accounts.md Q2), and `admission` belongs to the admission settings
-//! (docs/specs/m0/07-admission.md Q2), so a patch naming either is listed in the 422 as
-//! `settings.read_only`.
+//! (docs/specs/m0/04-local-accounts.md Q2), and `admission` only through
+//! `/api/v1/admin/admission` with `admission.manage` (docs/specs/m0/07-admission.md Q2), so a
+//! patch naming either is listed in the 422 as `settings.read_only`.
 //!
 //! `GET /api/v1/organization/entitlements` shows the organization's plan and what it allows, with
 //! every catalog feature and limit (docs/specs/m0/10-entitlements-framework.md B12). It needs
@@ -71,13 +71,13 @@ pub mod code {
 }
 
 /// The settings this route reads but does not write: the local sign-in switches belong to
-/// `/api/v1/admin/local-sign-in` (spec 04 Q2), the admission switches to spec 07's admission
-/// settings (Q2).
+/// `/api/v1/admin/local-sign-in` (spec 04 Q2), the admission switches to
+/// `/api/v1/admin/admission` (spec 07 Q2).
 pub const READ_ONLY_SETTINGS: &[&str] = CorePatch::WRITTEN_ELSEWHERE;
 
 problem_responses! {
     OrgWriteForbidden => "`permission.denied`: the caller does not hold `organization.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site.",
-    SettingsInvalid => "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting this route does not change (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`; `admission`: the admission settings); `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses.",
+    SettingsInvalid => "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting this route does not change (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`; `admission`: `PUT /api/v1/admin/admission`); `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses.",
 }
 
 /// The caller's organization.
@@ -137,7 +137,7 @@ pub struct OrgSettings {
     /// The local sign-in method switches; read-only here, changed through
     /// `PUT /api/v1/admin/local-sign-in`.
     pub local_sign_in: LocalMethods,
-    /// Who admission lets in; read-only here.
+    /// Who admission lets in; read-only here, changed through `PUT /api/v1/admin/admission`.
     pub admission: AdmissionSwitches,
 }
 
@@ -150,6 +150,8 @@ pub struct AdmissionSwitches {
     /// sign in through an identity provider; `false` unless set. Off, they are refused with
     /// `auth.signup_closed`.
     pub signup_allowed: bool,
+    /// Whether only users already provisioned may sign in; `false` unless set.
+    pub sync_only: bool,
 }
 
 /// The local sign-in method switches as the organization settings show them.
