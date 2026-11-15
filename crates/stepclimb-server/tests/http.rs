@@ -193,6 +193,8 @@ async fn the_openapi_document_is_3_1_and_lists_every_route() {
             "/api/v1/users/{user_id}/identities/{identity_id}",
             "/auth/local/enrollment/passkey",
             "/auth/local/enrollment/start",
+            "/auth/local/passkey/finish",
+            "/auth/local/passkey/start",
             "/auth/sign-out",
             "/healthz",
             "/readyz",

@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The WebAuthn credential creation options the API answers, as typed members, so the OpenAPI
-//! document and the generated client describe them (W3C Web Authentication Level 3,
-//! `PublicKeyCredentialCreationOptionsJSON`).
+//! The WebAuthn credential creation and request options the API answers, as typed members, so
+//! the OpenAPI document and the generated client describe them (W3C Web Authentication Level 3,
+//! `PublicKeyCredentialCreationOptionsJSON` and `PublicKeyCredentialRequestOptionsJSON`).
 //!
-//! `stepclimb_auth::passkey` produces them as JSON; [`PasskeyCreationOptions::from_json`] reads
-//! that JSON into these types and refuses any member they do not declare, so a `webauthn-rs`
-//! release that adds one fails every passkey test instead of reaching clients undocumented.
+//! `stepclimb_auth::passkey` produces them as JSON; [`PasskeyCreationOptions::from_json`] and
+//! [`PasskeyRequestOptions::from_json`] read that JSON into these types and refuse any member
+//! they do not declare, so a `webauthn-rs` release that adds one fails every passkey test
+//! instead of reaching clients undocumented.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -143,4 +144,39 @@ pub struct RegistrationExtensions {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub hmac_create_secret: Option<bool>,
+}
+
+/// `CredentialRequestOptions` as JSON: pass `publicKey` to
+/// `PublicKeyCredential.parseRequestOptionsFromJSON`, then to `navigator.credentials.get`.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PasskeyRequestOptions {
+    #[serde(rename = "publicKey")]
+    pub public_key: PublicKeyRequestOptions,
+}
+
+impl PasskeyRequestOptions {
+    /// Read the options `stepclimb_auth::passkey` made.
+    pub fn from_json(options: Value) -> Result<Self, serde_json::Error> {
+        serde_json::from_value(options)
+    }
+}
+
+/// `PublicKeyCredentialRequestOptionsJSON`.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PublicKeyRequestOptions {
+    /// base64url, unpadded.
+    pub challenge: String,
+    /// Milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub timeout: Option<u32>,
+    /// The relying party ID: the instance's host name.
+    pub rp_id: String,
+    /// The passkeys the account may sign in with. Empty when the address has no account or
+    /// the account has no passkey: the answer looks the same either way.
+    pub allow_credentials: Vec<CredentialDescriptor>,
+    /// `required`: the authenticator checks a PIN or biometric.
+    pub user_verification: String,
 }

@@ -8,8 +8,8 @@
 //! settings and its entitlements, the account tree, the permission catalog, roles and role
 //! assignment routes under `/api/v1/admin`, the user admin routes, users' identities and the
 //! signed-in user's, the organization's branding and its stylesheet (`/theme.css`), the local
-//! sign-in switches, enrollment links, the enrollment start route and passkey registration
-//! through a link, and the shared error
+//! sign-in switches, enrollment links, the enrollment start route, passkey registration
+//! through a link and passkey sign-in, and the shared error
 //! schemas and responses below. The other M0 specs add their endpoints under `/api/v1`.
 //!
 //! Every `/api/v1` operation lists its errors in `#[utoipa::path]` (spec 02 B6). The errors
@@ -29,7 +29,7 @@ use crate::{
     accounts, appearance, auth, branding, enrollment,
     error::{FieldError, PROBLEM_JSON, Problem},
     health, identities, local_sign_in, me, organization, passkey_enrollment, passkey_options,
-    role_assignments, roles, users,
+    passkey_sign_in, role_assignments, roles, users,
 };
 
 /// The operation extension that marks a handler as changing state (spec 08 B12, T17). Every
@@ -52,6 +52,8 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         auth::sign_out,
         enrollment::start_enrollment,
         passkey_enrollment::enroll_passkey,
+        passkey_sign_in::start_passkey_sign_in,
+        passkey_sign_in::finish_passkey_sign_in,
         me::get_me,
         appearance::update_my_appearance,
         organization::get_organization,
@@ -155,7 +157,12 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             passkey_options::AuthenticatorSelection,
             passkey_options::RegistrationExtensions,
             passkey_enrollment::PasskeyEnrollment,
-            passkey_enrollment::SignedIn
+            passkey_enrollment::SignedIn,
+            passkey_options::PasskeyRequestOptions,
+            passkey_options::PublicKeyRequestOptions,
+            passkey_sign_in::PasskeySignInStart,
+            passkey_sign_in::PasskeySignInStarted,
+            passkey_sign_in::PasskeySignInFinish
         ),
         responses(
             BadRequest,
@@ -217,7 +224,12 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             enrollment::EnrollmentStartNotFound,
             passkey_enrollment::EnrollPasskeyInvalid,
             passkey_enrollment::EnrollPasskeyForbidden,
-            passkey_enrollment::EnrollPasskeyNotFound
+            passkey_enrollment::EnrollPasskeyNotFound,
+            passkey_sign_in::PasskeySignInStartNotFound,
+            passkey_sign_in::PasskeySignInFinishBadRequest,
+            passkey_sign_in::PasskeySignInFinishUnauthorized,
+            passkey_sign_in::PasskeySignInFinishForbidden,
+            passkey_sign_in::PasskeySignInFinishNotFound
         )
     ),
     tags(

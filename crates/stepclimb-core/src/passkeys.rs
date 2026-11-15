@@ -10,11 +10,18 @@
 //!
 //! [`create`] writes the `passkey.create` audit entry (docs/specs/m0/09-permissions-and-roles.md
 //! B22) with the user and the name, never the credential.
+//!
+//! Sign-in (B11, B12) reads a user's credentials with [`credentials`], locks the passkey an
+//! assertion names with [`lock_for_sign_in`], found by `(org_id, credential_id)` so another
+//! organization's credential never matches, and saves the updated credential with
+//! [`record_sign_in`], or marks it with [`flag_counter_regressed`] when its sign counter did not
+//! go up. Sign-ins write no audit entry: docs/specs/m0/08-sessions-and-csrf.md Q14
+//! keeps routine sign-ins to the log.
 
 use std::time::SystemTime;
 
 use serde_json::{Value, json};
-use sqlx::{Acquire, PgExecutor, Postgres};
+use sqlx::{Acquire, PgConnection, PgExecutor, Postgres};
 use uuid::Uuid;
 
 use crate::{
@@ -78,6 +85,13 @@ pub enum Error {
     /// The name contains NUL, which PostgreSQL `text` cannot store.
     #[error("the passkey name contains NUL")]
     NameContainsNul,
+    /// No passkey with that id in the scope's organization.
+    #[error("the passkey does not exist")]
+    NotFound,
+    /// A stored credential is not JSON: the table's check makes it an object, so this is a
+    /// fault.
+    #[error("a stored passkey credential is unreadable: {0}")]
+    Credential(#[source] serde_json::Error),
     #[error(transparent)]
     Time(#[from] TimeOutOfRange),
     #[error(transparent)]
@@ -197,6 +211,137 @@ pub async fn exists_for_user(
     .fetch_one(db)
     .await?;
     Ok(found)
+}
+
+/// The stored credentials of the passkeys of the user `user_id` in the scope's organization,
+/// oldest first: what a sign-in ceremony for the user allows.
+pub async fn credentials(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    user_id: Uuid,
+) -> Result<Vec<Value>, Error> {
+    let rows = sqlx::query_scalar!(
+        r#"SELECT credential::text AS "credential!" FROM passkeys
+           WHERE org_id = $1 AND user_id = $2
+           ORDER BY created_at, id"#,
+        scope.org_id(),
+        user_id,
+    )
+    .fetch_all(db)
+    .await?;
+    rows.iter()
+        .map(|text| serde_json::from_str(text).map_err(Error::Credential))
+        .collect()
+}
+
+/// A passkey a sign-in checks an assertion against.
+#[derive(Clone, PartialEq)]
+pub struct StoredPasskey {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    /// The credential as `stepclimb_auth::passkey` serialized it.
+    pub credential: Value,
+}
+
+/// Leaves the credential out, as [`NewPasskey`] does.
+impl std::fmt::Debug for StoredPasskey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoredPasskey")
+            .field("id", &self.id)
+            .field("user_id", &self.user_id)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The passkey of the scope's organization whose credential id is `credential_id`, locked
+/// (`FOR UPDATE`) until the caller's transaction ends, or `None`. Only the scope's organization
+/// is searched: a credential id another organization registered never matches. The lock makes
+/// two sign-ins with one passkey take turns, so each checks its sign counter against the one
+/// the other saved.
+pub async fn lock_for_sign_in(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    credential_id: &[u8],
+) -> Result<Option<StoredPasskey>, Error> {
+    let row = sqlx::query!(
+        r#"SELECT id, user_id, credential::text AS "credential!" FROM passkeys
+           WHERE org_id = $1 AND credential_id = $2
+           FOR UPDATE"#,
+        scope.org_id(),
+        credential_id,
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+    row.map(|row| {
+        Ok(StoredPasskey {
+            id: row.id,
+            user_id: row.user_id,
+            credential: serde_json::from_str(&row.credential).map_err(Error::Credential)?,
+        })
+    })
+    .transpose()
+}
+
+/// Save `credential`, the passkey `id`'s credential with the counter and backup state of a
+/// verified sign-in, and mark the passkey used at `now`. Refuses a passkey the scope's
+/// organization does not have ([`Error::NotFound`]).
+pub async fn record_sign_in(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    id: Uuid,
+    credential: &Value,
+    now: SystemTime,
+) -> Result<(), Error> {
+    let now_us = epoch_micros(now)?;
+    let updated = sqlx::query!(
+        r#"UPDATE passkeys
+           SET credential = $3::text::jsonb,
+               last_used_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond',
+               updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond'
+           WHERE org_id = $1 AND id = $2"#,
+        scope.org_id(),
+        id,
+        credential.to_string(),
+        now_us,
+    )
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    if updated == 0 {
+        return Err(Error::NotFound);
+    }
+    Ok(())
+}
+
+/// Mark the passkey `id` as having presented a sign counter that did not go up (Q12's "refuse
+/// and flag"), at `now` unless it is already marked: `counter_regressed_at` keeps the first
+/// time. Nothing reads the mark to refuse a sign-in. Refuses a passkey the scope's organization
+/// does not have ([`Error::NotFound`]).
+pub async fn flag_counter_regressed(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    id: Uuid,
+    now: SystemTime,
+) -> Result<(), Error> {
+    let now_us = epoch_micros(now)?;
+    let updated = sqlx::query!(
+        r#"UPDATE passkeys
+           SET counter_regressed_at = COALESCE(
+                   counter_regressed_at,
+                   timestamptz 'epoch' + $3::bigint * interval '1 microsecond'),
+               updated_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond'
+           WHERE org_id = $1 AND id = $2"#,
+        scope.org_id(),
+        id,
+        now_us,
+    )
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    if updated == 0 {
+        return Err(Error::NotFound);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

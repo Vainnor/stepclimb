@@ -21,6 +21,7 @@ use crate::{
     enrollment,
     error::ApiError,
     health, identities, local_sign_in, me, openapi, organization, passkey_enrollment,
+    passkey_sign_in,
     rate_limit::RateLimiter,
     role_assignments, roles, spa, users,
     web_origin::WebOrigin,
@@ -102,6 +103,14 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         (
             passkey_enrollment::ENROLLMENT_PASSKEY_PATH,
             post(passkey_enrollment::enroll_passkey),
+        ),
+        (
+            passkey_sign_in::PASSKEY_START_PATH,
+            post(passkey_sign_in::start_passkey_sign_in),
+        ),
+        (
+            passkey_sign_in::PASSKEY_FINISH_PATH,
+            post(passkey_sign_in::finish_passkey_sign_in),
         ),
         (branding::THEME_CSS_PATH, get(branding::theme_css)),
         (me::ME_PATH, get(me::get_me)),

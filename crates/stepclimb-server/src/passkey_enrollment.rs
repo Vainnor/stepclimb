@@ -115,7 +115,7 @@ pub struct Begun {
 
 /// The organization's relying party: the public URL's host as its ID, the organization's name
 /// as its name.
-async fn relying_party(
+pub(crate) async fn relying_party(
     state: &AppState,
     db: &mut PgConnection,
     scope: OrgScope,
@@ -244,7 +244,7 @@ pub async fn enroll_passkey(
     .await;
     let flow = match flow {
         Ok(flow) => flow,
-        Err(error) => return flow_refused(tx, error).await,
+        Err(error) => return flow_refused(tx, error, &REGISTRATION_FLOW).await,
     };
     let pending: Pending =
         serde_json::from_slice(&flow.payload).map_err(|e| ApiError::internal(&e))?;
@@ -285,11 +285,25 @@ fn passkey_name(name: Option<&str>) -> Result<String, ApiError> {
     }
 }
 
-/// The answer for a flow [`flow::finish`] did not return: `auth.flow_invalid` with nothing
-/// changed, or `auth.flow_expired` after committing the expired flow's deletion (spec 08 B21).
-async fn flow_refused(
+/// What a passkey ceremony's flow refusals tell the user: when the flow expired, and when there
+/// is none.
+pub(crate) struct FlowDetails {
+    pub expired: &'static str,
+    pub invalid: &'static str,
+}
+
+const REGISTRATION_FLOW: FlowDetails = FlowDetails {
+    expired: "This passkey registration started more than 10 minutes ago. Open the enrollment link again.",
+    invalid: "No passkey registration is waiting in this browser. Open the enrollment link again.",
+};
+
+/// The answer for a flow [`flow::finish`] did not return: 400 `auth.flow_invalid` with nothing
+/// changed, or 400 `auth.flow_expired` after committing the expired flow's deletion (spec 08
+/// B21), with `details`' text and the flow cookie cleared.
+pub(crate) async fn flow_refused(
     tx: Transaction<'_, Postgres>,
     error: FinishError,
+    details: &FlowDetails,
 ) -> Result<Response, ApiError> {
     let Some(code) = error.code() else {
         return Err(ApiError::internal(&error));
@@ -298,10 +312,8 @@ async fn flow_refused(
         tx.commit().await.map_err(|e| ApiError::internal(&e))?;
     }
     let detail = match error {
-        FinishError::Expired => {
-            "This passkey registration started more than 10 minutes ago. Open the enrollment link again."
-        }
-        _ => "No passkey registration is waiting in this browser. Open the enrollment link again.",
+        FinishError::Expired => details.expired,
+        _ => details.invalid,
     };
     let refusal = ApiError::new(StatusCode::BAD_REQUEST, code, detail);
     Ok(with_flow_cleared(refusal.into_response()))
@@ -321,15 +333,16 @@ struct Attempt<'a> {
     now: SystemTime,
 }
 
-/// Why [`register`] did not sign the user in: a refusal the client caused, answered after the
-/// flow's deletion commits, or a server fault, which rolls everything back.
-enum Outcome {
+/// Why [`register`] (or a passkey sign-in) did not sign the user in: a refusal the client
+/// caused, answered after the flow's deletion commits, or a server fault, which rolls
+/// everything back.
+pub(crate) enum Outcome {
     Refused(ApiError),
     Failed(ApiError),
 }
 
 impl Outcome {
-    fn internal(cause: &dyn std::error::Error) -> Self {
+    pub(crate) fn internal(cause: &dyn std::error::Error) -> Self {
         Self::Failed(ApiError::internal(cause))
     }
 }
@@ -467,7 +480,7 @@ fn flow_mismatch() -> ApiError {
     )
 }
 
-fn suspended() -> ApiError {
+pub(crate) fn suspended() -> ApiError {
     ApiError::new(
         StatusCode::FORBIDDEN,
         code::AUTH_SUSPENDED,
@@ -476,7 +489,7 @@ fn suspended() -> ApiError {
 }
 
 /// `response` with the flow cookie cleared, since the flow is gone.
-fn with_flow_cleared(mut response: Response) -> Response {
+pub(crate) fn with_flow_cleared(mut response: Response) -> Response {
     response
         .headers_mut()
         .append(header::SET_COOKIE, flow::clear_cookie());
@@ -484,7 +497,7 @@ fn with_flow_cleared(mut response: Response) -> Response {
 }
 
 /// 200 `{return_to}` with the session cookie, the flow cookie cleared and `no-store`.
-fn signed_in(started: session::Started, return_to: &str) -> Response {
+pub(crate) fn signed_in(started: session::Started, return_to: &str) -> Response {
     let body = SignedIn {
         return_to: return_to.to_owned(),
     };

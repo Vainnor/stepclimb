@@ -55,6 +55,7 @@ pub mod organization;
 pub mod pagination;
 pub mod passkey_enrollment;
 pub mod passkey_options;
+pub mod passkey_sign_in;
 pub mod rate_limit;
 pub mod recovery;
 pub mod request_org;

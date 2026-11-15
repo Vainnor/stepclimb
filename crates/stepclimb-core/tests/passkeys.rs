@@ -242,3 +242,112 @@ async fn a_users_passkeys_go_with_the_user(pool: PgPool) {
         .expect("count");
     assert_eq!(rows, 0);
 }
+
+/// Sign-in reads a user's credentials oldest first, finds a passkey by its credential id in the
+/// scope's organization only, and saves the updated credential with the time it was used.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_sign_in_finds_the_passkey_in_its_organization_and_records_its_use(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    let b = org(&pool, "org-b").await;
+    let sam = user(&pool, a).await;
+    let kim = user(&pool, b).await;
+    let first = store(&pool, a, sam, &[5; 16]).await.expect("store");
+    store(&pool, a, sam, &[6; 16]).await.expect("store");
+    let kims = store(&pool, b, kim, &[9; 16]).await.expect("store in B");
+    assert_eq!(
+        passkeys::credentials(&pool, scope(a), sam).await.unwrap(),
+        [credential(), credential()]
+    );
+    assert!(
+        passkeys::credentials(&pool, scope(a), kim)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let mut tx = pool.begin().await.expect("a transaction");
+    let found = passkeys::lock_for_sign_in(&mut tx, scope(a), &[5; 16])
+        .await
+        .unwrap()
+        .expect("the passkey");
+    assert_eq!((found.id, found.user_id), (first.id, sam));
+    assert_eq!(found.credential, credential());
+    assert!(
+        passkeys::lock_for_sign_in(&mut tx, scope(a), &[9; 16])
+            .await
+            .unwrap()
+            .is_none(),
+        "organization B's credential id matched in A"
+    );
+    let updated = json!({ "cred": { "counter": 3 } });
+    let later = now() + Duration::from_secs(60);
+    passkeys::record_sign_in(&mut tx, scope(a), first.id, &updated, later)
+        .await
+        .expect("record the sign-in");
+    let refused = passkeys::record_sign_in(&mut tx, scope(a), kims.id, &updated, later).await;
+    assert!(matches!(refused, Err(Error::NotFound)), "{refused:?}");
+    tx.commit().await.expect("commit");
+
+    let row: Value = sqlx::query_scalar(
+        "SELECT jsonb_build_object('credential', credential,
+                'used', last_used_at = updated_at AND last_used_at > created_at)
+         FROM passkeys WHERE id = $1",
+    )
+    .bind(first.id)
+    .fetch_one(&pool)
+    .await
+    .expect("the row");
+    assert_eq!(row, json!({ "credential": updated, "used": true }));
+    let kims_row: Value = sqlx::query_scalar("SELECT credential FROM passkeys WHERE id = $1")
+        .bind(kims.id)
+        .fetch_one(&pool)
+        .await
+        .expect("B's row");
+    assert_eq!(kims_row, credential());
+}
+
+/// The counter flag keeps the first time it was set, and another organization's passkey is not
+/// flagged through this scope.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_counter_flag_keeps_its_first_time(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    let b = org(&pool, "org-b").await;
+    let sam = user(&pool, a).await;
+    let kim = user(&pool, b).await;
+    let passkey = store(&pool, a, sam, &[8; 16]).await.expect("store");
+    let kims = store(&pool, b, kim, &[8; 16]).await.expect("store in B");
+    let mut conn = pool.acquire().await.expect("a connection");
+    let first = now() + Duration::from_secs(60);
+    passkeys::flag_counter_regressed(&mut conn, scope(a), passkey.id, first)
+        .await
+        .expect("flag");
+    passkeys::flag_counter_regressed(
+        &mut conn,
+        scope(a),
+        passkey.id,
+        first + Duration::from_secs(60),
+    )
+    .await
+    .expect("flag again");
+    let refused = passkeys::flag_counter_regressed(&mut conn, scope(a), kims.id, first).await;
+    assert!(matches!(refused, Err(Error::NotFound)), "{refused:?}");
+    let flagged: Vec<bool> = sqlx::query_scalar(
+        "SELECT counter_regressed_at IS NOT DISTINCT FROM
+                timestamptz 'epoch' + $1::bigint * interval '1 microsecond'
+         FROM passkeys ORDER BY org_id = $2 DESC",
+    )
+    .bind(
+        i64::try_from(
+            first
+                .duration_since(UNIX_EPOCH)
+                .expect("after the epoch")
+                .as_micros(),
+        )
+        .expect("fits"),
+    )
+    .bind(a)
+    .fetch_all(&pool)
+    .await
+    .expect("read the flags");
+    assert_eq!(flagged, [true, false]);
+}
