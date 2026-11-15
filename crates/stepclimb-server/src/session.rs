@@ -181,6 +181,11 @@ pub struct Rejection {
 }
 
 impl Rejection {
+    /// The error the request is refused with.
+    pub fn error(&self) -> &ApiError {
+        &self.error
+    }
+
     fn keep(error: ApiError) -> Self {
         Self {
             error,

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! `GET /api/v1/me`: the signed-in user, their organization, their grants and the
-//! organization's features (docs/specs/m0/03-users-and-identities.md B21, B22).
+//! organization's features (docs/specs/m0/03-users-and-identities.md B21, B22), and the user's
+//! appearance choice (docs/specs/m0/11-app-shell.md B21, Q6).
 //!
 //! The route needs a principal that is a user and no permission ([`AuthOnly`]). Today the only
 //! such principal is a browser session; the user and the organization are read with the
@@ -13,7 +14,7 @@
 use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
 use stepclimb_core::{
-    Source, feature,
+    Source, appearance, feature,
     grants::{Grants, ScopeId},
     id::Uuid,
     organizations,
@@ -23,8 +24,8 @@ use stepclimb_core::{
 use utoipa::ToSchema;
 
 use crate::{
-    AppState, entitlements::Entitlements, error::ApiError, organization::Organization,
-    require::AuthOnly, roles::ScopeType,
+    AppState, appearance::UserAppearance, entitlements::Entitlements, error::ApiError,
+    organization::Organization, require::AuthOnly, roles::ScopeType,
 };
 
 /// The path of the route.
@@ -41,6 +42,8 @@ pub struct Me {
     pub grants: Vec<MeGrant>,
     /// The keys of the catalog features the organization's plan includes, sorted.
     pub features: Vec<String>,
+    /// The theme and density the user chose (docs/specs/m0/11-app-shell.md B21, Q6).
+    pub appearance: UserAppearance,
 }
 
 /// The signed-in user.
@@ -173,7 +176,11 @@ pub async fn get_me(
     let organization = organizations::get(&state.db, scope)
         .await
         .map_err(|error| ApiError::internal(&error))?;
+    let appearance = appearance::get(&state.db, scope, principal.user_id)
+        .await
+        .map_err(|error| ApiError::internal(&error))?;
     Ok(Json(Me {
+        appearance: appearance.into(),
         user: user.into(),
         organization: organization.into(),
         grants: me_grants(auth.grants()),

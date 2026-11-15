@@ -4,7 +4,7 @@
 //! It is committed as `openapi/stepclimb.json`; `just openapi-diff` regenerates it and the
 //! TypeScript client (`packages/api-client`) and fails when either differs from what is
 //! committed. Today it lists the operations probes, which the web app's skeleton route calls
-//! through the generated client, sign-out, `GET /api/v1/me`, the caller's organization, its
+//! through the generated client, sign-out, `GET /api/v1/me` and the user's appearance choice, the caller's organization, its
 //! settings and its entitlements, the account tree, the permission catalog, roles and role
 //! assignment routes under `/api/v1/admin`, the user admin routes, users' identities and the
 //! signed-in user's, the organization's branding and its stylesheet (`/theme.css`), the local
@@ -25,7 +25,7 @@ use utoipa::{
 };
 
 use crate::{
-    accounts, auth, branding, enrollment,
+    accounts, appearance, auth, branding, enrollment,
     error::{FieldError, PROBLEM_JSON, Problem},
     health, identities, local_sign_in, me, organization, role_assignments, roles, users,
 };
@@ -50,6 +50,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         auth::sign_out,
         enrollment::start_enrollment,
         me::get_me,
+        appearance::update_my_appearance,
         organization::get_organization,
         organization::update_organization,
         organization::get_settings,
@@ -98,6 +99,9 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             me::GrantScope,
             me::UserStatus,
             me::UserSource,
+            appearance::UserAppearance,
+            appearance::ThemeChoice,
+            appearance::DensityChoice,
             organization::Organization,
             organization::OrganizationPatch,
             organization::OrgSettings,

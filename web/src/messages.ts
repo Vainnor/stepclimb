@@ -5,6 +5,14 @@ import { type Catalog, uiMessages } from "@stepclimb/ui";
 export const webMessages: Catalog = {
   en: {
     "app.name": "Stepclimb",
+    "appearance.density.comfortable": "Comfortable",
+    "appearance.density.compact": "Compact",
+    "appearance.failed": "Your choice was not saved",
+    "appearance.failedHint": "The page keeps its look. Try again in a moment.",
+    "appearance.theme.dark": "Dark",
+    "appearance.theme.highContrast": "High contrast",
+    "appearance.theme.light": "Light",
+    "appearance.theme.system": "Match my device",
     "document.title": "{view} · {organization}",
     "document.titleSignedOut": "{view} · Stepclimb",
     "home.empty": "You have no {courses} yet.",
@@ -28,7 +36,10 @@ export const webMessages: Catalog = {
     "signOut.failed": "Sign-out failed",
     "signOut.failedHint": "You are still signed in. Try again in a moment.",
     "userMenu.label": "{name}, account menu",
+    "userMenu.saving": "{setting}: saving {choice}",
+    "userMenu.density": "Density",
     "userMenu.signOut": "Sign out",
+    "userMenu.theme": "Theme",
   },
 };
 

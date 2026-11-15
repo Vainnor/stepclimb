@@ -156,9 +156,9 @@ Read on 2026-11-12; the spec builds on it.
 - **B21.** The page sets `data-sc-theme` on `<html>` from the user's appearance choice, and
   leaves it unset to follow `prefers-color-scheme` (theme resolution order, `docs/plan/ui.md` ->
   What we borrow). The choices are light, dark, high contrast and system; the organization's
-  default appearance applies until the user chooses. Where the choice is stored, and how it is
-  applied before first paint without an inline script, is Open question Q6. Density is set the
-  same way with `data-sc-density`.
+  default appearance applies until the user chooses (not built yet: issue #162). Where the
+  choice is stored, and how it is applied before first paint without an inline script, is Open
+  question Q6. Density is set the same way with `data-sc-density`.
 - **B22.** The Vite dev server proxies `/theme.css` (and `/auth`) to `stepclimb serve`, as it
   does `/api`, so development matches production.
 
@@ -215,11 +215,12 @@ Read on 2026-11-12; the spec builds on it.
 
 ## API
 
-This spec adds one route to the server and consumes others.
+This spec adds two routes to the server and consumes others.
 
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
 | `GET /theme.css` | none; the organization comes from the request's host as 02 resolves it | `200 text/css`, cache headers per Q4 | `404` only if 02 finds no organization for the host | public (the sign-in screen needs it) |
+| `PUT /api/v1/me/appearance` | `{ theme, density }` | `200` the same, and the `__Host-sc_appearance` cookie | `400`, `401`, `403 auth.csrf_refused` | authenticated user (added by the I2 and I6 coordinator decisions, 2026-11-14) |
 
 `/theme.css` is in the OpenAPI document under the `operations` tag beside `/healthz`, with a
 `text/css` response, so the generated client and the Tauri app (M5) can find it. It is not under
@@ -232,7 +233,8 @@ which are full-page navigations by design.
 
 ## Data
 
-No tables. The appearance choice and terminology overrides are stored wherever Q6 and Q7 decide.
+No tables. The appearance choice is two columns of `users` (coordinator decisions below); terminology
+overrides are stored wherever Q7 decides.
 
 ## Permissions
 
@@ -291,9 +293,10 @@ Server (crate tests):
 - **T20.** (B20) `GET /theme.css` answers `text/css` with the cache headers Q4 settles, for an
   organization with branding and one without.
 
-There is no protected route in this spec, so no four-case permission test; `/theme.css` gets the
-cross-organization test that 02 defines for host resolution: one organization's host never
-receives another's theme.
+`PUT /api/v1/me/appearance` needs a user and no permission, so the permission suite gives it the
+401, 2xx and cross-organization cases of an `AuthOnly` entry (09 B20); there is no 403 or 404
+case. `/theme.css` gets the cross-organization test that 02 defines for host resolution: one
+organization's host never receives another's theme.
 
 ## Out of scope
 
@@ -460,6 +463,58 @@ Coordinator decisions (2026-11-14), on the owner's delegation, while building I3
 - **End-to-end tests answer `/me` in the browser.** The e2e stack has no organization and nothing
   can sign in before I5, so T15 and T17 fulfill `/api/v1/me` with a synthetic user in Playwright;
   T18 and an anonymous browser's redirect to `/sign-in` run against the real server.
+
+Coordinator decisions (2026-11-14), on the owner's delegation, while building I2 and I6:
+
+- **The fingerprint (Q4).** The server writes `index.html` for each request: its `/theme.css`
+  link becomes `/theme.css?v=<css_hash>`, the SHA-256 the branding record already stores (12).
+  `/theme.css` answers `Cache-Control: public, max-age=31536000, immutable` when `v` is the
+  served stylesheet's hash and `no-cache` otherwise (no `v`, as the Vite dev server's page links
+  it, or a page from before a branding change), so no cache keeps a stylesheet under a hash that
+  is not its own. `index.html` is `private, no-cache` with `Vary: Cookie`. When the request's
+  organization cannot be found, the link stays unfingerprinted and `/theme.css` gives the same
+  refusal; a database error there is logged and has the same effect, since the app's own `/me`
+  request then shows the failure. A stored hash that is not 64 lowercase hex digits also leaves
+  the link unfingerprinted, so nothing else reaches the attribute. A server error while finding
+  the page's session is logged and the page drawn from the appearance cookie.
+- **An instance without an organization serves the default theme.** `/theme.css` answers the
+  default brand's stylesheet for `org.none` instead of 503, because with Q5 the page has no
+  other colors and the "no organization yet" screen must still be drawn. Two or more
+  organizations still answer 404 `org.not_found`.
+- **The `theme` field of `/.well-known/stepclimb` (Q4)** joins that route when 08 I9 builds it;
+  the route does not exist yet.
+- **The bundle without color variables (Q5).** `@stepclimb/tokens` builds `structure.css`, every
+  variable no theme sets (space, type, control heights, motion, the pill radius, the floating
+  shadow, compact density), and `theme.css`, the default brand's stylesheet. `@stepclimb/ui/app.css`
+  imports `structure.css` where `styles.css` imports `variables.css`; `web/` imports `app.css`,
+  Storybook keeps `styles.css`. A tokens test checks that the two files declare no variable in
+  common and together give every element what `variables.css` gives it.
+- **The Tauri shell's theme.** `apps/app` loads `web/dist` with no server, so `vite build` copies
+  the default brand's stylesheet to `web/dist/theme.css`. The server never serves that file: its
+  `/theme.css` route answers first. Linking a server's theme is M5.
+- **Where the choice lives (Q6), for the owner to confirm.** Two columns of `users`, `theme` (`system`, `light`, `dark`,
+  `high-contrast`) and `density` (`comfortable`, `compact`), defaulting to `system` and
+  `comfortable`. `GET /api/v1/me` returns them as `appearance`; `PUT /api/v1/me/appearance` sets
+  both (authenticated user, no permission, CSRF-checked) and answers them with
+  `__Host-sc_appearance=<theme>.<density>` (one year, `HttpOnly`, `SameSite=Lax`), the cookie
+  of Q6 (b). `index.html` takes the signed-in user's choice, or without a session the cookie's;
+  an unreadable or repeated cookie is no choice. 03 lists no profile route for M0; this narrow,
+  self-only preference route is the one exception, and 03 says so. The coordinator kept both the
+  columns and the route after review (2026-11-14); the owner confirms or overrules them.
+- **No organization default appearance yet.** B21's "the organization's default appearance"
+  has no input: 12's branding inputs do not include one. Until #162 adds it, a user who has not
+  chosen follows the operating system (`data-sc-theme` unset). #162 also re-renders stored
+  stylesheets when the generator version changes. I6 therefore covers B21 except the
+  organization default.
+- **The choice is in the user menu,** as two submenus, Theme (Match my device, Light, Dark, High
+  contrast) and Density (Comfortable, Compact), each marking the current value. The app saves
+  first and applies the answer to `<html>`; a failed save shows an error toast and changes
+  nothing. While a save is pending, both submenu items are disabled and the one being saved reads
+  "Theme: saving Dark", so a second quick choice cannot send the first one's old value back. The app also applies `/me`'s choice when it loads, for a page the server did not
+  write (the Vite dev server, the Tauri shell).
+- **The OrgSwitcher (B19, Q3)** stays out of the shell: M0 resolves one organization per
+  instance (`RequestOrg` answers 404 with two or more), so there is no second session to list.
+  A Vitest test checks it is not in the DOM; Q3's behavior is built with 02 Q2's resolution.
 
 ## Issues
 

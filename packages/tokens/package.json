@@ -6,6 +6,8 @@
   "type": "module",
   "exports": {
     "./variables.css": "./build/css/variables.css",
+    "./structure.css": "./build/css/structure.css",
+    "./theme.css": "./build/css/theme.css",
     "./tailwind-theme.css": "./build/css/tailwind-theme.css",
     "./docs/tokens.json": "./build/docs/tokens.json"
   },

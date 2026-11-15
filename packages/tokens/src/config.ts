@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The Terrazzo configuration: build/css/variables.css (every theme as CSS variables),
-// build/css/tailwind-theme.css (Tailwind 4's theme mapped onto those variables) and the docs
-// tables in build/docs/ (src/docs.ts). The themes are generated (src/themes.ts), checked against
+// build/css/structure.css (the variables no organization's theme sets, for a page whose theme
+// comes from the server's `/theme.css`), build/css/theme.css (the default brand's stylesheet, as
+// `/theme.css` serves it), build/css/tailwind-theme.css (Tailwind 4's theme mapped onto those
+// variables) and the docs tables in build/docs/ (src/docs.ts). The themes are generated (src/themes.ts), checked against
 // the contrast report, and put into a copy of the resolver that Terrazzo reads. It takes the
 // resolver path and, optionally, the themes, so a test can build a modified copy of the token
 // JSON or a modified theme with the same settings.
@@ -10,10 +12,10 @@ import { pathToFileURL } from "node:url";
 import type { Config, Plugin } from "@terrazzo/parser";
 import css from "@terrazzo/plugin-css";
 import { docsTables } from "./docs";
-import { type Theme, themeToDtcg } from "./generate";
+import { generate, type Theme, themeToDtcg } from "./generate";
 import { tailwindKey, variableName } from "./names";
-import { osContrast, osDark } from "./stylesheet";
-import { brandThemes, checkThemes } from "./themes";
+import { brandStylesheet, osContrast, osDark } from "./stylesheet";
+import { brands, brandThemes, checkThemes } from "./themes";
 
 /**
  * Theme selectors. The page's `data-sc-theme` wins over the OS setting (plan, UI tab -> What we
@@ -62,6 +64,26 @@ function brandPermutations(brand: string, attr: string) {
       prepare: media("(prefers-contrast: more)", [`:root${attr}${osContrast}`]),
     },
   ];
+}
+
+/** The compact density's control heights, which no theme sets. */
+const compactDensity = {
+  input: { theme: "default-light", density: "compact" },
+  include: ["control.h", "control.h-sm"],
+  prepare: wrap(['[data-sc-density="compact"]']),
+};
+
+/**
+ * The default brand's `/theme.css` (spec 12 B25): a build of the web app without a server (the
+ * Tauri shell) ships it as its own `theme.css`.
+ */
+function defaultStylesheet(): Plugin {
+  return {
+    name: "stepclimb-default-stylesheet",
+    async build({ outputFile }) {
+      outputFile("css/theme.css", brandStylesheet(generate(brands.default)));
+    },
+  };
 }
 
 /** Tailwind's own palette is removed, so `bg-blue-500` does not exist (plan, UI tab -> Tokens). */
@@ -169,13 +191,20 @@ export function tokensConfig(resolver: string, options: TokensOptions = {}): Con
           ...brandPermutations("default", ""),
           ...brandPermutations("vzdc", '[data-sc-brand="vzdc"]'),
           // Density is independent of the theme, so a compact view can sit inside any theme.
-          {
-            input: { theme: "default-light", density: "compact" },
-            include: ["control.h", "control.h-sm"],
-            prepare: wrap(['[data-sc-density="compact"]']),
-          },
+          compactDensity,
         ],
       }),
+      // What a page whose theme is `/theme.css` still needs: one stylesheet per page sets the
+      // colors, fonts and radii, so the bundle never out-ranks it (spec 11 Q5).
+      css({
+        filename: "css/structure.css",
+        variableName: (token) => variableName(token.id),
+        permutations: [
+          { input: { theme: "default-light" }, exclude: themed, prepare: wrap([":root"]) },
+          compactDensity,
+        ],
+      }),
+      defaultStylesheet(),
       tailwindTheme(),
       docsTables(new URL("descriptions.json", source)),
     ],

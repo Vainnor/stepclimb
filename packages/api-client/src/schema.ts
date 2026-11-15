@@ -223,6 +223,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/appearance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set the signed-in user's theme and density. The answer also sets the `__Host-sc_appearance`
+         *     cookie, so this browser's signed-out screens use the same choice.
+         */
+        put: operations["updateMyAppearance"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/identities": {
         parameters: {
             query?: never;
@@ -613,6 +633,11 @@ export interface components {
          */
         CornerStyle: "square" | "default" | "round";
         /**
+         * @description The density a user chose. `compact` sets the shorter control heights.
+         * @enum {string}
+         */
+        DensityChoice: "comfortable" | "compact";
+        /**
          * @description A local method an enrollment link can set up.
          * @enum {string}
          */
@@ -728,6 +753,8 @@ export interface components {
         };
         /** @description What `GET /api/v1/me` answers. */
         Me: {
+            /** @description The theme and density the user chose (docs/specs/m0/11-app-shell.md B21, Q6). */
+            appearance: components["schemas"]["UserAppearance"];
             /** @description The keys of the catalog features the organization's plan includes, sorted. */
             features: string[];
             /**
@@ -1142,6 +1169,11 @@ export interface components {
          */
         ScopeType: "organization" | "account" | "course";
         /**
+         * @description The theme a user chose. `system` follows the operating system's color and contrast settings.
+         * @enum {string}
+         */
+        ThemeChoice: "system" | "light" | "dark" | "high-contrast";
+        /**
          * @description A UI font the instance bundles.
          * @enum {string}
          */
@@ -1174,6 +1206,11 @@ export interface components {
              * @description RFC 3339, UTC.
              */
             updated_at: string;
+        };
+        /** @description The theme and density the signed-in user's pages are drawn in. */
+        UserAppearance: {
+            density: components["schemas"]["DensityChoice"];
+            theme: components["schemas"]["ThemeChoice"];
         };
         /**
          * @description A change to a user; an omitted member is left as it is. A member sent as `null` is
@@ -2378,6 +2415,38 @@ export interface operations {
             503: components["responses"]["NoOrganization"];
         };
     };
+    updateMyAppearance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserAppearance"];
+            };
+        };
+        responses: {
+            /** @description The appearance after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserAppearance"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["CsrfRefused"];
+            404: components["responses"]["OrganizationNotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
     listMyIdentities: {
         parameters: {
             query?: never;
@@ -2912,14 +2981,21 @@ export interface operations {
     };
     getThemeCss: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description The stylesheet's SHA-256 (lowercase hex), as the served page links it. When it is the
+                 *     served stylesheet's, the answer is cached for a year; otherwise it is revalidated on
+                 *     every load.
+                 */
+                v?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description The organization's light, dark and high-contrast themes as CSS variables, revalidated on every load (`Cache-Control: no-cache`) */
+            /** @description The organization's light, dark and high-contrast themes as CSS variables: the default brand's when it has saved no branding or the instance has no organization yet. Cached for a year (`Cache-Control: public, max-age=31536000, immutable`) when `v` is the stylesheet's hash, as the page the server serves links it; revalidated on every load (`no-cache`) otherwise. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2928,9 +3004,9 @@ export interface operations {
                     "text/css": string;
                 };
             };
+            400: components["responses"]["BadRequest"];
             404: components["responses"]["OrganizationNotFound"];
             500: components["responses"]["InternalError"];
-            503: components["responses"]["NoOrganization"];
         };
     };
 }
