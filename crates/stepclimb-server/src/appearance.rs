@@ -2,8 +2,10 @@
 //! The signed-in user's appearance choice, `PUT /api/v1/me/appearance`
 //! (docs/specs/m0/11-app-shell.md B21, Q6).
 //!
-//! The choice is a theme (system, light, dark, high contrast) and a density (comfortable,
-//! compact), stored on the user (`stepclimb_core::appearance`) and returned in `GET /api/v1/me`.
+//! The choice is a theme (system, light, dark, high contrast, or none) and a density
+//! (comfortable, compact), stored on the user (`stepclimb_core::appearance`) and returned in
+//! `GET /api/v1/me`. Until the user chooses a theme, their pages take the organization's default
+//! appearance (`default_appearance` of the branding inputs).
 //! The server writes it into every page it serves as `data-sc-theme` and `data-sc-density` on
 //! `<html>` (`spa`), so the page is drawn in it before any script runs. For the signed-out
 //! screens, a change also sets the `__Host-sc_appearance` cookie, which the server reads when
@@ -38,7 +40,7 @@ pub const COOKIE_NAME: &str = "__Host-sc_appearance";
 /// One year: the choice outlives any session.
 const COOKIE_MAX_AGE_SECS: u32 = 31_536_000;
 
-/// The theme a user chose. `system` follows the operating system's color and contrast settings.
+/// A theme. `system` follows the operating system's color and contrast settings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ThemeChoice {
@@ -56,48 +58,70 @@ pub enum DensityChoice {
     Compact,
 }
 
-/// The theme and density the signed-in user's pages are drawn in.
+impl From<Theme> for ThemeChoice {
+    fn from(theme: Theme) -> Self {
+        match theme {
+            Theme::System => Self::System,
+            Theme::Light => Self::Light,
+            Theme::Dark => Self::Dark,
+            Theme::HighContrast => Self::HighContrast,
+        }
+    }
+}
+
+impl From<ThemeChoice> for Theme {
+    fn from(theme: ThemeChoice) -> Self {
+        match theme {
+            ThemeChoice::System => Self::System,
+            ThemeChoice::Light => Self::Light,
+            ThemeChoice::Dark => Self::Dark,
+            ThemeChoice::HighContrast => Self::HighContrast,
+        }
+    }
+}
+
+/// The theme and density the signed-in user chose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UserAppearance {
-    pub theme: ThemeChoice,
+    /// `null` until the user chooses: their pages take the organization's default appearance
+    /// (`default_appearance` in `GET /api/v1/me`). Required, so a client sends `null` on purpose.
+    // `deserialize_with` makes serde refuse a missing member instead of reading it as `None`.
+    #[serde(deserialize_with = "Option::deserialize")]
+    #[schema(required = true)]
+    pub theme: Option<ThemeChoice>,
     pub density: DensityChoice,
 }
 
 impl From<Appearance> for UserAppearance {
     fn from(appearance: Appearance) -> Self {
-        let theme = match appearance.theme {
-            Theme::System => ThemeChoice::System,
-            Theme::Light => ThemeChoice::Light,
-            Theme::Dark => ThemeChoice::Dark,
-            Theme::HighContrast => ThemeChoice::HighContrast,
-        };
         let density = match appearance.density {
             Density::Comfortable => DensityChoice::Comfortable,
             Density::Compact => DensityChoice::Compact,
         };
-        Self { theme, density }
+        Self {
+            theme: appearance.theme.map(ThemeChoice::from),
+            density,
+        }
     }
 }
 
 impl From<UserAppearance> for Appearance {
     fn from(appearance: UserAppearance) -> Self {
-        let theme = match appearance.theme {
-            ThemeChoice::System => Theme::System,
-            ThemeChoice::Light => Theme::Light,
-            ThemeChoice::Dark => Theme::Dark,
-            ThemeChoice::HighContrast => Theme::HighContrast,
-        };
         let density = match appearance.density {
             DensityChoice::Comfortable => Density::Comfortable,
             DensityChoice::Compact => Density::Compact,
         };
-        Self { theme, density }
+        Self {
+            theme: appearance.theme.map(Theme::from),
+            density,
+        }
     }
 }
 
-/// Set the signed-in user's theme and density. The answer also sets the `__Host-sc_appearance`
-/// cookie, so this browser's signed-out screens use the same choice.
+/// Set the signed-in user's theme and density; a `null` theme leaves the theme to the
+/// organization's default appearance. The answer also sets the `__Host-sc_appearance` cookie, so
+/// this browser's signed-out screens use the same choice.
 #[utoipa::path(
     put,
     path = "/api/v1/me/appearance",
@@ -136,11 +160,15 @@ pub async fn update_my_appearance(
     Ok((cookie, Json(UserAppearance::from(saved))).into_response())
 }
 
-/// The cookie's value: `<theme>.<density>`, such as `dark.compact`.
+/// The cookie's theme for a user who has chosen none.
+const NO_THEME: &str = "default";
+
+/// The cookie's value: `<theme>.<density>`, such as `dark.compact`, with [`NO_THEME`] for no
+/// theme chosen (`default.compact`).
 fn cookie_value(appearance: Appearance) -> String {
     format!(
         "{}.{}",
-        appearance.theme.as_str(),
+        appearance.theme.map_or(NO_THEME, Theme::as_str),
         appearance.density.as_str()
     )
 }
@@ -155,15 +183,19 @@ fn set_cookie(appearance: Appearance) -> HeaderValue {
 }
 
 /// The appearance the request's `__Host-sc_appearance` cookie names. A missing, repeated or
-/// unreadable cookie is no choice: the page then follows the operating system, as before any
-/// choice was made.
+/// unreadable cookie is no choice: the page then takes the organization's default appearance, as
+/// before any choice was made.
 pub fn from_cookie(headers: &HeaderMap) -> Option<Appearance> {
     let Presented::One(value) = cookie::presented(headers, COOKIE_NAME) else {
         return None;
     };
     let (theme, density) = value.split_once('.')?;
+    let theme = match theme {
+        NO_THEME => None,
+        name => Some(Theme::parse(name)?),
+    };
     Some(Appearance {
-        theme: Theme::parse(theme)?,
+        theme,
         density: Density::parse(density)?,
     })
 }
@@ -180,7 +212,7 @@ mod tests {
 
     #[test]
     fn the_cookie_round_trips_every_choice() {
-        for theme in Theme::ALL {
+        for theme in Theme::ALL.map(Some).into_iter().chain([None]) {
             for density in Density::ALL {
                 let appearance = Appearance { theme, density };
                 let set = set_cookie(appearance);
@@ -195,7 +227,7 @@ mod tests {
         let set = set_cookie(Appearance::default());
         assert_eq!(
             set.to_str().unwrap(),
-            "__Host-sc_appearance=system.comfortable; Max-Age=31536000; Path=/; Secure; HttpOnly; SameSite=Lax"
+            "__Host-sc_appearance=default.comfortable; Max-Age=31536000; Path=/; Secure; HttpOnly; SameSite=Lax"
         );
     }
 
@@ -207,6 +239,8 @@ mod tests {
             "__Host-sc_appearance=dark.roomy",
             "__Host-sc_appearance=Dark.compact",
             "__Host-sc_appearance=dark.compact.x",
+            "__Host-sc_appearance=Default.compact",
+            "__Host-sc_appearance=.compact",
             "__Host-sc_appearance=dark.compact; __Host-sc_appearance=light.compact",
         ] {
             assert_eq!(from_cookie(&with_cookie(cookie)), None, "{cookie}");
@@ -216,7 +250,14 @@ mod tests {
                 "a=1; __Host-sc_appearance=high-contrast.compact"
             )),
             Some(Appearance {
-                theme: Theme::HighContrast,
+                theme: Some(Theme::HighContrast),
+                density: Density::Compact
+            })
+        );
+        assert_eq!(
+            from_cookie(&with_cookie("__Host-sc_appearance=default.compact")),
+            Some(Appearance {
+                theme: None,
                 density: Density::Compact
             })
         );
@@ -224,12 +265,12 @@ mod tests {
 
     #[test]
     fn the_api_names_are_the_stored_names() {
-        for theme in Theme::ALL {
+        for theme in Theme::ALL.map(Some).into_iter().chain([None]) {
             for density in Density::ALL {
                 let appearance = Appearance { theme, density };
                 let api = UserAppearance::from(appearance);
                 let json = serde_json::to_value(api).unwrap();
-                assert_eq!(json["theme"], theme.as_str());
+                assert_eq!(json["theme"], serde_json::to_value(theme).unwrap());
                 assert_eq!(json["density"], density.as_str());
                 assert_eq!(Appearance::from(api), appearance);
             }

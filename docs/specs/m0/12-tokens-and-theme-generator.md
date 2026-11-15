@@ -192,12 +192,32 @@ it at `packages/tokens/tokens/`. See Open question Q1.
 - **B26.** Custom CSS (scoped under `.sc-custom`, marked unsupported across upgrades) is an
   advanced branding setting in the plan with no milestone; it is Open question Q13.
 
+### Default appearance and generator upgrades
+
+- **B27.** The branding inputs include the organization's default appearance (`docs/plan/ui.md`
+  -> Organization theming, Inputs): `system`, `light`, `dark` or `high-contrast`, `system` when
+  absent. It is no generator input and leaves the stylesheet and its hash unchanged. The server
+  writes it into `index.html` as `data-sc-theme` for a user who has chosen no theme, signed in or
+  not (11 B21); a user's own choice, `system` included, wins. A change of it alone is a branding
+  change, audited like any other.
+- **B28.** A stylesheet must declare every token the running release's bundle uses (11 Q5), and a
+  new generator version may add tokens. Saved branding whose `generator` differs from
+  `GENERATOR_VERSION` is never served as stored: the server re-renders it from the stored inputs
+  with the running generator. At startup, before listening, it stores each re-rendered record
+  with its new `css_hash`, writing neither `updated_at` nor an audit entry (nobody changed the
+  branding); a read that still finds such a record (written by another release after this one
+  started) re-renders it for that answer. Stored inputs that fail the running generator, by its
+  contrast guard or its input checks, keep their inputs and default appearance and get the
+  default brand's stylesheet, hash and reports, with the failing reports in `fallback`; startup
+  logs that once at warn, naming the organization and each failing pair. Saving branding again
+  replaces the fallback.
+
 ## API
 
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
-| `GET /api/v1/admin/branding` | none | `200` the saved inputs, the generator version, the CSS hash and the contrast report | `401`, `403`, `404` (problem+json) | branding permission (below), organization scope |
-| `PUT /api/v1/admin/branding` | the inputs of B12 (JSON) | `200` as GET | `422 branding.invalid_input` (a field fails validation; `errors[]` names it), `422 branding.contrast_failed` (the report, failing pairs first, in a `report` extension member), `403 entitlement.feature_unavailable` (the plan lacks `custom_branding`), `401`, `403`, `404` | branding permission and the `custom_branding` feature, organization scope |
+| `GET /api/v1/admin/branding` | none | `200` the saved inputs, the generator version, the CSS hash, the contrast report and `fallback` (B28, `null` unless set) | `401`, `403`, `404` (problem+json) | branding permission (below), organization scope |
+| `PUT /api/v1/admin/branding` | the inputs of B12 and B27 (JSON) | `200` as GET | `422 branding.invalid_input` (a field fails validation; `errors[]` names it), `422 branding.contrast_failed` (the report, failing pairs first, in a `report` extension member), `403 entitlement.feature_unavailable` (the plan lacks `custom_branding`), `401`, `403`, `404` | branding permission and the `custom_branding` feature, organization scope |
 
 Both are in the OpenAPI document with their schemas, including the report. The codes follow the
 `area.reason` form. The web app calls them only through `@stepclimb/api-client`. `GET /theme.css`
@@ -208,7 +228,9 @@ is 11-app-shell's.
 - `organizations.branding` (`jsonb NOT NULL DEFAULT '{}'`, in
   `migrations/20261112000001_organizations.sql`) holds the saved inputs, the generator version,
   the rendered CSS, its hash and the contrast report of its themes. An empty object means the
-  default theme (B25). No new table.
+  default theme (B25). No new table. The inputs carry `default_appearance` (B27), read as
+  `system` from a record written before it existed; a record holding the default brand's
+  stylesheet for inputs that fail the running generator carries `fallback` (B28).
 - The JSON is versioned from its first release (`.claude/rules/architecture.md` -> Crate
   boundaries: data formats are versioned): a top-level `version` field.
 - Logos and the favicon need file storage, which is M1 (Q6).
@@ -265,6 +287,17 @@ Server (crate `tests/`, `#[sqlx::test]`):
   `entitlement.feature_unavailable` and changes nothing; `GET` still answers 200.
 - **T19.** A change writes one `organization.update_branding` audit entry; a refused or unchanged
   `PUT` writes none.
+- **T20.** (B27) `PUT` saves each default appearance, answers it in `inputs` with the same
+  `css_hash`, and audits it; a value that is not a theme is 422 `branding.not_a_choice` on
+  `/default_appearance`.
+- **T21.** (B28) A record another generator version wrote is served this generator's stylesheet by
+  `/theme.css` and `GET` before startup re-renders it; startup stores it with the new hash and
+  writes neither `updated_at` nor an audit entry, and another organization's record is unchanged.
+- **T22.** (B28) Stored inputs the running generator refuses are served the default brand's
+  stylesheet with `fallback` set, before and after startup; saving branding again clears it.
+- **T23.** (B27, 11 B21) A user with no theme chosen, signed in or not, gets the organization's
+  default in `index.html` and in `/me`; their own choice, `system` included, wins; one
+  organization's default never reaches another's pages.
 
 ## Out of scope
 
@@ -456,7 +489,8 @@ overrule any of them.
   "generator", "css", "css_hash", "report"}`, written together at save time; `GET` answers it
   as stored and never generates, so the report always describes the stylesheet `/theme.css`
   serves. Saving the same inputs, generator version and stylesheet again writes nothing.
-  Regenerating saved branding when `GENERATOR_VERSION` changes is a later decision.
+  Regenerating saved branding when `GENERATOR_VERSION` changes is a later decision (decided
+  with #162: B28 and the 2026-11-15 decisions below).
 - **Coordinator decision (2026-11-14): the contrast guard and the chroma cap.** The cap keeps
   every accepted input inside the range the generator's stops were fitted for. Within it, no
   input tried gives a failing theme: T7's sweep, a test at the cap for five hues, and the 254
@@ -484,6 +518,38 @@ overrule any of them.
   11 I2 has since replaced `no-cache` with the fingerprint: `immutable` for `?v=` naming the served
   stylesheet's hash, `no-cache` otherwise, and the default stylesheet when the instance has no
   organization yet (11's coordinator decisions, 2026-11-14).
+
+### Coordinator decisions (2026-11-15)
+
+Taken on the owner's delegation while building issue #162 (B27, B28); the owner can overrule any
+of them.
+
+- **Coordinator decision (2026-11-15): the default appearance is a theme.** The plan lists
+  "default appearance" among the inputs without values. It takes the four theme choices of 11
+  B21; density stays the user's alone, with `comfortable` for everyone until they choose. It is
+  stored in the record's `inputs` beside the generator's inputs, so the API, the record and the
+  audit entry show the same set, and it is checked after them (`branding.not_a_choice`).
+- **Coordinator decision (2026-11-15): re-render at startup, and on a read as a backstop.**
+  Startup stores the re-rendered records before the server listens, so no page or `/theme.css`
+  request pays for a render or a write, two requests never race to store one, and the fallback
+  warning is logged once rather than per request. A read re-renders in memory only a record
+  another release wrote after this one started (two releases on one database during an
+  upgrade); it stores nothing, so two releases never overwrite each other's record back and
+  forth. A database error during the startup pass stops startup, as the organization-plan
+  and local-row passes do; a record this release cannot read is logged at error and left, and its organization's
+  branding reads answer 500 as before.
+- **Coordinator decision (2026-11-15): inputs that fail the new generator fall back to the default
+  brand.** The stylesheet must declare every token, so the stale one is never served. The record
+  keeps the organization's inputs and default appearance, so the admin sees what was saved, and
+  takes the default brand's stylesheet, hash and passing reports, so `css_hash` and `report` still
+  describe what `/theme.css` serves; `fallback.report` holds the inputs' failing reports (empty
+  when the generator refused the inputs, as for a chroma above a cap a later release lowered).
+  The warning names the organization's id and each failing pair. Under today's generator no
+  accepted input fails (the 2026-11-14 decision on the guard), so this path is tested with a
+  doctored contrast failure and with a stored chroma above the 0.5 cap.
+- **Coordinator decision (2026-11-15): no `updated_at`.** The re-render leaves
+  `organizations.updated_at` alone, as it writes no audit entry: neither an admin nor an API
+  client changed the organization.
 
 ## Issues
 
@@ -518,3 +584,8 @@ In dependency order. Each is one PR.
   client regenerated. Covers B21, B24, B25; T14 to T19. Depends on: I7; 11 I2 (`/theme.css`);
   09 (the permission and `Require`); 10 (`Require<Feature>`); 02 (organization scope).
   Maintainer review: line by line (permissions, entitlements, audit).
+- **I9. Organization default appearance and generator upgrades** (#162). Deliverable: the
+  `default_appearance` input on `PUT /api/v1/admin/branding`, applied by the server to
+  `index.html` and answered in `/me`; saved stylesheets re-rendered when `GENERATOR_VERSION`
+  changes, with the default-brand fallback. Covers B27, B28; T20 to T23. Depends on: I8; 11 I6.
+  Maintainer review: line by line (branding and caching).

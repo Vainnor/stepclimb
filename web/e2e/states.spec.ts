@@ -44,6 +44,7 @@ function meWith(theme: string) {
     grants: [],
     features: [],
     appearance: { theme, density: "comfortable" },
+    default_appearance: "system",
   };
 }
 

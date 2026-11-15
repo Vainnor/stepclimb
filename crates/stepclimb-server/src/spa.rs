@@ -12,8 +12,10 @@
 //! its `/theme.css` link carries the request organization's stylesheet hash as `?v=`, which
 //! `/theme.css` caches for a year, and `<html>` carries the appearance as `data-sc-theme` and
 //! `data-sc-density`: the signed-in user's choice, or for a request without a session the
-//! `__Host-sc_appearance` cookie's. The page is therefore drawn in its theme before any script
-//! runs, without an inline script. It is `private, no-cache` and varies by cookie.
+//! `__Host-sc_appearance` cookie's. Without a theme chosen, the page takes the organization's
+//! default appearance (docs/specs/m0/12-tokens-and-theme-generator.md B27). The page is therefore
+//! drawn in its theme before any script runs, without an inline script. It is `private, no-cache`
+//! and varies by cookie.
 
 use axum::{
     body::Body,
@@ -70,9 +72,11 @@ pub async fn serve(State(state): State<AppState>, request: Request) -> Response 
             .into_response();
     };
     let template = String::from_utf8_lossy(&index.data);
+    let (theme_hash, default_theme) = theme(&state, &mut parts).await;
     let page = Page {
-        theme_hash: theme_hash(&state, &mut parts).await,
+        theme_hash,
         appearance: page_appearance(&state, &mut parts).await,
+        default_theme,
     };
     page_response(render_index(&template, &page))
 }
@@ -84,19 +88,22 @@ struct Page {
     /// the link unfingerprinted.
     theme_hash: Option<String>,
     appearance: Appearance,
+    /// The organization's default appearance, for an `appearance` without a theme.
+    default_theme: Theme,
 }
 
-/// The request organization's stylesheet hash. Without one the link stays `/theme.css`, which
-/// answers the same stylesheet revalidated on every load, or the same refusal.
-async fn theme_hash(state: &AppState, parts: &mut Parts) -> Option<String> {
+/// The request organization's stylesheet hash and default appearance. Without them the link
+/// stays `/theme.css`, which answers the same stylesheet revalidated on every load, or the same
+/// refusal, and a page without a chosen theme follows the operating system.
+async fn theme(state: &AppState, parts: &mut Parts) -> (Option<String>, Theme) {
     let org = RequestOrg::from_request_parts(parts, state).await;
     match branding::served(state, org).await {
-        Ok(served) => Some(served.css_hash),
+        Ok(served) => (Some(served.css_hash), served.default_appearance),
         Err(error) => {
             if error.status().is_server_error() {
                 tracing::error!(code = error.code(), "index.html: no theme hash");
             }
-            None
+            (None, Theme::System)
         }
     }
 }
@@ -145,11 +152,9 @@ fn render_index(template: &str, page: &Page) -> String {
         html = html.replacen(&link, &fingerprinted, 1);
     }
     let mut attributes = String::new();
-    if page.appearance.theme != Theme::System {
-        attributes.push_str(&format!(
-            " data-sc-theme=\"{}\"",
-            page.appearance.theme.as_str()
-        ));
+    let theme = page.appearance.theme_or(page.default_theme);
+    if theme != Theme::System {
+        attributes.push_str(&format!(" data-sc-theme=\"{}\"", theme.as_str()));
     }
     if page.appearance.density != Density::Comfortable {
         attributes.push_str(&format!(
@@ -254,33 +259,71 @@ mod tests {
     fn the_page_carries_the_chosen_theme_and_density() {
         for (theme, density, expected) in [
             (
-                Theme::Dark,
+                Some(Theme::Dark),
                 Density::Comfortable,
                 r#"<html data-sc-theme="dark" lang="en">"#,
             ),
             (
-                Theme::HighContrast,
+                Some(Theme::HighContrast),
                 Density::Compact,
                 r#"<html data-sc-theme="high-contrast" data-sc-density="compact" lang="en">"#,
             ),
             (
-                Theme::System,
+                Some(Theme::System),
                 Density::Compact,
                 r#"<html data-sc-density="compact" lang="en">"#,
             ),
+            (None, Density::Comfortable, r#"<html lang="en">"#),
             (
-                Theme::Light,
+                Some(Theme::Light),
                 Density::Comfortable,
                 r#"<html data-sc-theme="light" lang="en">"#,
             ),
         ] {
             let page = Page {
-                theme_hash: None,
                 appearance: Appearance { theme, density },
+                ..Page::default()
             };
             assert!(
                 render_index(TEMPLATE, &page).contains(expected),
                 "{theme:?} {density:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn without_a_chosen_theme_the_page_takes_the_organizations_default() {
+        for (theme, default, expected) in [
+            (
+                None,
+                Theme::Dark,
+                r#"<html data-sc-theme="dark" lang="en">"#,
+            ),
+            (
+                None,
+                Theme::HighContrast,
+                r#"<html data-sc-theme="high-contrast" lang="en">"#,
+            ),
+            (None, Theme::System, r#"<html lang="en">"#),
+            // The user's own choice wins, "Match my device" included.
+            (Some(Theme::System), Theme::Dark, r#"<html lang="en">"#),
+            (
+                Some(Theme::Light),
+                Theme::Dark,
+                r#"<html data-sc-theme="light" lang="en">"#,
+            ),
+        ] {
+            let page = Page {
+                appearance: Appearance {
+                    theme,
+                    density: Density::Comfortable,
+                },
+                default_theme: default,
+                ..Page::default()
+            };
+            assert!(
+                render_index(TEMPLATE, &page).contains(expected),
+                "{theme:?} {default:?}"
             );
         }
     }

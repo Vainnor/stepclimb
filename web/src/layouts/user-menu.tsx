@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The user menu at the TopBar's inline end (docs/specs/m0/11-app-shell.md B4, B12, B21): the
 // user's Avatar and display name, opening a menu with the theme and density choices and Sign out.
+// Until the user chooses a theme, the menu marks the organization's default appearance, and a
+// density change keeps the theme unchosen.
 // A choice is saved on the server first, then applied to the page; a failed save shows an error
 // toast and leaves the page as it was. While a save is pending, both submenus are disabled and the
 // one being saved says so, so a second choice cannot send the first one's old value back. Signing out calls the server, then leaves the signed-in
@@ -23,6 +25,7 @@ import {
   type DensityChoice,
   densityChoices,
   saveAppearance,
+  shownTheme,
   type ThemeChoice,
   themeChoices,
   type UserAppearance,
@@ -55,13 +58,13 @@ function chosen(keys: "all" | Set<Key>): string | undefined {
   return typeof key === "string" ? key : undefined;
 }
 
-function useAppearanceChange() {
+function useAppearanceChange(organizationDefault: ThemeChoice) {
   const { t } = useStepclimbStrings();
   const { toasts, queryClient } = useAppContext();
   return useMutation({
     mutationFn: saveAppearance,
     onSuccess: (saved) => {
-      applyAppearance(saved);
+      applyAppearance(shownTheme(saved, organizationDefault), saved.density);
       queryClient.setQueryData<Me>(meQuery.queryKey, (me) => me && { ...me, appearance: saved });
     },
     onError: () => {
@@ -77,12 +80,14 @@ function useAppearanceChange() {
 export interface UserMenuProps {
   name: string;
   appearance: UserAppearance;
+  /** The organization's default appearance, shown while `appearance.theme` is null. */
+  organizationDefault: ThemeChoice;
 }
 
-export function UserMenu({ name, appearance }: UserMenuProps) {
+export function UserMenu({ name, appearance, organizationDefault }: UserMenuProps) {
   const { t } = useStepclimbStrings();
   const { toasts, leaveSession } = useAppContext();
-  const change = useAppearanceChange();
+  const change = useAppearanceChange(organizationDefault);
   const signOutMutation = useMutation({
     mutationFn: signOut,
     onSuccess: () => leaveSession(),
@@ -97,6 +102,7 @@ export function UserMenu({ name, appearance }: UserMenuProps) {
   // The choice on its way to the server, shown in place of the saved one until it answers.
   const pending = change.isPending ? change.variables : undefined;
   const shown = pending ?? appearance;
+  const currentTheme = shownTheme(shown, organizationDefault);
   const savingTheme = pending && pending.theme !== appearance.theme;
   const savingDensity = pending && pending.density !== appearance.density;
   const chooseTheme = (keys: "all" | Set<Key>) => {
@@ -132,7 +138,7 @@ export function UserMenu({ name, appearance }: UserMenuProps) {
             {savingTheme
               ? t("userMenu.saving", {
                   setting: t("userMenu.theme"),
-                  choice: themeLabel(t, shown.theme),
+                  choice: themeLabel(t, currentTheme),
                 })
               : t("userMenu.theme")}
           </MenuItem>
@@ -140,7 +146,7 @@ export function UserMenu({ name, appearance }: UserMenuProps) {
             aria-label={t("userMenu.theme")}
             selectionMode="single"
             disallowEmptySelection
-            selectedKeys={[shown.theme]}
+            selectedKeys={[currentTheme]}
             onSelectionChange={chooseTheme}
           >
             {themeChoices.map((theme) => (

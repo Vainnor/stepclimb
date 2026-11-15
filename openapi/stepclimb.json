@@ -1509,7 +1509,7 @@
         "tags": [
           "me"
         ],
-        "summary": "Set the signed-in user's theme and density. The answer also sets the `__Host-sc_appearance`\ncookie, so this browser's signed-out screens use the same choice.",
+        "summary": "Set the signed-in user's theme and density; a `null` theme leaves the theme to the\norganization's default appearance. The answer also sets the `__Host-sc_appearance` cookie, so\nthis browser's signed-out screens use the same choice.",
         "operationId": "updateMyAppearance",
         "requestBody": {
           "content": {
@@ -3977,12 +3977,24 @@
           "inputs",
           "generator",
           "css_hash",
-          "report"
+          "report",
+          "fallback"
         ],
         "properties": {
           "css_hash": {
             "type": "string",
             "description": "The SHA-256 of the stylesheet, lowercase hex."
+          },
+          "fallback": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BrandingFallback",
+                "description": "`null`, or why the stylesheet and `report` are the default brand's although `inputs` are\nsaved."
+              }
+            ]
           },
           "generator": {
             "type": "integer",
@@ -3997,6 +4009,22 @@
             "items": {
               "$ref": "#/components/schemas/ContrastReport"
             }
+          }
+        }
+      },
+      "BrandingFallback": {
+        "type": "object",
+        "description": "Why `/theme.css` serves the default brand's stylesheet for saved branding: a release with\nanother theme generator re-rendered the saved inputs, and they fail its contrast report or its\ninput checks. Saving branding again replaces it.",
+        "required": [
+          "report"
+        ],
+        "properties": {
+          "report": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContrastReport"
+            },
+            "description": "The reports of the saved inputs' themes under this generator, failing pairs first; empty\nwhen the generator refused the inputs or could not build their themes."
           }
         }
       },
@@ -4015,6 +4043,17 @@
               {
                 "$ref": "#/components/schemas/CornerStyle",
                 "description": "Defaults to `default`."
+              }
+            ]
+          },
+          "default_appearance": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ThemeChoice",
+                "description": "The theme a user's pages take until the user chooses one. Defaults to `system`, which\nfollows the operating system's color and contrast settings."
               }
             ]
           },
@@ -4592,12 +4631,17 @@
           "organization",
           "grants",
           "features",
-          "appearance"
+          "appearance",
+          "default_appearance"
         ],
         "properties": {
           "appearance": {
             "$ref": "#/components/schemas/UserAppearance",
             "description": "The theme and density the user chose (docs/specs/m0/11-app-shell.md B21, Q6)."
+          },
+          "default_appearance": {
+            "$ref": "#/components/schemas/ThemeChoice",
+            "description": "The organization's default appearance: the theme the user's pages take while\n`appearance.theme` is `null`."
           },
           "features": {
             "type": "array",
@@ -5997,11 +6041,15 @@
           "primary",
           "ui_font",
           "reading_font",
-          "corner_style"
+          "corner_style",
+          "default_appearance"
         ],
         "properties": {
           "corner_style": {
             "$ref": "#/components/schemas/CornerStyle"
+          },
+          "default_appearance": {
+            "$ref": "#/components/schemas/ThemeChoice"
           },
           "primary": {
             "type": "string"
@@ -6156,7 +6204,7 @@
       },
       "ThemeChoice": {
         "type": "string",
-        "description": "The theme a user chose. `system` follows the operating system's color and contrast settings.",
+        "description": "A theme. `system` follows the operating system's color and contrast settings.",
         "enum": [
           "system",
           "light",
@@ -6294,7 +6342,7 @@
       },
       "UserAppearance": {
         "type": "object",
-        "description": "The theme and density the signed-in user's pages are drawn in.",
+        "description": "The theme and density the signed-in user chose.",
         "required": [
           "theme",
           "density"
@@ -6304,7 +6352,15 @@
             "$ref": "#/components/schemas/DensityChoice"
           },
           "theme": {
-            "$ref": "#/components/schemas/ThemeChoice"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ThemeChoice",
+                "description": "`null` until the user chooses: their pages take the organization's default appearance\n(`default_appearance` in `GET /api/v1/me`). Required, so a client sends `null` on purpose."
+              }
+            ]
           }
         },
         "additionalProperties": false

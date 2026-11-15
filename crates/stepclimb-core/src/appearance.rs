@@ -3,12 +3,15 @@
 //! (docs/specs/m0/11-app-shell.md B21, Q6). They are two columns of `users`; every query filters
 //! by `org_id = scope.org_id()`.
 //!
-//! [`Theme::System`] and [`Density::Comfortable`] are what a user has before choosing: the page
-//! leaves `data-sc-theme` unset, so the operating system's color and contrast settings select the
-//! theme, and `data-sc-density` unset.
+//! A user who has not chosen a theme has none stored (`NULL`): their pages take the
+//! organization's default appearance (spec 12, the branding inputs). [`Theme::System`] is a choice
+//! like the others: the page leaves `data-sc-theme` unset, so the operating system's color and
+//! contrast settings select the theme. [`Density::Comfortable`] is the default density and leaves
+//! `data-sc-density` unset.
 
 use std::time::SystemTime;
 
+use serde::{Deserialize, Serialize};
 use sqlx::PgExecutor;
 use uuid::Uuid;
 
@@ -17,8 +20,10 @@ use crate::{
     db::{TimeOutOfRange, epoch_micros},
 };
 
-/// The theme a user chose.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+/// A theme a user chooses, or an organization's default appearance. The serialized names are
+/// [`Theme::as_str`]'s.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Theme {
     /// Follow the operating system.
     #[default]
@@ -76,8 +81,17 @@ impl Density {
 /// A user's theme and density.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Appearance {
-    pub theme: Theme,
+    /// `None` until the user chooses: the organization's default appearance applies.
+    pub theme: Option<Theme>,
     pub density: Density,
+}
+
+impl Appearance {
+    /// The theme the page is drawn in: the user's choice, or `default` (the organization's
+    /// default appearance) when they have made none.
+    pub fn theme_or(self, default: Theme) -> Theme {
+        self.theme.unwrap_or(default)
+    }
 }
 
 /// Why an appearance call failed.
@@ -96,7 +110,7 @@ pub enum Error {
 }
 
 struct Row {
-    theme: String,
+    theme: Option<String>,
     density: String,
 }
 
@@ -104,7 +118,10 @@ impl TryFrom<Row> for Appearance {
     type Error = Error;
 
     fn try_from(row: Row) -> Result<Self, Error> {
-        let theme = Theme::parse(&row.theme).ok_or(Error::Stored(row.theme))?;
+        let theme = match row.theme {
+            None => None,
+            Some(name) => Some(Theme::parse(&name).ok_or(Error::Stored(name))?),
+        };
         let density = Density::parse(&row.density).ok_or(Error::Stored(row.density))?;
         Ok(Self { theme, density })
     }
@@ -150,7 +167,7 @@ pub async fn set(
            RETURNING theme, density"#,
         scope.org_id(),
         user_id,
-        appearance.theme.as_str(),
+        appearance.theme.map(Theme::as_str),
         appearance.density.as_str(),
         now,
     )
@@ -174,5 +191,25 @@ mod tests {
         }
         assert_eq!(Theme::parse("High-Contrast"), None);
         assert_eq!(Density::parse(""), None);
+    }
+
+    #[test]
+    fn serde_names_are_the_stored_names() {
+        for theme in Theme::ALL {
+            let json = serde_json::to_value(theme).unwrap();
+            assert_eq!(json, theme.as_str());
+            assert_eq!(serde_json::from_value::<Theme>(json).unwrap(), theme);
+        }
+    }
+
+    #[test]
+    fn a_choice_wins_over_the_default() {
+        let none = Appearance::default();
+        assert_eq!(none.theme_or(Theme::Dark), Theme::Dark);
+        let chosen = Appearance {
+            theme: Some(Theme::System),
+            density: Density::Comfortable,
+        };
+        assert_eq!(chosen.theme_or(Theme::Dark), Theme::System);
     }
 }

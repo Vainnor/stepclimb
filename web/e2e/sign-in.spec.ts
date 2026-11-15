@@ -272,8 +272,12 @@ test.describe
       const saved = await branding(page, "GET");
       expect(saved.status).toBe(200);
       try {
+        // The admin has chosen no theme, so the organization's default appearance draws the page
+        // (12 B27).
+        expect(await page.locator("html").getAttribute("data-sc-theme")).toBeNull();
         const changed = await branding(page, "PUT", {
           primary: otherHue(saved.body.inputs.primary),
+          default_appearance: "dark",
         });
         expect(changed.status).toBe(200);
         expect(`/theme.css?v=${changed.body.css_hash}`).not.toBe(before.href);
@@ -286,6 +290,7 @@ test.describe
         expect(await themeHref(page)).toBe(`/theme.css?v=${changed.body.css_hash}`);
         expect((await css).status()).toBe(200);
         expect(await brandColor(page)).not.toBe(before.brand);
+        await expect(page.locator("html")).toHaveAttribute("data-sc-theme", "dark");
       } finally {
         const restored = await branding(page, "PUT", saved.body.inputs);
         expect(restored.status).toBe(200);
