@@ -21,6 +21,9 @@ pub(crate) mod walk;
 use std::collections::HashMap;
 use std::fmt;
 
+use serde_json::{Map, Value};
+use sha2::{Digest as _, Sha256};
+
 use uuid::Uuid;
 
 use crate::encryption::{DecryptError, EncryptError, KeyRing};
@@ -161,14 +164,87 @@ pub const SOURCE: &str = "source";
 /// [`SOURCE`]'s value for a provider declared in `stepclimb.toml`.
 pub const SOURCE_CONFIG: &str = "config";
 
+/// The member a provider's admission rules live in (`07-admission.md` I3). An admin changes it
+/// through the API at any time, so [`Fingerprint`] leaves it out.
+const ADMISSION_RULES: &str = "admission_rules";
+
+/// A SHA-256 of a stored config, without its `admission_rules`, over a canonical JSON form
+/// (object members sorted by name at every level), so the same config read back from `jsonb`
+/// gives the same fingerprint. [`ConfigSecrets`] keeps one beside each secret: a row whose
+/// config has changed since this process read `stepclimb.toml` (another replica with another
+/// file) gets no secret.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Fingerprint([u8; 32]);
+
+impl Fingerprint {
+    /// The fingerprint of the stored config `config`.
+    #[must_use]
+    pub fn of(config: &Map<String, Value>) -> Self {
+        let mut text = String::new();
+        for (name, value) in sorted(config) {
+            if name != ADMISSION_RULES {
+                canonical(&mut text, name, value);
+            }
+        }
+        Self(Sha256::digest(text.as_bytes()).into())
+    }
+}
+
+impl fmt::Debug for Fingerprint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Fingerprint({:02x}{:02x}{:02x}{:02x}..)",
+            self.0[0], self.0[1], self.0[2], self.0[3]
+        )
+    }
+}
+
+fn sorted(map: &Map<String, Value>) -> Vec<(&String, &Value)> {
+    let mut members: Vec<_> = map.iter().collect();
+    members.sort_by(|a, b| a.0.cmp(b.0));
+    members
+}
+
+/// `name` and `value` as JSON, members sorted, appended to `out` with a separator.
+fn canonical(out: &mut String, name: &str, value: &Value) {
+    out.push_str(&Value::String(name.to_owned()).to_string());
+    out.push(':');
+    canonical_value(out, value);
+    out.push(',');
+}
+
+fn canonical_value(out: &mut String, value: &Value) {
+    match value {
+        Value::Object(map) => {
+            out.push('{');
+            for (name, value) in sorted(map) {
+                canonical(out, name, value);
+            }
+            out.push('}');
+        }
+        Value::Array(items) => {
+            out.push('[');
+            for item in items {
+                canonical_value(out, item);
+                out.push(',');
+            }
+            out.push(']');
+        }
+        other => out.push_str(&other.to_string()),
+    }
+}
+
 /// Where a stored config's client secret is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StoredSecret {
     /// Sealed in the row.
     Sealed(SealedSecret),
     /// In `stepclimb.toml`: the row has `source: "config"` and no secret, and the server holds
-    /// the secret in [`ConfigSecrets`].
-    ConfigFile,
+    /// the secret in [`ConfigSecrets`]. The fingerprint is the stored config's, when it was
+    /// read from a row; a config built from the file, never stored, has none and opens no
+    /// secret.
+    ConfigFile(Option<Fingerprint>),
 }
 
 impl StoredSecret {
@@ -181,7 +257,13 @@ impl StoredSecret {
     ) -> Result<ClientSecret, SecretError> {
         match self {
             Self::Sealed(sealed) => Ok(sealed.open(ring, row)?),
-            Self::ConfigFile => config.get(row).cloned().ok_or(SecretError::NotInConfig),
+            Self::ConfigFile(stored) => {
+                let (secret, read) = config.0.get(&row).ok_or(SecretError::NotInConfig)?;
+                if *stored != Some(*read) {
+                    return Err(SecretError::ConfigChanged);
+                }
+                Ok(secret.clone())
+            }
         }
     }
 }
@@ -195,23 +277,32 @@ pub enum SecretError {
     /// no such provider.
     #[error("the provider's client secret is in stepclimb.toml, which declares no such provider")]
     NotInConfig,
+    /// The row's config is not the one this server wrote from its `stepclimb.toml`: another
+    /// server with another file has written it since. Replicas must share one file.
+    #[error(
+        "the provider's stored config is not the one this server's stepclimb.toml declares; \
+         every server must read the same file"
+    )]
+    ConfigChanged,
 }
 
 /// The client secrets of the providers `stepclimb.toml` declares, by the row each belongs to,
-/// read when the server starts and never stored. `Debug` shows how many there are, never one.
+/// each with the [`Fingerprint`] of the config this server wrote to the row; read when the
+/// server starts and never stored. `Debug` shows how many there are, never one.
 #[derive(Clone, Default)]
-pub struct ConfigSecrets(HashMap<ProviderRow, ClientSecret>);
+pub struct ConfigSecrets(HashMap<ProviderRow, (ClientSecret, Fingerprint)>);
 
 impl ConfigSecrets {
-    /// Hold `secret` for `row`, replacing any secret held for it.
-    pub fn insert(&mut self, row: ProviderRow, secret: ClientSecret) {
-        self.0.insert(row, secret);
+    /// Hold `secret` for `row`, whose stored config has `fingerprint`, replacing any secret
+    /// held for it.
+    pub fn insert(&mut self, row: ProviderRow, secret: ClientSecret, fingerprint: Fingerprint) {
+        self.0.insert(row, (secret, fingerprint));
     }
 
-    /// The secret held for `row`.
+    /// The secret held for `row`, whatever the row holds now.
     #[must_use]
     pub fn get(&self, row: ProviderRow) -> Option<&ClientSecret> {
-        self.0.get(&row)
+        self.0.get(&row).map(|(secret, _)| secret)
     }
 
     /// How many secrets are held.

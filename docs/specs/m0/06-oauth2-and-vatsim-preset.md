@@ -221,8 +221,7 @@ server every sign-in test and the Playwright stack use instead of a real provide
   row, taking the file's `kind`, config, `label` and `enabled`, and moving `updated_at` only when
   one of them changed. The config goes through `identity_providers::replace_config`, so a row
   keeps the `admission_rules` it has (`07-admission.md` I3), and an entry may not declare
-  `admission_rules` (refused naming the member): rules are set through the admin API only; a row the admin API created is taken over, and a startup warning says so
-  (and when the kind changes, since existing identities keep their subjects). It disables, and
+  `admission_rules` (refused naming the member): rules are set through the admin API only; a row the admin API created is taken over. It disables, and
   never deletes, every enabled row of the file that the file no longer declares, so identities
   stay; the row stays the file's, and putting the entry back enables it again. The row records
   its owner as `config.source = "config"` (the Data section's proposal), and `05-oidc.md` Q2 (c)
@@ -233,6 +232,27 @@ server every sign-in test and the Playwright stack use instead of a real provide
   `serve` writes nothing, logs a warning and starts; the next start after `stepclimb admin
   create` writes the providers. `stepclimb admin create` itself does not write them: the running
   server would not hold their secrets until it restarts.
+
+  Coordinator decision (2026-11-15, revised after the security review of PR #195), decision 5:
+  the file may not change who a provider's users are. While a row has identities, an entry that
+  would take over a row the admin API created, or change the row's `kind`, its `issuer`
+  (`oidc`), the origin (scheme, host and port) of its `authorize`, `token` or `userinfo` URL, or
+  its `claims.subject` (`oauth2`), stops startup with exit 2, naming the entry, its key, the
+  organization and the member; nothing is written. The same holds between restarts for a row the
+  file already owns. With no identity at the row, it goes ahead and a startup warning says what
+  changed. A new path on the same origin, a label, scopes or profile claims are not anchors.
+
+  Coordinator decision (2026-11-15, same review): every server of an instance must read the
+  same `stepclimb.toml`. Each in-memory secret is kept with a SHA-256 fingerprint of the config
+  that server wrote (its members sorted, `admission_rules` left out, since an admin changes those
+  through the API); when the row's config no longer matches, because another server wrote it
+  from another file, the callback answers 500, logs why and sends no secret.
+
+  An entry's `org` names its organization by slug, which is fixed once created
+  (`02-organizations-and-accounts.md` Q3). A later spec that lets a slug be renamed, or an
+  organization be deleted, must revisit how file providers find their organization. Startup reads
+  the organization count, the slugs and the organization list on the same transaction that
+  writes the rows, and refuses an organization that is no longer there.
 - **B14.** `/api/v1/admin/providers` lists, creates, reads, updates and deletes the
   organization's `oidc` and `oauth2` providers. Validation is B4 for `oauth2` and `05-oidc.md`
   B1 for `oidc`, answering 422 `provider.config_invalid` with a JSON Pointer to the bad field.

@@ -290,7 +290,9 @@ pub(crate) fn stored_secret(walk: &mut Walk, config: &Map<String, Value>) -> Opt
                 walk.fail(&["client_secret"], code::FIELD_UNKNOWN);
                 return None;
             }
-            return Some(StoredSecret::ConfigFile);
+            return Some(StoredSecret::ConfigFile(Some(super::Fingerprint::of(
+                config,
+            ))));
         }
         Some(_) => {
             walk.fail(&[SOURCE], code::FIELD_TYPE);
@@ -314,7 +316,7 @@ pub(crate) fn insert_stored_secret(config: &mut Map<String, Value>, secret: &Sto
         StoredSecret::Sealed(sealed) => {
             config.insert("client_secret".into(), sealed_json(sealed));
         }
-        StoredSecret::ConfigFile => {
+        StoredSecret::ConfigFile(_) => {
             config.insert(SOURCE.into(), SOURCE_CONFIG.into());
         }
     }

@@ -181,7 +181,7 @@ impl OidcConfig {
     pub fn from_config_file(settings: OidcSettings) -> Self {
         Self {
             settings,
-            secret: StoredSecret::ConfigFile,
+            secret: StoredSecret::ConfigFile(None),
         }
     }
 
@@ -191,7 +191,7 @@ impl OidcConfig {
     pub fn sealed_secret(&self) -> Option<SealedSecret> {
         match &self.secret {
             StoredSecret::Sealed(sealed) => Some(sealed.clone()),
-            StoredSecret::ConfigFile => None,
+            StoredSecret::ConfigFile(_) => None,
         }
     }
 

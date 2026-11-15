@@ -398,6 +398,23 @@ pub async fn upsert_from_config(
     Ok(id)
 }
 
+/// How many identities link users to the scope's provider `id`: whether changing what the
+/// provider is would hand those users' accounts to someone else (spec 06 B13).
+pub async fn identity_count(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    id: Uuid,
+) -> Result<i64, Error> {
+    let count = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "count!" FROM identities WHERE org_id = $1 AND provider_id = $2"#,
+        scope.org_id(),
+        id,
+    )
+    .fetch_one(db)
+    .await?;
+    Ok(count)
+}
+
 /// Disable every enabled row of the scope's organization that `stepclimb.toml` owns and whose
 /// key is not in `keep` (spec 06 Q2 (a): a provider removed from the file is disabled, not
 /// deleted, so its identities stay). Returns the keys it disabled, sorted.

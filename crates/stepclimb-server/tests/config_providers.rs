@@ -131,6 +131,142 @@ async fn id_of(pool: &PgPool, org_id: Uuid, key: &str) -> Uuid {
         .expect("the row")
 }
 
+/// Link a new synthetic user of `org` to the provider `provider_id` by `subject`.
+async fn link(pool: &PgPool, org: Uuid, provider_id: Uuid, subject: &str) {
+    let user = stepclimb_core::id::new_id();
+    sqlx::query(
+        "INSERT INTO users (id, org_id, display_name, source, status, tz)
+         VALUES ($1, $2, 'Test Student', 'idp', 'active', 'UTC')",
+    )
+    .bind(user)
+    .bind(org)
+    .execute(pool)
+    .await
+    .expect("a user");
+    sqlx::query(
+        "INSERT INTO identities (id, org_id, user_id, provider_id, subject)
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(stepclimb_core::id::new_id())
+    .bind(org)
+    .bind(user)
+    .bind(provider_id)
+    .bind(subject)
+    .execute(pool)
+    .await
+    .expect("an identity");
+}
+
+/// An API row with an identity, as the admin API would leave it.
+async fn api_row_with_identity(pool: &PgPool, org: Uuid) -> Uuid {
+    let api = stepclimb_core::id::new_id();
+    sqlx::query(
+        "INSERT INTO identity_providers (id, org_id, key, kind, config, enabled)
+         VALUES ($1, $2, 'corp', 'oidc',
+                 '{\"issuer\": \"https://idp.example.test/corp\", \"label\": \"API\", \"client_secret\": {\"sealed\": \"AAAA\"}}',
+                 true)",
+    )
+    .bind(api)
+    .bind(org)
+    .execute(pool)
+    .await
+    .expect("an API row");
+    link(pool, org, api, "1000001").await;
+    api
+}
+
+/// The refusal `apply` gives, which must stop startup with exit 2.
+fn refusal(result: Result<ConfigSecrets, ApplyError>) -> String {
+    let error = result.expect_err("refused");
+    let message = error.to_string();
+    assert_eq!(StartupError::from(error).exit_code(), 2, "{message}");
+    message
+}
+
+/// Spec 06 B13 decision 5 (revised): the file does not take over an API row its users sign in
+/// with; the row is left as it was.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_file_does_not_take_over_an_api_row_with_identities(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    api_row_with_identity(&pool, a).await;
+    let before = rows(&pool).await;
+
+    let message = refusal(apply(&pool, &oidc("corp", ""), start()).await);
+
+    assert_eq!(
+        message,
+        "stepclimb.toml [[providers]] entry 1 (key \"corp\"): would take over provider \"corp\" \
+         of organization \"org-a\", created through the admin API, which 1 identities sign in with"
+    );
+    assert_eq!(rows(&pool).await, before, "nothing is written");
+}
+
+/// Decision 5 (revised), between restarts: a file row with identities keeps its issuer and
+/// kind; a label change still goes through.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_file_row_with_identities_keeps_its_issuer_and_kind(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    apply(&pool, &oidc("corp", ""), start())
+        .await
+        .expect("applies");
+    link(&pool, a, id_of(&pool, a, "corp").await, "1000001").await;
+    let before = rows(&pool).await;
+
+    let moved = oidc("corp", "").replace(
+        "https://idp.example.test/corp",
+        "https://evil.example.test/corp",
+    );
+    let message = refusal(apply(&pool, &moved, restart()).await);
+    assert!(
+        message.ends_with(
+            "`issuer` differs from provider \"corp\" of organization \"org-a\", which 1 \
+             identities sign in with; keep the stored value or remove those identities first"
+        ),
+        "{message}"
+    );
+    assert_eq!(rows(&pool).await, before, "nothing is written");
+
+    let oauth2 = "[[providers]]\nkind = \"oauth2\"\nkey = \"corp\"\nlabel = \"Corp\"\n\
+        authorize = \"https://idp.example.test/a\"\ntoken = \"https://idp.example.test/t\"\n\
+        userinfo = \"https://idp.example.test/u\"\nclient_id = \"c\"\nclient_secret = \"s\"\n\n\
+        [providers.claims]\nsubject = \"/sub\"\n";
+    let message = refusal(apply(&pool, oauth2, restart()).await);
+    assert!(
+        message.contains("`kind` differs from provider \"corp\""),
+        "{message}"
+    );
+
+    let relabeled = oidc("corp", "").replace("Sign in with corp", "Sign in with Corp SSO");
+    apply(&pool, &relabeled, restart())
+        .await
+        .expect("a label is not an anchor");
+}
+
+/// Decision 5 (revised) for `oauth2`: the endpoints' origins and the subject pointer.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_oauth2_file_row_with_identities_keeps_its_origins_and_subject(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    let mock = mock().await;
+    let file = mock_entry(&mock, "s");
+    apply(&pool, &file, start()).await.expect("applies");
+    link(&pool, a, id_of(&pool, a, "toml").await, "1000001").await;
+
+    let token = mock.url(Endpoint::OAuth2Token);
+    let elsewhere = file.replace(&token, "http://127.0.0.2:9/oauth2/token");
+    let message = refusal(apply(&pool, &elsewhere, restart()).await);
+    assert!(
+        message.contains("`token` differs from provider \"toml\""),
+        "{message}"
+    );
+
+    let subject = file.replace("subject = \"/data/cid\"", "subject = \"/data/email\"");
+    let message = refusal(apply(&pool, &subject, restart()).await);
+    assert!(
+        message.contains("`claims.subject` differs from provider \"toml\""),
+        "{message}"
+    );
+}
+
 /// T10: on a single-organization instance a provider without `org` is written to the one
 /// organization, marked `source: "config"`, with no secret in the row; the secret is held in
 /// memory for that row.
@@ -381,8 +517,8 @@ async fn several_organizations_need_org_and_an_unknown_slug_is_refused(pool: PgP
 
     let file = format!(
         "{}{}",
-        oidc("corp", "org = \"org-b\""),
-        oidc("corp", "org = \"org-a\"")
+        oidc("corp", "org = \"org-b\"").replace("secret-of-corp", "secret-of-b"),
+        oidc("corp", "org = \"org-a\"").replace("secret-of-corp", "secret-of-a")
     );
     let secrets = apply(&pool, &file, start()).await.expect("applies");
     let rows = rows(&pool).await;
@@ -392,6 +528,15 @@ async fn several_organizations_need_org_and_an_unknown_slug_is_refused(pool: PgP
     expected.sort();
     assert_eq!(orgs, expected);
     assert_eq!(secrets.len(), 2);
+    let (in_a, in_b) = (id_of(&pool, a, "corp").await, id_of(&pool, b, "corp").await);
+    assert_eq!(row_of(&secrets, a, in_a).as_deref(), Some("secret-of-a"));
+    assert_eq!(row_of(&secrets, b, in_b).as_deref(), Some("secret-of-b"));
+    assert_eq!(
+        row_of(&secrets, a, in_b),
+        None,
+        "a row is found only in its own organization"
+    );
+    assert_eq!(row_of(&secrets, b, in_a), None);
 }
 
 /// An entry naming the only organization and one naming none both land there: one key, twice.
@@ -588,4 +733,33 @@ async fn a_wrong_secret_in_the_file_fails_the_token_request(pool: PgPool) {
         "{answer:?}"
     );
     assert!(!answer.signed_in());
+}
+
+/// Finding 3: another server, reading another file, rewrote the row after this one started.
+/// This server's secret was read for the old config, so the callback answers 500 and sends no
+/// token request.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_row_rewritten_from_another_file_gets_no_secret_here(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    allow_signup(&pool, a).await;
+    let mock = mock().await;
+    let file = mock_entry(&mock, &mock.client_secret());
+    let ours = apply(&pool, &file, start()).await.expect("this server");
+    let theirs = file.replace("Sign in from the file", "Sign in from another file");
+    apply(&pool, &theirs, restart())
+        .await
+        .expect("another server");
+
+    let answer = sign_in(&pool, a, ours).await;
+
+    assert_eq!(
+        answer.status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "{answer:?}"
+    );
+    assert!(!answer.signed_in());
+    assert!(
+        mock.requests_to(Endpoint::OAuth2Token).is_empty(),
+        "no secret was sent"
+    );
 }

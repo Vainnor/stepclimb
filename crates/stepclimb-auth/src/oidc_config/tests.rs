@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use super::*;
 use crate::encryption::DecryptError;
+use crate::provider_config::Fingerprint;
 
 const POLICY: UrlPolicy = UrlPolicy::new(false, true);
 const SECRET: &str = "test-client-secret-value";
@@ -274,7 +275,7 @@ fn the_stored_config_holds_the_secret_only_sealed_and_reads_back() {
     assert!(!text.contains(SECRET), "{text}");
     assert!(stored["client_secret"]["sealed"].is_string(), "{text}");
     let read = OidcConfig::from_stored(&stored).expect("reads back");
-    assert_eq!(read, config);
+    assert_eq!(read.settings, config.settings);
     assert_eq!(
         read.client_secret(&ring(), row(), &ConfigSecrets::default())
             .expect("opens")
@@ -478,7 +479,7 @@ fn a_config_file_provider_stores_no_secret_and_reads_it_from_the_config_secrets(
     assert!(!text.contains(SECRET), "{text}");
 
     let read = OidcConfig::from_stored(&stored).expect("reads back");
-    assert_eq!(read, config);
+    assert_eq!(read.settings, config.settings);
     assert_eq!(read.sealed_secret(), None);
     assert_eq!(
         read.client_secret(&ring(), row(), &ConfigSecrets::default())
@@ -489,6 +490,7 @@ fn a_config_file_provider_stores_no_secret_and_reads_it_from_the_config_secrets(
     secrets.insert(
         row(),
         ClientSecret::from_config_file(SECRET.to_owned()).expect("not empty"),
+        Fingerprint::of(&stored),
     );
     let opened = read.client_secret(&ring(), row(), &secrets).expect("held");
     assert_eq!(opened.expose_secret(), SECRET);
@@ -541,4 +543,45 @@ fn an_admin_config_cannot_claim_the_config_file_source() {
         problems(&with("source", json!("config"))),
         one("/source", code::FIELD_UNKNOWN)
     );
+}
+
+/// A replica that read another file wrote the row: its config is not the one this process
+/// holds the secret for, so no secret comes out. The admission rules an admin changes do not
+/// count, and neither does the order `jsonb` gives the members back in.
+#[test]
+fn a_config_file_secret_opens_only_for_the_config_it_was_read_with() {
+    let settings = validate(&minimal(), POLICY, None).expect("valid").settings;
+    let stored = OidcConfig::from_config_file(settings).to_json();
+    let mut secrets = ConfigSecrets::default();
+    secrets.insert(
+        row(),
+        ClientSecret::from_config_file(SECRET.to_owned()).expect("not empty"),
+        Fingerprint::of(&stored),
+    );
+    let opens = |config: &Map<String, Value>| {
+        OidcConfig::from_stored(config)
+            .expect("reads")
+            .client_secret(&ring(), row(), &secrets)
+    };
+    assert!(opens(&stored).is_ok());
+
+    let mut with_rules = stored.clone();
+    with_rules.insert(
+        "admission_rules".into(),
+        json!([{ "attribute": "a", "op": "exists" }]),
+    );
+    assert!(
+        opens(&with_rules).is_ok(),
+        "admission rules are not the file's"
+    );
+
+    let reordered: Map<String, Value> = stored.clone().into_iter().rev().collect();
+    assert!(opens(&reordered).is_ok(), "member order does not count");
+
+    let mut other = stored.clone();
+    other.insert("client_id".into(), json!("another-client"));
+    assert_eq!(opens(&other).err(), Some(SecretError::ConfigChanged));
+    let mut relabeled = stored;
+    relabeled.insert("label".into(), json!("Another label"));
+    assert_eq!(opens(&relabeled).err(), Some(SecretError::ConfigChanged));
 }

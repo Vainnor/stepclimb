@@ -182,7 +182,7 @@ impl Oauth2Config {
     pub fn from_config_file(settings: Oauth2Settings) -> Self {
         Self {
             settings,
-            secret: StoredSecret::ConfigFile,
+            secret: StoredSecret::ConfigFile(None),
         }
     }
 
@@ -192,7 +192,7 @@ impl Oauth2Config {
     pub fn sealed_secret(&self) -> Option<SealedSecret> {
         match &self.secret {
             StoredSecret::Sealed(sealed) => Some(sealed.clone()),
-            StoredSecret::ConfigFile => None,
+            StoredSecret::ConfigFile(_) => None,
         }
     }
 

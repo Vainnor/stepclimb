@@ -316,7 +316,10 @@ cannot set `admission_rules`; those are managed through the admin API and kept a
   organization by `key`, taking over a provider of that key created any other way, and disables
   (never deletes) one that is no longer in the file, so its users' sign-in links are kept.
 - The client secret is never stored in the database: the server reads it from the file at
-  startup and keeps it in memory.
+  startup and keeps it in memory. Every server of an instance must read the same file: a server whose
+  file differs from the one that last wrote a provider refuses to sign in with it.
+- While people sign in with a provider, the file cannot take it over from the admin API or
+  change its kind, issuer, endpoint hosts or subject claim: the server stops with exit 2.
 - An invalid entry stops the server with exit code 2, naming the entry's position, its key and
   the member, and never the secret; `check-config` reports the same errors, and prints the
   providers as `key (kind)`. An `org` that names no organization, or a missing `org` on an
