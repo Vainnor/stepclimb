@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE organizations\n             SET settings = CASE WHEN $2::text::jsonb = '[]'::jsonb\n                     THEN settings #- '{admission,rules}'\n                     ELSE settings || jsonb_build_object('admission',\n                          COALESCE(settings -> 'admission', '{}'::jsonb)\n                          || jsonb_build_object('rules', $2::text::jsonb))\n                 END,\n                 updated_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond'\n             WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "add119e6ef202dce9c2c8dbb0b2f6eaf25e24bf88280a043c88cf785d178ebae"
+}

@@ -205,6 +205,51 @@ pub async fn list_for_user(
     rows.into_iter().map(IdentityProvider::try_from).collect()
 }
 
+/// The scope's providers but the local one, enabled or not, sorted by key: every provider an
+/// admission rule list can belong to (docs/specs/m0/07-admission.md Q2 (a)).
+pub async fn list_outside(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+) -> Result<Vec<IdentityProvider>, Error> {
+    let rows = sqlx::query_as!(
+        Row,
+        r#"SELECT id, key, kind, config::text AS "config!", enabled,
+                  (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM identity_providers
+           WHERE org_id = $1 AND kind <> $2
+           ORDER BY key"#,
+        scope.org_id(),
+        Kind::Local.as_str(),
+    )
+    .fetch_all(db)
+    .await?;
+    rows.into_iter().map(IdentityProvider::try_from).collect()
+}
+
+/// [`list_outside`], locking each row `FOR NO KEY UPDATE` until the caller's transaction ends,
+/// in key order, so a write of their admission rules replaces the lists read here.
+pub async fn lock_outside(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+) -> Result<Vec<IdentityProvider>, Error> {
+    let rows = sqlx::query_as!(
+        Row,
+        r#"SELECT id, key, kind, config::text AS "config!", enabled,
+                  (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM identity_providers
+           WHERE org_id = $1 AND kind <> $2
+           ORDER BY key
+           FOR NO KEY UPDATE"#,
+        scope.org_id(),
+        Kind::Local.as_str(),
+    )
+    .fetch_all(db)
+    .await?;
+    rows.into_iter().map(IdentityProvider::try_from).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

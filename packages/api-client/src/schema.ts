@@ -87,11 +87,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Read the organization's admission switches. */
+        /** Read the organization's admission switches and rules. */
         get: operations["getAdmissionSettings"];
         /**
-         * Change the admission switches the body names; send only what you change. A switch the body
-         *     leaves out keeps its value, and a body naming only current values changes nothing.
+         * Change the admission switches and rule lists the body names; send only what you change. A
+         *     member the body leaves out keeps its value, and a body naming only current values changes
+         *     nothing.
          */
         put: operations["updateAdmissionSettings"];
         post?: never;
@@ -653,7 +654,7 @@ export interface paths {
         };
         /**
          * Finish a sign-in with an outside identity provider.
-         * @description A browser navigation: the provider's redirect back after sign-in, with `code` and `state` or with `error` and `state`. It needs the `__Host-sc_flow` cookie of the flow the start route began, and clears it. Every refusal is a 303 to `/sign-in?error=<code>`: `auth.provider_not_found` (no enabled provider with this key), `auth.flow_invalid` (no flow cookie, a used or unknown flow, a flow for another provider, or another `state`), `auth.flow_expired` (the flow is older than 10 minutes), `auth.provider_denied` (the person declined at the provider), `auth.provider_error` (the provider reported an error, or its token, key set or userinfo answer could not be used), `auth.id_token_invalid` (the ID token failed a check), `auth.subject_missing` (the ID token's `sub` or the OAuth 2 userinfo subject is missing, empty, holds NUL or is longer than 255 characters), the admission refusals `auth.suspended`, `auth.signup_closed` and `entitlement.limit_reached`, or `auth.rate_limited` (with `Retry-After`). An admitted sign-in sets `__Host-sc_session` and is a 303 to the flow's `return_to`.
+         * @description A browser navigation: the provider's redirect back after sign-in, with `code` and `state` or with `error` and `state`. It needs the `__Host-sc_flow` cookie of the flow the start route began, and clears it. Every refusal is a 303 to `/sign-in?error=<code>`: `auth.provider_not_found` (no enabled provider with this key), `auth.flow_invalid` (no flow cookie, a used or unknown flow, a flow for another provider, or another `state`), `auth.flow_expired` (the flow is older than 10 minutes), `auth.provider_denied` (the person declined at the provider), `auth.provider_error` (the provider reported an error, or its token, key set or userinfo answer could not be used), `auth.id_token_invalid` (the ID token failed a check), `auth.subject_missing` (the ID token's `sub` or the OAuth 2 userinfo subject is missing, empty, holds NUL or is longer than 255 characters), the admission refusals `auth.suspended`, `auth.admission_refused`, `auth.signup_closed` and `entitlement.limit_reached`, or `auth.rate_limited` (with `Retry-After`). An admitted sign-in sets `__Host-sc_session` and is a 303 to the flow's `return_to`.
          */
         get: operations["finishProviderSignIn"];
         put?: never;
@@ -783,8 +784,71 @@ export interface components {
             /** @description Trimmed; 1 to 200 characters. */
             name?: string;
         };
+        /** @description Holds when every one of its 1 to 50 rules holds. Groups nest at most 4 deep. */
+        AdmissionAll: {
+            all: components["schemas"]["AdmissionRule"][];
+        };
+        /** @description Holds when at least one of its 1 to 50 rules holds. Groups nest at most 4 deep. */
+        AdmissionAny: {
+            any: components["schemas"]["AdmissionRule"][];
+        };
+        /** @description A test of one mapped attribute. */
+        AdmissionCondition: {
+            /**
+             * @description The attribute's name, as the provider's `claims.attributes` maps it; 1 to 1,000
+             *     characters.
+             */
+            attribute: string;
+            op: components["schemas"]["AdmissionOp"];
+            value?: null | components["schemas"]["AdmissionValue"];
+        };
+        /**
+         * @description What a condition asks of its attribute.
+         * @enum {string}
+         */
+        AdmissionOp: "equals" | "in" | "not_in" | "exists" | "matches";
+        /**
+         * @description One admission rule: a condition on one mapped attribute, or a group of rules. An attribute
+         *     that is absent or `null` fails its condition, whatever the `op`; one of a type the rule
+         *     cannot compare refuses the sign-in.
+         */
+        AdmissionRule: components["schemas"]["AdmissionCondition"] | components["schemas"]["AdmissionAny"] | components["schemas"]["AdmissionAll"];
+        /**
+         * @description The rules every sign-in through an outside provider must pass (Q3 (a)): every rule of the
+         *     organization's list and of the provider's own list. A sign-in with a local account runs no
+         *     rules. A refused person is answered `auth.admission_refused`.
+         */
+        AdmissionRules: {
+            /**
+             * @description The rules every outside provider's sign-ins must pass. Their attributes must be ones
+             *     some provider maps; a provider that does not map one fails the rule.
+             */
+            organization: components["schemas"]["AdmissionRule"][];
+            /**
+             * @description Each outside provider of the organization, enabled or not, by key, with the rules its
+             *     sign-ins must pass besides the organization's; `[]` when it has none.
+             */
+            providers: {
+                [key: string]: components["schemas"]["AdmissionRule"][];
+            };
+        };
+        /**
+         * @description The rule lists to replace: each list named replaces the stored one whole, and a list not
+         *     named keeps its rules. At most 50 rules per list.
+         */
+        AdmissionRulesPatch: {
+            /** @description The organization's list. */
+            organization?: components["schemas"]["AdmissionRule"][];
+            /** @description Provider lists by provider key; a provider not named keeps its list. `[]` empties one. */
+            providers?: {
+                [key: string]: components["schemas"]["AdmissionRule"][];
+            };
+        };
+        /** @description One value of an `in` or `not_in` list. */
+        AdmissionScalar: string | number | boolean;
         /** @description Who admission lets in. */
         AdmissionSettings: {
+            rules: components["schemas"]["AdmissionRules"];
             /**
              * @description Whether a person the organization has no user for is created as a user when they first
              *     sign in through an identity provider. Off, they are refused with `auth.signup_closed`.
@@ -797,10 +861,12 @@ export interface components {
             sync_only: boolean;
         };
         /**
-         * @description A change to the admission switches: send only what you change. An absent member keeps its
-         *     stored value, and `{}` changes nothing. A member sent as `null` is malformed: omit it instead.
+         * @description A change to the admission switches and rules: send only what you change. An absent member
+         *     keeps its stored value, and `{}` changes nothing. A member sent as `null` is malformed: omit
+         *     it instead.
          */
         AdmissionSettingsPatch: {
+            rules?: components["schemas"]["AdmissionRulesPatch"];
             /**
              * @description Whether a person the organization has no user for is created as a user when they first
              *     sign in through an identity provider.
@@ -823,6 +889,8 @@ export interface components {
             /** @description Whether only users already provisioned may sign in; `false` unless set. */
             sync_only: boolean;
         };
+        /** @description A condition's value. */
+        AdmissionValue: string | number | boolean | components["schemas"]["AdmissionScalar"][];
         /**
          * @description An appearance every brand has.
          * @enum {string}
@@ -1797,7 +1865,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `request.invalid`: the change breaks a rule; `errors` lists each one. `admission.sync_only_unavailable` marks `sync_only` turned on, which this release refuses. */
+        /** @description `request.invalid`: the change breaks a rule; `errors` lists each one (at most 20), each with a JSON Pointer to the member. `admission.sync_only_unavailable` marks `sync_only` turned on, which this release refuses. `admission.rule_invalid` marks a rule that is not one of the documented forms or breaks a limit; `admission.attribute_unknown` an attribute no provider the list applies to maps; `admission.provider_unknown` a key in `rules.providers` that is not an outside provider of the organization. */
         AdmissionInvalid: {
             headers: {
                 [name: string]: unknown;
@@ -1806,7 +1874,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `permission.denied`: the caller does not hold `admission.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site. */
+        /** @description `permission.denied`: the caller does not hold `admission.manage` at organization scope. `permission.escalation`: the change changes a rule list, which applies to every user who signs in through an outside provider, and the caller does not hold every catalog permission at organization scope. `auth.csrf_refused`: the request did not come from this site. */
         AdmissionWriteForbidden: {
             headers: {
                 [name: string]: unknown;
@@ -2744,7 +2812,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The admission switches */
+            /** @description The admission switches and rules */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2773,7 +2841,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The switches after the change */
+            /** @description The switches and rules after the change */
             200: {
                 headers: {
                     [name: string]: unknown;

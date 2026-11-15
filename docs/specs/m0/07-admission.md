@@ -136,7 +136,7 @@ Every endpoint has `#[utoipa::path]` and appears in `openapi/stepclimb.json`. Er
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
 | `GET /api/v1/admin/admission` | none | 200 `{signup_allowed, sync_only, rules: [...]}` (rule shape pending Q1) | `auth.unauthenticated`, `permission.denied` | `perm::AdmissionManage`, organization |
-| `PUT /api/v1/admin/admission` | `{rules}`, plus the switches if Q2 says this endpoint writes them | 200 the stored settings | `admission.rule_invalid` (with the rule index), `admission.attribute_unknown` (pending Q1), `permission.denied` | `perm::AdmissionManage`, organization |
+| `PUT /api/v1/admin/admission` | `{rules}`, plus the switches if Q2 says this endpoint writes them | 200 the stored settings | `admission.rule_invalid` (with the rule index), `admission.attribute_unknown`, `admission.provider_unknown`, `permission.denied`, `permission.escalation` (a rule change, I3) | `perm::AdmissionManage`, organization |
 | `GET /api/v1/admin/admission/webhook` | none | 200 `{url, enabled, created_at}` or 404 | `admission.webhook_not_found`, `permission.denied` | `perm::AdmissionManage`, organization |
 | `PUT /api/v1/admin/admission/webhook` | `{url, enabled}` | 200 `{url, enabled, secret?}` (`secret` only when the webhook was created by this call) | `admission.webhook_url_invalid`, `permission.denied` | `perm::AdmissionManage`, organization |
 | `POST /api/v1/admin/admission/webhook/rotate-secret` | none | 200 `{secret}` | `admission.webhook_not_found`, `permission.denied` | `perm::AdmissionManage`, organization |
@@ -162,7 +162,7 @@ does not name; Q2 proposes it. Proposed, pending Q2:
 - **Rules, as Q2 recommends:** per provider in `identity_providers.config` under `admission_rules`
   (shape pending Q1), plus an optional organization-wide list in `organizations.settings` under
   `admission.rules`. The `GET /api/v1/admin/admission` response returns both, the per-provider
-  lists keyed by provider key.
+  lists keyed by provider key. Built so in I3; the shape is in I3's decisions.
 - **`admission_webhooks`** (proposed): `id uuid PK`, `org_id uuid NOT NULL UNIQUE REFERENCES
   organizations(id)` (one webhook per organization), `url text NOT NULL`, `secret bytea NOT
   NULL` (AES-256-GCM), `enabled boolean NOT NULL DEFAULT true`, `created_at`, `updated_at`. The
@@ -416,6 +416,81 @@ overrule one, which then updates this spec.
    - A release older than I4 ignores a stored `sync_only: true` (I4's note on rollback).
 3. **I3. Declarative rules.** Rule model, validation on save, evaluation at step 2, storage per
    Q2. Covers B8 to B10; T7, T8, T21 (steps 1, 2, 5). Depends on: I2, Q1, Q3.
+
+   Coordinator decisions (2026-11-15), for this issue:
+
+   - The rule model is Q1 (b), in `stepclimb_core::admission_rules`. A list is a JSON array
+     and every rule in it must hold. A rule is a condition
+     `{"attribute": <name>, "op": <op>, "value": <value>}` with `op` one of `equals`, `in`,
+     `not_in`, `exists` (no `value`) and `matches`, or a group `{"any": [...]}` or
+     `{"all": [...]}`. A value is a string, an integer (64-bit) or a boolean; the values of one
+     `in` or `not_in` list share a type. A `matches` pattern uses the Rust `regex` syntax
+     (linear-time matching) and is anchored at both ends. Limits: 50 rules per list, 50 per
+     group, groups nested at most 4 deep, 100 values per list, 1,000 characters per name,
+     string value or pattern, and 1 MiB per compiled pattern. Empty groups are refused.
+   - Evaluation (B9) fails closed. An absent attribute, or one present as `null`, fails its
+     condition whatever the `op`, so `not_in` with the attribute absent refuses. A present
+     attribute of a type the rule cannot compare (an array, an object, a number against a
+     string, a non-integer number against an integer) makes the rule unevaluable, which
+     refuses. A group evaluates every rule in it, so one unevaluable rule anywhere makes the
+     group unevaluable, even an `any` whose other rule holds; the outcome never depends on the
+     order of the rules. Both outcomes refuse with `auth.admission_refused`.
+   - Storage is Q2 (a): the organization's list in `organizations.settings` as
+     `admission.rules`, and each outside provider's in its `identity_providers.config` as
+     `admission_rules`. An empty list is stored as no member. A sign-in through an outside
+     provider must pass the organization's list, then that provider's list. A stored list
+     that does not parse (a newer release's form, corruption) is a server fault: the sign-in
+     gets a 500 and no one is admitted through the providers it applies to.
+   - Step 2 runs after step 1 on every sign-in through an outside provider, known identity or
+     new person (Q3 (a)), before step 1's attribute and profile writes, which a refusal rolls
+     back with the savepoint (B3). It reads the rules in the sign-in's transaction, from the
+     provider row `admit` reads again before step 1.
+   - Local sign-ins (`admission::complete_local`, and `admit` with the local provider) run no
+     rules. They carry no mapped attributes, so under B9 any organization-wide rule would
+     refuse every local account, the break-glass administrator's included. The local provider
+     cannot have a list of its own (`admission.provider_unknown`). A passkey added by a user
+     of an outside provider (`04-local-accounts.md` B13) signs in without that provider's
+     fresh attributes and so without the rules; the per-provider `allow_local_passkeys`
+     switch, off by default, is the control the owner chose for that.
+   - Rules see attributes exactly as mapped. The `email_verified` rule (`05-oidc.md` B13,
+     `06-oauth2-and-vatsim-preset.md` B10) drops only the profile email; an admin who maps an
+     email claim as an attribute and writes a rule on it gets the provider's value, verified
+     or not.
+   - The admin surface is the I2 route. `GET /api/v1/admin/admission` adds
+     `rules: {organization: [...], providers: {<key>: [...]}}`, with every outside provider of
+     the organization, enabled or not, by key (`[]` for one without rules) and never the local
+     provider. `PUT` takes `rules: {organization?, providers?}`, partial like the switches: an
+     absent `rules`, `rules.organization` or `rules.providers`, and a provider the map leaves
+     out, keep their stored lists, and a named list is replaced whole. `null` for any of them,
+     a non-object `rules` and an unknown member of `rules` are 400 `request.malformed`.
+   - Validation on save answers 422 `request.invalid` with at most 20 `errors`, each a JSON
+     Pointer and a code: `admission.rule_invalid` (not one of the forms, an unknown member, a
+     broken limit, a pattern that does not compile), `admission.attribute_unknown` and
+     `admission.provider_unknown`. A provider's list may name only attributes that provider's
+     config maps (`claims.attributes`); the organization's list only attributes some outside
+     provider of the organization maps. A provider whose stored config does not read maps
+     none. A stored list's names are not checked again at sign-in: an attribute a provider
+     stops mapping is then absent, and its condition fails.
+   - Rule writes take the escalation rule I2 left to this issue: since rules run on every
+     outside-provider sign-in, a `PUT` that changes any list is refused with 403
+     `permission.escalation` unless the caller holds every catalog permission at organization
+     scope, the rule of `PUT /api/v1/admin/local-sign-in` (`04-local-accounts.md` I1). A `PUT`
+     whose lists equal the stored ones needs only `perm::AdmissionManage` and writes nothing.
+     The switches keep I2's rule; a body that changes both is refused whole.
+   - The write locks the organization's row and then every outside provider's row
+     (`FOR NO KEY UPDATE`), compares, and writes only the lists that differ. Each changed list
+     gets one audit entry in the same transaction: `organization.update_settings` with
+     `admission.rules` before and after, or `identity_provider.update` on the provider with
+     its `admission_rules` before and after (`09-permissions-and-roles.md` B22).
+   - A rule refusal logs, at info, the provider key, the step `rules`, the code, the rule's
+     id (its JSON Pointer in the `GET` body, such as `/rules/providers/sso/1`) and the
+     outcome (`fails` or `unevaluable`), never an attribute value. Each step logs at debug as
+     it starts (`admission runs a step`, with `step`), which T21 reads.
+   - Every writer of `identity_providers.config` keeps the stored `admission_rules` member:
+     `stepclimb.toml` providers (`06-oauth2-and-vatsim-preset.md` I4), which rewrite the
+     config on each start, and the provider administration API (06 I5), whose config
+     validation refuses unknown members. A writer that drops the member silently removes that
+     provider's rules, which admits people the rules refused.
 4. **I4. Unknown-identity resolution and sync-only mode.** The provisioned-user match (Q4),
    email matching under `03-users-and-identities.md` Q2's conditions (which lifts the refusal to
    set `email_matching` to `true`, `03-users-and-identities.md` B17), sync-only refusal. Covers

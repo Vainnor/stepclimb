@@ -141,7 +141,8 @@ declined at the provider), `auth.provider_error` (the provider reported an error
 key set or userinfo answer could not be used), `auth.id_token_invalid` (the ID token failed a \
 check), `auth.subject_missing` (the ID token's `sub` or the OAuth 2 userinfo subject is \
 missing, empty, holds NUL or is longer than 255 characters), the admission refusals \
-`auth.suspended`, `auth.signup_closed` and `entitlement.limit_reached`, or `auth.rate_limited` \
+`auth.suspended`, `auth.admission_refused`, `auth.signup_closed` and \
+`entitlement.limit_reached`, or `auth.rate_limited` \
 (with `Retry-After`). An admitted sign-in sets `__Host-sc_session` and is a 303 to the flow's \
 `return_to`.",
     params(ProviderParam, CallbackQuery),
