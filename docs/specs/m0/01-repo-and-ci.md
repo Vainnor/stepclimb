@@ -36,14 +36,15 @@ release recipe. What a release ships beyond a tagged GitHub Release is pending Q
 - **B2. The merge gate.** `just ci` runs, in this order: `secrets-scan` (gitleaks over the tree,
   `.gitleaks.toml`), `fmt-check`, `lint` (clippy `-D warnings`), `layering`
   (`bin/check-layering.sh`), `lint-escapes` (`bin/check-lint-escapes.py`), `spdx-check`
-  (`bin/check-spdx.sh`), `gate-check` (the tests of `bin/ci_gate.py`), `test-rust` (web build,
+  (`bin/check-spdx.sh`), `version-check` (B14), `gate-check` (the Python tests in `bin/`:
+  `bin/ci_gate.py`, the version scripts, the update's rules), `test-rust` (web build,
   `cargo nextest run --workspace`, doctests), `deny` (`cargo deny check`, `deny.toml`),
   `sqlx-check`, `openapi-diff` (the committed `openapi/stepclimb.json` and
   `packages/api-client/src/schema.ts` against what the code generates), `web-lint` (Biome),
-  `typecheck` (tsc in every package), `test-web` (Vitest), `ui-visual` (story screenshots and
+  `web-audit` (B12), `typecheck` (tsc in every package), `test-web` (Vitest), `ui-visual` (story screenshots and
   axe), `e2e` (Playwright against the Compose stack, image built from `deploy/Dockerfile`),
   `compose-check` (the production Compose example), `compose-ops-check` (the same with Caddy and
-  the dumps) and `agents-check`. `bin/ci_gate.py` runs them with the run's own PostgreSQL and
+  the dumps), `image-check` (`bin/check-image.sh`) and `agents-check`. `bin/ci_gate.py` runs them with the run's own PostgreSQL and
   Compose projects, named from the worktree path and removed when the run ends, and lets at most
   `SC_CI_SLOTS` (default 3) runs share the machine, so several worktrees can gate at once.
   `just ci`'s last step, `bin/ci-stamp.sh`, records the commit checked out when the run started
@@ -110,9 +111,13 @@ release recipe. What a release ships beyond a tagged GitHub Release is pending Q
   npm registry, so it runs in `just ci` only when the registry answers (pending Q7 for whether a local run without the network fails or
   skips with a message).
 - **B13. Monthly update recipe.** `just update-deps` runs `cargo update` in both Cargo
-  workspaces and `pnpm update` within the pinned ranges, refreshes the digests of the base and
-  Compose images to the newest at least 14 days old, and prints what changed, so the monthly PR
-  is one command. The MinIO image choice itself is ADR 0019.
+  workspaces and `pnpm update` within the pinned ranges, age-checks every crate version in both
+  lockfiles (D3), moves each base and Compose image pin to its tag's current digest once that
+  build is at least 14 days old, and prints what changed, so the monthly PR is one command. A
+  registry lists only a tag's current digest, not its earlier ones, so a tag rebuilt more often
+  than every 14 days keeps its old pin; each run prints how many days old every pinned build is,
+  and that number grows from run to run, so a base image stuck behind its tag shows up (D4). The
+  MinIO image choice itself is ADR 0019.
 - **B14. One version.** Semantic versioning (Hosting and operations -> Releases). One version
   number covers the server, the web app and the Tauri app: `[workspace.package] version` in
   `Cargo.toml` is the source, and `apps/app/src-tauri/tauri.conf.json` and
@@ -234,6 +239,56 @@ overrule one, which then updates this spec.
   `critical`, and skip with a printed warning when the registry cannot be reached; B, fail on any severity; C, fail on `moderate` and above. Recommendation: A,
   with a reviewed allowlist file for advisories that do not apply.
   **Decided:** the recommendation (owner, 13 Nov 2026).
+
+### Coordinator decisions (2026-11-14)
+
+Points the behaviors above left open, settled while building issues 2 to 5 on the owner's
+delegation; the owner can overrule any of them.
+
+- **D1. When the registry "answers" (B12, Q7).** Before the audit, `bin/check-pnpm-audit.mjs`
+  asks the configured registry's bulk advisory endpoint about `lodash` 4.17.20, which has public
+  high advisories, with a 15 s timeout. Only a network error or the timeout makes `web-audit`
+  print `SKIPPED` and pass; it then writes `target/web-audit-skipped`, and `just ci`'s last line
+  says `web-audit SKIPPED (offline)`. An answer without lodash's advisories fails the gate, since
+  an empty report from that endpoint cannot be trusted, and so does any later `pnpm audit` error.
+  Node's `fetch` uses a proxy only from `HTTPS_PROXY` or `HTTP_PROXY` with `NODE_USE_ENV_PROXY=1`,
+  which the recipe sets; a proxy set only in pnpm's configuration fails the gate, naming the
+  variable to export.
+- **D2. The allowlist (B12, Q7).** `pnpm-audit-allowlist.json` lists advisories by GHSA id, each
+  with `package` (the advisory's package name), `reason` and `expires`, a real calendar date at
+  most 90 days ahead. Days are UTC. An entry passes through its expiry date and fails the day
+  after. An entry fails when its advisory is gone or now below `high`, when its package is not
+  the advisory's, or when a field is missing or duplicated. Below `high`, advisories are printed
+  and pass without an entry; an advisory with a severity outside info, low, moderate, high and
+  critical, or with no GHSA id, fails. The list
+  starts empty: on 14 Nov 2026 `pnpm audit` reports 2 moderate advisories (glob
+  GHSA-3g3m-2fjr-6pw4, minimatch GHSA-g3hv-75wg-m249, both under Storybook) and none higher.
+- **D3. The 14-day rule for crates (B6, B13).** Stable Cargo 1.98 has no minimum release age
+  (`-Z min-publish-age` is nightly-only). After `cargo update`, `bin/update_deps.py` looks up
+  every crate version in both lockfiles on the crates.io API, the ones the lockfile already had
+  too. One published less than 14 days ago is set back with
+  `cargo update -p name@version --precise` to the newest unyanked release of the same semver
+  series at least 14 days old, one crate at a time, reading the lockfile again after each. When
+  Cargo refuses (a dependent requires the newer version) or the series has nothing old enough,
+  the run fails naming the crate and Cargo's reason.
+- **D4. Image age (B13).** An image's age is the linux/amd64 build date (`created`) of a digest.
+  The pin moves to the tag's current digest only when that build is at least 14 days old. A newer
+  build, or a placeholder date (reproducible images such as distroless report 1970-01-01), keeps
+  the old pin, and the run lists it with the pinned build's age. The images are those in `deploy/Dockerfile` and
+  `deploy/compose/`; the Playwright image in `bin/ui-visual.sh` pins the amd64 manifest the
+  story screenshot baselines were drawn with, so it moves only with them and `update-deps`
+  leaves it alone.
+- **D5. What "one version" covers (B14).** Besides the three files B14 names, `version-check`
+  reads every workspace member `cargo metadata --no-deps` lists (each must say
+  `version.workspace = true`), the workspace
+  crates' entries in both Cargo lockfiles, and any `package.json` that carries a `version`
+  outside Changesets. `packages/ui` and `packages/tokens` keep the versions Changesets gives them
+  (ADR 0015); the other npm packages carry none today.
+- **D6. Private vulnerability reporting (B11, issue 2).** Q6's email address is the channel.
+  GitHub's private vulnerability reporting stays off while the repository is private; when it
+  goes public, the owner switches it on in the repository settings (Security, "Private
+  vulnerability reporting") and adds it to `SECURITY.md`. No file in the repository can turn it
+  on.
 
 ## Issues
 

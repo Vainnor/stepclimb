@@ -3,9 +3,13 @@
 ## Reporting a vulnerability
 
 Please report security problems privately by email to **contact@vainnor.com**. Do not open a
-public issue, pull request or discussion about it. When the repository is public, GitHub's
-private vulnerability reporting (the "Security" tab, "Report a vulnerability") will work too;
-GitHub does not offer it on private repositories.
+public issue, pull request or discussion about it.
+
+GitHub's private vulnerability reporting (the "Security" tab, "Report a vulnerability") is not
+available yet: the repository is private, and GitHub offers the feature only on public
+repositories. When the repository goes public, the maintainer turns it on in the repository's
+settings (Security, "Private vulnerability reporting") and this section will name it as a second
+channel. Until then, email is the only one.
 
 Include what you found, how to reproduce it, the version or commit, and the impact you expect. You
 will get an acknowledgement within 7 days. Stepclimb has one maintainer, so fixes take as long as

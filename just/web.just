@@ -22,6 +22,15 @@ changeset-check: web-install
     node --test bin/check-changesets.test.mjs
     node bin/check-changesets.mjs origin/next
 
+# `pnpm audit --prod` and `pnpm audit` fail on a high or critical advisory that
+# pnpm-audit-allowlist.json does not list with a reason and an unexpired date. Needs the npm
+# registry; when it does not answer, prints SKIPPED and passes (bin/check-pnpm-audit.mjs). Node's
+# fetch reads HTTPS_PROXY only with NODE_USE_ENV_PROXY=1.
+# npm advisories at high and critical, with a reviewed allowlist
+web-audit: web-install
+    node --test bin/check-pnpm-audit.test.mjs
+    NODE_USE_ENV_PROXY=1 node bin/check-pnpm-audit.mjs
+
 # Biome: apply formatting and safe fixes
 web-fmt: web-install
     pnpm biome check --write .

@@ -6,6 +6,8 @@ import 'just/secrets.just'
 import 'just/rust.just'
 import 'just/web.just'
 import 'just/stack.just'
+import 'just/release.just'
+import 'just/deps.just'
 
 # The local database (`just up`); `just ci` sets its own run's database. sqlx's test and query macros read DATABASE_URL.
 export DATABASE_URL := env('DATABASE_URL', 'postgres://stepclimb:stepclimb-local@127.0.0.1:55432/stepclimb')
@@ -28,10 +30,14 @@ ci:
     python3 -X utf8 -B bin/ci_gate.py run -- "{{ just_executable() }}" _ci-checks
     bash bin/ci-stamp.sh "$tested" "$tree"
 
-_ci-checks: secrets-scan fmt-check lint layering lint-escapes spdx-check gate-check test-rust deny sqlx-check openapi-diff web-lint typecheck test-web ui-visual e2e compose-check compose-ops-check image-check agents-check
-    @echo "just ci: all gates passed"
+# web-audit writes target/web-audit-skipped when the registry did not answer; the last line
+# repeats it so a pass without the npm advisories is not mistaken for a full one.
+_ci-checks: secrets-scan fmt-check lint layering lint-escapes spdx-check version-check gate-check test-rust deny sqlx-check openapi-diff web-lint web-audit typecheck test-web ui-visual e2e compose-check compose-ops-check image-check agents-check
+    @if [[ -f target/web-audit-skipped ]]; then echo "just ci: all gates passed; web-audit SKIPPED (offline): the npm advisories were not checked"; else echo "just ci: all gates passed"; fi
 
-# Tests of bin/ci_gate.py, the gate's locks and per-run stack
+# Covers bin/ci_gate.py (the gate's locks and per-run stack), the version scripts, the dependency
+# update's rules and the self-hosting guide's table.
+# Tests of the Python in bin/ and the scripts it drives
 gate-check:
     python3 -X utf8 -B -m unittest discover -s bin -p 'test_*.py'
 
