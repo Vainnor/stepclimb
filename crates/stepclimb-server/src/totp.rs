@@ -156,7 +156,8 @@ pub struct TotpCode {
 }
 
 /// A new TOTP secret, shown once.
-#[derive(Debug, Serialize, ToSchema)]
+// No `Debug`, so the secret cannot reach a log line through `{:?}`.
+#[derive(Serialize, ToSchema)]
 pub struct TotpEnrollment {
     /// The URI to show as a QR code for the authenticator app.
     pub otpauth_uri: String,
@@ -165,7 +166,8 @@ pub struct TotpEnrollment {
 }
 
 /// The recovery codes of a confirmed TOTP, shown once.
-#[derive(Debug, Serialize, ToSchema)]
+// No `Debug`, so the codes cannot reach a log line through `{:?}`.
+#[derive(Serialize, ToSchema)]
 pub struct TotpConfirmed {
     /// Ten single-use codes that stand in for a TOTP code when the app is lost.
     pub recovery_codes: Vec<String>,
@@ -193,7 +195,7 @@ fn open_secret(
     let bytes = keys
         .decrypt(sealed, &secret_context(&org_id, &user_id))
         .map_err(internal)?;
-    Secret::from_bytes(&bytes).map_err(internal)
+    Secret::from_decrypted(bytes).map_err(internal)
 }
 
 /// `[org_id, "local_logins", user_id, "totp_secret"]`.
@@ -443,11 +445,12 @@ async fn accept_code(
         let Some(step) = totp::verify(&secret, &code, now, totp.last_step) else {
             return Ok(None);
         };
-        // Under the login's lock no later step can have been recorded since it was read.
-        local_totp::record_step(conn, scope, user_id, step, now)
+        // The update records the step only if it is still later than the last one, so a code
+        // that a concurrent request used first is refused here even without the locks.
+        let recorded = local_totp::record_step(conn, scope, user_id, step, now)
             .await
             .map_err(internal)?;
-        return Ok(Some(Used::Totp));
+        return Ok(recorded.then_some(Used::Totp));
     }
     let Some(hash) = totp::recovery_code_hash(presented).filter(|_| recovery) else {
         return Ok(None);

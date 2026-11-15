@@ -226,7 +226,9 @@ fn one_of_needs_exactly_one_fitting_schema() {
     ]);
     let errors = common::schema_errors(&overlapping, "PasswordSignedIn", &json!({}));
     assert!(
-        errors.iter().any(|e| e.contains("conforms to 2 of the oneOf schemas")),
+        errors
+            .iter()
+            .any(|e| e.contains("conforms to 2 of the oneOf schemas")),
         "{errors:#?}"
     );
 }

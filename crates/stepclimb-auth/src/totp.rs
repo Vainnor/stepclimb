@@ -18,7 +18,8 @@
 //! hyphens and spaces ignored). 80 random bits need no slow hash.
 //!
 //! None of the secret types implements `Display`, and their `Debug` output leaves the secret
-//! out. The time a code is checked at comes from the caller, which reads the controllable clock.
+//! out. A [`Secret`]'s bytes are wiped when it is dropped, and so are the decrypted bytes
+//! [`Secret::from_decrypted`] takes. The time a code is checked at comes from the caller, which reads the controllable clock.
 
 use std::{fmt, time::SystemTime};
 
@@ -26,6 +27,7 @@ use data_encoding::BASE32_NOPAD;
 use hmac::{Hmac, KeyInit, Mac};
 use sha1::Sha1;
 use subtle::ConstantTimeEq;
+use zeroize::Zeroize;
 
 use crate::token::{RandomError, TokenHash, random_bytes};
 
@@ -60,9 +62,17 @@ impl Secret {
         Ok(Self(random_bytes()?))
     }
 
-    /// A secret from its bytes, as stored after decryption.
+    /// A secret from its bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, MalformedSecret> {
         bytes.try_into().map(Self).map_err(|_| MalformedSecret)
+    }
+
+    /// A secret from the bytes decryption returned, which are wiped whether or not they are a
+    /// secret.
+    pub fn from_decrypted(mut bytes: Vec<u8>) -> Result<Self, MalformedSecret> {
+        let secret = Self::from_bytes(&bytes);
+        bytes.zeroize();
+        secret
     }
 
     /// The bytes, to encrypt for storage. Never log them.
@@ -125,6 +135,12 @@ impl Secret {
             value /= 10;
         }
         code
+    }
+}
+
+impl Drop for Secret {
+    fn drop(&mut self) {
+        self.0.zeroize();
     }
 }
 
@@ -365,6 +381,9 @@ mod tests {
         let back = Secret::from_bytes(one.expose_bytes()).unwrap();
         assert_eq!(back.expose_bytes(), one.expose_bytes());
         assert!(Secret::from_bytes(&[0; 19]).is_err());
+        let decrypted = Secret::from_decrypted(one.expose_bytes().to_vec()).unwrap();
+        assert_eq!(decrypted.expose_bytes(), one.expose_bytes());
+        assert!(Secret::from_decrypted(vec![0; 21]).is_err());
     }
 
     #[test]

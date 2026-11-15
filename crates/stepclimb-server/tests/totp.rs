@@ -22,7 +22,7 @@ use axum::{
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use stepclimb_auth::{encryption::KeyRing, password, totp::Secret};
+use stepclimb_auth::{encryption::KeyRing, password, token::Token, totp::Secret};
 use stepclimb_core::{
     OrgScope, Source,
     audit::{self, Actor},
@@ -30,6 +30,7 @@ use stepclimb_core::{
     id::Uuid,
     local_logins,
     local_sign_in::{self, LocalMethods, LocalSignIn},
+    local_tokens::{self, Origin},
     organizations,
     users::{self, NewUser, Status},
 };
@@ -50,6 +51,7 @@ const TOTP: &str = "/auth/local/totp";
 const MY_TOTP: &str = "/api/v1/me/totp";
 const CONFIRM: &str = "/api/v1/me/totp/confirm";
 const DISABLE: &str = "/api/v1/me/totp/disable";
+const ENROLL: &str = "/auth/local/enrollment/password";
 
 const EMAIL: &str = "sam@example.test";
 const PASSWORD: &str = "correct horse battery staple";
@@ -791,19 +793,64 @@ async fn the_totp_routes_log_no_secret(pool: PgPool) {
 
     let text = log.text();
     assert!(text.contains("TOTP sign-in"), "the capture missed the log");
+    // Long secrets cannot appear by chance: the whole log is searched for them.
     let mut secrets = vec![
         sam.secret.expose_base32(),
-        sam.secret.code_at_time(now()),
-        code,
-        disable_code,
         PASSWORD.to_owned(),
-        flow.split_once('=').unwrap().1.to_owned(),
+        flow.split_once('=').expect("a pair").1.to_owned(),
     ];
     secrets.extend(sam.recovery_codes.iter().cloned());
     secrets.extend(sam.recovery_codes.iter().map(|c| c.replace('-', "")));
-    for secret in secrets {
-        assert!(!text.contains(&secret), "the log holds {secret:?}");
+    for secret in &secrets {
+        assert!(!text.contains(secret.as_str()), "the log holds {secret:?}");
     }
+    // Six digits could appear by chance inside a timestamp or an id, so the codes are looked
+    // for as whole values: every field of every event but its timestamp, as a token with no
+    // letter or digit beside it.
+    let codes = [sam.secret.code_at_time(now()), code, disable_code];
+    for line in text.lines() {
+        let event: Value = serde_json::from_str(line).expect("a JSON log line");
+        let mut values = Vec::new();
+        field_values(&event, &mut values);
+        for code in &codes {
+            let leaked = values.iter().find(|value| holds_token(value, code));
+            assert!(leaked.is_none(), "the log holds the code {code:?}: {line}");
+        }
+    }
+}
+
+/// Every string and number in `value`, but under a `timestamp` key, as text.
+fn field_values(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::Object(members) => members
+            .iter()
+            .filter(|(key, _)| key.as_str() != "timestamp")
+            .for_each(|(_, member)| field_values(member, out)),
+        Value::Array(items) => items.iter().for_each(|item| field_values(item, out)),
+        Value::String(text) => out.push(text.clone()),
+        Value::Number(number) => out.push(number.to_string()),
+        Value::Bool(_) | Value::Null => {}
+    }
+}
+
+/// Whether `token` appears in `text` with no letter or digit right before or after it.
+fn holds_token(text: &str, token: &str) -> bool {
+    text.match_indices(token).any(|(at, _)| {
+        let before = text[..at].chars().next_back();
+        let after = text[at + token.len()..].chars().next();
+        !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
+    })
+}
+
+#[test]
+fn a_code_is_found_only_as_a_whole_token() {
+    assert!(holds_token("123456", "123456"));
+    assert!(holds_token("code=123456 sent", "123456"));
+    assert!(!holds_token("2025-11-13T02:13:20.1234567Z", "123456"));
+    assert!(!holds_token(
+        "01900000-0000-7000-8000-a123456b0000",
+        "123456"
+    ));
 }
 
 #[derive(Clone, Default)]
@@ -826,4 +873,121 @@ impl Write for Captured {
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
+}
+
+/// Decision 7 of the PR (B9, B19): a password reset through an enrollment link signs in without
+/// a code, TOTP stays confirmed, and the next password sign-in asks for the code again.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_enrollment_link_reset_keeps_totp(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let sam = f.enrolled().await;
+    let token = Token::generate().expect("a token");
+    local_tokens::create_enrollment(
+        &f.pool,
+        scope(f.org),
+        sam.id,
+        token.hash().as_bytes(),
+        Origin::Bootstrap,
+        f.clock.clock().now(),
+        Actor::Instance,
+    )
+    .await
+    .expect("create a link");
+    let body = json!({ "token": token.expose_secret(), "password": OTHER_PASSWORD });
+    let reset = f.send(Method::POST, ENROLL, None, Some(body)).await;
+    assert_eq!(reset.status, StatusCode::OK, "{reset:?}");
+    assert_eq!(reset.body, json!({ "return_to": "/" }));
+    assert!(
+        reset.session().is_some(),
+        "the link signs in without a code"
+    );
+    let confirmed: bool = sqlx::query_scalar(
+        "SELECT totp_confirmed_at IS NOT NULL FROM local_logins WHERE user_id = $1",
+    )
+    .bind(sam.id)
+    .fetch_one(&f.pool)
+    .await
+    .expect("the login");
+    assert!(confirmed, "TOTP stays confirmed");
+
+    let next = f.sign_in(OTHER_PASSWORD).await;
+    assert_eq!(next.body, json!({ "next": "totp" }), "{next:?}");
+    assert!(next.session().is_none());
+    let signed_in = f
+        .code_step(&next.flow().expect("a flow"), &f.code(&sam))
+        .await;
+    assert_eq!(signed_in.status, StatusCode::OK, "{signed_in:?}");
+}
+
+/// B20: TOTP disabled between the two steps ends the waiting sign-in with 400
+/// `auth.flow_invalid`, not a code refusal.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn totp_disabled_between_the_steps_ends_the_sign_in(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let sam = f.enrolled().await;
+    let flow = f.password_step().await;
+    let disabled = f.disable(&sam.session, &f.code(&sam)).await;
+    assert_eq!(disabled.status, StatusCode::NO_CONTENT, "{disabled:?}");
+    f.clock.advance(STEP);
+    let refused = f.code_step(&flow, &f.code(&sam)).await;
+    assert_eq!(
+        (refused.status, refused.code()),
+        (StatusCode::BAD_REQUEST, "auth.flow_invalid"),
+        "{refused:?}"
+    );
+    assert!(refused.session().is_none());
+}
+
+/// Waits until `n` sessions of this test's database wait on a row or transaction lock.
+async fn until_waiting(pool: &PgPool, n: i64) {
+    for _ in 0..500 {
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("read pg_stat_activity");
+        if waiting >= n {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("{n} sessions did not wait on a lock within 5 s");
+}
+
+/// B20, RFC 6238 section 5.2: the same code sent twice at once, from two password steps, signs
+/// in once. The test holds the login's row lock until both requests wait, so they reach the
+/// check together; the other is refused with 401 `auth.totp_invalid`.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_same_code_sent_twice_at_once_signs_in_once(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let sam = f.enrolled().await;
+    let (first, second) = (f.password_step().await, f.password_step().await);
+    let code = f.code(&sam);
+    let mut holder = f.pool.begin().await.expect("a transaction");
+    sqlx::query("SELECT 1 FROM local_logins WHERE user_id = $1 FOR UPDATE")
+        .bind(sam.id)
+        .execute(&mut *holder)
+        .await
+        .expect("lock the login");
+    let both = async { tokio::join!(f.code_step(&first, &code), f.code_step(&second, &code)) };
+    let release = async {
+        until_waiting(&f.pool, 2).await;
+        holder.commit().await.expect("release the lock");
+    };
+    let ((one, two), ()) = tokio::join!(both, release);
+    let mut outcomes = [
+        (one.status, one.code().to_owned()),
+        (two.status, two.code().to_owned()),
+    ];
+    outcomes.sort();
+    assert_eq!(
+        outcomes,
+        [
+            (StatusCode::OK, String::new()),
+            (StatusCode::UNAUTHORIZED, "auth.totp_invalid".to_owned()),
+        ],
+        "{one:?} {two:?}"
+    );
 }
