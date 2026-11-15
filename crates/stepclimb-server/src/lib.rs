@@ -47,6 +47,7 @@ pub mod config;
 mod cookie;
 pub mod csrf;
 pub mod device;
+pub mod discovery;
 pub mod enrollment;
 pub mod entitlements;
 pub mod error;

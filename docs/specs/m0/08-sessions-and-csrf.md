@@ -311,6 +311,31 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   configuration beyond those three fields. Branding and `theme.css` fields are added by the spec
   that owns them (see Out of scope).
 
+  Coordinator decisions (2026-11-15), for issue I9, on the owner's delegation:
+
+  - **The local entry.** `sign_in` lists local sign-in first, as one entry `{key: "local", kind:
+    "local", label: null, methods: [...]}` whose `methods` are `LocalSignIn::offered()`
+    (`04-local-accounts.md` B2) in the order `passkey`, `password`, `totp`, `magic_link`. It is
+    absent when that list is empty: the local row disabled, or no primary method on (TOTP alone
+    offers nothing). The outside providers follow, sorted by key, each exactly `{key, kind,
+    label}`; only provider entries never carry `methods`. An organization that offers nothing
+    answers `sign_in: []`.
+  - **`label`** is the string `label` member of the provider's config, and `null` when it has
+    none or it is not a string, as `03-users-and-identities.md` B23 reads it. Local sign-in's
+    labels are the web app's strings, so its `label` is always `null`.
+  - **No `oauth` field yet.** The authorization, token and revocation endpoints are issues I7
+    and I8, which have not landed. Listing URLs that answer 404 would point the M5 app at
+    nothing, so the document leaves `oauth` out and I7 or I8 adds it with the endpoints.
+  - **`theme`** (`11-app-shell.md` Q4) is `{stylesheet}`, the absolute URL
+    `<STEPCLIMB_PUBLIC_URL>/theme.css?v=<SHA-256>` of the stylesheet `/theme.css` serves the
+    organization, the same hash the served page links; a stored hash that is not 64 lowercase
+    hex digits leaves the `?v=` out, as the page does.
+  - **Caching.** The document answers `Cache-Control: no-cache`: a switched-off method or a saved
+    branding change must show on the next read, and the document holds nothing personal.
+  - **Organization.** `RequestOrg` picks it, so no organization answers 503 `org.none` and two or
+    more 404 `org.not_found`, as every unauthenticated route does. Nothing in the document is an
+    internal id.
+
 ## API
 
 Every endpoint has `#[utoipa::path]` and appears in `openapi/stepclimb.json`. Errors are RFC
@@ -320,7 +345,7 @@ Every endpoint has `#[utoipa::path]` and appears in `openapi/stepclimb.json`. Er
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
 | `POST /auth/sign-out` | none (cookie) | 204, cookie cleared | `auth.csrf_refused` | none |
-| `GET /.well-known/stepclimb` | none | 200 `{name, sign_in: [{key, kind, label}], oauth: {authorization_endpoint, token_endpoint, revocation_endpoint}}` | none | none |
+| `GET /.well-known/stepclimb` | none | 200 `{name, sign_in: [{key, kind, label, methods?}], theme: {stylesheet}}`; `oauth: {authorization_endpoint, token_endpoint, revocation_endpoint}` joins it with I7 and I8 (B38) | `org.not_found`, `org.none` | none |
 | `GET /oauth/authorize` (path pending Q10) | query `client_id, redirect_uri, code_challenge, code_challenge_method, state` | 302 to sign-in, or 302 to `redirect_uri?code&state`; HTML error page on client or redirect mismatch | `oauth.client_unknown`, `oauth.redirect_uri_mismatch`, `oauth.pkce_required` | browser session (or sign-in first) |
 | `POST /oauth/token` | form: `grant_type=authorization_code, code, redirect_uri, client_id, code_verifier` or `grant_type=refresh_token, refresh_token, client_id` | 200 `{access_token, token_type: "Bearer", expires_in: 900, refresh_token}` | `invalid_request`, `invalid_client`, `invalid_grant`, `unsupported_grant_type` (format Q13), `auth.rate_limited` | none (client is public) |
 | `POST /oauth/revoke` | form: `token, token_type_hint?, client_id` | 200 | `invalid_request`, `auth.rate_limited` | none |

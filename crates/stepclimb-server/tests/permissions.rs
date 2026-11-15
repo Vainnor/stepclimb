@@ -113,6 +113,7 @@ const PUBLIC: &[&str] = &[
     "readyz",
     "signOut",
     "getThemeCss",
+    "getDiscovery",
     "startEnrollment",
     "enrollPasskey",
     "startPasskeySignIn",

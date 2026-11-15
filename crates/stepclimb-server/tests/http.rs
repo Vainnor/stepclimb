@@ -172,6 +172,7 @@ async fn the_openapi_document_is_3_1_and_lists_every_route() {
     assert_eq!(
         paths,
         [
+            "/.well-known/stepclimb",
             "/api/v1/accounts",
             "/api/v1/accounts/{account_id}",
             "/api/v1/accounts/{account_id}/move",

@@ -13,7 +13,15 @@ import { defineConfig } from "vitest/config";
 const server = process.env.SC_DEV_SERVER ?? "http://127.0.0.1:8080";
 
 /** The paths the server answers, which the dev server passes on to it. */
-export const proxied = ["/healthz", "/readyz", "/theme.css", "/auth", "/api", "/docs"];
+export const proxied = [
+  "/healthz",
+  "/readyz",
+  "/theme.css",
+  "/.well-known/stepclimb",
+  "/auth",
+  "/api",
+  "/docs",
+];
 
 /**
  * The default brand's stylesheet as `dist/theme.css`, for a build that runs without a server (the

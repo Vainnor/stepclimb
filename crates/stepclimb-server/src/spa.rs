@@ -125,7 +125,7 @@ async fn page_appearance(state: &AppState, parts: &mut Parts) -> Appearance {
 }
 
 /// A SHA-256 as the branding record stores it: 64 lowercase hex digits.
-fn is_css_hash(hash: &str) -> bool {
+pub(crate) fn is_css_hash(hash: &str) -> bool {
     hash.len() == 64 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 

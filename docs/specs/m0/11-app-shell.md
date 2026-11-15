@@ -482,8 +482,8 @@ Coordinator decisions (2026-11-14), on the owner's delegation, while building I2
   default brand's stylesheet for `org.none` instead of 503, because with Q5 the page has no
   other colors and the "no organization yet" screen must still be drawn. Two or more
   organizations still answer 404 `org.not_found`.
-- **The `theme` field of `/.well-known/stepclimb` (Q4)** joins that route when 08 I9 builds it;
-  the route does not exist yet.
+- **The `theme` field of `/.well-known/stepclimb` (Q4)** is `{stylesheet}`, the absolute URL
+  `<public URL>/theme.css?v=<hash>` (08 B38, coordinator decision 2026-11-15, issue I9).
 - **The bundle without color variables (Q5).** `@stepclimb/tokens` builds `structure.css`, every
   variable no theme sets (space, type, control heights, motion, the pill radius, the floating
   shadow, compact density), and `theme.css`, the default brand's stylesheet. `@stepclimb/ui/app.css`
@@ -522,8 +522,9 @@ Coordinator decisions (2026-11-15), on the owner's delegation, while building I5
 - **Only the methods with server routes.** The screens drive enrollment by link, passkey
   registration and passkey sign-in (04 I2 to I4). Password, TOTP and the magic link arrive with
   04 I6 to I8, and provider buttons with 05 and 06; each adds its step route under `/sign-in`.
-- **No discovery document yet.** `/.well-known/stepclimb` (08 I9) does not exist, so the sign-in
-  screen cannot read the organization's methods or name (B13). Until it lands, `/sign-in` offers
+- **The screen does not read the discovery document yet.** The server serves
+  `/.well-known/stepclimb` (08 I9), but the sign-in screen reads the organization's methods and
+  name from it (B13) only with issue #171. Until then, `/sign-in` offers
   the local email and passkey steps, and the passkey start route's 404 `auth.method_disabled`
   tells the screen the method is off, which it shows as B17's message. The signed-out layout keeps
   the product name. T6 is tested with 08 I9.

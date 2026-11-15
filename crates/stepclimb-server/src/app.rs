@@ -18,7 +18,7 @@ use utoipa_scalar::{Scalar, Servable};
 use crate::{
     accounts, admission_settings, appearance, auth, branding,
     csrf::{self, OriginAllowlist},
-    enrollment,
+    discovery, enrollment,
     error::ApiError,
     health, identities, local_sign_in, me, my_passkeys, openapi, organization, passkey_enrollment,
     passkey_sign_in, password,
@@ -117,6 +117,7 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         ("/healthz", get(health::healthz)),
         ("/readyz", get(health::readyz)),
         ("/auth/sign-out", post(auth::sign_out)),
+        (discovery::DISCOVERY_PATH, get(discovery::get_discovery)),
         (
             enrollment::ENROLLMENT_START_PATH,
             post(enrollment::start_enrollment),
