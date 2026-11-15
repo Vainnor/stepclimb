@@ -14,7 +14,14 @@ use serde::de::DeserializeOwned;
 
 use crate::error::ApiError;
 
+mod maps_only;
+
+use maps_only::MapsOnly;
+
 /// A JSON request body: 415 when it is not JSON, 400 when it does not parse or match `T`.
+///
+/// Every struct in `T`, at any depth, must be a JSON object: an array in its fields' order is
+/// a 400 too ([`maps_only`]), so the order of a body type's fields is not part of the API.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ApiJson<T>(pub T);
 
@@ -26,7 +33,7 @@ where
     type Rejection = ApiError;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        let Json(value) = Json::<T>::from_request(req, state).await?;
+        let Json(MapsOnly(value)) = Json::<MapsOnly<T>>::from_request(req, state).await?;
         Ok(Self(value))
     }
 }
