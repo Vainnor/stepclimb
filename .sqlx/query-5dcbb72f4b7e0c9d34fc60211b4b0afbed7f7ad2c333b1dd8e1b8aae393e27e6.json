@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO local_logins (user_id, org_id, email_normalized, password_hash,\n                                     password_changed_at, created_at, updated_at)\n           SELECT u.id, u.org_id, lower(u.email), $3,\n                  timestamptz 'epoch' + $4::bigint * interval '1 microsecond',\n                  timestamptz 'epoch' + $4::bigint * interval '1 microsecond',\n                  timestamptz 'epoch' + $4::bigint * interval '1 microsecond'\n           FROM users u\n           WHERE u.org_id = $1 AND u.id = $2\n           ON CONFLICT (user_id) DO UPDATE\n           SET password_hash = EXCLUDED.password_hash,\n               password_changed_at = EXCLUDED.password_changed_at,\n               updated_at = EXCLUDED.updated_at\n           RETURNING user_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "local_logins",
+            "name": "user_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5dcbb72f4b7e0c9d34fc60211b4b0afbed7f7ad2c333b1dd8e1b8aae393e27e6"
+}

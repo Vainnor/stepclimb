@@ -22,7 +22,10 @@ use stepclimb_core::{
 };
 use tokio::net::TcpListener;
 
-use crate::{AppState, Config, flow, providers::Providers, rate_limit::RateLimiter, router};
+use crate::{
+    AppState, Config, flow, password_hasher::PasswordHasher, providers::Providers,
+    rate_limit::RateLimiter, router,
+};
 
 /// How long a request waits for a database connection from the pool.
 pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -271,6 +274,7 @@ pub async fn serve_on(
         allowed_origins: config.allowed_origins,
         rate_limits,
         providers,
+        passwords: PasswordHasher::default(),
     };
     axum::serve(
         listener,

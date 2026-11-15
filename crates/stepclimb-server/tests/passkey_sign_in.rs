@@ -437,6 +437,7 @@ fn state(pool: &PgPool, clock: &ManualClock) -> AppState {
         public_url: WebOrigin::parse(ORIGIN).expect("a valid origin"),
         allowed_origins: Vec::new(),
         rate_limits: RateLimiter::new(Limits::DEFAULT, TrustedProxies::none()),
+        passwords: Default::default(),
         providers: stepclimb_server::providers::Providers::new(false).expect("provider clients"),
     }
 }

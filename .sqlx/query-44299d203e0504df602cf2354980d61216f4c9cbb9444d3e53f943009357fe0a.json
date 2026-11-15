@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE local_logins\n         SET password_hash = $4,\n             updated_at = timestamptz 'epoch' + $5::bigint * interval '1 microsecond'\n         WHERE org_id = $1 AND user_id = $2 AND password_hash = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "44299d203e0504df602cf2354980d61216f4c9cbb9444d3e53f943009357fe0a"
+}

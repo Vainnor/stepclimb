@@ -21,7 +21,9 @@ use crate::{
     enrollment,
     error::ApiError,
     health, identities, local_sign_in, me, my_passkeys, openapi, organization, passkey_enrollment,
-    passkey_sign_in, provider_callback, provider_sign_in,
+    passkey_sign_in, password,
+    password_hasher::PasswordHasher,
+    provider_callback, provider_sign_in,
     providers::Providers,
     rate_limit::RateLimiter,
     role_assignments, roles, spa, users,
@@ -45,6 +47,9 @@ pub struct AppState {
     /// The outbound clients for identity providers and their discovery cache
     /// (`allow_insecure_providers`).
     pub providers: Providers,
+    /// The argon2id hasher every password check and new password goes through, at most four
+    /// at once.
+    pub passwords: PasswordHasher,
 }
 
 /// The `Strict-Transport-Security` value: one year, for this host only. Subdomains of the
@@ -129,6 +134,14 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
             post(passkey_sign_in::finish_passkey_sign_in),
         ),
         (
+            password::ENROLLMENT_PASSWORD_PATH,
+            post(password::enroll_password),
+        ),
+        (
+            password::PASSWORD_SIGN_IN_PATH,
+            post(password::sign_in_with_password),
+        ),
+        (
             provider_sign_in::START_PATH,
             get(provider_sign_in::start_provider_sign_in),
         ),
@@ -141,6 +154,10 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         (
             appearance::MY_APPEARANCE_PATH,
             put(appearance::update_my_appearance),
+        ),
+        (
+            password::MY_PASSWORD_PATH,
+            put(password::change_my_password),
         ),
         (
             identities::MY_IDENTITIES_PATH,

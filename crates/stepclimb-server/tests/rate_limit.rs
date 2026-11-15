@@ -21,7 +21,7 @@ use axum::{
 use http_body_util::BodyExt;
 use sqlx::postgres::PgPoolOptions;
 use stepclimb_auth::encryption::KeyRing;
-use stepclimb_core::{OrgScope, clock::ManualClock, id::Uuid};
+use stepclimb_core::{OrgScope, clock::ManualClock, id::Uuid, local_logins::LoginEmail};
 use stepclimb_server::{
     AppState, Config,
     client_ip::TrustedProxies,
@@ -86,10 +86,15 @@ async fn password(
 ) -> Response {
     let account = headers["x-account"].to_str().expect("an ASCII account");
     let now = fixture.app.clock.now();
-    let check = match fixture.app.rate_limits.account_check(scope(), account, now) {
-        Ok(check) => check,
-        Err(refused) => return refused.into_response(),
-    };
+    let check =
+        match fixture
+            .app
+            .rate_limits
+            .account_check(scope(), &LoginEmail::for_test(account), now)
+        {
+            Ok(check) => check,
+            Err(refused) => return refused.into_response(),
+        };
     fixture.ran.fetch_add(1, Ordering::SeqCst);
     if headers["x-password"] == "right" {
         check.passed();
@@ -122,6 +127,7 @@ fn setup(limits: Limits, trusted: &str) -> Setup {
         public_url: WebOrigin::parse("https://lms.example.org").expect("a valid origin"),
         allowed_origins: Vec::new(),
         rate_limits: RateLimiter::new(limits, trusted),
+        passwords: Default::default(),
         providers: stepclimb_server::providers::Providers::new(false).expect("provider clients"),
     };
     let ran = Arc::new(AtomicUsize::new(0));

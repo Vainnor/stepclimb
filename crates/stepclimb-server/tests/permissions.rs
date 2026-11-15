@@ -117,6 +117,8 @@ const PUBLIC: &[&str] = &[
     "enrollPasskey",
     "startPasskeySignIn",
     "finishPasskeySignIn",
+    "enrollPassword",
+    "signInWithPassword",
     "startProviderSignIn",
     "finishProviderSignIn",
 ];
@@ -314,6 +316,10 @@ const TABLE: &[Entry] = &[
         },
     },
     Entry {
+        operation_id: "changeMyPassword",
+        access: Access::Mine(password_of_caller),
+    },
+    Entry {
         operation_id: "getBranding",
         access: permission(BrandingManage::KEY, Target::Org, at_org),
     },
@@ -349,6 +355,31 @@ fn passkey_of_caller(org: &Org, caller: Uuid) -> Pin<Box<dyn Future<Output = Min
         Mine::call(Call {
             params: Vec::new(),
             body: None,
+            at: At::Org,
+        })
+    })
+}
+
+/// The caller's password, and the body that changes it.
+fn password_of_caller(org: &Org, caller: Uuid) -> Pin<Box<dyn Future<Output = Mine> + Send + '_>> {
+    Box::pin(async move {
+        let hash = stepclimb_auth::password::hash("correct horse battery staple").expect("a hash");
+        stepclimb_core::local_logins::set_password(
+            &org.pool,
+            scope(org.id),
+            caller,
+            hash.as_str(),
+            now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("set the password");
+        Mine::call(Call {
+            params: Vec::new(),
+            body: Some(serde_json::json!({
+                "current_password": "correct horse battery staple",
+                "new_password": "tremendous violet umbrella",
+            })),
             at: At::Org,
         })
     })
@@ -1109,7 +1140,8 @@ async fn public_request(world: &World, org: &Org, id: &str) -> (Option<Value>, O
             );
         }
         "finishPasskeySignIn" => return passkey_sign_in_request(world, org).await,
-        "startEnrollment" | "enrollPasskey" => {}
+        "signInWithPassword" => return password_sign_in_request(org).await,
+        "startEnrollment" | "enrollPasskey" | "enrollPassword" => {}
         _ => return (None, None),
     }
     let (_, user) = org
@@ -1129,6 +1161,11 @@ async fn public_request(world: &World, org: &Org, id: &str) -> (Option<Value>, O
     let (_, token) = link.expose_url().split_once("#token=").expect("a token");
     if id == "startEnrollment" {
         return (Some(serde_json::json!({ "token": token })), None);
+    }
+    if id == "enrollPassword" {
+        let body =
+            serde_json::json!({ "token": token, "password": "correct horse battery staple" });
+        return (Some(body), None);
     }
     let mut conn = world.pool.acquire().await.expect("a connection");
     let hash = stepclimb_auth::token::TokenHash::of(token);
@@ -1160,6 +1197,27 @@ async fn public_request(world: &World, org: &Org, id: &str) -> (Option<Value>, O
     let cookie = cookie.split(';').next().expect("a pair").to_owned();
     let body = serde_json::json!({ "token": token, "credential": credential });
     (Some(body), Some(cookie))
+}
+
+/// A user with a password, and the body that signs in with it.
+async fn password_sign_in_request(org: &Org) -> (Option<Value>, Option<String>) {
+    let email = "password@example.test";
+    let (_, user) = org
+        .named_user("Pat Example".into(), Some(email.into()))
+        .await;
+    let hash = stepclimb_auth::password::hash("correct horse battery staple").expect("a hash");
+    stepclimb_core::local_logins::set_password(
+        &org.pool,
+        scope(org.id),
+        user,
+        hash.as_str(),
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .expect("set the password");
+    let body = serde_json::json!({ "email": email, "password": "correct horse battery staple" });
+    (Some(body), None)
 }
 
 /// A user with a software passkey, a started sign-in for them, and the passkey's assertion:
@@ -2156,6 +2214,7 @@ fn state_for(pool: &PgPool) -> AppState {
         rate_limits: Default::default(),
         // The insecure switch on, as the test setup sets it (spec 05 Q4): the mock IdP of the
         // provider sign-in case listens on http loopback.
+        passwords: Default::default(),
         providers: stepclimb_server::providers::Providers::new(true).expect("provider clients"),
     }
 }

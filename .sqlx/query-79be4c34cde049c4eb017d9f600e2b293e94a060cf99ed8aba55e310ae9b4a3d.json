@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT lower($2::text) AS \"normalized!\", l.user_id AS \"user_id?\",\n                  l.password_hash AS \"password_hash?\"\n           FROM (VALUES (1)) AS one (n)\n           LEFT JOIN local_logins l ON l.org_id = $1 AND l.email_normalized = lower($2::text)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "normalized!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id?",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "local_logins",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "password_hash?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "local_logins",
+            "name": "password_hash"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      true,
+      true
+    ]
+  },
+  "hash": "79be4c34cde049c4eb017d9f600e2b293e94a060cf99ed8aba55e310ae9b4a3d"
+}

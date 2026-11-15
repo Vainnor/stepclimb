@@ -58,6 +58,7 @@ pub enum Action {
     PasskeyCreate,
     PasskeyRename,
     PasskeyDelete,
+    PasswordSet,
 }
 
 impl Action {
@@ -86,6 +87,7 @@ impl Action {
             Self::PasskeyCreate => "passkey.create",
             Self::PasskeyRename => "passkey.rename",
             Self::PasskeyDelete => "passkey.delete",
+            Self::PasswordSet => "password.set",
         }
     }
 
@@ -107,6 +109,8 @@ impl Action {
             Self::IdentityProviderUpdate => "identity_provider",
             Self::EnrollmentLinkCreate => "enrollment_link",
             Self::PasskeyCreate | Self::PasskeyRename | Self::PasskeyDelete => "passkey",
+            // A password has no row id of its own; the entry names its user.
+            Self::PasswordSet => "password",
         }
     }
 }
@@ -244,7 +248,7 @@ impl TryFrom<Row> for Entry {
 mod tests {
     use super::*;
 
-    const ALL: [Action; 21] = [
+    const ALL: [Action; 22] = [
         Action::RoleCreate,
         Action::RoleUpdate,
         Action::RoleDelete,
@@ -266,6 +270,7 @@ mod tests {
         Action::PasskeyCreate,
         Action::PasskeyRename,
         Action::PasskeyDelete,
+        Action::PasswordSet,
     ];
 
     #[test]

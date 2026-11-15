@@ -38,7 +38,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use sha2::{Digest, Sha256};
-use stepclimb_core::OrgScope;
+use stepclimb_core::{OrgScope, local_logins::LoginEmail};
 
 use crate::{AppState, client_ip::TrustedProxies, error::ApiError};
 
@@ -228,13 +228,23 @@ impl RateLimiter {
             .map(|_| ())
     }
 
-    /// Start a password or TOTP check for `identifier` in `scope`'s organization. The check
-    /// counts as a failure from now on, so parallel guesses cannot all pass before the first
-    /// failure is recorded; [`AccountCheck::passed`] takes it back after a success. Refused
-    /// when the account's failures in the window have reached the limit: run no check then,
-    /// right or wrong. `identifier` is what the sign-in method matches the account by, already
-    /// normalized the way that match is.
+    /// Start a password or TOTP check for the account `email` names in `scope`'s organization.
+    /// The check counts as a failure from now on, so parallel guesses cannot all pass before the
+    /// first failure is recorded; [`AccountCheck::passed`] takes it back after a success.
+    /// Refused when the account's failures in the window have reached the limit: run no check
+    /// then, right or wrong. The identifier is a [`LoginEmail`], the one normalized form the
+    /// sign-in methods match accounts by (spec 08 B41), so `Ada@example.org` and
+    /// `ada@example.org` share one budget.
     pub fn account_check(
+        &self,
+        scope: OrgScope,
+        email: &LoginEmail,
+        now: SystemTime,
+    ) -> Result<AccountCheck, TooManyRequests> {
+        self.check_identifier(scope, email.as_str(), now)
+    }
+
+    fn check_identifier(
         &self,
         scope: OrgScope,
         identifier: &str,
@@ -569,15 +579,18 @@ mod tests {
     fn failed_checks_share_the_account_budget_across_addresses() {
         let limiter = limiter(20, 60, 2);
         for _ in 0..2 {
-            drop(limiter.account_check(scope(1), "ada", at(0)).unwrap());
+            drop(limiter.check_identifier(scope(1), "ada", at(0)).unwrap());
         }
-        let refused = limiter.account_check(scope(1), "ada", at(1)).err().unwrap();
+        let refused = limiter
+            .check_identifier(scope(1), "ada", at(1))
+            .err()
+            .unwrap();
         assert_eq!(refused.retry_after(), 899);
         // Another account, or the same name in another organization, is untouched.
-        assert!(limiter.account_check(scope(1), "grace", at(1)).is_ok());
-        assert!(limiter.account_check(scope(2), "ada", at(1)).is_ok());
+        assert!(limiter.check_identifier(scope(1), "grace", at(1)).is_ok());
+        assert!(limiter.check_identifier(scope(2), "ada", at(1)).is_ok());
         // The window closes 15 minutes after the first failure.
-        assert!(limiter.account_check(scope(1), "ada", at(900)).is_ok());
+        assert!(limiter.check_identifier(scope(1), "ada", at(900)).is_ok());
     }
 
     #[test]
@@ -585,39 +598,39 @@ mod tests {
         let limiter = limiter(20, 60, 2);
         for _ in 0..5 {
             limiter
-                .account_check(scope(1), "ada", at(0))
+                .check_identifier(scope(1), "ada", at(0))
                 .unwrap()
                 .passed();
         }
-        drop(limiter.account_check(scope(1), "ada", at(0)).unwrap());
-        drop(limiter.account_check(scope(1), "ada", at(0)).unwrap());
-        assert!(limiter.account_check(scope(1), "ada", at(0)).is_err());
+        drop(limiter.check_identifier(scope(1), "ada", at(0)).unwrap());
+        drop(limiter.check_identifier(scope(1), "ada", at(0)).unwrap());
+        assert!(limiter.check_identifier(scope(1), "ada", at(0)).is_err());
     }
 
     #[test]
     fn checks_in_flight_count_before_they_finish() {
         let limiter = limiter(20, 60, 2);
-        let first = limiter.account_check(scope(1), "ada", at(0)).unwrap();
-        let second = limiter.account_check(scope(1), "ada", at(0)).unwrap();
-        assert!(limiter.account_check(scope(1), "ada", at(0)).is_err());
+        let first = limiter.check_identifier(scope(1), "ada", at(0)).unwrap();
+        let second = limiter.check_identifier(scope(1), "ada", at(0)).unwrap();
+        assert!(limiter.check_identifier(scope(1), "ada", at(0)).is_err());
         first.passed();
-        assert!(limiter.account_check(scope(1), "ada", at(0)).is_ok());
+        assert!(limiter.check_identifier(scope(1), "ada", at(0)).is_ok());
         drop(second);
     }
 
     #[test]
     fn a_pass_after_the_window_reopened_leaves_the_new_window_alone() {
         let limiter = limiter(20, 60, 1);
-        let old = limiter.account_check(scope(1), "ada", at(0)).unwrap();
-        drop(limiter.account_check(scope(1), "ada", at(900)).unwrap());
+        let old = limiter.check_identifier(scope(1), "ada", at(0)).unwrap();
+        drop(limiter.check_identifier(scope(1), "ada", at(900)).unwrap());
         old.passed();
-        assert!(limiter.account_check(scope(1), "ada", at(901)).is_err());
+        assert!(limiter.check_identifier(scope(1), "ada", at(901)).is_err());
     }
 
     #[test]
     fn closed_windows_are_swept_once_the_table_doubles() {
         let limiter = limiter(20, 60, 10);
-        drop(limiter.account_check(scope(1), "ada", at(0)).unwrap());
+        drop(limiter.check_identifier(scope(1), "ada", at(0)).unwrap());
         for n in 1..MIN_SWEEP as u32 {
             let client = IpAddr::V4(Ipv4Addr::from(n));
             limiter.hit_address(Class::SignIn, client, at(0)).unwrap();
@@ -688,8 +701,8 @@ mod tests {
         assert!(std::mem::size_of::<Key>() <= 40);
         // The two long identifiers keep separate budgets.
         let limiter = limiter(20, 60, 1);
-        drop(limiter.account_check(scope(1), &one, at(0)).unwrap());
-        assert!(limiter.account_check(scope(1), &one, at(0)).is_err());
-        assert!(limiter.account_check(scope(1), &other, at(0)).is_ok());
+        drop(limiter.check_identifier(scope(1), &one, at(0)).unwrap());
+        assert!(limiter.check_identifier(scope(1), &one, at(0)).is_err());
+        assert!(limiter.check_identifier(scope(1), &other, at(0)).is_ok());
     }
 }

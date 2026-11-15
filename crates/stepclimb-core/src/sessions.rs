@@ -286,6 +286,29 @@ pub async fn delete_by_token_hash(
     Ok(result.rows_affected() > 0)
 }
 
+/// Delete every session of the user `user_id` in the scope's organization except the one whose
+/// token hashes to `keep`, for a password change that ends the user's other sessions
+/// (docs/specs/m0/04-local-accounts.md B17, Q8). Returns how many were deleted.
+pub async fn delete_others_of_user(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    user_id: Uuid,
+    keep: &[u8; 32],
+) -> Result<u64, Error> {
+    let result = sqlx::query!(
+        r#"DELETE FROM sessions s
+           USING users u
+           WHERE u.id = s.user_id AND u.org_id = $1 AND s.user_id = $2
+             AND s.token_hash <> $3"#,
+        scope.org_id(),
+        user_id,
+        keep.as_slice(),
+    )
+    .execute(db)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::UNIX_EPOCH;

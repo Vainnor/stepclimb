@@ -10,7 +10,8 @@
 //! routes ([`role_assignments`]), the user admin routes under `/api/v1/users` ([`users`]),
 //! users' identities under `/api/v1/users/{user_id}/identities` and `/api/v1/me/identities`
 //! ([`identities`]), the signed-in user's passkeys under `/api/v1/me/passkeys`
-//! ([`my_passkeys`]), the signed-in user at
+//! ([`my_passkeys`]), password sign-in, enrollment and change ([`password`], hashed by
+//! [`password_hasher`], with the [`device`] cookie), the signed-in user at
 //! `GET /api/v1/me` ([`me`]) and their appearance choice at `PUT /api/v1/me/appearance`
 //! ([`appearance`]), the organization's branding at `/api/v1/admin/branding` and its
 //! stylesheet at `/theme.css` ([`branding`]), the OpenAPI document (`/api/openapi.json`) and its Scalar UI
@@ -45,6 +46,7 @@ pub mod client_ip;
 pub mod config;
 mod cookie;
 pub mod csrf;
+pub mod device;
 pub mod enrollment;
 pub mod entitlements;
 pub mod error;
@@ -64,6 +66,8 @@ pub mod pagination;
 pub mod passkey_enrollment;
 pub mod passkey_options;
 pub mod passkey_sign_in;
+pub mod password;
+pub mod password_hasher;
 pub mod provider_callback;
 pub mod provider_sign_in;
 pub mod providers;
