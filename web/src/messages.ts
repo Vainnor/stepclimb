@@ -4,6 +4,57 @@ import { type Catalog, uiMessages } from "@stepclimb/ui";
 
 export const webMessages: Catalog = {
   en: {
+    "account.cancel": "Cancel",
+    "account.passkeys.add": "Add a passkey",
+    "account.passkeys.add.description":
+      "Your browser will ask you to create the passkey with your device's fingerprint, face or screen lock, or with a security key.",
+    "account.passkeys.add.nameDescription":
+      "Optional. Name it after the device that holds it, so you can tell your passkeys apart.",
+    "account.passkeys.add.submit": "Create the passkey",
+    "account.passkeys.add.title": "Add a passkey",
+    "account.passkeys.added": "{name} added",
+    "account.passkeys.delete": "Delete",
+    "account.passkeys.delete.confirm": "Delete passkey",
+    "account.passkeys.delete.description":
+      "You can no longer sign in with this passkey. This cannot be undone.",
+    "account.passkeys.delete.title": "Delete {name}?",
+    "account.passkeys.deleteLabel": "Delete {name}",
+    "account.passkeys.deleted": "{name} deleted",
+    "account.passkeys.description":
+      "Passkeys let you sign in with your device's fingerprint, face or screen lock instead of a password.",
+    "account.passkeys.empty": "You have no passkeys yet.",
+    "account.passkeys.exists":
+      "This device already holds a passkey for your account. Use another device or a security key.",
+    "account.passkeys.name.empty": "Enter a name.",
+    "account.passkeys.name.invalid": "This name cannot be used. Try another one.",
+    "account.passkeys.name.label": "Name",
+    "account.passkeys.name.tooLong": "Use at most 200 characters.",
+    "account.passkeys.problem.flowExpired": "The passkey registration expired. Try again.",
+    "account.passkeys.problem.flowInvalid":
+      "This passkey registration was already finished or replaced by one in another tab. Try again.",
+    "account.passkeys.problem.lastMethod":
+      "This passkey is your last way to sign in, so it cannot be deleted. Add another passkey first, then delete this one.",
+    "account.passkeys.problem.methodDisabled":
+      "Your organization has turned off passkeys, so they cannot be shown or changed here. Ask an administrator how to sign in.",
+    "account.passkeys.problem.notAllowed":
+      "You sign in through an identity provider that does not let its users add passkeys, so you cannot add one. An administrator can change this in the provider's settings.",
+    "account.passkeys.problem.notFound":
+      "This passkey no longer exists. It may have been deleted in another tab.",
+    "account.passkeys.problem.passkeyInvalid":
+      "Stepclimb could not add that passkey. Try again, or use another device.",
+    "account.passkeys.rename": "Rename",
+    "account.passkeys.rename.submit": "Save name",
+    "account.passkeys.rename.title": "Rename passkey",
+    "account.passkeys.renameLabel": "Rename {name}",
+    "account.passkeys.title": "Passkeys",
+    "account.passkeys.unused": "Added {created, date, medium} · Not used to sign in yet",
+    "account.passkeys.used": "Added {created, date, medium} · Last used {lastUsed, date, medium}",
+    "account.problem.failed": "Something went wrong. Try again.",
+    "account.problem.unknown":
+      "Something went wrong. Try again. If it keeps happening, give an administrator this code:",
+    "account.problem.unreachable":
+      "Stepclimb could not reach the server. Check your connection, then try again.",
+    "account.title": "Account",
     "app.name": "Stepclimb",
     "appearance.density.comfortable": "Comfortable",
     "appearance.density.compact": "Compact",
@@ -45,6 +96,7 @@ export const webMessages: Catalog = {
     "loadError.title": "Could not load",
     "loadError.unreachable": "Check your connection, then try again.",
     "loadError.unreachableTitle": "The server could not be reached",
+    "nav.account": "Account",
     "nav.home": "Home",
     "notFound.description": "Check the address, or go to the home page.",
     "notFound.heading": "There is no page at {path}",
