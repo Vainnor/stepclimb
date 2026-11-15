@@ -109,7 +109,10 @@ const CLIENT: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1
 // The table.
 
 /// The operations that need no credential: the probes and the unauthenticated routes specs 04
-/// to 08 declare (B21).
+/// to 08 declare (B21). The OAuth 2.1 authorization endpoint (`authorizeApp`,
+/// `answerAppAuthorization`) needs no permission (spec 08 Permissions); it answers a missing
+/// session with sign-in or its error page rather than a 401 problem, and
+/// `tests/oauth_authorize.rs` covers its session, bearer and cross-organization cases.
 const PUBLIC: &[&str] = &[
     "healthz",
     "readyz",
@@ -125,6 +128,8 @@ const PUBLIC: &[&str] = &[
     "signInWithTotp",
     "startProviderSignIn",
     "finishProviderSignIn",
+    "authorizeApp",
+    "answerAppAuthorization",
 ];
 
 /// One entry per operation that needs a principal (B20). The M0 specs' routes add theirs here
@@ -1208,6 +1213,10 @@ async fn public_operations_answer_without_a_credential(pool: PgPool) {
             provider_callback_answers_without_a_credential(&app, &org).await;
             continue;
         }
+        if *id == "authorizeApp" || *id == "answerAppAuthorization" {
+            authorization_answers_without_a_credential(&app, &org).await;
+            continue;
+        }
         let (body, cookie) = public_request(&world, &org, id).await;
         let answer = send(
             &app,
@@ -1220,6 +1229,26 @@ async fn public_operations_answer_without_a_credential(pool: PgPool) {
         .await;
         assert!(answer.status.is_success(), "{id}: {answer:?}");
     }
+}
+
+/// The OAuth 2.1 authorization endpoint answers an anonymous browser without a 401 problem: a
+/// good request goes to sign-in carrying it, and an answer to the confirmation page shows the
+/// endpoint's own error page, since a browser navigation would show a problem body raw.
+async fn authorization_answers_without_a_credential(app: &Router, org: &Org) {
+    let request = "/oauth/authorize?response_type=code&client_id=stepclimb-app\
+                   &redirect_uri=http%3A%2F%2F127.0.0.1%3A43210%2Foauth%2Fcallback\
+                   &code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM\
+                   &code_challenge_method=S256";
+    let opened = send(app, &Method::GET, request, org.id, None, None).await;
+    assert_eq!(opened.status, StatusCode::SEE_OTHER, "{opened:?}");
+    let location = opened.headers[header::LOCATION].to_str().expect("ASCII");
+    assert!(location.starts_with("/sign-in?return_to="), "{location}");
+    let answered = send(app, &Method::POST, "/oauth/authorize", org.id, None, None).await;
+    assert_eq!(answered.status, StatusCode::BAD_REQUEST, "{answered:?}");
+    assert!(
+        answered.body.contains("<code>request.malformed</code>"),
+        "{answered:?}"
+    );
 }
 
 /// The provider sign-in start answers a redirect, not a 2xx: with an enabled provider of the

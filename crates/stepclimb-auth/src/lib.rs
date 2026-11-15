@@ -13,15 +13,17 @@
 //! mapping of both kinds, and [`json_pointer`], its pointers. For local
 //! accounts it has [`passkey`], the WebAuthn relying party that registers passkeys
 //! (`docs/specs/m0/04-local-accounts.md` B8), and [`password`], the password policy and its
-//! argon2id hashes, and [`totp`], TOTP codes and recovery codes (B19 to B21). Sessions, CSRF, API-key
-//! authentication, the sign-in methods and the OAuth 2.1 server arrive with the rest of that spec
-//! and specs 04 to 07.
+//! argon2id hashes, and [`totp`], TOTP codes and recovery codes (B19 to B21). For the OAuth 2.1
+//! server for Stepclimb's own apps it has [`oauth_server`], the client registry and the checks of
+//! an authorization request (spec 08 B30, B31). Sessions, CSRF and API-key authentication live in
+//! the server crate; the OAuth 2.1 token endpoint arrives with spec 08 I8.
 
 pub mod claims;
 pub mod encryption;
 pub mod json_pointer;
 pub mod oauth2_config;
 pub mod oauth2_flow;
+pub mod oauth_server;
 pub mod oidc;
 pub mod oidc_config;
 pub mod outbound;

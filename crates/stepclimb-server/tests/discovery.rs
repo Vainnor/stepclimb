@@ -219,7 +219,11 @@ async fn a_new_organization_offers_its_default_local_methods(pool: PgPool) {
         json!([local(&["passkey", "password", "totp"])])
     );
     let keys: Vec<&String> = body.as_object().unwrap().keys().collect();
-    assert_eq!(keys, ["name", "sign_in", "theme"]);
+    assert_eq!(keys, ["name", "oauth", "sign_in", "theme"]);
+    assert_eq!(
+        body["oauth"],
+        json!({ "authorization_endpoint": "https://lms.example.org/oauth/authorize" })
+    );
     let errors = common::schema_errors(&document(), "Discovery", &body);
     assert!(errors.is_empty(), "{errors:#?}");
 }

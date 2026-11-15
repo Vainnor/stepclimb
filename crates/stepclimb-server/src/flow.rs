@@ -11,7 +11,9 @@
 //!
 //! [`spawn_cleanup`] deletes expired flows on a `tokio` interval until the jobs runner exists.
 //! A flow never nests inside another: there is one flow cookie, and the OAuth 2.1 authorization
-//! endpoint (spec 08 I7) carries its request in the sign-in flow's `return_to` instead.
+//! endpoint (`crate::oauth_authorize`) carries its request through sign-in in the sign-in
+//! flow's `return_to`, and starts its own flow only for its confirmation page, once the browser
+//! is signed in. The cleanup also deletes expired authorization codes.
 //! The cookie's value is the flow token and never reaches a log line or an error body.
 
 use std::time::{Duration, SystemTime};
@@ -27,7 +29,7 @@ use stepclimb_core::{
     auth_flows::{self, Consumed, Kind, LIFETIME, NewFlow, ReturnTo},
     clock::Clock,
     id::{Uuid, new_id},
-    organizations,
+    oauth_codes, organizations,
 };
 
 use crate::cookie::{self, Presented};
@@ -265,18 +267,28 @@ pub fn clear_cookie() -> HeaderValue {
     HeaderValue::from_static("__Host-sc_flow=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax")
 }
 
-/// Delete every flow that has expired at `now`, organization by organization (B21). Returns how
-/// many were deleted. A failure in one organization is logged and the others still run; only
-/// failing to list the organizations stops the pass.
+/// Delete every flow and every OAuth 2.1 authorization code that has expired at `now`,
+/// organization by organization (B21). Returns how many rows were deleted. A failure in one
+/// organization is logged and the others still run; only failing to list the organizations
+/// stops the pass.
 pub async fn delete_expired(db: &PgPool, now: SystemTime) -> Result<u64, organizations::Error> {
     let mut deleted = 0;
     for org_id in organizations::ids(db).await? {
-        match auth_flows::delete_expired(db, job_scope(org_id), now).await {
+        let scope = job_scope(org_id);
+        match auth_flows::delete_expired(db, scope, now).await {
             Ok(count) => deleted += count,
             Err(error) => tracing::error!(
                 %org_id,
                 %error,
                 "could not delete the organization's expired sign-in flows"
+            ),
+        }
+        match oauth_codes::delete_expired(db, scope, now).await {
+            Ok(count) => deleted += count,
+            Err(error) => tracing::error!(
+                %org_id,
+                %error,
+                "could not delete the organization's expired authorization codes"
             ),
         }
     }

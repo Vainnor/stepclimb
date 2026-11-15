@@ -11,7 +11,8 @@
 //! sign-in switches, enrollment links, the enrollment start route, passkey registration
 //! through a link and passkey sign-in, the start of sign-in with an outside identity provider,
 //! the signed-in user's passkeys, password enrollment, sign-in and change, TOTP enrollment,
-//! its sign-in step and disabling, the discovery document (`/.well-known/stepclimb`), service
+//! its sign-in step and disabling, the discovery document (`/.well-known/stepclimb`), the OAuth
+//! 2.1 authorization endpoint for Stepclimb's own apps (`/oauth/authorize`), service
 //! accounts and their API keys, and the shared error
 //! schemas and responses below. The other M0 specs add their endpoints under `/api/v1`.
 //!
@@ -31,9 +32,9 @@ use utoipa::{
 use crate::{
     accounts, admission_settings, appearance, auth, branding, discovery, enrollment,
     error::{FieldError, PROBLEM_JSON, Problem},
-    health, identities, local_sign_in, me, my_passkeys, organization, passkey_enrollment,
-    passkey_options, passkey_sign_in, password, provider_callback, provider_sign_in,
-    role_assignments, roles, service_accounts, totp, users,
+    health, identities, local_sign_in, me, my_passkeys, oauth_authorize, organization,
+    passkey_enrollment, passkey_options, passkey_sign_in, password, provider_callback,
+    provider_sign_in, role_assignments, roles, service_accounts, totp, users,
 };
 
 /// The operation extension that marks a handler as changing state (spec 08 B12, T17). Every
@@ -64,6 +65,8 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         totp::sign_in_with_totp,
         provider_sign_in::start_provider_sign_in,
         provider_callback::finish_provider_sign_in,
+        oauth_authorize::authorize_app,
+        oauth_authorize::answer_app_authorization,
         me::get_me,
         appearance::update_my_appearance,
         password::change_my_password,
@@ -127,6 +130,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             discovery::SignInKind,
             discovery::LocalMethod,
             discovery::DiscoveryTheme,
+            discovery::DiscoveryOauth,
             me::Me,
             me::MeUser,
             me::MeGrant,
@@ -272,6 +276,8 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             local_sign_in::LocalSignInInvalid,
             admission_settings::AdmissionWriteForbidden,
             admission_settings::AdmissionInvalid,
+            oauth_authorize::AuthorizeForbidden,
+            oauth_authorize::AnswerForbidden,
             enrollment::EnrollmentLinkForbidden,
             enrollment::EnrollmentLinkConflict,
             enrollment::EnrollmentStartForbidden,
