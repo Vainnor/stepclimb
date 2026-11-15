@@ -66,9 +66,10 @@
   :focus:not(:focus-visible) {
     outline: none;
   }
-  /* A view's h1 takes focus by script after a client-side navigation, so a screen reader
-     announces the new view (spec 11 B6). It is not a control, so it draws no ring. */
-  h1[tabindex="-1"]:focus {
+  /* A heading with tabindex="-1" takes focus only by script: a view's h1 after a client-side
+     navigation, so a screen reader announces the new view (spec 11 B6), or a section's heading
+     after the row that held focus was removed. It is not a control, so it draws no ring. */
+  :is(h1, h2, h3, h4, h5, h6)[tabindex="-1"]:focus {
     outline: none;
     box-shadow: none;
   }
