@@ -518,6 +518,167 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/api/v1/admin/admission/webhook": {
+      "get": {
+        "tags": [
+          "admission"
+        ],
+        "summary": "Read the organization's admission webhook. The signing secret is never returned.",
+        "operationId": "getAdmissionWebhook",
+        "responses": {
+          "200": {
+            "description": "The admission webhook",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdmissionWebhook"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdmissionWebhookReadForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/AdmissionWebhookNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "admission"
+        ],
+        "summary": "Create the organization's admission webhook, or change the members the body names. The\nanswer of the call that creates it carries the signing secret, once.",
+        "operationId": "updateAdmissionWebhook",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdmissionWebhookPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The webhook after the change, with `secret` when this call created it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedAdmissionWebhook"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdmissionWebhookWriteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/AdmissionWebhookInvalid"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      },
+      "delete": {
+        "tags": [
+          "admission"
+        ],
+        "summary": "Delete the organization's admission webhook; sign-ins no longer call it.",
+        "operationId": "deleteAdmissionWebhook",
+        "responses": {
+          "204": {
+            "description": "The webhook and its secret are deleted"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdmissionWebhookDeleteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/AdmissionWebhookNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/admin/admission/webhook/rotate-secret": {
+      "post": {
+        "tags": [
+          "admission"
+        ],
+        "summary": "Replace the webhook's signing secret with a new one, returned once. The old secret stops\nsigning at once.",
+        "operationId": "rotateAdmissionWebhookSecret",
+        "responses": {
+          "200": {
+            "description": "The new signing secret",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdmissionWebhookSecret"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/AdmissionWebhookRotateForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/AdmissionWebhookNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/AdmissionWebhookSecretChanged"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/api/v1/admin/branding": {
       "get": {
         "tags": [
@@ -4069,6 +4230,58 @@
         ],
         "description": "A condition's value."
       },
+      "AdmissionWebhook": {
+        "type": "object",
+        "description": "The organization's admission webhook, without its secret.",
+        "required": [
+          "url",
+          "enabled",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether admission calls it. Off, sign-ins skip the webhook. A new webhook is off until\nenabled."
+          },
+          "url": {
+            "type": "string",
+            "description": "Where admission POSTs each sign-in through an outside provider. Not a secret: every\n`admission.manage` holder reads it and the audit log records it."
+          }
+        }
+      },
+      "AdmissionWebhookPatch": {
+        "type": "object",
+        "description": "A change to the webhook: send only what you change. An absent member keeps its stored\nvalue; creating the webhook needs `url`, and `enabled` is then `false` unless sent, so the\nreceiver can be given the secret first. A member sent as `null` is malformed: omit it\ninstead. Without the plan's `admission_webhook` feature, only `{\"enabled\": false}` (or `{}`)\nis accepted.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether admission calls the webhook."
+          },
+          "url": {
+            "type": "string",
+            "description": "An absolute `https` URL, at most 2,048 characters, with no fragment, user name or\npassword, kept exactly as sent. It is not a secret: it is returned to every\n`admission.manage` holder and written to the audit log. Authenticate the receiver with\nthe signing secret, never with a token in a query parameter."
+          }
+        },
+        "additionalProperties": false
+      },
+      "AdmissionWebhookSecret": {
+        "type": "object",
+        "description": "A new signing secret, shown once.",
+        "required": [
+          "secret"
+        ],
+        "properties": {
+          "secret": {
+            "type": "string",
+            "description": "The Standard Webhooks signing secret, `whsec_` and 32 bytes in base64. The old one stops\nsigning at once: sign-ins through outside providers are refused until the receiver has\nthis one."
+          }
+        }
+      },
       "Appearance": {
         "type": "string",
         "description": "An appearance every brand has.",
@@ -6200,6 +6413,35 @@
         },
         "additionalProperties": false
       },
+      "SavedAdmissionWebhook": {
+        "type": "object",
+        "description": "The webhook after a `PUT`, with its signing secret when this call created it.",
+        "required": [
+          "url",
+          "enabled",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Present only when this call created the webhook: the Standard Webhooks signing secret,\n`whsec_` and 32 bytes in base64. This is the only answer that carries it: give it to the\nreceiver now. Rotate it to get a new one."
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
       "SavedInputs": {
         "type": "object",
         "description": "The saved inputs, every choice made.",
@@ -6625,6 +6867,76 @@
       },
       "AdmissionInvalid": {
         "description": "`request.invalid`: the change breaks a rule; `errors` lists each one (at most 20), each with a JSON Pointer to the member. `admission.rule_invalid` marks a rule that is not one of the documented forms or breaks a limit; `admission.attribute_unknown` an attribute no provider the list applies to maps; `admission.provider_unknown` a key in `rules.providers` that is not an outside provider of the organization.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "AdmissionWebhookDeleteForbidden": {
+        "description": "`permission.denied`: the caller does not hold `admission.manage` at organization scope. `permission.escalation`: the caller does not hold every catalog permission at organization scope; removing the webhook lets in people it refuses. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "AdmissionWebhookInvalid": {
+        "description": "`request.invalid`: `errors` names `/url` with `admission.webhook_url_invalid` (not an absolute `https` URL of at most 2,048 characters without a fragment, white space or control character), `admission.webhook_url_refused` (the outbound URL policy refuses it: a user name or password, `http` or a loopback address without the instance's insecure-providers switch, a private network address on an instance with several organizations, or a link-local, multicast or reserved address) or `admission.webhook_url_required` (the organization has no webhook yet and the body names no URL).",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "AdmissionWebhookNotFound": {
+        "description": "`admission.webhook_not_found`: the organization has no admission webhook. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "AdmissionWebhookReadForbidden": {
+        "description": "`permission.denied`: the caller does not hold `admission.manage` at organization scope.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "AdmissionWebhookRotateForbidden": {
+        "description": "`entitlement.feature_unavailable`: the organization's plan does not include `admission_webhook`. `permission.denied`: the caller does not hold `admission.manage` at organization scope. `permission.escalation`: the caller does not hold every catalog permission at organization scope; until the receiver has the new secret, every sign-in through an outside provider is refused. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "AdmissionWebhookSecretChanged": {
+        "description": "`admission.webhook_secret_changed`: another rotation replaced the secret while this one ran; its secret is the current one. Rotate again for a new one.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "AdmissionWebhookWriteForbidden": {
+        "description": "`permission.denied`: the caller does not hold `admission.manage` at organization scope. `entitlement.feature_unavailable`: the body creates the webhook, sets its URL or enables it, and the organization's plan does not include `admission_webhook`; a body that only disables it needs no feature. `permission.escalation`: the caller does not hold every catalog permission at organization scope; the webhook decides the sign-ins of every user, including users with permissions the caller lacks. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
           "application/problem+json": {
             "schema": {

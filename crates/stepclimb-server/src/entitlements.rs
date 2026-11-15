@@ -8,7 +8,7 @@
 //! handler's own [`Entitlements`] share it and nothing outside this module can plant one. Nothing
 //! is kept across requests, so a plan change applies on the next request.
 //!
-//! Three checks read it:
+//! Four checks read it:
 //!
 //! - `Require<F>` with `F: Feature` ([`crate::require`]): 403 `entitlement.feature_unavailable`
 //!   when the plan does not include `F`;
@@ -18,6 +18,9 @@
 //!   a principal checks a feature with `Require<F>`, which runs before the permission check;
 //!   a check in the handler body would run after it, and a missing id would answer 404 while
 //!   the feature is off;
+//! - [`Entitlements::check`], for the one handler whose need for a feature depends on its body
+//!   (`PUT /api/v1/admin/admission/webhook`, `crate::admission_webhook`): it runs after the
+//!   permission check, which a route with a path id must not do, and that route has none;
 //! - [`Entitlements::check_room`], the limit check a creating transaction runs before it
 //!   inserts: 403 `entitlement.limit_reached` with the problem's `limit` and `max` members.
 //!

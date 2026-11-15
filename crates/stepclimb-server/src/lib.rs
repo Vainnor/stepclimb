@@ -43,6 +43,7 @@ pub mod accounts;
 pub mod admin;
 pub mod admission;
 pub mod admission_settings;
+pub mod admission_webhook;
 pub mod api_key;
 pub mod app;
 pub mod appearance;
