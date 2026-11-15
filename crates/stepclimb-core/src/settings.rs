@@ -30,8 +30,8 @@ pub struct OrgSettings {
     /// The local sign-in method switches (spec 04 B1, Q2), written only through
     /// [`crate::local_sign_in::update`].
     pub local_sign_in: LocalMethods,
-    /// The admission switches (spec 07 B12, B20, Q2). No patch writes them: spec 07 gives them
-    /// a route of their own, with `admission.manage`.
+    /// The admission switches (spec 07 B12, B20, Q2), written only through
+    /// [`crate::admission_settings::update`].
     pub admission: AdmissionSwitches,
 }
 
@@ -54,6 +54,10 @@ pub struct AdmissionSwitches {
     /// Whether a person no user of the organization matches is created as a user at sign-in
     /// (spec 07 B20); off, they are refused with `auth.signup_closed` (B21).
     pub signup_allowed: bool,
+    /// Whether only users already provisioned may sign in (spec 07 B11, B12); a person no user
+    /// matches is then refused with `auth.not_provisioned`, whatever `signup_allowed` says.
+    /// [`crate::admission_settings::update`] refuses to turn it on until admission applies it.
+    pub sync_only: bool,
 }
 
 /// A partial update of [`OrgSettings`]: one optional member per key but those in
@@ -74,7 +78,7 @@ pub struct OrgSettingsPatch {
 impl OrgSettingsPatch {
     /// The settings keys no patch can name, because one repository function writes each with
     /// rules of its own: `local_sign_in` through [`crate::local_sign_in::update`] (spec 04 Q2),
-    /// and `admission`, which spec 07 Q2 gives to the admission settings route.
+    /// and `admission` through [`crate::admission_settings::update`] (spec 07 Q2).
     pub const WRITTEN_ELSEWHERE: &'static [&'static str] = &["local_sign_in", "admission"];
 
     /// Whether a patch may name `key`, so the API can report each unknown key by name
@@ -152,6 +156,18 @@ mod tests {
         let stored: OrgSettings =
             serde_json::from_str(r#"{"admission": {"signup_allowed": true, "newer": 1}}"#).unwrap();
         assert!(stored.admission.signup_allowed);
+    }
+
+    #[test]
+    fn sync_only_is_off_by_default_and_reads_a_stored_value() {
+        assert!(!OrgSettings::default().admission.sync_only);
+        let settings: OrgSettings =
+            serde_json::from_str(r#"{"admission": {"signup_allowed": true}}"#).unwrap();
+        assert!(!settings.admission.sync_only);
+        let stored: OrgSettings =
+            serde_json::from_str(r#"{"admission": {"sync_only": true}}"#).unwrap();
+        assert!(stored.admission.sync_only);
+        assert!(!stored.admission.signup_allowed);
     }
 
     #[test]

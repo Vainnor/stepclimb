@@ -380,12 +380,59 @@ overrule one, which then updates this spec.
    switches, with the four-case and cross-organization tests. Covers B12, B23; T19, T20 (for
    these routes). Depends on: I1, `09-permissions-and-roles.md` (`Require<P>`),
    Q2.
+
+   Coordinator decisions (2026-11-15), for this issue:
+
+   - The switches are the two B12, B20 and B23 name, `signup_allowed` and `sync_only`, stored
+     as members of the `admission` settings key; "the three switches" above counts one too
+     many. `email_matching` stays `03-users-and-identities.md`'s key, written through
+     `PATCH /api/v1/organization/settings`, as Data says. The rules are I3's: I2's `GET`
+     answers `{signup_allowed, sync_only}`, and its `PUT` takes those two members only.
+   - The `PUT` body is partial: send only what you change. An absent member keeps its stored
+     value, and `{}` changes nothing, so a `PUT` from one admin cannot write back a stale
+     value of a switch another admin changed in the meantime. A member sent as `null`, an
+     unknown member or a non-boolean answers 400 `request.malformed`. The answer is every
+     switch after the change.
+   - Both routes need `perm::AdmissionManage` at organization scope and nothing more. No
+     escalation rule applies, unlike `PUT /api/v1/admin/local-sign-in`
+     (`04-local-accounts.md` I1): the owner's rule covers writes that affect another user's
+     sign-in, and these switches only decide whether a person the organization has no user
+     for gets in. They never refuse a known identity (step 1 runs first, B11 applies after
+     B4 and B5), and a just-in-time user gets no role. The API table lists no
+     `permission.escalation` for this route. I3's rules run on every sign-in (Q3), so they
+     can lock out an existing user, and I3 decides whether its rule writes take the rule.
+   - `sync_only` is stored and returned, but the `PUT` refuses to set it to `true` (422
+     `request.invalid`, `errors[].code = "admission.sync_only_unavailable"` at `/sync_only`)
+     until I4 makes admission apply it, and I4 lifts the refusal. A `true` that no sign-in
+     reads would tell an admin that only provisioned users get in while anyone with an
+     identity still does when sign-up is on. This is `03-users-and-identities.md` B17's rule
+     for `email_matching`. In M0 sign-up off already refuses every person with no user.
+   - `stepclimb_core::admission_settings::update` is the only writer. Under the organization
+     row's lock it compares the body with the stored switches: equal, it writes nothing (no
+     settings change, no `updated_at`, no audit entry) and answers 200. Different, it merges
+     the switches into the stored `admission` object, keeping members this release does not
+     know, and writes one `organization.update_settings` entry with `admission` before and
+     after (`09-permissions-and-roles.md` B22).
+   - A release older than I4 ignores a stored `sync_only: true` (I4's note on rollback).
 3. **I3. Declarative rules.** Rule model, validation on save, evaluation at step 2, storage per
    Q2. Covers B8 to B10; T7, T8, T21 (steps 1, 2, 5). Depends on: I2, Q1, Q3.
 4. **I4. Unknown-identity resolution and sync-only mode.** The provisioned-user match (Q4),
    email matching under `03-users-and-identities.md` Q2's conditions (which lifts the refusal to
    set `email_matching` to `true`, `03-users-and-identities.md` B17), sync-only refusal. Covers
    B5, B6, B11; T2 to T5, T9. Depends on: I3, Q4, `03-users-and-identities.md` Q2.
+
+   Coordinator decisions (2026-11-15), carried from I2, for this issue:
+
+   - I4 lifts I2's refusal of `sync_only: true` (`admission.sync_only_unavailable`) when
+     admission applies it, and keeps the partial `PUT` of I2: a member the body leaves out
+     keeps its stored value. I3's `rules` member, when it is added to the same body, follows
+     the same rule and never replaces the switches: a `PUT` naming only `rules` leaves
+     `signup_allowed` and `sync_only` as stored.
+   - Rollback: after I4 an organization can store `sync_only: true`. A release older than I4
+     reads the key as `AdmissionSwitches` does (a stored member is kept and its value read),
+     but its admission never applies it, so after a rollback a person with no user is
+     admitted again whenever sign-up is allowed. The release notes of I4's release say so,
+     and an operator who rolls back with sync-only mode on turns sign-up off first.
 5. **I5. Webhook administration.** Migration for `admission_webhooks` (pending Q2), the four
    webhook routes, server-generated secret returned once, rotation, encryption at rest. Covers
    B24; T18, T19 and T20 (for these routes). Depends on: I2, `08-sessions-and-csrf.md` I1

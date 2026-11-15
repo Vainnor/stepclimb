@@ -60,6 +60,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/admission": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the organization's admission switches. */
+        get: operations["getAdmissionSettings"];
+        /**
+         * Change the admission switches the body names; send only what you change. A switch the body
+         *     leaves out keeps its value, and a body naming only current values changes nothing.
+         */
+        put: operations["updateAdmissionSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/branding": {
         parameters: {
             query?: never;
@@ -691,6 +712,35 @@ export interface components {
             /** @description Trimmed; 1 to 200 characters. */
             name?: string;
         };
+        /** @description Who admission lets in. */
+        AdmissionSettings: {
+            /**
+             * @description Whether a person the organization has no user for is created as a user when they first
+             *     sign in through an identity provider. Off, they are refused with `auth.signup_closed`.
+             */
+            signup_allowed: boolean;
+            /**
+             * @description Whether only users already provisioned may sign in. This release accepts only `false`:
+             *     `true` answers 422 with `admission.sync_only_unavailable`.
+             */
+            sync_only: boolean;
+        };
+        /**
+         * @description A change to the admission switches: send only what you change. An absent member keeps its
+         *     stored value, and `{}` changes nothing. A member sent as `null` is malformed: omit it instead.
+         */
+        AdmissionSettingsPatch: {
+            /**
+             * @description Whether a person the organization has no user for is created as a user when they first
+             *     sign in through an identity provider.
+             */
+            signup_allowed?: boolean;
+            /**
+             * @description Whether only users already provisioned may sign in. This release accepts only `false`:
+             *     `true` answers 422 with `admission.sync_only_unavailable`.
+             */
+            sync_only?: boolean;
+        };
         /** @description The admission switches as the organization settings show them. */
         AdmissionSwitches: {
             /**
@@ -699,6 +749,8 @@ export interface components {
              *     `auth.signup_closed`.
              */
             signup_allowed: boolean;
+            /** @description Whether only users already provisioned may sign in; `false` unless set. */
+            sync_only: boolean;
         };
         /**
          * @description An appearance every brand has.
@@ -1108,7 +1160,7 @@ export interface components {
          *     default when none is stored.
          */
         OrgSettings: {
-            /** @description Who admission lets in; read-only here. */
+            /** @description Who admission lets in; read-only here, changed through `PUT /api/v1/admin/admission`. */
             admission: components["schemas"]["AdmissionSwitches"];
             /** @description The IANA time zone a user created without one gets; `UTC` unless set. */
             default_tz: string;
@@ -1595,6 +1647,24 @@ export interface components {
     responses: {
         /** @description `account.not_found`: no account with this id exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined. */
         AccountNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.invalid`: the change breaks a rule; `errors` lists each one. `admission.sync_only_unavailable` marks `sync_only` turned on, which this release refuses. */
+        AdmissionInvalid: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: the caller does not hold `admission.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site. */
+        AdmissionWriteForbidden: {
             headers: {
                 [name: string]: unknown;
             };
@@ -2126,7 +2196,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting this route does not change (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`; `admission`: the admission settings); `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses. */
+        /** @description `request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting this route does not change (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`; `admission`: `PUT /api/v1/admin/admission`); `tz.unknown` a `default_tz` that is no IANA time zone; `settings.email_matching_unavailable` an `email_matching` of `true`, which this release refuses. */
         SettingsInvalid: {
             headers: {
                 [name: string]: unknown;
@@ -2430,6 +2500,64 @@ export interface operations {
             409: components["responses"]["MoveConflict"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    getAdmissionSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The admission switches */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdmissionSettings"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["PermissionDenied"];
+            404: components["responses"]["OrganizationNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    updateAdmissionSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdmissionSettingsPatch"];
+            };
+        };
+        responses: {
+            /** @description The switches after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdmissionSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AdmissionWriteForbidden"];
+            404: components["responses"]["OrganizationNotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["AdmissionInvalid"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };

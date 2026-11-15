@@ -27,7 +27,7 @@ use utoipa::{
 };
 
 use crate::{
-    accounts, appearance, auth, branding, enrollment,
+    accounts, admission_settings, appearance, auth, branding, enrollment,
     error::{FieldError, PROBLEM_JSON, Problem},
     health, identities, local_sign_in, me, my_passkeys, organization, passkey_enrollment,
     passkey_options, passkey_sign_in, provider_callback, provider_sign_in, role_assignments, roles,
@@ -99,7 +99,9 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         branding::update_branding,
         branding::theme_css,
         local_sign_in::get_local_sign_in,
-        local_sign_in::update_local_sign_in
+        local_sign_in::update_local_sign_in,
+        admission_settings::get_admission_settings,
+        admission_settings::update_admission_settings
     ),
     components(
         schemas(
@@ -154,6 +156,8 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             branding::ContrastWarning,
             branding::BrandingProblem,
             local_sign_in::LocalSignIn,
+            admission_settings::AdmissionSettings,
+            admission_settings::AdmissionSettingsPatch,
             enrollment::EnrollmentLink,
             enrollment::EnrollmentStart,
             enrollment::EnrollMethod,
@@ -233,6 +237,8 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             local_sign_in::LocalSignInForbidden,
             local_sign_in::LocalSignInConflict,
             local_sign_in::LocalSignInInvalid,
+            admission_settings::AdmissionWriteForbidden,
+            admission_settings::AdmissionInvalid,
             enrollment::EnrollmentLinkConflict,
             enrollment::EnrollmentStartInvalid,
             enrollment::EnrollmentStartNotFound,
@@ -262,7 +268,8 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         (name = "roles", description = "The permission catalog, roles and role assignments"),
         (name = "users", description = "The organization's users"),
         (name = "branding", description = "The organization's branding and theme"),
-        (name = "local-sign-in", description = "The organization's local sign-in methods")
+        (name = "local-sign-in", description = "The organization's local sign-in methods"),
+        (name = "admission", description = "Who may sign in to the organization")
     )
 )]
 struct ApiDoc;

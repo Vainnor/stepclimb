@@ -80,8 +80,8 @@ use stepclimb_core::{
     identities::{self, NewIdentity},
     organizations,
     perm::{
-        self, AccountManage, AccountView, BrandingManage, OrgManage, Permission, ProviderManage,
-        RoleAssign, RoleManage, RoleView, ScopeType, UserManage, UserView,
+        self, AccountManage, AccountView, AdmissionManage, BrandingManage, OrgManage, Permission,
+        ProviderManage, RoleAssign, RoleManage, RoleView, ScopeType, UserManage, UserView,
     },
     role_assignments::{self, NewAssignment, Scope},
     roles::{self, NewRole},
@@ -332,6 +332,14 @@ const TABLE: &[Entry] = &[
         operation_id: "updateLocalSignIn",
         access: permission(ProviderManage::KEY, Target::Org, unchanged_local_sign_in),
     },
+    Entry {
+        operation_id: "getAdmissionSettings",
+        access: permission(AdmissionManage::KEY, Target::Org, at_org),
+    },
+    Entry {
+        operation_id: "updateAdmissionSettings",
+        access: permission(AdmissionManage::KEY, Target::Org, open_signup),
+    },
 ];
 
 /// A passkey of the caller, so the list has a row to answer.
@@ -421,6 +429,18 @@ fn second_passkey_of_owner(
         Call {
             params: vec![("passkey_id", org.passkey(owner).await)],
             body: None,
+            at: At::Org,
+        }
+    })
+}
+
+/// Sign-up switched on: a change, so the cross-organization case sees org A's settings and
+/// audit entries move while org B's stay as they are (spec 07 T20).
+fn open_signup(_: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: Vec::new(),
+            body: Some(serde_json::json!({ "signup_allowed": true })),
             at: At::Org,
         }
     })
