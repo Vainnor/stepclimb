@@ -140,8 +140,9 @@ The Nix dev shell (`flake.nix`) provides every tool below.
 - PR only, squash merge. Never push to `main` or `next` directly; `.claude/hooks/git-guard`
   refuses it.
 - Dependencies are updated by hand once a month and before each release, as in Mainline:
-  `cargo update` in both Cargo workspaces and `pnpm update`, then `just ci`, `just deny` and
-  `just app-build`, opened as a lockfile-only PR. A framework or major-version bump goes through
+  `just update-deps` (`cargo update` in both Cargo workspaces, `pnpm update`, image digests, each
+  new version at least 14 days old), then `just ci`, `just deny` and `just app-build`, opened as a
+  lockfile-only PR (`CONTRIBUTING.md` -> Monthly dependency update). A framework or major-version bump goes through
   `dependency-researcher` first. Before bumping `react-aria-components`, read its release notes for
   the `UNSTABLE_` toast parts Stepclimb UI builds Toast on (ADR 0024). There is no Dependabot (owner, 13 Nov 2026).
 - The remote is the private GitHub repository `Vainnor/stepclimb`; `next` is the default branch.
@@ -154,7 +155,7 @@ The Nix dev shell (`flake.nix`) provides every tool below.
 ## Commands (via `just`)
 
 ```bash
-just ci            # the merge gate, run locally: secrets, fmt, clippy, layering, lint escapes, spdx, tests, deny, sqlx, openapi, biome, tsc, vitest, story screenshots, playwright, compose, image, agents; several worktrees may run it at once
+just ci            # the merge gate, run locally: secrets, fmt, clippy, layering, lint escapes, spdx, versions, tests, deny, sqlx, openapi, biome, npm audit, tsc, vitest, story screenshots, playwright, compose, image, agents; several worktrees may run it at once
 just app-build     # the Tauri shell for this OS, unbundled and unsigned, after cargo-deny on its workspace
 just up / down     # PostgreSQL 16 and MinIO in Compose (deploy/compose/compose.yaml), one stack shared by every worktree
 just serve         # the server on :8080 against the Compose database, web build embedded
@@ -168,6 +169,9 @@ just layering      # bin/check-layering.sh
 just lint-escapes  # bin/check-lint-escapes.py: no way around the OrgScope lint gate (inner allows, wide expects, lint config)
 just spdx-check    # bin/check-spdx.sh: SPDX headers on every source file
 just deny          # cargo deny check
+just version-check # bin/check-versions.sh: one version in Cargo.toml, the app's manifests, tauri.conf.json and the lockfiles
+just release-version <x.y.z>  # write that version everywhere and refresh both Cargo lockfiles; commit it on its own
+just update-deps   # the monthly update: both Cargo lockfiles, pnpm-lock.yaml and image digests, 14 days old or more (bin/update_deps.py)
 just migrate       # apply migrations to the local database
 just sqlx-prepare  # regenerate .sqlx/ after changing a query (against a database of its own)
 just sqlx-check    # fail if .sqlx/ is stale (against a database of its own)
@@ -176,6 +180,7 @@ just openapi-diff  # fail if either is stale
 just web-build     # tokens, then web/dist
 just web-lint / web-fmt  # Biome, its UI rules and bin/check-ui-lint.mjs (raw colors, emoji)
 just changeset-check  # a changeset for any change to packages/ui or packages/tokens (in web-lint)
+just web-audit     # pnpm audit (prod, then all) fails on high or critical outside pnpm-audit-allowlist.json; SKIPPED offline
 just typecheck     # tsc in every package
 just test-web      # Vitest in every package
 just e2e           # Playwright smoke test against this worktree's own Compose stack (builds the image)
