@@ -32,7 +32,9 @@ async function withoutScript(browser: Browser, appearance?: string): Promise<Pag
     : {};
   const context = await browser.newContext({ javaScriptEnabled: false, extraHTTPHeaders: headers });
   const page = await context.newPage();
-  await page.goto("/sign-in", { waitUntil: "domcontentloaded" });
+  // `load`, not `domcontentloaded`: without a script, DOMContentLoaded does not wait for the
+  // stylesheets, which only block the first paint. The page's own script never runs either way.
+  await page.goto("/sign-in", { waitUntil: "load" });
   return page;
 }
 
