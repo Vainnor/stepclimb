@@ -336,6 +336,7 @@ pub async fn replace_config(
         return Err(Error::NotFound);
     }
     Ok(())
+}
 
 /// A provider `stepclimb.toml` declares, as [`upsert_from_config`] writes it.
 pub struct ConfigRow<'a> {

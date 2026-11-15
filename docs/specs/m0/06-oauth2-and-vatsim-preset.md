@@ -219,7 +219,9 @@ server every sign-in test and the Playwright stack use instead of a real provide
   Coordinator decision (2026-11-15), for I4, Q2 (a): at startup, in one transaction, `serve`
   writes each entry to the row of its organization with the same `key`, whoever created that
   row, taking the file's `kind`, config, `label` and `enabled`, and moving `updated_at` only when
-  one of them changed; a row the admin API created is taken over, and a startup warning says so
+  one of them changed. The config goes through `identity_providers::replace_config`, so a row
+  keeps the `admission_rules` it has (`07-admission.md` I3), and an entry may not declare
+  `admission_rules` (refused naming the member): rules are set through the admin API only; a row the admin API created is taken over, and a startup warning says so
   (and when the kind changes, since existing identities keep their subjects). It disables, and
   never deletes, every enabled row of the file that the file no longer declares, so identities
   stay; the row stays the file's, and putting the entry back enables it again. The row records

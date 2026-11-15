@@ -309,7 +309,8 @@ provider), `label`, `enabled` (default `true`), and exactly one of `client_secre
 `client_id`, `scopes`, `claims`, `userinfo` and `allow_local_passkeys`; for `oauth2`, the three
 URLs, `client_id`, `scopes`, `pkce`, `claims` and `allow_local_passkeys`
 (`docs/specs/m0/05-oidc.md` B1, `docs/specs/m0/06-oauth2-and-vatsim-preset.md` B4). On an
-instance with more than one organization, `org = "<slug>"` names the provider's organization.
+instance with more than one organization, `org = "<slug>"` names the provider's organization. An entry
+cannot set `admission_rules`; those are managed through the admin API and kept across restarts.
 
 - The file owns the providers it declares. Every start of `serve` writes them to their
   organization by `key`, taking over a provider of that key created any other way, and disables

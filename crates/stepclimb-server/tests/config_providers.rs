@@ -507,6 +507,7 @@ async fn sign_in(pool: &PgPool, org: Uuid, secrets: ConfigSecrets) -> Answer {
         providers: Providers::new(true)
             .expect("clients")
             .with_config_secrets(secrets),
+        passwords: Default::default(),
     };
     let app = router(state).layer(Extension(ConnectInfo(CLIENT)));
     let started = get(&app, org, "/auth/toml/start?return_to=/c/s1", None).await;

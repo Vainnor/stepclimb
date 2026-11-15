@@ -101,7 +101,7 @@ async fn upsert_inserts_then_updates_by_key_in_the_scope_only(pool: PgPool) {
     let b = org(&pool, "org-b").await;
     let first = config("First");
     let id = identity_providers::upsert_from_config(
-        &mut conn(&pool).await,
+        &mut *conn(&pool).await,
         scope(a),
         &row("corp", &first, true),
         start(),
@@ -116,7 +116,7 @@ async fn upsert_inserts_then_updates_by_key_in_the_scope_only(pool: PgPool) {
 
     // The same row again leaves `updated_at` alone.
     let again = identity_providers::upsert_from_config(
-        &mut conn(&pool).await,
+        &mut *conn(&pool).await,
         scope(a),
         &row("corp", &first, true),
         restart(),
@@ -132,7 +132,7 @@ async fn upsert_inserts_then_updates_by_key_in_the_scope_only(pool: PgPool) {
     // A change moves it, and keeps the id.
     let second = config("Second");
     let changed = identity_providers::upsert_from_config(
-        &mut conn(&pool).await,
+        &mut *conn(&pool).await,
         scope(a),
         &row("corp", &second, false),
         restart(),
@@ -152,7 +152,7 @@ async fn upsert_takes_over_a_row_the_api_wrote_with_the_same_key(pool: PgPool) {
     let api = api_row(&pool, a, "corp").await;
     let file = config("From the file");
     let id = identity_providers::upsert_from_config(
-        &mut conn(&pool).await,
+        &mut *conn(&pool).await,
         scope(a),
         &row("corp", &file, true),
         start(),
@@ -176,7 +176,7 @@ async fn upsert_refuses_a_config_without_the_config_source(pool: PgPool) {
     let mut not_ours = config("Not ours");
     not_ours.remove("source");
     let result = identity_providers::upsert_from_config(
-        &mut conn(&pool).await,
+        &mut *conn(&pool).await,
         scope(a),
         &row("corp", &not_ours, true),
         start(),
@@ -185,7 +185,7 @@ async fn upsert_refuses_a_config_without_the_config_source(pool: PgPool) {
     assert!(matches!(result, Err(Error::NotFromConfig)), "{result:?}");
     not_ours.insert("source".into(), json!("api"));
     let result = identity_providers::upsert_from_config(
-        &mut conn(&pool).await,
+        &mut *conn(&pool).await,
         scope(a),
         &row("corp", &not_ours, true),
         start(),
@@ -200,7 +200,7 @@ async fn upsert_cannot_turn_the_local_row_into_an_outside_provider(pool: PgPool)
     let a = org(&pool, "org-a").await;
     let file = config("Local");
     let result = identity_providers::upsert_from_config(
-        &mut conn(&pool).await,
+        &mut *conn(&pool).await,
         scope(a),
         &row("local", &file, true),
         start(),
@@ -218,7 +218,7 @@ async fn disable_turns_off_only_the_files_rows_it_no_longer_declares_in_the_scop
     let file = config("File");
     for key in ["kept", "removed", "already-off"] {
         identity_providers::upsert_from_config(
-            &mut conn(&pool).await,
+            &mut *conn(&pool).await,
             scope(a),
             &row(key, &file, key != "already-off"),
             start(),
@@ -227,7 +227,7 @@ async fn disable_turns_off_only_the_files_rows_it_no_longer_declares_in_the_scop
         .expect("upsert");
     }
     identity_providers::upsert_from_config(
-        &mut conn(&pool).await,
+        &mut *conn(&pool).await,
         scope(b),
         &row("removed", &file, true),
         start(),
