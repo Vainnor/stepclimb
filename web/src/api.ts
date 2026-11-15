@@ -3,16 +3,38 @@
 // `fetch` is looked up on each request rather than captured once, so tests can stub it.
 import { type components, createApiClient } from "@stepclimb/api-client";
 
+/**
+ * A request that got no answer at all: `fetch` rejected, because the network or the server is
+ * down (docs/specs/m0/11-app-shell.md B29). An HTTP error answer is an `ApiError` instead, and a
+ * request the app aborted keeps its `AbortError`.
+ */
+export class UnreachableError extends Error {
+  constructor(cause: unknown) {
+    super("the server did not answer", { cause });
+    this.name = "UnreachableError";
+  }
+}
+
+/** `fetch`, with a rejection that is not an abort turned into an `UnreachableError`. */
+export async function fetchOrUnreachable(request: Request): Promise<Response> {
+  try {
+    return await globalThis.fetch(request);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new UnreachableError(error);
+  }
+}
+
 export const api = createApiClient({
   baseUrl: globalThis.location.origin,
-  fetch: (request) => globalThis.fetch(request),
+  fetch: fetchOrUnreachable,
 });
 
 export type Problem = components["schemas"]["Problem"];
 
 /**
  * An HTTP error answer from the server. `problem` is its problem+json body when it sent one. A
- * request that got no answer at all throws the `fetch` error instead, never an `ApiError`.
+ * request that got no answer at all throws an `UnreachableError` instead, never an `ApiError`.
  */
 export class ApiError extends Error {
   readonly status: number;
@@ -64,4 +86,9 @@ export function unwrap<T>(result: { data?: T; error?: unknown; response: Respons
 /** True for a 401: the request carried no session, or one that expired or was ended. */
 export function isUnauthorized(error: unknown): boolean {
   return error instanceof ApiError && error.status === 401;
+}
+
+/** True when the request got no answer at all (B29). */
+export function isUnreachable(error: unknown): boolean {
+  return error instanceof UnreachableError;
 }

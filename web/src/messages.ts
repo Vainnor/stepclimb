@@ -50,6 +50,8 @@ export const webMessages: Catalog = {
     "notFound.heading": "There is no page at {path}",
     "notFound.home": "Go to the home page",
     "notFound.title": "Page not found",
+    "offline.notice":
+      "The server could not be reached, so this page may be out of date. Check your connection, then try again.",
     "problem.orgNone.description":
       "An administrator has to create the organization on the server. Try again once that is done.",
     "problem.orgNone.title": "This server has no organization yet",

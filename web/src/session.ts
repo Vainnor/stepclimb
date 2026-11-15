@@ -53,7 +53,13 @@ function hasDotSegment(path: string): boolean {
 /**
  * The client every query and mutation runs through. A 401 from any of them calls
  * `onUnauthorized`, which decides whether the session ended (B10). Failed requests are not
- * retried: the views offer "Try again", and a 401 must reach the handler at once.
+ * retried: the views offer "Try again", and a 401 must reach the handler at once. Requests go out
+ * whatever the browser says about its network (`networkMode: "always"`): only the server's
+ * answer, or its absence, decides what the page shows (B29). A browser that reports itself
+ * offline can still reach a server on the same machine, and TanStack Query's default would leave
+ * the request paused, the page loading for good, instead of saying the server could not be
+ * reached. TanStack Query turns `refetchOnReconnect` off under that mode unless it is set, so it
+ * is set: when the network returns, the queries on screen ask again and the offline notice goes.
  */
 export function createQueryClient(onUnauthorized: () => void): QueryClient {
   const onError = (error: unknown) => {
@@ -62,7 +68,10 @@ export function createQueryClient(onUnauthorized: () => void): QueryClient {
   return new QueryClient({
     queryCache: new QueryCache({ onError }),
     mutationCache: new MutationCache({ onError }),
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    defaultOptions: {
+      queries: { retry: false, networkMode: "always", refetchOnReconnect: true },
+      mutations: { retry: false, networkMode: "always" },
+    },
   });
 }
 

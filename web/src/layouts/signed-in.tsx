@@ -3,7 +3,7 @@
 // SideNav, BottomTabs and TopBar, drawn only once `/me` has loaded. While it loads, the delayed
 // ShellSkeleton. On a 401 it draws the skeleton too, never the cached user, while the session
 // handler clears the cache and takes the browser to the sign-in screen. Any other failure shows
-// LoadError.
+// LoadError. Above the view, the offline notice (B29).
 import {
   AppShell,
   BottomTabs,
@@ -26,6 +26,7 @@ import { useDocumentTitle } from "./document-title";
 import { LoadError } from "./load-error";
 import { ShellSkeleton } from "./shell-skeleton";
 import { SignedOutFrame } from "./signed-out";
+import { UnreachableNotice } from "./unreachable-notice";
 import { UserMenu } from "./user-menu";
 
 /** The organization's name at the top of the SideNav; its initials where the SideNav is icons only. */
@@ -76,6 +77,7 @@ export function SignedInShell({ me, title, current, children }: SignedInShellPro
         />
       }
     >
+      <UnreachableNotice />
       {children}
     </AppShell>
   );

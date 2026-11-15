@@ -14,6 +14,7 @@ import {
   type Strings,
   SubmenuTrigger,
   useStepclimbStrings,
+  VisuallyHidden,
 } from "@stepclimb/ui";
 import { useMutation } from "@tanstack/react-query";
 import type { Key } from "react-aria-components";
@@ -110,13 +111,15 @@ export function UserMenu({ name, appearance }: UserMenuProps) {
   };
   return (
     <MenuTrigger>
-      <Button
-        intent="ghost"
-        aria-label={t("userMenu.label", { name })}
-        isPending={signOutMutation.isPending}
-      >
-        <Avatar name={name} size="sm" />
-        <span className="max-w-48 truncate max-md:sr-only">{name}</span>
+      {/* The name comes from the hidden text, which starts with the visible name, so a voice
+          command naming what the button shows finds it (WCAG 2.5.3). An `aria-label` would make
+          the Avatar's initials visible text that the name lacks. */}
+      <Button intent="ghost" isPending={signOutMutation.isPending}>
+        <span aria-hidden="true" className="flex items-center gap-2">
+          <Avatar name={name} size="sm" />
+          <span className="max-w-48 truncate max-md:hidden">{name}</span>
+        </span>
+        <VisuallyHidden>{t("userMenu.label", { name })}</VisuallyHidden>
       </Button>
       <Menu
         placement="bottom end"

@@ -11,5 +11,19 @@ export default defineConfig({
     baseURL: process.env.SC_E2E_URL ?? "http://localhost:58080",
     trace: "retain-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  // sign-in.spec.ts changes the organization's branding (spec 11 T14), which every page is drawn
+  // with, so it runs once every other file has finished.
+  projects: [
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"] },
+      testIgnore: /sign-in\.spec\.ts$/,
+    },
+    {
+      name: "sign-in",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: /sign-in\.spec\.ts$/,
+      dependencies: ["chromium"],
+    },
+  ],
 });
