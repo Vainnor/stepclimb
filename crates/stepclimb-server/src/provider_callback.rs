@@ -25,9 +25,10 @@
 //!    a `sub` no identity can hold, which is `auth.subject_missing`;
 //! 6. hands the verified sign-in to [`complete_sign_in`].
 //!
-//! Every answer after step 3 clears the flow cookie. A refusal is a 303 to the sign-in page
-//! with the code, logged at warn with the provider's key and never with a URL, a token, the
-//! `code` or a secret; a server fault (the client secret does not open) is 500 problem details.
+//! A refusal is a 303 to the sign-in page with the code, logged at warn with the provider's key
+//! and never with a URL, a token, the `code` or a secret. A server fault (the flow's payload or
+//! the client secret does not open) is 500 problem details. Every answer from step 3 on clears
+//! the flow cookie, a 500 included.
 //!
 //! The flow is taken before any request to the provider, in its own statement, rather than in
 //! the transaction that later creates the session: no database connection is held while the
@@ -37,7 +38,7 @@
 use axum::{
     extract::State,
     http::{HeaderMap, header},
-    response::Response,
+    response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 use stepclimb_auth::{
@@ -166,11 +167,15 @@ pub async fn finish_provider_sign_in(
     }
     let now = state.clock.now();
     let taken = flow::finish(&state.db, &state.keys, scope, &headers, FlowKind::Oidc, now).await;
+    // From here on every answer clears the flow cookie, a server fault's 500 included: the flow
+    // is taken, or its row is unusable.
     let response = match taken {
-        Ok(flow) => after_flow(&state, scope, &provider, &key, flow, &query).await?,
+        Ok(flow) => after_flow(&state, scope, &provider, &key, flow, &query)
+            .await
+            .unwrap_or_else(IntoResponse::into_response),
         Err(error) => match error.code() {
             Some(code) => to_sign_in(code),
-            None => return Err(ApiError::internal(&error)),
+            None => ApiError::internal(&error).into_response(),
         },
     };
     Ok(clearing_flow_cookie(response))

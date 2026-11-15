@@ -40,8 +40,7 @@ pub use discovery::{
 };
 pub use exchange::{ClientAuth, CodeExchange, ExchangeError, Tokens, client_auth, exchange_code};
 pub use id_token::{
-    CLOCK_SKEW, Expected, IdTokenError, MAX_SUBJECT_CHARS, VerifiedIdToken, accepted_algorithms,
-    verify_id_token,
+    CLOCK_SKEW, Expected, IdTokenError, VerifiedIdToken, accepted_algorithms, verify_id_token,
 };
 pub use jwks::{JWKS_REFETCH_INTERVAL, JWKS_TTL, JwksCache, JwksError, KeySet, fetch_jwks};
 pub use userinfo::{UserinfoError, fetch_userinfo, merge_claims};

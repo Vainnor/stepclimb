@@ -4,9 +4,10 @@
 //! The token is a JWS in compact serialization (RFC 7515 7.1). [`verify_id_token`] checks, in
 //! order, and refuses at the first failure:
 //!
-//! 1. the shape: three base64url parts, a JSON header and a JSON object payload; a header with
-//!    `crit`, `cty` or a `typ` other than `JWT` is refused, so a nested or encrypted token or an
-//!    access token in JWT form (`at+jwt`) is not read as an ID token;
+//! 1. the shape: three base64url parts, a JSON header and a JSON object payload. A header with
+//!    `crit`, `cty` or `enc` is refused, and so is a `typ` other than `JWT` or `application/jwt`
+//!    in any case (RFC 7515 4.1.9), so a nested or encrypted token or an access token in JWT
+//!    form (`at+jwt`) is not read as an ID token;
 //! 2. the algorithm: `alg: none` is refused, and so is any algorithm outside the accepted list
 //!    of [`accepted_algorithms`] (Q8: asymmetric only, as the discovery document lists them);
 //! 3. the signature, with the one key of the provider's key set whose `kid` is the token's and
@@ -20,8 +21,8 @@
 //! 7. `nonce` equals the flow's nonce, compared in constant time;
 //! 8. `at_hash`, when present, is the left half of the access token's hash under the
 //!    signature's hash function, base64url (OIDC Core 3.1.3.6);
-//! 9. `sub` is a string an identity can hold (B12): not empty, no NUL, at most
-//!    [`MAX_SUBJECT_CHARS`] characters.
+//! 9. `sub` is a string an identity can hold (B12): [`usable_subject`], not empty, no NUL and
+//!    at most 255 characters.
 //!
 //! The claims are read as plain JSON, not as `openidconnect`'s typed claims, so a profile claim
 //! of an unexpected type reaches the claims mapping as it is (B13) instead of refusing the
@@ -40,20 +41,10 @@ use subtle::ConstantTimeEq;
 
 use super::ProviderMetadata;
 use super::jwks::KeySet;
+use crate::claims::usable_subject;
 
 /// How far the provider's clock may be from the server's for `exp`, `iat` and `nbf` (Q5).
 pub const CLOCK_SKEW: Duration = Duration::from_secs(60);
-
-/// The longest subject an identity holds, in characters: `stepclimb_core::identities`'
-/// `MAX_SUBJECT_CHARS`, which `identities.subject` is checked against. The same rule as the
-/// OAuth 2 subject check of `06-oauth2-and-vatsim-preset.md` B6.
-pub const MAX_SUBJECT_CHARS: usize = 255;
-
-/// Whether `subject` can be an identity's subject: not empty, no NUL, at most
-/// [`MAX_SUBJECT_CHARS`] characters.
-fn usable_subject(subject: &str) -> bool {
-    !subject.is_empty() && !subject.contains('\0') && subject.chars().count() <= MAX_SUBJECT_CHARS
-}
 
 /// The asymmetric algorithms `openidconnect` verifies (Q8). HMAC (`HS*`), `ES512` and `none`
 /// are never accepted.

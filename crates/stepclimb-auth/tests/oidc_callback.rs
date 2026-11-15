@@ -11,10 +11,11 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use openidconnect::core::CoreJwsSigningAlgorithm;
 use serde_json::json;
+use stepclimb_auth::claims;
 use stepclimb_auth::oidc::{
     CallbackError, ClientAuth as UsedAuth, CodeCallback, ExchangeError, Expected, FlowSecrets,
-    IdTokenError, JWKS_REFETCH_INTERVAL, JWKS_TTL, JwksCache, KeySet, MAX_SUBJECT_CHARS,
-    ProviderMetadata, ProviderSignIn, UserinfoError, VerifiedIdToken, authorization_url,
+    IdTokenError, JWKS_REFETCH_INTERVAL, JWKS_TTL, JwksCache, KeySet, ProviderMetadata,
+    ProviderSignIn, UserinfoError, VerifiedIdToken, accepted_algorithms, authorization_url,
     client_auth, discover, fetch_jwks, verify_id_token,
 };
 use stepclimb_auth::oidc_config::{self, ClientSecret, DraftSecret, OidcSettings};
@@ -348,6 +349,22 @@ async fn q8_an_algorithm_the_discovery_document_does_not_list_is_refused() {
         Some(json!(["HS256"])),
     );
     assert_eq!(id_token_error(rp.sign_in().await), IdTokenError::Algorithm);
+    // ES512 listed is not accepted either: openidconnect does not verify it.
+    rp.mock.set_discovery_field(
+        "id_token_signing_alg_values_supported",
+        Some(json!(["ES512", "RS256"])),
+    );
+    let metadata = rp.metadata().await;
+    assert_eq!(
+        accepted_algorithms(&metadata),
+        [CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256]
+    );
+    let issued = Issued::new(&rp).await;
+    let es512 = issued.with_header(&json!({ "alg": "ES512", "kid": rp.mock.signing_kid() }));
+    assert_eq!(
+        issued.verify_with(&es512, &accepted_algorithms(&metadata), &issued.keys),
+        Err(IdTokenError::Algorithm)
+    );
 }
 
 #[tokio::test]
@@ -494,7 +511,7 @@ async fn t9_a_wrong_at_hash_is_refused_and_an_absent_one_is_not_required() {
 #[tokio::test]
 async fn a_subject_no_identity_can_hold_is_refused() {
     let rp = Rp::new().await;
-    let longest = "\u{1F600}".repeat(MAX_SUBJECT_CHARS);
+    let longest = "\u{1F600}".repeat(claims::MAX_SUBJECT_CHARS);
     rp.mock.set_user(MockUser::new(&longest));
     let sign_in = rp.sign_in().await.expect("255 characters fit");
     assert_eq!(sign_in.subject, longest);
@@ -747,14 +764,23 @@ impl Issued {
 
     fn verify(&self, token: &str) -> Result<VerifiedIdToken, IdTokenError> {
         let algorithms = [CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256];
+        self.verify_with(token, &algorithms, &self.keys)
+    }
+
+    fn verify_with(
+        &self,
+        token: &str,
+        algorithms: &[CoreJwsSigningAlgorithm],
+        keys: &KeySet,
+    ) -> Result<VerifiedIdToken, IdTokenError> {
         let expected = Expected {
             issuer: &self.issuer,
             client_id: &self.client_id,
             nonce: &self.nonce,
             access_token: &self.access_token,
-            algorithms: &algorithms,
+            algorithms,
         };
-        verify_id_token(token, &self.keys, &expected, t0())
+        verify_id_token(token, keys, &expected, t0())
     }
 
     /// The token with its header replaced by `header`, payload and signature kept.
@@ -857,4 +883,51 @@ async fn two_keys_that_fit_a_token_without_a_kid_are_ambiguous() {
         issued.verify(&issued.with_header(&json!({ "alg": "RS256" }))),
         Err(IdTokenError::AmbiguousKey)
     );
+}
+
+/// The mock's key set with the signing key's JSON changed by `change`.
+fn with_signing_key(issued: &Issued, kid: &str, change: impl Fn(&mut serde_json::Value)) -> KeySet {
+    let mut set = serde_json::to_value(&issued.keys).expect("a key set serializes");
+    for key in set["keys"].as_array_mut().expect("keys") {
+        if key["kid"] == kid {
+            change(key);
+        }
+    }
+    serde_json::from_value(set).expect("a key set")
+}
+
+#[tokio::test]
+async fn a_kid_naming_a_key_of_another_type_or_use_is_no_key() {
+    let rp = Rp::new().await;
+    let issued = Issued::new(&rp).await;
+    let kid = rp.mock.signing_kid();
+    let rs256 = [CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256];
+
+    // The kid names an EC key (RFC 7515 A.3's public key): an RS256 signature cannot use it.
+    let ec = with_signing_key(&issued, &kid, |key| {
+        *key = json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "kid": kid,
+            "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+            "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0",
+        });
+    });
+    assert_eq!(
+        issued.verify_with(&issued.id_token, &rs256, &ec),
+        Err(IdTokenError::UnknownKey)
+    );
+
+    // The kid names the right RSA key, published for encryption only.
+    let enc = with_signing_key(&issued, &kid, |key| key["use"] = json!("enc"));
+    assert_eq!(
+        issued.verify_with(&issued.id_token, &rs256, &enc),
+        Err(IdTokenError::UnknownKey)
+    );
+
+    // The same key for signatures verifies.
+    let sig = with_signing_key(&issued, &kid, |key| key["use"] = json!("sig"));
+    issued
+        .verify_with(&issued.id_token, &rs256, &sig)
+        .expect("a signing key");
 }

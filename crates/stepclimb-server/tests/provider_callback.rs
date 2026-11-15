@@ -674,3 +674,48 @@ async fn no_log_line_carries_a_token_the_code_or_a_secret(pool: PgPool) {
         assert!(!log.contains(&secret), "a secret reached the log");
     }
 }
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_server_fault_after_the_flow_is_taken_still_clears_its_cookie(pool: PgPool) {
+    let fixture = Fixture::new(pool).await;
+    let provider = fixture.provider(fixture.org, "mock", "oidc").await;
+
+    // The flow's payload does not open: the flow is taken, then its payload fails.
+    let started = fixture.start("mock").await;
+    sqlx::query("UPDATE auth_flows SET payload = '\\x00010203'::bytea")
+        .execute(&fixture.pool)
+        .await
+        .expect("corrupt the payload");
+    let answer = fixture
+        .callback("mock", &started.back, Some(&started.cookie))
+        .await;
+    assert_eq!(
+        answer.status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "{answer:?}"
+    );
+    assert_eq!(answer.set_cookies(), [CLEARED], "{answer:?}");
+    assert_eq!(fixture.count("auth_flows").await, 0, "the flow was taken");
+
+    // The client secret does not open: the failure comes from deeper in the callback.
+    let started = fixture.start("mock").await;
+    sqlx::query(
+        "UPDATE identity_providers \
+         SET config = jsonb_set(config, '{client_secret,sealed}', '\"AAECAwQFBgcICQoL\"') \
+         WHERE id = $1",
+    )
+    .bind(provider)
+    .execute(&fixture.pool)
+    .await
+    .expect("corrupt the secret");
+    let answer = fixture
+        .callback("mock", &started.back, Some(&started.cookie))
+        .await;
+    assert_eq!(
+        answer.status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "{answer:?}"
+    );
+    assert_eq!(answer.set_cookies(), [CLEARED], "{answer:?}");
+    assert_eq!(fixture.token_requests(), 0, "nothing reached the provider");
+}

@@ -65,6 +65,7 @@ the module documentation of `stepclimb_auth::oidc::id_token`.
   from the controllable clock. ADR 0028's note on `IdTokenVerifier::set_time_fn` no longer
   describes the code.
 - The header checks are ours: `alg: none`, an algorithm outside Q8's list, `crit`, `cty`, `enc`
-  and a `typ` other than `JWT` are refused before the signature is checked.
+  and a `typ` other than `JWT` or `application/jwt` in any case (RFC 7515 4.1.9) are refused
+  before the signature is checked.
 - A crate upgrade that changes `CoreJsonWebKey`'s verification is caught by the tests that sign
   with the mock's keys and alter tokens after signing (`crates/stepclimb-auth/tests/oidc_callback.rs`).
