@@ -10,7 +10,8 @@
 //! signed-in user's, the organization's branding and its stylesheet (`/theme.css`), the local
 //! sign-in switches, enrollment links, the enrollment start route, passkey registration
 //! through a link and passkey sign-in, the start of sign-in with an outside identity provider,
-//! the signed-in user's passkeys, password enrollment, sign-in and change, and the shared error
+//! the signed-in user's passkeys, password enrollment, sign-in and change, the discovery document
+//! (`/.well-known/stepclimb`), and the shared error
 //! schemas and responses below. The other M0 specs add their endpoints under `/api/v1`.
 //!
 //! Every `/api/v1` operation lists its errors in `#[utoipa::path]` (spec 02 B6). The errors
@@ -27,7 +28,7 @@ use utoipa::{
 };
 
 use crate::{
-    accounts, admission_settings, appearance, auth, branding, enrollment,
+    accounts, admission_settings, appearance, auth, branding, discovery, enrollment,
     error::{FieldError, PROBLEM_JSON, Problem},
     health, identities, local_sign_in, me, my_passkeys, organization, passkey_enrollment,
     passkey_options, passkey_sign_in, password, provider_callback, provider_sign_in,
@@ -52,6 +53,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         health::healthz,
         health::readyz,
         auth::sign_out,
+        discovery::get_discovery,
         enrollment::start_enrollment,
         passkey_enrollment::enroll_passkey,
         passkey_sign_in::start_passkey_sign_in,
@@ -112,6 +114,11 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             health::HealthStatus,
             Problem,
             FieldError,
+            discovery::Discovery,
+            discovery::SignInMethod,
+            discovery::SignInKind,
+            discovery::LocalMethod,
+            discovery::DiscoveryTheme,
             me::Me,
             me::MeUser,
             me::MeGrant,
