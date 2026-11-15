@@ -90,5 +90,7 @@ declare module "@tanstack/react-router" {
   interface HistoryState {
     /** The address the email step hands to the passkey step (routes/sign-in.tsx). */
     email?: string;
+    /** The enrollment link's token, moved out of the fragment (routes/enroll.tsx). */
+    enrollToken?: string;
   }
 }

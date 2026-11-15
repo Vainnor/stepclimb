@@ -147,6 +147,7 @@ names the React Aria Components export each is built on.
 | | Skeleton | none | Appears only after 300 ms; no shimmer |
 | | EmptyState | none | One sentence on why it is empty and at most one primary action |
 | | ErrorState | none | What happened and how to fix it; a retry action slot |
+| | Code, FormError | none | Coordinator decision (2026-11-15), added for the sign-in screens (spec 11 I5): `Code` is a short machine value in running text (an error code, an ID) in the mono face, left to right, breaking anywhere; `FormError` is a form's failure that belongs to no one field, body-size danger text after a warning icon, announced as an alert, with an optional code in `Code` |
 
 ### Base styles (`src/styles/base.css`)
 

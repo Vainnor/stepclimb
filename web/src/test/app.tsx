@@ -3,7 +3,7 @@
 // method and path. jsdom has no `matchMedia`; every query answers `wide`, so a test picks the
 // SideNav (wide) or the BottomTabs layout.
 import { StringsProvider } from "@stepclimb/ui";
-import { createMemoryHistory } from "@tanstack/react-router";
+import { createMemoryHistory, type HistoryState } from "@tanstack/react-router";
 import { render } from "@testing-library/react";
 import { vi } from "vitest";
 import { type App, AppRoot, createApp } from "../app";
@@ -72,8 +72,11 @@ export function problem(status: number, code: string, title: string): Response {
   });
 }
 
-export function renderApp(path: string): App {
-  const app = createApp(createMemoryHistory({ initialEntries: [path] }));
+/** Renders the app at `path`; `state` is the history entry's, as after a reload of that entry. */
+export function renderApp(path: string, state?: HistoryState): App {
+  const history = createMemoryHistory({ initialEntries: [path] });
+  if (state !== undefined) history.replace(path, state);
+  const app = createApp(history);
   render(
     <StringsProvider catalogs={catalogs} isDevelopment>
       <AppRoot app={app} />

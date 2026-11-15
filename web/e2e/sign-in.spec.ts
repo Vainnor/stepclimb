@@ -42,58 +42,81 @@ function answerOf(page: Page, path: string) {
   );
 }
 
-test("enroll with a passkey, sign out, and sign in with it again (04 T20)", async ({ page }) => {
+/** The setup link `just e2e` printed. Assertions on it compare shapes, never print the token. */
+function setupLink(): string {
   const link = process.env.SC_E2E_ENROLL_URL;
   if (!link) throw new Error("SC_E2E_ENROLL_URL is unset: run the tests with `just e2e`");
-  const linkUrl = new URL(link);
-  expect(linkUrl.pathname).toBe("/enroll");
-  expect(linkUrl.hash).toMatch(/^#token=[A-Za-z0-9_-]{43}$/);
-  const credentials = await addAuthenticator(page);
+  return link;
+}
 
-  // The token stays in the fragment: the page request the browser sends carries none of it.
-  const pageRequest = page.waitForRequest((request) => request.resourceType() === "document");
-  await page.goto(link);
-  expect((await pageRequest).url()).not.toContain("token");
-  await expect(page.getByText(`You will sign in as ${EMAIL}.`)).toBeVisible();
-  expect(await violations(page)).toEqual([]);
+const TOKEN_FRAGMENT = /^#token=[A-Za-z0-9_-]{43}$/;
 
-  const registered = answerOf(page, "/auth/local/enrollment/passkey");
-  await page.getByRole("button", { name: "Create a passkey" }).click();
-  expect((await registered).status()).toBe(200);
-  expect(await credentials()).toBe(1);
+// The second test uses the link the first one used up, so they run in order and stop together.
+test.describe
+  .serial("a setup link", () => {
+    test("enroll with a passkey, sign out, and sign in with it again (04 T20)", async ({
+      page,
+    }) => {
+      const link = setupLink();
+      const linkUrl = new URL(link);
+      expect(linkUrl.pathname).toBe("/enroll");
+      expect(
+        TOKEN_FRAGMENT.test(linkUrl.hash),
+        "the link ends #token= and 43 base64url characters",
+      ).toBe(true);
+      const credentials = await addAuthenticator(page);
 
-  // Signed in: the shell loads the real `/me`, and the link's entry left the history.
-  await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Avery Example, account menu" })).toBeVisible();
-  expect(new URL(page.url()).hash).toBe("");
-  await expect(page).toHaveTitle("Home · Example Training");
+      // The token stays in the fragment: the page request the browser sends carries none of it.
+      const pageRequest = page.waitForRequest((request) => request.resourceType() === "document");
+      await page.goto(link);
+      expect(new URL((await pageRequest).url()).hash === "", "a request carries no fragment").toBe(
+        true,
+      );
+      await expect(page.getByText(`You will sign in as ${EMAIL}.`)).toBeVisible();
+      // The page moved the token out of the address bar before anything can be pressed.
+      expect(new URL(page.url()).hash === "", "the address bar shows no fragment").toBe(true);
+      expect(new URL(page.url()).pathname).toBe("/enroll");
+      expect(await violations(page)).toEqual([]);
 
-  await page.getByRole("button", { name: "Avery Example, account menu" }).click();
-  await page.getByRole("menuitem", { name: "Sign out" }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Sign in" })).toBeVisible();
-  expect((await page.request.get("/api/v1/me")).status()).toBe(401);
+      const registered = answerOf(page, "/auth/local/enrollment/passkey");
+      await page.getByRole("button", { name: "Create a passkey" }).click();
+      expect((await registered).status()).toBe(200);
+      expect(await credentials()).toBe(1);
 
-  await page.getByRole("textbox", { name: "Email" }).fill(EMAIL.toUpperCase());
-  await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByText(`Signing in as ${EMAIL.toUpperCase()}.`)).toBeVisible();
-  expect(page.url()).not.toContain("avery");
+      // Signed in: the shell loads the real `/me`, and the link's entry left the history.
+      await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Avery Example, account menu" })).toBeVisible();
+      expect(new URL(page.url()).pathname).toBe("/");
+      await expect(page).toHaveTitle("Home · Example Training");
 
-  const finished = answerOf(page, "/auth/local/passkey/finish");
-  await page.getByRole("button", { name: "Sign in with a passkey" }).click();
-  expect((await finished).status()).toBe(200);
-  await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
-  expect((await page.request.get("/api/v1/me")).status()).toBe(200);
-});
+      await page.getByRole("button", { name: "Avery Example, account menu" }).click();
+      await page.getByRole("menuitem", { name: "Sign out" }).click();
+      await expect(page.getByRole("heading", { level: 1, name: "Sign in" })).toBeVisible();
+      expect((await page.request.get("/api/v1/me")).status()).toBe(401);
 
-test("the used setup link no longer works", async ({ page }) => {
-  const link = process.env.SC_E2E_ENROLL_URL;
-  if (!link) throw new Error("SC_E2E_ENROLL_URL is unset: run the tests with `just e2e`");
-  // Runs after the enrollment test above: the tests of one file run in order, in one worker.
-  await page.goto(link);
-  await expect(
-    page.getByRole("heading", { level: 1, name: "This setup link does not work" }),
-  ).toBeVisible();
-});
+      await page.getByRole("textbox", { name: "Email" }).fill(EMAIL.toUpperCase());
+      await page.getByRole("button", { name: "Continue" }).click();
+      await expect(page.getByText(`Signing in as ${EMAIL.toUpperCase()}.`)).toBeVisible();
+      expect(page.url()).not.toContain("avery");
+
+      const finished = answerOf(page, "/auth/local/passkey/finish");
+      await page.getByRole("button", { name: "Sign in with a passkey" }).click();
+      expect((await finished).status()).toBe(200);
+      await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
+      expect((await page.request.get("/api/v1/me")).status()).toBe(200);
+    });
+
+    test("the used setup link no longer works", async ({ page }) => {
+      await page.goto(setupLink());
+      await expect(
+        page.getByRole("heading", { level: 1, name: "This setup link does not work" }),
+      ).toBeVisible();
+      await expect(page.getByRole("link", { name: "Go to sign in" })).toHaveAttribute(
+        "href",
+        "/sign-in",
+      );
+    });
+  });
 
 const themes = ["light", "dark", "high-contrast"] as const;
 const widths = [

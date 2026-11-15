@@ -535,10 +535,15 @@ Coordinator decisions (2026-11-15), on the owner's delegation, while building I5
   after a press. After `auth.flow_invalid`, `auth.flow_expired` or `auth.passkey_invalid` (the
   server deleted the flow) it asks for new options.
 - **The enrollment page.** `/enroll` reads the token from the fragment only (a `?token=` query is
-  ignored) and sends it only in request bodies. It asks no passkey name, so the server's
+  ignored) and sends it only in request bodies. Once read, the page moves the token into the
+  history entry's state and replaces the entry without the fragment, so the address bar no longer
+  shows it while a reload still finds it; a new link pasted into the same tab (only the fragment
+  changes) replaces it. It asks no passkey name, so the server's
   `Passkey` applies. A link whose `methods` holds only `password` says the browser cannot set
   that up yet. `auth.enrollment_invalid` and `auth.enrollment_expired`, from either route, end
-  the page in an ErrorState without "Try again"; so does `auth.method_disabled`. After sign-in
+  the page in an ErrorState without "Try again"; so does `auth.method_disabled`. The dead-link
+  page links to `/sign-in`. "Try again" after a failed start also clears the failed
+  registration's message. After sign-in
   the return target replaces the page's history entry, so Back does not reopen the link.
 - **Completing sign-in.** The app clears its query cache and opens the server's `return_to`
   after checking it again by B15's rule, so a target the server let through but the client
@@ -549,13 +554,17 @@ Coordinator decisions (2026-11-15), on the owner's delegation, while building I5
   a 429 names the wait when `Retry-After` gives seconds. A ceremony the browser ends has its own
   too: cancelled or timed out (`NotAllowedError`, `AbortError`), a passkey this device already
   holds for the account (`InvalidStateError` while registering), a browser without WebAuthn's
-  JSON methods (`parseCreationOptionsFromJSON`, Baseline 2025), and any other refusal. Any other
-  code shows the general message and the code in mono.
-- **The callback error (B18)** is built with the first flow that redirects with `?error=` (05 or
-  06); nothing does yet.
+  JSON methods (`parseCreationOptionsFromJSON`, Baseline 2025), a page that is not a secure
+  context (`window.isSecureContext`; it is told to open the `https` address), and any other
+  refusal. Any other code shows the general message and the code in Stepclimb UI's `Code`. A
+  failure that belongs to no field is Stepclimb UI's `FormError` at body size. The copy names no
+  server setting (a link's lifetime, a flow's), so a changed setting cannot make it wrong.
+- **The callback error (B18)** moved to #171 with the first flow that redirects with `?error=`
+  (05 or 06); nothing does yet.
 - **End to end.** The e2e stack's public URL is `http://localhost:<port>`, since a relying party
   ID cannot be an IP address (04 B8), and `just e2e` creates its one organization and admin with
-  `stepclimb admin create`, whose printed link the Playwright test opens (04 T20).
+  `stepclimb admin create`, whose printed link the Playwright test opens (04 T20). Its sign-in
+  rate limit is 200 a minute, since every test comes from one address.
 
 ## Issues
 
@@ -584,10 +593,12 @@ In dependency order. Each is one PR.
   and sign-out, navigation entries gated by permission. Covers B5, B9 to B12, B15; T2 to T5, T7.
   Depends on: I3; 03-users-and-identities (the `/me` response); 08 (sign-out endpoint and
   session expiry); 13 I13 (Toast).
-- **I5. Sign-in screens.** Deliverable: the method list, provider buttons, the local-account step
-  routes (email, passkey, password, TOTP, magic link sent), error messages per problem `code`,
-  callback error display. Covers B13 to B18; T6, T8, T16, T19 (sign-in screen). Depends on: I3;
-  04, 05, 06, 07, 08 (endpoints and codes; 08 I9 for `/.well-known/stepclimb`).
+- **I5. Sign-in screens.** Deliverable: the enrollment page, the email and passkey step routes,
+  error messages per problem `code` for those routes. Covers B15, B16 and B17 for the local
+  passkey method; T7, T8, T19 (sign-in screen and enrollment page). Depends on: I3; 04 I2 to I4;
+  08 (codes). Narrowed by the coordinator (2026-11-15): the method list (B13), provider buttons
+  (B14), the callback error (B18), the password, TOTP and magic-link steps, and T6 and T16 moved
+  to issue #171, which depends on 08 I9 (`/.well-known/stepclimb`), 04 I6 to I8, 05 and 06.
 - **I6. Appearance choice and OrgSwitcher.** Deliverable: the appearance and density settings
   applied before first paint as Q6 decides, and a test that the OrgSwitcher stays out of the
   DOM (B19). Covers B19, B21; T9. Depends on: I4; Q6 answered; 12 I4 (high-contrast theme).

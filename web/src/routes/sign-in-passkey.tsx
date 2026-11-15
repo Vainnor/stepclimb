@@ -5,16 +5,15 @@
 // and a session ends the step at the flow's return target. When the server has deleted the flow
 // (expired, used, or the passkey refused), the step asks for new options. Without the address in
 // the history entry (a link opened directly) it goes back to the email step.
-import { Button, Heading, Link, Text, useStepclimbStrings } from "@stepclimb/ui";
+import { Button, FormError, Heading, Link, Text, useStepclimbStrings } from "@stepclimb/ui";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Navigate, useRouter, useSearch } from "@tanstack/react-router";
 import { api, unwrap } from "../api";
 import { useDocumentTitle } from "../layouts/document-title";
 import type { SignInSearch } from "../router";
 import { useCompleteSignIn } from "../sign-in/complete";
-import { FormError } from "../sign-in/form-error";
 import { useLocationHere } from "../sign-in/location-here";
-import { getPasskey, PasskeyError, passkeysSupported } from "../sign-in/passkey";
+import { getPasskey, PasskeyError, passkeyUnavailable } from "../sign-in/passkey";
 import { needsNewCeremony, signInProblem } from "../sign-in/problems";
 
 export function SignInPasskeyView() {
@@ -38,7 +37,8 @@ function PasskeyStep({ email, search }: { email: string; search: SignInSearch })
   useDocumentTitle(title);
   const router = useRouter();
   const complete = useCompleteSignIn();
-  const supported = passkeysSupported();
+  const unavailable = passkeyUnavailable();
+  const supported = unavailable === undefined;
 
   // A POST that starts a flow: fetched once per visit, never again on focus or reconnect, and
   // dropped when the step is left, so a later visit starts a new flow.
@@ -69,9 +69,10 @@ function PasskeyStep({ email, search }: { email: string; search: SignInSearch })
     else void start.refetch();
   };
 
-  const failure = supported
-    ? (finish.error ?? (start.isError ? start.error : null))
-    : new PasskeyError("unsupported");
+  const failure = unavailable
+    ? new PasskeyError(unavailable)
+    : (finish.error ?? (start.isError ? start.error : null));
+  const problem = failure ? signInProblem(failure, "signIn", t) : undefined;
   const otherEmail = router.buildLocation({ to: "/sign-in", search }).href;
 
   return (
@@ -80,7 +81,7 @@ function PasskeyStep({ email, search }: { email: string; search: SignInSearch })
       <Text elementType="p" className="wrap-anywhere">
         {t("signIn.passkey.as", { email })}
       </Text>
-      {failure ? <FormError problem={signInProblem(failure, "signIn", t)} /> : null}
+      {problem ? <FormError code={problem.code}>{problem.message}</FormError> : null}
       {supported ? (
         <Button
           intent="primary"

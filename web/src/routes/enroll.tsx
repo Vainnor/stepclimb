@@ -1,27 +1,33 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // `/enroll`, where an enrollment link opens (docs/specs/m0/04-local-accounts.md B7, B8, Q6, Q7):
 // `https://<host>/enroll#token=<token>`. The token is read from the fragment, which a browser never
-// sends to a server, and goes only into the body of the start and passkey requests. The start
+// sends to a server, then moved into the history entry's state and the fragment removed, so the
+// address bar, a screenshot or a shared screen no longer shows it while a reload still finds it. It
+// goes only into the body of the start and passkey requests. The start
 // answer names the account and the methods the link can set up; registering a passkey signs the
 // user in and opens the return target in place of this page, so the link's entry leaves the
 // history. A link that is used, replaced, unknown or expired can never work again: the page says
-// so and offers no retry.
+// so, offers no retry, and links to the sign-in screen.
 import {
   Button,
+  Code,
   ErrorState,
+  FormError,
   Heading,
+  Link,
   Skeleton,
   type Strings,
   Text,
   useStepclimbStrings,
 } from "@stepclimb/ui";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
+import { useEffect } from "react";
 import { ApiError, api, unwrap } from "../api";
 import { useDocumentTitle } from "../layouts/document-title";
 import { useCompleteSignIn } from "../sign-in/complete";
-import { FormError } from "../sign-in/form-error";
 import { useLocationHere } from "../sign-in/location-here";
-import { createPasskey, PasskeyError, passkeysSupported } from "../sign-in/passkey";
+import { createPasskey, PasskeyError, passkeyUnavailable } from "../sign-in/passkey";
 import { isDeadLink, needsNewCeremony, signInProblem } from "../sign-in/problems";
 
 /** The token in a fragment `token=<token>`, or undefined when there is none. */
@@ -30,10 +36,26 @@ export function enrollmentToken(hash: string): string | undefined {
   return token === null || token === "" ? undefined : token;
 }
 
+/**
+ * The link's token: from the fragment the first time, which this then moves into the history
+ * entry's state (replacing the entry, without the fragment); from that state after, so a reload
+ * keeps it. A new link pasted into the same tab changes only the fragment, and wins.
+ */
+function useEnrollmentToken(): string | undefined {
+  const navigate = useNavigate();
+  const fromHash = useLocationHere("/enroll", (location) => enrollmentToken(location.hash));
+  const fromState = useLocationHere("/enroll", (location) => location.state.enrollToken);
+  useEffect(() => {
+    if (fromHash === undefined) return;
+    void navigate({ to: "/enroll", hash: "", state: { enrollToken: fromHash }, replace: true });
+  }, [fromHash, navigate]);
+  return fromHash ?? fromState;
+}
+
 export function EnrollView() {
   const { t } = useStepclimbStrings();
   useDocumentTitle(t("enroll.title"));
-  const token = enrollmentToken(useLocationHere("/enroll", (location) => location.hash));
+  const token = useEnrollmentToken();
   if (token === undefined) {
     return (
       <ErrorState title={t("enroll.noToken.title")} level={1}>
@@ -66,22 +88,24 @@ function isFinal(error: unknown): boolean {
   );
 }
 
+/** A dead link can only be replaced: it points to signing in instead. Other errors may retry. */
+function failureAction(error: unknown, t: Strings["t"], onRetry?: () => void) {
+  if (isDeadLink(error)) return <Link href="/sign-in">{t("enroll.problem.signIn")}</Link>;
+  if (isFinal(error) || onRetry === undefined) return undefined;
+  return <Button onPress={onRetry}>{t("loadError.retry")}</Button>;
+}
+
 function LinkFailure({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
   const { t } = useStepclimbStrings();
   const problem = signInProblem(error, "enroll", t);
   return (
-    <ErrorState
-      title={failureTitle(error, t)}
-      level={1}
-      action={
-        isFinal(error) || onRetry === undefined ? undefined : (
-          <Button onPress={onRetry}>{t("loadError.retry")}</Button>
-        )
-      }
-    >
+    <ErrorState title={failureTitle(error, t)} level={1} action={failureAction(error, t, onRetry)}>
       {problem.message}
       {problem.code === undefined ? null : (
-        <code className="mt-1 block font-mono wrap-anywhere">{problem.code}</code>
+        <>
+          {" "}
+          <Code>{problem.code}</Code>
+        </>
       )}
     </ErrorState>
   );
@@ -114,13 +138,18 @@ function Enrollment({ token }: { token: string }) {
   });
 
   if (start.isPending) return <EnrollmentSkeleton />;
-  if (start.isError)
-    return <LinkFailure error={start.error} onRetry={() => void start.refetch()} />;
+  // Retrying the start clears the registration's error too, or it would show again beside the
+  // new options.
+  const retry = () => {
+    register.reset();
+    void start.refetch();
+  };
+  if (start.isError) return <LinkFailure error={start.error} onRetry={retry} />;
   if (isDeadLink(register.error)) return <LinkFailure error={register.error} />;
 
   const options = start.data.methods.includes("passkey") ? start.data.passkey_options : undefined;
-  const supported = passkeysSupported();
-  const failure = supported ? register.error : new PasskeyError("unsupported");
+  const unavailable = passkeyUnavailable();
+  const failure = unavailable ? new PasskeyError(unavailable) : register.error;
   const create = () => {
     register.reset();
     if (options) register.mutate(options);
@@ -137,8 +166,8 @@ function Enrollment({ token }: { token: string }) {
       ) : (
         <>
           <Text elementType="p">{t("enroll.passkey.description")}</Text>
-          {failure ? <FormError problem={signInProblem(failure, "enroll", t)} /> : null}
-          {supported ? (
+          {failure ? <Failure error={failure} /> : null}
+          {unavailable === undefined ? (
             <Button
               intent="primary"
               onPress={create}
@@ -151,6 +180,12 @@ function Enrollment({ token }: { token: string }) {
       )}
     </>
   );
+}
+
+function Failure({ error }: { error: unknown }) {
+  const { t } = useStepclimbStrings();
+  const problem = signInProblem(error, "enroll", t);
+  return <FormError code={problem.code}>{problem.message}</FormError>;
 }
 
 function EnrollmentSkeleton() {

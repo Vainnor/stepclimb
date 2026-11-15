@@ -35,6 +35,8 @@ export function needsNewCeremony(error: unknown): boolean {
 
 function passkeyMessage(error: PasskeyError, screen: SignInScreen, t: Strings["t"]): string {
   switch (error.failure) {
+    case "insecure":
+      return t("signIn.passkey.insecure");
     case "unsupported":
       return t("signIn.passkey.unsupported");
     case "cancelled":

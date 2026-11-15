@@ -26,7 +26,7 @@ export const webMessages: Catalog = {
     "enroll.passkey.exists":
       "This device already has a passkey for this account. Sign in with it, or create one on another device.",
     "enroll.passkey.submit": "Create a passkey",
-    "enroll.problem.expired": "Setup links last 7 days. Ask an administrator for a new one.",
+    "enroll.problem.expired": "It can no longer be used. Ask an administrator for a new one.",
     "enroll.problem.expiredTitle": "This setup link has expired",
     "enroll.problem.invalid":
       "It was already used, replaced by a newer link, or copied incompletely. Ask an administrator for a new one.",
@@ -34,6 +34,7 @@ export const webMessages: Catalog = {
     "enroll.problem.methodDisabled":
       "Your organization has turned off passkey and password sign-in. Ask an administrator how to sign in.",
     "enroll.problem.passkeyInvalid": "Stepclimb could not register that passkey. Try again.",
+    "enroll.problem.signIn": "Go to sign in",
     "enroll.problem.title": "This setup link could not be opened",
     "enroll.title": "Set up your account",
     "home.empty": "You have no {courses} yet.",
@@ -59,12 +60,14 @@ export const webMessages: Catalog = {
       "The passkey request was cancelled or timed out. Try again when you are ready.",
     "signIn.passkey.failed":
       "This browser could not use a passkey. Try again, or use another browser.",
+    "signIn.passkey.insecure":
+      "Passkeys work only over a secure connection. Open this page at its https:// address, then try again.",
     "signIn.passkey.otherEmail": "Use a different email",
     "signIn.passkey.submit": "Sign in with a passkey",
     "signIn.passkey.title": "Use your passkey",
     "signIn.passkey.unsupported":
       "This browser cannot use passkeys. Update it, or use a current version of Chrome, Edge, Firefox or Safari.",
-    "signIn.problem.flowExpired": "The passkey request expired after 10 minutes. Try again.",
+    "signIn.problem.flowExpired": "The passkey request expired. Try again.",
     "signIn.problem.flowInvalid":
       "This sign-in was already finished or replaced by one in another tab. Try again.",
     "signIn.problem.methodDisabled":

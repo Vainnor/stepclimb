@@ -24,9 +24,15 @@ export interface WebAuthnStub {
 export function stubWebAuthn(): WebAuthnStub {
   const create = vi.fn(async () => new FakePublicKeyCredential());
   const get = vi.fn(async () => new FakePublicKeyCredential());
+  stubSecureContext(true);
   vi.stubGlobal("PublicKeyCredential", FakePublicKeyCredential);
   Object.defineProperty(navigator, "credentials", { value: { create, get }, configurable: true });
   return { create, get };
+}
+
+/** Sets `isSecureContext`, which jsdom's page does not decide as a browser would. */
+export function stubSecureContext(secure: boolean): void {
+  vi.stubGlobal("isSecureContext", secure);
 }
 
 /** Removes the stand-in, as for a browser without WebAuthn. */

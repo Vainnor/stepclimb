@@ -13,7 +13,13 @@ import {
   stubMatchMedia,
   stubServer,
 } from "../test/app";
-import { credentialJson, domError, removeWebAuthn, stubWebAuthn } from "../test/webauthn";
+import {
+  credentialJson,
+  domError,
+  removeWebAuthn,
+  stubSecureContext,
+  stubWebAuthn,
+} from "../test/webauthn";
 
 const requestOptions = {
   publicKey: {
@@ -190,12 +196,38 @@ describe("the passkey step", () => {
   });
 
   it("says when the browser cannot use passkeys, and starts no flow", async () => {
+    stubSecureContext(true);
     const fetch = stubServer({});
     renderApp("/sign-in");
     await enterEmail();
     expect(screen.getByRole("alert")).toHaveTextContent("This browser cannot use passkeys.");
     expect(screen.queryByRole("button", { name: "Sign in with a passkey" })).toBeNull();
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("says to open the https address on a page that is not a secure context", async () => {
+    stubWebAuthn();
+    stubSecureContext(false);
+    const fetch = stubServer({});
+    renderApp("/sign-in");
+    await enterEmail();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Passkeys work only over a secure connection. Open this page at its https:// address",
+    );
+    expect(screen.queryByRole("button", { name: "Sign in with a passkey" })).toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("counts a browser without credentials.get as one that cannot use passkeys", async () => {
+    stubWebAuthn();
+    Object.defineProperty(navigator, "credentials", {
+      value: { create: async () => null },
+      configurable: true,
+    });
+    stubServer({});
+    renderApp("/sign-in");
+    await enterEmail();
+    expect(screen.getByRole("alert")).toHaveTextContent("This browser cannot use passkeys.");
   });
 
   it("says a cancelled prompt was cancelled, and sends nothing", async () => {
@@ -232,7 +264,7 @@ describe("problem codes on the passkey step (B17, T8)", () => {
   });
 
   it.each([
-    [400, "auth.flow_expired", "The passkey request expired after 10 minutes. Try again."],
+    [400, "auth.flow_expired", "The passkey request expired. Try again."],
     [
       400,
       "auth.flow_invalid",

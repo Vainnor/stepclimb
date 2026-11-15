@@ -26,6 +26,9 @@ services:
       # name, not 127.0.0.1: the WebAuthn relying party ID is the public URL's host, which cannot be
       # an IP address (spec 04 B8), and browsers treat http://localhost as a secure context.
       STEPCLIMB_PUBLIC_URL: http://localhost:${SC_CI_PORT:?SC_CI_PORT is set by bin/ci_gate.py}
+      # The end-to-end tests come from one address and start a dozen sign-in flows within a
+      # minute; the default of 20 a minute (spec 08 B40) would leave them little headroom.
+      STEPCLIMB_SIGN_IN_RATE_LIMIT: "200"
     labels:
       stepclimb.ci.slot: "${SC_CI_SLOT:?SC_CI_SLOT is set by bin/ci_gate.py}"
     ports: !override
