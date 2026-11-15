@@ -1,9 +1,11 @@
 # 0031. The release image: one archive pushed by digest, signed keyless, an SPDX SBOM from syft
 
-- **Status:** Accepted
+- **Status:** Proposed
 - **Date:** 2026-11-15
-- **Decider:** the coordinator on the owner's delegation (overnight, 2026-11-15); what a release
-  publishes is the owner's Q1 option B (`docs/specs/m0/01-repo-and-ci.md`, 13 Nov 2026)
+- **Decider:** the owner, not yet. The coordinator recommends it on the owner's delegation
+  (overnight, 2026-11-15) and the recipes are built this way; nothing publishes until the owner
+  runs `just release-publish`. What a release publishes is the owner's Q1 option B
+  (`docs/specs/m0/01-repo-and-ci.md`, 13 Nov 2026).
 - **Related:** `docs/plan/technical.md` -> Hosting and operations (Images), Security and privacy
   (supply chain); `docs/specs/m0/01-repo-and-ci.md` B16, D9; ADR 0021, ADR 0030;
   `bin/release_artifacts.py`; `deploy/Dockerfile`
@@ -60,6 +62,8 @@ cargo-auditable so syft can list its crates.
 
 ## Decision
 
+Proposed, awaiting the owner. The recipes implement it:
+
 - **Push.** Option A: one OCI archive, pushed with skopeo (nixpkgs 1.24.1, published 16 Sep
   2026) keeping its digests. `just release-publish` refuses to sign when the registry serves
   another digest under the version's tag, and refuses to push over a tag that already holds
@@ -74,7 +78,11 @@ cargo-auditable so syft can list its crates.
 - **Crates.** `deploy/Dockerfile` builds the server with `cargo auditable build`
   (cargo-auditable 0.7.7, published 2 Oct 2026), which stores the crates compiled into the binary
   in a `.dep-v0` section that syft reads. `bin/release_artifacts.py` refuses an SBOM that lists
-  no Debian package, no crate, or not `stepclimb-server` at the release's version.
+  no Debian package, no crate, or not `stepclimb-server` at the release's version, and
+  `bin/check-image.sh` (in `just ci`) refuses a binary without the section. The cargo-auditable
+  version moves by hand, to a release at least 14 days old. Its own dependencies come from its
+  lockfile (`cargo install --locked`), outside `Cargo.lock`, so `cargo deny` does not check them;
+  none of them is linked into the server.
 
 ## Consequences
 
@@ -86,5 +94,8 @@ cargo-auditable so syft can list its crates.
 - The release builds on an amd64 Docker engine only, because `deploy/Dockerfile` cross-compiles
   arm64 from amd64.
 - Keyless signing records the signer's email address and the image digests in Sigstore's public
-  transparency log (Rekor), even while the repository is private.
+  transparency log (Rekor), even while the repository is private. The SBOM attestations are
+  in-toto statements in DSSE envelopes; evidence points at Rekor keeping the envelope, so the
+  SBOMs' content (every package and version in the image) may be retrievable from the public
+  log as well.
 - A version tag on GHCR is never replaced by the recipe. A broken release gets a new version.

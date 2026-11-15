@@ -39,7 +39,8 @@ IMAGE = "ghcr.io/vainnor/stepclimb"
 SOURCE = "https://github.com/Vainnor/stepclimb"
 PLATFORMS = ("linux/amd64", "linux/arm64")
 # anchore/syft v1.55.0 (built 19 Oct 2026), its multi-platform index. Moved by hand, at least
-# 14 days after the build it names (docs/adr/0031).
+# 14 days after the build it names (docs/adr/0031). Split in two only for the line length: the
+# tag and the digest form one reference.
 SYFT_IMAGE = ("docker.io/anchore/syft:v1.55.0"
               "@sha256:4cc92b64ca74ffca4c94d4c8fcc01f217731375300be14d0b6eeb2e82eaa110a")
 INDEX_TYPES = ("application/vnd.oci.image.index.v1+json",
@@ -232,6 +233,9 @@ def load_manifest(root: Path, tag: str, commit: str) -> dict:
         raise ReleaseError(f"cannot read {files['manifest']} ({error}); run just release {tag}") from error
     if manifest.get("tag") != tag or manifest.get("commit") != commit:
         raise ReleaseError(f"{files['manifest']} was built from another tag or commit; run just release {tag}")
+    if manifest.get("image") != f"{IMAGE}:{release.tag_version(tag)}":
+        raise ReleaseError(f"{files['manifest']} names the image {manifest.get('image')}, not "
+                           f"{IMAGE}:{release.tag_version(tag)}; run just release {tag}")
     recorded = [(manifest["archive"], files["archive"]), (manifest["body"], files["body"])]
     recorded += [(manifest["sboms"][p], files[p]) for p in PLATFORMS]
     for entry, path in recorded:

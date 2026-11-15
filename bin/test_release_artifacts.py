@@ -294,6 +294,29 @@ class Publish(Tagged):
         self.assertEqual(result.returncode, 1)
         self.assertIn("image.oci.tar is missing or changed", result.stderr)
 
+    def test_refuses_a_dirty_tree(self) -> None:
+        (self.tagged / "stray.txt").write_text("x")
+        result = self.artifacts("publish", self.TAG, "--dry-run")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("the working tree has changes", result.stderr)
+
+    def edit_manifest(self, **changes: object) -> None:
+        path = self.out("artifacts.json")
+        path.write_text(json.dumps({**json.loads(path.read_text()), **changes}))
+
+    def test_refuses_a_manifest_whose_digests_differ_from_the_archive(self) -> None:
+        self.edit_manifest(index="sha256:" + "1" * 64)
+        result = self.artifacts("publish", self.TAG, "--dry-run")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("the image archive's digests differ", result.stderr)
+
+    def test_refuses_a_manifest_naming_another_image(self) -> None:
+        self.edit_manifest(image="ghcr.io/someone-else/stepclimb:0.1.0-test.1")
+        result = self.artifacts("publish", self.TAG, "--dry-run")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("names the image ghcr.io/someone-else/stepclimb", result.stderr)
+        self.assertEqual(self.calls(), [])
+
     def test_never_replaces_a_published_version(self) -> None:
         (self.registry / f"docker://{a.IMAGE}:{self.TAG[1:]}".replace("/", "_").replace(":", "_")).write_text("{}")
         result = self.artifacts("publish", self.TAG)
@@ -357,6 +380,14 @@ class Archive(unittest.TestCase):
         path = self.write(layout, {f"blobs/sha256/{digest[7:]}": b"tampered"})
         with self.assertRaisesRegex(ReleaseError, "does not match its digest"):
             a.read_index(path)
+
+    def test_refuses_an_index_listing_a_platform_twice(self) -> None:
+        manifest = {"digest": "sha256:" + "2" * 64, "platform": {"os": "linux", "architecture": "amd64"}}
+        index = json.dumps({"manifests": [manifest, manifest]}).encode()
+        digest = "sha256:" + hashlib.sha256(index).hexdigest()
+        layout = {"manifests": [{"mediaType": a.INDEX_TYPES[0], "digest": digest}]}
+        with self.assertRaisesRegex(ReleaseError, "lists linux/amd64 twice"):
+            a.read_index(self.write(layout, {f"blobs/sha256/{digest[7:]}": index}))
 
     def test_refuses_a_layout_that_is_not_one_index(self) -> None:
         layout = {"manifests": [{"mediaType": "application/vnd.oci.image.manifest.v1+json",

@@ -6,7 +6,8 @@
 #   - its configured user resolves, in the image's own /etc/passwd, to a uid other than 0;
 #   - it holds no shell (sh, bash, dash, ash, ksh, zsh or busybox) anywhere in its file system,
 #     and for the machine's own platform `docker run --entrypoint sh` fails;
-#   - /usr/local/bin holds the stepclimb binary and nothing else;
+#   - /usr/local/bin holds the stepclimb binary and nothing else, and the binary carries
+#     cargo-auditable's `.dep-v0` section, the crate list the release SBOM reads (ADR 0031);
 #   - `stepclimb check-config` runs in it and accepts a valid configuration: in a container for
 #     the machine's own platform, and under QEMU user-mode emulation (qemu-aarch64 or
 #     qemu-x86_64, from the Nix dev shell on Linux) for another, which Docker without a
@@ -66,6 +67,26 @@ with open(sys.argv[1], "rb") as file:
 if header[:4] != b"\x7fELF" or header[5] != 1:
     sys.exit("not a little-endian ELF file")
 print({62: "x86_64", 183: "aarch64"}.get(struct.unpack_from("<H", header, 18)[0], "other"))
+PY
+}
+
+# Whether the 64-bit little-endian ELF file $1 has a section named $2.
+has_section() {
+    python3 -I - "$1" "$2" <<'PY'
+import struct, sys
+with open(sys.argv[1], "rb") as file:
+    data = file.read()
+if data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
+    sys.exit("not a 64-bit little-endian ELF file")
+(shoff,) = struct.unpack_from("<Q", data, 40)
+shentsize, shnum, shstrndx = struct.unpack_from("<HHH", data, 58)
+names_offset = struct.unpack_from("<Q", data, shoff + shstrndx * shentsize + 24)[0]
+for i in range(shnum):
+    (name,) = struct.unpack_from("<I", data, shoff + i * shentsize)
+    end = data.index(b"\0", names_offset + name)
+    if data[names_offset + name:end].decode() == sys.argv[2]:
+        sys.exit(0)
+sys.exit(1)
 PY
 }
 
@@ -160,6 +181,9 @@ check_platform() {
     [[ $(elf_machine "$root/usr/local/bin/stepclimb") == "$machine" ]] \
         || fail "/usr/local/bin/stepclimb in $tag is not built for $machine"
 
+    has_section "$root/usr/local/bin/stepclimb" .dep-v0 \
+        || fail "/usr/local/bin/stepclimb in $tag has no .dep-v0 section (cargo auditable build in deploy/Dockerfile)"
+
     user=$(docker image inspect --format '{{.Config.User}}' "$tag")
     [[ -n $user ]] || fail "$tag sets no user, so it runs as root"
     uid=$(uid_of "$user" "$root/etc/passwd")
@@ -194,7 +218,7 @@ check_platform() {
     grep -qx 'stepclimb: the configuration is valid' "$work/check.log" \
         || fail "check-config did not report a valid configuration: $(cat "$work/check.log")"
 
-    echo "image check: $platform ok (user $user, uid $uid; no shell; $machine binary; check-config ran $how)"
+    echo "image check: $platform ok (user $user, uid $uid; no shell; $machine binary with .dep-v0; check-config ran $how)"
 }
 
 for platform in "${platforms[@]}"; do

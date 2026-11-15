@@ -131,7 +131,10 @@ dependency update first.
    ([ADR 0031](docs/adr/0031-release-image-signing-and-sbom.md)). The digests and file hashes go
    in `v0.1.0-artifacts.json` and the GitHub Release body in `v0.1.0-release.md`. Nothing is
    published. The arm64 image is cross-compiled from amd64, so an arm64 machine cannot build the
-   release.
+   release. Writing both platforms into one OCI archive needs Docker's containerd image store
+   (`docker info` shows `driver-type io.containerd.snapshotter.v1`) or a buildx builder with the
+   `docker-container` driver (`docker buildx create --use`); the classic store refuses the
+   export.
 7. `just release-publish v0.1.0 --dry-run` checks the tag, the `just ci` pass and every artifact
    against `v0.1.0-artifacts.json`, and prints the commands of the next step without running any.
 8. `just release-publish v0.1.0` runs them: it pushes the archive to
@@ -142,7 +145,11 @@ dependency update first.
    two SBOMs (`--prerelease` for a version such as `0.1.0-rc.1`). It refuses a version the
    registry already holds as another image; run again after a failed step, it skips the push of
    the same image and repeats the rest. cosign opens a browser for each of its three keyless
-   signings.
+   signings. Before pushing, it asks GHCR for the version's tag and pushes only when the answer
+   says `manifest unknown`. What GHCR answers for a repository that does not exist yet, on the
+   first publish, has not been checked (it may be `NAME_UNKNOWN` or `denied`); any other answer
+   stops the recipe before it pushes. Record the first run's answer here, and widen the check in
+   `bin/release_artifacts.py` (`registry_digest`) if it differs.
 
 Before the first release, the owner changes the repository's settings so `main` takes merge
 commits only and `next` squash merges only (ADR 0030 -> Consequences); until then GitHub refuses
@@ -159,8 +166,10 @@ The maintainer sets these up once, on the machine that runs step 8:
 - `gh auth login` with access to the repository, for the GitHub Release.
 - An account cosign's keyless flow accepts (GitHub, Google or Microsoft). The signing
   certificate names that account's email address, and the signature, the certificate and the
-  SBOM attestations' digests are recorded in Sigstore's public transparency log (Rekor), so the
-  address and the image digests become public even while the repository is private.
+  SBOM attestations are recorded in Sigstore's public transparency log (Rekor), so the address
+  and the image digests become public even while the repository is private. Evidence points at
+  Rekor keeping each attestation's envelope, so the SBOMs' content (every package and version
+  in the image) may be readable there too.
 - A first push creates the package under the account, private. GitHub connects it to the
   repository from the image's `org.opencontainers.image.source` label. Make it public in the
   package settings, or every pull needs a token. GitHub's billing docs say Container registry
