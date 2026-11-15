@@ -1244,6 +1244,161 @@ async fn b20_every_table_entry_passes_its_cases(pool: PgPool) {
     assert!(failures.is_empty(), "{failures:#?}");
 }
 
+// Bodies sent as arrays (`ApiJson` reads every struct from an object only).
+
+/// Each entry's 2xx body with an object, at the top or nested in another, rewritten as an
+/// array of its values: 400 `request.malformed` for every order of the values, so for the
+/// struct's field order too, which serde would otherwise accept. A field the document gives
+/// as a free-form object (a WebAuthn credential) is any JSON to `ApiJson`, so is left as it is.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn every_table_body_sent_as_an_array_is_malformed(pool: PgPool) {
+    let world = World::new(pool).await;
+    let app = router(world.state()).layer(Extension(ConnectInfo(CLIENT)));
+    let doc = document();
+    let operations = operations(&doc).expect("named operations");
+    let mut failures = Vec::new();
+    let mut sent = 0;
+    for entry in TABLE {
+        let op = operations
+            .iter()
+            .find(|op| op.id == entry.operation_id)
+            .unwrap_or_else(|| panic!("{} is not in the document", entry.operation_id));
+        let org = world.org().await;
+        let (call, cookie) = allowed_call(&org, &entry.access).await;
+        let Some(body) = &call.body else { continue };
+        let schema = &doc["paths"][&op.path][op.method.as_str().to_lowercase()]["requestBody"]["content"]
+            ["application/json"]["schema"];
+        for form in array_forms(&doc, schema, body) {
+            sent += 1;
+            let call = Call {
+                params: call.params.clone(),
+                body: Some(form),
+                at: call.at,
+            };
+            let answer = match call_op(&app, op, &call, org.id, Some(&cookie)).await {
+                Ok(answer) => answer,
+                Err(why) => {
+                    failures.push(format!("{}: {why}", op.id));
+                    continue;
+                }
+            };
+            if let Err(why) = answer.expect(StatusCode::BAD_REQUEST, "request.malformed") {
+                failures.push(format!(
+                    "{} with {}: {why}",
+                    op.id,
+                    call.body.expect("a body")
+                ));
+            }
+        }
+    }
+    assert!(sent > 0, "no entry has a body");
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// The call of `access`'s 2xx case and the cookie that passes its checks.
+async fn allowed_call(org: &Org, access: &Access) -> (Call, String) {
+    match access {
+        Access::AuthOnly(setup) => (setup(org).await, org.user().await.0),
+        Access::Own { setup, .. } => {
+            let (cookie, owner) = org.user().await;
+            (setup(org, owner).await, cookie)
+        }
+        Access::Mine(setup) => {
+            let (cookie, caller) = org.user().await;
+            let mine = setup(org, caller).await;
+            let cookie = mine.cookie(Some(&cookie)).expect("a session");
+            (mine.call, cookie)
+        }
+        Access::Permission {
+            key, extra, setup, ..
+        } => {
+            let call = setup(org).await;
+            let keys: Vec<&str> = [*key].iter().chain(*extra).copied().collect();
+            let cookie = org.holder(&keys, call.at).await;
+            (call, cookie)
+        }
+    }
+}
+
+/// `body`, whose schema in `doc` is `schema`, with one of its objects replaced by an array of
+/// its values, in every order: `body` itself, or an object below it that is not in a
+/// free-form field.
+fn array_forms(doc: &Value, schema: &Value, body: &Value) -> Vec<Value> {
+    let Value::Object(fields) = body else {
+        return Vec::new();
+    };
+    let schema = resolve(doc, schema);
+    let values: Vec<Value> = fields.values().cloned().collect();
+    let mut forms: Vec<Value> = orders(&values).into_iter().map(Value::Array).collect();
+    for (key, value) in fields {
+        let field = &schema["properties"][key];
+        if free_form(field) {
+            continue;
+        }
+        for form in array_forms(doc, field, value) {
+            let mut rewritten = fields.clone();
+            rewritten.insert(key.clone(), form);
+            forms.push(Value::Object(rewritten));
+        }
+    }
+    forms
+}
+
+/// `schema` with a `$ref`, or the `$ref` of a `oneOf` (an `Option` of a struct), followed.
+fn resolve<'a>(doc: &'a Value, schema: &'a Value) -> &'a Value {
+    let reference = schema["$ref"].as_str().or_else(|| {
+        schema["oneOf"]
+            .as_array()
+            .and_then(|options| options.iter().find_map(|option| option["$ref"].as_str()))
+    });
+    match reference.and_then(|r| r.strip_prefix("#/components/schemas/")) {
+        Some(name) => &doc["components"]["schemas"][name],
+        None => schema,
+    }
+}
+
+/// An object the document says nothing more about: `ApiJson` takes any JSON there.
+fn free_form(schema: &Value) -> bool {
+    schema["type"] == "object" && schema.get("properties").is_none() && schema.get("$ref").is_none()
+}
+
+/// Every order of `values`.
+fn orders(values: &[Value]) -> Vec<Vec<Value>> {
+    if values.is_empty() {
+        return vec![Vec::new()];
+    }
+    let mut all = Vec::new();
+    for (i, first) in values.iter().enumerate() {
+        let mut rest = values.to_vec();
+        rest.remove(i);
+        for mut order in orders(&rest) {
+            order.insert(0, first.clone());
+            all.push(order);
+        }
+    }
+    all
+}
+
+#[test]
+fn array_forms_cover_every_order_at_every_depth_but_free_form_fields() {
+    let doc = serde_json::json!({ "components": { "schemas": {
+        "Inner": { "type": "object", "properties": { "c": {}, "d": {} } },
+    } } });
+    let schema = serde_json::json!({ "type": "object", "properties": {
+        "a": { "type": "integer" },
+        "b": { "oneOf": [{ "type": "null" }, { "$ref": "#/components/schemas/Inner" }] },
+        "e": { "type": "object" },
+    } });
+    let body = serde_json::json!({ "a": 1, "b": { "c": 2, "d": [3] }, "e": { "f": 4 } });
+    let forms = array_forms(&doc, &schema, &body);
+    assert_eq!(forms.len(), 6 + 2, "{forms:#?}");
+    assert!(forms.contains(&serde_json::json!([1, { "c": 2, "d": [3] }, { "f": 4 }])));
+    assert!(forms.contains(&serde_json::json!([{ "f": 4 }, { "c": 2, "d": [3] }, 1])));
+    assert!(forms.contains(&serde_json::json!({ "a": 1, "b": [2, [3]], "e": { "f": 4 } })));
+    assert!(forms.contains(&serde_json::json!({ "a": 1, "b": [[3], 2], "e": { "f": 4 } })));
+    assert!(!forms.contains(&serde_json::json!({ "a": 1, "b": { "c": 2, "d": [3] }, "e": [4] })));
+}
+
 // The runner.
 
 /// What the runner did with one entry.
