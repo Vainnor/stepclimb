@@ -13,21 +13,27 @@ set -euo pipefail
 # Rule 3. Nothing VATSIM- or ATC-specific reaches the core: only stepclimb-server may depend on
 # the ATC pack or the connectors (behind features, per organization).
 # Rule 4. Nothing depends on stepclimb-server: it is the top of the graph.
+# Rule 5. stepclimb-mock-idp is for tests: no crate, the server included, takes it as a normal or
+# build dependency, so it never reaches the release binary; it depends on no workspace crate
+# (docs/adr/0027-mock-identity-provider.md).
 io='sqlx|sqlx-.*|tokio|tokio-.*|mio|axum|axum-.*|hyper|hyper-.*|tower|tower-.*|reqwest|object_store'
 ws='stepclimb-.*'
 pack='stepclimb-activities-atc|stepclimb-connectors'
+mock='stepclimb-mock-idp'
 
 declare -A banned=(
-    [stepclimb-core]="stepclimb-server|$pack"
-    [stepclimb-auth]="stepclimb-server|$pack"
+    [stepclimb-core]="stepclimb-server|$pack|$mock"
+    [stepclimb-auth]="stepclimb-server|$pack|$mock"
     [stepclimb-assess]="$ws|$io"
-    [stepclimb-activities]="stepclimb-server|$pack"
-    [stepclimb-activities-atc]="stepclimb-server|stepclimb-connectors"
-    [stepclimb-interop]="stepclimb-server|$pack"
-    [stepclimb-integrations]="stepclimb-server|$pack"
+    [stepclimb-activities]="stepclimb-server|$pack|$mock"
+    [stepclimb-activities-atc]="stepclimb-server|stepclimb-connectors|$mock"
+    [stepclimb-interop]="stepclimb-server|$pack|$mock"
+    [stepclimb-integrations]="stepclimb-server|$pack|$mock"
     [stepclimb-connectors]="$ws"
-    [stepclimb-media]="stepclimb-server|$pack"
-    [stepclimb-jobs]="stepclimb-server|$pack"
+    [stepclimb-mock-idp]="$ws"
+    [stepclimb-server]="$mock"
+    [stepclimb-media]="stepclimb-server|$pack|$mock"
+    [stepclimb-jobs]="stepclimb-server|$pack|$mock"
 )
 
 members="$(cargo metadata --locked --no-deps --format-version 1 \
@@ -35,7 +41,6 @@ members="$(cargo metadata --locked --no-deps --format-version 1 \
 failed=0
 checked=0
 for crate in $members; do
-    [[ "$crate" == stepclimb-server ]] && continue
     rule="${banned[$crate]:-}"
     if [[ -z "$rule" ]]; then
         echo "layering: $crate has no rule in bin/check-layering.sh; add one" >&2

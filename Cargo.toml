@@ -12,6 +12,7 @@ members = [
     "crates/stepclimb-connectors",
     "crates/stepclimb-media",
     "crates/stepclimb-jobs",
+    "crates/stepclimb-mock-idp",
 ]
 # The Tauri shell is its own workspace with its own lockfile: it needs WebKitGTK on Linux to
 # build, which the server's gates do not; `just app-build` builds it.
@@ -39,6 +40,7 @@ stepclimb-integrations = { path = "crates/stepclimb-integrations" }
 stepclimb-connectors = { path = "crates/stepclimb-connectors" }
 stepclimb-media = { path = "crates/stepclimb-media" }
 stepclimb-jobs = { path = "crates/stepclimb-jobs" }
+stepclimb-mock-idp = { path = "crates/stepclimb-mock-idp" }
 
 # HTTP (plan, Technical -> Architecture and stack: axum 0.8, tower-http, tokio).
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "tracing"] }
@@ -105,6 +107,16 @@ reqwest = { version = "=0.13.5", default-features = false, features = ["rustls-n
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-platform-verifier = "=0.7.1"
 http = "=1.5.0"
+# The mock identity provider's ID tokens (docs/specs/m0/06-oauth2-and-vatsim-preset.md I1,
+# docs/adr/0027-mock-identity-provider.md): RS256 keys generated at start and PKCS #1 v1.5
+# signatures. 0.9 is the line openidconnect 4.1 verifies with, so the mock adds no rsa beyond
+# the 0.9 openidconnect brings; webauthn-rs brings 0.10.0-rc.19 beside it.
+# Test-only: no release build reaches it (bin/check-layering.sh rule 5).
+rsa = { version = "=0.9.10", default-features = false, features = ["std", "u64_digit", "getrandom", "sha2"] }
+# OpenID Connect for the relying party (plan, Technical -> Architecture and stack: `openidconnect`).
+# Today only the mock's tests use it, to parse what the mock serves (spec 06 T1); spec 05 I2 uses
+# it in stepclimb-auth. No default features: its reqwest adapter is not used (ADR 0025).
+openidconnect = { version = "=4.1.0", default-features = false }
 tracing = "=0.1.44"
 # WebAuthn for local passkeys (docs/specs/m0/04-local-accounts.md B8, Q12; plan, Technical ->
 # Architecture and stack: webauthn-rs). 0.6 verifies with RustCrypto (`crypto-glue`) where 0.5
@@ -138,3 +150,11 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 debug = false
+
+# The mock identity provider generates 2048-bit RSA keys at start; unoptimized, the prime search
+# takes seconds per key.
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
+
+[profile.dev.package.rsa]
+opt-level = 3
