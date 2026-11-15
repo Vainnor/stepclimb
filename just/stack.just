@@ -16,7 +16,7 @@ up-stack:
 # Playwright end-to-end tests against this run's own stack (bin/ci_gate.py), built from this
 # checkout. The stack gets one organization and its admin from `stepclimb admin create`, whose
 # printed setup link the enrollment test opens (SC_E2E_ENROLL_URL; it is a test credential of a
-# stack that exists only for this run).
+# stack that exists only for this run), and one identity provider that cannot sign anyone in.
 e2e:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -27,6 +27,14 @@ e2e:
     "${gate[@]}" up --detach --wait --build stepclimb
     report="$("${gate[@]}" exec -T stepclimb stepclimb admin create --org-slug example \
       --org-name "Example Training" --email avery@example.test --name "Avery Example")"
+    # One outside provider for the method list (spec 11 B13, B14, B18): its label is all the
+    # discovery document reads, and its config holds nothing else, so its start route answers
+    # `/sign-in?error=auth.provider_unavailable` without asking any server outside the stack.
+    # The stack has no route to create providers yet; the row goes in as an administrator's would.
+    "${gate[@]}" exec -T postgres psql -U stepclimb -d stepclimb -v ON_ERROR_STOP=1 -qc \
+      "INSERT INTO identity_providers (id, org_id, key, kind, config)
+       SELECT gen_random_uuid(), id, 'example-id', 'oidc', '{\"label\": \"Sign in with Example ID\"}'
+       FROM organizations"
     address="$("${gate[@]}" port stepclimb 8080)"
     SC_E2E_URL="http://localhost:${address##*:}" SC_E2E_ENROLL_URL="$(tail -n 1 <<<"$report")" \
       pnpm --filter web e2e

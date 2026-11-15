@@ -4,9 +4,9 @@ import { useStepclimbStrings } from "@stepclimb/ui";
 import { useEffect } from "react";
 
 /**
- * Sets the document title for the current view. `organization` is the signed-in user's
- * organization; signed-out screens pass none and get the product name in its place, until
- * `/.well-known/stepclimb` (spec 08 I9) gives them the organization's name.
+ * Sets the document title for the current view. `organization` is the organization's name: the
+ * signed-in user's, or on a signed-out screen the discovery document's (spec 08 B38). Without one
+ * (the document has not loaded, or a screen outside both layouts) the product name takes its place.
  */
 export function useDocumentTitle(view: string, organization?: string): void {
   const { t } = useStepclimbStrings();

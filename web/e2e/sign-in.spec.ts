@@ -8,6 +8,9 @@ import { type Browser, expect, type Page, test } from "@playwright/test";
 
 const WCAG = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"];
 const EMAIL = "avery@example.test";
+/** The user the password test adds, and the passphrase they set: a throwaway stack's test data. */
+const PASSWORD_USER = "blake@example.test";
+const PHRASE = "plinth harbor lantern 7342";
 
 /** axe's WCAG 2.2 AA violations on the whole page, one line per node. */
 async function violations(page: Page): Promise<string[]> {
@@ -393,6 +396,88 @@ test.describe
         await expect(page.getByRole("row")).toHaveCount(1);
       });
       [passkey] = await authenticator.credentials();
+    });
+
+    // Password sign-in (04 B14) end to end: the admin adds a user and makes them a setup link
+    // through the public API, the link sets a password, and the user signs in with it from the
+    // sign-in screen: a wrong password first, then the right one.
+    test("sign in with a password from the sign-in screen (04 B14, 11 B16)", async ({
+      page,
+      browser,
+    }) => {
+      expect(passkey, "an earlier test left the admin a passkey").toBeDefined();
+      const authenticator = await addVirtualAuthenticator(page, passkey);
+      await page.goto("/sign-in");
+      await page.getByRole("textbox", { name: "Email" }).fill(EMAIL);
+      await page.getByRole("button", { name: "Continue" }).click();
+      await page.getByRole("button", { name: "Sign in with a passkey" }).click();
+      await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
+      [passkey] = await authenticator.credentials();
+
+      const link = await page.evaluate(async (email) => {
+        const created = await fetch("/api/v1/users", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ display_name: "Blake Example", email }),
+        });
+        const user = await created.json();
+        const issued = await fetch(`/api/v1/admin/users/${user.id}/enrollment-links`, {
+          method: "POST",
+        });
+        return { created: created.status, issued: issued.status, ...(await issued.json()) };
+      }, PASSWORD_USER);
+      expect([link.created, link.issued]).toEqual([201, 201]);
+
+      const context = await browser.newContext();
+      const learner = await context.newPage();
+      try {
+        // The link's token, set through the enrollment route as a client of the API would.
+        await learner.goto("/sign-in");
+        const token = new URL(link.url).hash.replace(/^#token=/, "");
+        const enrolled = await learner.evaluate(
+          async ({ token, password }) =>
+            (
+              await fetch("/auth/local/enrollment/password", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ token, password }),
+              })
+            ).status,
+          { token, password: PHRASE },
+        );
+        expect(enrolled).toBe(200);
+        await context.clearCookies();
+
+        await learner.goto("/sign-in?return_to=%2Faccount");
+        await learner.getByRole("textbox", { name: "Email" }).fill(PASSWORD_USER);
+        await learner.getByRole("button", { name: "Continue" }).click();
+        // Passkeys come first; the password is the user's choice.
+        await learner.getByRole("link", { name: "Sign in with a password instead" }).click();
+        await expect(
+          learner.getByRole("heading", { level: 1, name: "Enter your password" }),
+        ).toBeVisible();
+
+        const refused = answerOf(learner, "/auth/local/password");
+        await learner.getByLabel("Password").fill(`${PHRASE}-wrong`);
+        await learner.getByRole("button", { name: "Sign in" }).click();
+        expect((await refused).status()).toBe(401);
+        await expect(learner.getByRole("alert")).toContainText(
+          "That email and password do not match.",
+        );
+
+        const accepted = answerOf(learner, "/auth/local/password");
+        await learner.getByLabel("Password").fill(PHRASE);
+        await learner.getByRole("button", { name: "Sign in" }).click();
+        expect((await accepted).status()).toBe(200);
+        await expect(learner.getByRole("heading", { level: 1, name: "Account" })).toBeVisible();
+        expect(new URL(learner.url()).pathname).toBe("/account");
+        await expect(
+          learner.getByRole("button", { name: "Blake Example, account menu" }),
+        ).toBeVisible();
+        expect(learner.url()).not.toContain("lantern");
+      } finally {
+        await context.close();
+      }
     });
   });
 

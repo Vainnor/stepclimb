@@ -9,19 +9,58 @@ import { vi } from "vitest";
 import { type App, AppRoot, createApp } from "../app";
 import { catalogs } from "../messages";
 import type { Me } from "../session";
+import type { Discovery, LocalMethod, SignInMethod } from "../sign-in/discovery";
 
 export type Handler = (request: Request) => Response | Promise<Response>;
 
-/** Stubs `fetch`; a request no handler names fails the test. Returns the mock. */
+/**
+ * A synthetic discovery document: Example Training offering local sign-in with `methods`, then
+ * `providers`.
+ */
+export function discoveryFixture(
+  methods: LocalMethod[] | null = ["passkey"],
+  providers: SignInMethod[] = [],
+): Discovery {
+  const local: SignInMethod[] =
+    methods === null ? [] : [{ key: "local", kind: "local", label: null, methods }];
+  return {
+    name: "Example Training",
+    sign_in: [...local, ...providers],
+    theme: { stylesheet: "http://localhost/theme.css" },
+  };
+}
+
+const DISCOVERY = "GET /.well-known/stepclimb";
+
+/**
+ * Stubs `fetch`; a request no handler names fails the test. Returns the mock. The signed-out
+ * layout reads the discovery document, so a test that does not answer it itself gets
+ * `discoveryFixture()`; `requestsTo` and `apiRequests` leave that request out.
+ */
 export function stubServer(handlers: Record<string, Handler>) {
+  const all: Record<string, Handler> = { [DISCOVERY]: () => json(discoveryFixture()), ...handlers };
   const fetch = vi.fn(async (request: Request) => {
     const key = `${request.method} ${new URL(request.url).pathname}`;
-    const handler = handlers[key];
+    const handler = all[key];
     if (!handler) throw new Error(`unexpected request: ${key}`);
     return handler(request);
   });
   vi.stubGlobal("fetch", fetch);
   return fetch;
+}
+
+/** The requests the stub got, but for the discovery document's. */
+export function apiRequests(fetch: ReturnType<typeof stubServer>): Request[] {
+  return fetch.mock.calls
+    .map(([request]) => request as Request)
+    .filter((request) => `${request.method} ${new URL(request.url).pathname}` !== DISCOVERY);
+}
+
+/** The requests the stub got for `path`. */
+export function requestsTo(fetch: ReturnType<typeof stubServer>, path: string): Request[] {
+  return fetch.mock.calls
+    .map(([request]) => request as Request)
+    .filter((request) => new URL(request.url).pathname === path);
 }
 
 export function stubMatchMedia(wide: boolean): void {

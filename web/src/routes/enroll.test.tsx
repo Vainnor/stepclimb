@@ -6,6 +6,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  apiRequests,
   type Handler,
   json,
   meFixture,
@@ -103,7 +104,7 @@ describe("the enrollment page", () => {
       expect(
         await screen.findByRole("heading", { level: 1, name: "This page needs your setup link" }),
       ).toBeInTheDocument();
-      expect(fetch).not.toHaveBeenCalled();
+      expect(apiRequests(fetch)).toEqual([]);
     },
   );
 

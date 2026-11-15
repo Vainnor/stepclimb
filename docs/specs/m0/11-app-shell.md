@@ -562,7 +562,7 @@ Coordinator decisions (2026-11-15), on the owner's delegation, while building I5
   failure that belongs to no field is Stepclimb UI's `FormError` at body size. The copy names no
   server setting (a link's lifetime, a flow's), so a changed setting cannot make it wrong.
 - **The callback error (B18)** moved to #171 with the first flow that redirects with `?error=`
-  (05 or 06); nothing does yet.
+  (05 or 06), and was built there (below).
 - **End to end.** The e2e stack's public URL is `http://localhost:<port>`, since a relying party
   ID cannot be an IP address (04 B8), and `just e2e` creates its one organization and admin with
   `stepclimb admin create`, whose printed link the Playwright test opens (04 T20). Its sign-in
@@ -657,6 +657,59 @@ account page Q2 (a) names):
   axe on the list, the add dialog and the delete confirmation in light, dark and high contrast at
   1280 and 375 px with `/me` and the passkey routes answered in the browser.
 
+Coordinator decisions (2026-11-15), on the owner's delegation, while building issue #171 (the method
+list, provider buttons, the callback error and the password step that I5 left):
+
+- **The method list (B13).** `/sign-in` reads `/.well-known/stepclimb` and draws what its `sign_in`
+  lists, in its order: the local entry's email step first when its `methods` hold `passkey` or
+  `password`, then a Separator, then one button per provider. `totp` is a second step after a
+  password and the magic link has no screen yet (04 I8), so neither draws anything on its own. A
+  document that offers nothing the browser can use shows an EmptyState saying so, with no action.
+  While the document loads the view shows its `h1` and a Skeleton; a failure is `LoadError` with
+  "Try again" (`org.none` keeps its message). The view's one primary action is Continue, or a
+  provider's button when it is the only way in; with two or more providers and no local sign-in,
+  no button is primary, since none is preferred.
+- **The organization's name.** The signed-out layout's header and the sign-in steps' document
+  titles use the document's `name`. While it loads the header keeps its line empty; when it
+  cannot load, and in the frames drawn outside the layout (not found, a failed layout), the
+  product name stays. The document is kept a minute in the query cache, so the layout and the
+  steps share one request; every page load asks again.
+- **Provider buttons (B14)** are Stepclimb UI's `ButtonLink` (13, added for this): an anchor to
+  `/auth/<key>/start`, the key percent-encoded as one path segment, with `?return_to=` when the
+  page has one. The link passes `routerOptions={{ reloadDocument: true }}`, and the app's React
+  Aria `RouterProvider` hands such a link to the browser (`location.assign`) instead of TanStack
+  Router. A provider whose `label` is `null` reads "Sign in with <key>".
+- **The callback error (B18).** The route keeps any string `error` from the search, the screen
+  reads it once into its own state, shows its message as a `FormError` above the methods, and
+  replaces the history entry without `error` (keeping `return_to`). Each code the provider routes
+  and admission send today has its own message: `auth.rate_limited`, `auth.provider_not_found`,
+  `auth.provider_unavailable`, `auth.provider_denied`, `auth.provider_error`,
+  `auth.id_token_invalid`, `auth.subject_missing`, `auth.flow_expired`, `auth.flow_invalid`,
+  `auth.suspended`, `auth.signup_closed` and `entitlement.limit_reached`. Anyone can write a link
+  to `/sign-in?error=...`, so an unknown value is shown in `Code` only when it has a code's shape
+  (lowercase words joined by dots, at most 64 characters); anything else gets the general message
+  alone and never reaches the page.
+- **The password step (B16).** The email step goes to `/sign-in/passkey` when passkeys are
+  offered and to `/sign-in/password` when only passwords are. Each of the two steps links to the
+  other when the document offers both, handing the address on in the history entry's state; the
+  passkey step does not guess from the server's options whether the user has a passkey (Q9 may
+  change what those reveal). The step posts the address, the password and `return_to` to
+  `POST /auth/local/password` and completes sign-in as the passkey step does. The password lives
+  only in the field and the request body; while a request is in flight, Enter sends nothing more.
+  `auth.credentials_invalid` and the password step's `auth.method_disabled` have their own
+  messages; its 429 message names no network, since the route also counts failed checks per
+  account (08 B40).
+- **TOTP (04 I7, #27) and the magic link (04 I8, #28)** have no server routes yet, so no step is
+  drawn for either; each adds its step route with its issue.
+- **End to end.** `just e2e` inserts one `oidc` provider, `example-id`, whose config holds only a
+  `label`, into the stack's organization, since no route creates providers yet (06 I5). Its start
+  route answers `/sign-in?error=auth.provider_unavailable` without contacting any server, so the
+  test checks the button's full-page navigation, the 303 and the message after it. Sign-in at a
+  real provider (T16) waits for the mock OpenID Connect server in the e2e stack (06 I7, #39). The password
+  test adds a user through `POST /api/v1/users`, sets a password through an enrollment link and
+  signs in on the screen. The method list's other states run axe in the browser with synthetic
+  documents, in light, dark and high contrast at 1280 and 375 px.
+
 ## Issues
 
 In dependency order. Each is one PR.
@@ -689,7 +742,9 @@ In dependency order. Each is one PR.
   passkey method; T7, T8, T19 (sign-in screen and enrollment page). Depends on: I3; 04 I2 to I4;
   08 (codes). Narrowed by the coordinator (2026-11-15): the method list (B13), provider buttons
   (B14), the callback error (B18), the password, TOTP and magic-link steps, and T6 and T16 moved
-  to issue #171, which depends on 08 I9 (`/.well-known/stepclimb`), 04 I6 to I8, 05 and 06.
+  to issue #171, which depends on 08 I9 (`/.well-known/stepclimb`), 04 I6 to I8, 05 and 06. #171
+  built B13, B14, B18 and the password step, and T6; the TOTP and magic-link steps go with 04 I7
+  and I8, and T16 with the mock OpenID Connect server (#39).
 - **I6. Appearance choice and OrgSwitcher.** Deliverable: the appearance and density settings
   applied before first paint as Q6 decides, and a test that the OrgSwitcher stays out of the
   DOM (B19). Covers B19, B21; T9. Depends on: I4; Q6 answered; 12 I4 (high-contrast theme).
