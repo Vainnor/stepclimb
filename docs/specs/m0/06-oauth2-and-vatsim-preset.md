@@ -289,10 +289,63 @@ server every sign-in test and the Playwright stack use instead of a real provide
   `trusted_for_email_matching: true`, turning it on, or, while it is on, changing
   `claims.email`, `claims.email_verified` or the `oidc` `issuer`. Each decides which existing
   users a new identity can reach by email.
+
+  Coordinator decisions (2026-11-15), for I5 (`stepclimb_server::provider_admin`,
+  `stepclimb_core::identity_providers::admin`):
+
+  - The answer is `{id, key, kind, label, enabled, source, redirect_uri, client_secret_set,
+    config}`; `config` is the stored config without `client_secret`, `label`, `source` and
+    `admission_rules` (`identity_providers::public_config`), and `client_secret_set` is true
+    for a sealed secret or a row of the file. The label is stored as the config's `label`
+    member, as I4 stores it. The list is sorted by key and paged by key.
+  - `POST` takes `{key, kind, preset?, label, enabled, config}`; `enabled` defaults to `true`,
+    as in the file. `preset` answers 422 `provider.preset_unknown` until I6 adds one. A key
+    or label breaking its rule answers 422 `request.invalid` with `provider.key_invalid` at
+    `/key` or `provider.label_invalid` at `/label` (the label rule of B13).
+  - `PATCH` takes `label`, `enabled` and `config`, each optional and none `null`. Each named
+    `config` member replaces the stored one whole (`claims` as a whole object); the merged
+    config is validated as a new one under the URL policy of the instance at the time of the
+    request, with the stored secret kept when `client_secret` is not named. A patch naming no
+    `config` member does not validate the stored config again. A named `client_secret` is a
+    change even when it equals the stored one: the server does not open the stored secret to
+    compare. A patch naming only current values writes nothing (`09` B22).
+  - Config problems answer 422 `provider.config_invalid` with at most 20 `errors`, each a
+    pointer under `/config` and the config type's code.
+  - Every write takes the organization row's lock, then the provider row's, so the checks
+    below hold until it commits. Each writes one audit entry (`09` B22).
+  - Feature gating (`05-oidc.md` Q1 (a), `10-entitlements-framework.md` issue 4): an `oidc`
+    write needs `oidc_providers`, an `oauth2` one `oauth2_providers`. The route serves both
+    kinds, so the check reads the body's kind on `POST` and the row's on `PATCH`, after the
+    permission check and, on `PATCH`, after the row is found; with one feature off, a `PATCH`
+    of an unknown id answers 404, not 403 (a departure from `10` B9's order, which one route
+    for two features cannot keep). `DELETE` and the reads need no feature. The permission
+    suite marks such entries `gated_by_target`.
+  - More than `provider.manage` (all 403, checked on the validated config):
+    1. trusting a provider for email matching (`trusted_for_email_matching: true` on create,
+       or turned on), or, while it is trusted, changing its kind, issuer, endpoint origins,
+       `claims.subject`, `claims.email` or `claims.email_verified`, needs every catalog
+       permission at organization scope (`permission.escalation`, the rule of
+       `roles::refuse_unless_holds_every_permission`; the paragraph above, extended to the
+       other anchors, since they decide whose verified emails the provider asserts);
+    2. changing the kind, issuer, endpoint origins or `claims.subject` of a provider that
+       identities link users to needs every permission (`permission.escalation`): otherwise a
+       `provider.manage` holder could point an admin's provider at an IdP they control and sign
+       in as the admin. These are the trust anchors of I4's decision 5 for the file;
+    3. with `admission.signup_allowed` on, creating an enabled provider, enabling one, or
+       changing those anchors of an enabled one needs `admission.manage` as well
+       (`permission.denied`; COORDINATOR DECIDED on #37 from the review of #178).
+    An API key's narrowed grants apply to each (`08` B27).
+  - Disabling or deleting an enabled provider when the local methods offer no primary way in
+    and no other outside provider is enabled answers 409 `local.last_method`
+    (`04-local-accounts.md` B2's rule, from the providers' side).
 - **B15.** A `key` already used in the organization answers 409 `provider.key_taken`. Key
-  format: pending Q5.
-- **B16.** Deleting a provider that has identities: pending Q5. Disabling (`enabled: false`)
-  always works and makes its `/auth/{key}/...` routes "not found" (`05-oidc.md` B3) while
+  format: Q5 (a), never `local`, and fixed once created. Coordinator decision (2026-11-15), for
+  I5: the table enforces the format too, with the check constraint
+  `identity_providers_key_format` (`^[a-z0-9][a-z0-9-]{0,31}$`, byte ranges), so no writer can
+  store `.`, `..`, `/` or upper case.
+- **B16.** Deleting a provider that has identities: Q5 (a), 409 `provider.in_use`; its open
+  sign-in flows are deleted with it. Disabling (`enabled: false`) works unless it would leave
+  the organization no way to sign in (B14's coordinator decisions) and makes its `/auth/{key}/...` routes "not found" (`05-oidc.md` B3) while
   keeping identities.
 - **B17.** This API does not create or edit the `local` provider row; local sign-in methods are
   switched through `04-local-accounts.md`. Creating `kind = "local"` answers 422
@@ -323,10 +376,10 @@ are those of `05-oidc.md` (303 redirects with `error` codes). Admin routes retur
 | --- | --- | --- | --- | --- |
 | `GET /auth/{provider}/start`, `GET /auth/{provider}/callback` (`oauth2` kind) | as `05-oidc.md` | as `05-oidc.md` | as `05-oidc.md`, plus `auth.subject_missing`; no `auth.id_token_invalid` | none |
 | `GET /api/v1/admin/providers` | cursor pagination | 200 list of `{id, key, kind, preset?, label, enabled, source, redirect_uri, config}` (secrets removed) | `auth.unauthenticated`, `permission.denied` | `perm::ProviderManage`, organization |
-| `POST /api/v1/admin/providers` | `{key, kind, preset?, label, enabled, config}` | 201 the provider | `provider.config_invalid`, `provider.key_taken`, `provider.kind_unsupported`, `provider.preset_unknown`, `permission.denied` | `perm::ProviderManage`, organization |
+| `POST /api/v1/admin/providers` | `{key, kind, preset?, label, enabled, config}` | 201 the provider | `provider.config_invalid`, `provider.key_taken`, `provider.kind_unsupported`, `provider.preset_unknown`, `request.invalid`, `entitlement.feature_unavailable`, `permission.denied`, `permission.escalation` | `perm::ProviderManage`, organization |
 | `GET /api/v1/admin/providers/{id}` | none | 200 the provider | `provider.not_found`, `permission.denied` | `perm::ProviderManage`, organization |
-| `PATCH /api/v1/admin/providers/{id}` | any of `label, enabled, config` (a `config` patch replaces named fields; an absent secret keeps the stored one) | 200 the provider | `provider.not_found`, `provider.config_invalid`, `provider.config_owned` (pending Q2), `permission.denied` | `perm::ProviderManage`, organization |
-| `DELETE /api/v1/admin/providers/{id}` | none | 204 | `provider.not_found`, `provider.in_use` (pending Q5), `provider.config_owned` (pending Q2), `permission.denied` | `perm::ProviderManage`, organization |
+| `PATCH /api/v1/admin/providers/{id}` | any of `label, enabled, config` (a `config` patch replaces named fields; an absent secret keeps the stored one) | 200 the provider | `provider.not_found`, `provider.config_invalid`, `provider.config_owned` (Q2), `local.last_method`, `entitlement.feature_unavailable`, `permission.denied`, `permission.escalation` | `perm::ProviderManage`, organization |
+| `DELETE /api/v1/admin/providers/{id}` | none | 204 | `provider.not_found`, `provider.in_use` (Q5), `provider.config_owned` (Q2), `local.last_method`, `permission.denied` | `perm::ProviderManage`, organization |
 
 `source` in responses is `api` or `config` (Q2): `config` exactly when the row's
 `config.source` is `"config"` (`stepclimb_core::identity_providers::IdentityProvider::is_from_config_file`).
@@ -368,7 +421,9 @@ preset fix in a release reaches every organization.
 | `perm::ProviderManage` (`provider.manage`): list, create, change and delete identity providers | organization | Organization admin (the plan: "Everything, including providers") |
 
 Entitlement gating (`oauth2_providers` in `10-entitlements-framework.md` Q1, and whether the
-VATSIM preset counts as a connector): handled as `05-oidc.md` Q1 recommends for OIDC.
+VATSIM preset counts as a connector): handled as `05-oidc.md` Q1 recommends for OIDC. I5 checks
+the provider's kind's feature on create and change (B14's coordinator decisions). Some writes
+also need every catalog permission or `admission.manage` (the same decisions).
 
 ## Test cases
 

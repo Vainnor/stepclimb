@@ -311,3 +311,8 @@ overrule one, which then updates this spec.
    as `05-oidc.md` Q1 decides), `admission_webhook` on webhook administration (`07` issue 5),
    `api_keys` on the service-account routes (`08` issue 6) and `custom_branding` on `PUT
    /api/v1/admin/branding` (`12` I8).
+   **Coordinator decision (2026-11-15), for `06` issue 5.** `POST` and `PATCH
+   /api/v1/admin/providers` serve both provider kinds, so their feature depends on the body's or
+   the stored row's kind and is checked in the handler after the permission (and, on `PATCH`,
+   after the row is found), not with `Require<F>`. With one provider feature off, a `PATCH` of
+   an unknown id answers 404. The permission suite's `gated_by_target` entries expect that.

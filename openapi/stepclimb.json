@@ -907,6 +907,305 @@
         }
       }
     },
+    "/api/v1/admin/providers": {
+      "get": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "List the organization's `oidc` and `oauth2` providers, by key.",
+        "operationId": "listProviders",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page; omit it for the first page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many items to return, 1 to 200; 50 when omitted.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 200,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of providers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Provider"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProvidersForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "Create an `oidc` or `oauth2` provider.",
+        "operationId": "createProvider",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewProvider"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The provider is created",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The provider's path"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Provider"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProviderWriteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProviderCreateConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProviderInvalid"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/admin/providers/{provider_id}": {
+      "get": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "Read one provider.",
+        "operationId": "getProvider",
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "path",
+            "description": "The provider's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The provider",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Provider"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProvidersForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProviderNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "Delete a provider no identity links a user to. To keep its identities, disable it instead.",
+        "operationId": "deleteProvider",
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "path",
+            "description": "The provider's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The provider is deleted"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProviderDeleteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProviderNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProviderDeleteConflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      },
+      "patch": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "Change a provider's label, whether it is enabled, or members of its config. Its key and\nkind never change.",
+        "operationId": "updateProvider",
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "path",
+            "description": "The provider's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The provider after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Provider"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProviderWriteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProviderNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProviderUpdateConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProviderInvalid"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/api/v1/admin/role-assignments": {
       "get": {
         "tags": [
@@ -5272,6 +5571,47 @@
         },
         "additionalProperties": false
       },
+      "NewProvider": {
+        "type": "object",
+        "description": "A provider to create.",
+        "required": [
+          "key",
+          "kind",
+          "label",
+          "config"
+        ],
+        "properties": {
+          "config": {
+            "type": "object",
+            "description": "The kind's configuration: the members of an `OidcProviderConfig` or an\n`Oauth2ProviderConfig` and `client_secret`, which is stored encrypted and never answered.\nMembers with a default may be left out.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether people can sign in through it; `true` when omitted."
+          },
+          "key": {
+            "type": "string",
+            "description": "1 to 32 lowercase letters, digits and hyphens, starting with a letter or digit; not\n`local`. It is part of the redirect URI and never changes."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`oidc` or `oauth2`; anything else answers 422 `provider.kind_unsupported`."
+          },
+          "label": {
+            "type": "string",
+            "description": "1 to 200 characters without control characters."
+          },
+          "preset": {
+            "type": "string",
+            "description": "A preset to take the provider's endpoints and claims from. This server has none, so any\nvalue answers 422 `provider.preset_unknown`."
+          }
+        },
+        "additionalProperties": false
+      },
       "NewRole": {
         "type": "object",
         "description": "A custom role to create.",
@@ -5423,6 +5763,194 @@
           "totp"
         ]
       },
+      "Oauth2ProviderClaims": {
+        "type": "object",
+        "description": "JSON Pointers into the userinfo body; a profile field without one is not mapped.",
+        "required": [
+          "subject",
+          "attributes"
+        ],
+        "properties": {
+          "attributes": {
+            "type": "object",
+            "description": "Attribute names to pointers.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email_verified": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "family_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "given_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "groups": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject": {
+            "type": "string"
+          }
+        }
+      },
+      "Oauth2ProviderConfig": {
+        "type": "object",
+        "description": "An `oauth2` provider's configuration (B4).",
+        "required": [
+          "authorize",
+          "token",
+          "userinfo",
+          "client_id",
+          "scopes",
+          "pkce",
+          "claims",
+          "allow_local_passkeys",
+          "trusted_for_email_matching"
+        ],
+        "properties": {
+          "allow_local_passkeys": {
+            "type": "boolean",
+            "description": "Whether users who sign in through the provider may also add passkeys."
+          },
+          "authorize": {
+            "type": "string"
+          },
+          "claims": {
+            "$ref": "#/components/schemas/Oauth2ProviderClaims"
+          },
+          "client_id": {
+            "type": "string"
+          },
+          "pkce": {
+            "type": "boolean",
+            "description": "Whether sign-in sends S256 PKCE."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "token": {
+            "type": "string"
+          },
+          "trusted_for_email_matching": {
+            "type": "boolean",
+            "description": "Whether, with the organization's email matching on, a sign-in whose verified email\nequals a user's verified email may be linked to that user."
+          },
+          "userinfo": {
+            "type": "string"
+          }
+        }
+      },
+      "OidcProviderClaims": {
+        "type": "object",
+        "description": "JSON Pointers into the merged ID token and userinfo claims.",
+        "required": [
+          "given_name",
+          "family_name",
+          "email",
+          "email_verified",
+          "attributes"
+        ],
+        "properties": {
+          "attributes": {
+            "type": "object",
+            "description": "Attribute names to pointers.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "email": {
+            "type": "string"
+          },
+          "email_verified": {
+            "type": "string"
+          },
+          "family_name": {
+            "type": "string"
+          },
+          "given_name": {
+            "type": "string"
+          },
+          "groups": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "OidcProviderConfig": {
+        "type": "object",
+        "description": "An `oidc` provider's configuration (`05-oidc.md` B1).",
+        "required": [
+          "issuer",
+          "client_id",
+          "scopes",
+          "claims",
+          "userinfo",
+          "allow_local_passkeys",
+          "trusted_for_email_matching"
+        ],
+        "properties": {
+          "allow_local_passkeys": {
+            "type": "boolean",
+            "description": "Whether users who sign in through the provider may also add passkeys."
+          },
+          "claims": {
+            "$ref": "#/components/schemas/OidcProviderClaims"
+          },
+          "client_id": {
+            "type": "string"
+          },
+          "issuer": {
+            "type": "string",
+            "description": "The issuer, exactly as written; discovery is read from it."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Always includes `openid`."
+          },
+          "trusted_for_email_matching": {
+            "type": "boolean",
+            "description": "Whether, with the organization's email matching on, a sign-in whose verified email\nequals a user's verified email may be linked to that user."
+          },
+          "userinfo": {
+            "type": "boolean",
+            "description": "Whether sign-in also reads the provider's userinfo endpoint."
+          }
+        }
+      },
       "OrgSettings": {
         "type": "object",
         "description": "Every organization setting with its effective value: the stored one, or the setting's\ndefault when none is stored.",
@@ -5554,6 +6082,78 @@
                   "type": "string",
                   "format": "date-time",
                   "description": "RFC 3339, UTC."
+                }
+              }
+            },
+            "description": "The items, in the list's sort order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass this as `cursor` to get the next page; `null` on the last page."
+          }
+        }
+      },
+      "Page_Provider": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "An `oidc` or `oauth2` provider of the organization.",
+              "required": [
+                "id",
+                "key",
+                "kind",
+                "label",
+                "enabled",
+                "source",
+                "redirect_uri",
+                "client_secret_set",
+                "config"
+              ],
+              "properties": {
+                "client_secret_set": {
+                  "type": "boolean",
+                  "description": "Whether the provider has a client secret. The secret itself is never answered."
+                },
+                "config": {
+                  "$ref": "#/components/schemas/ProviderConfig",
+                  "description": "The kind's configuration, without the client secret."
+                },
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Whether people can sign in through it. A disabled provider keeps its identities."
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "key": {
+                  "type": "string",
+                  "description": "The `{provider}` of `/auth/{provider}/start`; fixed once created."
+                },
+                "kind": {
+                  "$ref": "#/components/schemas/ProviderKind"
+                },
+                "label": {
+                  "type": "string",
+                  "description": "The text of the provider's sign-in button."
+                },
+                "redirect_uri": {
+                  "type": "string",
+                  "description": "The URI to register at the provider as the client's redirect URI."
+                },
+                "source": {
+                  "$ref": "#/components/schemas/ProviderSource"
                 }
               }
             },
@@ -6143,6 +6743,106 @@
             "description": "`about:blank` until the docs site documents each code."
           }
         }
+      },
+      "Provider": {
+        "type": "object",
+        "description": "An `oidc` or `oauth2` provider of the organization.",
+        "required": [
+          "id",
+          "key",
+          "kind",
+          "label",
+          "enabled",
+          "source",
+          "redirect_uri",
+          "client_secret_set",
+          "config"
+        ],
+        "properties": {
+          "client_secret_set": {
+            "type": "boolean",
+            "description": "Whether the provider has a client secret. The secret itself is never answered."
+          },
+          "config": {
+            "$ref": "#/components/schemas/ProviderConfig",
+            "description": "The kind's configuration, without the client secret."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether people can sign in through it. A disabled provider keeps its identities."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "key": {
+            "type": "string",
+            "description": "The `{provider}` of `/auth/{provider}/start`; fixed once created."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ProviderKind"
+          },
+          "label": {
+            "type": "string",
+            "description": "The text of the provider's sign-in button."
+          },
+          "redirect_uri": {
+            "type": "string",
+            "description": "The URI to register at the provider as the client's redirect URI."
+          },
+          "source": {
+            "$ref": "#/components/schemas/ProviderSource"
+          }
+        }
+      },
+      "ProviderConfig": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OidcProviderConfig"
+          },
+          {
+            "$ref": "#/components/schemas/Oauth2ProviderConfig"
+          }
+        ],
+        "description": "A provider's configuration, by its `kind`."
+      },
+      "ProviderKind": {
+        "type": "string",
+        "description": "A provider's protocol.",
+        "enum": [
+          "oidc",
+          "oauth2"
+        ]
+      },
+      "ProviderPatch": {
+        "type": "object",
+        "description": "A change to a provider: send only what you change. A member sent as `null` is malformed.",
+        "properties": {
+          "config": {
+            "type": "object",
+            "description": "Config members to replace, each whole; members not named keep their value, and an\nabsent `client_secret` keeps the stored secret.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "label": {
+            "type": "string",
+            "description": "1 to 200 characters without control characters."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProviderSource": {
+        "type": "string",
+        "description": "Who owns a provider's row.",
+        "enum": [
+          "api",
+          "config"
+        ]
       },
       "PublicKeyCreationOptions": {
         "type": "object",
@@ -7685,6 +8385,86 @@
           }
         }
       },
+      "ProviderCreateConflict": {
+        "description": "`provider.key_taken`: another provider of the organization has the key.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ProviderDeleteConflict": {
+        "description": "`provider.config_owned`: `stepclimb.toml` declares the provider; remove it there, and the server disables it. `provider.in_use`: identities still link users to the provider; disable it instead. `local.last_method`: deleting it would leave the organization no way to sign in.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ProviderDeleteForbidden": {
+        "description": "`permission.denied`: the caller does not hold `provider.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ProviderInvalid": {
+        "description": "`provider.config_invalid`: the config breaks a rule; `errors` lists each one (at most 20) with a JSON Pointer under `/config` and a `provider.*` code. `provider.kind_unsupported`: the kind is not `oidc` or `oauth2`. `provider.preset_unknown`: this server has no such preset. `request.invalid`: `errors` names `/key` (`provider.key_invalid`) or `/label` (`provider.label_invalid`).",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ProviderNotFound": {
+        "description": "`provider.not_found`: the organization has no `oidc` or `oauth2` provider with this id. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ProviderUpdateConflict": {
+        "description": "`provider.config_owned`: `stepclimb.toml` declares the provider; change it there. `local.last_method`: disabling it would leave the organization no way to sign in.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ProviderWriteForbidden": {
+        "description": "`entitlement.feature_unavailable`: the organization's plan does not include the provider's kind (`oidc_providers` for `oidc`, `oauth2_providers` for `oauth2`). `permission.denied`: the caller does not hold `provider.manage` at organization scope; or sign-up is on and the write turns the provider on, or changes the issuer, endpoint origins or subject pointer of an enabled one, without `admission.manage`. `permission.escalation`: the write trusts the provider for email matching, or changes the issuer, endpoint origins, subject pointer or email claims of a trusted one, or changes the issuer, endpoint origins or subject pointer of a provider identities link users to, and the caller does not hold every catalog permission at organization scope. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ProvidersForbidden": {
+        "description": "`permission.denied`: the caller does not hold `provider.manage` at organization scope.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "RateLimited": {
         "description": "`auth.rate_limited`: too many sign-in or token requests from this client address, or too many failed password or TOTP checks for this account; `Retry-After` gives the seconds until the limit's window closes.",
         "headers": {
@@ -7969,6 +8749,10 @@
     {
       "name": "service-accounts",
       "description": "Service accounts and their API keys"
+    },
+    {
+      "name": "providers",
+      "description": "The organization's OpenID Connect and OAuth 2 sign-in providers"
     }
   ]
 }

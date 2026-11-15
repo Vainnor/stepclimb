@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE identity_providers\n             SET enabled = $3,\n                 updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond'\n             WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bool",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d5fa6e527c0d38be1e81a30fa664ba8a5cbe08c5fcc514c1b7cc6f7add1e23ea"
+}

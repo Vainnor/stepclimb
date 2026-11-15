@@ -227,11 +227,7 @@ fn provider_method(provider: &IdentityProvider) -> Option<SignInMethod> {
         Kind::Oauth2 => SignInKind::Oauth2,
         Kind::Local => return None,
     };
-    let label = provider
-        .config
-        .get("label")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned);
+    let label = provider.label().map(str::to_owned);
     Some(SignInMethod {
         key: provider.key.clone(),
         kind,

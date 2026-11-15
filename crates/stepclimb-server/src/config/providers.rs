@@ -38,8 +38,7 @@ use stepclimb_core::identity_providers::{self, Kind};
 
 use super::ConfigFile;
 
-/// The longest `label`, in characters.
-pub const LABEL_MAX_CHARS: usize = 200;
+pub use identity_providers::LABEL_MAX_CHARS;
 
 /// The members of an entry that are the provider's own, not its kind's config.
 const OWN_MEMBERS: [&str; 7] = [
@@ -113,7 +112,7 @@ impl ConfigProvider {
         .map_err(|ConfigErrors(problems)| {
             problems.iter().map(problem_message).collect::<Vec<_>>()
         })?;
-        stored.insert("label".into(), self.label.as_str().into());
+        stored.insert(identity_providers::LABEL.into(), self.label.as_str().into());
         Ok(stored)
     }
 }
@@ -284,11 +283,7 @@ fn valid_key(value: Option<&toml::Value>, problems: &mut Vec<String>) -> Option<
 fn label(value: Option<&toml::Value>, problems: &mut Vec<String>) -> Option<String> {
     match value.map(toml::Value::as_str) {
         None => problems.push("`label` is required".to_owned()),
-        Some(Some(label))
-            if !label.is_empty()
-                && label.chars().count() <= LABEL_MAX_CHARS
-                && !label.chars().any(char::is_control) =>
-        {
+        Some(Some(label)) if identity_providers::valid_label(label) => {
             return Some(label.to_owned());
         }
         Some(_) => problems.push(format!(

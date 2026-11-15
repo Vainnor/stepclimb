@@ -201,6 +201,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the organization's `oidc` and `oauth2` providers, by key. */
+        get: operations["listProviders"];
+        put?: never;
+        /** Create an `oidc` or `oauth2` provider. */
+        post: operations["createProvider"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/providers/{provider_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one provider. */
+        get: operations["getProvider"];
+        put?: never;
+        post?: never;
+        /** Delete a provider no identity links a user to. To keep its identities, disable it instead. */
+        delete: operations["deleteProvider"];
+        options?: never;
+        head?: never;
+        /**
+         * Change a provider's label, whether it is enabled, or members of its config. Its key and
+         *     kind never change.
+         */
+        patch: operations["updateProvider"];
+        trace?: never;
+    };
     "/api/v1/admin/role-assignments": {
         parameters: {
             query?: never;
@@ -1552,6 +1592,33 @@ export interface components {
             /** @description What you call this passkey: trimmed, 1 to 200 characters. `Passkey` when absent. */
             name?: string | null;
         };
+        /** @description A provider to create. */
+        NewProvider: {
+            /**
+             * @description The kind's configuration: the members of an `OidcProviderConfig` or an
+             *     `Oauth2ProviderConfig` and `client_secret`, which is stored encrypted and never answered.
+             *     Members with a default may be left out.
+             */
+            config: {
+                [key: string]: unknown;
+            };
+            /** @description Whether people can sign in through it; `true` when omitted. */
+            enabled?: boolean;
+            /**
+             * @description 1 to 32 lowercase letters, digits and hyphens, starting with a letter or digit; not
+             *     `local`. It is part of the redirect URI and never changes.
+             */
+            key: string;
+            /** @description `oidc` or `oauth2`; anything else answers 422 `provider.kind_unsupported`. */
+            kind: string;
+            /** @description 1 to 200 characters without control characters. */
+            label: string;
+            /**
+             * @description A preset to take the provider's endpoints and claims from. This server has none, so any
+             *     value answers 422 `provider.preset_unknown`.
+             */
+            preset?: string;
+        };
         /** @description A custom role to create. */
         NewRole: {
             /**
@@ -1623,6 +1690,67 @@ export interface components {
          * @enum {string}
          */
         NextStep: "totp";
+        /** @description JSON Pointers into the userinfo body; a profile field without one is not mapped. */
+        Oauth2ProviderClaims: {
+            /** @description Attribute names to pointers. */
+            attributes: {
+                [key: string]: string;
+            };
+            email?: string | null;
+            email_verified?: string | null;
+            family_name?: string | null;
+            given_name?: string | null;
+            groups?: string | null;
+            subject: string;
+        };
+        /** @description An `oauth2` provider's configuration (B4). */
+        Oauth2ProviderConfig: {
+            /** @description Whether users who sign in through the provider may also add passkeys. */
+            allow_local_passkeys: boolean;
+            authorize: string;
+            claims: components["schemas"]["Oauth2ProviderClaims"];
+            client_id: string;
+            /** @description Whether sign-in sends S256 PKCE. */
+            pkce: boolean;
+            scopes: string[];
+            token: string;
+            /**
+             * @description Whether, with the organization's email matching on, a sign-in whose verified email
+             *     equals a user's verified email may be linked to that user.
+             */
+            trusted_for_email_matching: boolean;
+            userinfo: string;
+        };
+        /** @description JSON Pointers into the merged ID token and userinfo claims. */
+        OidcProviderClaims: {
+            /** @description Attribute names to pointers. */
+            attributes: {
+                [key: string]: string;
+            };
+            email: string;
+            email_verified: string;
+            family_name: string;
+            given_name: string;
+            groups?: string | null;
+        };
+        /** @description An `oidc` provider's configuration (`05-oidc.md` B1). */
+        OidcProviderConfig: {
+            /** @description Whether users who sign in through the provider may also add passkeys. */
+            allow_local_passkeys: boolean;
+            claims: components["schemas"]["OidcProviderClaims"];
+            client_id: string;
+            /** @description The issuer, exactly as written; discovery is read from it. */
+            issuer: string;
+            /** @description Always includes `openid`. */
+            scopes: string[];
+            /**
+             * @description Whether, with the organization's email matching on, a sign-in whose verified email
+             *     equals a user's verified email may be linked to that user.
+             */
+            trusted_for_email_matching: boolean;
+            /** @description Whether sign-in also reads the provider's userinfo endpoint. */
+            userinfo: boolean;
+        };
         /**
          * @description Every organization setting with its effective value: the stored one, or the setting's
          *     default when none is stored.
@@ -1704,6 +1832,30 @@ export interface components {
                  * @description RFC 3339, UTC.
                  */
                 updated_at: string;
+            }[];
+            /** @description Pass this as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
+        };
+        /** @description One page of a list. */
+        Page_Provider: {
+            /** @description The items, in the list's sort order. */
+            items: {
+                /** @description Whether the provider has a client secret. The secret itself is never answered. */
+                client_secret_set: boolean;
+                /** @description The kind's configuration, without the client secret. */
+                config: components["schemas"]["ProviderConfig"];
+                /** @description Whether people can sign in through it. A disabled provider keeps its identities. */
+                enabled: boolean;
+                /** Format: uuid */
+                id: string;
+                /** @description The `{provider}` of `/auth/{provider}/start`; fixed once created. */
+                key: string;
+                kind: components["schemas"]["ProviderKind"];
+                /** @description The text of the provider's sign-in button. */
+                label: string;
+                /** @description The URI to register at the provider as the client's redirect URI. */
+                redirect_uri: string;
+                source: components["schemas"]["ProviderSource"];
             }[];
             /** @description Pass this as `cursor` to get the next page; `null` on the last page. */
             next_cursor: string | null;
@@ -1941,6 +2093,50 @@ export interface components {
             /** @description `about:blank` until the docs site documents each code. */
             type: string;
         };
+        /** @description An `oidc` or `oauth2` provider of the organization. */
+        Provider: {
+            /** @description Whether the provider has a client secret. The secret itself is never answered. */
+            client_secret_set: boolean;
+            /** @description The kind's configuration, without the client secret. */
+            config: components["schemas"]["ProviderConfig"];
+            /** @description Whether people can sign in through it. A disabled provider keeps its identities. */
+            enabled: boolean;
+            /** Format: uuid */
+            id: string;
+            /** @description The `{provider}` of `/auth/{provider}/start`; fixed once created. */
+            key: string;
+            kind: components["schemas"]["ProviderKind"];
+            /** @description The text of the provider's sign-in button. */
+            label: string;
+            /** @description The URI to register at the provider as the client's redirect URI. */
+            redirect_uri: string;
+            source: components["schemas"]["ProviderSource"];
+        };
+        /** @description A provider's configuration, by its `kind`. */
+        ProviderConfig: components["schemas"]["OidcProviderConfig"] | components["schemas"]["Oauth2ProviderConfig"];
+        /**
+         * @description A provider's protocol.
+         * @enum {string}
+         */
+        ProviderKind: "oidc" | "oauth2";
+        /** @description A change to a provider: send only what you change. A member sent as `null` is malformed. */
+        ProviderPatch: {
+            /**
+             * @description Config members to replace, each whole; members not named keep their value, and an
+             *     absent `client_secret` keeps the stored secret.
+             */
+            config?: {
+                [key: string]: unknown;
+            };
+            enabled?: boolean;
+            /** @description 1 to 200 characters without control characters. */
+            label?: string;
+        };
+        /**
+         * @description Who owns a provider's row.
+         * @enum {string}
+         */
+        ProviderSource: "api" | "config";
         /** @description `PublicKeyCredentialCreationOptionsJSON`. */
         PublicKeyCreationOptions: {
             /** @description `none`: the server does not ask which device this is. */
@@ -3007,6 +3203,78 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `provider.key_taken`: another provider of the organization has the key. */
+        ProviderCreateConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `provider.config_owned`: `stepclimb.toml` declares the provider; remove it there, and the server disables it. `provider.in_use`: identities still link users to the provider; disable it instead. `local.last_method`: deleting it would leave the organization no way to sign in. */
+        ProviderDeleteConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: the caller does not hold `provider.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site. */
+        ProviderDeleteForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `provider.config_invalid`: the config breaks a rule; `errors` lists each one (at most 20) with a JSON Pointer under `/config` and a `provider.*` code. `provider.kind_unsupported`: the kind is not `oidc` or `oauth2`. `provider.preset_unknown`: this server has no such preset. `request.invalid`: `errors` names `/key` (`provider.key_invalid`) or `/label` (`provider.label_invalid`). */
+        ProviderInvalid: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `provider.not_found`: the organization has no `oidc` or `oauth2` provider with this id. `org.not_found`: the request's organization cannot be determined. */
+        ProviderNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `provider.config_owned`: `stepclimb.toml` declares the provider; change it there. `local.last_method`: disabling it would leave the organization no way to sign in. */
+        ProviderUpdateConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `entitlement.feature_unavailable`: the organization's plan does not include the provider's kind (`oidc_providers` for `oidc`, `oauth2_providers` for `oauth2`). `permission.denied`: the caller does not hold `provider.manage` at organization scope; or sign-up is on and the write turns the provider on, or changes the issuer, endpoint origins or subject pointer of an enabled one, without `admission.manage`. `permission.escalation`: the write trusts the provider for email matching, or changes the issuer, endpoint origins, subject pointer or email claims of a trusted one, or changes the issuer, endpoint origins or subject pointer of a provider identities link users to, and the caller does not hold every catalog permission at organization scope. `auth.csrf_refused`: the request did not come from this site. */
+        ProviderWriteForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: the caller does not hold `provider.manage` at organization scope. */
+        ProvidersForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `auth.rate_limited`: too many sign-in or token requests from this client address, or too many failed password or TOTP checks for this account; `Retry-After` gives the seconds until the limit's window closes. */
         RateLimited: {
             headers: {
@@ -3753,6 +4021,167 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["PermissionDenied"];
             404: components["responses"]["OrganizationNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    listProviders: {
+        parameters: {
+            query?: {
+                /** @description The `next_cursor` of the previous page; omit it for the first page. */
+                cursor?: string;
+                /** @description How many items to return, 1 to 200; 50 when omitted. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of providers */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_Provider"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ProvidersForbidden"];
+            404: components["responses"]["OrganizationNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    createProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewProvider"];
+            };
+        };
+        responses: {
+            /** @description The provider is created */
+            201: {
+                headers: {
+                    /** @description The provider's path */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Provider"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ProviderWriteForbidden"];
+            404: components["responses"]["OrganizationNotFound"];
+            409: components["responses"]["ProviderCreateConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["ProviderInvalid"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    getProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The provider's id. */
+                provider_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The provider */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Provider"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ProvidersForbidden"];
+            404: components["responses"]["ProviderNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    deleteProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The provider's id. */
+                provider_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The provider is deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ProviderDeleteForbidden"];
+            404: components["responses"]["ProviderNotFound"];
+            409: components["responses"]["ProviderDeleteConflict"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    updateProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The provider's id. */
+                provider_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderPatch"];
+            };
+        };
+        responses: {
+            /** @description The provider after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Provider"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ProviderWriteForbidden"];
+            404: components["responses"]["ProviderNotFound"];
+            409: components["responses"]["ProviderUpdateConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["ProviderInvalid"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };

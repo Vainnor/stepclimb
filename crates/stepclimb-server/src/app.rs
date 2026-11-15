@@ -23,7 +23,7 @@ use crate::{
     health, identities, local_sign_in, me, my_passkeys, oauth_authorize, openapi, organization,
     passkey_enrollment, passkey_sign_in, password,
     password_hasher::PasswordHasher,
-    provider_callback, provider_sign_in,
+    provider_admin, provider_callback, provider_sign_in,
     providers::Providers,
     rate_limit::RateLimiter,
     role_assignments, roles, service_accounts, spa, totp, users,
@@ -285,6 +285,16 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         (
             admission_webhook::ROTATE_SECRET_PATH,
             post(admission_webhook::rotate_admission_webhook_secret),
+        ),
+        (
+            provider_admin::PROVIDERS_PATH,
+            get(provider_admin::list_providers).post(provider_admin::create_provider),
+        ),
+        (
+            "/api/v1/admin/providers/{provider_id}",
+            get(provider_admin::get_provider)
+                .patch(provider_admin::update_provider)
+                .delete(provider_admin::delete_provider),
         ),
     ]
 }

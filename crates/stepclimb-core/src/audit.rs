@@ -56,7 +56,9 @@ pub enum Action {
     UserSetStatus,
     IdentityLink,
     IdentityUnlink,
+    IdentityProviderCreate,
     IdentityProviderUpdate,
+    IdentityProviderDelete,
     EnrollmentLinkCreate,
     PasskeyCreate,
     PasskeyRename,
@@ -93,7 +95,9 @@ impl Action {
             Self::UserSetStatus => "user.set_status",
             Self::IdentityLink => "identity.link",
             Self::IdentityUnlink => "identity.unlink",
+            Self::IdentityProviderCreate => "identity_provider.create",
             Self::IdentityProviderUpdate => "identity_provider.update",
+            Self::IdentityProviderDelete => "identity_provider.delete",
             Self::EnrollmentLinkCreate => "enrollment_link.create",
             Self::PasskeyCreate => "passkey.create",
             Self::PasskeyRename => "passkey.rename",
@@ -125,7 +129,9 @@ impl Action {
             | Self::OrganizationUpdateBranding => "organization",
             Self::UserSetStatus => "user",
             Self::IdentityLink | Self::IdentityUnlink => "identity",
-            Self::IdentityProviderUpdate => "identity_provider",
+            Self::IdentityProviderCreate
+            | Self::IdentityProviderUpdate
+            | Self::IdentityProviderDelete => "identity_provider",
             Self::EnrollmentLinkCreate => "enrollment_link",
             Self::PasskeyCreate | Self::PasskeyRename | Self::PasskeyDelete => "passkey",
             // A password has no row id of its own; the entry names its user.
@@ -279,7 +285,7 @@ impl TryFrom<Row> for Entry {
 mod tests {
     use super::*;
 
-    const ALL: [Action; 26] = [
+    const ALL: [Action; 28] = [
         Action::RoleCreate,
         Action::RoleUpdate,
         Action::RoleDelete,
@@ -296,7 +302,9 @@ mod tests {
         Action::UserSetStatus,
         Action::IdentityLink,
         Action::IdentityUnlink,
+        Action::IdentityProviderCreate,
         Action::IdentityProviderUpdate,
+        Action::IdentityProviderDelete,
         Action::EnrollmentLinkCreate,
         Action::PasskeyCreate,
         Action::PasskeyRename,
