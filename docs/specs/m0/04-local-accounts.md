@@ -576,8 +576,9 @@ authenticator.
 - Sending email (enrollment links, magic links, security notices): M1 (platform and
   organization senders, `docs/plan/technical.md` -> Email and notifications).
 - Admin creation and editing of user records: `03-users-and-identities.md`.
-- The sign-in, enrollment and security-settings pages: `11-app-shell.md` (sign-in page) and a
-  later UI issue for the account security page.
+- The sign-in, enrollment and security-settings pages: `11-app-shell.md` (the sign-in and
+  enrollment screens, and the account page at `/account` whose Passkeys section manages B13's
+  passkeys, issue #179).
 - Passkey sign-in inside the Tauri app: it signs in through the system browser (M5).
 
 ## Open questions

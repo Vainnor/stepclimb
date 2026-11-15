@@ -441,8 +441,9 @@ Coordinator decisions (2026-11-14), on the owner's delegation, while building I3
 - **An entry's permission is held at any scope.** B5 shows an entry when any grant in `/me`
   lists the permission, organization or account, so a sub-account admin sees the screen their
   role reaches.
-- **Home in M0** is the only navigation entry (Q2) and shows an EmptyState, "You have no
-  {courses} yet." The skeleton route that read `/healthz` is removed; the probes stay.
+- **Home in M0** was the first navigation entry (Q2); the account page (issue #179, below)
+  added the second. Home shows an EmptyState, "You have no {courses} yet." The skeleton route
+  that read `/healthz` is removed; the probes stay.
 - **The not-found view asks `/me`** to choose its layout: AppShell when it answers 200, the
   signed-out layout for a 401 or any failure. It never redirects to sign in.
 - **A `/me` failure other than a 401** shows ErrorState in the signed-out layout with "Try
@@ -608,6 +609,52 @@ Coordinator decisions (2026-11-15), on the owner's delegation, while building I7
   menu"; it now comes from visually hidden text instead of an `aria-label`. The Avatar and the
   visible name are decorative and hidden from assistive technology. With the `aria-label`, axe's
   `label-content-name-mismatch` rule, which T19 runs, read the Avatar's initials as label text.
+
+Coordinator decisions (2026-11-15), on the owner's delegation, while building issue #179 (the
+account page Q2 (a) names):
+
+- **The page is "Account", at `/account`,** with the navigation entry "Account" (Phosphor
+  `UserCircle`) after Home, for every signed-in user. **Decided by the owner (15 Nov 2026):**
+  "Account" at `/account`, not the plan's "Profile". Q2 (a) calls it "the user's account page"
+  and the user menu is already the "account menu"; "Profile" would promise a profile editor M0
+  does not have. The TopBar's `h1` is "Account"; the page holds sections, each
+  with its own `h2`. In M0 the one section is Passkeys (04 B13); the password (04 I6) and TOTP
+  (04 I7) add theirs.
+- **Passkeys** lists each passkey's name, the date it was added and the date it last signed in
+  ("Not used to sign in yet" before then), dates in ICU's `date, medium` in the browser's time
+  zone, oldest first as the server answers. Each has Rename and Delete; "Add a passkey" is the
+  view's one primary action. An empty list is an EmptyState without an action, since Add is
+  beside it.
+- **Adding** opens a Dialog with an optional Name field (a short input, which `docs/plan/ui.md`
+  allows a dialog). Opening it calls the start route, so its button goes straight to the
+  browser's prompt; a blank name is left out of the request and the server's `Passkey` applies.
+  After `auth.flow_invalid`, `auth.flow_expired` or `auth.passkey_invalid` it asks for new
+  options. `local.passkeys_not_allowed` and `auth.method_disabled` from the start route leave
+  only Cancel; after any other start failure the dialog's button reads "Try again" and starts
+  again. While a registration or a rename is in flight, pressing Enter in the name field sends
+  nothing more. Without WebAuthn, or outside a secure context, the section says why in place of
+  the button; list, rename and delete still work.
+- **Renaming** opens a Dialog with the name filled in; deleting asks in an AlertDialog ("Delete
+  {name}?", the danger "Delete passkey", focus on Cancel) and sends nothing until confirmed. A
+  name the server refuses (422 on `/name`) is shown at the field. After a delete, a success toast
+  names the passkey and focus moves to the section's `h2`, since the row that held it is gone;
+  Stepclimb UI's `base.css` draws no ring on a heading with `tabindex="-1"` (extended from `h1`
+  to every heading level). The `local.last_method` message stays only while the list it was
+  refused against is on screen: an add, a rename or a refreshed list that differs removes it.
+- **Messages (B17).** `local.last_method`, `local.passkeys_not_allowed` (it says the organization's
+  sign-in settings for the user's provider do not allow passkeys, and that an administrator of
+  the organization can allow them in Stepclimb),
+  `auth.method_disabled`, `auth.flow_invalid`, `auth.flow_expired`, `auth.passkey_invalid` and
+  `passkey.not_found` (which also refreshes the list) each have their own message; any other code
+  shows the general message and the code in `Code`. A passkey this device already holds for the
+  account (`InvalidStateError`) has its own message; the other ceremony endings reuse the sign-in
+  screens' messages. While passkeys are off, the list's `auth.method_disabled` replaces the list
+  with that message and no "Try again"; any other list failure is `LoadError` with "Try again".
+- **End to end.** `web/e2e/sign-in.spec.ts` drives the page against the real server with the
+  virtual authenticator (add, the refusal of a device that already holds one, rename, delete
+  after confirming, and the refused delete of the last passkey); `web/e2e/account.spec.ts` runs
+  axe on the list, the add dialog and the delete confirmation in light, dark and high contrast at
+  1280 and 375 px with `/me` and the passkey routes answered in the browser.
 
 ## Issues
 

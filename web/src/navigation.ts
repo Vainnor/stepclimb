@@ -3,7 +3,7 @@
 // destinations that exist; each milestone adds its entry with its feature. An entry with a
 // `permission` shows only to a user who holds it at some scope according to `/me`. Hiding an entry
 // is presentation: the server still refuses the route's API calls.
-import { HouseIcon, type Icon as PhosphorIcon } from "@phosphor-icons/react";
+import { HouseIcon, type Icon as PhosphorIcon, UserCircleIcon } from "@phosphor-icons/react";
 import type { NavEntry, Strings } from "@stepclimb/ui";
 import { holdsPermission, type Me } from "./session";
 
@@ -21,6 +21,7 @@ export interface NavRoute {
 
 export const navRoutes: readonly NavRoute[] = [
   { id: "home", to: "/", icon: HouseIcon, label: (t) => t("nav.home") },
+  { id: "account", to: "/account", icon: UserCircleIcon, label: (t) => t("nav.account") },
 ];
 
 /** The entries `me` may see, in order, labeled. */

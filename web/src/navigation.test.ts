@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { HouseIcon, UsersIcon } from "@phosphor-icons/react";
+import { HouseIcon, UserCircleIcon, UsersIcon } from "@phosphor-icons/react";
 import { describe, expect, it } from "vitest";
 import { type NavRoute, navRoutes, visibleNavEntries } from "./navigation";
 import { meFixture, orgId } from "./test/app";
@@ -37,6 +37,7 @@ describe("visibleNavEntries (B5, T2)", () => {
   it("labels and links each entry from its route", () => {
     expect(visibleNavEntries(navRoutes, meFixture(), (id) => `[${id}]`)).toEqual([
       { id: "home", href: "/", label: "[nav.home]", icon: HouseIcon },
+      { id: "account", href: "/account", label: "[nav.account]", icon: UserCircleIcon },
     ]);
   });
 });

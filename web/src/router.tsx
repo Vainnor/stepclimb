@@ -15,6 +15,7 @@ import { Root } from "./layouts/root";
 import { type ErrorPlace, RouteError } from "./layouts/route-error";
 import { SignedInLayout } from "./layouts/signed-in";
 import { SignedOutLayout } from "./layouts/signed-out";
+import { AccountView } from "./routes/account";
 import { EnrollView } from "./routes/enroll";
 import { HomeView } from "./routes/home";
 import { NotFoundView } from "./routes/not-found";
@@ -77,9 +78,16 @@ const homeRoute = createRoute({
   component: HomeView,
 });
 
+const accountRoute = createRoute({
+  getParentRoute: () => signedInRoute,
+  path: "account",
+  staticData: { view: { title: (t) => t("account.title"), nav: "account" } },
+  component: AccountView,
+});
+
 export const routeTree = rootRoute.addChildren([
   signedOutRoute.addChildren([signInRoute, signInPasskeyRoute, enrollRoute]),
-  signedInRoute.addChildren([homeRoute]),
+  signedInRoute.addChildren([homeRoute, accountRoute]),
 ]);
 
 /** The layout a route sits in: a route under one draws its error inside it. */

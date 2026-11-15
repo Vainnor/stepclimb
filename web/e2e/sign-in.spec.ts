@@ -254,12 +254,14 @@ test.describe
       page,
     }) => {
       expect(passkey, "the first test registered a passkey").toBeDefined();
-      await addVirtualAuthenticator(page, passkey);
+      const authenticator = await addVirtualAuthenticator(page, passkey);
       await page.goto("/sign-in");
       await page.getByRole("textbox", { name: "Email" }).fill(EMAIL);
       await page.getByRole("button", { name: "Continue" }).click();
       await page.getByRole("button", { name: "Sign in with a passkey" }).click();
       await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
+      // The sign-in raised the passkey's sign counter: the next test signs in with this copy.
+      [passkey] = await authenticator.credentials();
 
       const before = { href: await themeHref(page), brand: await brandColor(page) };
       expect(before.href).toMatch(/^\/theme\.css\?v=[0-9a-f]{64}$/);
@@ -284,6 +286,113 @@ test.describe
         const restored = await branding(page, "PUT", saved.body.inputs);
         expect(restored.status).toBe(200);
       }
+    });
+
+    // The account page against the real server (04 B13): the first test left the account two
+    // passkeys, "Passkey" from the setup link and "Second device", which the authenticator holds.
+    test("add, rename and delete passkeys on the account page, and keep the last one", async ({
+      page,
+    }) => {
+      expect(passkey, "the first test registered a passkey").toBeDefined();
+      const authenticator = await addVirtualAuthenticator(page, passkey);
+      await page.goto("/sign-in");
+      await page.getByRole("textbox", { name: "Email" }).fill(EMAIL);
+      await page.getByRole("button", { name: "Continue" }).click();
+      await page.getByRole("button", { name: "Sign in with a passkey" }).click();
+      await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
+
+      await page.getByRole("link", { name: "Account", exact: true }).click();
+      await expect(page.getByRole("heading", { level: 1, name: "Account" })).toBeVisible();
+      await expect(page).toHaveTitle("Account · Example Training");
+      const rows = page.getByRole("row");
+      await expect(rows).toHaveCount(2);
+      await expect(rows.nth(0)).toContainText("Passkey");
+      await expect(rows.nth(1)).toContainText("Second device");
+      await expect(rows.nth(1)).toContainText("Last used");
+
+      await test.step("add: the device that holds one of the account's passkeys refuses", async () => {
+        await page.getByRole("button", { name: "Add a passkey" }).click();
+        const dialog = page.getByRole("dialog", { name: "Add a passkey" });
+        await dialog.getByRole("textbox", { name: "Name" }).fill("Tablet");
+        await dialog.getByRole("button", { name: "Create the passkey" }).click();
+        await expect(dialog.getByRole("alert")).toContainText(
+          "This device already holds a passkey for your account.",
+        );
+        await dialog.getByRole("button", { name: "Cancel" }).click();
+        await expect(dialog).toBeHidden();
+      });
+
+      await test.step("add: a device without one registers a new passkey", async () => {
+        const [held] = await authenticator.ids();
+        if (held === undefined) throw new Error("the authenticator holds no passkey");
+        await authenticator.remove(held);
+        await page.getByRole("button", { name: "Add a passkey" }).click();
+        const dialog = page.getByRole("dialog", { name: "Add a passkey" });
+        await dialog.getByRole("textbox", { name: "Name" }).fill("Tablet");
+        const added = page.waitForResponse(
+          (r) =>
+            new URL(r.url()).pathname === "/api/v1/me/passkeys" && r.request().method() === "POST",
+        );
+        await dialog.getByRole("button", { name: "Create the passkey" }).click();
+        expect((await added).status()).toBe(201);
+        await expect(dialog).toBeHidden();
+        await expect(rows).toHaveCount(3);
+        await expect(rows.nth(2)).toContainText("Tablet");
+        await expect(rows.nth(2)).toContainText("Not used to sign in yet");
+        expect(await authenticator.ids()).toHaveLength(1);
+      });
+
+      await test.step("rename", async () => {
+        await page.getByRole("button", { name: "Rename Tablet" }).click();
+        const dialog = page.getByRole("dialog", { name: "Rename passkey" });
+        await dialog.getByRole("textbox", { name: "Name" }).fill("Work tablet");
+        await dialog.getByRole("button", { name: "Save name" }).click();
+        await expect(dialog).toBeHidden();
+        await expect(rows.nth(2)).toContainText("Work tablet");
+        await page.reload();
+        await expect(page.getByRole("row").nth(2)).toContainText("Work tablet");
+      });
+
+      await test.step("delete asks first; Cancel keeps the passkey", async () => {
+        await page.getByRole("button", { name: "Delete Passkey" }).click();
+        const confirm = page.getByRole("alertdialog", { name: "Delete Passkey?" });
+        await confirm.getByRole("button", { name: "Cancel" }).click();
+        await expect(confirm).toBeHidden();
+        await expect(rows).toHaveCount(3);
+      });
+
+      await test.step("delete two once confirmed", async () => {
+        for (const name of ["Passkey", "Second device"]) {
+          await page.getByRole("button", { name: `Delete ${name}` }).click();
+          const confirm = page.getByRole("alertdialog", { name: `Delete ${name}?` });
+          const deleted = page.waitForResponse((r) => r.request().method() === "DELETE");
+          // By keyboard, so the browser would draw a ring on what takes focus next.
+          await confirm.getByRole("button", { name: "Delete passkey" }).press("Enter");
+          expect((await deleted).status()).toBe(204);
+          await expect(page.getByText(`${name} deleted`)).toBeVisible();
+          // The deleted row held focus; the section's heading takes it, without a ring.
+          const heading = page.getByRole("heading", { level: 2, name: "Passkeys" });
+          await expect(heading).toBeFocused();
+          expect(await heading.evaluate((h) => getComputedStyle(h).boxShadow)).toBe("none");
+        }
+        await expect(rows).toHaveCount(1);
+        await expect(rows.nth(0)).toContainText("Work tablet");
+      });
+
+      await test.step("the last way to sign in cannot be deleted", async () => {
+        await page.getByRole("button", { name: "Delete Work tablet" }).click();
+        const confirm = page.getByRole("alertdialog", { name: "Delete Work tablet?" });
+        const refused = page.waitForResponse((r) => r.request().method() === "DELETE");
+        await confirm.getByRole("button", { name: "Delete passkey" }).click();
+        expect((await refused).status()).toBe(409);
+        // The page's own alert, not a toast's.
+        await expect(page.locator('[data-slot="form-error"]')).toContainText(
+          "This passkey is your last way to sign in, so it cannot be deleted.",
+        );
+        await page.reload();
+        await expect(page.getByRole("row")).toHaveCount(1);
+      });
+      [passkey] = await authenticator.credentials();
     });
   });
 
