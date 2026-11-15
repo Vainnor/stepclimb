@@ -305,3 +305,49 @@ async fn a_sign_in_finds_the_passkey_in_its_organization_and_records_its_use(poo
         .expect("B's row");
     assert_eq!(kims_row, credential());
 }
+
+/// The counter flag keeps the first time it was set, and another organization's passkey is not
+/// flagged through this scope.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_counter_flag_keeps_its_first_time(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    let b = org(&pool, "org-b").await;
+    let sam = user(&pool, a).await;
+    let kim = user(&pool, b).await;
+    let passkey = store(&pool, a, sam, &[8; 16]).await.expect("store");
+    let kims = store(&pool, b, kim, &[8; 16]).await.expect("store in B");
+    let mut conn = pool.acquire().await.expect("a connection");
+    let first = now() + Duration::from_secs(60);
+    passkeys::flag_counter_regressed(&mut conn, scope(a), passkey.id, first)
+        .await
+        .expect("flag");
+    passkeys::flag_counter_regressed(
+        &mut conn,
+        scope(a),
+        passkey.id,
+        first + Duration::from_secs(60),
+    )
+    .await
+    .expect("flag again");
+    let refused = passkeys::flag_counter_regressed(&mut conn, scope(a), kims.id, first).await;
+    assert!(matches!(refused, Err(Error::NotFound)), "{refused:?}");
+    let flagged: Vec<bool> = sqlx::query_scalar(
+        "SELECT counter_regressed_at IS NOT DISTINCT FROM
+                timestamptz 'epoch' + $1::bigint * interval '1 microsecond'
+         FROM passkeys ORDER BY org_id = $2 DESC",
+    )
+    .bind(
+        i64::try_from(
+            first
+                .duration_since(UNIX_EPOCH)
+                .expect("after the epoch")
+                .as_micros(),
+        )
+        .expect("fits"),
+    )
+    .bind(a)
+    .fetch_all(&pool)
+    .await
+    .expect("read the flags");
+    assert_eq!(flagged, [true, false]);
+}

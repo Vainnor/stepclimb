@@ -257,15 +257,18 @@ creates and hands over.
     organization and the email in any letter case, `users_email`'s comparison) and always
     answers 200 `{options}` with a new `passkey_sign_in` flow. An address with no account,
     another organization's, one that holds NUL, and an account without a passkey all get
-    `allowCredentials: []`, and their flow can finish no sign-in. An account with passkeys
-    still differs from these, since its options list its credential ids: (a) accepts that.
-    `webauthn-rs` has a fake credential id generator that would hide it; adopting it is the
-    owner's call. Discoverable sign-in (Q9 (b)) is not built.
+    `allowCredentials: []`, after the same queries (the credentials query runs with the nil id
+    when there is no user), and their flow can finish no sign-in. An account with passkeys
+    still differs from these, since its options list its credential ids: pending Q14.
+    Discoverable sign-in (Q9 (b)) and fake credential ids are not built in M0 (owner, 14 Nov
+    2026).
   - Both routes take `RateLimited<SignIn>` first, then answer 404 `auth.method_disabled` while
-    passkeys are off, before they read anything else. Both answer `Cache-Control: no-store`.
+    passkeys are off, before they read the body, so a switched-off method answers 404 whatever
+    the body. Both answer `Cache-Control: no-store`.
   - The finish route takes the flow first and deletes it in its transaction, so a challenge is
     used once whatever the outcome. In a savepoint it then finds the passkey by `(org_id,
-    credential_id)` with `FOR UPDATE`, which must belong to the flow's user, and verifies the
+    credential_id)` with `FOR UPDATE` (for a flow with no account too), which must belong to
+    the flow's user, and verifies the
     assertion against the flow's state (challenge, the public URL's origin exactly, the
     relying party ID, user verification required, the signature) and against the stored
     credential. A user handle, when the authenticator sends one, must be the flow user's id.
@@ -273,14 +276,20 @@ creates and hands over.
     user handle mismatch, a counter that did not go up and a body that is not an assertion all
     answer the same 401 `auth.passkey_invalid`. `auth.flow_invalid` and `auth.flow_expired` are
     400, as in B8. A refusal rolls the savepoint back and commits the flow's deletion; every
-    answer after the flow is taken clears the flow cookie.
+    answer after the flow is taken clears the flow cookie. A server fault (500) rolls the whole
+    transaction back and leaves the flow usable; nothing a client sends reaches that path.
   - Q12's counter rule: a counter must go up unless both the stored and the presented counter
     are 0. This is the W3C rule `webauthn-rs` applies, and it is stricter than Q12's wording in
-    one case: a stored counter above 0 with a presented 0 is refused, since a passkey that
-    once counted and stops is not a synced passkey. The check runs against the row read under
-    the lock, not only the ceremony's copy, so two sign-ins cannot pass with one counter value.
-    A refusal for the counter logs a warning with the passkey's id; the passkey is not flagged
-    or disabled (no column for it).
+    one case: a stored counter above 0 with a presented 0 is refused. `webauthn-rs` cannot
+    apply the literal rule, and refusing fails closed; whether to keep it is pending Q15. The
+    check runs against the row read under the lock, not only the ceremony's copy, so two
+    sign-ins cannot pass with one counter value.
+  - "Refuse and flag" (Q12): a counter refusal logs a warning with the passkey's id and sets
+    `passkeys.counter_regressed_at` (migration `20261114200000_passkey_counter_flag.sql`) to the
+    first time it happened, in the outer transaction after the savepoint's rollback, so the
+    flag commits although the sign-in is refused. The flag blocks nothing: a flagged passkey
+    whose counter goes up again still signs in. Whether a flagged passkey is blocked is pending
+    Q15.
   - Admission (B5): as in B8, a suspended user is refused with 403 `auth.suspended`, checked
     only after the assertion verified, so the answer reveals the suspension only to the
     passkey's holder. Nothing is saved for a refused sign-in.
@@ -400,7 +409,8 @@ with the composite foreign key `(org_id, user_id) REFERENCES users (org_id, id) 
 CASCADE`, as every table but `organizations` has, and `UNIQUE (org_id, credential_id)` in place
 of a unique `credential_id`, so one organization's registrations never collide with, or reveal,
 another's (coordinator decision, 2026-11-14). `credential_id` is 1 to 1023 bytes (WebAuthn
-Level 3's limit).
+Level 3's limit). Issue I4 adds `counter_regressed_at timestamptz NULL`, the first time a
+sign-in was refused for its sign counter (B12, Q15).
 
 **`identity_providers`** (from `03-users-and-identities.md`): one row per organization with
 `kind = 'local'`, `key = 'local'`; its `config` holds the switches if Q2 chooses that.
@@ -610,6 +620,24 @@ overrule one, which then updates this spec.
   address: at most one live link (a new request replaces it) or several. Build it in M0 with a
   test-only mail sink, or in M1 with email. Recommendation: (a), one live link, built in M1.
   **Decided:** the recommendation (owner, 13 Nov 2026).
+- **Q14. Which addresses have passkeys.** Raised by issue I4. With Q9 (a), the start route's
+  options list an account's credential ids, so anyone can tell an address with a passkey from
+  one without (an unknown address, or an account without a passkey, both get an empty list).
+  (a) Discoverable sign-in (Q9 (b)): the start route takes no email and allows no credential,
+  and the browser offers the passkeys it holds; email-first then goes or stays as a fallback.
+  (b) Fake credential ids for an address without passkeys, derived from the address so they
+  are stable (`webauthn-rs` 0.6.2 has `fake::WebauthnFakeCredentialGenerator`). (c) Accept the
+  difference. Registration today sets `residentKey: discouraged` (Q12), so some passkeys
+  registered now will not be discoverable and could not sign in under (a) without registering
+  again; choosing (a) later may mean changing registration to `preferred` now. Not built in
+  M0 (owner, 14 Nov 2026). **Open:** the owner's.
+- **Q15. The sign counter's edge case and the flag.** Raised by issue I4. Q12 says to refuse
+  only when both counters are non-zero; the server also refuses a stored counter above 0
+  followed by a presented 0, the W3C rule `webauthn-rs` applies, since `webauthn-rs` cannot
+  apply the literal one and refusing fails closed. Keep it, or accept that case? And should a
+  passkey with `counter_regressed_at` set be blocked from sign-in (and then how is it
+  cleared: an admin, deleting the passkey), or only shown? Today it is only stored. **Open:**
+  the owner's.
 
 ## Issues
 

@@ -253,42 +253,7 @@ impl Fixture {
     }
 
     async fn send(&self, org: Uuid, uri: &str, cookie: Option<&str>, body: Value) -> Answer {
-        let mut request = Request::builder()
-            .method(Method::POST)
-            .uri(uri)
-            .header(TEST_ORG_HEADER, org.to_string())
-            .header("sec-fetch-site", "same-origin")
-            .header(header::CONTENT_TYPE, "application/json");
-        if let Some(cookie) = cookie {
-            request = request.header(header::COOKIE, cookie);
-        }
-        let response = self
-            .app
-            .clone()
-            .oneshot(
-                request
-                    .body(Body::from(body.to_string()))
-                    .expect("a request"),
-            )
-            .await
-            .expect("the router never fails");
-        let (status, headers) = (response.status(), response.headers().clone());
-        let bytes = response
-            .into_body()
-            .collect()
-            .await
-            .expect("the body is readable")
-            .to_bytes();
-        let body = if bytes.is_empty() {
-            Value::Null
-        } else {
-            serde_json::from_slice(&bytes).expect("a JSON body")
-        };
-        Answer {
-            status,
-            headers,
-            body,
-        }
+        post(self.app.clone(), org, uri, cookie, body.to_string()).await
     }
 
     async fn start_in(&self, org: Uuid, email: &str) -> Answer {
@@ -365,6 +330,40 @@ impl Fixture {
         local_sign_in::update(&self.pool, scope(self.org), new, now(), Actor::Instance)
             .await
             .expect("set the switches");
+    }
+}
+
+/// POST `body` as JSON to `uri` of `org` from this site, with `cookie`.
+async fn post(app: Router, org: Uuid, uri: &str, cookie: Option<&str>, body: String) -> Answer {
+    let mut request = Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header(TEST_ORG_HEADER, org.to_string())
+        .header("sec-fetch-site", "same-origin")
+        .header(header::CONTENT_TYPE, "application/json");
+    if let Some(cookie) = cookie {
+        request = request.header(header::COOKIE, cookie);
+    }
+    let response = app
+        .oneshot(request.body(Body::from(body)).expect("a request"))
+        .await
+        .expect("the router never fails");
+    let (status, headers) = (response.status(), response.headers().clone());
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body is readable")
+        .to_bytes();
+    let body = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).expect("a JSON body")
+    };
+    Answer {
+        status,
+        headers,
+        body,
     }
 }
 
@@ -660,6 +659,95 @@ async fn a_counter_that_does_not_go_up_is_refused(pool: PgPool) {
     assert!(f.passkey(&sam.credential_id).await["last_used_at"].is_null());
 }
 
+/// Q12's "refuse and flag": a refused counter sets `counter_regressed_at`, committed although
+/// the sign-in is refused and its savepoint rolled back. The first time stays. The flag blocks
+/// nothing: once the counter goes up again the passkey signs in, still flagged.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_refused_counter_flags_the_passkey_without_blocking_it(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let mut sam = f.member("sam@example.test").await;
+    let flag = |row: Value| row["counter_regressed_at"].clone();
+    assert_eq!(flag(f.passkey(&sam.credential_id).await), Value::Null);
+    f.set_counter(&sam, 50).await;
+    let started = f.start(&sam.email).await;
+    let answer = f.finish(&started, sam.assert(&started)).await;
+    assert_eq!(answer.code(), "auth.passkey_invalid", "{answer:?}");
+    let first = flag(f.passkey(&sam.credential_id).await);
+    assert!(first.is_string(), "not flagged: {first}");
+
+    f.clock.advance(Duration::from_secs(60));
+    let started = f.start(&sam.email).await;
+    let answer = f.finish(&started, sam.assert(&started)).await;
+    assert_eq!(answer.code(), "auth.passkey_invalid", "{answer:?}");
+    assert_eq!(flag(f.passkey(&sam.credential_id).await), first);
+
+    f.set_counter(&sam, 0).await;
+    let started = f.start(&sam.email).await;
+    let answer = f.finish(&started, sam.assert(&started)).await;
+    assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    assert_eq!(flag(f.passkey(&sam.credential_id).await), first);
+}
+
+/// The finish route locks the passkey row before it reads the counter: while another
+/// transaction holds the row, the sign-in waits, then checks the counter that transaction
+/// saved (50, above the authenticator's 1) and refuses. Without the lock it would read the old
+/// counter, pass, and overwrite 50.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_sign_in_waits_for_the_passkey_row_and_reads_its_saved_counter(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let mut sam = f.member("sam@example.test").await;
+    let started = f.start(&sam.email).await;
+    let assertion = sam.assert(&started);
+
+    let mut holder = f.pool.begin().await.expect("a transaction");
+    sqlx::query("SELECT 1 FROM passkeys WHERE credential_id = $1 FOR UPDATE")
+        .bind(sam.credential_id.as_slice())
+        .execute(&mut *holder)
+        .await
+        .expect("lock the passkey");
+    let app = f.app.clone();
+    let (org, cookie) = (f.org, started.flow_cookie());
+    let body = json!({ "credential": assertion }).to_string();
+    let finish = tokio::spawn(async move { post(app, org, FINISH, Some(&cookie), body).await });
+    wait_for_a_lock_wait(&f.pool).await;
+    sqlx::query(
+        "UPDATE passkeys SET credential = jsonb_set(credential, '{cred,counter}', '50')
+         WHERE credential_id = $1",
+    )
+    .bind(sam.credential_id.as_slice())
+    .execute(&mut *holder)
+    .await
+    .expect("save a higher counter");
+    holder.commit().await.expect("commit");
+
+    let answer = finish.await.expect("the request runs");
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::UNAUTHORIZED, "auth.passkey_invalid"),
+        "{answer:?}"
+    );
+    assert_eq!(f.counter(&sam).await, 50);
+    assert_eq!(f.sessions_of(sam.id).await, 0);
+}
+
+/// Wait until a backend of this database waits for a lock, at most 10 seconds.
+async fn wait_for_a_lock_wait(pool: &PgPool) {
+    for _ in 0..1000 {
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("read pg_stat_activity");
+        if waiting > 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("no request waited for the passkey row");
+}
+
 /// B18: a sign-in older than the flow's lifetime has expired.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn a_sign_in_older_than_the_flow_lifetime_has_expired(pool: PgPool) {
@@ -681,7 +769,8 @@ async fn a_sign_in_older_than_the_flow_lifetime_has_expired(pool: PgPool) {
 }
 
 /// T1's sign-in part (B2): with passkeys switched off both routes answer 404
-/// `auth.method_disabled` and the passkey signs nobody in; switched back on, it works unchanged.
+/// `auth.method_disabled`, whatever the body, and the passkey signs nobody in; switched back
+/// on, it works unchanged.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn a_switched_off_passkey_does_not_sign_in_until_switched_on(pool: PgPool) {
     let f = Fixture::new(pool).await;
@@ -698,7 +787,24 @@ async fn a_switched_off_passkey_does_not_sign_in_until_switched_on(pool: PgPool)
             "{answer:?}"
         );
     }
+    for (uri, cookie) in [(START, None), (FINISH, Some(started.flow_cookie()))] {
+        let answer = post(
+            f.app.clone(),
+            f.org,
+            uri,
+            cookie.as_deref(),
+            "{not json".into(),
+        )
+        .await;
+        assert_eq!(
+            (answer.status, answer.code()),
+            (StatusCode::NOT_FOUND, "auth.method_disabled"),
+            "{uri} with a malformed body: {answer:?}"
+        );
+    }
     f.set_passkey(true).await;
+    let malformed = post(f.app.clone(), f.org, FINISH, None, "{not json".into()).await;
+    assert_eq!(malformed.status, StatusCode::BAD_REQUEST, "{malformed:?}");
     let answer = f.finish(&started, assertion).await;
     assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
 }

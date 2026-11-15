@@ -160,9 +160,8 @@ impl Assertion {
 #[derive(Debug, thiserror::Error)]
 pub enum SignInError {
     /// `webauthn-rs` refused it: another challenge, origin or relying party ID, no user
-    /// verification, a bad signature, a credential the ceremony did not allow, or a sign counter
-    /// that did not go up against the one the ceremony started with. The client's, or an
-    /// attacker's.
+    /// verification, a bad signature, or a credential the ceremony did not allow. The client's,
+    /// or an attacker's.
     #[error("the passkey sign-in was refused: {0}")]
     Refused(#[source] WebauthnError),
     /// The assertion names a user handle other than the expected user's id.
@@ -171,10 +170,11 @@ pub enum SignInError {
     /// The stored credential is not the one the assertion was signed with.
     #[error("the assertion is for another credential")]
     WrongCredential,
-    /// The sign counter did not go up against the stored one (spec 04 Q12): two copies of the
-    /// passkey may exist. Only a counter of 0 on both sides, a passkey without a counter, passes.
-    #[error("the passkey's sign counter went from {stored} to {presented}")]
-    CounterNotIncreased { stored: u32, presented: u32 },
+    /// The sign counter did not go up against the stored one or the ceremony's copy of it
+    /// (spec 04 Q12): two copies of the passkey may exist. Only a counter of 0 on both sides, a
+    /// passkey without a counter, passes.
+    #[error("the passkey's sign counter did not go up")]
+    CounterNotIncreased,
     /// The stored state did not parse: a server fault, since only [`RelyingParty`] writes it.
     #[error("the stored passkey sign-in state is unreadable: {0}")]
     State(#[source] serde_json::Error),
@@ -192,10 +192,6 @@ pub struct Verified {
     /// The stored credential with the assertion's sign counter and backup state: store it in
     /// place of the old one.
     pub credential: Value,
-    /// The sign counter the authenticator reported; 0 for a passkey without one.
-    pub counter: u32,
-    /// Whether the passkey is backed up (synced) now.
-    pub backup_state: bool,
 }
 
 /// The sign counter of a stored credential, as `webauthn-rs` serializes a [`Passkey`]
@@ -320,7 +316,10 @@ impl RelyingParty {
         let result = self
             .0
             .finish_passkey_authentication(&assertion.0, &state)
-            .map_err(SignInError::Refused)?;
+            .map_err(|error| match error {
+                WebauthnError::CredentialPossibleCompromise => SignInError::CounterNotIncreased,
+                other => SignInError::Refused(other),
+            })?;
         if let Some(handle) = assertion.0.get_user_unique_id()
             && handle != user_id.as_bytes()
         {
@@ -328,18 +327,13 @@ impl RelyingParty {
         }
         let presented = result.counter();
         if !counter_increased(stored_counter, presented) {
-            return Err(SignInError::CounterNotIncreased {
-                stored: stored_counter,
-                presented,
-            });
+            return Err(SignInError::CounterNotIncreased);
         }
         if passkey.update_credential(&result).is_none() {
             return Err(SignInError::WrongCredential);
         }
         Ok(Verified {
             credential: serde_json::to_value(&passkey).map_err(SignInError::Serialize)?,
-            counter: presented,
-            backup_state: result.backup_state(),
         })
     }
 }
@@ -626,10 +620,8 @@ mod tests {
         let party = party();
         let (mut authenticator, registered) = registered(&party);
         let first = sign_in(&party, &mut authenticator, &registered.credential, |_| {}).unwrap();
-        assert_eq!(first.counter, 1);
         assert_eq!(first.credential["cred"]["counter"], 1);
         let second = sign_in(&party, &mut authenticator, &first.credential, |_| {}).unwrap();
-        assert_eq!(second.counter, 2);
         assert_eq!(second.credential["cred"]["counter"], 2);
     }
 
@@ -659,30 +651,19 @@ mod tests {
         let refused =
             party.finish_authentication(&assertion, &started.state, registrant().user_id, &since);
         assert!(
-            matches!(
-                refused,
-                Err(SignInError::CounterNotIncreased {
-                    stored: 7,
-                    presented: 1
-                })
-            ),
+            matches!(refused, Err(SignInError::CounterNotIncreased)),
             "{refused:?}"
         );
     }
 
     #[test]
-    fn a_counter_behind_the_ceremonys_copy_is_refused_by_webauthn_rs() {
+    fn a_counter_behind_the_ceremonys_copy_is_refused_as_not_increased() {
         let party = party();
         let (mut authenticator, registered) = registered(&party);
         let ahead = with_counter(&registered.credential, 7);
         let refused = sign_in(&party, &mut authenticator, &ahead, |_| {});
         assert!(
-            matches!(
-                refused,
-                Err(SignInError::Refused(
-                    WebauthnError::CredentialPossibleCompromise
-                ))
-            ),
+            matches!(refused, Err(SignInError::CounterNotIncreased)),
             "{refused:?}"
         );
     }

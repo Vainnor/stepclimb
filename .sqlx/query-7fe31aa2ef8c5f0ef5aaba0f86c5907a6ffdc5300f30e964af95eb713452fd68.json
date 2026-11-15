@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE passkeys\n           SET counter_regressed_at = COALESCE(\n                   counter_regressed_at,\n                   timestamptz 'epoch' + $3::bigint * interval '1 microsecond'),\n               updated_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond'\n           WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7fe31aa2ef8c5f0ef5aaba0f86c5907a6ffdc5300f30e964af95eb713452fd68"
+}

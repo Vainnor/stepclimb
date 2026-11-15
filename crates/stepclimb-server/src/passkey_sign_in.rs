@@ -3,21 +3,22 @@
 //! Q12; docs/specs/m0/08-sessions-and-csrf.md B7, B17 to B20).
 //!
 //! The ceremony takes two requests, each rate limited first and answering 404
-//! `auth.method_disabled` while passkeys are off.
+//! `auth.method_disabled` while passkeys are off, before the body is read, so a switched-off
+//! method answers 404 whatever the body.
 //!
 //! `POST /auth/local/passkey/start` ([`start_passkey_sign_in`]) finds the user by the
 //! organization and the email (spec 04 B4) and answers credential request options that allow
 //! that user's passkeys, bound to a new `passkey_sign_in` flow whose sealed payload holds the
 //! ceremony state. An address with no account, another organization's, or one whose account
-//! has no passkey gets the same answer with no credential allowed (Q9 (a)), and a flow that no
-//! assertion can finish.
+//! has no passkey gets the same answer with no credential allowed (Q9 (a)), after the same
+//! queries, and a flow that no assertion can finish. The answer still differs for an account
+//! with passkeys, whose ids it lists (pending Q14).
 //!
 //! `POST /auth/local/passkey/finish` ([`finish_passkey_sign_in`]) takes the flow (deleting it,
 //! so the challenge is used once), then, in a savepoint:
 //!
-//! 1. refuses a flow started for no account;
-//! 2. locks the passkey the assertion names by `(org_id, credential_id)`, which must belong to
-//!    the flow's user;
+//! 1. locks the passkey the assertion names by `(org_id, credential_id)`;
+//! 2. refuses it unless it belongs to the flow's user (a flow for no account matches none);
 //! 3. verifies the assertion (`stepclimb_auth::passkey`: challenge, exact origin, relying party
 //!    ID, user verification, signature, user handle, sign counter against the stored one);
 //! 4. admits the user: spec 07's pipeline is not built, and for a known user its only step is
@@ -28,14 +29,19 @@
 //! Every refusal at steps 1 to 3 is the same 401 `auth.passkey_invalid`, so the answer does not
 //! say whether the account, the passkey or the signature was wrong. A refusal rolls the
 //! savepoint back and commits the flow's deletion; every answer after the flow is taken clears
-//! the flow cookie. No step logs the flow token, the ceremony state or the assertion.
-//! A sign-in writes no audit entry (spec 08 Q14: routine sign-ins are logged only).
+//! the flow cookie. A sign counter that did not go up also sets the passkey's
+//! `counter_regressed_at` after the rollback, committed with the flow's deletion (Q12's "refuse
+//! and flag"); the flag blocks nothing (pending Q15). A server fault (500: the database, a
+//! payload or stored credential that does not parse) rolls the whole transaction back and
+//! leaves the flow usable; nothing a client sends reaches that path. No step logs the flow
+//! token, the ceremony state or the assertion. A sign-in writes no audit entry (spec 08 Q14:
+//! routine sign-ins are logged only).
 
 use std::time::SystemTime;
 
 use axum::{
     Json,
-    extract::State,
+    extract::{FromRequest, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
@@ -48,7 +54,7 @@ use stepclimb_core::{
     auth_flows::Kind,
     id::Uuid,
     local_sign_in::Method,
-    passkeys,
+    passkeys::{self, StoredPasskey},
     users::{self, Status, User},
 };
 use utoipa::ToSchema;
@@ -153,10 +159,11 @@ pub async fn start_passkey_sign_in(
     _limited: RateLimited<SignIn>,
     org: RequestOrg,
     State(state): State<AppState>,
-    ApiJson(body): ApiJson<PasskeySignInStart>,
+    request: Request,
 ) -> Result<Response, ApiError> {
     let scope = org.scope();
     require_method(&state.db, scope, Method::Passkey).await?;
+    let ApiJson(body) = ApiJson::<PasskeySignInStart>::from_request(request, &state).await?;
     let now = state.clock.now();
     let mut conn = state
         .db
@@ -193,12 +200,12 @@ pub async fn begin(
     now: SystemTime,
 ) -> Result<Begun, ApiError> {
     let user = account(&mut *conn, scope, &request.email).await?;
-    let credentials = match &user {
-        Some(user) => passkeys::credentials(&mut *conn, scope, user.id)
-            .await
-            .map_err(|e| ApiError::internal(&e))?,
-        None => Vec::new(),
-    };
+    // The same query for every address: the nil id matches no user, so an address without an
+    // account costs what one without a passkey does.
+    let user_id = user.as_ref().map_or(Uuid::nil(), |user| user.id);
+    let credentials = passkeys::credentials(&mut *conn, scope, user_id)
+        .await
+        .map_err(|e| ApiError::internal(&e))?;
     let party = relying_party(state, &mut *conn, scope).await?;
     let started = party
         .start_authentication(&credentials)
@@ -279,10 +286,11 @@ pub async fn finish_passkey_sign_in(
     org: RequestOrg,
     State(state): State<AppState>,
     headers: HeaderMap,
-    ApiJson(body): ApiJson<PasskeySignInFinish>,
+    request: Request,
 ) -> Result<Response, ApiError> {
     let scope = org.scope();
     require_method(&state.db, scope, Method::Passkey).await?;
+    let ApiJson(body) = ApiJson::<PasskeySignInFinish>::from_request(request, &state).await?;
     let now = state.clock.now();
     let mut tx = state.db.begin().await.map_err(|e| ApiError::internal(&e))?;
     let flow = flow::finish(
@@ -331,54 +339,85 @@ struct Attempt<'a> {
 }
 
 /// Steps 1 to 6 of the module documentation, in a savepoint of `tx` that only a sign-in
-/// releases.
+/// releases. A counter refusal rolls the savepoint back and then flags the passkey in `tx`, so
+/// the flag commits with the flow's deletion.
 async fn sign_in(
     tx: &mut Transaction<'_, Postgres>,
     attempt: Attempt<'_>,
 ) -> Result<session::Started, Outcome> {
     let scope = attempt.scope;
     let mut sp = tx.begin().await.map_err(|e| Outcome::internal(&e))?;
-    let Some(user_id) = attempt.user_id else {
-        return Err(refused(
-            "the sign-in was started for an address with no account",
-        ));
-    };
-    let assertion = Assertion::parse(attempt.credential)
-        .map_err(|_| refused("the credential is not a passkey assertion"))?;
-    let stored = passkeys::lock_for_sign_in(&mut sp, scope, assertion.credential_id())
-        .await
-        .map_err(|e| Outcome::internal(&e))?
-        .ok_or_else(|| refused("no passkey of the organization has the credential id"))?;
-    if stored.user_id != user_id {
-        return Err(refused("the passkey is another user's"));
-    }
-    let user = users::get(&mut *sp, scope, user_id)
-        .await
-        .map_err(|e| Outcome::internal(&e))?
-        .ok_or_else(|| refused("the sign-in's account no longer exists"))?;
+    let (assertion, stored, user) = locate(&mut sp, &attempt).await?;
     let party = relying_party(attempt.state, &mut sp, scope)
         .await
         .map_err(Outcome::Failed)?;
-    let verified = party
-        .finish_authentication(
-            &assertion,
-            &attempt.pending.state,
-            user_id,
-            &stored.credential,
-        )
-        .map_err(|error| verification_refused(error, stored.id))?;
+    let verified = party.finish_authentication(
+        &assertion,
+        &attempt.pending.state,
+        user.id,
+        &stored.credential,
+    );
+    let verified = match verified {
+        Ok(verified) => verified,
+        Err(webauthn::SignInError::CounterNotIncreased) => {
+            sp.rollback().await.map_err(|e| Outcome::internal(&e))?;
+            return Err(counter_refused(tx, scope, stored.id, attempt.now).await);
+        }
+        Err(other) => return Err(verification_refused(other, stored.id)),
+    };
     if user.status == Status::Suspended {
         return Err(Outcome::Refused(suspended()));
     }
     passkeys::record_sign_in(&mut sp, scope, stored.id, &verified.credential, attempt.now)
         .await
         .map_err(|e| Outcome::internal(&e))?;
-    let started = session::start_on(&mut sp, scope, user_id, attempt.headers, attempt.now)
+    let started = session::start_on(&mut sp, scope, user.id, attempt.headers, attempt.now)
         .await
         .map_err(|e| Outcome::internal(&e))?;
     sp.commit().await.map_err(|e| Outcome::internal(&e))?;
-    tracing::info!(%user_id, passkey_id = %stored.id, "passkey sign-in");
+    tracing::info!(user_id = %user.id, passkey_id = %stored.id, "passkey sign-in");
     Ok(started)
+}
+
+/// Steps 1 and 2: the assertion, the passkey it names (locked) and the flow's user. The lookup
+/// runs before the user is compared, whether or not the flow has one, so a flow for no account
+/// does the same work as one whose account has another passkey.
+async fn locate(
+    conn: &mut PgConnection,
+    attempt: &Attempt<'_>,
+) -> Result<(Assertion, StoredPasskey, User), Outcome> {
+    let scope = attempt.scope;
+    let assertion = Assertion::parse(attempt.credential)
+        .map_err(|_| refused("the credential is not a passkey assertion"))?;
+    let stored = passkeys::lock_for_sign_in(&mut *conn, scope, assertion.credential_id())
+        .await
+        .map_err(|e| Outcome::internal(&e))?
+        .ok_or_else(|| refused("no passkey of the organization has the credential id"))?;
+    if Some(stored.user_id) != attempt.user_id {
+        return Err(refused(
+            "the passkey is not the one of the account the sign-in was started for",
+        ));
+    }
+    let user = users::get(&mut *conn, scope, stored.user_id)
+        .await
+        .map_err(|e| Outcome::internal(&e))?
+        .ok_or_else(|| refused("the sign-in's account no longer exists"))?;
+    Ok((assertion, stored, user))
+}
+
+/// 401 `auth.passkey_invalid` for a sign counter that did not go up, after flagging the passkey
+/// in `tx` (Q12's "refuse and flag"). The flag does not block the passkey.
+async fn counter_refused(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: OrgScope,
+    passkey_id: Uuid,
+    now: SystemTime,
+) -> Outcome {
+    tracing::warn!(%passkey_id, "passkey sign-in refused: the sign counter did not go up");
+    match passkeys::flag_counter_regressed(tx, scope, passkey_id, now).await {
+        Ok(()) => Outcome::Refused(passkey_invalid()),
+        Err(error) => Outcome::internal(&error),
+    }
 }
 
 /// 401 `auth.passkey_invalid`, logged with `reason` and nothing the client sent.
@@ -388,15 +427,12 @@ fn refused(reason: &'static str) -> Outcome {
 }
 
 /// A failed verification: the client's or an attacker's, and a server fault only when the
-/// stored state or credential does not parse. A counter that did not go up is logged as a
-/// warning, since two copies of the passkey may exist.
+/// stored state or credential does not parse. [`sign_in`] handles a counter that did not go up
+/// with [`counter_refused`] before this is reached.
 fn verification_refused(error: webauthn::SignInError, passkey_id: Uuid) -> Outcome {
     match error {
-        webauthn::SignInError::CounterNotIncreased { .. } => {
-            tracing::warn!(%passkey_id, %error, "passkey sign-in refused: the sign counter did not go up");
-            Outcome::Refused(passkey_invalid())
-        }
-        webauthn::SignInError::Refused(_)
+        webauthn::SignInError::CounterNotIncreased
+        | webauthn::SignInError::Refused(_)
         | webauthn::SignInError::UserHandleMismatch
         | webauthn::SignInError::WrongCredential => {
             tracing::info!(%passkey_id, %error, "passkey sign-in refused");

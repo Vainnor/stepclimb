@@ -14,7 +14,8 @@
 //! Sign-in (B11, B12) reads a user's credentials with [`credentials`], locks the passkey an
 //! assertion names with [`lock_for_sign_in`], found by `(org_id, credential_id)` so another
 //! organization's credential never matches, and saves the updated credential with
-//! [`record_sign_in`]. Sign-ins write no audit entry: docs/specs/m0/08-sessions-and-csrf.md Q14
+//! [`record_sign_in`], or marks it with [`flag_counter_regressed`] when its sign counter did not
+//! go up. Sign-ins write no audit entry: docs/specs/m0/08-sessions-and-csrf.md Q14
 //! keeps routine sign-ins to the log.
 
 use std::time::SystemTime;
@@ -301,6 +302,37 @@ pub async fn record_sign_in(
         scope.org_id(),
         id,
         credential.to_string(),
+        now_us,
+    )
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    if updated == 0 {
+        return Err(Error::NotFound);
+    }
+    Ok(())
+}
+
+/// Mark the passkey `id` as having presented a sign counter that did not go up (Q12's "refuse
+/// and flag"), at `now` unless it is already marked: `counter_regressed_at` keeps the first
+/// time. Nothing reads the mark to refuse a sign-in. Refuses a passkey the scope's organization
+/// does not have ([`Error::NotFound`]).
+pub async fn flag_counter_regressed(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    id: Uuid,
+    now: SystemTime,
+) -> Result<(), Error> {
+    let now_us = epoch_micros(now)?;
+    let updated = sqlx::query!(
+        r#"UPDATE passkeys
+           SET counter_regressed_at = COALESCE(
+                   counter_regressed_at,
+                   timestamptz 'epoch' + $3::bigint * interval '1 microsecond'),
+               updated_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond'
+           WHERE org_id = $1 AND id = $2"#,
+        scope.org_id(),
+        id,
         now_us,
     )
     .execute(&mut *conn)
