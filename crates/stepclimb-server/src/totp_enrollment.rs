@@ -6,7 +6,8 @@
 //! belongs to a user without confirmed TOTP, the password route (`crate::password`) calls
 //! [`begin`] in its sign-in transaction instead of creating a session: it stores a new
 //! unconfirmed secret for the user (replacing an unconfirmed one, as `POST /api/v1/me/totp`
-//! does) and starts a `password_totp_enroll` flow naming the user and the password's generation.
+//! does) and starts a `password_totp_enroll` flow naming the user, the password's generation and
+//! the SHA-256 of the sealed secret it stored, which binds the flow to that secret.
 //! The answer is 200 `{next: "totp_enroll", otpauth_uri, secret}` with the flow cookie and
 //! `no-store`, and no session or device cookie.
 //!
@@ -15,7 +16,9 @@
 //! only a `password_totp_enroll` flow of the organization satisfies, so the code step's flow
 //! cannot stand in for it nor it for the code step's. In a savepoint it locks the flow's user and
 //! login and refuses (400 `auth.flow_invalid`) a flow whose password changed, whose user
-//! confirmed TOTP in the meantime, or whose waiting secret is gone. It takes the failed-check
+//! confirmed TOTP in the meantime, or whose waiting secret is gone or was replaced (by another
+//! password sign-in's set-up or by `POST /api/v1/me/totp`): the code the user typed belongs to a
+//! secret this flow no longer names, so they start again rather than retry. It takes the failed-check
 //! budgets of the password check, checks the code against the waiting secret (no recovery code:
 //! there are none yet), confirms it with ten new recovery codes (`totp.enable`, the user as the
 //! actor), and completes the sign-in through admission's local entry. The answer is 200
@@ -37,7 +40,8 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx::{Acquire, PgConnection, Postgres, Transaction};
 use stepclimb_auth::totp::{self as algorithm, Secret};
 use stepclimb_core::{
@@ -69,8 +73,8 @@ use crate::{
     request_org::RequestOrg,
     session,
     totp::{
-        NextStep, Pending, SECOND_STEP_FLOW, TotpCode, accept_code, code::AUTH_TOTP_INVALID,
-        flow_changed, no_store_with_flow, seal_secret,
+        NextStep, SECOND_STEP_FLOW, TotpCode, accept_code, code::AUTH_TOTP_INVALID, flow_changed,
+        no_store_with_flow, seal_secret,
     },
 };
 
@@ -93,6 +97,20 @@ pub struct EnrollmentRequired {
     pub otpauth_uri: String,
     /// The secret in base32, for typing into the app instead.
     pub secret: String,
+}
+
+/// What the set-up flow keeps, sealed: the password's generation when it was checked, and the
+/// SHA-256 of the sealed secret the set-up stored, so a replaced secret ends the set-up.
+#[derive(Serialize, Deserialize)]
+pub struct SetUpPending {
+    pub generation: i64,
+    pub secret_hash: [u8; 32],
+}
+
+/// The SHA-256 of a sealed secret, as [`SetUpPending::secret_hash`] keeps it.
+#[must_use]
+pub fn sealed_secret_hash(sealed: &[u8]) -> [u8; 32] {
+    Sha256::digest(sealed).into()
 }
 
 /// TOTP is on and the user is signed in; the recovery codes are shown once.
@@ -122,7 +140,11 @@ pub(crate) async fn begin(
     local_totp::start(&mut *conn, scope, user.id, &sealed, now)
         .await
         .map_err(internal)?;
-    let payload = serde_json::to_vec(&Pending { generation }).map_err(internal)?;
+    let pending = SetUpPending {
+        generation,
+        secret_hash: sealed_secret_hash(&sealed),
+    };
+    let payload = serde_json::to_vec(&pending).map_err(internal)?;
     let start = FlowStart {
         kind: Kind::PasswordTotpEnroll,
         user_id: Some(user.id),
@@ -192,7 +214,7 @@ pub async fn enroll_totp_at_sign_in(
         Ok(flow) => flow,
         Err(error) => return Ok(flow_refused(tx, error, &SECOND_STEP_FLOW).await?),
     };
-    let pending: Pending = serde_json::from_slice(&flow.payload).map_err(internal)?;
+    let pending: SetUpPending = serde_json::from_slice(&flow.payload).map_err(internal)?;
     let attempt = Attempt {
         state: &state,
         scope,
@@ -201,7 +223,7 @@ pub async fn enroll_totp_at_sign_in(
     };
     let step = Enrollment {
         user_id: flow.user_id,
-        generation: pending.generation,
+        pending: &pending,
         code: &body.code,
         ip: client.0,
     };
@@ -238,7 +260,7 @@ pub async fn enroll_totp_at_sign_in(
 /// The set-up's inputs besides the transaction.
 struct Enrollment<'a> {
     user_id: Option<Uuid>,
-    generation: i64,
+    pending: &'a SetUpPending,
     code: &'a str,
     ip: std::net::IpAddr,
 }
@@ -275,7 +297,7 @@ async fn confirm(
     let failed = |e: &dyn std::error::Error| Step::Failed(ApiError::internal(e));
     let mut sp = tx.begin().await.map_err(|e| failed(&e))?;
     let user_id = step.user_id.ok_or_else(|| Step::Refused(flow_changed()))?;
-    let totp = lock_waiting(&mut sp, scope, user_id, step.generation).await?;
+    let totp = lock_waiting(&mut sp, scope, user_id, step.pending).await?;
     let login = local_logins::get(&mut *sp, scope, user_id)
         .await
         .map_err(|e| failed(&e))?;
@@ -323,13 +345,14 @@ async fn confirm(
 }
 
 /// Lock the user `user_id` and their login, and return their TOTP if it still waits for this
-/// flow: a password of generation `generation` and an unconfirmed secret. Anything else is the
-/// flow's refusal.
+/// flow: a password of `pending`'s generation and, unconfirmed, the secret whose sealed form
+/// hashes to `pending`'s. Anything else (a changed password, TOTP confirmed, the secret gone or
+/// replaced) is the flow's refusal.
 async fn lock_waiting(
     conn: &mut PgConnection,
     scope: OrgScope,
     user_id: Uuid,
-    generation: i64,
+    pending: &SetUpPending,
 ) -> Result<Totp, Step> {
     match identities::lock_user(&mut *conn, scope, user_id).await {
         Ok(_) => {}
@@ -340,9 +363,11 @@ async fn lock_waiting(
         .await
         .map_err(|e| Step::Failed(internal(e)))?
         .filter(|totp| {
-            !totp.confirmed
-                && totp.sealed_secret.is_some()
-                && totp.password_generation == generation
+            let same_secret = totp
+                .sealed_secret
+                .as_deref()
+                .is_some_and(|sealed| sealed_secret_hash(sealed) == pending.secret_hash);
+            !totp.confirmed && same_secret && totp.password_generation == pending.generation
         })
         .ok_or_else(|| Step::Refused(flow_changed()))
 }

@@ -38,8 +38,10 @@
 //! (`users::refuse_escalation`, which also refuses an API key acting on its own owner with 403
 //! `auth.session_required`), refuses the caller's own TOTP (409
 //! `local.cannot_remove_own_totp`: their own goes through `/api/v1/me/totp/disable` with a
-//! code), and writes `totp.disable` by the administrator. It does not check that TOTP is
-//! offered: an administrator can clean up TOTP while the method is switched off.
+//! code), writes `totp.disable` by the administrator, and ends every session of the user in the
+//! same transaction, so a session that passed the removed second factor (or a thief's) does not
+//! outlive it. It does not check that TOTP is offered: an administrator can clean up TOTP while
+//! the method is switched off.
 //!
 //! The code-checking routes take `RateLimited<SignIn>` first. No step logs the secret, the URI,
 //! a code or a recovery code; `totp.enable` and `totp.disable` audit entries name the user.
@@ -67,6 +69,7 @@ use stepclimb_core::{
     local_totp::{self, Totp},
     organizations,
     perm::UserManage,
+    sessions::{self, Keep},
 };
 use utoipa::ToSchema;
 
@@ -148,8 +151,8 @@ pub(crate) const SECOND_STEP_FLOW: FlowDetails = FlowDetails {
 /// What the second step's flow keeps, sealed: the password's generation when it was checked,
 /// so a password changed in between ends the sign-in.
 #[derive(Serialize, Deserialize)]
-pub(crate) struct Pending {
-    pub(crate) generation: i64,
+struct Pending {
+    generation: i64,
 }
 
 /// The next step a password sign-in needs.
@@ -685,7 +688,7 @@ pub async fn disable_my_totp(
     extensions(("x-stepclimb-mutates" = json!(true))),
     params(UserIdParam),
     responses(
-        (status = 204, description = "The user's TOTP is off; its secret and recovery codes are deleted. The user's sessions stay."),
+        (status = 204, description = "The user's TOTP is off; its secret and recovery codes are deleted, and every session of the user has ended."),
         (status = 400, response = crate::openapi::BadRequest),
         (status = 401, response = crate::openapi::Unauthenticated),
         (status = 403, response = UserTotpForbidden),
@@ -718,8 +721,11 @@ pub async fn remove_user_totp(
     local_totp::disable(&mut tx, scope, user_id, state.clock.now(), actor)
         .await
         .map_err(totp_error)?;
+    sessions::delete_others_of_user(&mut *tx, scope, user_id, Keep::Nothing)
+        .await
+        .map_err(internal)?;
     tx.commit().await.map_err(internal)?;
-    tracing::info!(%user_id, by = %principal.user_id, "TOTP removed by an administrator");
+    tracing::info!(%user_id, by = %principal.user_id, "TOTP removed by an administrator; the user's sessions ended");
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -829,9 +835,6 @@ mod tests {
             (invalid.status, invalid.code.as_str()),
             (401, "auth.totp_invalid")
         );
-        let own =
-            ApiError::new(StatusCode::CONFLICT, code::LOCAL_CANNOT_REMOVE_OWN_TOTP, "").problem();
-        assert_eq!(own.code, "local.cannot_remove_own_totp");
         let changed = flow_changed().problem();
         assert_eq!(
             (changed.status, changed.code.as_str()),

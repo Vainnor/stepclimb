@@ -4681,7 +4681,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The user's TOTP is off; its secret and recovery codes are deleted. The user's sessions stay. */
+            /** @description The user's TOTP is off; its secret and recovery codes are deleted, and every session of the user has ended. */
             204: {
                 headers: {
                     [name: string]: unknown;

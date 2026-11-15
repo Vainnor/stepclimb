@@ -1304,7 +1304,7 @@ async fn turning_the_requirement_off_keeps_confirmed_totp(pool: PgPool) {
 }
 
 /// B14, B20: a password changed during set-up ends it (400 `auth.flow_invalid`), as does TOTP
-/// confirmed meanwhile from a session that existed before (the flow's secret was replaced).
+/// started again and confirmed meanwhile from a session that existed before.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn a_password_changed_during_set_up_ends_it(pool: PgPool) {
     let f = Fixture::new(pool).await;
@@ -1323,7 +1323,7 @@ async fn a_password_changed_during_set_up_ends_it(pool: PgPool) {
     assert!(refused.session().is_none());
     assert_eq!(f.totp_of(sam).await, (false, 0));
 
-    // A set-up whose user confirmed TOTP through `/api/v1/me/totp` in the meantime.
+    // A set-up whose user started and confirmed TOTP through `/api/v1/me/totp` in the meantime.
     let body = json!({ "email": EMAIL, "password": OTHER_PASSWORD });
     let again = f.send(Method::POST, SIGN_IN, None, Some(body)).await;
     let flow = again.flow().expect("a flow");
@@ -1476,7 +1476,7 @@ async fn the_set_up_logs_no_secret(pool: PgPool) {
 // An administrator removes a user's TOTP.
 
 /// An administrator removes another user's TOTP and recovery codes (`totp.disable` by the
-/// administrator); the user's password signs in alone, or sets TOTP up again while it is
+/// administrator) and every session of the user ends; the user's password signs in alone, or sets TOTP up again while it is
 /// required. Removing it twice, or the caller's own, is refused (409).
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn an_admin_removes_a_users_totp(pool: PgPool) {
@@ -1499,7 +1499,19 @@ async fn an_admin_removes_a_users_totp(pool: PgPool) {
         entry.actor
     );
     let me = f.send(Method::GET, ME, Some(&sam.session), None).await;
-    assert_eq!(me.status, StatusCode::OK, "the user's sessions stay");
+    assert_eq!(
+        me.status,
+        StatusCode::UNAUTHORIZED,
+        "every session of the user ended"
+    );
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM sessions WHERE user_id = $1")
+        .bind(sam.id)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(left, 0);
+    let admin_me = f.send(Method::GET, ME, Some(&cookie), None).await;
+    assert_eq!(admin_me.status, StatusCode::OK, "the admin's session stays");
     assert!(f.sign_in(PASSWORD).await.session().is_some());
 
     let again = f
@@ -1544,4 +1556,43 @@ async fn a_manager_cannot_remove_a_more_privileged_users_totp(pool: PgPool) {
         "{refused:?}"
     );
     assert_eq!(f.totp_of(sam.id).await, (true, 10));
+}
+
+/// B15 (#205 review): the set-up flow is bound to the secret it showed. A second password
+/// sign-in, or `POST /api/v1/me/totp` from an earlier session, replaces the waiting secret
+/// without confirming it; the first flow's code then answers 400 `auth.flow_invalid` (start
+/// again), not 401 (try again), since no code for its secret can work any more.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_replaced_secret_ends_the_set_up(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let sam = f.sam_with_password().await;
+    let session = f.session_for(sam).await;
+    f.require_totp(true).await;
+
+    let first = f.set_up_started().await;
+    let second = f.set_up_started().await;
+    let code = first.secret.code_at_time(f.clock.clock().now());
+    let refused = f.set_up_step(&first.flow, &code).await;
+    assert_eq!(
+        (refused.status, refused.code()),
+        (StatusCode::BAD_REQUEST, "auth.flow_invalid"),
+        "{refused:?}"
+    );
+    assert!(refused.clears("__Host-sc_flow"));
+
+    let started = f.start(&session).await;
+    assert_eq!(started.status, StatusCode::OK, "{started:?}");
+    let code = second.secret.code_at_time(f.clock.clock().now());
+    let refused = f.set_up_step(&second.flow, &code).await;
+    assert_eq!(
+        (refused.status, refused.code()),
+        (StatusCode::BAD_REQUEST, "auth.flow_invalid"),
+        "{refused:?}"
+    );
+    assert_eq!(f.totp_of(sam).await, (false, 0));
+
+    let third = f.set_up_started().await;
+    let code = third.secret.code_at_time(f.clock.clock().now());
+    let done = f.set_up_step(&third.flow, &code).await;
+    assert_eq!(done.status, StatusCode::OK, "{done:?}");
 }

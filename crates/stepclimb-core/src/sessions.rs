@@ -293,10 +293,13 @@ pub enum Keep {
     Session(Uuid),
     /// The session whose token hashes to this, such as the one a request presents.
     TokenHash([u8; 32]),
+    /// None: every session of the user ends, as when an administrator removes their TOTP
+    /// (docs/specs/m0/04-local-accounts.md B21).
+    Nothing,
 }
 
 /// Delete every session of the user `user_id` in the scope's organization but the one `keep`
-/// names, for a new password that ends the user's other sessions (a change or a reset through
+/// names (all of them with [`Keep::Nothing`]), for a new password that ends the user's other sessions (a change or a reset through
 /// an enrollment link, docs/specs/m0/04-local-accounts.md B9, B17, Q8). Returns how many were
 /// deleted.
 pub async fn delete_others_of_user(
@@ -308,6 +311,7 @@ pub async fn delete_others_of_user(
     let (id, hash) = match keep {
         Keep::Session(id) => (Some(id), None),
         Keep::TokenHash(hash) => (None, Some(hash.to_vec())),
+        Keep::Nothing => (None, None),
     };
     let result = sqlx::query!(
         r#"DELETE FROM sessions s

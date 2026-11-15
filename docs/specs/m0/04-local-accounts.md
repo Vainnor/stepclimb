@@ -432,7 +432,7 @@ creates and hands over.
     switched-off method stop working and come back unchanged). The admin who switches it off
     must hold every catalog permission (B2's escalation rule).
 
-  Coordinator decisions (2026-11-16), for issue I9 (#192), Q11 (a)'s organization setting:
+  Coordinator decisions (2026-11-15), for issue I9 (#192), Q11 (a)'s organization setting:
 
   - The setting is `totp_required`, a fifth member of the `local_sign_in` settings object
     (default `false`), read and written with the switches through `/api/v1/admin/local-sign-in`,
@@ -451,7 +451,8 @@ creates and hands over.
   - Set-up during sign-in: the password route, in its sign-in transaction, stores a new
     unconfirmed secret (as `POST /api/v1/me/totp` does, replacing an unconfirmed one) and starts
     a `password_totp_enroll` flow (a new `auth_flows.kind`, migration
-    `20261116120000_totp_enroll_flow.sql`) naming the user and the password's generation. It
+    `20261116120000_totp_enroll_flow.sql`) naming the user, the password's generation and the
+    SHA-256 of the sealed secret it stored, which binds the flow to that secret. It
     answers 200 `{next: "totp_enroll", otpauth_uri, secret}` (`EnrollmentRequired`, a third member
     of `PasswordSignedIn`) with the flow cookie and `no-store`, without a session or a device
     cookie. The secret is in this answer because no session exists to fetch it with.
@@ -459,7 +460,10 @@ creates and hands over.
     404 `auth.method_disabled` unless TOTP is offered, takes only a `password_totp_enroll` flow (so
     neither step's flow stands in for the other's), and in a savepoint locks the user and login.
     A flow whose password generation changed, whose user confirmed TOTP meanwhile, or whose
-    waiting secret is gone answers 400 `auth.flow_invalid`. The code counts against B18's budgets
+    waiting secret is gone or was replaced without being confirmed (by a second password sign-in's
+    set-up or by `POST /api/v1/me/totp` from an earlier session) answers 400 `auth.flow_invalid`:
+    no code for the secret it showed can work any more, so the user starts again rather than
+    retrying (from the security review of #205). The code counts against B18's budgets
     and is checked against the waiting secret (no recovery code: none exist yet); a right code
     confirms TOTP with ten new recovery codes (`totp.enable` with the user as actor), completes the
     sign-in through admission (B5), and answers 200 `{return_to, recovery_codes}` with the session,
@@ -480,6 +484,14 @@ creates and hands over.
     sign-in after an enrollment link sets TOTP up.
   - A user may still turn their own TOTP off with a code (B21) while it is required; their next
     password sign-in sets it up again.
+  - For administrators (from the security review of #205): with `totp_required` on, whoever
+    knows an account's password first sets up its TOTP, so turn it on only for accounts whose
+    passwords are the users' own. The recovery runbook for an account set up by someone else, or
+    a user who lost both the app and the recovery codes, is the administrator's removal of the
+    user's TOTP (B21's I9 decision, which also ends the user's sessions) and then an enrollment
+    link, which resets the password; the user's next password sign-in sets TOTP up again.
+    Enforcement lags for sessions that existed before the setting was turned on: they last until
+    they end, at most the 30-day session limit (`08-sessions-and-csrf.md` B8).
 - **B16.** Passwords are hashed with argon2id using the parameters of Q8, with a per-hash random
   salt, in the PHC string format. When a stored hash uses older parameters, a successful sign-in
   rehashes it. The number of hashes computed at once is capped (pending Q8) so sign-in bursts
@@ -619,7 +631,7 @@ creates and hands over.
     `auth.totp_invalid`. A `POST` with a body rather than `DELETE`, since the request carries a
     code.
 
-  Coordinator decisions (2026-11-16), for issue I9 (#192), from the security review of I7: an
+  Coordinator decisions (2026-11-15), for issue I9 (#192), from the security review of I7: an
   administrator removes another user's TOTP with `DELETE /api/v1/admin/users/{user_id}/totp`, for a
   user who lost both the app and the recovery codes. It needs `user.manage` at organization scope
   and the user routes' escalation rule (`03-users-and-identities.md` B6 as the owner decided it:
@@ -631,7 +643,9 @@ creates and hands over.
   has no confirmed TOTP. The caller's own TOTP is refused with 409 `local.cannot_remove_own_totp`:
   it goes through B21's route with a code, so a stolen admin session cannot drop its own second
   factor without one. The route does not check that TOTP is offered, so TOTP can be cleaned up
-  while it is switched off. The user's sessions stay.
+  while it is switched off. In the same transaction it ends every session of the user
+  (`sessions::delete_others_of_user` keeping none), so a session that passed the removed second
+  factor, or a thief's, does not outlive it (from the security review of #205).
 
 ### Magic link
 
@@ -832,7 +846,8 @@ authenticator.
   requirement off keeps confirmed TOTP; a stored requirement with TOTP off never signs in with
   the password alone. The requirement needs every catalog permission and the password and TOTP
   switched on. An administrator's removal of a user's TOTP is audited, refuses the caller's own,
-  a more privileged user's and a key's owner; four-case and cross-organization cases for it and
+  a more privileged user's and a key's owner, and ends every session of the user; a set-up whose
+  secret was replaced answers 400 `auth.flow_invalid`; four-case and cross-organization cases for it and
   the set-up route come from the permission suite.
 
 `/api/v1/me/...` routes have no permission to withhold, so their four-case test is three cases
@@ -1016,4 +1031,4 @@ overrule one, which then updates this spec.
 9. **I9. Required TOTP (#192).** Q11 (a)'s organization setting `totp_required`, TOTP set up during
    a password sign-in while it is required, and an administrator's removal of a user's TOTP.
    Covers B15's and B21's I9 decisions. Depends on: I7. Stays in M0 (coordinator decision,
-   2026-11-16: Q11 (a), which the owner decided, includes the setting).
+   2026-11-15: Q11 (a), which the owner decided, includes the setting).

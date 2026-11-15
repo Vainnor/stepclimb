@@ -1659,11 +1659,22 @@ async fn totp_set_up_request(org: &Org) -> (Option<Value>, Option<String>) {
         .await;
     let secret = give_totp(org, user, false).await;
     let keys = state_for(&org.pool).keys;
+    let sealed: Vec<u8> =
+        sqlx::query_scalar("SELECT totp_secret FROM local_logins WHERE user_id = $1")
+            .bind(user)
+            .fetch_one(&org.pool)
+            .await
+            .expect("the waiting secret");
+    let pending = stepclimb_server::totp_enrollment::SetUpPending {
+        generation: 1,
+        secret_hash: stepclimb_server::totp_enrollment::sealed_secret_hash(&sealed),
+    };
+    let payload = serde_json::to_vec(&pending).expect("JSON");
     let start = stepclimb_server::flow::FlowStart {
         kind: stepclimb_core::auth_flows::Kind::PasswordTotpEnroll,
         user_id: Some(user),
         provider_id: None,
-        payload: br#"{"generation":1}"#,
+        payload: &payload,
         return_to: None,
     };
     let flow = stepclimb_server::flow::start(&org.pool, &keys, scope(org.id), start, now())

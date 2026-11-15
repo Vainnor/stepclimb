@@ -743,7 +743,7 @@ list, provider buttons, the callback error and the password step that I5 left):
   vZDC example brand (its rules from the token build, since changing the stack's branding would
   reach every other test).
 
-Coordinator decisions (2026-11-16), on the owner's delegation, while building issue #192 (TOTP
+Coordinator decisions (2026-11-15), on the owner's delegation, while building issue #192 (TOTP
 required by the organization, 04 B15's I9 decisions):
 
 - **The set-up step (B16, B17).** A right password answering `{next: "totp_enroll", otpauth_uri,
