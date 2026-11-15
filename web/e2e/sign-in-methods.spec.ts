@@ -51,19 +51,6 @@ test("a provider button opens its start route as a page and the refusal comes ba
   expect(await violations(page)).toEqual([]);
 });
 
-/**
- * Waits for React Aria's live announcer to drop its announcements. A pressed Button that turns
- * pending announces its label through a `role="img"` node labelled by the button's id, kept 7 s
- * (react-aria `LiveAnnouncer`, `LIVEREGION_TIMEOUT_DELAY`); when the step that held the button is
- * left in that time, the node points at an id that no longer exists, which axe reports as
- * `role-img-alt`. The page after the step is checked once the announcer has cleared.
- */
-async function announcementsCleared(page: Page) {
-  await expect(page.locator('[data-live-announcer] [role="img"]')).toHaveCount(0, {
-    timeout: 10_000,
-  });
-}
-
 const themes = ["light", "dark", "high-contrast"] as const;
 const widths = [
   { width: 1280, height: 800 },
@@ -234,7 +221,6 @@ function methodListAxe(
       await page.getByLabel("Password").fill("not the password");
       await page.getByRole("button", { name: "Sign in" }).click();
       await expect(page.getByRole("heading", { level: 1, name: "Enter your code" })).toBeVisible();
-      await announcementsCleared(page);
       expect(await violations(page)).toEqual([]);
       await page.getByRole("button", { name: "Use a recovery code instead" }).click();
       await page.getByRole("textbox", { name: /^Recovery code/ }).fill("ABCD-EFGH-IJKL-MNOP");

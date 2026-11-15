@@ -4,7 +4,8 @@
 // plan's `h-[--sc-control-h]` is Tailwind 3 syntax and generates no height in Tailwind 4.
 // `isPending` draws the loading state: once the wait has lasted SKELETON_DELAY_MS (300 ms), so a
 // fast request never flashes it, the label turns invisible, still the button's accessible name and
-// width, under a spinner named from the strings catalog.
+// width, under a spinner named from the strings catalog. React Aria announces the change to a
+// focused button; `usePendingAnnouncementId` takes the announcement back when the button unmounts.
 import { CircleNotchIcon } from "@phosphor-icons/react";
 import { type ReactNode, useEffect, useState } from "react";
 import {
@@ -14,6 +15,7 @@ import {
   ProgressBar,
 } from "react-aria-components";
 import { tv, type VariantProps } from "../lib/tv";
+import { usePendingAnnouncementId } from "../lib/use-pending-announcement";
 import { useStepclimbStrings } from "../strings/strings";
 import { Icon } from "../theme/icon";
 import { SKELETON_DELAY_MS } from "./skeleton";
@@ -77,11 +79,13 @@ function Pending({ children }: { children: ReactNode }) {
   );
 }
 
-export function Button({ intent, size, className, children, ...props }: ButtonProps) {
+export function Button({ intent, size, className, children, id, ...props }: ButtonProps) {
+  const buttonId = usePendingAnnouncementId(id);
   return (
     <AriaButton
       data-slot="button"
       {...props}
+      id={buttonId}
       className={composeRenderProps(className, (cls) => button({ intent, size, className: cls }))}
     >
       {composeRenderProps(children, (content, { isPending }) =>

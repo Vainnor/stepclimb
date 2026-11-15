@@ -14,7 +14,7 @@ const meta = {
       description: {
         component: `A button that names its action. Secondary by default; \`intent="primary"\` marks the one next thing to do in a view.
 
-**Usage.** \`<Button intent="primary" onPress={submit}>Submit quiz</Button>\`. \`isPending\` shows the loading state: the button keeps its width and stays focusable, does not press, and screen readers hear its label and "In progress".
+**Usage.** \`<Button intent="primary" onPress={submit}>Submit quiz</Button>\`. \`isPending\` shows the loading state: the button keeps its width and stays focusable, does not press, and screen readers hear its label and "In progress". A focused button announces when it turns pending and when it stops; if the view removes the button first, such as a sign-in step that moves on, the announcement leaves the page with it.
 
 **Do** write the action as a verb ("Submit quiz", "Delete attempt"), keep one primary button per view, and use \`danger\` for actions that destroy something.
 
