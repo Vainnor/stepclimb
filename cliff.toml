@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Release notes for one version, from the Conventional Commit subjects in a range
+# (docs/specs/m0/01-repo-and-ci.md B15). bin/release.py runs git-cliff with this file and puts the
+# section it prints into CHANGELOG.md; the header stays in that file, so there is none here.
+# Breaking changes come first, then features and fixes, then the other types in a fixed order.
+# A BREAKING CHANGE footer adds only its first line to the entry.
+# The group names carry a hidden sort key (`<!-- 01 -->`), since git-cliff orders groups by name.
+
+[changelog]
+header = ""
+body = """
+## {{ version }}
+{% set breaking = commits | filter(attribute="breaking", value=true) %}
+{%- if breaking %}
+### Breaking changes
+{% for commit in breaking %}
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | upper_first }}\
+{% set footer = commit.breaking_description | default(value="") | split(pat="\n") | first %}\
+{% if footer and footer != commit.message %}. {{ footer | upper_first }}{% endif %}
+{%- endfor %}
+{% endif %}
+{%- for group, commits in commits | filter(attribute="breaking", value=false) | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+{% for commit in commits %}
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | upper_first }}
+{%- endfor %}
+{% endfor %}
+"""
+footer = ""
+trim = true
+
+[git]
+conventional_commits = true
+# A subject that is not a Conventional Commit (a merge commit, the bootstrap commit) is left out,
+# except GitHub's revert subjects, which the preprocessor turns into `revert:` commits first.
+filter_unconventional = true
+commit_preprocessors = [
+    { pattern = '^Revert "(.*)"(.*)$', replace = 'revert: Revert "${1}"${2}' },
+]
+split_commits = false
+protect_breaking_commits = true
+filter_commits = false
+tag_pattern = "^v[0-9]"
+topo_order = false
+sort_commits = "oldest"
+commit_parsers = [
+    # The release's own commits: the version bump, the notes and the PR that brings them to next.
+    { message = "^chore\\(release\\)", skip = true },
+    { message = "^feat", group = "<!-- 01 -->Features" },
+    { message = "^fix", group = "<!-- 02 -->Fixes" },
+    { message = "^perf", group = "<!-- 03 -->Performance" },
+    { message = "^refactor", group = "<!-- 04 -->Refactoring" },
+    { message = "^docs", group = "<!-- 05 -->Documentation" },
+    { message = "^test", group = "<!-- 06 -->Tests" },
+    { message = "^build", group = "<!-- 07 -->Build" },
+    { message = "^ci", group = "<!-- 08 -->CI" },
+    { message = "^chore", group = "<!-- 09 -->Chores" },
+    { message = "^revert", group = "<!-- 10 -->Reverts" },
+    { message = ".*", group = "<!-- 11 -->Other" },
+]

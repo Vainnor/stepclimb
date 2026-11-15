@@ -127,7 +127,8 @@ The Nix dev shell (`flake.nix`) provides every tool below.
 ## Git workflow
 
 - `main` holds released code; `next` is the integration branch. Branch from `next`, open PRs
-  against `next`, promote `next` to `main` with a release PR.
+  against `next`, promote `next` to `main` with a release PR (`CONTRIBUTING.md` -> Releases),
+  the one PR merged with a merge commit (ADR 0030).
 - Branch names: `{type}/{issue-or-hash}/{short-desc}`, e.g. `feat/12/passkey-registration`.
 - Commits follow Conventional Commits with a scope: `type(scope): summary`, imperative, at most
   about 70 characters. Types: `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `chore`, `ci`,
@@ -137,7 +138,7 @@ The Nix dev shell (`flake.nix`) provides every tool below.
   `claude`, `ci`, `deps`.
 - Reference issues with `Closes #N` in the PR body; that is the only trailer.
 - Lockfile-only changes and toolchain or framework version bumps go in their own commit.
-- PR only, squash merge. Never push to `main` or `next` directly; `.claude/hooks/git-guard`
+- PR only; PRs into `next` squash-merge, release PRs into `main` take a merge commit (ADR 0030). Never push to `main` or `next` directly; `.claude/hooks/git-guard`
   refuses it.
 - Dependencies are updated by hand once a month and before each release, as in Mainline:
   `just update-deps` (`cargo update` in both Cargo workspaces, `pnpm update`, image digests, each
@@ -170,7 +171,9 @@ just lint-escapes  # bin/check-lint-escapes.py: no way around the OrgScope lint 
 just spdx-check    # bin/check-spdx.sh: SPDX headers on every source file
 just deny          # cargo deny check
 just version-check # bin/check-versions.sh: one version in Cargo.toml, the app's manifests, tauri.conf.json and the lockfiles
-just release-version <x.y.z>  # write that version everywhere and refresh both Cargo lockfiles; commit it on its own
+just release-version <x.y.z>  # write that version everywhere (OpenAPI info.version included), refresh both Cargo lockfiles, add its CHANGELOG.md notes (git-cliff)
+just release-prepare <x.y.z>  # branch from origin/next, run release-version, commit the version and the notes, print the release steps; pushes nothing
+just release <vX.Y.Z>  # in a worktree of the annotated merge tag on main: check it and its notes, just ci, print the gh release command; publishes nothing
 just update-deps   # the monthly update: both Cargo lockfiles, pnpm-lock.yaml and image digests, 14 days old or more (bin/update_deps.py)
 just migrate       # apply migrations to the local database
 just sqlx-prepare  # regenerate .sqlx/ after changing a query (against a database of its own)
@@ -196,7 +199,7 @@ just install-hooks # once per clone: .githooks (secret scan, formatting, no-attr
 
 Needs: the Nix dev shell (`nix develop`, or `use flake` in a local `.envrc`), or the same tools
 installed by hand: Rust via rustup, `just`, `cargo-nextest`, `cargo-deny`, `sqlx-cli`,
-`gitleaks` (or Docker), Node 26.13 with pnpm 12.9, Playwright's Chromium, `python3`, Docker with
+`gitleaks` (or Docker), `git-cliff` (releases), Node 26.13 with pnpm 12.9, Playwright's Chromium, `python3`, Docker with
 Compose (with buildx), and on Linux WebKitGTK 4.1 for the Tauri app and QEMU's user-mode
 emulators (`qemu-aarch64`) for `just image-check`.
 

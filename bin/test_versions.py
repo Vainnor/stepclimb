@@ -20,7 +20,7 @@ def manifests() -> list[str]:
     """Every file the two scripts read, as tracked in this checkout."""
     listed = subprocess.run(
         ["git", "ls-files", "--", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "crates",
-         f"{APP}/Cargo.toml", f"{APP}/Cargo.lock", f"{APP}/tauri.conf.json",
+         f"{APP}/Cargo.toml", f"{APP}/Cargo.lock", f"{APP}/tauri.conf.json", "openapi/stepclimb.json",
          "package.json", "*/package.json", ".changeset/config.json"],
         cwd=REPO, check=True, capture_output=True, text=True,
     ).stdout.split()
@@ -131,6 +131,15 @@ class Versions(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("web/package.json has '9.9.9'", result.stderr)
 
+    def test_a_stale_openapi_version_fails(self) -> None:
+        file = self.root / "openapi/stepclimb.json"
+        data = json.loads(file.read_text())
+        data["info"]["version"] = "9.9.9"
+        file.write_text(json.dumps(data, indent=2) + "\n")
+        result = self.check()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("openapi/stepclimb.json info.version has '9.9.9'", result.stderr)
+
     def test_a_changesets_package_keeps_its_own_version(self) -> None:
         self.edit_json("packages/ui/package.json", version="9.9.9")
         result = self.check()
@@ -145,6 +154,9 @@ class Versions(unittest.TestCase):
         after = (self.root / APP / "tauri.conf.json").read_text()
         self.assertEqual(after, before.replace(f'"version": "{self.version}"', '"version": "0.1.0"', 1))
         self.assertEqual(json.loads((self.root / "web/package.json").read_text())["version"], "0.1.0")
+        openapi = (self.root / "openapi/stepclimb.json").read_text()
+        self.assertEqual(json.loads(openapi)["info"]["version"], "0.1.0")
+        self.assertEqual(openapi.count('"version": "0.1.0"'), 1)
         self.assertNotEqual(json.loads((self.root / "packages/ui/package.json").read_text())["version"], "0.1.0")
         failures = [line for line in self.check().stderr.splitlines() if " has '" in line]
         self.assertTrue(failures)
@@ -162,7 +174,7 @@ class Versions(unittest.TestCase):
         self.assertIn("version-check: ok (0.1.0 in ", result.stdout)
 
     def test_set_version_refuses_what_is_not_a_version(self) -> None:
-        for bad in ("v0.1.0", "0.1", "01.0.0", "0.1.0+build", ""):
+        for bad in ("v0.1.0", "0.1", "01.0.0", "0.1.0+build", "0.1.0-rc.01", "0.1.0-00", "0.1.0-", ""):
             with self.subTest(bad=bad):
                 result = self.run_script("set-version", bad)
                 self.assertEqual(result.returncode, 2)
@@ -170,9 +182,11 @@ class Versions(unittest.TestCase):
         self.assertEqual(self.read_version(), self.version)
 
     def test_set_version_accepts_a_pre_release(self) -> None:
-        result = self.run_script("set-version", "0.0.1-test.1")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.read_version(), "0.0.1-test.1")
+        for good in ("0.0.1-test.1", "1.0.0-0", "1.0.0-0a.1", "1.0.0-x-y.10"):
+            with self.subTest(good=good):
+                result = self.run_script("set-version", good)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.read_version(), good)
 
 
 if __name__ == "__main__":

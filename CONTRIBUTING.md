@@ -78,9 +78,57 @@ A major-version bump is not part of this update: it changes a pin, goes through 
 The server, the web app and the Tauri app share one version: `[workspace.package] version` in
 `Cargo.toml`. `apps/app/src-tauri/Cargo.toml`, `tauri.conf.json` and the lockfiles carry the same
 value, and `just version-check` (part of `just ci`) fails when one differs.
-`just release-version <x.y.z>` writes it everywhere; commit that change on its own.
+`just release-version <x.y.z>` writes it everywhere, including `openapi/stepclimb.json`'s
+`info.version` (utoipa takes it from the crate version), and adds the version's release notes to
+`CHANGELOG.md` (Releases, below); commit the version on its own.
 `packages/ui` and `packages/tokens` keep their own versions, set by Changesets
 ([`.changeset/README.md`](.changeset/README.md)).
+
+## Releases
+
+The maintainer cuts releases. Versions follow Semantic Versioning; before 1.0 a release is
+`0.<milestone>.<patch>`, so M0 ends at `0.1.0`. No recipe pushes, tags or publishes: each one
+prints the commands to run, and a person runs them. Run the monthly dependency update first.
+
+1. From a clean worktree with `git-cliff` on the PATH (the Nix dev shell has it), run
+   `just release-prepare 0.1.0`. It fetches `origin`, then refuses when the version is not newer
+   than the one on `origin/next`, the tag `v0.1.0` exists, `CHANGELOG.md` on `origin/next`
+   already has a `v0.1.0` section, a file `origin/main` changed reads differently on
+   `origin/next`, there is no Conventional Commit to release, or a subject carries AI
+   attribution. Otherwise it creates `chore/<hash>/release-v0.1.0` from `origin/next` and runs
+   `just release-version 0.1.0`, which sets the version everywhere and has git-cliff add the
+   `v0.1.0` section to `CHANGELOG.md`. It commits the version, then the notes (that commit's body
+   names the `origin/next` commit the notes end at), and writes the release PR's body to
+   `target/release/v0.1.0-pr.md`. If a step fails after the branch exists, it prints the
+   `git reset --hard && git switch - && git branch -D ...` that removes it.
+2. Read the new `CHANGELOG.md` section. The notes are the commit subjects since the previous
+   release tag (`cliff.toml`): breaking changes first, then features, fixes, the other types and
+   reverts. Leave the section as git-cliff wrote it: `just release` regenerates it and refuses a
+   tag whose section differs. A subject that reads badly is fixed in the PR title before it
+   merges.
+3. `just ci`, push the branch, and open the release preparation PR against `next`
+   (`chore(release): prepare v0.1.0`). Squash-merge it as usual, keeping the commit messages in
+   the squash body. Merge nothing else into `next` until the release PR is merged: `just release`
+   refuses a release whose `next` gained a commit after the notes were written.
+4. Open the release PR from `next` to `main`:
+   `gh pr create --base main --head next --title "chore(release): v0.1.0" --body-file target/release/v0.1.0-pr.md`.
+   Merge it with a **merge commit**, never a squash, and keep `next`
+   ([ADR 0030](docs/adr/0030-release-merge-commits.md)). `main` takes merge commits only; every
+   PR into `next` is squash-merged.
+5. Tag the merge commit on `main` with an annotated tag and push the tag:
+   `git fetch origin && git tag -a v0.1.0 -m "Stepclimb v0.1.0" origin/main && git push origin v0.1.0`.
+6. `git worktree add ../stepclimb-v0.1.0 v0.1.0`, then in that worktree `just release v0.1.0`.
+   It stops unless the tree is clean and the tag is annotated, checked out, equal to the
+   workspace version and a merge commit on `origin/main`'s first-parent history. It also stops
+   when `next` gained anything but `chore(release)` commits after the notes were written, or
+   when git-cliff, run again over the same commits, writes a different section. Then it writes
+   the notes to `target/release/v0.1.0-notes.md`, runs `just ci` on the tag, and prints the
+   `gh release create` command (with `--prerelease` for a version such as `0.1.0-rc.1`). Run that
+   command to publish the GitHub Release.
+
+Before the first release, the owner changes the repository's settings so `main` takes merge
+commits only and `next` squash merges only (ADR 0030 -> Consequences); until then GitHub refuses
+step 4's merge.
 
 ## What we will not merge
 
