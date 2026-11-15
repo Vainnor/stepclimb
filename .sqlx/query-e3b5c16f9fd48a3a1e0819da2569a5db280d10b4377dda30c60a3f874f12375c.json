@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE passkeys\n           SET credential = $3::text::jsonb,\n               last_used_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond',\n               updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond'\n           WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e3b5c16f9fd48a3a1e0819da2569a5db280d10b4377dda30c60a3f874f12375c"
+}

@@ -444,6 +444,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/local/passkey/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Finish signing in with a passkey. */
+        post: operations["finishPasskeySignIn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/local/passkey/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start signing in with a passkey. */
+        post: operations["startPasskeySignIn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/sign-out": {
         parameters: {
             query?: never;
@@ -1111,6 +1145,36 @@ export interface components {
             /** @description The text after `#token=` in the link. */
             token: string;
         };
+        /**
+         * @description `CredentialRequestOptions` as JSON: pass `publicKey` to
+         *     `PublicKeyCredential.parseRequestOptionsFromJSON`, then to `navigator.credentials.get`.
+         */
+        PasskeyRequestOptions: {
+            publicKey: components["schemas"]["PublicKeyRequestOptions"];
+        };
+        /** @description The browser's answer to the request options. */
+        PasskeySignInFinish: {
+            /**
+             * @description The `PublicKeyCredential` `navigator.credentials.get` returned, as JSON
+             *     (`PublicKeyCredential.toJSON()`).
+             */
+            credential: Record<string, never>;
+        };
+        /** @description The address to sign in with. */
+        PasskeySignInStart: {
+            /** @description The account's email, in any letter case. */
+            email: string;
+            /** @description The path on this site to open after signing in; anything else becomes `/`. */
+            return_to?: string | null;
+        };
+        /** @description The request options for the browser. */
+        PasskeySignInStarted: {
+            /**
+             * @description Pass to `navigator.credentials.get`, then send the result to `POST
+             *     /auth/local/passkey/finish` in this browser within 10 minutes.
+             */
+            options: components["schemas"]["PasskeyRequestOptions"];
+        };
         /** @description One permission of the catalog. */
         PermissionInfo: {
             /** @description The scope types at which a role assignment grants it. */
@@ -1179,6 +1243,25 @@ export interface components {
              */
             timeout?: number;
             user: components["schemas"]["UserInfo"];
+        };
+        /** @description `PublicKeyCredentialRequestOptionsJSON`. */
+        PublicKeyRequestOptions: {
+            /**
+             * @description The passkeys the account may sign in with. Empty when the address has no account or
+             *     the account has no passkey: the answer looks the same either way.
+             */
+            allowCredentials: components["schemas"]["CredentialDescriptor"][];
+            /** @description base64url, unpadded. */
+            challenge: string;
+            /** @description The relying party ID: the instance's host name. */
+            rpId: string;
+            /**
+             * Format: int32
+             * @description Milliseconds.
+             */
+            timeout?: number;
+            /** @description `required`: the authenticator checks a PIN or biometric. */
+            userVerification: string;
         };
         /**
          * @description The reading font: the bundled serif, or the organization's UI font.
@@ -1738,6 +1821,51 @@ export interface components {
         };
         /** @description `account.not_found`: no account with `parent_id` exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined. */
         ParentNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.malformed`: the body is not `{credential}`. `auth.flow_invalid`: no passkey sign-in was started in this browser, or it was already finished; start again. `auth.flow_expired`: the sign-in was started more than 10 minutes ago; start again. */
+        PasskeySignInFinishBadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `auth.suspended`: the account is suspended. `auth.csrf_refused`: the request did not come from this site. */
+        PasskeySignInFinishForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `auth.method_disabled`: passkey sign-in is switched off for this organization. `org.not_found`: the request's organization cannot be determined. */
+        PasskeySignInFinishNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `auth.passkey_invalid`: the passkey did not sign in: it is not a passkey of the account the sign-in was started for, or its answer did not verify. Start again. */
+        PasskeySignInFinishUnauthorized: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `auth.method_disabled`: passkey sign-in is switched off for this organization. `org.not_found`: the request's organization cannot be determined. */
+        PasskeySignInStartNotFound: {
             headers: {
                 [name: string]: unknown;
             };
@@ -3079,6 +3207,77 @@ export interface operations {
             400: components["responses"]["EnrollmentStartInvalid"];
             403: components["responses"]["CsrfRefused"];
             404: components["responses"]["EnrollmentStartNotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    finishPasskeySignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasskeySignInFinish"];
+            };
+        };
+        responses: {
+            /** @description The user is signed in */
+            200: {
+                headers: {
+                    /** @description The new `__Host-sc_session` cookie, and `__Host-sc_flow` cleared */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignedIn"];
+                };
+            };
+            400: components["responses"]["PasskeySignInFinishBadRequest"];
+            401: components["responses"]["PasskeySignInFinishUnauthorized"];
+            403: components["responses"]["PasskeySignInFinishForbidden"];
+            404: components["responses"]["PasskeySignInFinishNotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    startPasskeySignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasskeySignInStart"];
+            };
+        };
+        responses: {
+            /** @description The request options, whether or not the address has an account or a passkey */
+            200: {
+                headers: {
+                    /** @description `no-store` */
+                    "Cache-Control"?: string;
+                    /** @description The `__Host-sc_flow` cookie of the sign-in */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasskeySignInStarted"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["CsrfRefused"];
+            404: components["responses"]["PasskeySignInStartNotFound"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             429: components["responses"]["RateLimited"];

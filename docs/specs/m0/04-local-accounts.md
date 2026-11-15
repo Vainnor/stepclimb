@@ -251,6 +251,46 @@ creates and hands over.
   `return_to`. A failed check answers 401 `auth.passkey_invalid`. A counter that goes
   backwards: pending Q12.
 
+  Coordinator decisions (2026-11-14), for issue I4:
+
+  - Q9 (a) as decided. The start route finds the user with `users::find_by_email` (the
+    organization and the email in any letter case, `users_email`'s comparison) and always
+    answers 200 `{options}` with a new `passkey_sign_in` flow. An address with no account,
+    another organization's, one that holds NUL, and an account without a passkey all get
+    `allowCredentials: []`, and their flow can finish no sign-in. An account with passkeys
+    still differs from these, since its options list its credential ids: (a) accepts that.
+    `webauthn-rs` has a fake credential id generator that would hide it; adopting it is the
+    owner's call. Discoverable sign-in (Q9 (b)) is not built.
+  - Both routes take `RateLimited<SignIn>` first, then answer 404 `auth.method_disabled` while
+    passkeys are off, before they read anything else. Both answer `Cache-Control: no-store`.
+  - The finish route takes the flow first and deletes it in its transaction, so a challenge is
+    used once whatever the outcome. In a savepoint it then finds the passkey by `(org_id,
+    credential_id)` with `FOR UPDATE`, which must belong to the flow's user, and verifies the
+    assertion against the flow's state (challenge, the public URL's origin exactly, the
+    relying party ID, user verification required, the signature) and against the stored
+    credential. A user handle, when the authenticator sends one, must be the flow user's id.
+    A flow for no account, an unknown credential, another user's passkey, a bad signature, a
+    user handle mismatch, a counter that did not go up and a body that is not an assertion all
+    answer the same 401 `auth.passkey_invalid`. `auth.flow_invalid` and `auth.flow_expired` are
+    400, as in B8. A refusal rolls the savepoint back and commits the flow's deletion; every
+    answer after the flow is taken clears the flow cookie.
+  - Q12's counter rule: a counter must go up unless both the stored and the presented counter
+    are 0. This is the W3C rule `webauthn-rs` applies, and it is stricter than Q12's wording in
+    one case: a stored counter above 0 with a presented 0 is refused, since a passkey that
+    once counted and stops is not a synced passkey. The check runs against the row read under
+    the lock, not only the ceremony's copy, so two sign-ins cannot pass with one counter value.
+    A refusal for the counter logs a warning with the passkey's id; the passkey is not flagged
+    or disabled (no column for it).
+  - Admission (B5): as in B8, a suspended user is refused with 403 `auth.suspended`, checked
+    only after the assertion verified, so the answer reveals the suspension only to the
+    passkey's holder. Nothing is saved for a refused sign-in.
+  - On success the route saves the credential with its new counter and backup state, sets
+    `last_used_at` and `updated_at`, and creates the session with `session::start_on`, which
+    ends the sessions the browser's old cookies name (`08-sessions-and-csrf.md` B7).
+  - A sign-in writes no audit entry: `09-permissions-and-roles.md` B22 lists none, and
+    `08-sessions-and-csrf.md` Q14 keeps routine sign-ins to the log. The route logs the user
+    and passkey ids at `info`, never the email, the assertion, the flow token or the state.
+
 ### Passkey management
 
 - **B13.** A signed-in user lists, adds, renames and deletes their own passkeys under
@@ -326,8 +366,8 @@ answer the admission refusals of `07-admission.md` as 403.
 | `POST /auth/local/enrollment/start` | `{token}` | 200 `{email, methods: [...], passkey_options?}`; with `passkey_options`, sets the flow cookie | `auth.enrollment_invalid`, `auth.enrollment_expired` | none |
 | `POST /auth/local/enrollment/passkey` | `{token, credential, name?}` | 200 `{return_to}`; sets `__Host-sc_session` | `auth.enrollment_invalid`, `auth.enrollment_expired`, `auth.flow_invalid`, `auth.flow_expired`, `auth.passkey_invalid` (all 400), `auth.suspended` (403), `request.invalid` (422, `name`) | none |
 | `POST /auth/local/enrollment/password` | `{token, password}` | 200 `{return_to}`; sets the session | `auth.enrollment_invalid`, `auth.enrollment_expired`, `local.password_weak` | none |
-| `POST /auth/local/passkey/start` | `{email, return_to?}` | 200 `{options}`; sets the flow cookie | (Q9) | none |
-| `POST /auth/local/passkey/finish` | `{credential}` | 200 `{return_to}`; sets the session | `auth.flow_invalid`, `auth.flow_expired`, `auth.passkey_invalid` | none |
+| `POST /auth/local/passkey/start` | `{email, return_to?}` | 200 `{options}`; sets the flow cookie | none beyond the common ones (Q9 (a): every address gets 200) | none |
+| `POST /auth/local/passkey/finish` | `{credential}` | 200 `{return_to}`; sets the session | `auth.flow_invalid`, `auth.flow_expired` (400), `auth.passkey_invalid` (401), `auth.suspended` (403) | none |
 | `POST /auth/local/password` | `{email, password, return_to?}` | 200 `{return_to}` with the session, or 200 `{next: "totp"}` with the flow cookie | `auth.credentials_invalid` | none |
 | `POST /auth/local/totp` | `{code}` | 200 `{return_to}`; sets the session | `auth.flow_invalid`, `auth.flow_expired`, `auth.totp_invalid` | none |
 | `POST /auth/local/magic-link` | `{email, return_to?}` | 202 | none beyond the common ones | none |

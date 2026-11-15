@@ -109,6 +109,8 @@ const PUBLIC: &[&str] = &[
     "getThemeCss",
     "startEnrollment",
     "enrollPasskey",
+    "startPasskeySignIn",
+    "finishPasskeySignIn",
 ];
 
 /// One entry per operation that needs a principal (B20). The M0 specs' routes add theirs here
@@ -858,8 +860,16 @@ async fn public_operations_answer_without_a_credential(pool: PgPool) {
 /// registration's flow cookie and a software passkey's answer to its options; the others take
 /// none.
 async fn public_request(world: &World, org: &Org, id: &str) -> (Option<Value>, Option<String>) {
-    if id != "startEnrollment" && id != "enrollPasskey" {
-        return (None, None);
+    match id {
+        "startPasskeySignIn" => {
+            return (
+                Some(serde_json::json!({ "email": "anyone@example.test" })),
+                None,
+            );
+        }
+        "finishPasskeySignIn" => return passkey_sign_in_request(world, org).await,
+        "startEnrollment" | "enrollPasskey" => {}
+        _ => return (None, None),
     }
     let (_, user) = org
         .named_user("Pat Example".into(), Some(format!("{id}@example.test")))
@@ -908,6 +918,68 @@ async fn public_request(world: &World, org: &Org, id: &str) -> (Option<Value>, O
     let cookie = begun.set_cookie.to_str().expect("ASCII");
     let cookie = cookie.split(';').next().expect("a pair").to_owned();
     let body = serde_json::json!({ "token": token, "credential": credential });
+    (Some(body), Some(cookie))
+}
+
+/// A user with a software passkey, a started sign-in for them, and the passkey's assertion:
+/// the body and flow cookie `finishPasskeySignIn` signs in with.
+async fn passkey_sign_in_request(world: &World, org: &Org) -> (Option<Value>, Option<String>) {
+    use stepclimb_auth::passkey::{Registrant, RelyingParty};
+    use webauthn_rs::prelude::{CreationChallengeResponse, RequestChallengeResponse, Url};
+    let email = "signs-in@example.test";
+    let (_, user) = org
+        .named_user("Pat Example".into(), Some(email.into()))
+        .await;
+    let origin = Url::parse("https://lms.example.org").expect("a URL");
+    let party = RelyingParty::new(origin.as_str(), "Org").expect("a relying party");
+    let registrant = Registrant {
+        user_id: user,
+        name: email,
+        display_name: "Pat Example",
+    };
+    let started = party
+        .start_registration(registrant, Vec::new())
+        .expect("start a registration");
+    let options: CreationChallengeResponse =
+        serde_json::from_value(started.options).expect("creation options");
+    let mut authenticator = webauthn_authenticator_rs::softpasskey::SoftPasskey::new(true);
+    let response = authenticator
+        .do_registration(origin.clone(), options)
+        .expect("the soft passkey registers");
+    let response = serde_json::to_value(response).expect("JSON");
+    let registered = party
+        .finish_registration(&response, &started.state)
+        .expect("the registration verifies");
+    let new = stepclimb_core::passkeys::NewPasskey {
+        user_id: user,
+        credential_id: &registered.credential_id,
+        credential: &registered.credential,
+        name: "Phone",
+    };
+    stepclimb_core::passkeys::create(&world.pool, scope(org.id), new, now(), Actor::Instance)
+        .await
+        .expect("store the passkey");
+    let mut conn = world.pool.acquire().await.expect("a connection");
+    let request: stepclimb_server::passkey_sign_in::PasskeySignInStart =
+        serde_json::from_value(serde_json::json!({ "email": email })).expect("a start");
+    let begun = stepclimb_server::passkey_sign_in::begin(
+        &world.state(),
+        &mut conn,
+        scope(org.id),
+        &request,
+        now(),
+    )
+    .await
+    .expect("start a sign-in");
+    let options: RequestChallengeResponse =
+        serde_json::from_value(serde_json::to_value(&begun.options).expect("JSON"))
+            .expect("request options");
+    let assertion = authenticator
+        .do_authentication(origin, options)
+        .expect("the soft passkey signs");
+    let cookie = begun.set_cookie.to_str().expect("ASCII");
+    let cookie = cookie.split(';').next().expect("a pair").to_owned();
+    let body = serde_json::json!({ "credential": assertion });
     (Some(body), Some(cookie))
 }
 

@@ -2166,6 +2166,143 @@
         }
       }
     },
+    "/auth/local/passkey/finish": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Finish signing in with a passkey.",
+        "operationId": "finishPasskeySignIn",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeySignInFinish"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The user is signed in",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The new `__Host-sc_session` cookie, and `__Host-sc_flow` cleared"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignedIn"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/PasskeySignInFinishBadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/PasskeySignInFinishUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/PasskeySignInFinishForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/PasskeySignInFinishNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/auth/local/passkey/start": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Start signing in with a passkey.",
+        "operationId": "startPasskeySignIn",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeySignInStart"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The request options, whether or not the address has an account or a passkey",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`no-store`"
+              },
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The `__Host-sc_flow` cookie of the sign-in"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeySignInStarted"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/CsrfRefused"
+          },
+          "404": {
+            "$ref": "#/components/responses/PasskeySignInStartNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/auth/sign-out": {
       "post": {
         "tags": [
@@ -3627,6 +3764,67 @@
         },
         "additionalProperties": false
       },
+      "PasskeyRequestOptions": {
+        "type": "object",
+        "description": "`CredentialRequestOptions` as JSON: pass `publicKey` to\n`PublicKeyCredential.parseRequestOptionsFromJSON`, then to `navigator.credentials.get`.",
+        "required": [
+          "publicKey"
+        ],
+        "properties": {
+          "publicKey": {
+            "$ref": "#/components/schemas/PublicKeyRequestOptions"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PasskeySignInFinish": {
+        "type": "object",
+        "description": "The browser's answer to the request options.",
+        "required": [
+          "credential"
+        ],
+        "properties": {
+          "credential": {
+            "type": "object",
+            "description": "The `PublicKeyCredential` `navigator.credentials.get` returned, as JSON\n(`PublicKeyCredential.toJSON()`)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PasskeySignInStart": {
+        "type": "object",
+        "description": "The address to sign in with.",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "The account's email, in any letter case."
+          },
+          "return_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The path on this site to open after signing in; anything else becomes `/`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PasskeySignInStarted": {
+        "type": "object",
+        "description": "The request options for the browser.",
+        "required": [
+          "options"
+        ],
+        "properties": {
+          "options": {
+            "$ref": "#/components/schemas/PasskeyRequestOptions",
+            "description": "Pass to `navigator.credentials.get`, then send the result to `POST\n/auth/local/passkey/finish` in this browser within 10 minutes."
+          }
+        }
+      },
       "PermissionInfo": {
         "type": "object",
         "description": "One permission of the catalog.",
@@ -3793,6 +3991,44 @@
           },
           "user": {
             "$ref": "#/components/schemas/UserInfo"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PublicKeyRequestOptions": {
+        "type": "object",
+        "description": "`PublicKeyCredentialRequestOptionsJSON`.",
+        "required": [
+          "challenge",
+          "rpId",
+          "allowCredentials",
+          "userVerification"
+        ],
+        "properties": {
+          "allowCredentials": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CredentialDescriptor"
+            },
+            "description": "The passkeys the account may sign in with. Empty when the address has no account or\nthe account has no passkey: the answer looks the same either way."
+          },
+          "challenge": {
+            "type": "string",
+            "description": "base64url, unpadded."
+          },
+          "rpId": {
+            "type": "string",
+            "description": "The relying party ID: the instance's host name."
+          },
+          "timeout": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Milliseconds.",
+            "minimum": 0
+          },
+          "userVerification": {
+            "type": "string",
+            "description": "`required`: the authenticator checks a PIN or biometric."
           }
         },
         "additionalProperties": false
@@ -4630,6 +4866,56 @@
       },
       "ParentNotFound": {
         "description": "`account.not_found`: no account with `parent_id` exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "PasskeySignInFinishBadRequest": {
+        "description": "`request.malformed`: the body is not `{credential}`. `auth.flow_invalid`: no passkey sign-in was started in this browser, or it was already finished; start again. `auth.flow_expired`: the sign-in was started more than 10 minutes ago; start again.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "PasskeySignInFinishForbidden": {
+        "description": "`auth.suspended`: the account is suspended. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "PasskeySignInFinishNotFound": {
+        "description": "`auth.method_disabled`: passkey sign-in is switched off for this organization. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "PasskeySignInFinishUnauthorized": {
+        "description": "`auth.passkey_invalid`: the passkey did not sign in: it is not a passkey of the account the sign-in was started for, or its answer did not verify. Start again.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "PasskeySignInStartNotFound": {
+        "description": "`auth.method_disabled`: passkey sign-in is switched off for this organization. `org.not_found`: the request's organization cannot be determined.",
         "content": {
           "application/problem+json": {
             "schema": {
