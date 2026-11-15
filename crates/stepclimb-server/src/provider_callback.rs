@@ -370,7 +370,7 @@ async fn redeem(
         provider_id: provider.id,
     };
     let client_secret = config
-        .client_secret(&state.keys, row)
+        .client_secret(&state.keys, row, state.providers.config_secrets())
         .map_err(|e| ApiError::internal(&e))?;
     let redirect_uri = redirect_uri(&state.public_url, key);
     let callback = oidc::CodeCallback {

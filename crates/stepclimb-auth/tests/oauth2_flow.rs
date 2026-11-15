@@ -76,7 +76,9 @@ fn provider(mock: &MockIdp, pkce: bool) -> (Oauth2Settings, ClientSecret) {
         .expect("a valid config")
         .seal(&ring, row)
         .expect("seal");
-    let secret = sealed.client_secret(&ring, row).expect("the secret opens");
+    let secret = sealed
+        .client_secret(&ring, row, &oauth2_config::ConfigSecrets::default())
+        .expect("the secret opens");
     (sealed.settings, secret)
 }
 

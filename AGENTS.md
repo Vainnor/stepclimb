@@ -20,7 +20,8 @@ the first deployment. The plan is `docs/plan/` (source: the plan artifact, linke
 
 **Status: M0 Foundations in progress. The repository skeleton is in place; most product code is
 not.** `stepclimb serve` reads `STEPCLIMB_*` variables over an optional `stepclimb.toml` (ADR
-0022; `STEPCLIMB_ENCRYPTION_KEYS` or its `_FILE` variant is required), runs the embedded
+0022; `STEPCLIMB_ENCRYPTION_KEYS` or its `_FILE` variant is required), writes the file's
+`[[providers]]` to their organizations at startup (spec 06 B13, secrets kept in memory), runs the embedded
 migrations (fifteen: `organizations`, `users`, `accounts`, `sessions`, `roles`, `auth_flows`, `identities`, `plans`, `audit_events`, `local_provider`, `local_tokens`, `user_appearance`, `passkeys`, `passkey_counter_flag`, `auth_flow_provider`), writes the built-in roles and the `unlimited` plan, gives every organization without a plan the `unlimited` one (spec 10 B4, B5) and without one its local provider row (spec 04 B1), and serves `/healthz`, `/readyz`, the
 permission catalog, roles and role assignment routes under `/api/v1/admin` (spec 09 I5, I6), the local sign-in switches at `/api/v1/admin/local-sign-in` (spec 04 I1),
 `GET /api/v1/me`

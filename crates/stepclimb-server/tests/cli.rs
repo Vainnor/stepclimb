@@ -286,13 +286,98 @@ fn check_config_exits_0_printing_only_non_secret_values_without_connecting() {
             "stepclimb: the configuration is valid\nfile: {}\nbind: 0.0.0.0:9000\nlog: info\n\
              public_url: https://lms.example.org\nallowed_origins: (none)\n\
              trusted_proxies: (none)\nsign_in_rate_limit: 20\ntoken_rate_limit: 60\n\
-             failed_sign_in_limit: 10\nallow_insecure_providers: false\n",
+             failed_sign_in_limit: 10\nallow_insecure_providers: false\nproviders: (none)\n",
             file.0.display()
         )
     );
     for secret in ["zq-db-secret", "AAEC"] {
         assert!(!stdout.contains(secret), "stdout: {stdout}");
         assert!(!stderr.contains(secret), "stderr: {stderr}");
+    }
+}
+
+/// Spec 06 B11's canonical `[[providers]]` example, its secret in a file beside it.
+const PROVIDERS: &str = r#"
+[[providers]]
+kind = "oauth2"
+key = "vatsim"
+label = "Sign in with VATSIM"
+authorize = "https://auth.vatsim.net/oauth/authorize"
+token = "https://auth.vatsim.net/oauth/token"
+userinfo = "https://auth.vatsim.net/api/user"
+scopes = ["full_name", "vatsim_details", "email"]
+client_id = "stepclimb-test-client"
+client_secret_file = "vatsim_client_secret"
+
+[providers.claims]
+subject = "/data/cid"
+given_name = "/data/personal/name_first"
+family_name = "/data/personal/name_last"
+email = "/data/personal/email"
+attributes.rating = "/data/vatsim/rating/short"
+attributes.subdivision = "/data/vatsim/subdivision/id"
+"#;
+
+const PROVIDER_SECRET: &str = "zq-vatsim-client-secret";
+
+fn providers_file(test: &str, contents: &str) -> TomlFile {
+    let file = TomlFile::new(test, contents);
+    let dir = file.0.parent().expect("a directory");
+    std::fs::write(dir.join("vatsim_client_secret"), PROVIDER_SECRET).expect("the secret file");
+    file
+}
+
+/// Spec 06 T9: the canonical example loads, and only the provider's key and kind are printed.
+#[test]
+fn check_config_lists_the_files_providers_without_their_secret() {
+    let file = providers_file("check-providers", PROVIDERS);
+    let output = stepclimb()
+        .args(["check-config", "--config"])
+        .arg(&file.0)
+        .env("STEPCLIMB_DATABASE_URL", UNREACHABLE_URL)
+        .env("STEPCLIMB_ENCRYPTION_KEYS", KEYS)
+        .output()
+        .expect("the binary runs");
+    let (stdout, stderr) = (stdout_of(&output), stderr_of(&output));
+    assert_eq!(output.status.code(), Some(0), "stderr: {stderr}");
+    assert!(
+        stdout.ends_with("\nproviders: vatsim (oauth2)\n"),
+        "stdout: {stdout}"
+    );
+    for hidden in [PROVIDER_SECRET, "vatsim_client_secret"] {
+        assert!(!stdout.contains(hidden), "stdout: {stdout}");
+        assert!(!stderr.contains(hidden), "stderr: {stderr}");
+    }
+}
+
+/// Spec 06 T9 and B13: without `token`, `check-config` and `serve` both stop with exit 2 before
+/// connecting, naming the key and the field.
+#[test]
+fn a_provider_without_a_token_exits_2_naming_the_key_and_the_field() {
+    let file = providers_file(
+        "providers-no-token",
+        &PROVIDERS.replace("token = \"https://auth.vatsim.net/oauth/token\"\n", ""),
+    );
+    for command in ["check-config", "serve"] {
+        let output = stepclimb()
+            .args([command, "--config"])
+            .arg(&file.0)
+            .env("STEPCLIMB_DATABASE_URL", UNREACHABLE_URL)
+            .env("STEPCLIMB_ENCRYPTION_KEYS", KEYS)
+            .output()
+            .expect("the binary runs");
+        assert_eq!(output.status.code(), Some(2), "{command}");
+        assert_eq!(stdout_of(&output), "", "{command}");
+        let stderr = stderr_of(&output);
+        assert_eq!(
+            stderr,
+            format!(
+                "stepclimb: configuration error: {}: [[providers]] entry 1 (key \"vatsim\"): \
+                 `token` is required\n",
+                file.0.display()
+            ),
+            "{command}"
+        );
     }
 }
 

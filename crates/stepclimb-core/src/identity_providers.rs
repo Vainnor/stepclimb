@@ -5,14 +5,16 @@
 //! the organization, the `{provider}` of `/auth/{provider}/...`). Every query here filters by
 //! `org_id = scope.org_id()`.
 //!
-//! `config` is a JSON object this module passes through without reading: its shape, the
-//! secrets sealed inside it and the functions that write providers belong to
-//! docs/specs/m0/05-oidc.md and 06-oauth2-and-vatsim-preset.md.
+//! `config` is a JSON object this module passes through without reading, but for its `source`
+//! member: its shape and the secrets sealed inside it belong to docs/specs/m0/05-oidc.md and
+//! 06-oauth2-and-vatsim-preset.md. A row whose config has `source: "config"` belongs to
+//! `stepclimb.toml` (spec 06 Q2): [`upsert_from_config`] writes it at startup and
+//! [`disable_config_rows_except`] disables it once the file no longer declares it.
 
 use std::time::SystemTime;
 
 use serde_json::{Map, Value};
-use sqlx::PgExecutor;
+use sqlx::{PgConnection, PgExecutor};
 use uuid::Uuid;
 
 use crate::{
@@ -53,6 +55,32 @@ impl Kind {
     }
 }
 
+/// The config member naming who owns the row, and its value for a row `stepclimb.toml`
+/// declares. `stepclimb_auth::provider_config::{SOURCE, SOURCE_CONFIG}` read and write the same
+/// member; a server test keeps the two in step.
+pub const SOURCE: &str = "source";
+/// [`SOURCE`]'s value for a provider `stepclimb.toml` declares.
+pub const SOURCE_CONFIG: &str = "config";
+
+/// The longest provider key (spec 06 Q5 (a)).
+pub const KEY_MAX_LEN: usize = 32;
+
+/// Whether `key` is a provider key of spec 06 Q5 (a): 1 to 32 lowercase ASCII letters, digits
+/// and hyphens, starting with a letter or digit. It appears in `/auth/{key}/...` URLs and in the
+/// redirect URI registered at the provider.
+#[must_use]
+pub fn valid_key(key: &str) -> bool {
+    let first_ok = key
+        .bytes()
+        .next()
+        .is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
+    first_ok
+        && key.len() <= KEY_MAX_LEN
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
 /// A provider as the repository reads it.
 #[derive(Clone, PartialEq, Eq)]
 pub struct IdentityProvider {
@@ -64,6 +92,14 @@ pub struct IdentityProvider {
     pub enabled: bool,
     pub created_at: SystemTime,
     pub updated_at: SystemTime,
+}
+
+impl IdentityProvider {
+    /// Whether `stepclimb.toml` owns the row (its config has `source: "config"`).
+    #[must_use]
+    pub fn is_from_config_file(&self) -> bool {
+        self.config.get(SOURCE).and_then(Value::as_str) == Some(SOURCE_CONFIG)
+    }
 }
 
 /// Leaves `config` out: it holds the provider's sealed client secret.
@@ -96,6 +132,9 @@ pub enum Error {
     /// happening, and the read fails closed if it does.
     #[error("the stored provider config is not a JSON object")]
     StoredConfig,
+    /// [`upsert_from_config`] was given a config without `source: "config"`.
+    #[error("a provider written from stepclimb.toml must have source \"config\"")]
+    NotFromConfig,
     /// A time that cannot be stored or read.
     #[error(transparent)]
     Time(#[from] TimeOutOfRange),
@@ -297,6 +336,92 @@ pub async fn replace_config(
         return Err(Error::NotFound);
     }
     Ok(())
+
+/// A provider `stepclimb.toml` declares, as [`upsert_from_config`] writes it.
+pub struct ConfigRow<'a> {
+    pub key: &'a str,
+    /// [`Kind::Oidc`] or [`Kind::Oauth2`].
+    pub kind: Kind,
+    /// The whole stored config, with `source: "config"`.
+    pub config: &'a Map<String, Value>,
+    pub enabled: bool,
+}
+
+/// Write `row` into the scope's organization by its key (spec 06 Q2 (a)): a new row with a new
+/// id, or the existing row with that key, whoever wrote it, taking the file's kind, config
+/// and `enabled`. The config goes through [`replace_config`], so the row keeps the admission
+/// rules it has (docs/specs/m0/07-admission.md I3). `updated_at` moves to `now` only when
+/// something changed. Returns the row's id. A config without `source: "config"` is refused with
+/// [`Error::NotFromConfig`], so the rows this writes are always the file's.
+pub async fn upsert_from_config(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    row: &ConfigRow<'_>,
+    now: SystemTime,
+) -> Result<Uuid, Error> {
+    if row.key.contains('\0') {
+        return Err(Error::ContainsNul { field: "key" });
+    }
+    if row.config.get(SOURCE).and_then(Value::as_str) != Some(SOURCE_CONFIG) {
+        return Err(Error::NotFromConfig);
+    }
+    let micros = crate::db::epoch_micros(now)?;
+    // A new row starts with an empty config, which `replace_config` then fills: the config has
+    // one writer.
+    let id = sqlx::query_scalar!(
+        r#"INSERT INTO identity_providers
+               (id, org_id, key, kind, config, enabled, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, '{}'::jsonb, $5,
+                   timestamptz 'epoch' + $6::bigint * interval '1 microsecond',
+                   timestamptz 'epoch' + $6::bigint * interval '1 microsecond')
+           ON CONFLICT (org_id, key) DO UPDATE SET
+               kind = EXCLUDED.kind,
+               enabled = EXCLUDED.enabled,
+               updated_at = CASE
+                   WHEN (identity_providers.kind, identity_providers.enabled)
+                        IS DISTINCT FROM (EXCLUDED.kind, EXCLUDED.enabled)
+                   THEN EXCLUDED.updated_at
+                   ELSE identity_providers.updated_at
+               END
+           RETURNING id"#,
+        crate::id::new_id(),
+        scope.org_id(),
+        row.key,
+        row.kind.as_str(),
+        row.enabled,
+        micros,
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    replace_config(&mut *conn, scope, id, row.config, now).await?;
+    Ok(id)
+}
+
+/// Disable every enabled row of the scope's organization that `stepclimb.toml` owns and whose
+/// key is not in `keep` (spec 06 Q2 (a): a provider removed from the file is disabled, not
+/// deleted, so its identities stay). Returns the keys it disabled, sorted.
+pub async fn disable_config_rows_except(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    keep: &[String],
+    now: SystemTime,
+) -> Result<Vec<String>, Error> {
+    let now = crate::db::epoch_micros(now)?;
+    let mut keys = sqlx::query_scalar!(
+        r#"UPDATE identity_providers
+           SET enabled = false, updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond'
+           WHERE org_id = $1 AND enabled AND config ->> $2 = $3 AND NOT (key = ANY($5))
+           RETURNING key"#,
+        scope.org_id(),
+        SOURCE,
+        SOURCE_CONFIG,
+        now,
+        keep,
+    )
+    .fetch_all(db)
+    .await?;
+    keys.sort();
+    Ok(keys)
 }
 
 #[cfg(test)]
@@ -310,6 +435,47 @@ mod tests {
         }
         assert_eq!(Kind::parse("saml"), None);
         assert_eq!(Kind::parse("Local"), None);
+    }
+
+    #[test]
+    fn provider_keys_follow_q5() {
+        for key in ["vatsim", "a", "0", "corp-sso", "a1-b2", &"k".repeat(32)] {
+            assert!(valid_key(key), "{key:?}");
+        }
+        for key in [
+            "",
+            "-sso",
+            "Vatsim",
+            "corp_sso",
+            "corp sso",
+            "corp.sso",
+            "é",
+            &"k".repeat(33),
+        ] {
+            assert!(!valid_key(key), "{key:?}");
+        }
+    }
+
+    #[test]
+    fn a_row_is_from_the_config_file_only_with_source_config() {
+        let mut provider = IdentityProvider {
+            id: Uuid::nil(),
+            key: "example".into(),
+            kind: Kind::Oidc,
+            config: Map::new(),
+            enabled: true,
+            created_at: SystemTime::UNIX_EPOCH,
+            updated_at: SystemTime::UNIX_EPOCH,
+        };
+        assert!(!provider.is_from_config_file());
+        provider.config.insert(SOURCE.into(), Value::from("api"));
+        assert!(!provider.is_from_config_file());
+        provider.config.insert(SOURCE.into(), Value::from(true));
+        assert!(!provider.is_from_config_file());
+        provider
+            .config
+            .insert(SOURCE.into(), Value::from(SOURCE_CONFIG));
+        assert!(provider.is_from_config_file());
     }
 
     #[test]

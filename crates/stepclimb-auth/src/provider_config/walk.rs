@@ -9,7 +9,8 @@ use serde_json::{Map, Value};
 use url::Url;
 
 use super::{
-    ClientSecret, ConfigErrors, ConfigProblem, DraftSecret, SealedSecret, StoredConfigError, code,
+    ClientSecret, ConfigErrors, ConfigProblem, DraftSecret, SOURCE, SOURCE_CONFIG, SealedSecret,
+    StoredConfigError, StoredSecret, code,
 };
 use crate::json_pointer::{JsonPointer, pointer_to};
 use crate::outbound::UrlPolicy;
@@ -278,8 +279,24 @@ pub(crate) fn input_secret(
     }
 }
 
-/// A stored `client_secret`: `{"sealed": "<standard base64>"}`.
-pub(crate) fn stored_secret(walk: &mut Walk, value: Option<&Value>) -> Option<SealedSecret> {
+/// A stored config's secret: `client_secret: {"sealed": "<standard base64>"}`, or, for a row
+/// with `source: "config"`, no `client_secret` at all. Any other `source` fails closed.
+pub(crate) fn stored_secret(walk: &mut Walk, config: &Map<String, Value>) -> Option<StoredSecret> {
+    let value = config.get("client_secret");
+    match config.get(SOURCE) {
+        None => {}
+        Some(Value::String(source)) if source == SOURCE_CONFIG => {
+            if value.is_some() {
+                walk.fail(&["client_secret"], code::FIELD_UNKNOWN);
+                return None;
+            }
+            return Some(StoredSecret::ConfigFile);
+        }
+        Some(_) => {
+            walk.fail(&[SOURCE], code::FIELD_TYPE);
+            return None;
+        }
+    }
     let sealed = value
         .and_then(Value::as_object)
         .and_then(|secret| secret.get("sealed"))
@@ -288,11 +305,23 @@ pub(crate) fn stored_secret(walk: &mut Walk, value: Option<&Value>) -> Option<Se
     if sealed.is_none() {
         walk.fail(&["client_secret"], code::FIELD_TYPE);
     }
-    sealed.map(SealedSecret)
+    sealed.map(|bytes| StoredSecret::Sealed(SealedSecret(bytes)))
+}
+
+/// Put `secret`'s stored form in `config`, which [`stored_secret`] reads.
+pub(crate) fn insert_stored_secret(config: &mut Map<String, Value>, secret: &StoredSecret) {
+    match secret {
+        StoredSecret::Sealed(sealed) => {
+            config.insert("client_secret".into(), sealed_json(sealed));
+        }
+        StoredSecret::ConfigFile => {
+            config.insert(SOURCE.into(), SOURCE_CONFIG.into());
+        }
+    }
 }
 
 /// The stored form of a sealed secret, which [`stored_secret`] reads.
-pub(crate) fn sealed_json(secret: &SealedSecret) -> Value {
+fn sealed_json(secret: &SealedSecret) -> Value {
     let mut sealed = Map::new();
     sealed.insert("sealed".into(), STANDARD.encode(&secret.0).into());
     Value::Object(sealed)

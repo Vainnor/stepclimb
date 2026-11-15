@@ -4,6 +4,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use super::*;
+use crate::encryption::DecryptError;
 
 const POLICY: UrlPolicy = UrlPolicy::new(false, true);
 const SECRET: &str = "test-client-secret-value";
@@ -250,15 +251,11 @@ fn the_secret_is_required_unless_one_is_stored() {
         .expect("valid")
         .seal(&ring(), row())
         .expect("sealed");
-    let change = validate(
-        &without("client_secret"),
-        POLICY,
-        Some(stored.sealed_secret()),
-    )
-    .expect("valid with the stored secret");
+    let change = validate(&without("client_secret"), POLICY, stored.sealed_secret())
+        .expect("valid with the stored secret");
     let kept = change.seal(&ring(), row()).expect("sealed");
     assert_eq!(
-        kept.client_secret(&ring(), row())
+        kept.client_secret(&ring(), row(), &ConfigSecrets::default())
             .expect("opens")
             .expose_secret(),
         SECRET
@@ -279,7 +276,7 @@ fn the_stored_config_holds_the_secret_only_sealed_and_reads_back() {
     let read = OidcConfig::from_stored(&stored).expect("reads back");
     assert_eq!(read, config);
     assert_eq!(
-        read.client_secret(&ring(), row())
+        read.client_secret(&ring(), row(), &ConfigSecrets::default())
             .expect("opens")
             .expose_secret(),
         SECRET
@@ -302,8 +299,10 @@ fn a_sealed_secret_opens_only_for_its_own_row() {
     };
     for wrong in [other_provider, other_org] {
         assert_eq!(
-            config.client_secret(&ring(), wrong).err(),
-            Some(DecryptError::Inauthentic),
+            config
+                .client_secret(&ring(), wrong, &ConfigSecrets::default())
+                .err(),
+            Some(SecretError::Decrypt(DecryptError::Inauthentic)),
             "{wrong:?}"
         );
     }
@@ -313,7 +312,9 @@ fn a_sealed_secret_opens_only_for_its_own_row() {
 fn nothing_prints_the_secret() {
     let draft = validate(&minimal(), POLICY, None).expect("valid");
     let config = draft.clone().seal(&ring(), row()).expect("sealed");
-    let opened = config.client_secret(&ring(), row()).expect("opens");
+    let opened = config
+        .client_secret(&ring(), row(), &ConfigSecrets::default())
+        .expect("opens");
     let shown = format!("{draft:?} {config:?} {opened:?}");
     assert!(!shown.contains(SECRET), "{shown}");
     assert!(!shown.contains("sealed\""), "{shown}");
@@ -462,4 +463,82 @@ fn the_local_passkeys_switch_is_stored_and_read_back() {
     older.remove(ALLOW_LOCAL_PASSKEYS);
     let read = OidcConfig::from_stored(&older).expect("readable");
     assert!(!read.settings.allow_local_passkeys);
+}
+
+/// A provider `stepclimb.toml` declares stores `source: "config"` and no secret
+/// (`05-oidc.md` Q2 (c)); its secret comes only from the server's [`ConfigSecrets`].
+#[test]
+fn a_config_file_provider_stores_no_secret_and_reads_it_from_the_config_secrets() {
+    let settings = validate(&minimal(), POLICY, None).expect("valid").settings;
+    let config = OidcConfig::from_config_file(settings);
+    let stored = config.to_json();
+    assert_eq!(stored["source"], json!("config"));
+    assert!(!stored.contains_key("client_secret"), "{stored:?}");
+    let text = serde_json::to_string(&stored).expect("json");
+    assert!(!text.contains(SECRET), "{text}");
+
+    let read = OidcConfig::from_stored(&stored).expect("reads back");
+    assert_eq!(read, config);
+    assert_eq!(read.sealed_secret(), None);
+    assert_eq!(
+        read.client_secret(&ring(), row(), &ConfigSecrets::default())
+            .err(),
+        Some(SecretError::NotInConfig)
+    );
+    let mut secrets = ConfigSecrets::default();
+    secrets.insert(
+        row(),
+        ClientSecret::from_config_file(SECRET.to_owned()).expect("not empty"),
+    );
+    let opened = read.client_secret(&ring(), row(), &secrets).expect("held");
+    assert_eq!(opened.expose_secret(), SECRET);
+    let other_org = ProviderRow {
+        org_id: Uuid::from_u128(9),
+        ..row()
+    };
+    assert_eq!(
+        read.client_secret(&ring(), other_org, &secrets).err(),
+        Some(SecretError::NotInConfig)
+    );
+    assert!(!format!("{secrets:?}").contains(SECRET));
+    assert!(ClientSecret::from_config_file(String::new()).is_none());
+}
+
+#[test]
+fn a_stored_source_other_than_config_or_a_config_row_with_a_secret_fails_closed() {
+    let settings = validate(&minimal(), POLICY, None).expect("valid").settings;
+    let mut with_secret = OidcConfig::from_config_file(settings).to_json();
+    with_secret.insert("client_secret".into(), json!({ "sealed": "AAAA" }));
+    assert_eq!(
+        OidcConfig::from_stored(&with_secret),
+        Err(StoredConfigError::Invalid {
+            pointer: "/client_secret".into(),
+            code: code::FIELD_UNKNOWN,
+        })
+    );
+    let sealed = validate(&minimal(), POLICY, None)
+        .expect("valid")
+        .seal(&ring(), row())
+        .expect("sealed");
+    assert!(sealed.sealed_secret().is_some());
+    for source in [json!("api"), json!(true), json!("Config")] {
+        let mut stored = sealed.to_json();
+        stored.insert("source".into(), source.clone());
+        assert_eq!(
+            OidcConfig::from_stored(&stored),
+            Err(StoredConfigError::Invalid {
+                pointer: "/source".into(),
+                code: code::FIELD_TYPE,
+            }),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn an_admin_config_cannot_claim_the_config_file_source() {
+    assert_eq!(
+        problems(&with("source", json!("config"))),
+        one("/source", code::FIELD_UNKNOWN)
+    );
 }

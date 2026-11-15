@@ -417,6 +417,8 @@ fn every_config_field_is_a_classified_setting() {
         token_rate_limit: _,
         failed_sign_in_limit: _,
         allow_insecure_providers: _,
+        // `[[providers]]` is a record of the file, not a setting (`providers::tests`).
+        providers: _,
     } = config;
     let fields = [
         (BIND, false),

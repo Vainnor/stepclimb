@@ -11,11 +11,15 @@
 //! without it. No error repeats a secret's value or a `_FILE` path, since an operator may have
 //! pasted the secret itself there.
 //!
+//! Identity providers can also be declared in the file as `[[providers]]` tables, which have no
+//! variable ([`providers`], spec 06 B11 to B13).
+//!
 //! A spec that adds configuration adds a [`Setting`] to [`SETTINGS`], its field to [`Config`] and
 //! to `FileKeys` in `file.rs`, and its validation to [`Config::load`]
 //! (`docs/specs/m0/14-compose-deploy.md` B11).
 
 mod file;
+pub mod providers;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -28,6 +32,7 @@ use stepclimb_auth::encryption::KeyRing;
 use tracing_subscriber::EnvFilter;
 
 pub use file::ConfigFile;
+pub use providers::ConfigProvider;
 
 use crate::client_ip::TrustedProxies;
 use crate::rate_limit::Limits;
@@ -186,6 +191,9 @@ pub struct Config {
     /// `false` when unset. Never on in production: it lets an admin reach services on the
     /// server's own host.
     pub allow_insecure_providers: bool,
+    /// `[[providers]]`: the identity providers the file declares, checked, each with its
+    /// client secret (spec 06 B11). `stepclimb serve` writes them to their organizations.
+    pub providers: Vec<ConfigProvider>,
 }
 
 impl fmt::Debug for Config {
@@ -203,6 +211,7 @@ impl fmt::Debug for Config {
             .field("token_rate_limit", &self.token_rate_limit)
             .field("failed_sign_in_limit", &self.failed_sign_in_limit)
             .field("allow_insecure_providers", &self.allow_insecure_providers)
+            .field("providers", &self.providers)
             .finish()
     }
 }
@@ -327,6 +336,11 @@ pub enum ConfigError {
     NotUnicode { name: String },
     #[error("could not read the configuration file {}: {reason}", path.display())]
     Unreadable { path: PathBuf, reason: String },
+    #[error("{}: {error}", path.display())]
+    Provider {
+        path: PathBuf,
+        error: providers::EntryError,
+    },
     #[error("{}{}: {message}", path.display(), line.map(|l| format!(" line {l}")).unwrap_or_default())]
     Toml {
         path: PathBuf,
@@ -401,6 +415,11 @@ impl Config {
             Some((value, origin)) => trusted_proxies(&value, origin)?,
             None => TrustedProxies::none(),
         };
+        let allow_insecure_providers = sources.flag(&ALLOW_INSECURE_PROVIDERS)?;
+        let providers = match file {
+            Some(file) => file_providers(file, allow_insecure_providers)?,
+            None => Vec::new(),
+        };
         let defaults = Limits::DEFAULT;
         Ok(Self {
             file: file.map(|f| f.path().to_path_buf()),
@@ -414,7 +433,8 @@ impl Config {
             sign_in_rate_limit: sources.count(&SIGN_IN_RATE_LIMIT, defaults.sign_in)?,
             token_rate_limit: sources.count(&TOKEN_RATE_LIMIT, defaults.token)?,
             failed_sign_in_limit: sources.count(&FAILED_SIGN_IN_LIMIT, defaults.failed_checks)?,
-            allow_insecure_providers: sources.flag(&ALLOW_INSECURE_PROVIDERS)?,
+            allow_insecure_providers,
+            providers,
         })
     }
 
@@ -451,6 +471,29 @@ impl Config {
         ]
     }
 
+    /// The declared providers as `key (kind)`, `, disabled` added for one that is off, and
+    /// `org <slug>` for one that names its organization, comma-separated; `(none)` when there
+    /// are none. Never a secret.
+    pub fn providers_or_none(&self) -> String {
+        if self.providers.is_empty() {
+            return "(none)".to_owned();
+        }
+        self.providers
+            .iter()
+            .map(|p| {
+                let mut notes = vec![p.kind.as_str().to_owned()];
+                if let Some(org) = &p.org {
+                    notes.push(format!("org {org}"));
+                }
+                if !p.enabled {
+                    notes.push("disabled".to_owned());
+                }
+                format!("{} ({})", p.key, notes.join(", "))
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     /// `trusted_proxies` as it is configured, comma-separated, or `(none)`.
     pub fn trusted_proxies_or_none(&self) -> String {
         if self.trusted_proxies.is_empty() {
@@ -476,6 +519,26 @@ impl Config {
             .collect::<Vec<_>>()
             .join(",")
     }
+}
+
+/// The `[[providers]]` of `file`, checked with the insecure switch `allow_insecure`.
+fn file_providers(
+    file: &ConfigFile,
+    allow_insecure: bool,
+) -> Result<Vec<ConfigProvider>, ConfigError> {
+    let Some((value, origin)) = file.providers() else {
+        return Ok(Vec::new());
+    };
+    providers::parse(value, file, allow_insecure).map_err(|error| match error {
+        providers::ProvidersError::NotArray => ConfigError::Invalid {
+            origin,
+            problem: "must be an array of tables, each written [[providers]]".to_owned(),
+        },
+        providers::ProvidersError::Entry(error) => ConfigError::Provider {
+            path: file.path().to_path_buf(),
+            error,
+        },
+    })
 }
 
 /// The `STEPCLIMB_*` variables of this process. Other variables are not read.

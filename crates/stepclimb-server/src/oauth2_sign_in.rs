@@ -116,7 +116,7 @@ async fn redeem(
         provider_id: provider.id,
     };
     let client_secret = config
-        .client_secret(&state.keys, row)
+        .client_secret(&state.keys, row, state.providers.config_secrets())
         .map_err(|e| ApiError::internal(&e))?;
     let tenancy = organizations::tenancy(&state.db)
         .await

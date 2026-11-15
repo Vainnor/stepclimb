@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO identity_providers\n               (id, org_id, key, kind, config, enabled, created_at, updated_at)\n           VALUES ($1, $2, $3, $4, $5::text::jsonb, $6,\n                   timestamptz 'epoch' + $7::bigint * interval '1 microsecond',\n                   timestamptz 'epoch' + $7::bigint * interval '1 microsecond')\n           ON CONFLICT (org_id, key) DO UPDATE SET\n               kind = EXCLUDED.kind,\n               config = EXCLUDED.config,\n               enabled = EXCLUDED.enabled,\n               updated_at = CASE\n                   WHEN (identity_providers.kind, identity_providers.config,\n                         identity_providers.enabled)\n                        IS DISTINCT FROM (EXCLUDED.kind, EXCLUDED.config, EXCLUDED.enabled)\n                   THEN EXCLUDED.updated_at\n                   ELSE identity_providers.updated_at\n               END\n           RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "identity_providers",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Bool",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "92a3c3ea503f10098c5f9e5d855ec5713cd53462ed9ec5aed8013071d1156872"
+}

@@ -274,6 +274,55 @@ default or secrecy is wrong.
 The three limits have nothing to count until the sign-in and token routes arrive; none exists in
 M0.
 
+
+### Sign-in providers
+
+OpenID Connect and OAuth 2 sign-in providers can be declared in `stepclimb.toml` as
+`[[providers]]` tables; they have no variable. Unlike the settings above, their values use TOML's
+own types: `scopes` is an array and `enabled` a boolean.
+
+```toml
+[[providers]]
+kind = "oauth2"
+key = "vatsim"
+label = "Sign in with VATSIM"
+authorize = "https://auth.vatsim.net/oauth/authorize"
+token = "https://auth.vatsim.net/oauth/token"
+userinfo = "https://auth.vatsim.net/api/user"
+scopes = ["full_name", "vatsim_details", "email"]
+client_id = "<your client id>"
+client_secret_file = "/run/secrets/vatsim_client_secret"
+
+[providers.claims]
+subject = "/data/cid"
+given_name = "/data/personal/name_first"
+family_name = "/data/personal/name_last"
+email = "/data/personal/email"
+attributes.rating = "/data/vatsim/rating/short"
+attributes.subdivision = "/data/vatsim/subdivision/id"
+```
+
+Each entry has `kind` (`oidc` or `oauth2`), `key` (1 to 32 lowercase letters, digits and
+hyphens, part of the redirect URI `<public URL>/auth/<key>/callback` you register at the
+provider), `label`, `enabled` (default `true`), and exactly one of `client_secret` and
+`client_secret_file`. The other members are the provider's config: for `oidc`, `issuer`,
+`client_id`, `scopes`, `claims`, `userinfo` and `allow_local_passkeys`; for `oauth2`, the three
+URLs, `client_id`, `scopes`, `pkce`, `claims` and `allow_local_passkeys`
+(`docs/specs/m0/05-oidc.md` B1, `docs/specs/m0/06-oauth2-and-vatsim-preset.md` B4). On an
+instance with more than one organization, `org = "<slug>"` names the provider's organization.
+
+- The file owns the providers it declares. Every start of `serve` writes them to their
+  organization by `key`, taking over a provider of that key created any other way, and disables
+  (never deletes) one that is no longer in the file, so its users' sign-in links are kept.
+- The client secret is never stored in the database: the server reads it from the file at
+  startup and keeps it in memory.
+- An invalid entry stops the server with exit code 2, naming the entry's position, its key and
+  the member, and never the secret; `check-config` reports the same errors, and prints the
+  providers as `key (kind)`. An `org` that names no organization, or a missing `org` on an
+  instance with several, is found only once `serve` has connected; it also exits 2.
+- On a fresh instance there is no organization to add them to: `serve` logs a warning and starts
+  without them. Restart it after `admin create`.
+
 ## Commands
 
 The image's entry point is the `stepclimb` binary, so Compose runs a command by naming it after
@@ -281,14 +330,15 @@ the service. `--config <path>` works with every command.
 
 | Command | What it does | Exit codes |
 | --- | --- | --- |
-| `serve` | The default: applies pending migrations, then serves HTTP until SIGINT or SIGTERM | 0 on shutdown; 1 when the database, a migration or the listener fails |
+| `serve` | The default: applies pending migrations, writes the `[[providers]]` of `stepclimb.toml`, then serves HTTP until SIGINT or SIGTERM | 0 on shutdown; 2 for a provider entry that fits no organization; 1 when the database, a migration or the listener fails |
 | `migrate` | Applies pending migrations and exits | 0; 1 on a database or migration failure |
 | `check-config` | Checks the configuration without connecting to anything and prints its non-secret values | 0 when valid; 2 when refused |
 | `admin create` | Applies migrations, then creates the organization and its first admin in one transaction | 0; 2 for a refused value or an existing organization; 1 on a database failure |
 | `admin enrollment-link` | Applies migrations, then makes a new one-time enrollment link for an organization's admin and prints it | 0; 2 for an unknown organization or user, a user who is not an Organization admin or can already sign in; 1 on a database failure |
 | `healthcheck` | Asks `/readyz` on the server's `STEPCLIMB_BIND` port; the container health check | 0 when it answers 200; 1 otherwise |
 
-Every command exits 2 when the configuration is refused.
+Every command exits 2 when the configuration is refused, `serve` also when a `[[providers]]`
+entry does not fit the instance's organizations.
 
 ```sh
 docker compose -f deploy/compose/compose.production.yaml run --rm --no-deps stepclimb check-config

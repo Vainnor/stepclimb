@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! `stepclimb serve` (connect, migrate, sync the built-in roles and the `unlimited` plan, give
-//! every organization a plan and its local provider row, start the sign-in flow cleanup,
-//! listen) and `stepclimb migrate` (connect, migrate, exit).
+//! every organization a plan and its local provider row, write the providers of
+//! `stepclimb.toml`, start the sign-in flow cleanup, listen) and `stepclimb migrate` (connect, migrate, exit).
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -22,9 +22,11 @@ use stepclimb_core::{
 };
 use tokio::net::TcpListener;
 
+use stepclimb_auth::provider_config::ConfigSecrets;
+
 use crate::{
-    AppState, Config, flow, password_hasher::PasswordHasher, providers::Providers,
-    rate_limit::RateLimiter, router,
+    AppState, Config, config_providers, flow, password_hasher::PasswordHasher,
+    providers::Providers, rate_limit::RateLimiter, router,
 };
 
 /// How long a request waits for a database connection from the pool.
@@ -62,6 +64,20 @@ pub enum StartupError {
     Serve(#[source] std::io::Error),
     #[error(transparent)]
     ProviderClient(#[from] stepclimb_auth::outbound::BuildError),
+    #[error(transparent)]
+    ConfigProviders(#[from] config_providers::ApplyError),
+}
+
+impl StartupError {
+    /// The process exit code: 2 when a `[[providers]]` entry does not fit the instance, as for
+    /// any refused configuration; 1 otherwise.
+    #[must_use]
+    pub fn exit_code(&self) -> u8 {
+        match self {
+            Self::ConfigProviders(config_providers::ApplyError::Entry(_)) => 2,
+            _ => 1,
+        }
+    }
 }
 
 /// Open the connection pool.
@@ -219,6 +235,7 @@ pub fn log_configuration(config: &Config) {
         token_rate_limit = %config.token_rate_limit,
         failed_sign_in_limit = %config.failed_sign_in_limit,
         allow_insecure_providers = %config.allow_insecure_providers,
+        providers = %config.providers_or_none(),
         "configuration loaded"
     );
 }
@@ -241,6 +258,13 @@ pub async fn serve(config: Config) -> Result<(), StartupError> {
     let pool = connect(&config.database_url).await?;
     let clock = Clock::system();
     prepare(&pool, &clock).await?;
+    let config_secrets = config_providers::apply(
+        &pool,
+        &config.providers,
+        config.allow_insecure_providers,
+        clock.now(),
+    )
+    .await?;
     let listener = TcpListener::bind(config.bind)
         .await
         .map_err(|source| StartupError::Bind {
@@ -249,23 +273,34 @@ pub async fn serve(config: Config) -> Result<(), StartupError> {
         })?;
     tracing::info!(addr = %config.bind, "listening");
     flow::spawn_cleanup(pool.clone(), clock.clone());
-    serve_on(listener, config, pool, clock, router, shutdown_signal()).await
+    serve_on(
+        listener,
+        config,
+        config_secrets,
+        pool,
+        clock,
+        router,
+        shutdown_signal(),
+    )
+    .await
 }
 
-/// Build the application state from `config`, `db` and `clock`, with the rate limiter `config`
-/// sets, and serve `app(state)` on `listener` until `shutdown` completes. Each request carries
+/// Build the application state from `config`, the secrets of the providers `stepclimb.toml`
+/// declares, `db` and `clock`, with the rate limiter `config` sets, and serve `app(state)` on `listener` until `shutdown` completes. Each request carries
 /// its TCP peer's address (`ConnectInfo<SocketAddr>`), which the rate limits start from.
 /// [`serve`] passes [`router`]; a test passes a router with a rate-limited route.
 pub async fn serve_on(
     listener: TcpListener,
     config: Config,
+    config_secrets: ConfigSecrets,
     db: PgPool,
     clock: Clock,
     app: impl FnOnce(AppState) -> Router,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), StartupError> {
     let rate_limits = RateLimiter::new(config.limits(), config.trusted_proxies.clone());
-    let providers = Providers::new(config.allow_insecure_providers)?;
+    let providers =
+        Providers::new(config.allow_insecure_providers)?.with_config_secrets(config_secrets);
     let state = AppState {
         db,
         clock,

@@ -15,6 +15,10 @@
 //! | `claims` | an object with `subject`, a JSON Pointer, and optional `given_name`, `family_name`, `email`, `email_verified`, `groups` pointers and `attributes`, an object of names to pointers | refused |
 //! | `allow_local_passkeys` | a boolean: whether users who sign in through this provider may also add passkeys (`04-local-accounts.md` B13) | `false` |
 //!
+//! A provider declared in `stepclimb.toml` is validated the same way, then stored with
+//! [`Oauth2Config::from_config_file`]: no secret in the row, `source: "config"` in its place
+//! (`crate::provider_config`).
+//!
 //! Any other member is refused, so a misspelled one cannot be silently ignored. A profile field
 //! with no pointer is not mapped: unlike OIDC, a userinfo body has no standard shape, so there
 //! are no defaults to fall back on. Mapping a userinfo body is [`Oauth2Claims::map`], over the
@@ -34,13 +38,13 @@ use serde_json::{Map, Value};
 
 pub use crate::claims::MappedSignIn;
 use crate::claims::{self, ProfileMapping, SubjectMissing};
-use crate::encryption::{DecryptError, EncryptError, KeyRing};
+use crate::encryption::{EncryptError, KeyRing};
 use crate::json_pointer::JsonPointer;
 use crate::outbound::UrlPolicy;
 use crate::provider_config::walk;
 pub use crate::provider_config::{
-    ClientSecret, ConfigErrors, ConfigProblem, DraftSecret, ProviderRow, SealedSecret,
-    StoredConfigError, code,
+    ClientSecret, ConfigErrors, ConfigProblem, ConfigSecrets, DraftSecret, ProviderRow,
+    SealedSecret, SecretError, StoredConfigError, StoredSecret, code,
 };
 
 /// Where a config's claims come from: JSON Pointers into the userinfo body (B6).
@@ -91,11 +95,11 @@ pub struct Oauth2ConfigDraft {
     pub secret: DraftSecret,
 }
 
-/// A config as stored: its settings and its sealed secret.
+/// A config as stored: its settings and where its secret is.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Oauth2Config {
     pub settings: Oauth2Settings,
-    secret: SealedSecret,
+    secret: StoredSecret,
 }
 
 impl fmt::Debug for Oauth2Config {
@@ -122,7 +126,7 @@ impl Oauth2ConfigDraft {
     pub fn seal(self, ring: &KeyRing, row: ProviderRow) -> Result<Oauth2Config, EncryptError> {
         Ok(Oauth2Config {
             settings: self.settings,
-            secret: SealedSecret::from_draft(self.secret, ring, row)?,
+            secret: StoredSecret::Sealed(SealedSecret::from_draft(self.secret, ring, row)?),
         })
     }
 }
@@ -153,7 +157,7 @@ impl Oauth2Config {
         config.insert("token".into(), s.token.as_str().into());
         config.insert("userinfo".into(), s.userinfo.as_str().into());
         config.insert("client_id".into(), s.client_id.as_str().into());
-        config.insert("client_secret".into(), walk::sealed_json(&self.secret));
+        walk::insert_stored_secret(&mut config, &self.secret);
         config.insert("scopes".into(), s.scopes.clone().into());
         config.insert("pkce".into(), s.pkce.into());
         config.insert("claims".into(), Value::Object(claims));
@@ -171,20 +175,37 @@ impl Oauth2Config {
         parse::stored(config)
     }
 
-    /// The sealed secret, for a change that keeps it ([`validate`]'s `stored`).
+    /// The config of a provider `stepclimb.toml` declares: `settings` validated by [`validate`],
+    /// with the secret left to [`ConfigSecrets`]. Its [`Oauth2Config::to_json`] has `source:
+    /// "config"` and no `client_secret`.
     #[must_use]
-    pub fn sealed_secret(&self) -> SealedSecret {
-        self.secret.clone()
+    pub fn from_config_file(settings: Oauth2Settings) -> Self {
+        Self {
+            settings,
+            secret: StoredSecret::ConfigFile,
+        }
     }
 
-    /// Open the client secret, for the token request. It fails when the value was sealed to
-    /// another row or under a key no longer in the ring.
+    /// The sealed secret, for a change that keeps it ([`validate`]'s `stored`); `None` for a
+    /// provider `stepclimb.toml` declares.
+    #[must_use]
+    pub fn sealed_secret(&self) -> Option<SealedSecret> {
+        match &self.secret {
+            StoredSecret::Sealed(sealed) => Some(sealed.clone()),
+            StoredSecret::ConfigFile => None,
+        }
+    }
+
+    /// The client secret, for the token request: opened from the row, or, for a provider
+    /// `stepclimb.toml` declares, taken from `config`. It fails when the value was sealed to
+    /// another row or under a key no longer in the ring, or `config` holds none for the row.
     pub fn client_secret(
         &self,
         ring: &KeyRing,
         row: ProviderRow,
-    ) -> Result<ClientSecret, DecryptError> {
-        self.secret.open(ring, row)
+        config: &ConfigSecrets,
+    ) -> Result<ClientSecret, SecretError> {
+        self.secret.open(ring, row, config)
     }
 }
 
