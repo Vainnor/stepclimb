@@ -297,7 +297,7 @@ also writes to:
   | `passkey.delete` | `passkey` | `passkeys::delete` (`04` issue 5) | `before`: user, name |
   | `password.set` | `password` (the user's id: a password has no row id of its own) | `local_logins::set_password` (`04` issue 6) | `after`: user; never the hash |
   | `totp.enable` | `totp` (the user's id) | `local_totp::confirm` (`04` issue 7) | `after`: user; never the secret or a recovery code |
-  | `totp.disable` | `totp` (the user's id) | `local_totp::disable` (`04` issue 7) | `before`: user |
+  | `totp.disable` | `totp` (the user's id) | `local_totp::disable` (`04` issue 7; an administrator's removal, `04` issue 9, with the administrator as actor) | `before`: user |
   | `service_account.create` | `service_account` | `service_accounts::create` (`08` I6) | `after`: name, kind, owner, scopes; never the key or its hash |
   | `service_account.delete` | `service_account` | `service_accounts::delete` (`08` I6) | `before`: the same |
   | `admission_webhook.create` | `admission_webhook` | `admission_webhooks::save` (`07` issue 5) | `after`: url, enabled; never the secret |

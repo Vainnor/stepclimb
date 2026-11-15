@@ -175,6 +175,8 @@ pub struct LocalMethods {
     pub password: bool,
     pub totp: bool,
     pub magic_link: bool,
+    /// Every password sign-in needs a TOTP code.
+    pub totp_required: bool,
 }
 
 /// A partial change to the organization settings: one optional member per setting this route

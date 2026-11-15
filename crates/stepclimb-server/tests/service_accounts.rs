@@ -692,8 +692,8 @@ async fn t15_t16_a_valid_key_skips_csrf_and_outranks_a_cookie(pool: PgPool) {
 }
 
 /// Spec 08 B44, spec 03 B6: an API key, whatever its scopes, cannot change its owner's email
-/// or status, link or remove its owner's identities, or create an enrollment link for anyone
-/// (403 `auth.session_required`); nothing changes. The same key may still change another
+/// or status, link or remove its owner's identities, remove its owner's TOTP, or create an
+/// enrollment link for anyone (403 `auth.session_required`); nothing changes. The same key may still change another
 /// user's email.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn a_key_cannot_take_over_its_owner_through_the_admin_routes(pool: PgPool) {
@@ -737,6 +737,11 @@ async fn a_key_cannot_take_over_its_owner_through_the_admin_routes(pool: PgPool)
         (
             Method::POST,
             format!("/api/v1/admin/users/{pat}/enrollment-links"),
+            None,
+        ),
+        (
+            Method::DELETE,
+            format!("/api/v1/admin/users/{kim}/totp"),
             None,
         ),
     ];
@@ -1033,6 +1038,7 @@ async fn the_every_permission_rule_reads_a_keys_narrowed_grants(pool: PgPool) {
     let local = || {
         json!({
             "enabled": true, "passkey": true, "password": true, "totp": false, "magic_link": false,
+            "totp_required": false,
         })
     };
     let admission_path = "/api/v1/admin/admission";

@@ -5,7 +5,9 @@
 // the step at the return target the server answers. Without the address in the history entry (a
 // link opened directly) it goes back to the email step. When the organization offers passkeys
 // too, the step links to the passkey step. A right password for an account with TOTP answers
-// `{next: "totp"}` and no session (04-local-accounts B15): the step goes on to `/sign-in/totp`.
+// `{next: "totp"}` and no session (04-local-accounts B15): the step goes on to `/sign-in/totp`. While
+// the organization requires TOTP, an account without it answers `{next: "totp_enroll"}` with the
+// secret to set up: the step keeps the secret in memory and goes on to `/sign-in/totp-setup`.
 // When that step needs the password again, it comes back here with the reason in the history
 // entry's state, shown once above the form and focused.
 import {
@@ -27,6 +29,7 @@ import type { SignInSearch } from "../router";
 import { useCompleteSignIn } from "../sign-in/complete";
 import { discoveryQuery, emailMethods, useOrganizationName } from "../sign-in/discovery";
 import { useLocationHere } from "../sign-in/location-here";
+import { holdSetup } from "../sign-in/pending-setup";
 import { passwordAgainMessage, signInProblem } from "../sign-in/problems";
 
 export function SignInPasswordView() {
@@ -61,6 +64,11 @@ function PasswordStep({ email, search }: { email: string; search: SignInSearch }
   const submit = useMutation({
     mutationFn: (entered: string) => signIn(email, entered, search.return_to),
     onSuccess: async (answer) => {
+      if ("next" in answer && answer.next === "totp_enroll" && "secret" in answer) {
+        holdSetup({ otpauthUri: answer.otpauth_uri, secret: answer.secret });
+        await router.navigate({ to: "/sign-in/totp-setup", search, state: { email } });
+        return;
+      }
       if ("next" in answer) {
         await router.navigate({ to: "/sign-in/totp", search, state: { email } });
         return;

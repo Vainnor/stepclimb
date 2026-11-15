@@ -13,6 +13,8 @@ const EMAIL = "avery@example.test";
 /** The user the password test adds, and the passphrase they set: a throwaway stack's test data. */
 const PASSWORD_USER = "blake@example.test";
 const PHRASE = "plinth harbor lantern 7342";
+/** The user the required-TOTP test adds; they set the same passphrase. */
+const SET_UP_USER = "casey@example.test";
 
 /** axe's WCAG 2.2 AA violations on the whole page, one line per node. */
 async function violations(page: Page): Promise<string[]> {
@@ -615,6 +617,115 @@ test.describe
         });
       } finally {
         await context.close();
+      }
+    });
+
+    // TOTP required by the organization (04 B15, Q11 (a)) end to end: the admin adds a user with a
+    // password and turns the requirement on through the public API; the user's password sign-in
+    // sets TOTP up on the screen (a wrong code first, then the app's), sees the recovery codes once
+    // and lands signed in. The admin then removes the user's TOTP, and turns the requirement off.
+    test("set up a required TOTP during sign-in (04 B15, Q11)", async ({ page, browser }) => {
+      expect(passkey, "an earlier test left the admin a passkey").toBeDefined();
+      const authenticator = await addVirtualAuthenticator(page, passkey);
+      await page.goto("/sign-in");
+      await page.getByRole("textbox", { name: "Email" }).fill(EMAIL);
+      await page.getByRole("button", { name: "Continue" }).click();
+      await page.getByRole("button", { name: "Sign in with a passkey" }).click();
+      await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
+      [passkey] = await authenticator.credentials();
+
+      const casey = await page.evaluate(async (email) => {
+        const created = await fetch("/api/v1/users", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ display_name: "Casey Example", email }),
+        });
+        const user = await created.json();
+        const issued = await fetch(`/api/v1/admin/users/${user.id}/enrollment-links`, {
+          method: "POST",
+        });
+        return { id: user.id as string, status: issued.status, ...(await issued.json()) };
+      }, SET_UP_USER);
+      expect(casey.status).toBe(201);
+      /** Turns the requirement on or off as the admin, keeping every other switch. */
+      const requireTotp = (on: boolean) =>
+        page.evaluate(async (on) => {
+          const current = await (await fetch("/api/v1/admin/local-sign-in")).json();
+          const answer = await fetch("/api/v1/admin/local-sign-in", {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ ...current, totp_required: on }),
+          });
+          return { status: answer.status, ...(await answer.json()) };
+        }, on);
+
+      const context = await browser.newContext();
+      const learner = await context.newPage();
+      try {
+        await learner.goto("/sign-in");
+        const token = new URL(casey.url).hash.replace(/^#token=/, "");
+        const enrolled = await learner.evaluate(
+          async ({ token, password }) =>
+            (
+              await fetch("/auth/local/enrollment/password", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ token, password }),
+              })
+            ).status,
+          { token, password: PHRASE },
+        );
+        expect(enrolled).toBe(200);
+        await context.clearCookies();
+        const required = await requireTotp(true);
+        expect([required.status, required.totp_required]).toEqual([200, true]);
+
+        await learner.goto("/sign-in?return_to=%2Faccount");
+        await learner.getByRole("textbox", { name: "Email" }).fill(SET_UP_USER);
+        await learner.getByRole("button", { name: "Continue" }).click();
+        await learner.getByRole("link", { name: "Sign in with a password instead" }).click();
+        await learner.getByLabel("Password").fill(PHRASE);
+        const started = answerOf(learner, "/auth/local/password");
+        await learner.getByRole("button", { name: "Sign in" }).click();
+        expect((await started).status()).toBe(200);
+        await expect(
+          learner.getByRole("heading", { level: 1, name: "Set up a code from an app" }),
+        ).toBeVisible();
+        expect((await learner.request.get("/api/v1/me")).status()).toBe(401);
+        expect(learner.url()).not.toContain("secret");
+        const text = await learner.locator('[data-slot="totp-setup-key"] code').textContent();
+        const secret = base32(text ?? "");
+        expect(await violations(learner)).toEqual([]);
+
+        const refused = answerOf(learner, "/auth/local/totp/enrollment");
+        await learner.getByRole("textbox", { name: /^Code/ }).fill(wrongCode(secret));
+        await learner.getByRole("button", { name: "Turn on and sign in" }).click();
+        expect((await refused).status()).toBe(401);
+        await expect(learner.getByRole("alert")).toContainText("That code did not work.");
+
+        const accepted = answerOf(learner, "/auth/local/totp/enrollment");
+        await learner.getByRole("textbox", { name: /^Code/ }).fill(totp(secret, 0));
+        await learner.getByRole("button", { name: "Turn on and sign in" }).click();
+        expect((await accepted).status()).toBe(200);
+        await expect(
+          learner.getByRole("heading", { level: 1, name: "Save your recovery codes" }),
+        ).toBeFocused();
+        await expect(learner.getByRole("listitem")).toHaveCount(10);
+        expect(await violations(learner)).toEqual([]);
+        await learner.getByRole("button", { name: "Continue" }).click();
+        await expect(learner.getByRole("heading", { level: 1, name: "Account" })).toBeVisible();
+
+        const removed = await page.evaluate(
+          async (id) =>
+            (await fetch(`/api/v1/admin/users/${id}/totp`, { method: "DELETE" })).status,
+          casey.id,
+        );
+        expect(removed).toBe(204);
+      } finally {
+        await context.close();
+        // Back to the organization's default, so no later test meets the requirement.
+        const restored = await requireTotp(false);
+        expect([restored.status, restored.totp_required]).toEqual([200, false]);
       }
     });
 

@@ -97,6 +97,7 @@ pub mod spa;
 pub mod startup;
 pub mod timestamp;
 pub mod totp;
+pub mod totp_enrollment;
 pub mod users;
 pub mod web_origin;
 

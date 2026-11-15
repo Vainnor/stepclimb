@@ -14,7 +14,8 @@
 //! so a `PUT` it passes as changing nothing cannot change something by the time it writes.
 //!
 //! The repository's `local_sign_in::update` refuses the rest under the same lock: the magic
-//! link, which needs email (M1; 422 `local.magic_link_needs_email`), and a change that would
+//! link, which needs email (M1; 422 `local.magic_link_needs_email`), `totp_required` on while
+//! the password or TOTP is off (422 `local.totp_required_needs_totp`), and a change that would
 //! leave the organization no primary way to sign in (409 `local.last_method`, B2): no offered
 //! passkey, password or magic link (TOTP is only a second step) and no enabled provider that is
 //! not local. Disabling the local row counts as such a change.
@@ -53,6 +54,8 @@ pub mod code {
     pub const AUTH_METHOD_DISABLED: &str = "auth.method_disabled";
     /// In a 422's `errors`: the magic link cannot be switched on before email exists (M1).
     pub const LOCAL_MAGIC_LINK_NEEDS_EMAIL: &str = "local.magic_link_needs_email";
+    /// In a 422's `errors`: TOTP can be required only while the password and TOTP are on.
+    pub const LOCAL_TOTP_REQUIRED_NEEDS_TOTP: &str = "local.totp_required_needs_totp";
     /// The change would leave the organization no primary way to sign in (409).
     pub const LOCAL_LAST_METHOD: &str = "local.last_method";
 }
@@ -60,7 +63,7 @@ pub mod code {
 problem_responses! {
     LocalSignInForbidden => "`permission.denied`: the caller does not hold `provider.manage` at organization scope. `permission.escalation`: the change affects how every user signs in, and the caller does not hold every catalog permission at organization scope. `auth.csrf_refused`: the request did not come from this site.",
     LocalSignInConflict => "`local.last_method`: the change would leave the organization no way to sign in: no offered passkey, password or magic link (TOTP is only a second step), and no enabled outside provider.",
-    LocalSignInInvalid => "`request.invalid`: the change breaks a rule; `errors` lists each one. `local.magic_link_needs_email` marks `magic_link` switched on while the server cannot send email.",
+    LocalSignInInvalid => "`request.invalid`: the change breaks a rule; `errors` lists each one. `local.magic_link_needs_email` marks `magic_link` switched on while the server cannot send email. `local.totp_required_needs_totp` marks `totp_required` on while `password` or `totp` is off.",
 }
 
 /// The organization's local sign-in: whether it is on at all, and each method's switch. A method
@@ -78,6 +81,10 @@ pub struct LocalSignIn {
     pub totp: bool,
     /// Sign-in with a link sent by email. Off until the server can send email.
     pub magic_link: bool,
+    /// Every password sign-in needs a TOTP code: a user without TOTP sets it up at their next
+    /// password sign-in, before they get a session. Needs `password` and `totp` on. Turning it
+    /// off keeps the TOTP users already set up.
+    pub totp_required: bool,
 }
 
 impl From<CoreLocalSignIn> for LocalSignIn {
@@ -87,6 +94,7 @@ impl From<CoreLocalSignIn> for LocalSignIn {
             password,
             totp,
             magic_link,
+            totp_required,
         } = local.methods;
         Self {
             enabled: local.enabled,
@@ -94,6 +102,7 @@ impl From<CoreLocalSignIn> for LocalSignIn {
             password,
             totp,
             magic_link,
+            totp_required,
         }
     }
 }
@@ -107,6 +116,7 @@ impl From<LocalSignIn> for CoreLocalSignIn {
                 password: body.password,
                 totp: body.totp,
                 magic_link: body.magic_link,
+                totp_required: body.totp_required,
             },
         }
     }
@@ -230,6 +240,10 @@ fn local_error(error: repo::Error) -> ApiError {
             &["magic_link"],
             code::LOCAL_MAGIC_LINK_NEEDS_EMAIL,
         )]),
+        repo::Error::TotpRequiredNeedsTotp => ApiError::invalid(vec![FieldError::at(
+            &["totp_required"],
+            code::LOCAL_TOTP_REQUIRED_NEEDS_TOTP,
+        )]),
         repo::Error::LastMethod => ApiError::new(
             StatusCode::CONFLICT,
             code::LOCAL_LAST_METHOD,
@@ -256,6 +270,7 @@ mod tests {
             password: false,
             totp: true,
             magic_link: false,
+            totp_required: true,
         };
         assert_eq!(LocalSignIn::from(CoreLocalSignIn::from(body)), body);
     }
@@ -263,12 +278,19 @@ mod tests {
     #[test]
     fn a_body_must_name_every_switch_and_nothing_else() {
         let full = serde_json::json!({
-            "enabled": true, "passkey": true, "password": true, "totp": true, "magic_link": false
+            "enabled": true, "passkey": true, "password": true, "totp": true, "magic_link": false,
+            "totp_required": false
         });
         assert!(serde_json::from_value::<LocalSignIn>(full.clone()).is_ok());
         let mut missing = full.clone();
         missing.as_object_mut().unwrap().remove("totp");
         assert!(serde_json::from_value::<LocalSignIn>(missing).is_err());
+        let mut no_requirement = full.clone();
+        no_requirement
+            .as_object_mut()
+            .unwrap()
+            .remove("totp_required");
+        assert!(serde_json::from_value::<LocalSignIn>(no_requirement).is_err());
         let mut extra = full.clone();
         extra["sso"] = true.into();
         assert!(serde_json::from_value::<LocalSignIn>(extra).is_err());
@@ -286,6 +308,10 @@ mod tests {
         );
         assert_eq!(magic.errors[0].field, "/magic_link");
         assert_eq!(magic.errors[0].code, "local.magic_link_needs_email");
+        let required = local_error(repo::Error::TotpRequiredNeedsTotp).problem();
+        assert_eq!(required.status, 422);
+        assert_eq!(required.errors[0].field, "/totp_required");
+        assert_eq!(required.errors[0].code, "local.totp_required_needs_totp");
         let last = local_error(repo::Error::LastMethod).problem();
         assert_eq!(
             (last.status, last.code.as_str()),

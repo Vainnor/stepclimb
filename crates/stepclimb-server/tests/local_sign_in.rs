@@ -70,7 +70,10 @@ fn assert_schema(name: &str, value: &Value) {
 
 /// The switches a new organization has.
 fn defaults() -> Value {
-    json!({ "enabled": true, "passkey": true, "password": true, "totp": true, "magic_link": false })
+    json!({
+        "enabled": true, "passkey": true, "password": true, "totp": true, "magic_link": false,
+        "totp_required": false
+    })
 }
 
 #[derive(Debug)]
@@ -378,7 +381,10 @@ async fn the_settings_route_reads_the_switches_and_refuses_to_write_them(pool: P
     let read = f.send(Method::GET, SETTINGS, &admin, None).await;
     assert_eq!(
         read.body["local_sign_in"],
-        json!({ "passkey": true, "password": true, "totp": true, "magic_link": false })
+        json!({
+            "passkey": true, "password": true, "totp": true, "magic_link": false,
+            "totp_required": false
+        })
     );
     assert_schema("OrgSettings", &read.body);
 
@@ -549,4 +555,60 @@ async fn totp_without_the_password_is_not_offered(pool: PgPool) {
 
     f.put(&admin, defaults()).await;
     assert!(require_method(&f.pool, s, LocalMethod::Totp).await.is_ok());
+}
+
+/// Q11 (a): requiring TOTP is a change to how every password user signs in, so it takes the
+/// same escalation rule as the switches; an admin turns it on (audited), and it is refused
+/// (422 at `/totp_required`, nothing written) while the password or TOTP is off.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn requiring_totp_needs_every_permission_and_the_password_and_totp(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let mut required = defaults();
+    required["totp_required"] = true.into();
+
+    let holder = f.holder(&[ProviderManage::KEY]).await;
+    let before = f.snapshot().await;
+    let refused = f.put(&holder, required.clone()).await;
+    assert_eq!(
+        (refused.status, refused.code()),
+        (StatusCode::FORBIDDEN, "permission.escalation"),
+        "{refused:?}"
+    );
+    assert_eq!(f.snapshot().await, before);
+
+    let admin = f.admin().await;
+    for off in ["password", "totp"] {
+        let mut broken = required.clone();
+        broken[off] = false.into();
+        let before = f.snapshot().await;
+        let refused = f.put(&admin, broken).await;
+        assert_eq!(
+            (refused.status, refused.code()),
+            (StatusCode::UNPROCESSABLE_ENTITY, "request.invalid"),
+            "{off}: {refused:?}"
+        );
+        assert_eq!(refused.body["errors"][0]["field"], "/totp_required");
+        assert_eq!(
+            refused.body["errors"][0]["code"],
+            "local.totp_required_needs_totp"
+        );
+        assert_eq!(f.snapshot().await, before, "{off}");
+    }
+
+    let changed = f.put(&admin, required.clone()).await;
+    assert_eq!(changed.status, StatusCode::OK, "{changed:?}");
+    assert_eq!(changed.body, required);
+    assert!(
+        local_sign_in::get(&f.pool, scope(f.org))
+            .await
+            .unwrap()
+            .requires_totp()
+    );
+    let entries = audit::list(&f.pool, scope(f.org), 100).await.unwrap();
+    let last = entries.last().unwrap();
+    assert_eq!(last.action, "organization.update_settings");
+    assert_eq!(last.data["after"]["local_sign_in"]["totp_required"], true);
+    // The same body again changes nothing, so `provider.manage` alone may send it.
+    let unchanged = f.put(&holder, required).await;
+    assert_eq!(unchanged.status, StatusCode::OK, "{unchanged:?}");
 }

@@ -743,6 +743,35 @@ list, provider buttons, the callback error and the password step that I5 left):
   vZDC example brand (its rules from the token build, since changing the stack's branding would
   reach every other test).
 
+Coordinator decisions (2026-11-16), on the owner's delegation, while building issue #192 (TOTP
+required by the organization, 04 B15's I9 decisions):
+
+- **The set-up step (B16, B17).** A right password answering `{next: "totp_enroll", otpauth_uri,
+  secret}` sends the password step to `/sign-in/totp-setup` with the address in the history
+  entry's state. The secret and the setup link travel in memory only (`sign-in/pending-setup.ts`),
+  never in the URL or the history entry's state, which the browser may keep on disk; the step
+  reads them once. Arriving without them (a reload, a typed URL with an address) replaces the
+  entry with the password step carrying `auth.flow_invalid`, so a new password sign-in answers a
+  new secret; without an address it goes to the email step. The step shows the setup key and
+  the `otpauth://` link as text in `Code` (no QR code in M0), then a code field
+  (`autocomplete="one-time-code"`, `inputmode="numeric"`) and "Turn on and sign in", which posts
+  `{code}` to `POST /auth/local/totp/enrollment`. A wrong code (`auth.totp_invalid`) stays on the
+  step with its own message, since the server keeps the set-up waiting; `auth.flow_invalid` and
+  `auth.flow_expired` go back to the password step with the reason as the TOTP step does; other
+  failures stay with the TOTP step's messages.
+- **The recovery codes.** The answer signs the user in and carries ten recovery codes: the view
+  replaces the form, in place, with "Save your recovery codes", the codes in a list (one column
+  under the `sm` breakpoint, two above, so a code never breaks across lines at 375 px) and
+  Continue, which opens the return target the server answered. Focus moves to the new `h1`, as a
+  navigation would. The codes are shown this once.
+- **End to end.** `web/e2e/sign-in.spec.ts` adds a user with a password through the public API,
+  turns the requirement on as the admin, sets TOTP up on the screen (a wrong code, then the app's
+  code computed from the setup key), sees the codes and lands on the return target; the admin then
+  removes the user's TOTP through `DELETE /api/v1/admin/users/{user_id}/totp` and turns the
+  requirement off. `web/e2e/sign-in-methods.spec.ts` runs axe on the set-up step, its refusal and
+  the recovery codes with synthetic answers, in both brands, light, dark and high contrast, at
+  1280 and 375 px, and checks the set-up code field is at least 16 px on a phone.
+
 Coordinator decisions (2026-11-15), on the owner's delegation, while building issue #162 (the
 organization default appearance, 12 B27):
 

@@ -686,3 +686,119 @@ describe("the TOTP step (04 B15, B20, B21; 11 B16, B17)", () => {
     expect(apiRequests(fetch)).toEqual([]);
   });
 });
+
+describe("TOTP set-up during sign-in (04 B15, Q11 (a); 11 B16, B17)", () => {
+  const secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
+  const uri = `otpauth://totp/Example%20Training:avery%40example.test?secret=${secret}&issuer=Example%20Training&algorithm=SHA1&digits=6&period=30`;
+  const needsSetUp = {
+    "POST /auth/local/password": () => json({ next: "totp_enroll", otpauth_uri: uri, secret }),
+  };
+  const codes = Array.from(
+    { length: 10 },
+    (_, i) => `AAAA-BBBB-CCCC-DD${String(i).padStart(2, "0")}`,
+  );
+
+  async function reachSetUp(path = "/sign-in") {
+    const app = renderApp(path);
+    const user = await enterEmail();
+    await enterPassword(user, "correct horse battery");
+    await screen.findByRole("heading", { level: 1, name: "Set up a code from an app" });
+    return { app, user };
+  }
+
+  async function enterCode(user: ReturnType<typeof userEvent.setup>, code: string) {
+    await user.type(screen.getByRole("textbox", { name: /^Code/ }), code);
+    await user.click(screen.getByRole("button", { name: "Turn on and sign in" }));
+  }
+
+  it("shows the setup key and link, keeps the secret out of the history, and signs no one in", async () => {
+    const fetch = stubServer({ ...passwordOnly, ...needsSetUp });
+    const { app } = await reachSetUp("/sign-in?return_to=%2Fcourses");
+    expect(app.router.state.location.pathname).toBe("/sign-in/totp-setup");
+    expect(app.router.state.location.search).toEqual({ return_to: "/courses" });
+    expect(JSON.stringify(app.router.state.location.state)).not.toContain(secret);
+    expect(app.router.state.location.href).not.toContain(secret);
+    expect(requestsTo(fetch, "/api/v1/me")).toEqual([]);
+    expect(screen.getByText(secret)).toBeInTheDocument();
+    expect(screen.getByText(uri)).toBeInTheDocument();
+    const input = screen.getByRole("textbox", { name: /^Code/ });
+    expect(input).toHaveAttribute("autocomplete", "one-time-code");
+    expect(input).toHaveAttribute("inputmode", "numeric");
+  });
+
+  it("stays after a wrong code, then shows the recovery codes once and opens the return target", async () => {
+    let sent = 0;
+    const fetch = stubServer({
+      ...passwordOnly,
+      ...needsSetUp,
+      "POST /auth/local/totp/enrollment": () =>
+        ++sent === 1
+          ? problem(401, "auth.totp_invalid", "Refused")
+          : json({ return_to: "/?tab=2", recovery_codes: codes }),
+      "GET /api/v1/me": me,
+    });
+    const { app, user } = await reachSetUp("/sign-in?return_to=%2F%3Ftab%3D2");
+    await enterCode(user, "000000");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "That code did not work. Check that your device's clock is right",
+    );
+    expect(app.router.state.location.pathname).toBe("/sign-in/totp-setup");
+
+    const field = screen.getByRole("textbox", { name: /^Code/ });
+    await user.clear(field);
+    await enterCode(user, "123456");
+    const heading = await screen.findByRole("heading", {
+      level: 1,
+      name: "Save your recovery codes",
+    });
+    await waitFor(() => expect(heading).toHaveFocus());
+    const list = screen.getByRole("list");
+    expect(
+      within(list)
+        .getAllByRole("listitem")
+        .map((item) => item.textContent),
+    ).toEqual(codes);
+    expect(await bodyOf(fetch, "/auth/local/totp/enrollment")).toEqual({ code: "000000" });
+    expect(screen.queryByText(secret)).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeInTheDocument();
+    expect(app.router.state.location.href).toBe("/?tab=2");
+  });
+
+  it.each([
+    ["auth.flow_expired", 400, "The sign-in took too long to finish. Enter your password again"],
+    [
+      "auth.flow_invalid",
+      400,
+      "This sign-in was already finished or replaced by one in another tab.",
+    ],
+  ])("after %s, goes back to the password step with the reason", async (code, status, message) => {
+    stubServer({
+      ...passwordOnly,
+      ...needsSetUp,
+      "POST /auth/local/totp/enrollment": () => problem(status, code, "Refused"),
+    });
+    const { app, user } = await reachSetUp();
+    await enterCode(user, "123456");
+    await screen.findByRole("heading", { level: 1, name: "Enter your password" });
+    expect(screen.getByRole("alert")).toHaveTextContent(message);
+    expect(app.router.state.location.state.email).toBe("avery@example.test");
+  });
+
+  it("goes back to the password step when the secret is gone (a reload)", async () => {
+    const fetch = stubServer(passwordOnly);
+    const app = renderApp("/sign-in/totp-setup", { email: "avery@example.test" });
+    await screen.findByRole("heading", { level: 1, name: "Enter your password" });
+    expect(app.router.state.location.pathname).toBe("/sign-in/password");
+    expect(screen.getByRole("alert")).toHaveTextContent("Enter your password again.");
+    expect(requestsTo(fetch, "/auth/local/totp/enrollment")).toEqual([]);
+  });
+
+  it("goes back to the email step when opened without an address", async () => {
+    stubServer(passwordOnly);
+    const app = renderApp("/sign-in/totp-setup");
+    expect(await screen.findByRole("textbox", { name: "Email" })).toBeInTheDocument();
+    expect(app.router.state.location.pathname).toBe("/sign-in");
+  });
+});

@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! TOTP over the router (docs/specs/m0/04-local-accounts.md B2, B15, B18 to B21, B24, T8, T11,
-//! T15, T17). The permission suite's cases for the `/api/v1/me/totp` routes and
-//! `POST /auth/local/totp` are in `tests/permissions.rs`, and the rate limit walk over every
-//! route that documents a 429 in `tests/enrollment.rs`.
+//! T15, T17), with the organization's requirement of it (Q11 (a)): set-up during sign-in and an
+//! administrator's removal. The permission suite's cases for the `/api/v1/me/totp` routes,
+//! `POST /auth/local/totp`, `POST /auth/local/totp/enrollment` and `DELETE
+//! /api/v1/admin/users/{user_id}/totp` are in `tests/permissions.rs`, and the rate limit walk
+//! over every route that documents a 429 in `tests/enrollment.rs`.
 //!
 //! The tests play the authenticator app with `Secret::code_at_time` at the controllable
 //! clock's time. Needs `DATABASE_URL` (`just up`).
@@ -27,11 +29,13 @@ use stepclimb_core::{
     OrgScope, Source,
     audit::{self, Actor},
     clock::ManualClock,
-    id::Uuid,
+    id::{Uuid, new_id},
     local_logins,
     local_sign_in::{self, LocalMethods, LocalSignIn},
     local_tokens::{self, Origin},
     organizations,
+    role_assignments::{self, NewAssignment, Scope},
+    roles::{self, NewRole},
     users::{self, NewUser, Status},
 };
 use stepclimb_server::{
@@ -52,6 +56,12 @@ const MY_TOTP: &str = "/api/v1/me/totp";
 const CONFIRM: &str = "/api/v1/me/totp/confirm";
 const DISABLE: &str = "/api/v1/me/totp/disable";
 const ENROLL: &str = "/auth/local/enrollment/password";
+const SET_UP: &str = "/auth/local/totp/enrollment";
+const ME: &str = "/api/v1/me";
+
+fn user_totp(user: Uuid) -> String {
+    format!("/api/v1/admin/users/{user}/totp")
+}
 
 const EMAIL: &str = "sam@example.test";
 const PASSWORD: &str = "correct horse battery staple";
@@ -157,6 +167,7 @@ impl Fixture {
     }
 
     async fn with_limits(pool: PgPool, limits: Limits) -> Self {
+        roles::sync_builtin(&pool, now()).await.expect("sync roles");
         let org = organizations::create(&pool, "org-a", "Org A", now())
             .await
             .expect("create organization")
@@ -342,6 +353,101 @@ impl Fixture {
         local_sign_in::update(&self.pool, scope(self.org), new, now(), Actor::Instance)
             .await
             .expect("set the switches");
+    }
+
+    /// Require TOTP of password accounts, or stop requiring it, with the other switches at
+    /// their defaults.
+    async fn require_totp(&self, on: bool) {
+        self.set_methods(LocalMethods {
+            totp_required: on,
+            ..LocalMethods::default()
+        })
+        .await;
+    }
+
+    async fn set_up_step(&self, flow: &str, code: &str) -> Answer {
+        let body = json!({ "code": code });
+        self.send(Method::POST, SET_UP, Some(flow), Some(body))
+            .await
+    }
+
+    /// A session cookie for `user`, as a sign-in would leave.
+    async fn session_for(&self, user: Uuid) -> String {
+        let started = stepclimb_server::session::start(
+            &self.pool,
+            scope(self.org),
+            user,
+            &HeaderMap::new(),
+            now(),
+        )
+        .await
+        .expect("start a session");
+        let cookie = started.set_cookie.to_str().expect("ASCII");
+        cookie.split(';').next().expect("a pair").to_owned()
+    }
+
+    async fn assign(&self, user: Uuid, role: Uuid) {
+        let assignment = NewAssignment {
+            user_id: user,
+            role_id: role,
+            scope: Scope::Organization,
+            source: Source::Local,
+            external_id: None,
+        };
+        role_assignments::create(
+            &self.pool,
+            scope(self.org),
+            &assignment,
+            now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("create assignment");
+    }
+
+    /// A signed-in user holding a custom role with exactly `permissions` at the organization.
+    async fn holder(&self, email: &str, permissions: &[&str]) -> (Uuid, String) {
+        let user = self.user_in(self.org, email).await;
+        let role = NewRole {
+            key: format!("r{}", new_id().simple()),
+            name: "Test role".into(),
+            permissions: permissions.iter().map(|&p| p.to_owned()).collect(),
+        };
+        let role = roles::create_custom(&self.pool, scope(self.org), &role, now(), Actor::Instance)
+            .await
+            .expect("create role")
+            .id;
+        self.assign(user, role).await;
+        (user, self.session_for(user).await)
+    }
+
+    /// A signed-in Organization admin.
+    async fn admin(&self, email: &str) -> (Uuid, String) {
+        let user = self.user_in(self.org, email).await;
+        let role = roles::builtin_id(&self.pool, "org_admin")
+            .await
+            .expect("read role")
+            .expect("a built-in role");
+        self.assign(user, role).await;
+        (user, self.session_for(user).await)
+    }
+
+    /// Whether `user`'s TOTP is confirmed, and how many recovery codes they have.
+    async fn totp_of(&self, user: Uuid) -> (bool, i64) {
+        let confirmed: bool = sqlx::query_scalar(
+            "SELECT totp_confirmed_at IS NOT NULL FROM local_logins WHERE user_id = $1",
+        )
+        .bind(user)
+        .fetch_one(&self.pool)
+        .await
+        .expect("the login");
+        let codes: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM totp_recovery_codes WHERE user_id = $1")
+                .bind(user)
+                .fetch_one(&self.pool)
+                .await
+                .expect("count the codes");
+        (confirmed, codes)
     }
 
     async fn actions(&self) -> Vec<String> {
@@ -990,4 +1096,452 @@ async fn the_same_code_sent_twice_at_once_signs_in_once(pool: PgPool) {
         ],
         "{one:?} {two:?}"
     );
+}
+
+// The organization's requirement (Q11 (a)) and set-up during sign-in (B15).
+
+/// The password step's answer while TOTP is required and the user has none: its flow cookie
+/// and the secret to give the app.
+struct SetUp {
+    flow: String,
+    secret: Secret,
+}
+
+impl Fixture {
+    /// Sam, with a password and no TOTP, signs in while TOTP is required.
+    async fn set_up_started(&self) -> SetUp {
+        let answer = self.sign_in(PASSWORD).await;
+        assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+        assert_eq!(answer.body["next"], "totp_enroll", "{answer:?}");
+        SetUp {
+            flow: answer.flow().expect("the set-up's flow cookie"),
+            secret: Secret::from_base32(answer.body["secret"].as_str().expect("the secret"))
+                .expect("a secret"),
+        }
+    }
+
+    async fn sam_with_password(&self) -> Uuid {
+        let sam = self.user_in(self.org, EMAIL).await;
+        self.with_password(self.org, sam, PASSWORD).await;
+        sam
+    }
+}
+
+/// B15, Q11 (a): while TOTP is required, a right password of a user without it answers
+/// `{next: "totp_enroll"}` with the secret and its URI, a flow and no session. A wrong code keeps
+/// the set-up waiting; the current code confirms TOTP (`totp.enable` by the user), answers ten
+/// recovery codes once and signs in to the flow's `return_to`. The flow is then spent, and the
+/// next password sign-in asks for a code.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_required_totp_is_set_up_before_the_session(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let sam = f.sam_with_password().await;
+    f.require_totp(true).await;
+
+    let first = f.sign_in(PASSWORD).await;
+    assert_eq!(first.status, StatusCode::OK, "{first:?}");
+    assert_schema("EnrollmentRequired", &first.body);
+    assert_schema("PasswordSignedIn", &first.body);
+    assert_eq!(first.headers[header::CACHE_CONTROL], "no-store");
+    assert!(first.session().is_none(), "no session before set-up");
+    assert!(first.cookie("__Host-sc_device").is_none());
+    let text = first.body["secret"].as_str().unwrap();
+    assert_eq!(
+        first.body["otpauth_uri"],
+        format!(
+            "otpauth://totp/Org%20A:sam%40example.test?secret={text}&issuer=Org%20A&algorithm=SHA1&digits=6&period=30"
+        )
+    );
+    let flow = first.flow().expect("a flow cookie");
+    let secret = Secret::from_base32(text).unwrap();
+    assert_eq!(f.totp_of(sam).await, (false, 0), "nothing confirmed yet");
+
+    let wrong = f.set_up_step(&flow, "000000").await;
+    assert_eq!(
+        (wrong.status, wrong.code()),
+        (StatusCode::UNAUTHORIZED, "auth.totp_invalid"),
+        "{wrong:?}"
+    );
+    assert!(!wrong.clears("__Host-sc_flow"), "the set-up still waits");
+    assert!(wrong.session().is_none());
+
+    let confirmed = f
+        .set_up_step(&flow, &secret.code_at_time(f.clock.clock().now()))
+        .await;
+    assert_eq!(confirmed.status, StatusCode::OK, "{confirmed:?}");
+    assert_schema("EnrolledSignedIn", &confirmed.body);
+    assert_eq!(confirmed.body["return_to"], "/c/1");
+    assert_eq!(
+        confirmed.body["recovery_codes"].as_array().unwrap().len(),
+        10
+    );
+    assert!(confirmed.session().is_some());
+    assert!(confirmed.cookie("__Host-sc_device").is_some());
+    assert!(confirmed.clears("__Host-sc_flow"));
+    assert_eq!(confirmed.headers[header::CACHE_CONTROL], "no-store");
+    assert_eq!(f.totp_of(sam).await, (true, 10));
+    let me = f
+        .send(Method::GET, ME, confirmed.session().as_deref(), None)
+        .await;
+    assert_eq!(me.status, StatusCode::OK, "{me:?}");
+    let entries = audit::list(&f.pool, scope(f.org), 100).await.unwrap();
+    let enabled = entries.last().unwrap();
+    assert_eq!(enabled.action, "totp.enable");
+    assert!(
+        matches!(enabled.actor, Actor::User { id, .. } if id == sam),
+        "{:?}",
+        enabled.actor
+    );
+
+    f.clock.advance(STEP);
+    let spent = f
+        .set_up_step(&flow, &secret.code_at_time(f.clock.clock().now()))
+        .await;
+    assert_eq!(
+        (spent.status, spent.code()),
+        (StatusCode::BAD_REQUEST, "auth.flow_invalid")
+    );
+    let next = f.sign_in(PASSWORD).await;
+    assert_eq!(next.body, json!({ "next": "totp" }), "{next:?}");
+    let code = secret.code_at_time(f.clock.clock().now());
+    let signed_in = f.code_step(&next.flow().unwrap(), &code).await;
+    assert_eq!(signed_in.status, StatusCode::OK, "{signed_in:?}");
+}
+
+/// B15: the set-up cannot be skipped. Its flow is not the code step's: neither route takes the
+/// other's flow, no session exists until a code confirms the secret, and a flow from another
+/// organization is unknown. The body names no user, so the flow can set TOTP only for its own.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_set_up_cannot_be_skipped_or_used_for_someone_else(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let ada = f.user_in(f.org, "ada@example.test").await;
+    f.with_password(f.org, ada, OTHER_PASSWORD).await;
+    let sam = f.sam_with_password().await;
+    f.require_totp(true).await;
+    let set_up = f.set_up_started().await;
+    let code = set_up.secret.code_at_time(f.clock.clock().now());
+
+    let as_code_step = f.code_step(&set_up.flow, &code).await;
+    assert_eq!(
+        (as_code_step.status, as_code_step.code()),
+        (StatusCode::BAD_REQUEST, "auth.flow_invalid"),
+        "{as_code_step:?}"
+    );
+    let unauthenticated = f.send(Method::GET, ME, Some(&set_up.flow), None).await;
+    assert_eq!(unauthenticated.status, StatusCode::UNAUTHORIZED);
+    let b = organizations::create(&f.pool, "org-b", "Org B", now())
+        .await
+        .unwrap()
+        .id;
+    let body = json!({ "code": code });
+    let elsewhere = f
+        .send_in(b, Method::POST, SET_UP, Some(&set_up.flow), Some(body))
+        .await;
+    assert_eq!(
+        (elsewhere.status, elsewhere.code()),
+        (StatusCode::BAD_REQUEST, "auth.flow_invalid")
+    );
+    let none = f.set_up_step("__Host-sc_flow=unknown", &code).await;
+    assert_eq!(none.code(), "auth.flow_invalid");
+
+    let done = f.set_up_step(&set_up.flow, &code).await;
+    assert_eq!(done.status, StatusCode::OK, "{done:?}");
+    assert_eq!(f.totp_of(sam).await, (true, 10));
+    assert_eq!(f.totp_of(ada).await, (false, 0), "Ada is untouched");
+
+    // A code step's flow does not finish a set-up either.
+    f.clock.advance(STEP);
+    let code_flow = f.password_step().await;
+    let as_set_up = f
+        .set_up_step(
+            &code_flow,
+            &set_up.secret.code_at_time(f.clock.clock().now()),
+        )
+        .await;
+    assert_eq!(
+        (as_set_up.status, as_set_up.code()),
+        (StatusCode::BAD_REQUEST, "auth.flow_invalid")
+    );
+}
+
+/// B15: users who signed in before TOTP was required keep their sessions and set it up at their
+/// next password sign-in (coordinator decision: the spec ends no session here).
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn earlier_sessions_stay_and_the_next_sign_in_sets_up_totp(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (_, session) = f.signed_in().await;
+    f.require_totp(true).await;
+    let me = f.send(Method::GET, ME, Some(&session), None).await;
+    assert_eq!(me.status, StatusCode::OK, "{me:?}");
+    let next = f.sign_in(PASSWORD).await;
+    assert_eq!(next.body["next"], "totp_enroll", "{next:?}");
+    assert!(next.session().is_none());
+}
+
+/// Q11 (a): turning the requirement off keeps every confirmed TOTP; the code is still asked
+/// for, and a user without TOTP signs in with the password alone again.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn turning_the_requirement_off_keeps_confirmed_totp(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let ada = f.user_in(f.org, "ada@example.test").await;
+    f.with_password(f.org, ada, OTHER_PASSWORD).await;
+    let sam = f.sam_with_password().await;
+    f.require_totp(true).await;
+    let set_up = f.set_up_started().await;
+    let code = set_up.secret.code_at_time(f.clock.clock().now());
+    assert_eq!(
+        f.set_up_step(&set_up.flow, &code).await.status,
+        StatusCode::OK
+    );
+
+    f.require_totp(false).await;
+    assert_eq!(f.totp_of(sam).await, (true, 10));
+    let next = f.sign_in(PASSWORD).await;
+    assert_eq!(next.body, json!({ "next": "totp" }), "{next:?}");
+    let body = json!({ "email": "ada@example.test", "password": OTHER_PASSWORD });
+    let alone = f.send(Method::POST, SIGN_IN, None, Some(body)).await;
+    assert!(alone.session().is_some(), "{alone:?}");
+}
+
+/// B14, B20: a password changed during set-up ends it (400 `auth.flow_invalid`), as does TOTP
+/// confirmed meanwhile from a session that existed before (the flow's secret was replaced).
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_password_changed_during_set_up_ends_it(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let sam = f.sam_with_password().await;
+    let session = f.session_for(sam).await;
+    f.require_totp(true).await;
+    let set_up = f.set_up_started().await;
+    f.with_password(f.org, sam, OTHER_PASSWORD).await;
+    let code = set_up.secret.code_at_time(f.clock.clock().now());
+    let refused = f.set_up_step(&set_up.flow, &code).await;
+    assert_eq!(
+        (refused.status, refused.code()),
+        (StatusCode::BAD_REQUEST, "auth.flow_invalid"),
+        "{refused:?}"
+    );
+    assert!(refused.session().is_none());
+    assert_eq!(f.totp_of(sam).await, (false, 0));
+
+    // A set-up whose user confirmed TOTP through `/api/v1/me/totp` in the meantime.
+    let body = json!({ "email": EMAIL, "password": OTHER_PASSWORD });
+    let again = f.send(Method::POST, SIGN_IN, None, Some(body)).await;
+    let flow = again.flow().expect("a flow");
+    let started = f.start(&session).await;
+    let mine = Secret::from_base32(started.body["secret"].as_str().unwrap()).unwrap();
+    let confirmed = f
+        .confirm(&session, &mine.code_at_time(f.clock.clock().now()))
+        .await;
+    assert_eq!(confirmed.status, StatusCode::OK, "{confirmed:?}");
+    f.clock.advance(STEP);
+    let refused = f
+        .set_up_step(&flow, &mine.code_at_time(f.clock.clock().now()))
+        .await;
+    assert_eq!(
+        (refused.status, refused.code()),
+        (StatusCode::BAD_REQUEST, "auth.flow_invalid"),
+        "{refused:?}"
+    );
+}
+
+/// B5: a suspended user's right code is refused by admission and TOTP stays unset; the flow
+/// is spent.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_suspended_user_is_refused_at_set_up(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let sam = f.sam_with_password().await;
+    f.require_totp(true).await;
+    let set_up = f.set_up_started().await;
+    users::set_status(
+        &f.pool,
+        scope(f.org),
+        sam,
+        Status::Suspended,
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+    let code = set_up.secret.code_at_time(f.clock.clock().now());
+    let refused = f.set_up_step(&set_up.flow, &code).await;
+    assert_eq!(
+        (refused.status, refused.code()),
+        (StatusCode::FORBIDDEN, "auth.suspended")
+    );
+    assert!(refused.clears("__Host-sc_flow"));
+    assert_eq!(f.totp_of(sam).await, (false, 0));
+    assert!(!f.actions().await.contains(&"totp.enable".to_owned()));
+}
+
+/// B18, B20: wrong set-up codes count against the account's failed-check budget; once it is
+/// spent, the right code answers 429 and the set-up still waits. After the 10-minute lifetime
+/// the flow is expired.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn set_up_codes_spend_the_budget_and_the_flow_expires(pool: PgPool) {
+    let f = Fixture::with_limits(pool, failed_checks(2)).await;
+    f.sam_with_password().await;
+    f.require_totp(true).await;
+    let set_up = f.set_up_started().await;
+    for wrong in ["000000", "111111"] {
+        let answer = f.set_up_step(&set_up.flow, wrong).await;
+        assert_eq!(answer.code(), "auth.totp_invalid", "{answer:?}");
+    }
+    let code = set_up.secret.code_at_time(f.clock.clock().now());
+    let limited = f.set_up_step(&set_up.flow, &code).await;
+    assert_eq!(
+        (limited.status, limited.code()),
+        (StatusCode::TOO_MANY_REQUESTS, "auth.rate_limited")
+    );
+    assert!(limited.session().is_none());
+
+    f.clock.advance(Duration::from_secs(11 * 60));
+    let code = set_up.secret.code_at_time(f.clock.clock().now());
+    let expired = f.set_up_step(&set_up.flow, &code).await;
+    assert_eq!(
+        (expired.status, expired.code()),
+        (StatusCode::BAD_REQUEST, "auth.flow_expired"),
+        "{expired:?}"
+    );
+}
+
+/// Fail closed: a stored requirement with TOTP switched off (a state the switches' route refuses
+/// to write) never lets the password sign in alone. The set-up and the code step answer 404.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_requirement_without_totp_offered_signs_no_one_in(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let ada = f.user_in(f.org, "ada@example.test").await;
+    f.with_password(f.org, ada, OTHER_PASSWORD).await;
+    let sam = f.enrolled().await;
+    sqlx::query(
+        "UPDATE organizations SET settings = settings || jsonb_build_object('local_sign_in', \
+         jsonb_build_object('totp', false, 'totp_required', true)) WHERE id = $1",
+    )
+    .bind(f.org)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    let with_totp = f.sign_in(PASSWORD).await;
+    assert_eq!(with_totp.body, json!({ "next": "totp" }), "{with_totp:?}");
+    let refused = f.code_step(&with_totp.flow().unwrap(), &f.code(&sam)).await;
+    assert_eq!(refused.code(), "auth.method_disabled", "{refused:?}");
+    let body = json!({ "email": "ada@example.test", "password": OTHER_PASSWORD });
+    let without = f.send(Method::POST, SIGN_IN, None, Some(body)).await;
+    assert_eq!(without.body["next"], "totp_enroll", "{without:?}");
+    assert!(without.session().is_none());
+    let refused = f.set_up_step(&without.flow().unwrap(), "000000").await;
+    assert_eq!(refused.code(), "auth.method_disabled", "{refused:?}");
+}
+
+/// B24: the set-up logs no secret, URI, code or recovery code.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_set_up_logs_no_secret(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    f.sam_with_password().await;
+    f.require_totp(true).await;
+    let log = Captured::default();
+    let writer = log.clone();
+    let subscriber = stepclimb_server::logging::subscriber("trace", move || writer.clone());
+    let guard = tracing::subscriber::set_default(subscriber);
+    let set_up = f.set_up_started().await;
+    let code = set_up.secret.code_at_time(f.clock.clock().now());
+    let done = f.set_up_step(&set_up.flow, &code).await;
+    drop(guard);
+    assert_eq!(done.status, StatusCode::OK, "{done:?}");
+    let text = log.text();
+    assert!(
+        text.contains("TOTP set up at sign-in"),
+        "the capture missed the log"
+    );
+    let mut secrets = vec![
+        set_up.secret.expose_base32(),
+        set_up.flow.split_once('=').expect("a pair").1.to_owned(),
+    ];
+    for recovery in done.body["recovery_codes"].as_array().unwrap() {
+        let recovery = recovery.as_str().unwrap();
+        secrets.push(recovery.to_owned());
+        secrets.push(recovery.replace('-', ""));
+    }
+    for secret in &secrets {
+        assert!(!text.contains(secret.as_str()), "the log holds {secret:?}");
+    }
+    for line in text.lines() {
+        let event: Value = serde_json::from_str(line).expect("a JSON log line");
+        let mut values = Vec::new();
+        field_values(&event, &mut values);
+        let leaked = values.iter().find(|value| holds_token(value, &code));
+        assert!(leaked.is_none(), "the log holds the code: {line}");
+    }
+}
+
+// An administrator removes a user's TOTP.
+
+/// An administrator removes another user's TOTP and recovery codes (`totp.disable` by the
+/// administrator); the user's password signs in alone, or sets TOTP up again while it is
+/// required. Removing it twice, or the caller's own, is refused (409).
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_admin_removes_a_users_totp(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let sam = f.enrolled().await;
+    let (admin, cookie) = f.admin("admin@example.test").await;
+
+    let removed = f
+        .send(Method::DELETE, &user_totp(sam.id), Some(&cookie), None)
+        .await;
+    assert_eq!(removed.status, StatusCode::NO_CONTENT, "{removed:?}");
+    assert_eq!(f.totp_of(sam.id).await, (false, 0));
+    let entries = audit::list(&f.pool, scope(f.org), 100).await.unwrap();
+    let entry = entries.last().unwrap();
+    assert_eq!(entry.action, "totp.disable");
+    assert_eq!(entry.target_id, sam.id);
+    assert!(
+        matches!(entry.actor, Actor::User { id, .. } if id == admin),
+        "{:?}",
+        entry.actor
+    );
+    let me = f.send(Method::GET, ME, Some(&sam.session), None).await;
+    assert_eq!(me.status, StatusCode::OK, "the user's sessions stay");
+    assert!(f.sign_in(PASSWORD).await.session().is_some());
+
+    let again = f
+        .send(Method::DELETE, &user_totp(sam.id), Some(&cookie), None)
+        .await;
+    assert_eq!(
+        (again.status, again.code()),
+        (StatusCode::CONFLICT, "local.totp_not_enabled")
+    );
+
+    f.require_totp(true).await;
+    let next = f.sign_in(PASSWORD).await;
+    assert_eq!(next.body["next"], "totp_enroll", "{next:?}");
+
+    let own = f
+        .send(Method::DELETE, &user_totp(admin), Some(&cookie), None)
+        .await;
+    assert_eq!(
+        (own.status, own.code()),
+        (StatusCode::CONFLICT, "local.cannot_remove_own_totp")
+    );
+}
+
+/// The user routes' escalation rule: a `user.manage` holder cannot remove the TOTP of a user
+/// who holds a permission they lack; nothing changes.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_manager_cannot_remove_a_more_privileged_users_totp(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let sam = f.enrolled().await;
+    let role = roles::builtin_id(&f.pool, "org_admin")
+        .await
+        .unwrap()
+        .unwrap();
+    f.assign(sam.id, role).await;
+    let (_, manager) = f.holder("kim@example.test", &["user.manage"]).await;
+    let refused = f
+        .send(Method::DELETE, &user_totp(sam.id), Some(&manager), None)
+        .await;
+    assert_eq!(
+        (refused.status, refused.code()),
+        (StatusCode::FORBIDDEN, "permission.escalation"),
+        "{refused:?}"
+    );
+    assert_eq!(f.totp_of(sam.id).await, (true, 10));
 }

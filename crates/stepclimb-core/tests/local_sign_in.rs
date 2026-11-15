@@ -219,8 +219,8 @@ async fn update_switches_methods_and_the_row_in_the_scope_only(pool: PgPool) {
     assert_eq!(
         first.data,
         json!({
-            "before": { "local_sign_in": { "passkey": true, "password": true, "totp": true, "magic_link": false } },
-            "after": { "local_sign_in": { "passkey": false, "password": true, "totp": true, "magic_link": false } },
+            "before": { "local_sign_in": { "passkey": true, "password": true, "totp": true, "magic_link": false, "totp_required": false } },
+            "after": { "local_sign_in": { "passkey": false, "password": true, "totp": true, "magic_link": false, "totp_required": false } },
         })
     );
 }
@@ -326,6 +326,7 @@ async fn update_refuses_the_magic_link_and_a_lockout_writing_nothing(pool: PgPoo
             password: false,
             totp: true,
             magic_link: false,
+            totp_required: false,
         },
     };
     let row_off = LocalSignIn {
@@ -353,4 +354,67 @@ async fn update_refuses_the_magic_link_and_a_lockout_writing_nothing(pool: PgPoo
         .unwrap();
     let result = local_sign_in::update(&pool, scope(a), row_off, later(), admin()).await;
     assert_eq!(result.unwrap(), row_off);
+}
+
+/// Q11 (a), B15: `totp_required` needs the password and TOTP switched on; turned on with
+/// either off it is refused and nothing is written. With both on it is stored, audited like
+/// every switch, and turning it off keeps the other switches.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn totp_can_be_required_only_with_the_password_and_totp_on(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    let before = state(&pool, a).await;
+    let required = LocalMethods {
+        totp_required: true,
+        ..LocalMethods::default()
+    };
+    for methods in [
+        LocalMethods {
+            totp: false,
+            ..required
+        },
+        LocalMethods {
+            password: false,
+            ..required
+        },
+    ] {
+        let new = LocalSignIn {
+            enabled: true,
+            methods,
+        };
+        let result = local_sign_in::update(&pool, scope(a), new, later(), admin()).await;
+        assert!(
+            matches!(result, Err(Error::TotpRequiredNeedsTotp)),
+            "{methods:?}: {result:?}"
+        );
+    }
+    assert_eq!(state(&pool, a).await, before, "nothing written");
+
+    let on = LocalSignIn {
+        enabled: true,
+        methods: required,
+    };
+    local_sign_in::update(&pool, scope(a), on, later(), admin())
+        .await
+        .unwrap();
+    let read = local_sign_in::get(&pool, scope(a)).await.unwrap();
+    assert!(read.requires_totp());
+    let entries = audit::list(&pool, scope(a), 100).await.unwrap();
+    let last = entries.last().unwrap();
+    assert_eq!(last.action, "organization.update_settings");
+    assert_eq!(last.data["after"]["local_sign_in"]["totp_required"], true);
+    assert_eq!(last.data["before"]["local_sign_in"]["totp_required"], false);
+
+    let off = LocalSignIn {
+        enabled: true,
+        methods: LocalMethods::default(),
+    };
+    local_sign_in::update(&pool, scope(a), off, later(), admin())
+        .await
+        .unwrap();
+    assert!(
+        !local_sign_in::get(&pool, scope(a))
+            .await
+            .unwrap()
+            .requires_totp()
+    );
 }

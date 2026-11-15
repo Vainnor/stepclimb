@@ -24,6 +24,7 @@ import { SignInView } from "./routes/sign-in";
 import { SignInPasskeyView } from "./routes/sign-in-passkey";
 import { SignInPasswordView } from "./routes/sign-in-password";
 import { SignInTotpView } from "./routes/sign-in-totp";
+import { SignInTotpSetupView } from "./routes/sign-in-totp-setup";
 import { safeReturnTarget } from "./session";
 
 const rootRoute = createRootRouteWithContext<AppContext>()({
@@ -86,6 +87,13 @@ const signInTotpRoute = createRoute({
   component: SignInTotpView,
 });
 
+const signInTotpSetupRoute = createRoute({
+  getParentRoute: () => signedOutRoute,
+  path: "sign-in/totp-setup",
+  validateSearch: validateSignInSearch,
+  component: SignInTotpSetupView,
+});
+
 const enrollRoute = createRoute({
   getParentRoute: () => signedOutRoute,
   path: "enroll",
@@ -118,6 +126,7 @@ export const routeTree = rootRoute.addChildren([
     signInPasskeyRoute,
     signInPasswordRoute,
     signInTotpRoute,
+    signInTotpSetupRoute,
     enrollRoute,
   ]),
   signedInRoute.addChildren([homeRoute, accountRoute]),

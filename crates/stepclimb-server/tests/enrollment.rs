@@ -827,6 +827,7 @@ async fn every_sign_in_route_is_rate_limited(pool: PgPool) {
         (Method::POST, "/auth/local/password".to_owned()),
         (Method::PUT, "/api/v1/me/password".to_owned()),
         (Method::POST, "/auth/local/totp".to_owned()),
+        (Method::POST, "/auth/local/totp/enrollment".to_owned()),
         (Method::POST, "/api/v1/me/totp/confirm".to_owned()),
         (Method::POST, "/api/v1/me/totp/disable".to_owned()),
     ] {

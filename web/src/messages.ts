@@ -201,6 +201,21 @@ export const webMessages: Catalog = {
     "signIn.totp.title": "Enter your code",
     "signIn.totp.useApp": "Use a code from your app instead",
     "signIn.totp.useRecovery": "Use a recovery code instead",
+    "signIn.totpSetup.code.description":
+      "After adding the account, enter the 6-digit code your app shows for it.",
+    "signIn.totpSetup.code.label": "Code",
+    "signIn.totpSetup.intro":
+      "Your organization asks for a code from an authenticator app each time you sign in with a password. Set one up to finish signing in as {email}.",
+    "signIn.totpSetup.key": "In your authenticator app, add an account with this setup key:",
+    "signIn.totpSetup.link": "Or, if your app takes a setup link, use this one:",
+    "signIn.totpSetup.problem.invalid":
+      "That code did not work. Check that your device's clock is right, then enter the newest code from your app.",
+    "signIn.totpSetup.recovery.continue": "Continue",
+    "signIn.totpSetup.recovery.intro":
+      "Each of these codes signs you in once if you lose your app. Keep them somewhere safe, such as a password manager. They are not shown again.",
+    "signIn.totpSetup.recovery.title": "Save your recovery codes",
+    "signIn.totpSetup.submit": "Turn on and sign in",
+    "signIn.totpSetup.title": "Set up a code from an app",
     "signOut.failed": "Sign-out failed",
     "signOut.failedHint": "You are still signed in. Try again in a moment.",
     "userMenu.density": "Density",

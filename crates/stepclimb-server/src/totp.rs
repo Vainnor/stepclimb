@@ -19,8 +19,8 @@
 //! unused recovery code. The three take a browser session only (`SessionOnly`), as every route
 //! that manages a user's own sign-in does.
 //!
-//! The password route (`crate::password`) asks for the second step when the password is right
-//! and the user has confirmed TOTP: [`begin_second_step`] starts a `password_totp` flow naming
+//! The password route (`crate::password`) asks [`next_after_password`] what follows a right
+//! password. When the user has confirmed TOTP it is the second step: [`begin_second_step`] starts a `password_totp` flow naming
 //! the user and the password's generation, and the answer is 200 `{next: "totp"}` with no
 //! session (B15). `POST /auth/local/totp` ([`sign_in_with_totp`], B20) takes that flow, then in a
 //! savepoint locks the user and their login, refuses a flow whose password changed or whose
@@ -29,7 +29,17 @@
 //! recovery code, and completes the sign-in through admission's local entry. The flow is used
 //! once whatever the outcome: a wrong code (401 `auth.totp_invalid`, counted against the
 //! account) commits the flow's deletion, so every new guess needs the password again. Only a
-//! spent budget (429) and a server fault roll the flow's deletion back.
+//! spent budget (429) and a server fault roll the flow's deletion back. When the organization
+//! requires TOTP and the user has none, it is set-up instead (`crate::totp_enrollment`).
+//!
+//! `DELETE /api/v1/admin/users/{user_id}/totp` ([`remove_user_totp`]) lets an administrator
+//! remove another user's TOTP and recovery codes, for a user who lost both the app and the
+//! codes. It needs `user.manage` at organization scope and the user routes' escalation rule
+//! (`users::refuse_escalation`, which also refuses an API key acting on its own owner with 403
+//! `auth.session_required`), refuses the caller's own TOTP (409
+//! `local.cannot_remove_own_totp`: their own goes through `/api/v1/me/totp/disable` with a
+//! code), and writes `totp.disable` by the administrator. It does not check that TOTP is
+//! offered: an administrator can clean up TOTP while the method is switched off.
 //!
 //! The code-checking routes take `RateLimited<SignIn>` first. No step logs the secret, the URI,
 //! a code or a recovery code; `totp.enable` and `totp.disable` audit entries name the user.
@@ -53,9 +63,10 @@ use stepclimb_core::{
     auth_flows::Kind,
     id::Uuid,
     identities, local_logins,
-    local_sign_in::{self as switches, Method},
+    local_sign_in::{LocalSignIn, Method},
     local_totp::{self, Totp},
     organizations,
+    perm::UserManage,
 };
 use utoipa::ToSchema;
 
@@ -64,7 +75,9 @@ use crate::{
     audit::ClientAddress,
     error::ApiError,
     extract::ApiJson,
+    extract::ApiPath,
     flow::{self, FlowStart},
+    identities::begin_on_user,
     local_sign_in::require_method,
     openapi::problem_responses,
     passkey_enrollment::{FlowDetails, Outcome, flow_refused, with_flow_cleared},
@@ -72,8 +85,9 @@ use crate::{
     password_check::{Attempt, Refusal, Subject, internal, take_budgets},
     rate_limit::{AccountCheck, RateLimited, SignIn, TooManyRequests},
     request_org::RequestOrg,
-    require::SessionOnly,
+    require::{Require, SessionOnly},
     session,
+    users::UserIdParam,
 };
 
 /// The second sign-in step.
@@ -88,6 +102,9 @@ pub const MY_TOTP_CONFIRM_PATH: &str = "/api/v1/me/totp/confirm";
 /// Disabling it.
 pub const MY_TOTP_DISABLE_PATH: &str = "/api/v1/me/totp/disable";
 
+/// An administrator removing a user's TOTP.
+pub const USER_TOTP_PATH: &str = "/api/v1/admin/users/{user_id}/totp";
+
 /// The codes this module produces.
 pub mod code {
     /// The code is wrong, was used already, is outside the window, or is no unused recovery
@@ -101,6 +118,8 @@ pub mod code {
     pub const LOCAL_TOTP_ENABLED: &str = "local.totp_enabled";
     /// TOTP is not on, so there is nothing to disable (409).
     pub const LOCAL_TOTP_NOT_ENABLED: &str = "local.totp_not_enabled";
+    /// An administrator asked to remove their own TOTP through the admin route (409).
+    pub const LOCAL_CANNOT_REMOVE_OWN_TOTP: &str = "local.cannot_remove_own_totp";
 }
 
 /// The table and column the secret is sealed for (`stepclimb_auth::encryption` context rules).
@@ -117,9 +136,11 @@ problem_responses! {
     MyTotpUnauthorized => "`auth.unauthenticated`, `auth.session_expired`, `auth.suspended`: no valid session. `auth.totp_invalid`: the code is wrong, already used, or not the current one.",
     MyTotpConfirmConflict => "`local.totp_not_started`: no TOTP enrollment is waiting for a code; start one. `local.totp_enabled`: TOTP is already on.",
     MyTotpDisableConflict => "`local.totp_not_enabled`: TOTP is not on.",
+    UserTotpForbidden => "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the user holds a permission, at any scope, that the caller does not hold at organization scope. `auth.session_required`: an API key names its own owner. `auth.csrf_refused`: the request did not come from this site.",
+    UserTotpConflict => "`local.totp_not_enabled`: the user has no TOTP turned on. `local.cannot_remove_own_totp`: the user is the caller; turn your own TOTP off with a code from your account page.",
 }
 
-const SECOND_STEP_FLOW: FlowDetails = FlowDetails {
+pub(crate) const SECOND_STEP_FLOW: FlowDetails = FlowDetails {
     expired: "The password was checked more than 10 minutes ago. Sign in with your password again.",
     invalid: "No sign-in is waiting for a code in this browser. Sign in with your password again.",
 };
@@ -127,16 +148,19 @@ const SECOND_STEP_FLOW: FlowDetails = FlowDetails {
 /// What the second step's flow keeps, sealed: the password's generation when it was checked,
 /// so a password changed in between ends the sign-in.
 #[derive(Serialize, Deserialize)]
-struct Pending {
-    generation: i64,
+pub(crate) struct Pending {
+    pub(crate) generation: i64,
 }
 
 /// The next step a password sign-in needs.
-#[derive(Clone, Copy, Debug, Serialize, ToSchema)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum NextStep {
     /// A TOTP code, sent to `POST /auth/local/totp`.
     Totp,
+    /// Setting up TOTP, which the organization requires, confirmed with a code sent to `POST
+    /// /auth/local/totp/enrollment`.
+    TotpEnroll,
 }
 
 /// A right password whose account also needs a TOTP code: no session exists yet.
@@ -185,7 +209,7 @@ pub fn seal_secret(
     keys.encrypt(secret.expose_bytes(), &secret_context(&org_id, &user_id))
 }
 
-fn open_secret(
+pub(crate) fn open_secret(
     keys: &KeyRing,
     scope: OrgScope,
     user_id: Uuid,
@@ -208,19 +232,24 @@ fn secret_context<'a>(org_id: &'a Uuid, user_id: &'a Uuid) -> [&'a [u8]; 4] {
     ]
 }
 
-/// Whether the password sign-in of `totp`'s user needs a code (B15): the organization offers
-/// TOTP and the user confirmed it. An unconfirmed secret asks for nothing, and while TOTP is
-/// switched off a confirmed one asks for nothing either (B2: it works again once switched on).
-pub(crate) async fn needs_code(
-    db: impl PgExecutor<'_>,
-    scope: OrgScope,
-    totp: Option<&Totp>,
-) -> Result<bool, ApiError> {
-    if !totp.is_some_and(|totp| totp.confirmed) {
-        return Ok(false);
+/// What follows a right password for a user whose TOTP is `confirmed` or not (B15), given the
+/// organization's `local` sign-in; `None` signs in.
+///
+/// A confirmed secret asks for a code while the organization offers TOTP or requires it. While
+/// TOTP is switched off and not required, a confirmed secret asks for nothing (B2: it works
+/// again once switched on). A user without confirmed TOTP sets it up while the organization
+/// requires it (Q11 (a)), and otherwise signs in. `update` keeps TOTP switched on while it is
+/// required; a stored state that is not so asks for a step whose route answers 404, so the
+/// password alone never signs in while TOTP is required.
+pub(crate) fn next_after_password(local: &LocalSignIn, confirmed: bool) -> Option<NextStep> {
+    let required = local.requires_totp();
+    if confirmed && (local.offers(Method::Totp) || required) {
+        return Some(NextStep::Totp);
     }
-    let local = switches::get(db, scope).await.map_err(internal)?;
-    Ok(local.offers(Method::Totp))
+    if !confirmed && required {
+        return Some(NextStep::TotpEnroll);
+    }
+    None
 }
 
 /// Start the second step for the user `user_id`, whose password of generation `generation` was
@@ -249,10 +278,17 @@ pub async fn begin_second_step(
 
 /// 200 `{next: "totp"}` with the second step's flow cookie and `no-store`.
 pub(crate) fn code_required(flow: flow::Started) -> Response {
-    let mut response = Json(CodeRequired {
-        next: NextStep::Totp,
-    })
-    .into_response();
+    no_store_with_flow(
+        Json(CodeRequired {
+            next: NextStep::Totp,
+        })
+        .into_response(),
+        flow,
+    )
+}
+
+/// `response` with `flow`'s cookie and `no-store`.
+pub(crate) fn no_store_with_flow(mut response: Response, flow: flow::Started) -> Response {
     let headers = response.headers_mut();
     headers.append(header::SET_COOKIE, flow.set_cookie);
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -420,7 +456,7 @@ async fn second_step(
 
 /// What a code was accepted as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Used {
+pub(crate) enum Used {
     Totp,
     RecoveryCode,
 }
@@ -428,7 +464,7 @@ enum Used {
 /// Accept `presented` for `totp`'s user: a current code for a step after the last accepted one,
 /// whose step is then recorded, or, when `recovery` allows, an unused recovery code, which is
 /// then marked used. `None` when it is neither.
-async fn accept_code(
+pub(crate) async fn accept_code(
     conn: &mut PgConnection,
     attempt: &Attempt<'_>,
     user_id: Uuid,
@@ -640,6 +676,53 @@ pub async fn disable_my_totp(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
+/// Remove a user's TOTP and recovery codes.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/admin/users/{user_id}/totp",
+    operation_id = "removeUserTotp",
+    tag = "users",
+    extensions(("x-stepclimb-mutates" = json!(true))),
+    params(UserIdParam),
+    responses(
+        (status = 204, description = "The user's TOTP is off; its secret and recovery codes are deleted. The user's sessions stay."),
+        (status = 400, response = crate::openapi::BadRequest),
+        (status = 401, response = crate::openapi::Unauthenticated),
+        (status = 403, response = UserTotpForbidden),
+        (status = 404, response = crate::users::UserNotFound),
+        (status = 409, response = UserTotpConflict),
+        (status = 500, response = crate::openapi::InternalError),
+        (status = 503, response = crate::openapi::NoOrganization),
+    )
+)]
+pub async fn remove_user_totp(
+    require: Require<UserManage>,
+    client: ClientAddress,
+    State(state): State<AppState>,
+    ApiPath(UserIdParam { user_id }): ApiPath<UserIdParam>,
+) -> Result<Response, ApiError> {
+    let principal = require.principal();
+    let scope = principal.scope();
+    let mut tx = begin_on_user(&state, principal, require.grants(), user_id).await?;
+    if user_id == principal.user_id {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            code::LOCAL_CANNOT_REMOVE_OWN_TOTP,
+            "Turn your own TOTP off from your account page, with a code from your app or a recovery code.",
+        ));
+    }
+    identities::lock_user(&mut tx, scope, user_id)
+        .await
+        .map_err(internal)?;
+    let actor = client.actor(principal);
+    local_totp::disable(&mut tx, scope, user_id, state.clock.now(), actor)
+        .await
+        .map_err(totp_error)?;
+    tx.commit().await.map_err(internal)?;
+    tracing::info!(%user_id, by = %principal.user_id, "TOTP removed by an administrator");
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
 fn attempt<'a>(state: &'a AppState, scope: OrgScope, headers: &'a HeaderMap) -> Attempt<'a> {
     Attempt {
         state,
@@ -685,7 +768,7 @@ async fn own_budgets(
     Ok(take_budgets(limited, attempt, &subject)?)
 }
 
-fn no_store(mut response: Response) -> Response {
+pub(crate) fn no_store(mut response: Response) -> Response {
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -717,7 +800,7 @@ fn totp_error(error: local_totp::Error) -> ApiError {
 }
 
 /// 401 `auth.totp_invalid`.
-fn totp_invalid() -> ApiError {
+pub(crate) fn totp_invalid() -> ApiError {
     ApiError::new(
         StatusCode::UNAUTHORIZED,
         code::AUTH_TOTP_INVALID,
@@ -727,7 +810,7 @@ fn totp_invalid() -> ApiError {
 
 /// 400 `auth.flow_invalid` for a flow whose account, password or TOTP changed since the
 /// password was checked.
-fn flow_changed() -> ApiError {
+pub(crate) fn flow_changed() -> ApiError {
     ApiError::new(
         StatusCode::BAD_REQUEST,
         flow::code::AUTH_FLOW_INVALID,
@@ -746,6 +829,9 @@ mod tests {
             (invalid.status, invalid.code.as_str()),
             (401, "auth.totp_invalid")
         );
+        let own =
+            ApiError::new(StatusCode::CONFLICT, code::LOCAL_CANNOT_REMOVE_OWN_TOTP, "").problem();
+        assert_eq!(own.code, "local.cannot_remove_own_totp");
         let changed = flow_changed().problem();
         assert_eq!(
             (changed.status, changed.code.as_str()),
@@ -778,6 +864,55 @@ mod tests {
         let opened = open_secret(&keys, scope, sam, &sealed).unwrap();
         assert_eq!(opened.expose_bytes(), secret.expose_bytes());
         assert!(open_secret(&keys, scope, ada, &sealed).is_err());
+    }
+
+    fn local(totp: bool, totp_required: bool) -> LocalSignIn {
+        LocalSignIn {
+            enabled: true,
+            methods: stepclimb_core::local_sign_in::LocalMethods {
+                totp,
+                totp_required,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn a_right_password_is_followed_by_the_code_set_up_or_nothing() {
+        // Optional TOTP: a confirmed secret asks for the code; none signs in.
+        assert_eq!(
+            next_after_password(&local(true, false), true),
+            Some(NextStep::Totp)
+        );
+        assert_eq!(next_after_password(&local(true, false), false), None);
+        // Switched off and not required: the password alone signs in (B2).
+        assert_eq!(next_after_password(&local(false, false), true), None);
+        // Required: a user without TOTP sets it up; one with it gives the code.
+        assert_eq!(
+            next_after_password(&local(true, true), false),
+            Some(NextStep::TotpEnroll)
+        );
+        assert_eq!(
+            next_after_password(&local(true, true), true),
+            Some(NextStep::Totp)
+        );
+        // Required with TOTP's switch off (a state `update` refuses): never the password alone.
+        assert_eq!(
+            next_after_password(&local(false, true), true),
+            Some(NextStep::Totp)
+        );
+        assert_eq!(
+            next_after_password(&local(false, true), false),
+            Some(NextStep::TotpEnroll)
+        );
+    }
+
+    #[test]
+    fn the_next_steps_are_spelled_totp_and_totp_enroll() {
+        assert_eq!(
+            serde_json::to_value(NextStep::TotpEnroll).unwrap(),
+            serde_json::json!("totp_enroll")
+        );
     }
 
     #[test]
