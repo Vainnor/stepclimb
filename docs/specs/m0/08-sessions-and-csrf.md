@@ -411,22 +411,25 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   Their error format: pending Q13.
 - **B46.** How I8 builds B32 to B37 and Q11 to Q14. Coordinator decisions (2026-11-15), for the
   owner's review; the owner can overrule any of them:
-  - **Access tokens (Q12).** A JWT in compact JWS form, HS256, header exactly `alg: "HS256"`,
-    `typ: "JWT"` and `kid`, payload exactly `iss` (the public URL, as `oauth.issuer`), `sub` (the
-    user), `org`, `client_id`, `fid` (the refresh family), `iat` and `exp` (`iat` + 900), in
-    `stepclimb_auth::oauth_server::access_token`. No JOSE crate: the server signs and checks only
-    its own tokens. The signing key is derived from each key of the encryption key ring (Q3):
-    HMAC-SHA-256 under the AES key over a fixed label, so the AES key never signs, a rotation
-    keeps older tokens valid for their 15 minutes, and there is no second secret to configure
-    (ADR 0031). A presented token is checked without the database first (length, the three
-    base64url parts, the header, the signature in constant time, the issuer, then `exp` against
-    the server clock: past it is 401 `auth.access_token_expired`, anything else 401
-    `auth.access_token_invalid`). Then its `org` must be the request's (B6), its client still in
-    the registry, and its family must still exist for its user and client, read with the user's
-    status in one indexed query (Q12 (b)): a revoked or reused family stops its access tokens at
-    once (401 `auth.access_token_invalid`); a suspended user answers 401 `auth.suspended` (B11).
-  - **What an app token may do.** It acts as its user with all of the user's current grants,
-    like a browser session (the plan names no app scopes), and its changes are audited as the
+  - **Access tokens (Q12).** A JWT in compact JWS form, HS256, header exactly `alg: "HS256"`, `typ:
+    "JWT"` and `kid`, payload exactly `iss` (the public URL, as `oauth.issuer`), `sub` (the user),
+    `org`, `client_id`, `fid` (the refresh family), `iat` and `exp` (`iat` + 900), in
+    `stepclimb_auth::oauth_server::access_token`, on `jsonwebtoken` as the plan names it. The crate
+    runs on no crypto backend of its own: the module installs a `CryptoProvider` that signs and
+    verifies HS256 only, over the workspace's `hmac` and `sha2`. The signing key is derived from
+    each key of the encryption key ring (Q3): HMAC-SHA-256 under the AES key over a fixed label, so
+    the AES key never signs, a rotation keeps older tokens valid for their 15 minutes, and there is
+    no second secret to configure (ADR 0032). A presented token is checked without the database
+    first (length, the exact header and its key, then `jsonwebtoken::decode` with HS256 alone
+    allowed: the signature in constant time, the claim set, `exp`, `iss` and `sub` required, `iss`
+    this server's, no `aud`; then `exp` against the server clock, since the crate would read the
+    system time: past it is 401 `auth.access_token_expired`, anything else 401
+    `auth.access_token_invalid`). Then its `org` must be the request's (B6), its client still in the
+    registry, and its family must still exist for its user and client, read with the user's status
+    in one indexed query (Q12 (b)): a revoked or reused family stops its access tokens at once (401
+    `auth.access_token_invalid`); a suspended user answers 401 `auth.suspended` (B11).
+  - **What an app token may do** (ADR 0032). It acts as its user with all of the user's current
+    grants, like a browser session (the plan names no app scopes), and its changes are audited as the
     user's. It is a bearer credential, so every route that takes `NoBearer` or `SessionOnly`
     (B44) refuses it with 403 `auth.session_required`, and the admin user routes refuse an app
     token whose target is its own user, as they refuse a key on its owner. A router walk over

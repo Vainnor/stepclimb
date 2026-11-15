@@ -1,27 +1,43 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! App access tokens (docs/specs/m0/08-sessions-and-csrf.md B32, B33, B36, Q12, ADR 0031).
+//! App access tokens (docs/specs/m0/08-sessions-and-csrf.md B32, B33, B36, B46, Q12; ADR 0032).
 //!
-//! An access token is a JWT (RFC 7519) in the compact JWS form, signed HS256 with the key ring's
-//! access token key (`encryption::KeyRing::sign_access_token`): only this server signs and checks
-//! them. The header is exactly `alg`, `typ` and `kid`; the payload is exactly the [`Claims`]
-//! below. A token lives [`LIFETIME`].
+//! An access token is a JWT (RFC 7519) in the compact JWS form, signed HS256 with `jsonwebtoken`
+//! (plan, Technical -> Decided) under the key ring's access token key
+//! (`encryption::KeyRing::current_access_token_key`): only this server signs and checks them. The
+//! header is exactly `alg`, `typ` and `kid`; the payload is exactly the [`Claims`] below. A token
+//! lives [`LIFETIME`].
+//!
+//! `jsonwebtoken` runs on no crypto backend of its own: the first call here installs
+//! `PROVIDER` as its process-wide `CryptoProvider`, which signs and verifies HS256 only, with the
+//! workspace's `hmac` and `sha2`, and refuses every other algorithm. If a different provider was
+//! installed first, every token is refused and none is issued.
 //!
 //! [`verify`] reads a presented token in this order and stops at the first problem, before any
-//! database query: the length and the three base64url parts; the header, which must name `HS256`,
-//! `JWT` and a key of the ring; the signature, compared in constant time; then the payload, whose
-//! issuer must be this server's. A token past its `exp` is [`Refusal::Expired`]; every other
-//! problem is [`Refusal::Invalid`], which says nothing about which check failed. The server then
-//! checks the organization, the client, the user's status and that the refresh family still
-//! exists, so revoking a family stops its access tokens at once (Q12).
+//! database query: its length; the header, which must be exactly `alg: "HS256"`, `typ: "JWT"`
+//! and the `kid` of a key in the ring; then `jsonwebtoken::decode` with HS256 alone allowed, which
+//! checks the signature in constant time, reads the payload into [`Claims`] (no other member) and
+//! requires `exp`, `iss` and `sub`, with `iss` this server's issuer and no `aud`. Last, `exp` is
+//! compared with the clock the caller passes, not the system time the crate would read. A token
+//! past its `exp` is [`Refusal::Expired`]; every other problem is [`Refusal::Invalid`], which says
+//! nothing about which check failed. The server then checks the organization, the client, the
+//! user's status and that the refresh family still exists, so revoking a family stops its access
+//! tokens at once (Q12).
 //!
 //! [`AccessToken`] has no `Display` and a redacted `Debug`, so a token reaches no log line.
 
 use std::fmt;
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use hmac::{Hmac, KeyInit, Mac};
+use jsonwebtoken::{
+    Algorithm, DecodingKey, EncodingKey, Header, Validation,
+    crypto::{CryptoProvider, JwtSigner, JwtVerifier, KeyUtils},
+    errors::ErrorKind,
+    signature,
+};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use uuid::Uuid;
 
 use crate::encryption::KeyRing;
@@ -32,8 +48,8 @@ pub const LIFETIME: Duration = Duration::from_secs(15 * 60);
 /// The longest token text [`verify`] reads. An issued token is about 400 bytes.
 pub const MAX_LEN: usize = 2048;
 
-const ALG: &str = "HS256";
-const TYP: &str = "JWT";
+/// The one algorithm tokens are signed and checked with.
+const ALGORITHM: Algorithm = Algorithm::HS256;
 
 /// What an access token says.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,14 +81,6 @@ pub struct Subject<'a> {
     pub family_id: Uuid,
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Header {
-    alg: String,
-    typ: String,
-    kid: String,
-}
-
 /// An issued access token's text.
 pub struct AccessToken(String);
 
@@ -90,20 +98,31 @@ impl fmt::Debug for AccessToken {
     }
 }
 
-/// `now` cannot be written as seconds since the Unix epoch (before 1970), so no token was made.
+/// Why [`issue`] made no token.
 #[derive(Debug, thiserror::Error)]
-#[error("the clock reads a time before the Unix epoch")]
-pub struct ClockBeforeEpoch;
+pub enum IssueError {
+    /// `now` cannot be written as seconds since the Unix epoch (before 1970).
+    #[error("the clock reads a time before the Unix epoch")]
+    ClockBeforeEpoch,
+    /// Another `jsonwebtoken` crypto provider was installed in this process before this one.
+    #[error("another jsonwebtoken crypto provider is installed; access tokens cannot be signed")]
+    ForeignProvider,
+    #[error("the access token could not be signed: {0}")]
+    Sign(#[from] jsonwebtoken::errors::Error),
+}
 
 /// Sign a token for `subject`, issued at `now` and expiring [`LIFETIME`] later.
 pub fn issue(
     keys: &KeyRing,
     subject: &Subject<'_>,
     now: SystemTime,
-) -> Result<AccessToken, ClockBeforeEpoch> {
+) -> Result<AccessToken, IssueError> {
+    if !provider_installed() {
+        return Err(IssueError::ForeignProvider);
+    }
     let iat = now
         .duration_since(UNIX_EPOCH)
-        .map_err(|_| ClockBeforeEpoch)?
+        .map_err(|_| IssueError::ClockBeforeEpoch)?
         .as_secs();
     let claims = Claims {
         iss: subject.issuer.to_owned(),
@@ -114,25 +133,17 @@ pub fn issue(
         iat,
         exp: iat + LIFETIME.as_secs(),
     };
-    Ok(sign(keys, &claims))
+    let (kid, key) = keys.current_access_token_key();
+    let text = jsonwebtoken::encode(&header(kid), &claims, &EncodingKey::from_secret(key))?;
+    Ok(AccessToken(text))
 }
 
-fn sign(keys: &KeyRing, claims: &Claims) -> AccessToken {
-    let header = Header {
-        alg: ALG.to_owned(),
-        typ: TYP.to_owned(),
-        kid: keys.current_key_id().to_owned(),
-    };
-    // Structs of strings, UUIDs and integers always serialize.
-    let header = serde_json::to_vec(&header).expect("a header serializes");
-    let payload = serde_json::to_vec(claims).expect("claims serialize");
-    let signing_input = format!(
-        "{}.{}",
-        URL_SAFE_NO_PAD.encode(header),
-        URL_SAFE_NO_PAD.encode(payload)
-    );
-    let (_, tag) = keys.sign_access_token(signing_input.as_bytes());
-    AccessToken(format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(tag)))
+/// The one header a token may carry: `alg: "HS256"`, `typ: "JWT"` and `kid`.
+fn header(kid: &str) -> Header {
+    Header {
+        kid: Some(kid.to_owned()),
+        ..Header::new(ALGORITHM)
+    }
 }
 
 /// Why [`verify`] refused a token.
@@ -151,30 +162,22 @@ pub fn verify(
     issuer: &str,
     now: SystemTime,
 ) -> Result<Claims, Refusal> {
-    if presented.len() > MAX_LEN {
+    if presented.len() > MAX_LEN || !provider_installed() {
         return Err(Refusal::Invalid);
     }
-    let mut parts = presented.split('.');
-    let (Some(header), Some(payload), Some(signature), None) =
-        (parts.next(), parts.next(), parts.next(), parts.next())
-    else {
-        return Err(Refusal::Invalid);
-    };
-    let header: Header = decode_json(header)?;
-    if header.alg != ALG || header.typ != TYP {
+    let presented_header = jsonwebtoken::decode_header(presented).map_err(|_| Refusal::Invalid)?;
+    let kid = presented_header.kid.as_deref().ok_or(Refusal::Invalid)?;
+    if presented_header != header(kid) {
         return Err(Refusal::Invalid);
     }
-    let tag = URL_SAFE_NO_PAD
-        .decode(signature)
-        .map_err(|_| Refusal::Invalid)?;
-    let signing_input = &presented[..presented.len() - signature.len() - 1];
-    if !keys.verify_access_token(&header.kid, signing_input.as_bytes(), &tag) {
-        return Err(Refusal::Invalid);
-    }
-    let claims: Claims = decode_json(payload)?;
-    if claims.iss != issuer {
-        return Err(Refusal::Invalid);
-    }
+    let key = keys.access_token_key(kid).ok_or(Refusal::Invalid)?;
+    let decoded = jsonwebtoken::decode::<Claims>(
+        presented,
+        &DecodingKey::from_secret(key),
+        &validation(issuer),
+    )
+    .map_err(|_| Refusal::Invalid)?;
+    let claims = decoded.claims;
     let expires = UNIX_EPOCH
         .checked_add(Duration::from_secs(claims.exp))
         .ok_or(Refusal::Invalid)?;
@@ -184,13 +187,100 @@ pub fn verify(
     Ok(claims)
 }
 
-fn decode_json<T: for<'de> Deserialize<'de>>(part: &str) -> Result<T, Refusal> {
-    let bytes = URL_SAFE_NO_PAD.decode(part).map_err(|_| Refusal::Invalid)?;
-    serde_json::from_slice(&bytes).map_err(|_| Refusal::Invalid)
+/// HS256 alone; `exp`, `iss` and `sub` required, `iss` this server's; any `aud` refused (none is
+/// expected). The crate's own expiry and not-before checks are off, since they read the system
+/// time: [`verify`] compares `exp` with the clock it is given.
+fn validation(issuer: &str) -> Validation {
+    let mut validation = Validation::new(ALGORITHM);
+    validation.validate_exp = false;
+    validation.validate_nbf = false;
+    validation.leeway = 0;
+    validation.validate_aud = true;
+    validation.set_required_spec_claims(&["exp", "iss", "sub"]);
+    validation.set_issuer(&[issuer]);
+    validation
+}
+
+/// The `jsonwebtoken` crypto provider: HS256 only, over the workspace's `hmac` and `sha2`.
+static PROVIDER: CryptoProvider = CryptoProvider {
+    signer_factory,
+    verifier_factory,
+    key_utils: KeyUtils::new_unimplemented(),
+};
+
+/// Whether [`PROVIDER`] is this process's `jsonwebtoken` provider, installing it on the first
+/// call. `false` when another provider was installed before it.
+fn provider_installed() -> bool {
+    static INSTALLED: OnceLock<bool> = OnceLock::new();
+    *INSTALLED.get_or_init(|| PROVIDER.install_default().is_ok())
+}
+
+type HmacSha256 = Hmac<Sha256>;
+
+fn hs256(algorithm: &Algorithm, key: &[u8]) -> jsonwebtoken::errors::Result<HmacSha256> {
+    if *algorithm != ALGORITHM {
+        return Err(ErrorKind::InvalidAlgorithm.into());
+    }
+    HmacSha256::new_from_slice(key).map_err(|_| ErrorKind::InvalidKeyFormat.into())
+}
+
+fn signer_factory(
+    algorithm: &Algorithm,
+    key: &EncodingKey,
+) -> jsonwebtoken::errors::Result<Box<dyn JwtSigner>> {
+    Ok(Box::new(Hs256(hs256(algorithm, key.as_bytes())?)))
+}
+
+fn verifier_factory(
+    algorithm: &Algorithm,
+    key: &DecodingKey,
+) -> jsonwebtoken::errors::Result<Box<dyn JwtVerifier>> {
+    Ok(Box::new(Hs256(hs256(algorithm, key.try_get_as_bytes()?)?)))
+}
+
+/// HMAC-SHA-256 under one key, for both directions.
+struct Hs256(HmacSha256);
+
+impl signature::Signer<Vec<u8>> for Hs256 {
+    fn try_sign(&self, message: &[u8]) -> Result<Vec<u8>, signature::Error> {
+        Ok(self
+            .0
+            .clone()
+            .chain_update(message)
+            .finalize()
+            .into_bytes()
+            .to_vec())
+    }
+}
+
+impl signature::Verifier<Vec<u8>> for Hs256 {
+    /// The tag is compared in constant time (`Mac::verify_slice`).
+    fn verify(&self, message: &[u8], tag: &Vec<u8>) -> Result<(), signature::Error> {
+        self.0
+            .clone()
+            .chain_update(message)
+            .verify_slice(tag)
+            .map_err(|_| signature::Error::new())
+    }
+}
+
+impl JwtSigner for Hs256 {
+    fn algorithm(&self) -> Algorithm {
+        ALGORITHM
+    }
+}
+
+impl JwtVerifier for Hs256 {
+    fn algorithm(&self) -> Algorithm {
+        ALGORITHM
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
     use super::*;
 
     const ISSUER: &str = "https://lms.example.org";
@@ -226,11 +316,21 @@ mod tests {
         URL_SAFE_NO_PAD.encode(serde_json::to_vec(value).unwrap())
     }
 
-    /// A token with `header` and `payload` as given, signed under `ring`'s current key.
+    /// A token with `header` and `payload` as given, signed HS256 under `ring`'s current access
+    /// token key without this module, so a test can build what [`issue`] never would.
     fn forged(ring: &KeyRing, header: &serde_json::Value, payload: &serde_json::Value) -> String {
         let input = format!("{}.{}", encode(header), encode(payload));
-        let (_, tag) = ring.sign_access_token(input.as_bytes());
+        let (_, key) = ring.current_access_token_key();
+        let tag = HmacSha256::new_from_slice(key)
+            .unwrap()
+            .chain_update(input.as_bytes())
+            .finalize()
+            .into_bytes();
         format!("{input}.{}", URL_SAFE_NO_PAD.encode(tag))
+    }
+
+    fn good_header() -> serde_json::Value {
+        serde_json::json!({"alg": "HS256", "typ": "JWT", "kid": "a"})
     }
 
     fn good_payload() -> serde_json::Value {
@@ -258,6 +358,25 @@ mod tests {
     }
 
     #[test]
+    fn an_issued_token_has_exactly_the_three_header_members() {
+        let token = issued(&keys(KEY_A));
+        let header = token.split('.').next().unwrap();
+        let header: serde_json::Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(header).unwrap()).unwrap();
+        assert_eq!(header, good_header());
+    }
+
+    #[test]
+    fn a_token_built_without_this_module_verifies_the_same() {
+        let ring = keys(KEY_A);
+        let token = forged(&ring, &good_header(), &good_payload());
+        assert_eq!(
+            verify(&ring, &token, ISSUER, at(0)),
+            Ok(serde_json::from_value(good_payload()).unwrap())
+        );
+    }
+
+    #[test]
     fn t31_a_token_works_until_fifteen_minutes_and_not_at_them() {
         let ring = keys(KEY_A);
         let token = issued(&ring);
@@ -275,11 +394,16 @@ mod tests {
         for header in [
             serde_json::json!({"alg": "none", "typ": "JWT", "kid": "a"}),
             serde_json::json!({"alg": "HS512", "typ": "JWT", "kid": "a"}),
+            serde_json::json!({"alg": "HS384", "typ": "JWT", "kid": "a"}),
             serde_json::json!({"alg": "hs256", "typ": "JWT", "kid": "a"}),
+            serde_json::json!({"alg": "RS256", "typ": "JWT", "kid": "a"}),
             serde_json::json!({"alg": "HS256", "typ": "at+jwt", "kid": "a"}),
             serde_json::json!({"alg": "HS256", "kid": "a"}),
+            serde_json::json!({"alg": "HS256", "typ": "JWT"}),
             serde_json::json!({"alg": "HS256", "typ": "JWT", "kid": "b"}),
             serde_json::json!({"alg": "HS256", "typ": "JWT", "kid": "a", "crit": ["x"]}),
+            serde_json::json!({"alg": "HS256", "typ": "JWT", "kid": "a", "cty": "JWT"}),
+            serde_json::json!({"alg": "HS256", "typ": "JWT", "kid": "a", "x": 1}),
         ] {
             let token = forged(&ring, &header, &good_payload());
             assert_eq!(
@@ -288,26 +412,23 @@ mod tests {
                 "{header}"
             );
         }
-        let good = forged(
-            &ring,
-            &serde_json::json!({"alg": "HS256", "typ": "JWT", "kid": "a"}),
-            &good_payload(),
-        );
-        assert!(verify(&ring, &good, ISSUER, at(0)).is_ok());
     }
 
     #[test]
     fn a_payload_with_another_issuer_or_member_is_invalid() {
         let ring = keys(KEY_A);
-        let header = serde_json::json!({"alg": "HS256", "typ": "JWT", "kid": "a"});
         let mut other_issuer = good_payload();
         other_issuer["iss"] = "https://other.example".into();
         let mut extra = good_payload();
         extra["scope"] = "admin".into();
+        let mut audience = good_payload();
+        audience["aud"] = "stepclimb-app".into();
         let mut missing = good_payload();
         missing.as_object_mut().unwrap().remove("fid");
-        for payload in [other_issuer, extra, missing] {
-            let token = forged(&ring, &header, &payload);
+        let mut no_exp = good_payload();
+        no_exp.as_object_mut().unwrap().remove("exp");
+        for payload in [other_issuer, extra, audience, missing, no_exp] {
+            let token = forged(&ring, &good_header(), &payload);
             assert_eq!(
                 verify(&ring, &token, ISSUER, at(0)),
                 Err(Refusal::Invalid),
@@ -328,14 +449,7 @@ mod tests {
         let mut claims = good_payload();
         claims["sub"] = serde_json::to_value(Uuid::from_u128(9)).unwrap();
         let swapped = format!("{header}.{}.{signature}", encode(&claims));
-        let other_key = issue(
-            &keys("a:ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8="),
-            &subject(),
-            at(0),
-        )
-        .unwrap()
-        .expose_secret()
-        .to_owned();
+        let other_key = issued(&keys("a:ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8="));
         for token in [
             altered,
             swapped,
@@ -374,6 +488,25 @@ mod tests {
             verify(&keys(KEY_B), &token, ISSUER, at(0)),
             Err(Refusal::Invalid)
         );
+    }
+
+    #[test]
+    fn the_provider_refuses_every_algorithm_but_hs256() {
+        let key = EncodingKey::from_secret(b"k");
+        for algorithm in [
+            Algorithm::HS384,
+            Algorithm::HS512,
+            Algorithm::RS256,
+            Algorithm::ES256,
+            Algorithm::EdDSA,
+        ] {
+            assert!(signer_factory(&algorithm, &key).is_err(), "{algorithm:?}");
+            assert!(
+                verifier_factory(&algorithm, &DecodingKey::from_secret(b"k")).is_err(),
+                "{algorithm:?}"
+            );
+        }
+        assert!(signer_factory(&Algorithm::HS256, &key).is_ok());
     }
 
     #[test]
