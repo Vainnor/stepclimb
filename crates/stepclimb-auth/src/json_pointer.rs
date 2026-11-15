@@ -4,6 +4,8 @@
 
 use std::fmt;
 
+use serde_json::Value;
+
 /// A syntactically valid JSON Pointer that names a member: it starts with `/`, and every `~` is
 /// followed by `0` or `1`. The empty pointer, which RFC 6901 allows and which names the whole
 /// document, is refused: a mapping names one claim, never every claim at once.
@@ -32,6 +34,14 @@ impl JsonPointer {
             }
         }
         Ok(Self(text.to_owned()))
+    }
+
+    /// The value the pointer names in `document`, or `None` when it names nothing. Each
+    /// segment is unescaped as RFC 6901 section 4 says (`~1` to `/`, then `~0` to `~`), names an
+    /// object member, or an array element by its decimal index without a leading zero.
+    #[must_use]
+    pub fn resolve<'a>(&self, document: &'a Value) -> Option<&'a Value> {
+        document.pointer(&self.0)
     }
 
     /// The pointer as written.
@@ -88,6 +98,36 @@ mod tests {
                 Err(PointerError::BadEscape),
                 "{bad}"
             );
+        }
+    }
+
+    fn resolve(pointer: &str, document: &Value) -> Option<Value> {
+        JsonPointer::parse(pointer)
+            .expect("a pointer")
+            .resolve(document)
+            .cloned()
+    }
+
+    /// Spec 06 T4's escapes, with RFC 6901 section 5's example document.
+    #[test]
+    fn spec_t4_escapes_resolve_per_rfc_6901() {
+        let document = serde_json::json!({
+            "foo": ["bar", "baz"],
+            "": 0,
+            "a/b": 1,
+            "m~n": 8,
+            "~1": "tilde-one",
+            "data": { "cid": "1000001" },
+        });
+        assert_eq!(resolve("/a~1b", &document), Some(1.into()));
+        assert_eq!(resolve("/m~0n", &document), Some(8.into()));
+        // `~01` is `~1`, not `/`: `~1` is replaced before `~0`.
+        assert_eq!(resolve("/~01", &document), Some("tilde-one".into()));
+        assert_eq!(resolve("/", &document), Some(0.into()));
+        assert_eq!(resolve("/foo/0", &document), Some("bar".into()));
+        assert_eq!(resolve("/data/cid", &document), Some("1000001".into()));
+        for nothing in ["/a/b", "/foo/2", "/foo/01", "/foo/-", "/data/cid/x"] {
+            assert_eq!(resolve(nothing, &document), None, "{nothing}");
         }
     }
 
