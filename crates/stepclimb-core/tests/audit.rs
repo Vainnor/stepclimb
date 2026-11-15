@@ -491,7 +491,8 @@ async fn list_is_bounded_and_in_write_order(pool: PgPool) {
     assert_eq!(first, all[..1]);
 }
 
-/// The table's checks: a user actor has an id and an address, the instance has neither.
+/// The table's checks: a user or API-key actor has an id and an address, the instance has
+/// neither.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn the_table_refuses_an_actor_without_its_id_or_address(pool: PgPool) {
     let a = org(&pool, "org-a").await;
@@ -510,7 +511,10 @@ async fn the_table_refuses_an_actor_without_its_id_or_address(pool: PgPool) {
     let ip = Some("192.0.2.1");
     assert!(insert("user", Some(a.admin), ip).await.is_ok());
     assert!(insert("instance", None, None).await.is_ok());
+    assert!(insert("api_key", Some(a.id), ip).await.is_ok());
     for refused in [
+        insert("api_key", None, ip).await,
+        insert("api_key", Some(a.id), None).await,
         insert("user", None, ip).await,
         insert("user", Some(a.admin), None).await,
         insert("instance", Some(a.admin), None).await,
@@ -528,6 +532,11 @@ async fn the_table_refuses_an_actor_without_its_id_or_address(pool: PgPool) {
             id: a.admin,
             ip: ipv4
         }));
+    assert!(
+        stored
+            .iter()
+            .any(|e| e.actor == Actor::ApiKey { id: a.id, ip: ipv4 })
+    );
 }
 
 /// 2025-11-13T02:13:21.123456Z, one second after [`now`]: a no-op that wrote would move

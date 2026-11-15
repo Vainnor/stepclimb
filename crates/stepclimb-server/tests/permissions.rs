@@ -74,17 +74,19 @@ use stepclimb_core::{
     OrgScope, Source, accounts,
     audit::Actor,
     clock::ManualClock,
-    feature::{self, CustomBranding, CustomRoles, Feature, Limit},
+    feature::{self, ApiKeys, CustomBranding, CustomRoles, Feature, Limit},
     grants::ScopeId,
     id::{Uuid, new_id},
     identities::{self, NewIdentity},
     organizations,
     perm::{
         self, AccountManage, AccountView, AdmissionManage, BrandingManage, OrgManage, Permission,
-        ProviderManage, RoleAssign, RoleManage, RoleView, ScopeType, UserManage, UserView,
+        ProviderManage, RoleAssign, RoleManage, RoleView, ScopeType, ServiceAccountManage,
+        UserManage, UserView,
     },
     role_assignments::{self, NewAssignment, Scope},
     roles::{self, NewRole},
+    service_accounts,
     users::{self, NewUser},
 };
 use stepclimb_server::{
@@ -353,6 +355,31 @@ const TABLE: &[Entry] = &[
         access: permission(ProviderManage::KEY, Target::Org, unchanged_local_sign_in),
     },
     Entry {
+        operation_id: "listServiceAccounts",
+        access: gated(
+            ApiKeys::KEY,
+            permission(ServiceAccountManage::KEY, Target::Org, at_org),
+        ),
+    },
+    Entry {
+        operation_id: "createServiceAccount",
+        access: gated(
+            ApiKeys::KEY,
+            permission(ServiceAccountManage::KEY, Target::Org, new_service_account),
+        ),
+    },
+    Entry {
+        operation_id: "deleteServiceAccount",
+        access: gated(
+            ApiKeys::KEY,
+            permission(
+                ServiceAccountManage::KEY,
+                SERVICE_ACCOUNT_NOT_FOUND,
+                service_account_in_path,
+            ),
+        ),
+    },
+    Entry {
         operation_id: "getAdmissionSettings",
         access: permission(AdmissionManage::KEY, Target::Org, at_org),
     },
@@ -548,6 +575,39 @@ fn second_passkey_of_owner(
         org.passkey(owner).await;
         Call {
             params: vec![("passkey_id", org.passkey(owner).await)],
+            body: None,
+            at: At::Org,
+        }
+    })
+}
+
+/// A service account that is not the organization's: 404 `service_account.not_found`. Service
+/// accounts are organization-wide, so the route has no wrong-account 404 case.
+const SERVICE_ACCOUNT_NOT_FOUND: Target = Target::Scoped {
+    not_found: "service_account.not_found",
+    cross_org: "service_account.not_found",
+};
+
+/// A service account with no scopes, which any `service_account.manage` holder may create.
+fn new_service_account(_: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: Vec::new(),
+            body: Some(serde_json::json!({ "name": "Suite key", "scopes": [] })),
+            at: At::Org,
+        }
+    })
+}
+
+/// A new user's service account of `org`, named in the path.
+fn service_account_in_path(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let (_, owner) = org.user().await;
+        Call {
+            params: vec![(
+                "service_account_id",
+                org.service_account(owner, "Suite key").await,
+            )],
             body: None,
             at: At::Org,
         }
@@ -2432,6 +2492,28 @@ impl Org {
             .expect("create role")
             .id;
         self.assign(user, role, At::Org).await;
+        self.service_account(user, &format!("Key of {slug}")).await;
+    }
+
+    /// A service account of `owner` named `name`, with a new key: its id.
+    async fn service_account(&self, owner: Uuid, name: &str) -> Uuid {
+        let key = stepclimb_auth::token::ApiKey::generate().expect("a key");
+        let new = service_accounts::NewServiceAccount {
+            name: name.to_owned(),
+            owner_user_id: owner,
+            scopes: vec![RoleView::KEY.to_owned()],
+        };
+        service_accounts::create(
+            &self.pool,
+            scope(self.id),
+            &new,
+            key.hash().as_bytes(),
+            now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("create service account")
+        .id
     }
 
     /// A new user, signed in, with no role: their `Cookie` header value and id.

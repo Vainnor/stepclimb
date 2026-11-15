@@ -149,6 +149,7 @@ async fn startup_migrations_create_the_schema_on_an_empty_database(pool: PgPool)
             "plans",
             "role_assignments",
             "roles",
+            "service_accounts",
             "sessions",
             "totp_recovery_codes",
             "users"
@@ -185,6 +186,8 @@ async fn the_openapi_document_is_3_1_and_lists_every_route() {
             "/api/v1/admin/role-assignments/{assignment_id}",
             "/api/v1/admin/roles",
             "/api/v1/admin/roles/{role_id}",
+            "/api/v1/admin/service-accounts",
+            "/api/v1/admin/service-accounts/{service_account_id}",
             "/api/v1/admin/users/{user_id}/enrollment-links",
             "/api/v1/me",
             "/api/v1/me/appearance",

@@ -21,7 +21,8 @@
 //! 5. a visible target where `P` is not effective answers 403 `permission.denied`;
 //! 6. otherwise the handler runs with the principal, the grants and the resolved target.
 //!
-//! The grants are loaded once per request (one query, `Grants::load`) and kept in the request's
+//! The grants are loaded once per request (one query, `Grants::load`; for an API key, its owner's
+//! grants intersected with the key's scopes, spec 08 B27) and kept in the request's
 //! extensions under a type private to this module, so a second `Require` in the same handler
 //! reuses them and nothing outside this module can plant them. Nothing is kept across requests.
 
@@ -408,13 +409,14 @@ impl FromRequestParts<AppState> for AuthOnly {
 }
 
 /// [`AuthOnly`] for a route that only a browser session may call: the signed-in user's own
-/// credentials under `/api/v1/me/passkeys` and `/api/v1/me/password`
-/// (docs/specs/m0/04-local-accounts.md Permissions), so an API key cannot add or remove its
-/// owner's passkeys or change their password. A request carrying an `Authorization:
-/// Bearer` header answers 403 `auth.session_required` before anything else is read, whether the
-/// credential is valid or not: by spec 08 B16 such a request is authenticated by its bearer
-/// credential alone (an API key or an app access token), never by a cookie beside it, so no
-/// bearer request is a session's. Any other request is [`AuthOnly`]'s.
+/// sign-in credentials under `/api/v1/me/passkeys`, `/api/v1/me/password` and `/api/v1/me/totp`
+/// (docs/specs/m0/04-local-accounts.md Permissions) and `DELETE
+/// /api/v1/me/identities/{identity_id}`, so an API key cannot add or remove its owner's ways to
+/// sign in, change their password or manage their TOTP. A request carrying an `Authorization: Bearer` header
+/// answers 403 `auth.session_required` before anything else is read, whether the credential is
+/// valid or not: by spec 08 B16 such a request is authenticated by its bearer credential alone
+/// (an API key or an app access token), never by a cookie beside it, so no bearer request is a
+/// session's. Any other request is [`AuthOnly`]'s.
 pub struct SessionOnly(AuthOnly);
 
 impl SessionOnly {
@@ -431,6 +433,16 @@ pub mod session_code {
     pub const AUTH_SESSION_REQUIRED: &str = "auth.session_required";
 }
 
+/// 403 `auth.session_required` with `detail`: the operation takes a browser session, and the
+/// request is authenticated by a bearer credential.
+pub(crate) fn session_required(detail: &'static str) -> ApiError {
+    ApiError::new(
+        StatusCode::FORBIDDEN,
+        session_code::AUTH_SESSION_REQUIRED,
+        detail,
+    )
+}
+
 impl FromRequestParts<AppState> for SessionOnly {
     type Rejection = Rejection;
 
@@ -439,13 +451,33 @@ impl FromRequestParts<AppState> for SessionOnly {
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         if csrf::carries_bearer(&parts.headers) {
-            return Err(Rejection::Refused(ApiError::new(
-                StatusCode::FORBIDDEN,
-                session_code::AUTH_SESSION_REQUIRED,
-                "Only a signed-in browser session can change your passkeys, password or TOTP; API keys and app tokens cannot.",
+            return Err(Rejection::Refused(session_required(
+                "Only a signed-in browser session can change how you sign in; API keys and app tokens cannot.",
             )));
         }
         AuthOnly::from_request_parts(parts, state).await.map(Self)
+    }
+}
+
+/// Listed in a handler that a bearer credential may not call at all, before anything it reads:
+/// creating an API key (`crate::service_accounts`) or an enrollment link (`crate::enrollment`),
+/// each of which mints a new credential, and every step of using an enrollment link: its start
+/// (`crate::enrollment`), setting a password (`crate::password`) and adding a passkey
+/// (`crate::passkey_enrollment`). A request carrying an `Authorization: Bearer` header answers 403
+/// `auth.session_required`, as [`SessionOnly`] does; any other request passes on to the
+/// handler's other extractors.
+pub struct NoBearer;
+
+impl<S: Send + Sync> FromRequestParts<S> for NoBearer {
+    type Rejection = Rejection;
+
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+        if csrf::carries_bearer(&parts.headers) {
+            return Err(Rejection::Refused(session_required(
+                "Only a signed-in browser session can create this credential; API keys and app tokens cannot.",
+            )));
+        }
+        Ok(Self)
     }
 }
 
@@ -460,17 +492,25 @@ pub(crate) async fn principal(
 }
 
 /// The request's principal and grants: from the extensions when an earlier `Require` of the
-/// request loaded them, otherwise authenticated and loaded now.
+/// request loaded them, otherwise authenticated and loaded now. An API key's grants are its
+/// owner's, read now, intersected with the key's scopes.
 async fn evaluate(parts: &mut Parts, state: &AppState) -> Result<Evaluated, Rejection> {
     if let Some(evaluated) = parts.extensions.get::<Evaluated>() {
         return Ok(evaluated.clone());
     }
-    let principal = Authenticated::from_request_parts(parts, state)
+    let session::Credentialed {
+        principal,
+        key_scopes,
+    } = session::authenticate(parts, state)
         .await
         .map_err(Rejection::Unauthenticated)?;
-    let grants = Grants::load(&state.db, principal.scope(), principal.user_id)
+    let mut grants = Grants::load(&state.db, principal.scope(), principal.user_id)
         .await
         .map_err(|error| ApiError::internal(&error))?;
+    // An API key acts with its owner's current grants narrowed to its scopes (spec 08 B27).
+    if let Some(key_scopes) = key_scopes {
+        grants.intersect_key_scopes(&key_scopes);
+    }
     for key in grants.ignored_keys() {
         warn_unknown_key_once(key);
     }

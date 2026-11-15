@@ -284,8 +284,8 @@ async fn t17_anonymous_and_unknown_sessions_answer_401(pool: PgPool) {
     assert_eq!(unknown.code(), "auth.unauthenticated");
 }
 
-/// No bearer credential is accepted yet (API keys are spec 08 issue 6), and a cookie beside a
-/// bearer header never authenticates the request (spec 08 B16).
+/// A cookie beside a bearer header never authenticates the request (spec 08 B16): a malformed
+/// key answers its own 401. The owned-key case of T17 is in `tests/service_accounts.rs`.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn a_bearer_request_is_not_answered_for_the_cookie_beside_it(pool: PgPool) {
     let fixture = Fixture::new(pool).await;
@@ -297,7 +297,7 @@ async fn a_bearer_request_is_not_answered_for_the_cookie_beside_it(pool: PgPool)
         ])
         .await;
     assert_eq!(answer.status, StatusCode::UNAUTHORIZED, "{answer:?}");
-    assert_eq!(answer.code(), "auth.unauthenticated");
+    assert_eq!(answer.code(), "auth.api_key_invalid");
     assert!(answer.body.get("user").is_none());
 }
 

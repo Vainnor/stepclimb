@@ -65,7 +65,7 @@ use crate::{
     passkey_enrollment,
     rate_limit::{RateLimited, SignIn},
     request_org::RequestOrg,
-    require::Require,
+    require::{NoBearer, Require},
     timestamp,
     users::{UserIdParam, user_not_found},
     web_origin::WebOrigin,
@@ -92,7 +92,9 @@ pub mod code {
 const ENROLLABLE: [Method; 2] = [Method::Passkey, Method::Password];
 
 problem_responses! {
+    EnrollmentLinkForbidden => "`auth.session_required`: the request carries a bearer credential; only a signed-in browser session creates enrollment links. `permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the user holds a permission, at any scope, that the caller does not hold at organization scope. `auth.csrf_refused`: the request did not come from this site.",
     EnrollmentLinkConflict => "`local.email_required`: the user has no email address, which local sign-in finds them by; add one first.",
+    EnrollmentStartForbidden => "`auth.session_required`: the request carries a bearer credential; an enrollment link is used from a browser. `auth.csrf_refused`: the request did not come from this site.",
     EnrollmentStartInvalid => "`request.malformed`: the body is not `{token}`. `auth.enrollment_invalid`: the link is unknown, already used, replaced by a newer link, or for another organization. `auth.enrollment_expired`: the link is older than its 7-day lifetime; ask an admin for a new one.",
     EnrollmentStartNotFound => "`auth.method_disabled`: the organization offers neither passkey nor password sign-in. `org.not_found`: the request's organization cannot be determined.",
 }
@@ -184,7 +186,7 @@ pub async fn create_link<'c>(
         (status = 201, description = "The link, shown once", body = EnrollmentLink),
         (status = 400, response = crate::openapi::BadRequest),
         (status = 401, response = crate::openapi::Unauthenticated),
-        (status = 403, response = crate::identities::IdentityWriteForbidden),
+        (status = 403, response = EnrollmentLinkForbidden),
         (status = 404, response = crate::users::UserNotFound),
         (status = 409, response = EnrollmentLinkConflict),
         (status = 500, response = crate::openapi::InternalError),
@@ -192,6 +194,7 @@ pub async fn create_link<'c>(
     )
 )]
 pub async fn create_enrollment_link(
+    _: NoBearer,
     require: Require<UserManage>,
     client: ClientAddress,
     State(state): State<AppState>,
@@ -199,7 +202,7 @@ pub async fn create_enrollment_link(
 ) -> Result<Response, ApiError> {
     let principal = require.principal();
     let scope = principal.scope();
-    let mut tx = begin_on_user(&state, require.grants(), user_id).await?;
+    let mut tx = begin_on_user(&state, principal, require.grants(), user_id).await?;
     let actor = client.actor(principal);
     let now = state.clock.now();
     let origin = Origin::Admin(principal.user_id);
@@ -283,7 +286,7 @@ pub struct EnrollmentStarted {
             )
         ),
         (status = 400, response = EnrollmentStartInvalid),
-        (status = 403, response = crate::openapi::CsrfRefused),
+        (status = 403, response = EnrollmentStartForbidden),
         (status = 404, response = EnrollmentStartNotFound),
         (status = 413, response = crate::openapi::PayloadTooLarge),
         (status = 415, response = crate::openapi::UnsupportedMediaType),
@@ -294,6 +297,7 @@ pub struct EnrollmentStarted {
 )]
 pub async fn start_enrollment(
     _limited: RateLimited<SignIn>,
+    _: NoBearer,
     org: RequestOrg,
     State(state): State<AppState>,
     ApiJson(body): ApiJson<EnrollmentStart>,

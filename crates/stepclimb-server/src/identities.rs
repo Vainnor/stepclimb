@@ -26,7 +26,9 @@
 //! through docs/specs/m0/04-local-accounts.md's routes.
 //!
 //! The `/me` routes need a signed-in user and no permission, and act on the caller's own
-//! identities only: another user's identity id is 404. A user whose record an outside source
+//! identities only: another user's identity id is 404. Removing one changes how the user signs
+//! in, so it takes `SessionOnly`: an API key, whatever its scopes, answers 403
+//! `auth.session_required` there, as on the passkey routes. A user whose record an outside source
 //! owns cannot remove their identities (409 `identity.externally_managed`), since the source
 //! would re-create them. `/me/identities` never answers `attributes`, which can hold personal
 //! data the provider sent.
@@ -61,8 +63,9 @@ use crate::{
     error::{ApiError, FieldError},
     extract::{ApiJson, ApiPath},
     openapi::problem_responses,
-    require::{AuthOnly, Require},
+    require::{AuthOnly, Require, SessionOnly},
     roles::code::TEXT_CONTAINS_NUL,
+    session::Authenticated,
     timestamp,
     users::{
         UserIdParam, UserNotFound,
@@ -91,11 +94,12 @@ const ESCALATION_DETAIL: &str =
     "This user holds permissions you do not. You cannot change how they sign in.";
 
 problem_responses! {
-    IdentityWriteForbidden => "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the user holds a permission, at any scope, that the caller does not hold at organization scope. `auth.csrf_refused`: the request did not come from this site.",
+    IdentityWriteForbidden => "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the user holds a permission, at any scope, that the caller does not hold at organization scope. `auth.session_required`: an API key acts on its own owner. `auth.csrf_refused`: the request did not come from this site.",
     IdentityLinkConflict => "`identity.taken`: this provider's subject is already linked to a user.",
     IdentityDeleteNotFound => "`user.not_found`: no user of the organization has this id. `identity.not_found`: the user has no identity with this id. `org.not_found`: the request's organization cannot be determined.",
     IdentityDeleteConflict => "`identity.last_sign_in_method`: the user would be left with no way to sign in. `identity.local`: the identity is the user's local account, which is not removed here.",
     MyIdentityNotFound => "`identity.not_found`: you have no identity with this id. `org.not_found`: the request's organization cannot be determined.",
+    MyIdentityDeleteForbidden => "`auth.session_required`: the request carries a bearer credential; only a signed-in browser session removes your identities. `auth.csrf_refused`: the request did not come from this site.",
     MyIdentityDeleteConflict => "`identity.last_sign_in_method`: you would be left with no way to sign in. `identity.local`: the identity is your local account, which is not removed here. `identity.externally_managed`: an identity provider, the sync API, SCIM or a connector owns your user record and would link the identity again; ask an admin.",
 }
 
@@ -264,7 +268,7 @@ pub async fn create_user_identity(
     ApiJson(body): ApiJson<NewIdentity>,
 ) -> Result<Response, ApiError> {
     repo::validate_subject(&body.subject).map_err(identity_error)?;
-    let mut tx = begin_on_user(&state, require.grants(), user_id).await?;
+    let mut tx = begin_on_user(&state, require.principal(), require.grants(), user_id).await?;
     let scope = require.principal().scope();
     let provider = identity_providers::get_by_key(&mut *tx, scope, &body.provider_key)
         .await
@@ -321,7 +325,7 @@ pub async fn delete_user_identity(
         identity_id,
     }): ApiPath<UserIdentityParams>,
 ) -> Result<StatusCode, ApiError> {
-    let mut tx = begin_on_user(&state, require.grants(), user_id).await?;
+    let mut tx = begin_on_user(&state, require.principal(), require.grants(), user_id).await?;
     let scope = require.principal().scope();
     let actor = client.actor(require.principal());
     let now = state.clock.now();
@@ -335,10 +339,12 @@ pub async fn delete_user_identity(
 /// A transaction holding the account tree lock and the user's custom roles `FOR KEY SHARE`,
 /// once the escalation rule has passed for the user `user_id`: 404 `user.not_found` when the
 /// organization has no such user, 403 `permission.escalation` when they hold a permission the
-/// caller lacks. `crate::enrollment` takes it too: an enrollment link changes how the user signs
+/// caller lacks, 403 `auth.session_required` when an API key acts on its own owner.
+/// `crate::enrollment` takes it too: an enrollment link changes how the user signs
 /// in.
 pub(crate) async fn begin_on_user(
     state: &AppState,
+    principal: Authenticated,
     grants: &Grants,
     user_id: Uuid,
 ) -> Result<Transaction<'static, Postgres>, ApiError> {
@@ -353,7 +359,7 @@ pub(crate) async fn begin_on_user(
         .await
         .map_err(|error| ApiError::internal(&error))?
         .ok_or_else(user_not_found)?;
-    refuse_escalation(&mut tx, grants, user_id, ESCALATION_DETAIL).await?;
+    refuse_escalation(&mut tx, principal, grants, user_id, ESCALATION_DETAIL).await?;
     Ok(tx)
 }
 
@@ -398,7 +404,7 @@ pub async fn list_my_identities(
         (status = 204, description = "The identity is removed"),
         (status = 400, response = crate::openapi::BadRequest),
         (status = 401, response = crate::openapi::Unauthenticated),
-        (status = 403, response = crate::openapi::CsrfRefused),
+        (status = 403, response = MyIdentityDeleteForbidden),
         (status = 404, response = MyIdentityNotFound),
         (status = 409, response = MyIdentityDeleteConflict),
         (status = 500, response = crate::openapi::InternalError),
@@ -406,7 +412,7 @@ pub async fn list_my_identities(
     )
 )]
 pub async fn delete_my_identity(
-    auth: AuthOnly,
+    auth: SessionOnly,
     client: ClientAddress,
     State(state): State<AppState>,
     ApiPath(IdentityIdParam { identity_id }): ApiPath<IdentityIdParam>,

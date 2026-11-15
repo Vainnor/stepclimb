@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE service_accounts\n           SET last_used_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond',\n               updated_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond'\n           WHERE org_id = $1 AND id = $2\n             AND (last_used_at IS NULL\n                  OR last_used_at < timestamptz 'epoch' + $3::bigint * interval '1 microsecond')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0fe462e4d37f5e6a1cfd1c9c2bc86a866c7fab3ba6085f9cce829740d49c0cd1"
+}

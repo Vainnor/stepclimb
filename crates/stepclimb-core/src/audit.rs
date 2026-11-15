@@ -29,6 +29,9 @@ pub enum Actor {
     /// A user, through a request from the client address the server derived for it
     /// (`STEPCLIMB_TRUSTED_PROXIES` decides which `X-Forwarded-For` entry that is).
     User { id: Uuid, ip: IpAddr },
+    /// A service account's API key, by the service account's id, through a request from the
+    /// client address the server derived for it (docs/specs/m0/08-sessions-and-csrf.md I6).
+    ApiKey { id: Uuid, ip: IpAddr },
     /// The instance on its own behalf: the `stepclimb admin` CLI, startup, a job. It has no id
     /// and no address.
     Instance,
@@ -61,6 +64,8 @@ pub enum Action {
     PasswordSet,
     TotpEnable,
     TotpDisable,
+    ServiceAccountCreate,
+    ServiceAccountDelete,
 }
 
 impl Action {
@@ -92,6 +97,8 @@ impl Action {
             Self::PasswordSet => "password.set",
             Self::TotpEnable => "totp.enable",
             Self::TotpDisable => "totp.disable",
+            Self::ServiceAccountCreate => "service_account.create",
+            Self::ServiceAccountDelete => "service_account.delete",
         }
     }
 
@@ -117,6 +124,7 @@ impl Action {
             Self::PasswordSet => "password",
             // Nor has a user's TOTP; the entry names its user.
             Self::TotpEnable | Self::TotpDisable => "totp",
+            Self::ServiceAccountCreate | Self::ServiceAccountDelete => "service_account",
         }
     }
 }
@@ -164,6 +172,7 @@ pub(crate) async fn record(
 ) -> Result<(), sqlx::Error> {
     let (actor_type, actor_id, ip) = match actor {
         Actor::User { id, ip } => ("user", Some(id), Some(ip.to_string())),
+        Actor::ApiKey { id, ip } => ("api_key", Some(id), Some(ip.to_string())),
         Actor::Instance => ("instance", None, None),
     };
     sqlx::query!(
@@ -235,6 +244,10 @@ impl TryFrom<Row> for Entry {
                 id,
                 ip: ip.parse().map_err(|_| stored("ip"))?,
             },
+            ("api_key", Some(id), Some(ip)) => Actor::ApiKey {
+                id,
+                ip: ip.parse().map_err(|_| stored("ip"))?,
+            },
             ("instance", None, None) => Actor::Instance,
             _ => return Err(stored("actor")),
         };
@@ -254,7 +267,7 @@ impl TryFrom<Row> for Entry {
 mod tests {
     use super::*;
 
-    const ALL: [Action; 24] = [
+    const ALL: [Action; 26] = [
         Action::RoleCreate,
         Action::RoleUpdate,
         Action::RoleDelete,
@@ -279,6 +292,8 @@ mod tests {
         Action::PasswordSet,
         Action::TotpEnable,
         Action::TotpDisable,
+        Action::ServiceAccountCreate,
+        Action::ServiceAccountDelete,
     ];
 
     #[test]

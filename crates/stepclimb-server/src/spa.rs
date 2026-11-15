@@ -28,6 +28,7 @@ use crate::{
     AppState,
     appearance::from_cookie,
     branding::{self, THEME_CSS_PATH, THEME_CSS_VERSION_PARAM},
+    csrf,
     error::ApiError,
     request_org::RequestOrg,
     session::Authenticated,
@@ -103,8 +104,12 @@ async fn theme_hash(state: &AppState, parts: &mut Parts) -> Option<String> {
 /// The signed-in user's appearance; without a session, the cookie's; without either, none
 /// chosen. A server error while finding the session or the user's choice is logged and the page
 /// drawn from the cookie, or as if none were chosen: the app's `/me` request then shows the
-/// failure itself.
+/// failure itself. A page request carrying a bearer credential is drawn from the cookie without
+/// authenticating it, so a page load never looks up an API key or records its use.
 async fn page_appearance(state: &AppState, parts: &mut Parts) -> Appearance {
+    if csrf::carries_bearer(&parts.headers) {
+        return from_cookie(&parts.headers).unwrap_or_default();
+    }
     let auth = match Authenticated::from_request_parts(parts, state).await {
         Ok(auth) => auth,
         Err(rejection) => {

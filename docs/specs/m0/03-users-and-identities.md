@@ -78,7 +78,9 @@ these rows are in `04` to `07`.
   acts with its owner's permissions narrowed to its scopes (`08-sessions-and-csrf.md`), and a key
   whose scopes do not cover every permission of its owner is refused when it changes its owner's
   own email or status (coordinator decision, 2026-11-14, fail closed). M0 accepts no API key
-  yet; `08` issue 6 adds the key principal and a route test of this case.
+  yet; `08` issue 6 adds the key principal and a route test of this case (delivered with `08`
+  I6, which goes further: any key acting on its own owner answers 403 `auth.session_required`,
+  `08` B44).
 
   What the check is serialized with: the route takes the organization's account tree lock, which
   the role assignment routes take before they create or remove an assignment, then locks `FOR KEY
@@ -273,7 +275,8 @@ these rows are in `04` to `07`.
   `08-sessions-and-csrf.md` issue 6 and app access tokens with its issue 8, and until then the
   server accepts no bearer credential, so `GET /api/v1/me` answers browser sessions only and a
   bearer request is anonymous (401). The owned-key half of B21 and T17 lands with `08` issue 6,
-  which adds the key principal to the route and its test; the app-token case lands with `08`
+  which adds the key principal to the route and its test (delivered: `tests/service_accounts.rs`, an
+  owned key answers its owner with the key's narrowed grants); the app-token case lands with `08`
   issue 8 (access-token authentication), which does the same for app tokens. The ownerless half cannot arise in M0: `08` Q9 (a) makes every service
   account have an owner, so no M0 principal is not a user. The server therefore neither produces
   nor documents 403 `auth.not_a_user` until a principal without a user exists. `user` carries
