@@ -29,7 +29,7 @@ use stepclimb_core::{
     OrgScope, Source, accounts,
     audit::{self, Actor},
     clock::ManualClock,
-    courses,
+    course_files, courses, files,
     id::{Uuid, new_id},
     items, modules, organizations,
     role_assignments::{self, NewAssignment, Scope},
@@ -288,6 +288,38 @@ impl Fixture {
             .expect("create item")
             .id;
         (module, item)
+    }
+
+    /// A file in the top folder of a new course in Tower: its course file's id.
+    async fn course_file(&self) -> Uuid {
+        let course = self.course().await;
+        let mut hasher = files::Sha256Hasher::new();
+        hasher.update(b"Walked");
+        let new = files::NewFile {
+            hashed: hasher.finish(),
+            mime: "text/plain; charset=utf-8".into(),
+        };
+        let file = match files::insert(&self.pool, scope(self.org), &new, now()).await {
+            Ok(file) => file.id,
+            Err(files::Error::HashTaken) => {
+                let mut conn = self.pool.acquire().await.expect("a connection");
+                files::find_by_hash(&mut conn, scope(self.org), new.hashed.sha256())
+                    .await
+                    .expect("find the file")
+                    .expect("the file")
+                    .id
+            }
+            Err(error) => panic!("insert file: {error}"),
+        };
+        let place = (
+            &course_files::Folder::root(),
+            &course_files::Name::parse("walked.txt").expect("a name"),
+        );
+        let mut conn = self.pool.acquire().await.expect("a connection");
+        course_files::create(&mut conn, scope(self.org), course, file, place, now())
+            .await
+            .expect("create course file")
+            .id
     }
 
     /// A signed-in user holding a new custom role with `permissions` plus
@@ -1004,6 +1036,10 @@ async fn an_empty_scope_key_is_refused_on_every_operation_but_the_allowed_ones(p
                     .replace("{module_id}", &module.to_string())
                     .replace("{item_id}", &item.to_string());
             }
+            if uri.contains("{course_file_id}") {
+                let course_file = f.course_file().await;
+                uri = uri.replace("{course_file_id}", &course_file.to_string());
+            }
             if uri.contains("{user_id}") {
                 let target = f.user("Walk target").await;
                 uri = uri.replace("{user_id}", &target.to_string());
@@ -1027,10 +1063,16 @@ async fn an_empty_scope_key_is_refused_on_every_operation_but_the_allowed_ones(p
             let hidden_course = path.contains("{course_id}") && answer.code() == "course.not_found";
             let hidden_module = path.contains("{module_id}") && answer.code() == "module.not_found";
             let hidden_item = path.contains("{item_id}") && answer.code() == "item.not_found";
+            let hidden_file =
+                path.contains("{course_file_id}") && answer.code() == "file.not_found";
             assert!(
                 answer.status == StatusCode::FORBIDDEN
                     || (answer.status == StatusCode::NOT_FOUND
-                        && (hidden_account || hidden_course || hidden_module || hidden_item)),
+                        && (hidden_account
+                            || hidden_course
+                            || hidden_module
+                            || hidden_item
+                            || hidden_file)),
                 "{id} answered an empty-scope key: {answer:?}"
             );
         }

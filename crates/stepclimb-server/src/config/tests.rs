@@ -243,6 +243,7 @@ fn every_known_variable_is_accepted() {
             "STEPCLIMB_ALLOW_INSECURE_PROVIDERS",
             "STEPCLIMB_ROLE",
             "STEPCLIMB_WORKER_CONCURRENCY",
+            "STEPCLIMB_MAX_FILE_BYTES",
             "STEPCLIMB_STORAGE_URL",
             "STEPCLIMB_STORAGE_S3_ENDPOINT",
             "STEPCLIMB_STORAGE_S3_REGION",
@@ -448,6 +449,7 @@ fn every_config_field_is_a_classified_setting() {
         allow_insecure_providers: _,
         role: _,
         worker_concurrency: _,
+        max_file_bytes: _,
         // `[[providers]]` is a record of the file, not a setting (`providers::tests`).
         providers: _,
         // The six storage settings below (`storage::tests`).
@@ -467,6 +469,7 @@ fn every_config_field_is_a_classified_setting() {
         (ALLOW_INSECURE_PROVIDERS, false),
         (ROLE, false),
         (WORKER_CONCURRENCY, false),
+        (MAX_FILE_BYTES, false),
         (STORAGE_URL, false),
         (STORAGE_S3_ENDPOINT, false),
         (STORAGE_S3_REGION, false),
@@ -817,6 +820,7 @@ fn non_secret_values_list_every_non_secret_setting_and_no_secret() {
             ("allow_insecure_providers", "false".to_owned()),
             ("role", "all".to_owned()),
             ("worker_concurrency", "4".to_owned()),
+            ("max_file_bytes", "104857600".to_owned()),
         ]
     );
     let printed = format!("{values:?}");
@@ -1521,6 +1525,47 @@ fn a_worker_concurrency_outside_1_to_64_is_refused_naming_the_setting() {
         ),
         "{error}"
     );
+}
+
+// docs/specs/m1/06-files.md B4, Q2.
+#[test]
+fn max_file_bytes_is_100_mib_unless_set_and_1_mib_to_5_gib() {
+    let unset = Config::load(&with_required(&[]), None).unwrap();
+    assert_eq!(unset.max_file_bytes, 104_857_600);
+    for (value, bytes) in [
+        ("1048576", 1_048_576),
+        ("5368709120", 5_368_709_120),
+        ("", 104_857_600),
+    ] {
+        let config = Config::load(&with_required(&[(MAX_FILE_BYTES.var, value)]), None).unwrap();
+        assert_eq!(config.max_file_bytes, bytes, "{value:?}");
+    }
+    for (value, problem) in [
+        (
+            "1048575",
+            "1048575 is outside 1048576 (1 MiB) to 5368709120 (5 GiB)",
+        ),
+        (
+            "5368709121",
+            "5368709121 is outside 1048576 (1 MiB) to 5368709120 (5 GiB)",
+        ),
+        ("+1048576", "\"+1048576\" is not a whole number of bytes"),
+        ("100MiB", "\"100MiB\" is not a whole number of bytes"),
+        (
+            "99999999999999999999",
+            "\"99999999999999999999\" is not a whole number of bytes",
+        ),
+    ] {
+        let error = Config::load(&with_required(&[(MAX_FILE_BYTES.var, value)]), None).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "STEPCLIMB_MAX_FILE_BYTES: {problem}; for example {}",
+                MAX_FILE_BYTES.example
+            ),
+            "{value:?}"
+        );
+    }
 }
 
 #[test]

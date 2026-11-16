@@ -60,6 +60,8 @@ pub mod code {
     pub const MODULE_NOT_FOUND: &str = "module.not_found";
     /// The item does not exist in the organization or its course is not visible (404).
     pub const ITEM_NOT_FOUND: &str = "item.not_found";
+    /// The course file does not exist in the organization or its course is not visible (404).
+    pub const FILE_NOT_FOUND: &str = "file.not_found";
 }
 
 /// The path parameter [`AccountTarget`] and [`AccountParentTarget`] read.
@@ -73,6 +75,9 @@ pub const MODULE_ID_PARAM: &str = "module_id";
 
 /// The path parameter [`ItemTarget`] reads.
 pub const ITEM_ID_PARAM: &str = "item_id";
+
+/// The path parameter [`CourseFileTarget`] reads.
+pub const COURSE_FILE_ID_PARAM: &str = "course_file_id";
 
 /// A request whose principal holds the permission `R` at the target `T` resolves to (B17), or
 /// whose organization's plan includes the feature `R` (spec 10 B9).
@@ -286,6 +291,30 @@ impl Target for ItemTarget {
     }
 }
 
+/// The course file named by the path parameter `course_file_id`, which `P` must be effective
+/// over at its course (M1 spec 06 API): resolved to its course inside the principal's
+/// organization, then [`CourseTarget`]'s check with code `file.not_found`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CourseFileTarget {
+    pub id: Uuid,
+    pub course: CourseTarget,
+}
+
+impl Target for CourseFileTarget {
+    async fn resolve<P: Permission>(
+        parts: &mut Parts,
+        state: &AppState,
+        grants: &Grants,
+    ) -> Result<Self, ApiError> {
+        let id = uuid_param(parts, state, COURSE_FILE_ID_PARAM).await?;
+        let course_id = stepclimb_core::course_files::course_of(&state.db, grants.scope(), id)
+            .await
+            .map_err(|error| ApiError::internal(&error))?;
+        let course = course_of::<P>(state, grants, course_id, code::FILE_NOT_FOUND).await?;
+        Ok(Self { id, course })
+    }
+}
+
 /// The course `course_id` of a module or item as a [`CourseTarget`] that `P` is effective over:
 /// 404 with `not_found` when there is no such row (`None`), or its course is not visible to
 /// the principal; 403 when it is visible without `P`.
@@ -310,11 +339,12 @@ async fn course_of<P: Permission>(
 
 /// `denied` as an answer, with a course that is not found or not visible answered as 404
 /// `code` instead, for a target reached through its course: `module.not_found`,
-/// `item.not_found`, or `course.not_found` itself.
+/// `item.not_found`, `file.not_found`, or `course.not_found` itself.
 pub fn not_found_as(denied: Denied, code: &'static str) -> ApiError {
     let detail = match code {
         code::MODULE_NOT_FOUND => "No module with this id exists, or you cannot see it.",
         code::ITEM_NOT_FOUND => "No item with this id exists, or you cannot see it.",
+        code::FILE_NOT_FOUND => "No course file with this id exists, or you cannot see it.",
         _ => "No course with this id exists, or you cannot see it.",
     };
     match denied {
@@ -716,6 +746,11 @@ mod tests {
         let module = not_found_as(Denied::CourseNotFound, code::MODULE_NOT_FOUND);
         assert_eq!(module.status(), StatusCode::NOT_FOUND);
         assert_eq!(module.code(), "module.not_found");
+        let file = not_found_as(Denied::CourseNotFound, code::FILE_NOT_FOUND);
+        assert_eq!(
+            (file.status(), file.code()),
+            (StatusCode::NOT_FOUND, "file.not_found")
+        );
         let item_forbidden = not_found_as(Denied::Forbidden, code::ITEM_NOT_FOUND);
         assert_eq!(item_forbidden.code(), "permission.denied");
         let course = ApiError::from(Denied::CourseNotFound);

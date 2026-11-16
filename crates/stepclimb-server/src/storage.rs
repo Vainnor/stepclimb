@@ -38,7 +38,7 @@ use object_store::{
 use stepclimb_core::{
     OrgScope,
     files::{self, Sha256Digest},
-    id::new_id,
+    id::{Uuid, new_id},
 };
 
 use crate::{
@@ -74,11 +74,13 @@ fn retry_config() -> RetryConfig {
     }
 }
 
-/// The configured store and the prefix every key lives under. Cloning is cheap.
+/// The configured store, the prefix every key lives under, and the largest file one upload may
+/// send (`max_file_bytes`, B4), which only the upload route reads. Cloning is cheap.
 #[derive(Clone)]
 pub struct Storage {
     store: Arc<dyn ObjectStore>,
     prefix: Path,
+    max_file_bytes: u64,
 }
 
 impl std::fmt::Debug for Storage {
@@ -86,6 +88,7 @@ impl std::fmt::Debug for Storage {
         f.debug_struct("Storage")
             .field("store", &self.store.to_string())
             .field("prefix", &self.prefix.as_ref())
+            .field("max_file_bytes", &self.max_file_bytes)
             .finish()
     }
 }
@@ -114,9 +117,10 @@ pub enum StorageError {
 }
 
 impl Storage {
-    /// The store `config` names, or `None` when storage is not configured. Builds the client
-    /// only; nothing is sent until [`Storage::probe`] or a later call.
-    pub fn open(config: &StorageConfig) -> Result<Option<Self>, StorageError> {
+    /// The store `config` names, with uploads of at most `max_file_bytes` (`Config`'s value), or
+    /// `None` when storage is not configured. Builds the client only; nothing is sent until
+    /// [`Storage::probe`] or a later call.
+    pub fn open(config: &StorageConfig, max_file_bytes: u64) -> Result<Option<Self>, StorageError> {
         let open = |source| StorageError::Open { source };
         let (store, prefix): (Arc<dyn ObjectStore>, &str) = match config {
             StorageConfig::NotConfigured => return Ok(None),
@@ -131,7 +135,14 @@ impl Storage {
         Ok(Some(Self {
             store,
             prefix: Path::from_iter(prefix.split('/').filter(|s| !s.is_empty())),
+            max_file_bytes,
         }))
+    }
+
+    /// The largest file one upload may send, in bytes (`max_file_bytes`, B4).
+    #[must_use]
+    pub fn max_file_bytes(&self) -> u64 {
+        self.max_file_bytes
     }
 
     /// The store, for reading and writing objects at [`Storage::path`]s.
@@ -151,6 +162,40 @@ impl Storage {
     #[must_use]
     pub fn file_path(&self, scope: OrgScope, sha256: Sha256Digest) -> Path {
         self.path(&files::storage_key(scope, sha256))
+    }
+
+    /// The location of the temporary object an upload streams to,
+    /// `orgs/<org_id>/uploads/<upload_id>` (B5).
+    #[must_use]
+    pub fn upload_path(&self, scope: OrgScope, upload_id: Uuid) -> Path {
+        self.path(&format!("{}/{upload_id}", Self::uploads_key(scope)))
+    }
+
+    /// Where the scope's organization's temporary upload objects are (B8).
+    #[must_use]
+    pub fn uploads_prefix(&self, scope: OrgScope) -> Path {
+        self.path(&Self::uploads_key(scope))
+    }
+
+    /// Where the scope's organization's file objects are (B2, B21).
+    #[must_use]
+    pub fn files_prefix(&self, scope: OrgScope) -> Path {
+        self.path(&format!("orgs/{}/files", scope.org_id()))
+    }
+
+    fn uploads_key(scope: OrgScope) -> String {
+        format!("orgs/{}/uploads", scope.org_id())
+    }
+
+    /// The key of `location` relative to the store's prefix, as `files::storage_key` writes
+    /// one; `None` for a location outside the prefix.
+    #[must_use]
+    pub fn key_of(&self, location: &Path) -> Option<String> {
+        let parts: Vec<_> = location
+            .prefix_match(&self.prefix)?
+            .map(|p| p.as_ref().to_owned())
+            .collect();
+        Some(parts.join("/"))
     }
 
     /// Write, read back and delete an object under [`PROBE_PREFIX`] (B1). The first step that

@@ -287,7 +287,7 @@ fn check_config_exits_0_printing_only_non_secret_values_without_connecting() {
              public_url: https://lms.example.org\nallowed_origins: (none)\n\
              trusted_proxies: (none)\nsign_in_rate_limit: 20\ntoken_rate_limit: 60\n\
              failed_sign_in_limit: 10\nallow_insecure_providers: false\nrole: all\n\
-             worker_concurrency: 4\nproviders: (none)\n\
+             worker_concurrency: 4\nmax_file_bytes: 104857600\nproviders: (none)\n\
              storage: not configured (STEPCLIMB_STORAGE_URL)\n",
             file.0.display()
         )

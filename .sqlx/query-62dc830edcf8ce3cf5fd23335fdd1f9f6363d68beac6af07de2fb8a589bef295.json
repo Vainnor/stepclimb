@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE files\n           SET unreferenced_since = timestamptz 'epoch' + $3::bigint * interval '1 microsecond'\n           WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "62dc830edcf8ce3cf5fd23335fdd1f9f6363d68beac6af07de2fb8a589bef295"
+}

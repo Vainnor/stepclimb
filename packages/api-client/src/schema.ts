@@ -385,6 +385,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/course-files/{course_file_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a course file. */
+        get: operations["getCourseFile"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a course file no `file` item references. Its bytes stay stored until no course file
+         *     has used them for 24 hours.
+         */
+        delete: operations["deleteCourseFile"];
+        options?: never;
+        head?: never;
+        /**
+         * Rename a course file, or move it to another folder of its course. A patch naming only current
+         *     values changes nothing.
+         */
+        patch: operations["updateCourseFile"];
+        trace?: never;
+    };
     "/api/v1/courses": {
         parameters: {
             query?: never;
@@ -427,7 +452,32 @@ export interface paths {
         patch: operations["updateCourse"];
         trace?: never;
     };
-    "/api/v1/courses/{course_id}/copy": {
+    "/api/v1/courses/{course_id}/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the folders and files directly in a folder of the course: folders first, then files,
+         *     each sorted by name (compared as bytes).
+         */
+        get: operations["listCourseFiles"];
+        put?: never;
+        /**
+         * Upload a file into a folder of the course. The body is the file itself, with its
+         *     `Content-Length`; its `Content-Type` is ignored: the server reads the type from the bytes.
+         *     The same bytes the organization already stores are kept once and add nothing to its storage.
+         */
+        post: operations["uploadCourseFile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/courses/{course_id}/folders/rename": {
         parameters: {
             query?: never;
             header?: never;
@@ -436,8 +486,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Copy a course into an account as a new draft, or as a template. */
-        post: operations["copyCourse"];
+        /**
+         * Rename a folder of the course and every folder below it, in one change: either every file
+         *     moves or none does.
+         */
+        post: operations["renameCourseFolder"];
         delete?: never;
         options?: never;
         head?: never;
@@ -530,8 +583,8 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Rename, publish or unpublish an item, change an external link's URL, or set or remove its
-         *     requirement. A patch naming only current values changes nothing.
+         * Rename, publish or unpublish an item, or change an external link's URL. A patch naming only
+         *     current values changes nothing.
          */
         patch: operations["updateItem"];
         trace?: never;
@@ -760,10 +813,7 @@ export interface paths {
         delete: operations["deleteModule"];
         options?: never;
         head?: never;
-        /**
-         * Rename, publish or unpublish a module, or change its rules: unlock date, prerequisites,
-         *     sequential order and completion rule. A patch naming only current values changes nothing.
-         */
+        /** Rename, publish or unpublish a module. A patch naming only current values changes nothing. */
         patch: operations["updateModule"];
         trace?: never;
     };
@@ -1590,11 +1640,6 @@ export interface components {
             /** @description Send the code to `POST /auth/local/totp` in this browser within 10 minutes. */
             next: components["schemas"]["NextStep"];
         };
-        /**
-         * @description Whether all or one of a module's requirements complete it.
-         * @enum {string}
-         */
-        CompletionRule: "all" | "one";
         /** @description One measured pair: `foreground` on `background`. */
         ContrastPair: {
             /** @description A color token, such as `bg-canvas`. */
@@ -1672,22 +1717,45 @@ export interface components {
              */
             updated_at: string;
         };
-        /** @description A copy to make of a course, as a draft. */
-        CourseCopy: {
+        /** @description A file in a folder of a course. */
+        CourseFile: {
+            /** Format: uuid */
+            course_id: string;
             /**
-             * Format: uuid
-             * @description The account the copy belongs to; you must hold `course.create` at a scope containing it.
+             * Format: date-time
+             * @description RFC 3339, UTC.
              */
-            account_id: string;
-            /** @description Trimmed; 1 to 50 characters; unique in the organization, ignoring ASCII case. */
-            code: string;
+            created_at: string;
+            /** @description `/` or a path such as `/handouts/week-1`, NFC-normalized. */
+            folder: string;
+            /** Format: uuid */
+            id: string;
             /**
-             * @description Whether the copy is a template. Omitted or `false`, the copy is an ordinary course, also
-             *     when the source is a template.
+             * @description The type the server read from the file's first bytes; `application/octet-stream` when it
+             *     recognized none. Never the uploader's `Content-Type`.
              */
-            template?: boolean;
-            /** @description Trimmed; 1 to 200 characters. The source's title when omitted. */
-            title?: string;
+            mime: string;
+            /** @description NFC-normalized; unique in the folder. */
+            name: string;
+            /** @description The SHA-256 of the bytes as the server computed it, 64 lowercase hexadecimal digits. */
+            sha256: string;
+            /**
+             * Format: int64
+             * @description In bytes, as the server counted them.
+             */
+            size: number;
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            updated_at: string;
+        };
+        /** @description A change to a course file; an omitted member is left as it is. */
+        CourseFilePatch: {
+            /** @description The folder to move the file to, in the same course. */
+            folder?: string;
+            /** @description The file's new name. */
+            name?: string;
         };
         /** @description What a learner sees first when opening the course. */
         CourseHome: {
@@ -1901,6 +1969,31 @@ export interface components {
             /** @description A JSON Pointer (RFC 6901) to the member that broke the rule, such as `/name`. */
             field: string;
         };
+        /** @description One entry of a folder: a folder directly inside it, or a file in it. */
+        FolderEntry: {
+            /** @enum {string} */
+            kind: "folder";
+            /** @description Its last segment. */
+            name: string;
+            /** @description The folder's whole path, such as `/handouts/week-1`. */
+            path: string;
+        } | {
+            file: components["schemas"]["CourseFile"];
+            /** @enum {string} */
+            kind: "file";
+        };
+        /** @description A folder to rename, with everything below it. */
+        FolderRename: {
+            /** @description The folder's path now; not `/`. */
+            from: string;
+            /** @description Its new path; not `/`. */
+            to: string;
+        };
+        /** @description How many course files a folder rename moved. */
+        FolderRenamed: {
+            /** Format: int64 */
+            moved: number;
+        };
         /**
          * @description A scope a grant or a role assignment applies at: the organization, an account or a course,
          *     by id. An organization scope's `id` is the organization's id.
@@ -1973,7 +2066,6 @@ export interface components {
              * @description What the item points at; only for kinds that point at a row.
              */
             ref_id?: string;
-            requirement: null | components["schemas"]["Requirement"];
             title: string;
             /**
              * Format: date-time
@@ -2009,7 +2101,6 @@ export interface components {
         ItemPatch: {
             /** @description Whether learners see the item. */
             published?: boolean;
-            requirement?: null | components["schemas"]["Requirement"];
             /** @description Trimmed; 1 to 200 characters. */
             title?: string;
             /** @description For an external link only. */
@@ -2107,8 +2198,6 @@ export interface components {
         };
         /** @description A module of a course, with its items in order. */
         Module: {
-            /** @description Whether all or one of the module's requirements complete it. */
-            completion_rule: components["schemas"]["CompletionRule"];
             /** Format: uuid */
             course_id: string;
             /**
@@ -2124,17 +2213,8 @@ export interface components {
              * @description 0-based, dense within the course.
              */
             position: number;
-            /** @description The modules of the course this one waits for, in course order. */
-            prerequisite_ids: string[];
             published: boolean;
-            /** @description Whether the module's items go in order. */
-            require_sequential: boolean;
             title: string;
-            /**
-             * Format: date-time
-             * @description RFC 3339, UTC: the module stays locked to learners before this time.
-             */
-            unlock_at: string | null;
             /**
              * Format: date-time
              * @description RFC 3339, UTC.
@@ -2151,23 +2231,10 @@ export interface components {
         };
         /** @description A change to a module; an omitted member is left as it is. */
         ModulePatch: {
-            completion_rule?: components["schemas"]["CompletionRule"];
-            /**
-             * @description The whole new set of modules of the same course this one waits for: not itself, each
-             *     once, at most 20, and closing no cycle.
-             */
-            prerequisite_ids?: string[];
             /** @description Whether learners see the module. */
             published?: boolean;
-            /** @description Whether the module's items go in order. */
-            require_sequential?: boolean;
             /** @description Trimmed; 1 to 200 characters. */
             title?: string;
-            /**
-             * Format: date-time
-             * @description RFC 3339 with an offset, from 1970 up to 2200; `null` clears it.
-             */
-            unlock_at?: string | null;
         };
         /** @description One of the signed-in user's identities. */
         MyIdentity: {
@@ -2585,6 +2652,24 @@ export interface components {
             next_cursor: string | null;
         };
         /** @description One page of a list. */
+        Page_FolderEntry: {
+            /** @description The items, in the list's sort order. */
+            items: ({
+                /** @enum {string} */
+                kind: "folder";
+                /** @description Its last segment. */
+                name: string;
+                /** @description The folder's whole path, such as `/handouts/week-1`. */
+                path: string;
+            } | {
+                file: components["schemas"]["CourseFile"];
+                /** @enum {string} */
+                kind: "file";
+            })[];
+            /** @description Pass this as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
+        };
+        /** @description One page of a list. */
         Page_Provider: {
             /** @description The items, in the list's sort order. */
             items: {
@@ -2969,26 +3054,6 @@ export interface components {
             id: string;
             /** @description The organization's name. */
             name: string;
-        };
-        /**
-         * @description What completes an item for a learner: `view` (open it) and `mark_done` (mark it done) on a
-         *     page, file, external link or video; `watch` (at least `min_percent`, 1 to 100, of a video).
-         *     `submit`, `score` and `mastery` are reserved for quizzes and activities.
-         */
-        Requirement: {
-            /** @enum {string} */
-            kind: "view";
-        } | {
-            /** @enum {string} */
-            kind: "mark_done";
-        } | {
-            /** @enum {string} */
-            kind: "watch";
-            /**
-             * Format: int32
-             * @description 1 to 100.
-             */
-            min_percent: number;
         };
         /** @description The revocation request's form, for the document; the handler reads the body itself. */
         RevokeForm: {
@@ -3537,24 +3602,6 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `permission.denied`: you can see the course but do not hold `course.view_all` at a scope containing it. `permission.escalation`: the destination would give you, over the copy, a course permission (one grantable at course scope) you do not hold over the source. `auth.csrf_refused`: the request did not come from this site. */
-        CourseCopyForbidden: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/problem+json": components["schemas"]["Problem"];
-            };
-        };
-        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it. `account.not_found`: the destination `account_id` does not exist or you do not hold `course.create` at a scope containing it. `org.not_found`: the request's organization cannot be determined. */
-        CourseCopyNotFound: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/problem+json": components["schemas"]["Problem"];
-            };
-        };
         /** @description `permission.denied`: you hold `course.create` nowhere, or you can see the account without holding it there. `auth.csrf_refused`: the request did not come from this site. */
         CourseCreateForbidden: {
             headers: {
@@ -3566,6 +3613,42 @@ export interface components {
         };
         /** @description `account.not_found`: no account with `account_id` exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined. */
         CourseCreateNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.archived`: the course is archived and takes no content change. `file.in_use`: a `file` item references the course file; remove it first. */
+        CourseFileDeleteConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.invalid`: `errors` names `/folder` (`file.folder_invalid`: not `/` or a path of `/`-separated segments that are not empty, `.` or `..` and hold no `\` or control character; `file.folder_too_long`: a segment over 100 characters; `file.folder_too_deep`: more than 8 segments) or `/name` (`file.name_invalid`: empty, `.`, `..`, or holding `/`, `\` or a control character; `file.name_too_long`: over 255 characters). Both are compared after NFC normalization. */
+        CourseFileInvalid: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `file.not_found`: no course file with this id exists in the organization, or you cannot see its course. `org.not_found`: the request's organization cannot be determined. */
+        CourseFileNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.archived`: the course is archived and takes no content change. `file.name_taken`: the folder already holds a file with this name. */
+        CourseFileWriteConflict: {
             headers: {
                 [name: string]: unknown;
             };
@@ -3591,7 +3674,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `permission.denied`: you can see the course but do not hold `course.manage` at a scope containing it. `permission.escalation`: the destination would give you, over the course, a course permission (one grantable at course scope) you do not hold over it now. `auth.csrf_refused`: the request did not come from this site. */
+        /** @description `permission.denied`: you can see the course but do not hold `course.manage` at a scope containing it. `permission.escalation`: the destination would give you, over the course, a permission you do not hold over it now. `auth.csrf_refused`: the request did not come from this site. */
         CourseMoveForbidden: {
             headers: {
                 [name: string]: unknown;
@@ -3771,6 +3854,42 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined. */
+        FilesCourseNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: you can see the course but do not hold `course.view_all` at a scope containing it. */
+        FilesViewForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.invalid`: `errors` names `/from` or `/to` with `file.folder_invalid`, `file.folder_too_long` or `file.folder_too_deep` as for a course file's folder, `file.folder_root` (the top folder `/` cannot be renamed or be the new name), or `/to` with `file.folder_too_deep` when a moved file would be more than 8 levels deep. */
+        FolderRenameInvalid: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it. `folder.not_found`: no file is in the folder `from` or below it. `org.not_found`: the request's organization cannot be determined. */
+        FolderRenameNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `identity.last_sign_in_method`: the user would be left with no way to sign in. `identity.local`: the identity is the user's local account, which is not removed here. */
         IdentityDeleteConflict: {
             headers: {
@@ -3825,7 +3944,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space, control or Unicode format character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none), `/position` with `item.position_out_of_range` (outside 0 to the module's item count), or, on a patch, `/requirement` with `requirement.invalid` (an unknown shape or member, `min_percent` outside 1 to 100, or a requirement the item's kind does not take, such as any on a header) or `requirement.unavailable` (`submit`, `score` or `mastery`, reserved for quizzes and activities). */
+        /** @description `request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space, control or Unicode format character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none), or `/position` with `item.position_out_of_range` (outside 0 to the module's item count). */
         ItemInvalid: {
             headers: {
                 [name: string]: unknown;
@@ -3962,33 +4081,6 @@ export interface components {
         };
         /** @description `course.archived`: the course is archived and takes no content change. `order.stale`: the list is not exactly the current set of ids (one is missing, extra or repeated); reload and try again. */
         ModuleOrderConflict: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/problem+json": components["schemas"]["Problem"];
-            };
-        };
-        /** @description `course.archived`: the course is archived and takes no content change. `module.prerequisite_cycle`: the prerequisites would form a cycle in the course's modules. */
-        ModulePatchConflict: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/problem+json": components["schemas"]["Problem"];
-            };
-        };
-        /** @description `request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/unlock_at` with `module.date_out_of_range` (before 1970 or from 2200 on), or `/prerequisite_ids` with `module.prerequisite_self` (the module itself), `module.prerequisite_duplicate` (an id named twice) or `module.prerequisites_too_many` (more than 20). */
-        ModulePatchInvalid: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/problem+json": components["schemas"]["Problem"];
-            };
-        };
-        /** @description `module.not_found`: no module with this id exists in the organization, or you cannot see its course, or a `prerequisite_ids` entry is not a module of the same course. `org.not_found`: the request's organization cannot be determined. */
-        ModulePatchNotFound: {
             headers: {
                 [name: string]: unknown;
             };
@@ -4558,6 +4650,69 @@ export interface components {
         };
         /** @description `role.builtin_immutable`: built-in roles cannot be changed. */
         UpdateConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.malformed`: `Content-Length` is not a number, the body is longer or shorter than it says, or a query parameter does not parse. */
+        UploadBadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.archived`: the course is archived and takes no content change. `file.name_taken`: the folder already holds a file with this name. */
+        UploadConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined. */
+        UploadCourseNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: you can see the course but do not hold `course.content_edit` at a scope containing it. `entitlement.limit_reached`: the file would take the organization past its plan's `storage` limit; `limit` and `max` say which and how much. `auth.csrf_refused`: the request did not come from this site. */
+        UploadForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `file.length_required`: the request has no `Content-Length`; send the file with its length. */
+        UploadLengthRequired: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `storage.not_configured`: the server has no object storage configured, so it cannot store files; the operator sets `STEPCLIMB_STORAGE_URL`. `org.none`: the instance has no organization yet. */
+        UploadStorageUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `file.too_large`: `Content-Length` is over the largest file this server accepts (`max_file_bytes`, 100 MiB unless the operator set another). */
+        UploadTooLarge: {
             headers: {
                 [name: string]: unknown;
             };
@@ -5759,6 +5914,100 @@ export interface operations {
             503: components["responses"]["NoOrganization"];
         };
     };
+    getCourseFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The course file's id. */
+                course_file_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The course file */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CourseFile"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["FilesViewForbidden"];
+            404: components["responses"]["CourseFileNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    deleteCourseFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The course file's id. */
+                course_file_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The course file is deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ContentEditForbidden"];
+            404: components["responses"]["CourseFileNotFound"];
+            409: components["responses"]["CourseFileDeleteConflict"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    updateCourseFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The course file's id. */
+                course_file_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CourseFilePatch"];
+            };
+        };
+        responses: {
+            /** @description The course file after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CourseFile"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ContentEditForbidden"];
+            404: components["responses"]["CourseFileNotFound"];
+            409: components["responses"]["CourseFileWriteConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["CourseFileInvalid"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
     listCourses: {
         parameters: {
             query?: {
@@ -5896,41 +6145,121 @@ export interface operations {
             503: components["responses"]["NoOrganization"];
         };
     };
-    copyCourse: {
+    listCourseFiles: {
+        parameters: {
+            query?: {
+                /** @description The folder, such as `/handouts`; `/`, the course's top folder, when omitted. */
+                folder?: string;
+                /** @description The `next_cursor` of the previous page; omit it for the first page. */
+                cursor?: string;
+                /** @description How many items to return, 1 to 200; 50 when omitted. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The course's id. */
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the folder's entries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_FolderEntry"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["FilesViewForbidden"];
+            404: components["responses"]["FilesCourseNotFound"];
+            422: components["responses"]["CourseFileInvalid"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    uploadCourseFile: {
+        parameters: {
+            query: {
+                /** @description The folder, such as `/handouts`; `/`, the course's top folder, when omitted. */
+                folder?: string;
+                /** @description The file's name in the folder. */
+                name: string;
+            };
+            header?: never;
+            path: {
+                /** @description The course's id. */
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        /** @description The file's bytes, with `Content-Length`. */
+        requestBody: {
+            content: {
+                "application/octet-stream": number[];
+            };
+        };
+        responses: {
+            /** @description The file is stored and placed in the folder */
+            201: {
+                headers: {
+                    /** @description The course file's path */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CourseFile"];
+                };
+            };
+            400: components["responses"]["UploadBadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["UploadForbidden"];
+            404: components["responses"]["UploadCourseNotFound"];
+            409: components["responses"]["UploadConflict"];
+            411: components["responses"]["UploadLengthRequired"];
+            413: components["responses"]["UploadTooLarge"];
+            422: components["responses"]["CourseFileInvalid"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["UploadStorageUnavailable"];
+        };
+    };
+    renameCourseFolder: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                /** @description The source course's id. */
+                /** @description The course's id. */
                 course_id: string;
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CourseCopy"];
+                "application/json": components["schemas"]["FolderRename"];
             };
         };
         responses: {
-            /** @description The copy is created */
-            201: {
+            /** @description How many course files moved */
+            200: {
                 headers: {
-                    /** @description The copy's path */
-                    Location?: string;
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Course"];
+                    "application/json": components["schemas"]["FolderRenamed"];
                 };
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
-            403: components["responses"]["CourseCopyForbidden"];
-            404: components["responses"]["CourseCopyNotFound"];
-            409: components["responses"]["CourseCodeConflict"];
+            403: components["responses"]["ContentEditForbidden"];
+            404: components["responses"]["FolderRenameNotFound"];
+            409: components["responses"]["CourseFileWriteConflict"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
-            422: components["responses"]["UnprocessableEntity"];
+            422: components["responses"]["FolderRenameInvalid"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };
@@ -6626,11 +6955,11 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["ContentEditForbidden"];
-            404: components["responses"]["ModulePatchNotFound"];
-            409: components["responses"]["ModulePatchConflict"];
+            404: components["responses"]["ModuleNotFound"];
+            409: components["responses"]["ModuleWriteConflict"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
-            422: components["responses"]["ModulePatchInvalid"];
+            422: components["responses"]["UnprocessableEntity"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };

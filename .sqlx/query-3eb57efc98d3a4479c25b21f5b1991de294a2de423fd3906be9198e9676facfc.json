@@ -1,0 +1,129 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH entries AS (\n               SELECT DISTINCT 0 AS kind,\n                      split_part(substr(folder, char_length($4) + 1), '/', 1) AS name,\n                      NULL::uuid AS id\n               FROM course_files\n               WHERE org_id = $1 AND course_id = $2 AND starts_with(folder, $4) AND folder <> $3\n               UNION ALL\n               SELECT 1, name, id\n               FROM course_files\n               WHERE org_id = $1 AND course_id = $2 AND folder = $3\n           )\n           SELECT e.kind AS \"kind!\", e.name AS \"name!\", e.id, cf.course_id AS \"course_id?\",\n                  cf.file_id AS \"file_id?\", cf.folder AS \"folder?\", f.size AS \"size?\",\n                  f.mime AS \"mime?\", f.sha256 AS \"sha256?\",\n                  (extract(epoch FROM cf.created_at) * 1000000)::bigint AS \"created_at_us?\",\n                  (extract(epoch FROM cf.updated_at) * 1000000)::bigint AS \"updated_at_us?\"\n           FROM entries e\n           LEFT JOIN course_files cf ON cf.org_id = $1 AND cf.id = e.id\n           LEFT JOIN files f ON f.org_id = cf.org_id AND f.id = cf.file_id\n           WHERE $5::int IS NULL\n              OR e.kind > $5\n              OR (e.kind = $5 AND e.name COLLATE \"C\" > $6::text COLLATE \"C\")\n           ORDER BY e.kind, e.name COLLATE \"C\"\n           LIMIT $7",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "kind!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "course_id?",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "course_files",
+            "name": "course_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "file_id?",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "course_files",
+            "name": "file_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "folder?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "course_files",
+            "name": "folder"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "size?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "files",
+            "name": "size"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "mime?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "files",
+            "name": "mime"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "sha256?",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "files",
+            "name": "sha256"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "created_at_us?",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 10,
+        "name": "updated_at_us?",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Int4",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "3eb57efc98d3a4479c25b21f5b1991de294a2de423fd3906be9198e9676facfc"
+}

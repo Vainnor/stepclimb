@@ -237,6 +237,47 @@ Coordinator decisions (overnight, 2026-11-16, I1), pending owner review:
   non-`unlimited` plan refuses uploads until its row sets `storage`. Self-hosted instances run
   `unlimited`, which leaves it `null`.
 
+Coordinator decisions (overnight, 2026-11-16, I2), pending owner review:
+
+- B4's limit check before the body, read with T3, would refuse re-uploading a stored file whose
+  bytes do not fit as new bytes, which B7 then accepts at no cost. The check before the body
+  therefore refuses only when the length does not fit and the organization holds no file of
+  exactly that length; B7's check with the real size refuses the rest after the body is
+  streamed, and the upload leaves no object behind.
+- Uploads of the same bytes take turns on a transaction-scoped advisory lock on the
+  organization's hash (`files::lock_hash`), taken before the `files` row is looked up and held
+  to the commit. The loser of a race finds the winner's row and adds 0, so B7's retry after a
+  unique-index failure never happens, and a failed upload deletes the copy of a new hash while
+  it still holds the lock, when no other upload can have committed a row naming it. Without the
+  lock, an upload that failed while another upload of the same new bytes had copied but not yet
+  committed would delete an object the other's row is about to name.
+- `files.cleanup` holds the same lock as a session lock from before it rechecks a row until
+  the row's object is deleted after the commit, so an upload that reuses a hash cleanup has just
+  deleted copies the object again rather than losing it. Its third step lists
+  `orgs/<org_id>/files/` and deletes each object no row names, under the lock and after
+  checking again: the retry of B21's failed deletes, and the copy of an upload whose commit
+  failed. It deletes at most 1,000 unreferenced rows per organization per run.
+- "Unreferenced for 24 hours" is read from a new column, `files.unreferenced_since`, which
+  deleting a course file stamps with the time of the delete (migration
+  `20261117110000_files_unreferenced_since.sql`). A row that never lost a reference counts from
+  its `created_at`.
+- `folder` may be omitted on the upload and the listing and means `/`. The 422 field codes are
+  `file.folder_invalid`, `file.folder_too_long` (a segment over 100 characters),
+  `file.folder_too_deep`, `file.name_invalid`, `file.name_too_long`, and, for the folder rename,
+  `file.folder_root`: neither `from` nor `to` may be `/`. Names sort as bytes (`COLLATE "C"`).
+- B6's sniffer reads OGG as `audio/ogg` when its first page starts a Vorbis or Opus stream and
+  `application/ogg` otherwise, MP4 only for MP4 `ftyp` brands, WebM only for an EBML `webm`
+  document type, and office files only for an Office Open XML or OpenDocument archive; a plain
+  ZIP is `application/octet-stream`. Text that starts with `<` (HTML, SVG, XML) and an empty
+  file are `application/octet-stream`, so no markup is ever labeled as text a browser shows.
+- `max_file_bytes` is at most 5 GiB, the largest object one S3 copy request takes (B7 copies the
+  temporary object to its file's key), and the server carries it with the store, since only the
+  upload route reads it. NFC normalization uses `unicode-normalization` 0.1.26, which the
+  lockfile already held through sqlx and webauthn-rs.
+- B11's `file.in_use` covers `file` items here; the cover joins it with I4, which adds the
+  column. `GET /api/v1/course-files/{course_file_id}` from the API table comes with I2, as part
+  of the files area.
+
 ## Data
 
 Migration `migrations/<version>_files.sql` (I1), and `migrations/<version>_course_cover.sql`
@@ -285,9 +326,13 @@ with the default `NO ACTION` stops a referenced `files` row from being deleted (
 items point at `course_files.id` through `module_items.ref_id`, checked by the repository and by
 B11's `file.in_use`. Rows with `org_id` everywhere; the cover foreign key backs B11 for covers.
 
+I2 adds `files.unreferenced_since timestamptz` (B21, decision above).
+
 Repository functions (each takes `OrgScope`): `files::{find_by_hash, insert, count_for_limit,
 unreferenced, delete}`, `course_files::{create, get, list_folder, update, rename_folder, delete,
-referenced}`. `stepclimb-media` is not involved: it is spec 08's.
+referenced}`, and with I2 `files::{lock_hash, lock_hash_session, unlock_hash_session, exists,
+any_of_size}` and `course_files::{course_of, name_taken}`. `stepclimb-media` is not involved: it
+is spec 08's.
 
 ## Permissions
 

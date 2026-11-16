@@ -15,7 +15,7 @@
 //! its sign-in step and disabling, the discovery document (`/.well-known/stepclimb`), the OAuth
 //! 2.1 authorization, token and revocation endpoints for Stepclimb's own apps (`/oauth/authorize`,
 //! `/oauth/token`, `/oauth/revoke`), service
-//! accounts and their API keys, and the shared error
+//! accounts and their API keys, course file uploads and the files area, and the shared error
 //! schemas and responses below. The other M0 specs add their endpoints under `/api/v1`.
 //!
 //! Every `/api/v1` operation lists its errors in `#[utoipa::path]` (spec 02 B6). The errors
@@ -33,12 +33,12 @@ use utoipa::{
 
 use crate::{
     accounts, admission_settings, admission_webhook, admission_webhook_call, appearance, auth,
-    branding, courses, discovery, enrollment,
+    branding, course_files, courses, discovery, enrollment,
     error::{FieldError, PROBLEM_JSON, Problem},
     health, identities, items, local_sign_in, manifest, me, modules, my_passkeys, oauth_authorize,
     oauth_token, organization, passkey_enrollment, passkey_options, passkey_sign_in, password,
     provider_admin, provider_callback, provider_sign_in, role_assignments, roles, service_accounts,
-    totp, totp_enrollment, users,
+    totp, totp_enrollment, upload, users,
 };
 
 /// The operation extension that marks a handler as changing state (spec 08 B12, T17). Every
@@ -108,6 +108,12 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         items::move_item,
         items::delete_item,
         courses::copy_course,
+        course_files::list_course_files,
+        upload::upload_course_file,
+        course_files::get_course_file,
+        course_files::update_course_file,
+        course_files::delete_course_file,
+        course_files::rename_course_folder,
         roles::list_permissions,
         roles::list_roles,
         roles::get_role,
@@ -216,6 +222,11 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             items::ItemOrder,
             items::ItemMove,
             courses::CourseCopy,
+            course_files::CourseFile,
+            course_files::FolderEntry,
+            course_files::CourseFilePatch,
+            course_files::FolderRename,
+            course_files::FolderRenamed,
             roles::ScopeType,
             roles::PermissionInfo,
             roles::Role,
@@ -355,6 +366,21 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             items::ItemWriteConflict,
             items::ItemMoveConflict,
             items::ItemInvalid,
+            course_files::CourseFileNotFound,
+            course_files::FilesCourseNotFound,
+            course_files::FolderRenameNotFound,
+            course_files::FilesViewForbidden,
+            course_files::CourseFileWriteConflict,
+            course_files::CourseFileDeleteConflict,
+            course_files::CourseFileInvalid,
+            course_files::FolderRenameInvalid,
+            upload::UploadCourseNotFound,
+            upload::UploadForbidden,
+            upload::UploadConflict,
+            upload::UploadBadRequest,
+            upload::UploadLengthRequired,
+            upload::UploadTooLarge,
+            upload::UploadStorageUnavailable,
             roles::RoleNotFound,
             roles::WriteForbidden,
             roles::DeleteForbidden,
@@ -460,6 +486,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         (name = "accounts", description = "The account tree inside the organization"),
         (name = "courses", description = "Courses, their status and their account"),
         (name = "modules", description = "A course's modules and their items"),
+        (name = "files", description = "A course's files and folders"),
         (name = "roles", description = "The permission catalog, roles and role assignments"),
         (name = "users", description = "The organization's users"),
         (name = "branding", description = "The organization's branding and theme"),

@@ -34,6 +34,9 @@ use stepclimb_server::{
 };
 use tower::ServiceExt as _;
 
+/// `max_file_bytes`'s default; these tests upload nothing.
+const MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
+
 /// Every object key under `prefix`, walking object_store's delimiter listing, sorted.
 async fn list_keys(storage: &Storage, prefix: &object_store::path::Path) -> Vec<String> {
     let mut keys = Vec::new();
@@ -70,9 +73,12 @@ impl TempDir {
     }
 
     fn storage(&self) -> Storage {
-        Storage::open(&StorageConfig::Local {
-            root: self.0.clone(),
-        })
+        Storage::open(
+            &StorageConfig::Local {
+                root: self.0.clone(),
+            },
+            MAX_FILE_BYTES,
+        )
         .expect("open the directory")
         .expect("storage is configured")
     }
@@ -104,7 +110,7 @@ fn minio(prefix: &str) -> S3Config {
 }
 
 fn open(config: S3Config) -> Storage {
-    Storage::open(&StorageConfig::S3(config))
+    Storage::open(&StorageConfig::S3(config), MAX_FILE_BYTES)
         .expect("build the S3 client")
         .expect("storage is configured")
 }
@@ -123,7 +129,7 @@ fn test_prefix() -> String {
 #[test]
 fn without_a_storage_url_there_is_no_store() {
     assert!(
-        Storage::open(&StorageConfig::NotConfigured)
+        Storage::open(&StorageConfig::NotConfigured, MAX_FILE_BYTES)
             .expect("nothing to open")
             .is_none()
     );
@@ -141,7 +147,7 @@ async fn a_local_directory_passes_the_probe_and_keeps_no_probe_object() {
 #[tokio::test]
 async fn a_local_directory_that_does_not_exist_is_refused_naming_the_setting() {
     let missing = std::env::temp_dir().join(format!("stepclimb-storage-missing-{}", new_id()));
-    let error = Storage::open(&StorageConfig::Local { root: missing }).unwrap_err();
+    let error = Storage::open(&StorageConfig::Local { root: missing }, MAX_FILE_BYTES).unwrap_err();
     assert!(matches!(error, StorageError::Open { .. }), "{error}");
     assert!(
         error.to_string().contains("STEPCLIMB_STORAGE_URL"),

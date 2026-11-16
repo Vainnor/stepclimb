@@ -16,7 +16,8 @@ use tower_http::trace::TraceLayer;
 use utoipa_scalar::{Scalar, Servable};
 
 use crate::{
-    accounts, admission_settings, admission_webhook, appearance, auth, branding, courses,
+    accounts, admission_settings, admission_webhook, appearance, auth, branding, course_files,
+    courses,
     csrf::{self, OriginAllowlist},
     discovery, enrollment,
     error::ApiError,
@@ -26,7 +27,7 @@ use crate::{
     provider_admin, provider_callback, provider_sign_in,
     providers::Providers,
     rate_limit::RateLimiter,
-    role_assignments, roles, service_accounts, spa, totp, totp_enrollment, users,
+    role_assignments, roles, service_accounts, spa, totp, totp_enrollment, upload, users,
     web_origin::WebOrigin,
 };
 
@@ -307,6 +308,20 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         (
             "/api/v1/courses/{course_id}/copy",
             post(courses::copy_course),
+        ),
+        (
+            "/api/v1/courses/{course_id}/files",
+            get(course_files::list_course_files).post(upload::upload_course_file),
+        ),
+        (
+            "/api/v1/courses/{course_id}/folders/rename",
+            post(course_files::rename_course_folder),
+        ),
+        (
+            "/api/v1/course-files/{course_file_id}",
+            get(course_files::get_course_file)
+                .patch(course_files::update_course_file)
+                .delete(course_files::delete_course_file),
         ),
         ("/api/v1/admin/permissions", get(roles::list_permissions)),
         (

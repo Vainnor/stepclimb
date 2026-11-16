@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE course_files\n           SET folder = $5 || substr(folder, char_length($3) + 1),\n               updated_at = CASE WHEN $3 = $5 THEN updated_at\n                   ELSE timestamptz 'epoch' + $6::bigint * interval '1 microsecond' END\n           WHERE org_id = $1 AND course_id = $2 AND (folder = $3 OR starts_with(folder, $4))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "37dcec095d0e969874e84f2ca315e9a6f3ec68820baaa691f49a9178eef62723"
+}

@@ -411,16 +411,21 @@ pub fn log_configuration(config: &Config) {
         allow_insecure_providers = %config.allow_insecure_providers,
         role = %config.role,
         worker_concurrency = %config.worker_concurrency,
+        max_file_bytes = %config.max_file_bytes,
         providers = %config.providers_or_none(),
         storage = %config.storage,
         "configuration loaded"
     );
 }
 
-/// The store `config` names, opened and probed (docs/specs/m1/06-files.md B1), or `None`
-/// after one warning naming `STEPCLIMB_STORAGE_URL` when storage is not configured (B1a).
-pub async fn open_storage(config: &StorageConfig) -> Result<Option<Storage>, StartupError> {
-    let Some(storage) = Storage::open(config)? else {
+/// The store `config` names, opened and probed (docs/specs/m1/06-files.md B1) with uploads of
+/// at most `max_file_bytes` (B4), or `None` after one warning naming `STEPCLIMB_STORAGE_URL` when
+/// storage is not configured (B1a).
+pub async fn open_storage(
+    config: &StorageConfig,
+    max_file_bytes: u64,
+) -> Result<Option<Storage>, StartupError> {
+    let Some(storage) = Storage::open(config, max_file_bytes)? else {
         warn_storage_not_configured();
         return Ok(None);
     };
@@ -457,7 +462,7 @@ pub async fn serve(config: Config) -> Result<(), StartupError> {
     log_configuration(&config);
     warn_about_development_keys(&config.encryption_keys);
     warn_about_insecure_providers(&config);
-    let storage = open_storage(&config.storage).await?;
+    let storage = open_storage(&config.storage, config.max_file_bytes).await?;
     let pool = connect(&config.database_url).await?;
     let clock = Clock::system();
     prepare(&pool, &clock).await?;
@@ -470,7 +475,7 @@ pub async fn serve(config: Config) -> Result<(), StartupError> {
     .await?;
     // Built before the listener exists, so `/readyz` never answers before it (B16).
     let worker = if config.role.runs_jobs() {
-        Some(job_worker(&config, clock.clone()).await?)
+        Some(job_worker(&config, clock.clone(), storage.clone()).await?)
     } else {
         None
     };
@@ -549,9 +554,13 @@ impl JobRunner {
 /// The job runner of an `all` or `worker` process, with this binary's registry, serving every
 /// queue in it, its options from `config`, and the schedule rows of its periodic kinds written
 /// (spec m1/01 B17).
-async fn job_worker(config: &Config, clock: Clock) -> Result<JobRunner, StartupError> {
+async fn job_worker(
+    config: &Config,
+    clock: Clock,
+    storage: Option<Storage>,
+) -> Result<JobRunner, StartupError> {
     let pool = connect_jobs(&config.database_url, config.worker_concurrency).await?;
-    let registry = jobs::registry().map_err(StartupError::Registry)?;
+    let registry = jobs::registry(storage).map_err(StartupError::Registry)?;
     schedule::sync(&pool, &registry, clock.now())
         .await
         .map_err(StartupError::Schedules)?;
