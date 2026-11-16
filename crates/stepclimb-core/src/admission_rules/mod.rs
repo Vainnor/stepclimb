@@ -27,7 +27,7 @@ use sqlx::{PgConnection, PgExecutor};
 pub use eval::{Outcome, evaluate};
 pub use model::{
     Condition, MAX_DEPTH, MAX_GROUP_RULES, MAX_RULES, MAX_TEXT_CHARS, MAX_VALUES, Pattern, Problem,
-    Rule, Scalar, Test, code, parse_list, to_json,
+    Rule, Scalar, Test, attribute_names, code, parse_list, to_json,
 };
 
 use crate::{
@@ -170,6 +170,21 @@ pub async fn for_sign_in(
     })
 }
 
+/// The scope's organization's own list, [`Unreadable`] when it does not parse. Read under the
+/// organization row's lock (the lock every rule write takes first), it holds until the caller's
+/// transaction ends.
+pub async fn organization_list(conn: &mut PgConnection, scope: OrgScope) -> Result<Stored, Error> {
+    let stored = sqlx::query_scalar!(
+        r#"SELECT (settings -> 'admission' -> 'rules')::text AS rules FROM organizations
+           WHERE id = $1"#,
+        scope.org_id(),
+    )
+    .fetch_optional(&mut *conn)
+    .await?
+    .ok_or(Error::NotFound)?;
+    Ok(organization_rules(stored.as_deref()))
+}
+
 /// Every list of the scope's organization; [`Error::StoredRules`] when one does not parse.
 pub async fn get(conn: &mut PgConnection, scope: OrgScope) -> Result<RuleSets, Error> {
     let stored = sqlx::query_scalar!(
@@ -232,8 +247,8 @@ fn organization_rules(stored: Option<&str>) -> Stored {
     stored_list(Some(&value)).ok_or_else(location)
 }
 
-/// `provider`'s list from its config.
-fn provider_rules(provider: &IdentityProvider) -> Stored {
+/// `provider`'s list from its config, [`Unreadable`] when it does not parse.
+pub fn provider_rules(provider: &IdentityProvider) -> Stored {
     stored_list(provider.config.get(PROVIDER_MEMBER)).ok_or_else(|| {
         Unreadable(format!(
             "identity_providers({})/{PROVIDER_MEMBER}",

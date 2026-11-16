@@ -18,9 +18,11 @@
 //!   a principal checks a feature with `Require<F>`, which runs before the permission check;
 //!   a check in the handler body would run after it, and a missing id would answer 404 while
 //!   the feature is off;
-//! - [`Entitlements::check`], for the one handler whose need for a feature depends on its body
-//!   (`PUT /api/v1/admin/admission/webhook`, `crate::admission_webhook`): it runs after the
-//!   permission check, which a route with a path id must not do, and that route has none;
+//! - [`Entitlements::check`], for a handler whose need for a feature depends on its body or its
+//!   target, which no extractor can see: `PUT /api/v1/admin/admission/webhook`
+//!   (`crate::admission_webhook`), which has no path id, and the provider routes
+//!   (`crate::provider_admin`), where an `oidc` provider needs one feature and an `oauth2`
+//!   provider another. It runs after the permission check, so it is for those routes only;
 //! - [`Entitlements::check_room`], the limit check a creating transaction runs before it
 //!   inserts: 403 `entitlement.limit_reached` with the problem's `limit` and `max` members.
 //!
@@ -105,7 +107,8 @@ impl Entitlements {
         self.check::<F>()
     }
 
-    /// The feature check of `Require<F>` and [`Entitlements::require`].
+    /// The feature check of `Require<F>`, of [`Entitlements::require`], and of a handler whose
+    /// feature depends on the target or the body (module documentation).
     pub(crate) fn check<F: Feature>(&self) -> Result<(), ApiError> {
         if self.plan.entitlements.has::<F>() {
             Ok(())

@@ -34,8 +34,8 @@ use crate::{
     enrollment,
     error::{FieldError, PROBLEM_JSON, Problem},
     health, identities, local_sign_in, me, my_passkeys, oauth_authorize, organization,
-    passkey_enrollment, passkey_options, passkey_sign_in, password, provider_callback,
-    provider_sign_in, role_assignments, roles, service_accounts, totp, users,
+    passkey_enrollment, passkey_options, passkey_sign_in, password, provider_admin,
+    provider_callback, provider_sign_in, role_assignments, roles, service_accounts, totp, users,
 };
 
 /// The operation extension that marks a handler as changing state (spec 08 B12, T17). Every
@@ -122,7 +122,12 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         admission_webhook::delete_admission_webhook,
         service_accounts::list_service_accounts,
         service_accounts::create_service_account,
-        service_accounts::delete_service_account
+        service_accounts::delete_service_account,
+        provider_admin::list_providers,
+        provider_admin::create_provider,
+        provider_admin::get_provider,
+        provider_admin::update_provider,
+        provider_admin::delete_provider
     ),
     components(
         schemas(
@@ -225,7 +230,17 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             service_accounts::ServiceAccount,
             service_accounts::ServiceAccountKind,
             service_accounts::CreatedServiceAccount,
-            service_accounts::NewServiceAccount
+            service_accounts::NewServiceAccount,
+            provider_admin::Provider,
+            provider_admin::ProviderKind,
+            provider_admin::ProviderSource,
+            provider_admin::NewProvider,
+            provider_admin::ProviderPatch,
+            provider_admin::schema::ProviderConfig,
+            provider_admin::schema::OidcProviderConfig,
+            provider_admin::schema::OidcProviderClaims,
+            provider_admin::schema::Oauth2ProviderConfig,
+            provider_admin::schema::Oauth2ProviderClaims
         ),
         responses(
             BadRequest,
@@ -335,7 +350,15 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             service_accounts::ServiceAccountsForbidden,
             service_accounts::ServiceAccountCreateForbidden,
             service_accounts::ServiceAccountDeleteForbidden,
-            service_accounts::ServiceAccountNotFound
+            service_accounts::ServiceAccountNotFound,
+            provider_admin::ProvidersForbidden,
+            provider_admin::ProviderWriteForbidden,
+            provider_admin::ProviderDeleteForbidden,
+            provider_admin::ProviderNotFound,
+            provider_admin::ProviderCreateConflict,
+            provider_admin::ProviderUpdateConflict,
+            provider_admin::ProviderDeleteConflict,
+            provider_admin::ProviderInvalid
         )
     ),
     tags(
@@ -349,7 +372,8 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         (name = "branding", description = "The organization's branding and theme"),
         (name = "local-sign-in", description = "The organization's local sign-in methods"),
         (name = "admission", description = "Who may sign in to the organization"),
-        (name = "service-accounts", description = "Service accounts and their API keys")
+        (name = "service-accounts", description = "Service accounts and their API keys"),
+        (name = "providers", description = "The organization's OpenID Connect and OAuth 2 sign-in providers")
     )
 )]
 struct ApiDoc;

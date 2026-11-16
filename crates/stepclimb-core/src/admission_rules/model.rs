@@ -220,6 +220,22 @@ pub fn parse_list(
     }
 }
 
+/// The attribute names the conditions of `rules` test, at any depth.
+#[must_use]
+pub fn attribute_names(rules: &[Rule]) -> BTreeSet<&str> {
+    let mut names = BTreeSet::new();
+    let mut pending: Vec<&Rule> = rules.iter().collect();
+    while let Some(rule) = pending.pop() {
+        match rule {
+            Rule::Condition(condition) => {
+                names.insert(condition.attribute.as_str());
+            }
+            Rule::Any(rules) | Rule::All(rules) => pending.extend(rules),
+        }
+    }
+    names
+}
+
 /// The JSON array [`parse_list`] reads back as `rules`.
 #[must_use]
 pub fn to_json(rules: &[Rule]) -> Value {
@@ -691,5 +707,20 @@ mod tests {
             }]
         );
         assert!(parse_list(&list[..1], &root(), Some(&known)).is_ok());
+    }
+
+    #[test]
+    fn attribute_names_reads_every_condition_at_any_depth() {
+        let rules = parse(json!([
+            { "attribute": "rating", "op": "exists" },
+            { "any": [
+                { "attribute": "region", "op": "equals", "value": "east" },
+                { "all": [{ "attribute": "staff", "op": "equals", "value": true }] }
+            ] }
+        ]))
+        .expect("a valid list");
+        let names: Vec<&str> = attribute_names(&rules).into_iter().collect();
+        assert_eq!(names, ["rating", "region", "staff"]);
+        assert!(attribute_names(&[]).is_empty());
     }
 }

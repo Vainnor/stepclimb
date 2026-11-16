@@ -216,17 +216,17 @@ impl Fixture {
             .expect("link identity");
     }
 
-    /// A new OIDC provider of the organization with `config`, inserted directly since its admin
-    /// API is not built: its id.
+    /// A new OIDC provider of the organization with `config`, inserted directly: its id.
     async fn provider(&self, enabled: bool, config: Value) -> Uuid {
         let id = new_id();
+        let hex = id.simple().to_string();
         sqlx::query(
             "INSERT INTO identity_providers (id, org_id, key, kind, config, enabled)
              VALUES ($1, $2, $3, 'oidc', $4, $5)",
         )
         .bind(id)
         .bind(self.org)
-        .bind(format!("p{}", id.simple()))
+        .bind(format!("p{}", &hex[hex.len() - 16..]))
         .bind(config)
         .bind(enabled)
         .execute(&self.pool)

@@ -75,7 +75,9 @@ use stepclimb_core::{
     admission_webhooks::{self, Change, Fresh},
     audit::Actor,
     clock::ManualClock,
-    feature::{self, AdmissionWebhook, ApiKeys, CustomBranding, CustomRoles, Feature, Limit},
+    feature::{
+        self, AdmissionWebhook, ApiKeys, CustomBranding, CustomRoles, Feature, Limit, OidcProviders,
+    },
     grants::ScopeId,
     id::{Uuid, new_id},
     identities::{self, NewIdentity},
@@ -427,6 +429,32 @@ const TABLE: &[Entry] = &[
             webhook_of_org,
         )),
     },
+    Entry {
+        operation_id: "listProviders",
+        access: permission(ProviderManage::KEY, Target::Org, at_org),
+    },
+    Entry {
+        operation_id: "getProvider",
+        access: permission(ProviderManage::KEY, PROVIDER_NOT_FOUND, provider_in_path),
+    },
+    Entry {
+        operation_id: "createProvider",
+        access: gated(
+            OidcProviders::KEY,
+            permission(ProviderManage::KEY, Target::Org, new_oidc_provider),
+        ),
+    },
+    Entry {
+        operation_id: "updateProvider",
+        access: gated_by_target(
+            OidcProviders::KEY,
+            permission(ProviderManage::KEY, PROVIDER_NOT_FOUND, relabel_provider),
+        ),
+    },
+    Entry {
+        operation_id: "deleteProvider",
+        access: permission(ProviderManage::KEY, PROVIDER_NOT_FOUND, provider_in_path),
+    },
 ];
 
 /// The organization has no admission webhook. The routes act on the caller's organization's
@@ -470,6 +498,7 @@ const fn with_every_permission(access: Access) -> Access {
             key,
             target,
             feature,
+            feature_by_target,
             setup,
             ..
         } => Access::Permission {
@@ -477,6 +506,7 @@ const fn with_every_permission(access: Access) -> Access {
             target,
             extra: EVERY_PERMISSION,
             feature,
+            feature_by_target,
             setup,
         },
         Access::AuthOnly(_) | Access::Own { .. } | Access::Mine(_) => {
@@ -498,6 +528,23 @@ fn webhook_of_org(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> 
     })
 }
 
+const PROVIDER_NOT_FOUND: Target = Target::Scoped {
+    not_found: "provider.not_found",
+    cross_org: "provider.not_found",
+};
+
+/// A new `oidc` provider of `org` (`Org::provider`), named in the path.
+fn provider_in_path(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let (id, _) = org.provider().await;
+        Call {
+            params: vec![("provider_id", id)],
+            body: None,
+            at: At::Org,
+        }
+    })
+}
+
 /// [`webhook_of_org`] and a body that moves it: an update, and in an organization without one
 /// (the cross-organization case's org A), a creation.
 fn move_webhook_of_org(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
@@ -506,6 +553,40 @@ fn move_webhook_of_org(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + 
         Call {
             params: Vec::new(),
             body: Some(serde_json::json!({ "url": "https://suite.example.test/hook" })),
+            at: At::Org,
+        }
+    })
+}
+
+/// A new label for a new `oidc` provider of `org`.
+fn relabel_provider(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let (id, _) = org.provider().await;
+        Call {
+            params: vec![("provider_id", id)],
+            body: Some(serde_json::json!({ "label": "Renamed by the suite" })),
+            at: At::Org,
+        }
+    })
+}
+
+/// A new, disabled `oidc` provider: `provider.manage` alone may create it (sign-up is off in
+/// a new organization, and it is not trusted for email matching).
+fn new_oidc_provider(_: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: Vec::new(),
+            body: Some(serde_json::json!({
+                "key": "suite-sso",
+                "kind": "oidc",
+                "label": "Suite SSO",
+                "enabled": false,
+                "config": {
+                    "issuer": "https://idp.example.test/suite",
+                    "client_id": "suite",
+                    "client_secret": "suite-secret-value",
+                },
+            })),
             at: At::Org,
         }
     })
@@ -1050,6 +1131,10 @@ enum Access {
         extra: &'static [&'static str],
         /// `F::KEY` of the `Require<F>` the route takes before the permission, if any.
         feature: Option<&'static str>,
+        /// Whether the route checks `feature` only once it has found its target, because the
+        /// target decides which feature applies (a provider's kind, spec 06 I5): its "feature
+        /// off, unknown ids" case then answers the target's 404.
+        feature_by_target: bool,
         setup: Setup,
     },
 }
@@ -1950,6 +2035,7 @@ async fn run(world: &World, app: &Router, op: &Operation, access: &Access) -> Re
             target,
             extra,
             feature,
+            feature_by_target,
             setup,
         } => {
             let Some(info) = perm::ALL.iter().find(|p| p.key() == *key) else {
@@ -1968,10 +2054,17 @@ async fn run(world: &World, app: &Router, op: &Operation, access: &Access) -> Re
             }
             report.record(op, "401", anonymous(world, app, op, *setup).await);
             if let Some(feature) = feature {
-                let result = feature_off(world, app, op, feature, *setup, false).await;
+                let off = (StatusCode::FORBIDDEN, "entitlement.feature_unavailable");
+                let result = feature_off(world, app, op, feature, *setup, false, off).await;
                 report.record(op, "feature off", result);
                 if op.path.contains('{') {
-                    let result = feature_off(world, app, op, feature, *setup, true).await;
+                    let expected = match target {
+                        Target::Scoped { not_found, .. } if *feature_by_target => {
+                            (StatusCode::NOT_FOUND, *not_found)
+                        }
+                        _ => off,
+                    };
+                    let result = feature_off(world, app, op, feature, *setup, true, expected).await;
                     report.record(op, "feature off, unknown ids", result);
                 }
             }
@@ -2048,9 +2141,10 @@ async fn hidden(
 }
 
 /// The organization's plan has every catalog feature but `feature`: a user holding every
-/// permission at the target's scope gets 403 `entitlement.feature_unavailable` and the
-/// organization's rows stay as they were. With `unknown_ids`, every path parameter names an id
-/// that does not exist, which must not change the answer (spec 10 B9).
+/// permission at the target's scope gets `expected` (403 `entitlement.feature_unavailable`) and
+/// the organization's rows stay as they were. With `unknown_ids`, every path parameter names an
+/// id that does not exist, which must not change the answer (spec 10 B9), unless the target
+/// decides the feature ([`gated_by_target`]): then `expected` is the target's 404.
 async fn feature_off(
     world: &World,
     app: &Router,
@@ -2058,6 +2152,7 @@ async fn feature_off(
     feature: &str,
     setup: Setup,
     unknown_ids: bool,
+    expected: (StatusCode, &str),
 ) -> Result<(), String> {
     let org = world.org().await;
     let mut call = setup(&org).await;
@@ -2073,11 +2168,7 @@ async fn feature_off(
     let before = snapshot(&world.pool, org.id).await?;
     let answer = call_op(app, op, &call, org.id, Some(&cookie)).await?;
     let mut wrong = Vec::new();
-    wrong.extend(
-        answer
-            .expect(StatusCode::FORBIDDEN, "entitlement.feature_unavailable")
-            .err(),
-    );
+    wrong.extend(answer.expect(expected.0, expected.1).err());
     if snapshot(&world.pool, org.id).await? != before {
         wrong.push("the organization's rows changed".to_owned());
     }
@@ -2799,7 +2890,8 @@ impl Org {
     /// belong to specs 05 and 06, so the row is inserted directly.
     async fn provider(&self) -> (Uuid, String) {
         let id = new_id();
-        let key = format!("p{}", id.simple());
+        let hex = id.simple().to_string();
+        let key = format!("p{}", &hex[hex.len() - 16..]);
         sqlx::query(
             "INSERT INTO identity_providers (id, org_id, key, kind, config)
              VALUES ($1, $2, $3, 'oidc', $4::jsonb)",
@@ -3149,6 +3241,7 @@ const fn permission(key: &'static str, target: Target, setup: Setup) -> Access {
         target,
         extra: &[],
         feature: None,
+        feature_by_target: false,
         setup,
     }
 }
@@ -3168,6 +3261,34 @@ const fn gated(feature: &'static str, access: Access) -> Access {
             target,
             extra,
             feature: Some(feature),
+            feature_by_target: false,
+            setup,
+        },
+        Access::AuthOnly(_) | Access::Own { .. } | Access::Mine(_) => {
+            panic!("a feature entry needs a permission")
+        }
+    }
+}
+
+/// [`gated`], for a route whose target decides which feature it checks, after the target is
+/// found: the provider routes, where an `oidc` provider needs `oidc_providers` and an `oauth2`
+/// one `oauth2_providers` (spec 06 I5). The entry names the feature of the target its setup
+/// builds.
+const fn gated_by_target(feature: &'static str, access: Access) -> Access {
+    match gated(feature, access) {
+        Access::Permission {
+            key,
+            target,
+            extra,
+            feature,
+            setup,
+            ..
+        } => Access::Permission {
+            key,
+            target,
+            extra,
+            feature,
+            feature_by_target: true,
             setup,
         },
         Access::AuthOnly(_) | Access::Own { .. } | Access::Mine(_) => {

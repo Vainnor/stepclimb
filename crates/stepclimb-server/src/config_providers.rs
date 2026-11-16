@@ -226,7 +226,7 @@ async fn write_org(
 /// kind the issuer, or the origins of its three endpoints and the subject pointer. The members
 /// of `stored` (the row) that `config` (the file's) changes, by name; `kind` alone when the kind
 /// changes. A member missing or unreadable in either counts as changed.
-fn changed_anchors(
+pub(crate) fn changed_anchors(
     stored_kind: Kind,
     stored: &Map<String, Value>,
     kind: Kind,

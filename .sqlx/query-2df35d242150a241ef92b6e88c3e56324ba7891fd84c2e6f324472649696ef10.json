@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM identity_providers WHERE org_id = $1 AND id = $2 AND kind <> $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2df35d242150a241ef92b6e88c3e56324ba7891fd84c2e6f324472649696ef10"
+}

@@ -288,6 +288,9 @@ also writes to:
   | `identity.unlink` | `identity` | `identities::unlink` | `before`: the same |
   | `identity_provider.update` | `identity_provider` | `local_sign_in::update` (`04` issue 1) | `before` and `after`: enabled |
   | `identity_provider.update` | `identity_provider` | `admission_rules::update` (`07` issue 3) | `before` and `after`: `admission_rules` |
+  | `identity_provider.create` | `identity_provider` | `identity_providers::admin::create` (`06` issue 5) | `after`: key, kind, label, enabled, config without the client secret |
+  | `identity_provider.update` | `identity_provider` | `identity_providers::admin::update` (`06` issue 5) | `before` and `after` of each of label, enabled and the config (without the client secret) that changed; `client_secret_replaced: true` when the secret changed, never either value |
+  | `identity_provider.delete` | `identity_provider` | `identity_providers::admin::delete` (`06` issue 5) | `before`: key, kind, label, enabled, config without the client secret |
   | `enrollment_link.create` | `enrollment_link` | `local_tokens::create_enrollment` (`04` issue 2) | `after`: user, expiry; never the token or its hash |
   | `passkey.create` | `passkey` | `passkeys::create` (`04` issue 3) | `after`: user, name; never the credential |
   | `passkey.rename` | `passkey` | `passkeys::rename` (`04` issue 5) | `before` and `after`: name |

@@ -9,7 +9,10 @@
 //! member: its shape and the secrets sealed inside it belong to docs/specs/m0/05-oidc.md and
 //! 06-oauth2-and-vatsim-preset.md. A row whose config has `source: "config"` belongs to
 //! `stepclimb.toml` (spec 06 Q2): [`upsert_from_config`] writes it at startup and
-//! [`disable_config_rows_except`] disables it once the file no longer declares it.
+//! [`disable_config_rows_except`] disables it once the file no longer declares it. The admin
+//! API's writes are [`admin`]'s.
+
+pub mod admin;
 
 use std::time::SystemTime;
 
@@ -62,6 +65,42 @@ pub const SOURCE: &str = "source";
 /// [`SOURCE`]'s value for a provider `stepclimb.toml` declares.
 pub const SOURCE_CONFIG: &str = "config";
 
+/// The config member holding the provider's label, the text of its sign-in button.
+pub const LABEL: &str = "label";
+/// The config member holding the provider's sealed client secret.
+pub const CLIENT_SECRET: &str = "client_secret";
+
+/// The longest `label`, in characters.
+pub const LABEL_MAX_CHARS: usize = 200;
+
+/// Whether `label` is a provider label: 1 to [`LABEL_MAX_CHARS`] characters, none of them a
+/// control character (spec 06 B13's rule, the admin API's and `stepclimb.toml`'s alike).
+#[must_use]
+pub fn valid_label(label: &str) -> bool {
+    !label.is_empty()
+        && label.chars().count() <= LABEL_MAX_CHARS
+        && !label.chars().any(char::is_control)
+}
+
+/// `config` as an admin may read it back: without the client secret, the label (which has its
+/// own member in the API), the owner marker ([`SOURCE`]) and the admission rules (which the
+/// admission API serves). Every answer and audit entry that shows a provider's config shows
+/// this, so no secret leaves through one.
+#[must_use]
+pub fn public_config(config: &Map<String, Value>) -> Map<String, Value> {
+    let hidden = [
+        CLIENT_SECRET,
+        LABEL,
+        SOURCE,
+        crate::admission_rules::PROVIDER_MEMBER,
+    ];
+    config
+        .iter()
+        .filter(|(name, _)| !hidden.contains(&name.as_str()))
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect()
+}
+
 /// The longest provider key (spec 06 Q5 (a)).
 pub const KEY_MAX_LEN: usize = 32;
 
@@ -99,6 +138,12 @@ impl IdentityProvider {
     #[must_use]
     pub fn is_from_config_file(&self) -> bool {
         self.config.get(SOURCE).and_then(Value::as_str) == Some(SOURCE_CONFIG)
+    }
+
+    /// The stored label, or `None` when the config holds no string there.
+    #[must_use]
+    pub fn label(&self) -> Option<&str> {
+        self.config.get(LABEL).and_then(Value::as_str)
     }
 }
 
@@ -467,11 +512,50 @@ mod tests {
             "corp_sso",
             "corp sso",
             "corp.sso",
+            ".",
+            "..",
+            "a/b",
+            "%2e",
             "é",
             &"k".repeat(33),
         ] {
             assert!(!valid_key(key), "{key:?}");
         }
+    }
+
+    #[test]
+    fn labels_have_1_to_200_characters_and_no_control_character() {
+        for label in ["A", "Sign in with Example", &"é".repeat(LABEL_MAX_CHARS)] {
+            assert!(valid_label(label), "{label:?}");
+        }
+        for label in [
+            "",
+            "a\nb",
+            "tab\t",
+            "nul\0",
+            &"x".repeat(LABEL_MAX_CHARS + 1),
+        ] {
+            assert!(!valid_label(label), "{label:?}");
+        }
+    }
+
+    #[test]
+    fn the_public_config_leaves_out_the_secret_label_source_and_rules() {
+        let config = serde_json::json!({
+            "issuer": "https://idp.example.test",
+            "client_secret": { "sealed": "c2VjcmV0" },
+            "label": "Example",
+            "source": "config",
+            "admission_rules": [],
+            "scopes": ["openid"],
+        });
+        let Value::Object(config) = config else {
+            unreachable!()
+        };
+        let public = public_config(&config);
+        let names: Vec<&str> = public.keys().map(String::as_str).collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+        assert!(public.contains_key("issuer") && public.contains_key("scopes"));
     }
 
     #[test]
