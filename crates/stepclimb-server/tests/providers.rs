@@ -1304,3 +1304,59 @@ async fn another_organizations_provider_mapping_is_not_found(pool: PgPool) {
     }
     assert_eq!(f.stored(&id.to_string()).await, before);
 }
+
+/// While the provider maps an attribute a rule tests, its client, scopes and user endpoint
+/// flag decide which document the attribute is read from: changing one needs
+/// `admission.manage` as well.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn changing_where_a_tested_attribute_is_read_needs_admission_manage(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (manager, _) = f.holder(&[ProviderManage::KEY]).await;
+    let (both, _) = f.holder(&[ProviderManage::KEY, AdmissionManage::KEY]).await;
+    let mut body = oidc("corp-sso");
+    body["config"]["claims"] = json!({ "attributes": { "rating": "/rating" } });
+    let id = f.created(&manager, body).await;
+    let rules = json!([{ "attribute": "rating", "op": "exists" }]);
+    organization_rules(&f.pool, f.org, &rules).await;
+    let before = f.stored(&id).await;
+    let changes = [
+        json!({ "config": { "client_id": "another-client" } }),
+        json!({ "config": { "scopes": ["openid", "profile", "roles"] } }),
+        json!({ "config": { "userinfo": false } }),
+    ];
+    for change in &changes {
+        f.patch(&manager, &id, change.clone())
+            .await
+            .expect(StatusCode::FORBIDDEN, "permission.denied");
+    }
+    assert_eq!(f.stored(&id).await, before);
+    for change in changes {
+        f.patch(&both, &id, change).await.ok(StatusCode::OK);
+    }
+}
+
+/// A new provider mapping an attribute the organization's rules test needs
+/// `admission.manage` as well; refused, it leaves no row.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn creating_a_provider_that_maps_a_tested_attribute_needs_admission_manage(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (manager, _) = f.holder(&[ProviderManage::KEY]).await;
+    let (both, _) = f.holder(&[ProviderManage::KEY, AdmissionManage::KEY]).await;
+    let rules = json!([{ "attribute": "rating", "op": "exists" }]);
+    organization_rules(&f.pool, f.org, &rules).await;
+    let mut body = oidc("corp-sso");
+    body["config"]["claims"] = json!({ "attributes": { "rating": "/rating" } });
+    f.post(&manager, body.clone())
+        .await
+        .expect(StatusCode::FORBIDDEN, "permission.denied");
+    let rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM identity_providers WHERE org_id = $1 AND key = 'corp-sso'",
+    )
+    .bind(f.org)
+    .fetch_one(&f.pool)
+    .await
+    .expect("count rows");
+    assert_eq!(rows, 0);
+    assert!(f.entries().await.is_empty());
+    f.post(&both, body).await.ok(StatusCode::CREATED);
+}

@@ -30,7 +30,7 @@
 //!   `local.last_method`;
 //! - trusting a provider for email matching, changing what a provider with identities is,
 //!   with sign-up on, turning a provider on, and mapping an attribute an admission rule tests
-//!   differently each need more than `provider.manage`, and removing such an attribute answers
+//!   differently (or changing where it is read from) each need more than `provider.manage`, and removing such an attribute answers
 //!   422 ([`guard::Guard::check`]).
 //!
 //! Each write goes through `identity_providers::admin`, which writes the config through
@@ -121,7 +121,7 @@ pub mod code {
 
 problem_responses! {
     ProvidersForbidden => "`permission.denied`: the caller does not hold `provider.manage` at organization scope.",
-    ProviderWriteForbidden => "`entitlement.feature_unavailable`: the organization's plan does not include the provider's kind (`oidc_providers` for `oidc`, `oauth2_providers` for `oauth2`). `permission.denied`: the caller does not hold `provider.manage` at organization scope; or sign-up is on and the write turns the provider on, or changes the anchors of an enabled one, without `admission.manage`; or the write maps an attribute an admission rule tests differently without `admission.manage`. `permission.escalation`: the write trusts the provider for email matching, or changes the anchors or email claims of a trusted one, or changes the anchors of a provider identities link users to, and the caller does not hold every catalog permission at organization scope. The anchors are the issuer, the authorize origin, the whole token and userinfo URLs and the subject pointer. `auth.csrf_refused`: the request did not come from this site.",
+    ProviderWriteForbidden => "`entitlement.feature_unavailable`: the organization's plan does not include the provider's kind (`oidc_providers` for `oidc`, `oauth2_providers` for `oauth2`). `permission.denied`: the caller does not hold `provider.manage` at organization scope; or sign-up is on and the write turns the provider on, or changes the anchors of an enabled one, without `admission.manage`; or the write maps an attribute an admission rule tests differently, or changes `client_id`, `scopes` or `userinfo` while mapping one, without `admission.manage`. `permission.escalation`: the write trusts the provider for email matching, or changes the anchors or email claims of a trusted one, or changes the anchors of a provider identities link users to, and the caller does not hold every catalog permission at organization scope. The anchors are the issuer, the authorize origin, the whole token and userinfo URLs and the subject pointer. `auth.csrf_refused`: the request did not come from this site.",
     ProviderDeleteForbidden => "`permission.denied`: the caller does not hold `provider.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site.",
     ProviderNotFound => "`provider.not_found`: the organization has no `oidc` or `oauth2` provider with this id. `org.not_found`: the request's organization cannot be determined.",
     ProviderCreateConflict => "`provider.key_taken`: another provider of the organization has the key.",

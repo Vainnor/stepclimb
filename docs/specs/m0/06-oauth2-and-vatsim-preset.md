@@ -347,7 +347,11 @@ server every sign-in test and the Playwright stack use instead of a real provide
        `/config/claims/attributes/{name}`, whatever the caller holds: the rules change first.
        A stored list that does not parse counts as testing every attribute. The 422 tells a
        `provider.manage` holder that a rule tests the name, never what the rule says
-       (COORDINATOR DECIDED (overnight) from the security review of PR #207).
+       (COORDINATOR DECIDED (overnight) from the security review of PR #207). While the
+       provider maps a tested attribute, changing `client_id`, `scopes` or `userinfo` (the
+       `oidc` flag, or the `oauth2` URL) also counts as mapping it differently and needs
+       `admission.manage`: they decide which document the attribute is read from
+       (COORDINATOR DECIDED (overnight) from the re-review of PR #207).
     An API key's narrowed grants apply to each (`08` B27).
   - Disabling or deleting an enabled provider when the local methods offer no primary way in
     and no other outside provider is enabled answers 409 `local.last_method`

@@ -28,6 +28,11 @@ use crate::{
 /// The members of `claims` an email match reads besides the anchors.
 const EMAIL_CLAIMS: [&str; 2] = ["/claims/email", "/claims/email_verified"];
 
+/// The config members that decide which document a mapped attribute is read from: the client
+/// the provider answers as, the scopes it grants, and whether (`oidc`) or where (`oauth2`) the
+/// user endpoint is read.
+const ATTRIBUTE_SOURCE: [&str; 3] = ["client_id", "scopes", "userinfo"];
+
 const TRUST_DETAIL: &str = "A provider trusted for email matching can sign people in as the existing users whose verified email it asserts, including users with permissions you do not hold. Only someone holding every permission can trust a provider, or change the issuer, endpoints, subject or email claims of a trusted one.";
 
 const ANCHOR_DETAIL: &str = "Identities link users to this provider. Changing its issuer, endpoints or subject would sign them in as whoever the new provider says, including users with permissions you do not hold. Only someone holding every permission can change them.";
@@ -128,9 +133,10 @@ impl<'a> Guard<'a> {
     /// The attributes the organization's rules and `before`'s own rules test are read from
     /// where the provider maps them, so a different mapping changes who the rules let in.
     /// Removing one answers 422 `provider.config_invalid` with `provider.attribute_in_use` at
-    /// each; mapping one differently, a new provider's mapping included, needs
-    /// `admission.manage` (403 `permission.denied`). A list that does not parse could test
-    /// any attribute, so it counts as testing them all.
+    /// each; mapping one differently, a new provider's mapping included, or changing a member
+    /// of [`ATTRIBUTE_SOURCE`] while one is mapped, needs `admission.manage` (403
+    /// `permission.denied`). A list that does not parse could test any attribute, so it
+    /// counts as testing them all.
     fn check_attributes(
         &self,
         before: Option<&IdentityProvider>,
@@ -157,9 +163,12 @@ impl<'a> Guard<'a> {
             )
             .with_errors(removed));
         }
-        let remapped = proposed
+        let pointer_changed = proposed
             .iter()
             .any(|(name, pointer)| tested.contains(name) && stored.get(name) != Some(pointer));
+        let maps_tested = proposed.keys().any(|name| tested.contains(name));
+        let source_changed = before.is_some_and(|p| attribute_source_changed(&p.config, after));
+        let remapped = pointer_changed || (maps_tested && source_changed);
         if remapped && !self.holds::<AdmissionManage>() {
             return Err(ApiError::new(
                 StatusCode::FORBIDDEN,
@@ -280,6 +289,12 @@ fn endpoint_urls_changed(before: &IdentityProvider, after: &Proposed<'_>) -> boo
         let stored = url(&before.config, name);
         stored.is_none() || stored != url(after.config, name)
     })
+}
+
+fn attribute_source_changed(stored: &Map<String, Value>, after: &Proposed<'_>) -> bool {
+    ATTRIBUTE_SOURCE
+        .iter()
+        .any(|name| stored.get(*name) != after.config.get(*name))
 }
 
 fn email_claims_changed(before: &IdentityProvider, after: &Proposed<'_>) -> bool {
@@ -644,5 +659,58 @@ mod tests {
         assert_eq!(code(with(&manager).check(None, &new(&tested))), denied);
         assert_eq!(code(with(&both).check(None, &new(&tested))), None);
         assert_eq!(code(with(&manager).check(None, &new(&untested))), None);
+    }
+
+    /// While a tested attribute is mapped, the client, the scopes and the user endpoint flag
+    /// decide which document it is read from: changing one is a remap. Without a tested
+    /// attribute mapped, `provider.manage` is enough.
+    #[test]
+    fn changing_where_a_tested_attribute_is_read_needs_admission_manage() {
+        let manager = grants(&[ProviderManage::KEY]);
+        let both = grants(&[ProviderManage::KEY, AdmissionManage::KEY]);
+        let organization = rules(json!([{ "attribute": "rating", "op": "exists" }]));
+        let with_source = |attributes: Value| {
+            let mut config = mapping(attributes);
+            config.insert("client_id".into(), json!("stepclimb"));
+            config.insert("scopes".into(), json!(["openid", "profile"]));
+            config.insert("userinfo".into(), json!(true));
+            config
+        };
+        let denied = Some("permission.denied");
+        for (tested, expected) in [
+            (json!({ "rating": "/rating" }), denied),
+            (json!({ "region": "/region" }), None),
+        ] {
+            let row = stored(with_source(tested.clone()), false);
+            let current = Current {
+                provider: &row,
+                identities: 0,
+            };
+            for (member, value) in [
+                ("client_id", json!("another-client")),
+                ("scopes", json!(["openid", "profile", "roles"])),
+                ("userinfo", json!(false)),
+            ] {
+                let mut config = with_source(tested.clone());
+                config.insert(member.into(), value);
+                let after = Proposed {
+                    kind: Kind::Oidc,
+                    config: &config,
+                    enabled: false,
+                };
+                let as_manager = with_rules(&manager, Ok(organization.clone()));
+                let as_both = with_rules(&both, Ok(organization.clone()));
+                assert_eq!(
+                    code(as_manager.check(Some(&current), &after)),
+                    expected,
+                    "{member}"
+                );
+                assert_eq!(
+                    code(as_both.check(Some(&current), &after)),
+                    None,
+                    "{member}"
+                );
+            }
+        }
     }
 }
