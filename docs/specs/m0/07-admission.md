@@ -727,6 +727,12 @@ overrule one, which then updates this spec.
      sign-in is refused with `auth.admission_unavailable` and no marker changes. The pool is
      sized explicitly at startup, at 10 connections (`startup::POOL_MAX_CONNECTIONS`, sqlx's
      default), so the instance cap is 5; neither number is configurable.
+     Owner decision (2026-11-16): the caps of 5 per instance and 3 per organization are
+     accepted for M0. The owner was told the cost: on an instance with several organizations,
+     two organizations whose webhooks hang can hold all 5 places and refuse every other
+     organization's webhook sign-ins (fail closed) for up to 3 s at a time. The alternatives
+     not taken were a per-organization cap of 2 and calling the webhook outside the sign-in
+     transaction.
    - `allow: false` refuses with `auth.admission_refused` and, for a known or email-matched
      user, records the refusal marker as a rule refusal does (I3), so a local sign-in is
      refused too until a sign-in the webhook allows clears it. A webhook that cannot decide

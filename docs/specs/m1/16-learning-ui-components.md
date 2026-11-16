@@ -189,7 +189,8 @@ grants in `/me`; every route checks on the server.
 
 - Assessment, Activities and Reporting components: M2 and M3.
 - Certificate and ComplianceTable: listed for M1 in the inventory but used by features specified
-  later; the owner's Q1.
+  later; each is built with its feature (Q1): Certificate with the certificates spec,
+  ComplianceTable with M4's compliance report.
 - The App shell row (ServerPicker and the rest): M5.
 - Managed hosting components (PlanBadge, UpgradePrompt, SenderDomainSetup ...): M6; spec 12's
   sender screen uses plain forms in M1.
@@ -198,15 +199,17 @@ grants in `/me`; every route checks on the server.
 ## Open questions
 
 Q2 to Q4 were delegated by the owner to the coordinator; each recommendation is taken and stands
-until the owner reviews it. Q1 is the owner's and stays open.
+until the owner reviews it. Q1 moved work out of the milestone the plan names, so it was the
+owner's; the owner answered it on 2026-11-16.
 
-- **Q1. Certificate and ComplianceTable in M1 (open, for the owner).** The inventory lists both in
+- **Q1. Certificate and ComplianceTable in M1.** The inventory lists both in
   the M1 Learning row, but no M1 spec issues certificates (the plan's completion PDF) or builds the
   compliance report (M4). Building them now makes components nothing uses (`AGENTS.md`
   non-negotiable 4); building them later moves them out of the milestone the plan names, which is
   the owner's call. Options: (a) build each with its feature: Certificate with the certificates
   spec, ComplianceTable with M4's compliance report; (b) build both in M1 as stories only; (c) add
-  a certificates spec to M1. Recommendation: (a). Until the owner answers, neither is in this
+  a certificates spec to M1. Recommendation: (a).
+  Owner decision (2026-11-16): (a), each component is built with its feature; neither is in this
   spec's issues.
 - **Q2. Time zones in date fields.** Options: (a) values carry their zone, shown beside the value,
   defaulting to the user's zone; (b) the organization's zone always; (c) the browser's zone.

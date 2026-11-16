@@ -428,7 +428,7 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
     registry, and its family must still exist for its user and client, read with the user's status
     in one indexed query (Q12 (b)): a revoked or reused family stops its access tokens at once (401
     `auth.access_token_invalid`); a suspended user answers 401 `auth.suspended` (B11).
-  - **What an app token may do** (ADR 0032, Proposed). It acts as its user with all of the user's
+  - **What an app token may do** (ADR 0032, Accepted). It acts as its user with all of the user's
     current grants, like a browser session (the plan names no app scopes), and its changes are
     audited as the user's. It is a bearer credential, so every route that takes `NoBearer` or
     `SessionOnly` (B44) refuses it with 403 `auth.session_required`, and the admin user routes

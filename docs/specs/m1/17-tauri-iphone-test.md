@@ -79,7 +79,7 @@ way and says what is recorded as the result.
 - **B8.** Push needs a paid Apple Developer Program membership: evidence points at the free
   personal team not offering the Push Notifications capability, which I3 confirms against
   Apple's current documentation before the owner's run. The plan creates the account before M5;
-  this test is in M1 (Q5, the owner's).
+  the owner creates it before this test, around week 3 of M1, so all three checks run (Q5).
 
 ### What counts as passing
 
@@ -155,7 +155,7 @@ What only the owner runs (a Mac with Xcode, the iPhone, the Apple account, a VAT
 ## Open questions
 
 Q1 to Q4 were delegated by the owner to the coordinator; each recommendation is taken and stands
-until the owner reviews it. Q5 is the owner's and stays open.
+until the owner reviews it. Q5 was the owner's; the owner answered it on 2026-11-16.
 
 - **Q1. Where the throwaway app lives.** Options: (a) a branch with `spikes/iphone-test/`, never
   merged, the result recorded by an ADR on `next`; (b) the iOS target added to `apps/app` on
@@ -178,7 +178,7 @@ until the owner reviews it. Q5 is the owner's and stays open.
   the test; (b) test with the mock identity provider only, which no longer checks "sign in with
   VATSIM". Recommendation: (a); this question records the owner step, and I4 lists it.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
-- **Q5. When the Apple Developer account is needed (open, for the owner).** The plan creates the
+- **Q5. When the Apple Developer account is needed.** The plan creates the
   account before M5; the APNs check of this M1 test needs it (B8), and so does keeping the app
   installed longer than a free provisioning profile lasts. The account is the maintainer's (plan,
   Distribution); what is open is when it is created, since it is an outside account and a yearly
@@ -187,6 +187,8 @@ until the owner reviews it. Q5 is the owner's and stays open.
   account exists in M5, keeping ADR 0011's decision open until then; (c) move the whole test to
   M5. Recommendation: (a). The push check is the one most likely to differ between Tauri and Expo,
   and the plan wants the decision made in M1.
+  Owner decision (2026-11-16): (a), the owner creates the Apple Developer account before the
+  iPhone test, around week 3 of M1.
 
 ## Issues
 
@@ -205,10 +207,11 @@ to `next`), then the owner's run and the ADR.
 3. **I3. APNs path.** The push registration plugin, the device token on the status screen, the
    send script with its local stub test, and the check of B8 against Apple's documentation.
    Covers B6 to B8; T3. Depends on: I1.
-4. **I4. The owner's run.** Owner steps, in order: the Apple account (Q5), an APNs auth key
+4. **I4. The owner's run.** Owner steps, in order: the Apple Developer account, created around
+   week 3 of M1 (Q5), an APNs auth key
    (stored outside the repository and handed to the script by a file path), a VATSIM Connect client
    for the homelab (Q4), the homelab server updated to the M1 build, building the spike with Xcode
    on the Mac and installing it on the iPhone, running B9's checklist. Agent help: a written run
    sheet in the branch's README, fixes during the test days. Covers B9 to B11; T4. Depends on: I2,
-   I3; the owner's answers to Q4 and Q5.
+   I3; the owner's VATSIM Connect client (Q4).
 5. **I5. The result ADR.** Covers B12. Depends on: I4.

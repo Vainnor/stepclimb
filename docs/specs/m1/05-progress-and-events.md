@@ -36,7 +36,8 @@ enrolled to observe.
   `{ "action": "mark_done" }` records the learner's step. The item must be visible to them (`03`
   B14) and unlocked (`04` B13: 403 `item.locked`), and the course not archived (409
   `course.archived`). `view` is accepted for page, file and external link items (spec 09 records
-  video views itself); `mark_done` for any item whose requirement is `mark_done` (422
+  video views itself, except for oEmbed videos, whose `view` comes through this route from `09`
+  I4, `09` B12a); `mark_done` for any item whose requirement is `mark_done` (422
   `request.invalid`, `progress.action_invalid` at `/action`, otherwise).
 - **B3.** An item's progress is one `item_progress` row per learner and item, created at the
   first step with `state = 'started'` and `started_at`, and set to `state = 'completed'` with
@@ -113,8 +114,9 @@ enrolled to observe.
   - when no other active or concluded enrollment of the user in the course has
     `course.participate`, deletes the user's learner data for the course: `item_progress`,
     `module_progress` and `course_progress` (this spec), `video_progress` and `watch_reports` for
-    the course's items (spec 09, added by 09 I2), and `completions` for the course and its modules
-    (spec 14, added by 14 I1);
+    the course's items (spec 09, added by 09 I2), `completions` for the course and its modules
+    (spec 14, added by 14 I1), and the user's progress archives for the course with their
+    archived rows (spec 14 B15, added by 14 I4);
   - otherwise keeps all of it.
   Kept in every case: `assignment_users`, `reminders_sent` and `assignment_events` (spec 13: the
   record that the person was assigned and reminded), `email_messages` (spec 12, deleted by its
