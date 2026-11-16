@@ -2,8 +2,9 @@
 //! Running claimed jobs (docs/specs/m1/01-job-queue-and-outbox.md B4 to B12, B25).
 //!
 //! [`Worker::run_once`] is one pass of a worker: claim up to `limit` due jobs, run each on a task
-//! of its own, and settle each outcome. The loop that repeats it, with its concurrency, polling
-//! and shutdown, is spec issue I2's; tests call `run_once` directly and move a manual clock.
+//! of its own, and settle each outcome. [`Worker::run`] (`crate::runtime`) is the loop a server
+//! runs, with its concurrency, polling and shutdown; tests of a single pass call `run_once` and
+//! move a manual clock.
 
 use std::fmt;
 use std::sync::Arc;
@@ -12,7 +13,7 @@ use std::time::Duration;
 use serde_json::Value;
 use sqlx::PgPool;
 use stepclimb_core::{OrgScope, clock::Clock, id::Uuid, organizations};
-use tokio::task::JoinSet;
+use tokio::task::{JoinError, JoinSet};
 
 use crate::backoff::{Random, backoff};
 use crate::kind::Kind;
@@ -149,9 +150,24 @@ impl Worker {
 
     /// Claim up to `limit` due jobs, run them at once and settle their outcomes. Returns how
     /// many jobs it claimed to run; a job the claim found dead with its last lease lapsed is
-    /// logged and not counted (B5, B8). A database error while settling one job is logged and leaves that
-    /// job's lease to run out, so another claim runs it again (B12).
+    /// logged and not counted (B5, B8). A database error while settling one job is logged and
+    /// leaves that job's lease to run out, so another claim runs it again (B12).
     pub async fn run_once(&self, limit: u32) -> Result<usize, Error> {
+        let claimed = self.claim_due(limit).await?;
+        let count = claimed.len();
+        let mut running = JoinSet::new();
+        for job in claimed {
+            self.spawn(&mut running, job);
+        }
+        while let Some(joined) = running.join_next().await {
+            report_ended(joined);
+        }
+        Ok(count)
+    }
+
+    /// Claim up to `limit` due jobs of this worker's queues, logging each the claim found dead
+    /// with its last lease lapsed.
+    pub(crate) async fn claim_due(&self, limit: u32) -> Result<Vec<Claimed>, Error> {
         let inner = &self.inner;
         let leases = inner.registry.leases();
         let now = inner.clock.now();
@@ -162,19 +178,21 @@ impl Worker {
                 attempts = job.attempts, error = queue::LAPSED_ON_LAST_ATTEMPT, "job dead"
             );
         }
-        let count = claims.claimed.len();
-        let mut running = JoinSet::new();
-        for job in claims.claimed {
-            running.spawn(process(Arc::clone(inner), job));
-        }
-        while let Some(joined) = running.join_next().await {
-            // Only that it ended: a panic's message may quote a payload value (B25).
-            if let Err(error) = joined {
-                let panicked = error.is_panic();
-                tracing::error!(panicked, "a job's settling task ended abnormally");
-            }
-        }
-        Ok(count)
+        Ok(claims.claimed)
+    }
+
+    /// Run `job` and settle its outcome on a task of `running`.
+    pub(crate) fn spawn(&self, running: &mut JoinSet<()>, job: Claimed) {
+        running.spawn(process(Arc::clone(&self.inner), job));
+    }
+}
+
+/// Log a job task of a [`JoinSet`] that ended other than by returning. Only that it ended: a
+/// panic's message may quote a payload value (B25).
+pub(crate) fn report_ended(joined: Result<(), JoinError>) {
+    if let Err(error) = joined {
+        let panicked = error.is_panic();
+        tracing::error!(panicked, "a job's settling task ended abnormally");
     }
 }
 

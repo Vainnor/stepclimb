@@ -26,6 +26,9 @@ vatsim = ["dep:stepclimb-connectors", "stepclimb-connectors/vatsim"]
 [dependencies]
 stepclimb-core.workspace = true
 stepclimb-auth.workspace = true
+# The job worker of `serve`'s `all` and `worker` roles (docs/specs/m1/01-job-queue-and-outbox.md
+# B13 to B15).
+stepclimb-jobs.workspace = true
 stepclimb-connectors = { workspace = true, optional = true }
 axum.workspace = true
 # `sync` for the semaphore that caps concurrent password hashes (spec 04 B16).

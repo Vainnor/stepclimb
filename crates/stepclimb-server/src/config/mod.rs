@@ -121,6 +121,20 @@ pub const ALLOW_INSECURE_PROVIDERS: Setting = Setting {
     example: "true (only for tests and local development) or false",
 };
 
+pub const ROLE: Setting = Setting {
+    var: "STEPCLIMB_ROLE",
+    key: "role",
+    secret: false,
+    example: "all (HTTP and the job worker), web (HTTP only) or worker (the job worker and the \
+              probes only)",
+};
+pub const WORKER_CONCURRENCY: Setting = Setting {
+    var: "STEPCLIMB_WORKER_CONCURRENCY",
+    key: "worker_concurrency",
+    secret: false,
+    example: "4 (jobs one process runs at once, 1 to 64)",
+};
+
 /// Every setting [`Config`] reads.
 pub const SETTINGS: &[Setting] = &[
     BIND,
@@ -134,6 +148,8 @@ pub const SETTINGS: &[Setting] = &[
     TOKEN_RATE_LIMIT,
     FAILED_SIGN_IN_LIMIT,
     ALLOW_INSECURE_PROVIDERS,
+    ROLE,
+    WORKER_CONCURRENCY,
 ];
 
 /// The variable naming the configuration file when `--config` is not given.
@@ -144,6 +160,54 @@ pub const DEFAULT_BIND: &str = "127.0.0.1:8080";
 
 /// The log filter when `STEPCLIMB_LOG` is not set.
 pub const DEFAULT_LOG: &str = "info";
+
+/// The most jobs one process runs at once (`worker_concurrency`, spec m1/01 B14).
+pub const MAX_WORKER_CONCURRENCY: u32 = 64;
+
+/// `worker_concurrency` when it is not set.
+pub const DEFAULT_WORKER_CONCURRENCY: NonZeroU32 = NonZeroU32::new(4).expect("4 is not zero");
+
+/// What a `stepclimb serve` process runs (`role`, `serve --role`; spec m1/01 B13, Q1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum Role {
+    /// The HTTP application and the job worker.
+    #[default]
+    All,
+    /// The HTTP application only.
+    Web,
+    /// The job worker, with `/healthz` and `/readyz` the only HTTP routes.
+    Worker,
+}
+
+impl Role {
+    /// The spelling in configuration and on the command line.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Web => "web",
+            Self::Worker => "worker",
+        }
+    }
+
+    /// Whether the process serves the whole HTTP application.
+    #[must_use]
+    pub fn serves_app(self) -> bool {
+        matches!(self, Self::All | Self::Web)
+    }
+
+    /// Whether the process runs the job worker.
+    #[must_use]
+    pub fn runs_jobs(self) -> bool {
+        matches!(self, Self::All | Self::Worker)
+    }
+}
+
+impl fmt::Display for Role {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// The `STEPCLIMB_*` environment variables, by name.
 pub type Env = BTreeMap<String, String>;
@@ -191,6 +255,11 @@ pub struct Config {
     /// `false` when unset. Never on in production: it lets an admin reach services on the
     /// server's own host.
     pub allow_insecure_providers: bool,
+    /// `role`: what `stepclimb serve` runs; `all` when unset. `serve --role` overrides it.
+    pub role: Role,
+    /// `worker_concurrency`: the most jobs this process runs at once, 1 to
+    /// [`MAX_WORKER_CONCURRENCY`]; [`DEFAULT_WORKER_CONCURRENCY`] when unset.
+    pub worker_concurrency: NonZeroU32,
     /// `[[providers]]`: the identity providers the file declares, checked, each with its
     /// client secret (spec 06 B11). `stepclimb serve` writes them to their organizations.
     pub providers: Vec<ConfigProvider>,
@@ -211,6 +280,8 @@ impl fmt::Debug for Config {
             .field("token_rate_limit", &self.token_rate_limit)
             .field("failed_sign_in_limit", &self.failed_sign_in_limit)
             .field("allow_insecure_providers", &self.allow_insecure_providers)
+            .field("role", &self.role)
+            .field("worker_concurrency", &self.worker_concurrency)
             .field("providers", &self.providers)
             .finish()
     }
@@ -416,6 +487,11 @@ impl Config {
             None => TrustedProxies::none(),
         };
         let allow_insecure_providers = sources.flag(&ALLOW_INSECURE_PROVIDERS)?;
+        let role = match sources.plain(&ROLE)? {
+            Some((value, origin)) => role(&value, origin)?,
+            None => Role::default(),
+        };
+        let worker_concurrency = worker_concurrency(&sources)?;
         let providers = match file {
             Some(file) => file_providers(file, allow_insecure_providers)?,
             None => Vec::new(),
@@ -434,6 +510,8 @@ impl Config {
             token_rate_limit: sources.count(&TOKEN_RATE_LIMIT, defaults.token)?,
             failed_sign_in_limit: sources.count(&FAILED_SIGN_IN_LIMIT, defaults.failed_checks)?,
             allow_insecure_providers,
+            role,
+            worker_concurrency,
             providers,
         })
     }
@@ -468,6 +546,8 @@ impl Config {
                 ALLOW_INSECURE_PROVIDERS.key,
                 self.allow_insecure_providers.to_string(),
             ),
+            (ROLE.key, self.role.to_string()),
+            (WORKER_CONCURRENCY.key, self.worker_concurrency.to_string()),
         ]
     }
 
@@ -584,6 +664,35 @@ fn web_origin(value: &str, origin: Origin, setting: &Setting) -> Result<WebOrigi
     WebOrigin::parse(value).map_err(|problem| ConfigError::Invalid {
         origin,
         problem: format!("{problem}; for example {}", setting.example),
+    })
+}
+
+fn role(value: &str, origin: Origin) -> Result<Role, ConfigError> {
+    <Role as clap::ValueEnum>::from_str(value, false).map_err(|_| ConfigError::Invalid {
+        origin,
+        problem: format!("{value:?} is not a role; for example {}", ROLE.example),
+    })
+}
+
+/// `worker_concurrency`: [`Sources::count`] (a whole number of 1 or more, digits only), then at
+/// most [`MAX_WORKER_CONCURRENCY`]; [`DEFAULT_WORKER_CONCURRENCY`] when neither source sets it
+/// (spec m1/01 B14).
+fn worker_concurrency(sources: &Sources<'_>) -> Result<NonZeroU32, ConfigError> {
+    let count = sources.count(&WORKER_CONCURRENCY, DEFAULT_WORKER_CONCURRENCY)?;
+    if count.get() <= MAX_WORKER_CONCURRENCY {
+        return Ok(count);
+    }
+    // `count` only returns a value above the default when a source set it.
+    let origin = match sources.plain(&WORKER_CONCURRENCY)? {
+        Some((_, origin)) => origin,
+        None => Origin::Var(WORKER_CONCURRENCY.var.to_owned()),
+    };
+    Err(ConfigError::Invalid {
+        origin,
+        problem: format!(
+            "{count} is more than {MAX_WORKER_CONCURRENCY}; for example {}",
+            WORKER_CONCURRENCY.example
+        ),
     })
 }
 

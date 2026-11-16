@@ -6,8 +6,9 @@
 //! [`enqueue`] inserts a job in the caller's transaction, with dedupe; [`queue::claim`] takes
 //! due jobs under a lease; a [`Worker`] runs each claimed job's handler from the [`Registry`] on
 //! a task of its own, with its organization's scope, and records its [`Outcome`]: deleted when
-//! done, retried after [`backoff::backoff`], or dead. The worker loop and `--role` (I2), periodic
-//! jobs (I3) and the outbox (I4) come next.
+//! done, retried after [`backoff::backoff`], or dead. [`Worker::run`] is the loop a server runs
+//! (issue I2): up to `worker_concurrency` jobs at once, a poll every second when idle, and a
+//! graceful stop. Periodic jobs (I3) and the outbox (I4) come next.
 //!
 //! Jobs run at least once (B12): a lost lease or a crash between a handler's commit and the
 //! row's delete runs a handler again, so every handler is written to be safe to run twice.
@@ -16,9 +17,11 @@ pub mod backoff;
 pub mod kind;
 pub mod queue;
 mod registry;
+mod runtime;
 mod worker;
 
 pub use kind::{Kind, Retry};
 pub use queue::{Enqueued, NewJob, enqueue};
 pub use registry::{HandlerFuture, Registry, RegistryError};
+pub use runtime::{POLL_INTERVAL, RunOptions, SHUTDOWN_GRACE, Stopped};
 pub use worker::{Job, JobContext, Lease, Outcome, UNKNOWN_KIND_DELAY, Worker};

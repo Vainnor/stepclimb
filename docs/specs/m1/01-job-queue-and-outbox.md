@@ -362,6 +362,31 @@ iteration at a time through a test hook rather than on timers.
 2. **I2. Worker runtime and roles.** The claim loop with `worker_concurrency`, polling, graceful
    shutdown, `--role` and `STEPCLIMB_ROLE` in the configuration loader and `check-config`, and the
    worker-only listener for the probes. Covers B13 to B16; T11, T12. Depends on: I1.
+   Coordinator decisions (2026-11-16, made while building I2, pending owner review):
+   - `serve --role` overrides `STEPCLIMB_ROLE`, which overrides `role` in the file (ADR 0022's
+     order with the command line on top). A bad `--role` value is clap's usage error, exit 2.
+   - `worker_concurrency` is a quoted string in the file like every other setting, digits only.
+   - The poll interval (1 s) and the shutdown grace (30 s) are fields of
+     `stepclimb_jobs::RunOptions`; T12's tests shorten them in real time rather than pausing
+     `tokio` time, since paused time also fires the database pool's timeouts. Constant tests pin
+     the defaults.
+   - A `worker` process answers `/healthz` and `/readyz` and a bare 404 for every other path.
+   - `serve` installs a panic hook that logs, through `tracing` at `error`, only that a thread
+     panicked and its source location, never the message (B25).
+   - The `listening` log line names the address the listener got, so a bind to port 0 shows the
+     real port.
+   - A worker serves every queue its registry names. No kind is registered yet, so the loop
+     polls an empty queue list until I3 registers the first periodic jobs.
+   - Coordinator decision after review (option b): the job worker has its own PostgreSQL pool of
+     `worker_concurrency` + 1 connections (named `stepclimb-jobs` in `pg_stat_activity`); HTTP
+     keeps its pool of 10, and a `web` process opens no job pool. A process can therefore hold
+     up to 10 + `worker_concurrency` + 1 connections; the configuration reference says so,
+     against PostgreSQL's default `max_connections` of 100.
+   - The production Compose example gives the server `stop_grace_period: 40s`, so Docker's
+     default 10 s does not cut B15's 30 s short. After the loop returns, the process gives the
+     runtime's blocking threads 5 s before it exits.
+   - The panic hook also logs the thread's name and a backtrace when `RUST_BACKTRACE` asks for
+     one.
 3. **I3. Periodic jobs.** `job_schedules` (in I3's own migration), the scheduler under the
    advisory lock, startup sync of schedule rows, `jobs.prune` for dead jobs, and moving the
    sign-in flow cleanup from its `tokio` interval onto `auth.flows_cleanup` (updating `m0/08` B21 in

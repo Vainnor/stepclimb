@@ -118,6 +118,9 @@ services:
       dockerfile: deploy/Dockerfile
     image: ${SC_IMAGE:-stepclimb:local}
     restart: unless-stopped
+    # On SIGTERM the job worker waits up to 30 s for its running jobs (spec m1/01 B15); Docker's
+    # default 10 s would kill it first. 40 s leaves room for the HTTP listener and the exit.
+    stop_grace_period: 40s
     environment:
       STEPCLIMB_DATABASE_URL_FILE: /run/secrets/database_url
       STEPCLIMB_ENCRYPTION_KEYS_FILE: /run/secrets/encryption_keys

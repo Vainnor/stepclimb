@@ -270,9 +270,22 @@ default or secrecy is wrong.
 | `STEPCLIMB_TOKEN_RATE_LIMIT` | `token_rate_limit` | whole number, 1 or more | `60` | no | `/oauth/token` and `/oauth/revoke` requests per minute from one client address |
 | `STEPCLIMB_FAILED_SIGN_IN_LIMIT` | `failed_sign_in_limit` | whole number, 1 or more | `10` | no | Failed password or TOTP checks per account per 15 minutes |
 | `STEPCLIMB_ALLOW_INSECURE_PROVIDERS` | `allow_insecure_providers` | `true` or `false` | `false` | no | Lets the server fetch `http` and loopback URLs for identity providers and the admission webhook. For tests and local development only: it lets an organization admin make the server call services on its own host |
+| `STEPCLIMB_ROLE` | `role` | `all`, `web` or `worker` | `all` | no | What `stepclimb serve` runs: `all` the HTTP application and the job worker, `web` the HTTP application only, `worker` the job worker with only `/healthz` and `/readyz` on the bind address. `serve --role` overrides it |
+| `STEPCLIMB_WORKER_CONCURRENCY` | `worker_concurrency` | whole number, 1 to 64 | `4` | no | Jobs one `all` or `worker` process runs at once |
 
 The three limits have nothing to count until the sign-in and token routes arrive; none exists in
 M0.
+
+Each `serve` process holds up to 10 database connections for HTTP, and an `all` or `worker`
+process another `worker_concurrency` + 1 for the job worker (11 with the default 4), so up to
+10 + `worker_concurrency` + 1 in all. PostgreSQL allows 100 connections by default
+(`max_connections`); when you run several processes against one database, keep their sum, plus
+what backups and administration use, under it. A `web` process opens no job connections.
+
+The `stepclimb` service in `compose.production.yaml` sets `stop_grace_period: 40s`. On SIGTERM
+the job worker stops claiming and waits up to 30 s for the jobs it is running; Docker's default
+of 10 s would kill the process before then. A job still running at 30 s is left to its lease,
+which runs out so another worker takes it.
 
 
 ### Sign-in providers

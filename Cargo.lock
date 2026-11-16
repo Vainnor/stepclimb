@@ -3422,6 +3422,7 @@ dependencies = [
  "stepclimb-auth",
  "stepclimb-connectors",
  "stepclimb-core",
+ "stepclimb-jobs",
  "stepclimb-mock-idp",
  "stepclimb-server",
  "thiserror 2.0.21",

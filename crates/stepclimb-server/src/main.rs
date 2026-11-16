@@ -19,9 +19,10 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use stepclimb_server::admin::{self, NewOrganizationAdmin};
+use stepclimb_server::config::Role;
 use stepclimb_server::logging;
 use stepclimb_server::recovery::{self, RecoveryRequest, UserRef};
-use stepclimb_server::{Config, healthcheck, startup};
+use stepclimb_server::{Config, healthcheck, panic_hook, startup};
 use tracing_subscriber::util::SubscriberInitExt as _;
 
 #[derive(Parser)]
@@ -41,8 +42,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Apply database migrations, then serve HTTP.
-    Serve,
+    /// Apply database migrations, then serve HTTP, run the job worker, or both (`--role`).
+    Serve {
+        /// What this process runs: `all` (HTTP and the job worker), `web` (HTTP only) or
+        /// `worker` (the job worker, with only /healthz and /readyz over HTTP). Overrides
+        /// STEPCLIMB_ROLE and `role` in the file; `all` when none is set.
+        #[arg(long, value_enum, value_name = "ROLE")]
+        role: Option<Role>,
+    },
     /// Apply database migrations, then exit.
     Migrate,
     /// Validate the configuration without connecting to anything, print its non-secret values,
@@ -106,7 +113,7 @@ struct CreateArgs {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let config = match Config::from_env(cli.config.as_deref()) {
+    let mut config = match Config::from_env(cli.config.as_deref()) {
         Ok(config) => config,
         Err(error) => {
             eprintln!("stepclimb: configuration error: {error}");
@@ -114,8 +121,13 @@ fn main() -> ExitCode {
         }
     };
     match cli.command {
-        Command::Serve => {
+        Command::Serve { role } => {
+            if let Some(role) = role {
+                config.role = role;
+            }
             init_logging(&config.log);
+            // After logging, so a panic's report reaches the log without its message.
+            panic_hook::install();
             run(startup::serve(config))
         }
         Command::Migrate => {
@@ -261,12 +273,19 @@ fn runtime() -> Option<tokio::runtime::Runtime> {
     }
 }
 
+/// How long [`run`] waits for the runtime's blocking threads once `work` has returned.
+const RUNTIME_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Run `work` on a multi-threaded runtime; any error is logged and printed, and exits 1.
 fn run(work: impl Future<Output = Result<(), startup::StartupError>>) -> ExitCode {
     let Some(runtime) = runtime() else {
         return ExitCode::FAILURE;
     };
-    match runtime.block_on(work) {
+    let result = runtime.block_on(work);
+    // Tasks still running, such as a job handler past the worker's grace period, are dropped
+    // rather than waited for; blocking work gets this long to end.
+    runtime.shutdown_timeout(RUNTIME_SHUTDOWN_TIMEOUT);
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             tracing::error!(%error, "stopped");

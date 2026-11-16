@@ -2,7 +2,8 @@
 //! `stepclimb serve` (connect, migrate, sync the built-in roles and the `unlimited` plan, give
 //! every organization a plan and its local provider row, re-render saved branding an older
 //! generator version wrote, write the providers of `stepclimb.toml`, start the sign-in flow
-//! cleanup, listen) and `stepclimb migrate` (connect, migrate, exit). The branding pass runs in
+//! cleanup, start the job worker when the role runs one, listen) and `stepclimb migrate`
+//! (connect, migrate, exit). The branding pass runs in
 //! [`prepare`], before the providers: the two touch different rows, and a re-render is correct
 //! for this release whether or not a bad `[[providers]]` entry then stops it (an older release
 //! started afterwards re-renders the newer record in memory for each read).
@@ -30,17 +31,25 @@ use tokio::net::TcpListener;
 
 use stepclimb_auth::provider_config::ConfigSecrets;
 
+use stepclimb_jobs::{RunOptions, Worker, backoff::Random};
+use tokio::sync::watch;
+
 use crate::{
-    AppState, Config, config_providers, flow, password_hasher::PasswordHasher,
-    providers::Providers, rate_limit::RateLimiter, router,
+    AppState, Config, app::probes_router, config_providers, flow, jobs,
+    password_hasher::PasswordHasher, providers::Providers, rate_limit::RateLimiter, router,
 };
 
 /// How long a request waits for a database connection from the pool.
 pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The most connections the pool opens. The admission webhook's instance-wide limit is half of
-/// it (`crate::admission_webhook_limits`).
+/// The most connections the HTTP pool opens. The admission webhook's instance-wide limit is half
+/// of it (`crate::admission_webhook_limits`). The job worker has a pool of its own
+/// ([`connect_jobs`]).
 pub const POOL_MAX_CONNECTIONS: u32 = 10;
+
+/// The `application_name` of the job worker's connections, so an operator can tell them apart
+/// in `pg_stat_activity`.
+pub const JOBS_APPLICATION_NAME: &str = "stepclimb-jobs";
 
 /// Why the server stopped before or while serving.
 #[derive(Debug, thiserror::Error)]
@@ -75,6 +84,11 @@ pub enum StartupError {
         addr: std::net::SocketAddr,
         source: std::io::Error,
     },
+    #[error("could not read the address the listener on {addr} got: {source}")]
+    LocalAddr {
+        addr: std::net::SocketAddr,
+        source: std::io::Error,
+    },
     #[error("the HTTP server failed: {0}")]
     Serve(#[source] std::io::Error),
     #[error(transparent)]
@@ -101,6 +115,28 @@ pub async fn connect(database_url: &str) -> Result<PgPool, StartupError> {
         .max_connections(POOL_MAX_CONNECTIONS)
         .acquire_timeout(ACQUIRE_TIMEOUT)
         .connect(database_url)
+        .await
+        .map_err(StartupError::Connect)
+}
+
+/// The job worker's pool (spec m1/01 B14): one connection per job it may run at once, and one
+/// for its claims, so a busy worker never waits on the HTTP pool or the HTTP pool on it.
+pub fn jobs_pool_options(concurrency: std::num::NonZeroU32) -> PgPoolOptions {
+    PgPoolOptions::new()
+        .max_connections(concurrency.get().saturating_add(1))
+        .acquire_timeout(ACQUIRE_TIMEOUT)
+}
+
+/// Open the job worker's pool on `database_url` ([`jobs_pool_options`]), its connections named
+/// [`JOBS_APPLICATION_NAME`].
+pub async fn connect_jobs(
+    database_url: &str,
+    concurrency: std::num::NonZeroU32,
+) -> Result<PgPool, StartupError> {
+    let options: sqlx::postgres::PgConnectOptions =
+        database_url.parse().map_err(StartupError::Connect)?;
+    jobs_pool_options(concurrency)
+        .connect_with(options.application_name(JOBS_APPLICATION_NAME))
         .await
         .map_err(StartupError::Connect)
 }
@@ -353,6 +389,8 @@ pub fn log_configuration(config: &Config) {
         token_rate_limit = %config.token_rate_limit,
         failed_sign_in_limit = %config.failed_sign_in_limit,
         allow_insecure_providers = %config.allow_insecure_providers,
+        role = %config.role,
+        worker_concurrency = %config.worker_concurrency,
         providers = %config.providers_or_none(),
         "configuration loaded"
     );
@@ -368,7 +406,11 @@ pub async fn migrate_only(config: &Config) -> Result<(), StartupError> {
     Ok(())
 }
 
-/// Connect, [`prepare`] the database, then serve HTTP on `config.bind` until SIGINT or SIGTERM.
+/// Connect, [`prepare`] the database, then run what `config.role` asks for until SIGINT or
+/// SIGTERM (spec m1/01 B13 to B16): the whole HTTP application (`all`, `web`) or only the probes
+/// (`worker`) on `config.bind`, and the job worker (`all`, `worker`) on a pool of its own. On the
+/// signal the listener stops taking connections and the worker stops claiming; `serve` returns
+/// once both have finished, the worker after at most [`stepclimb_jobs::SHUTDOWN_GRACE`].
 pub async fn serve(config: Config) -> Result<(), StartupError> {
     log_configuration(&config);
     warn_about_development_keys(&config.encryption_keys);
@@ -383,24 +425,91 @@ pub async fn serve(config: Config) -> Result<(), StartupError> {
         clock.now(),
     )
     .await?;
-    let listener = TcpListener::bind(config.bind)
-        .await
-        .map_err(|source| StartupError::Bind {
-            addr: config.bind,
-            source,
-        })?;
-    tracing::info!(addr = %config.bind, "listening");
+    // Built before the listener exists, so `/readyz` never answers before it (B16).
+    let worker = if config.role.runs_jobs() {
+        Some(job_worker(&config, clock.clone()).await?)
+    } else {
+        None
+    };
+    let listener = listen(&config).await?;
     flow::spawn_cleanup(pool.clone(), clock.clone());
-    serve_on(
+    let stop = Stop::on_signal();
+    let app: fn(AppState) -> Router = if config.role.serves_app() {
+        router
+    } else {
+        probes_router
+    };
+    let http = serve_on(
         listener,
         config,
         config_secrets,
         pool,
         clock,
-        router,
-        shutdown_signal(),
-    )
-    .await
+        app,
+        stop.wait(),
+    );
+    let jobs = async {
+        if let Some((worker, options)) = worker {
+            worker.run(options, stop.wait()).await;
+        }
+        Ok(())
+    };
+    tokio::try_join!(http, jobs).map(|_| ())
+}
+
+/// Bind `config.bind` and log the address the listener got, which names the port when `bind`
+/// asks for port 0.
+async fn listen(config: &Config) -> Result<TcpListener, StartupError> {
+    let addr = config.bind;
+    let listener = TcpListener::bind(addr)
+        .await
+        .map_err(|source| StartupError::Bind { addr, source })?;
+    let bound = listener
+        .local_addr()
+        .map_err(|source| StartupError::LocalAddr { addr, source })?;
+    tracing::info!(addr = %bound, role = %config.role, "listening");
+    Ok(listener)
+}
+
+/// The job worker of an `all` or `worker` process, on its own pool ([`connect_jobs`]), with this
+/// binary's registry, serving every queue in it, and its options from `config`.
+async fn job_worker(config: &Config, clock: Clock) -> Result<(Worker, RunOptions), StartupError> {
+    let pool = connect_jobs(&config.database_url, config.worker_concurrency).await?;
+    let registry = jobs::registry();
+    let queues = registry.queues();
+    tracing::info!(
+        concurrency = %config.worker_concurrency,
+        queues = ?queues,
+        "job worker started"
+    );
+    let worker = Worker::new(pool, registry, clock, Random::system(), queues);
+    Ok((worker, RunOptions::new(config.worker_concurrency)))
+}
+
+/// The process's stop request: set once by SIGINT or SIGTERM, read by the listener and the job
+/// worker alike.
+#[derive(Clone)]
+struct Stop(watch::Receiver<bool>);
+
+impl Stop {
+    /// Start listening for SIGINT and SIGTERM.
+    fn on_signal() -> Self {
+        let (tx, rx) = watch::channel(false);
+        tokio::spawn(async move {
+            shutdown_signal().await;
+            let _ = tx.send(true);
+        });
+        Self(rx)
+    }
+
+    /// Completes once the stop is requested. A closed channel, which only an ended signal task
+    /// leaves, counts as a stop.
+    fn wait(&self) -> impl Future<Output = ()> + Send + 'static {
+        let mut rx = self.0.clone();
+        async move {
+            let _ = rx.wait_for(|stopped| *stopped).await;
+        }
+    }
 }
 
 /// Build the application state from `config`, the secrets of the providers `stepclimb.toml`
@@ -605,6 +714,17 @@ mod tests {
         assert!(output.contains("retired_feature"), "{output}");
         assert!(output.contains("retired_limit"), "{output}");
         assert_eq!(captured(|| warn_about_unknown_plan_keys(&[])), "");
+    }
+
+    #[test]
+    fn the_job_pool_has_one_connection_per_job_and_one_for_claims() {
+        for (concurrency, max) in [(1, 2), (4, 5), (64, 65)] {
+            let concurrency = std::num::NonZeroU32::new(concurrency).unwrap();
+            let options = jobs_pool_options(concurrency);
+            assert_eq!(options.get_max_connections(), max, "{concurrency}");
+            assert_eq!(options.get_acquire_timeout(), ACQUIRE_TIMEOUT);
+        }
+        assert_eq!(POOL_MAX_CONNECTIONS, 10, "the HTTP pool keeps its size");
     }
 
     #[test]
