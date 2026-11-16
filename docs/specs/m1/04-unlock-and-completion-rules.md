@@ -29,9 +29,9 @@ reaches the client.
 ### Rules on modules
 
 - **B1.** A module has `unlock_at` (optional), a set of prerequisite modules
-  (`module_prerequisites`), `require_sequential` (default false) and `completion_rule` (`all`, the default, or `one`; Q1).
-  They are changed through `PATCH /api/v1/modules/{module_id}` by a holder of
-  `perm::CourseContentEdit`, with `03` B2's archived refusal.
+  (`module_prerequisites`), `require_sequential` (default false) and `completion_rule` (`all`, the
+  default, or `one`; Q1). They are changed through `PATCH /api/v1/modules/{module_id}` by a holder
+  of `perm::CourseContentEdit`, with `03` B2's archived refusal.
 - **B2.** Prerequisites are modules of the same course (404 `module.not_found` otherwise), never
   the module itself, at most 20 per module, and never form a cycle (409 `module.prerequisite_cycle`;
   Q2). The write replaces the whole set, locks the course row (`03` B12) and checks for a cycle

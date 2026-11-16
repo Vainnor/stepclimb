@@ -54,12 +54,23 @@ to `Require`, and makes the evaluator read enrollments. Modules and items are sp
   "page_id": ... }` (Q6).
 - **B7.** A course's cover is an image from its files; spec 06 adds `cover_file_id` and its
   route, since files do not exist before spec 06.
-- **B8.** Courses are not deleted in M1 (Q7): a course leaves use by being archived. An account
-  that holds a course refuses deletion with 409 `account.has_courses`, the check `02` B21 left to
-  this spec; it runs under the same tree lock as `02` B21's other checks.
-- **B9.** A course stays in its account; moving a course between accounts is not in the plan and
-  not built. An account moved by `02` B20 carries its courses with it, since a course's scope
-  path is read through its account at every request.
+- **B8.** Courses are not deleted in M1 (Q7): a course leaves use by being archived. **In M1 an
+  account that holds any course, archived courses included, cannot be deleted**: the delete
+  answers 409 `account.has_courses`, the check `../m0/02-organizations-and-accounts.md` B21 left
+  to this spec ("From M1 an account that holds courses also refuses deletion"). It runs under the
+  same tree lock as B21's other checks. Every other account delete keeps M0's behavior. To delete
+  an account that holds courses, an admin first archives them if they wish and moves each one to
+  another account (B9), then deletes the empty account (Q11).
+- **B9.** `POST /api/v1/courses/{course_id}/move` with `{ "account_id" }` moves a course, in any
+  status, to another account of the organization. It needs `perm::CourseManage` at the course and
+  `perm::CourseCreate` at the destination, both checked under the organization's account tree
+  lock (`02` B22) with the paths read again under it, so a concurrent account move cannot carry
+  either end out of the caller's reach. A move to the current account writes nothing. Enrollments,
+  content and progress move with the course, since they hang off the course; grants held at the
+  old account's subtree stop covering it and grants at the new one start, on the next request.
+  It writes `course.move` (`before` and `after`: account). An account moved by `02` B20 carries
+  its courses with it, since a course's scope path is read through its account at every
+  request.
 
 ### Reading and listing courses
 
@@ -101,16 +112,21 @@ to `Require`, and makes the evaluator read enrollments. Modules and items are sp
 - **B16.** An `active` enrollment grants its role's permissions at the course's scope (Q1); a
   `concluded` enrollment grants nothing and is kept as history (Q8). A permission whose
   `GRANTABLE` list does not include `course` has no effect through an enrollment (`09` B3).
-- **B17.** Creating an enrollment names `user_id` and `role_id` and needs
-  `perm::EnrollmentManage` at the course, then runs `09` B12's checks with the course as the
-  scope, in order: the user exists in the organization (404 `user.not_found`); the role is
-  built-in or the organization's (404 `role.not_found`); the role is not Manager or Observer (422
-  `request.invalid`, `enrollment.role_unavailable` at `/role_id`, Q9); a built-in role this binary
-  does not define is refused (409 `role.unknown_builtin`); the caller holds at the course every
-  catalog permission of the role (403 `permission.escalation`); the enrollment does not exist (409
-  `enrollment.exists`). A template course takes no enrollment whose role holds
-  `course.participate` (409 `course.template`), and an archived course takes no new enrollment
-  (409 `course.archived`, B5). Enrollments made through the API have source `local`.
+- **B17.** Creating an enrollment names `user_id` and `role_id` and needs `perm::EnrollmentManage`
+  at the course, then runs `09` B12's checks with the course as the scope, in order: the user exists
+  in the organization (404 `user.not_found`); the role is built-in or the organization's (404
+  `role.not_found`); the role is not Manager, and not Observer until `05-progress-and-events.md` I3
+  adds observed learners (422 `request.invalid`, `enrollment.role_unavailable` at `/role_id`, Q9); a
+  built-in role this binary does not define is refused (409 `role.unknown_builtin`); the caller
+  holds at the course every catalog permission of the role that is grantable at organization or
+  account scope (403 `permission.escalation`); the enrollment does not exist (409
+  `enrollment.exists`). Permissions grantable only at course scope (`course.participate`, and spec
+  05's `progress.view_observed`) are left out of the escalation check, because no assignment can
+  give them to a caller: checking them would stop every admin from enrolling a Student. They
+  describe the enrolled person's own relation to the course; spec 05 B19 puts its own check on
+  naming observed learners (Q12). A template course takes no enrollment whose role holds
+  `course.participate` (409 `course.template`), and an archived course takes no new enrollment (409
+  `course.archived`, B5). Enrollments made through the API have source `local`.
 - **B18.** `PATCH /api/v1/enrollments/{enrollment_id}` with `{ "status" }` concludes or
   reactivates an enrollment, needing what creating it would (B17's permission and escalation
   check). `DELETE` removes the enrollment with the same checks; from spec 05 it also deletes the
@@ -151,12 +167,12 @@ to `Require`, and makes the evaluator read enrollments. Modules and items are sp
 ### Audit
 
 - **B27.** These changes write one `audit_events` row each, in their transaction (`09` B22):
-  `course.create` (`after`: account, title, code, template), `course.update` (`before` and
-  `after` of each changed member), `course.set_status` (`before` and `after`), `course.copy`
-  (on the new course; `after`: the source id, account, template), `enrollment.create` (`after`:
-  user, role, status, source), `enrollment.update` (`before` and `after`: status) and
-  `enrollment.delete` (`before`: user, role, status). Content edits in later specs are not
-  audited (pages keep versions, spec 07).
+  `course.create` (`after`: account, title, code, template), `course.update` (`before` and `after`
+  of each changed member), `course.set_status` (`before` and `after`), `course.copy` (on the new
+  course; `after`: the source id, account, template), `enrollment.create` (`after`: user, role,
+  status, source), `course.move` (B9), `enrollment.update` (`before` and `after`: status) and
+  `enrollment.delete` (`before`: user, role, status). Content edits in later specs are not audited
+  (pages keep versions, spec 07).
 
 ## API
 
@@ -170,6 +186,7 @@ Common errors as in `../m0/02-organizations-and-accounts.md` -> API. Unsafe meth
 | `GET /api/v1/courses/{course_id}` | | 200 `Course` | 404 `course.not_found` | `perm::CourseView` (course; drafts need `CourseViewAll`, B10) |
 | `PATCH /api/v1/courses/{course_id}` | `{ title?, code?, start_at?, end_at?, settings?: { home? } }` | 200 `Course` | 404 `course.not_found`, 409 `course.code_taken`, 422 `request.invalid` | `perm::CourseManage` (course) |
 | `POST /api/v1/courses/{course_id}/status` | `{ status }` | 200 `Course` | 404 `course.not_found`, 409 `course.status_invalid`, 409 `course.has_learners`, 409 `course.template` | `perm::CourseManage` (course) |
+| `POST /api/v1/courses/{course_id}/move` | `{ account_id }` | 200 `Course` | 404 `course.not_found`, 404 `account.not_found` | `perm::CourseManage` (course) and `perm::CourseCreate` (the account in the body) |
 | `POST /api/v1/courses/{course_id}/copy` | `{ account_id, title?, code, template? }` | 201 `Course`, `Location` | 404 `course.not_found`, 404 `account.not_found`, 409 `course.code_taken`, 422 `request.invalid` | `perm::CourseViewAll` (course) and `perm::CourseCreate` (the account in the body) |
 | `GET /api/v1/courses/{course_id}/enrollments` | `?status&role_id&user_id&cursor&limit` | 200 `Page<Enrollment>` | 404 `course.not_found`, 400 `pagination.invalid_cursor` | `perm::EnrollmentView` (course) |
 | `POST /api/v1/courses/{course_id}/enrollments` | `{ user_id, role_id }` | 201 `Enrollment`, `Location` | 403 `permission.escalation`, 404 `course.not_found`/`user.not_found`/`role.not_found`, 409 `enrollment.exists`, 409 `role.unknown_builtin`, 409 `course.template`, 409 `course.archived`, 422 `request.invalid` | `perm::EnrollmentManage` (course) |
@@ -277,7 +294,8 @@ an Organization admin holds the key but, assigned at the organization, does not 
 | Instructor | Course designer's, plus `enrollment.view`, `enrollment.manage` |
 | Grader | none until M2 |
 | Student | `course.view`, `course.participate` |
-| Manager, Observer | none; not enrollable (Q9) |
+| Observer | `course.view`, and `progress.view_observed` from `05-progress-and-events.md` I3, which also makes it enrollable (Q9) |
+| Manager | none; not enrollable in M1 (Q9) |
 
 Entitlements: none. The plan names no course feature or limit.
 
@@ -304,6 +322,10 @@ each have the tree root, Tower, Enroute.
   `course.archived` (content routes in specs 03 and later repeat this).
 - **T7** (B8). Deleting Tower with a course in it answers 409 `account.has_courses`; the course
   and account are unchanged.
+- **T7a** (B9, Q11). An organization admin moves an archived course from Tower to Enroute
+  (200, `course.move` entry) and then deletes Tower (204); an account admin of Tower without
+  `course.create` at Enroute gets 404 `account.not_found` for the destination; a course move racing
+  a move of Enroute out of the caller's subtree answers 404 and moves nothing (two connections).
 - **T8** (B10). A Student of a draft course gets 404 `course.not_found` on `GET`; a Course
   designer of it gets 200 with `permissions` listing exactly the designer's course keys.
 - **T9** (B11). With courses in Tower, Enroute and the root: an organization admin lists all
@@ -315,8 +337,12 @@ each have the tree root, Tower, Enroute.
   `CourseCreate` at the destination gets 404 for the destination; `template: true` produces a
   template that cannot be published.
 - **T11** (B15, B17). Enrolling a user as Student twice answers 409 `enrollment.exists`; as
-  Student and Instructor gives two rows; as Observer or Manager answers 422
+  Student and Instructor gives two rows; as Manager (and, before `05` I3, Observer) answers 422
   `enrollment.role_unavailable`; a user of org B answers 404 `user.not_found`.
+- **T12a** (B17). An account admin of Tower enrolls a Student in a Tower course (201), although
+  no assignment can give the admin `course.participate`; a custom role holding only
+  `course.participate` and `organization.manage` is refused 403 `permission.escalation` to the
+  same admin.
 - **T12** (B17). An Instructor of a course cannot enroll someone with a custom role holding
   `course.manage` (403 `permission.escalation`), and can enroll another Instructor (201).
 - **T13** (B16, B23). An active Student enrollment gives `course.view` at that course and not at
@@ -351,8 +377,9 @@ each have the tree root, Tower, Enroute.
   spec 05.
 - Enrollment rules from groups (`enrollment_rules`): M4, with groups and sync.
 - Self-enrollment and course catalogs: not in the plan.
-- Deleting a course: Q7. Moving a course between accounts: not in the plan (B9).
-- The Observer's named students and the Manager's reports: Q9.
+- Deleting a course: Q7.
+- The Observer's named learners: `05-progress-and-events.md` B17 to B20 (Q9). The Manager's
+  reports: M4.
 - A "view as student" preview for staff: not in the plan.
 - Course archive import and export: M4.
 - The course pages of the web app (list, home, settings, roster): spec 16 and the specs that
@@ -404,7 +431,7 @@ and stands until the owner reviews it.
   Options: (a) no deletion in M1, archive instead; (b) delete only a draft course that never had
   an enrollment; (c) delete any course with its learner data. Recommendation: (a). Deletion of
   learner data belongs with M4's organization and user deletion; the cost is that an account
-  holding a course cannot be deleted (B8).
+  holding a course cannot be deleted until its courses are moved out (B8, B9, Q11).
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
 - **Q8. What concluding and deleting an enrollment do.** The plan's enrollment rules either
   conclude ("history kept") or delete. Options: (a) concluded grants nothing and keeps the row
@@ -413,14 +440,16 @@ and stands until the owner reviews it.
   (a), the reading of "history kept" that fails closed. Delete is learner data deletion and gets
   the maintainer's line-by-line review in spec 05's issue.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
-- **Q9. Manager and Observer in courses.** `09` B13 refuses both, and `09` B5 says the
-  Observer's named-students scope arrives with progress in M1. Options: (a) refuse both as
-  enrollment roles in M1 and specify the Observer's named students with the Manager's reports in
-  M4, since both are scopes over people rather than courses; (b) add an observer link table to
-  spec 05; (c) allow Observer enrollments that see every learner of the course.
-  Recommendation: (a). vZDC's "staff oversight" use maps to Instructor or Account admin views
-  meanwhile; this moves `09` B5's "M1" to M4, which the owner should confirm.
-  Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
+- **Q9. Manager and Observer in courses.** `09` B13 refuses both in M0. `09` B5, which the owner
+  accepted, says the Observer's scope (named students) "arrives with progress in M1" and the
+  Manager's (a user's reports) in M4. This is therefore not an open point for the Observer: it
+  follows `09` B5. The Observer becomes an enrollment role that names the learners it observes in
+  that course, specified in `05-progress-and-events.md` B17 to B20 and built in 05 I3; until that
+  issue lands, Observer enrollments are refused as Manager ones are. Manager stays refused until
+  M4. The open part, how named learners are recorded, is `05` Q4.
+  Coordinator decision (overnight, 2026-11-16, revised): the Observer follows `09` B5 (M1, with
+  spec 05 I3); the Manager stays M4; pending owner review. This replaces the earlier decision that
+  moved the Observer to M4, which a coordinator decision cannot do to an owner-accepted spec.
 - **Q10. Which roles publish and change courses.** The plan gives Course designer "edit content",
   Instructor "designer permissions plus grading, overrides, accommodations and enrollments", and
   Account admin "courses ... within an account subtree". Options: (a) `course.manage` and
@@ -428,14 +457,33 @@ and stands until the owner reviews it.
   Course designer. Recommendation: (a), the least privilege the plan's wording supports; an
   organization that wants instructors to publish defines a custom role.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
+- **Q11. Accounts that hold courses.** With no course deletion (Q7),
+  `../m0/02-organizations-and-accounts.md` B21's rule that an account holding courses refuses
+  deletion would make such an account permanent. The plan does not say whether courses move between
+  accounts. Options: (a) a course move route, so an admin moves the courses (archived or not) out,
+  then deletes the account, with B21 kept as M0 wrote it; (b) archived courses do not block
+  deletion, which would leave their rows pointing at a deleted account or need a cascade that
+  deletes learner data; (c) nothing, the account stays. Recommendation: (a). It keeps M0's rule and
+  every M0 account delete working, needs one route with B2's locking, and loses no data. Coordinator
+  decision (overnight, 2026-11-16): (a), pending owner review.
+- **Q12. The escalation check for course-only permissions.** `09` B12 step 5 asks the caller to
+  hold every permission of the role, including those not grantable at the scope. Applied to
+  enrollments, that refuses everyone, since `course.participate` can only come from an enrollment.
+  Options: (a) leave course-only permissions out of the check, with a dedicated check where one
+  confers rights over others (`progress.view_observed`, `05` B19); (b) treat the caller as holding
+  them when they hold `enrollment.manage`; (c) keep the check and give Student no course-only
+  permission. Recommendation: (a); the left-out permissions give the enrolled person a relation to
+  the course, not power over anyone else.
+  Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
 
 ## Issues
 
-1. **I1. Courses table, catalog entries and `CourseTarget`.** Migration `<version>_courses.sql`,
-   the eight catalog entries and the built-in lists, `courses` repository (create, get, update,
-   status, list visible), `CourseTarget`, the course routes except copy, the account deletion
-   check, audit entries for courses, and the permission-suite setups. Covers B1 to B11, B24,
-   B27 (courses); T1 to T9, T19, T20, T22 for the course routes. Depends on: none (M0 complete).
+1. **I1. Courses table, catalog entries and `CourseTarget`.** Migration `<version>_courses.sql`, the
+   eight catalog entries and the built-in lists, `courses` repository (create, get, update, status,
+   list visible, move), `CourseTarget`, the course routes except copy, the course move route, the
+   account deletion check, audit entries for courses, and the permission-suite setups. Covers B1 to
+   B11, B24, B27 (courses); T1 to T9, T7a, T19, T20, T22 for the course routes. Depends on: none (M0
+   complete).
 2. **I2. Enrollments and course grants.** Migration `<version>_enrollments.sql` with its role
    trigger, enrollment routes, `EnrollmentTarget`, the evaluator's enrollment grants, API key
    intersection, the users list's account-scope widening, and `09` B12's text. Covers B15 to B23,

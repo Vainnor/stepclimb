@@ -10,8 +10,9 @@
 - **Depends on:** `01-job-queue-and-outbox.md` (outbox, jobs), `02-courses-and-enrollments.md`
   (`course.participate`, enrollments, archived courses), `03-modules-and-items.md` (items),
   `04-unlock-and-completion-rules.md` (requirements, locks, completion definitions)
-- **Review:** standard (enrollment deletion's progress removal, B15, is learner data deletion and
-  gets the maintainer's line-by-line review in its issue)
+- **Review:** standard, except issue I3 (enrollment deletion's progress removal, B15, deletes
+  learner data, and B17 to B20 add the Observer's permission), which gets the maintainer's
+  line-by-line review
 
 ## Summary
 
@@ -21,7 +22,8 @@ enough in spec 09, a quiz is submitted in M2 or an activity is mastered in M3). 
 in the same transaction to the learner's module and course progress, and every newly finished
 item, module and course writes an event to the outbox (`item.completed`, `module.completed`,
 `course.completed`) that later specs and M4's webhooks consume. Learners read their own progress
-in the course outline; instructors read every learner's.
+in the course outline; instructors read every learner's, and an Observer the learners they are
+enrolled to observe.
 
 ## Behavior
 
@@ -112,6 +114,36 @@ in the course outline; instructors read every learner's.
 - **B16.** Deleting an item that has any `item_progress` row answers 409 `item.has_progress`
   (`03` B9); the check and the delete run under the course lock.
 
+### Observers
+
+`../m0/09-permissions-and-roles.md` B5, accepted by the owner, gives the Observer "read-only view
+of named students' progress" and says its scope arrives with progress in M1. This section is that
+scope (`02-courses-and-enrollments.md` Q9).
+
+- **B17.** An Observer is enrolled in a course with role Observer and a list of observed learners,
+  `observed_user_ids` (1 to 100 users, each holding an enrollment in the course whose role has
+  `course.participate`, active or concluded; 422 `request.invalid`,
+  `enrollment.observed_invalid` at the entry otherwise). The list is set on `POST
+  /api/v1/courses/{course_id}/enrollments` and replaced whole by `PATCH
+  /api/v1/enrollments/{enrollment_id}` with `{ "observed_user_ids" }`; only an enrollment whose
+  role holds `progress.view_observed` takes the member (422 otherwise). This lifts `02` B17's
+  refusal of Observer enrollments.
+- **B18.** The built-in Observer role holds `course.view` and `perm::ProgressViewObserved`
+  (`progress.view_observed`, grantable at course scope only, so only an enrollment gives it). A
+  custom role may hold it too. An Observer reads the course as a learner without progress would
+  (locks apply, `04` B5) and records no progress (no `course.participate`).
+- **B19.** Naming observed learners, on create or `PATCH`, needs `perm::ProgressView` at the
+  course in addition to `perm::EnrollmentManage` (403 `permission.escalation` otherwise): whoever
+  points an Observer at learners must already be able to read those learners' progress. This is
+  the check `02` B17 and Q12 leave to this spec in place of the general escalation rule.
+- **B20.** The two staff progress routes (B14) take `Require<perm::CourseView, CourseTarget>` and
+  then decide in the handler: a caller holding `progress.view` at the course reads every learner;
+  a caller holding only `progress.view_observed` reads only the learners named by their active
+  Observer enrollments in that course (the list route filters to them; the detail route answers
+  404 `progress.not_found` for anyone else); any other caller gets 403 `permission.denied`. A
+  concluded Observer enrollment grants nothing (`02` B16). When an observed learner's enrollment is
+  deleted, the observer link to them is deleted with it.
+
 ## API
 
 Common errors as in `../m0/02-organizations-and-accounts.md` -> API; unsafe methods also answer
@@ -120,8 +152,12 @@ Common errors as in `../m0/02-organizations-and-accounts.md` -> API; unsafe meth
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
 | `POST /api/v1/items/{item_id}/progress` | `{ action: "view" \| "mark_done" }` | 200 `ItemProgress` | 404 `item.not_found`, 403 `item.locked`, 409 `course.archived`, 422 `request.invalid` | `perm::CourseParticipate` (the item's course) |
-| `GET /api/v1/courses/{course_id}/progress` | `?status&cursor&limit` | 200 `Page<LearnerProgress>` | 404 `course.not_found`, 400 `pagination.invalid_cursor` | `perm::ProgressView` (course) |
-| `GET /api/v1/courses/{course_id}/progress/{user_id}` | | 200 `LearnerProgressDetail` | 404 `course.not_found`, 404 `progress.not_found` | `perm::ProgressView` (course) |
+| `GET /api/v1/courses/{course_id}/progress` | `?status&cursor&limit` | 200 `Page<LearnerProgress>` | 404 `course.not_found`, 400 `pagination.invalid_cursor` | `perm::CourseView` (course), then `perm::ProgressView`, or `perm::ProgressViewObserved` filtered to observed learners (B20) |
+| `GET /api/v1/courses/{course_id}/progress/{user_id}` | | 200 `LearnerProgressDetail` | 404 `course.not_found`, 404 `progress.not_found` | as above (B20) |
+
+Changed from `02-courses-and-enrollments.md`: the enrollment `POST` and `PATCH` take
+`observed_user_ids` (B17, B19) and the `Enrollment` schema gains `observed_user_ids` (present for
+roles holding `progress.view_observed`).
 
 Changed: the reads of `03` (outline, module, item) and `GET /api/v1/courses/{course_id}` add the
 caller's own progress (B13); `DELETE /api/v1/items/{item_id}` adds 409 `item.has_progress`;
@@ -201,6 +237,28 @@ which `03` B3 allows only for an empty module, so no item progress is lost. Colu
 data model (`org_id` everywhere, `course_id`, `started_at`, the counts) are named in the comments
 and B6, B7. `score` stays null until M2.
 
+Observed learners: migration `migrations/<version>_enrollment_observees.sql` (I3), version fixed
+the same way:
+
+```sql
+CREATE TABLE enrollment_observees (            -- not in the data model: B17, Q4
+    org_id         uuid        NOT NULL,
+    enrollment_id  uuid        NOT NULL REFERENCES enrollments (id) ON DELETE CASCADE,
+    course_id      uuid        NOT NULL,
+    user_id        uuid        NOT NULL,
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    updated_at     timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (enrollment_id, user_id),
+    FOREIGN KEY (org_id, course_id) REFERENCES courses (org_id, id),
+    FOREIGN KEY (org_id, user_id) REFERENCES users (org_id, id)
+);
+CREATE INDEX enrollment_observees_by_user ON enrollment_observees (org_id, course_id, user_id);
+```
+
+The repository checks that `course_id` is the enrollment's course and that each user is a learner
+of it (B17); deleting a learner's enrollment deletes their rows here when they have no other
+learner enrollment in the course (B20).
+
 Repository functions (each takes `OrgScope`): `progress::{record_step, complete_item,
 for_learner_in_course, list_for_course, recompute_course, delete_for_enrollment}`. Job kind
 `progress.recompute_course` on the `default` queue.
@@ -210,6 +268,7 @@ for_learner_in_course, list_for_course, recompute_course, delete_for_enrollment}
 | Permission | Key | Grantable at | Built-in roles (M1) |
 | --- | --- | --- | --- |
 | `perm::ProgressView` | `progress.view` | organization, account, course | Organization admin, Account admin, Instructor (Q2) |
+| `perm::ProgressViewObserved` | `progress.view_observed` | course | Observer (B18; `09` B5) |
 
 Recording progress takes `perm::CourseParticipate` (`02`). Entitlements: none.
 
@@ -255,6 +314,15 @@ Database tests use `#[sqlx::test]` and a `ManualClock`; route tests use the perm
   a sibling account 404; only the route's permission 2xx.
 - **T15** (every route). Cross-organization: org A's admin with org B's course, item or user id
   gets 404, and org B's progress rows and outbox are unchanged.
+- **T16** (B17, B19). An Instructor enrolls an Observer naming two Students (201); naming a user
+  with no learner enrollment answers 422 `enrollment.observed_invalid`; a caller with
+  `enrollment.manage` but not `progress.view` naming learners answers 403
+  `permission.escalation`; `observed_user_ids` on a Student enrollment answers 422.
+- **T17** (B18, B20). The Observer lists progress and sees exactly the two named Students; the
+  detail of a third Student answers 404 `progress.not_found`; posting progress answers 403; after
+  the Observer enrollment is concluded, the list answers 403 `permission.denied`. Mutation:
+  dropping the observed-learner filter turns the test red.
+- **T18** (B20). Deleting a named Student's enrollment removes them from the Observer's list.
 
 ## Out of scope
 
@@ -265,7 +333,6 @@ Database tests use `#[sqlx::test]` and a `ManualClock`; route tests use the perm
   Progress views): their screens in spec 16 and later; this spec gives their API.
 - Expiring completions and cycles: spec 14, which adds a cycle to completion and the re-lock.
 - Delivering events anywhere: subscribers in specs 11, 12 and 14; webhooks in M4.
-- The Observer's view of named students: M4 (`02` Q9).
 - Gradebook and certificates: M2 and later.
 
 ## Open questions
@@ -295,6 +362,15 @@ and stands until the owner reviews it.
   are (watch, score, mastery) are decided by the server's own engines.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
 
+- **Q4. How an Observer's named learners are recorded.** `09` B5 fixes the Observer's scope as
+  named students and its milestone as M1; the shape is open. Options: (a) per course, on the
+  Observer's enrollment (`enrollment_observees`), so an Observer sees named learners in the courses
+  they are enrolled in; (b) per organization, an observer-to-learner link covering every course
+  of the learner; (c) a role assignment whose scope is a user. Recommendation: (a). It reuses the
+  enrollment grant (`02` Q1), needs no new scope type in the evaluator, and an admin decides per
+  course who oversees whom; (b) can come with M4's Manager scope, which is per person.
+  Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
+
 ## Issues
 
 1. **I1. Progress tables, recording and roll-up.** Migration, `record_step`, `complete_item` with
@@ -306,6 +382,9 @@ and stands until the owner reviews it.
 2. **I2. Recomputation after rule changes.** The `progress.recompute_course` job, its enqueue from
    every rule-changing write in specs 03 and 04, and batching. Covers B8; T8. Depends on: I1,
    `04-unlock-and-completion-rules.md` I3.
-3. **I3. Staff progress reads and enrollment deletion.** `progress.view` in the catalog and roles,
-   the two roster routes, and progress removal on enrollment delete (maintainer line-by-line).
-   Covers B9, B14, B15; T11, T12, T14 and T15 for these routes. Depends on: I1.
+3. **I3. Staff and Observer progress reads, and enrollment deletion.** `progress.view` and
+   `progress.view_observed` in the catalog and roles, the two roster routes with the observed
+   filter, Observer enrollments with `enrollment_observees` (lifting `02` B17's Observer refusal),
+   and progress removal on enrollment delete (maintainer line-by-line: permissions and learner data
+   deletion). Covers B9, B14, B15, B17 to B20; T11, T12, T14 to T18 for these routes. Depends on:
+   I1, `02-courses-and-enrollments.md` I2.

@@ -39,12 +39,12 @@ questions in the written specs carry coordinator decisions pending the owner's r
 | 04 | [Unlock and completion rules](m1/04-unlock-and-completion-rules.md) | maintainer line-by-line |
 | 05 | [Progress and events](m1/05-progress-and-events.md) | standard |
 | 06 | [Files](m1/06-files.md) | maintainer line-by-line |
-| 07 | Pages and the editor | to be written |
-| 08 | Uploaded video | to be written |
-| 09 | Linked video and watch tracking | to be written |
-| 10 | Learner dashboard and Next up | to be written |
-| 11 | Announcements and in-app notifications | to be written |
-| 12 | Email | to be written |
+| 07 | [Pages and the editor](m1/07-pages-and-the-editor.md) | standard |
+| 08 | [Uploaded video](m1/08-uploaded-video.md) | maintainer line-by-line |
+| 09 | [Linked video and watch tracking](m1/09-linked-video-and-watch-tracking.md) | standard |
+| 10 | [Learner dashboard and Next up](m1/10-learner-dashboard-and-next-up.md) | standard |
+| 11 | [Announcements and in-app notifications](m1/11-announcements-and-in-app-notifications.md) | standard |
+| 12 | [Email](m1/12-email.md) | maintainer line-by-line |
 | 13 | Assignments, due dates, reminders and escalation | to be written |
 | 14 | Recurrence and expiring completions | to be written |
 | 15 | Installable web app and offline reading | to be written |

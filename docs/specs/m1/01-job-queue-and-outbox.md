@@ -92,11 +92,13 @@ and, in M4, webhooks run on it. It adds no HTTP route.
 
 ### Workers and roles
 
-- **B13.** `stepclimb serve` takes `--role` (also `STEPCLIMB_ROLE`, `role` in the file, ADR
-  0022): `all` (the default: HTTP and every queue but those another spec reserves), `web` (HTTP
-  only, no worker) or `worker` (every queue, no HTTP listener). Spec 08 adds `transcoder`. Pending
-  Q1 for the names. A `worker` process still serves `/healthz` and `/readyz` on the bind address,
-  so the container health check works unchanged; it serves nothing else.
+- **B13.** `stepclimb serve` takes `--role` (also `STEPCLIMB_ROLE`, `role` in the file, ADR 0022):
+  `all` (the default: HTTP and every queue), `web` (HTTP only, no worker) or `worker` (every queue
+  except those a spec reserves for a dedicated role, no HTTP listener). Spec 08 adds `transcoder`,
+  which runs only the `transcode` queue that `worker` leaves out; `all` runs it too, so a
+  single-process install transcodes. Q1 for the names. A `worker` process still serves `/healthz`
+  and `/readyz` on the bind address, so the container health check works unchanged; it serves
+  nothing else.
 - **B14.** Each worker process runs `worker_concurrency` jobs at once
   (`STEPCLIMB_WORKER_CONCURRENCY`, default 4, 1 to 64; a value outside that range stops startup
   naming the setting). When idle it polls for due jobs every second (Q2).

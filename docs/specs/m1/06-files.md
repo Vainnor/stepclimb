@@ -33,9 +33,20 @@ inline in a preview. A plan's `storage` limit bounds what an organization stores
   configuration at startup (Q1): `storage_url` (`file:///path` or `s3://bucket[/prefix]`) and, for
   S3-compatible stores, `storage_s3_endpoint`, `storage_s3_region`,
   `storage_s3_access_key_id`, `storage_s3_secret_access_key` (with `_FILE`) and
-  `storage_s3_allow_http` (for a local MinIO). `serve` refuses to start without `storage_url`,
-  naming the setting, and checks at startup that it can write, read and delete a probe object
-  under `<prefix>/.probe/`; `check-config` validates the values without connecting.
+  `storage_s3_allow_http` (for a local MinIO). When `storage_url` is set, `serve` checks at
+  startup that it can write, read and delete a probe object under `<prefix>/.probe/` and refuses
+  to start, naming the probe failure, when it cannot; S3 settings without `storage_url`, or an
+  `storage_url` that does not parse, stop startup naming the setting. `check-config` validates the
+  values without connecting.
+- **B1a.** Storage is optional, so an M0 installation upgrades without new settings (Q1). Without
+  `storage_url` the server starts, logs once at `warn` that storage is not configured and names
+  `STEPCLIMB_STORAGE_URL`, and `check-config` prints `storage: not configured
+  (STEPCLIMB_STORAGE_URL)`. Every route that reads or writes stored bytes (upload, the signed URL
+  routes, `GET /files/<token>`, and spec 08's uploads) answers 503 `storage.not_configured`, whose
+  `detail` names `STEPCLIMB_STORAGE_URL`; a course's `cover_url` is `null`. This is an explicit
+  error on each use, not a fallback: nothing is written anywhere else. Routes that touch only rows
+  (listing, rename, delete of course files that exist) keep working, and `files.cleanup` skips its
+  object deletes and logs once per run. `/readyz` does not depend on storage.
 - **B2.** A stored file's key is `orgs/<org_id>/files/<sha256 hex>`. Keys never contain a client
   name or folder, so no client string reaches a storage path.
 
@@ -109,11 +120,11 @@ inline in a preview. A plan's `storage` limit bounds what an organization stores
   listed as staff-only in `04`'s lock suite.
 - **B16.** A signed URL is `/files/<token>`, where the token seals `{ org_id, file_id,
   course_file_id, disposition, expires_at }` with the encryption key ring
-  (`stepclimb_auth::encryption`, context `[b"file_url"]`) and is base64url-encoded (Q6). It is valid until `expires_at`, 10
-  minutes after issue by the request's clock (Q7), and the response carries `expires_at`. Anyone
-  holding the URL can fetch the file until then; that is what lets `<img>`, `<iframe>` and the
-  browser's PDF viewer load it without a cookie. Key rotation keeps working while an old key stays
-  in the ring.
+  (`stepclimb_auth::encryption`, context `[b"file_url"]`) and is base64url-encoded (Q6). It is valid
+  until `expires_at`, 10 minutes after issue by the request's clock (Q7), and the response carries
+  `expires_at`. Anyone holding the URL can fetch the file until then; that is what lets `<img>`,
+  `<iframe>` and the browser's PDF viewer load it without a cookie. Key rotation keeps working while
+  an old key stays in the ring.
 - **B17.** `GET /files/<token>` (no session, no CSRF check; a public route for the walker, `09`
   B21) opens the token, refuses one that does not open or has expired with 404 `file.not_found`
   (one answer for both, so a token reveals nothing), checks that the course file still exists in
@@ -160,7 +171,7 @@ Common errors as in `../m0/02-organizations-and-accounts.md` -> API; unsafe meth
 
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
-| `POST /api/v1/courses/{course_id}/files` | `?folder&name`, raw body, `Content-Length` | 201 `CourseFile`, `Location` | 404 `course.not_found`, 409 `file.name_taken`, 411 `file.length_required`, 413 `file.too_large`, 403 `entitlement.limit_reached`, 422 `request.invalid` | `perm::CourseContentEdit` (course) |
+| `POST /api/v1/courses/{course_id}/files` | `?folder&name`, raw body, `Content-Length` | 201 `CourseFile`, `Location` | 503 `storage.not_configured`, 404 `course.not_found`, 409 `file.name_taken`, 411 `file.length_required`, 413 `file.too_large`, 403 `entitlement.limit_reached`, 422 `request.invalid` | `perm::CourseContentEdit` (course) |
 | `GET /api/v1/courses/{course_id}/files` | `?folder&cursor&limit` | 200 `Page<FolderEntry>` | 404 `course.not_found`, 422 `request.invalid` | `perm::CourseViewAll` (course) |
 | `POST /api/v1/courses/{course_id}/folders/rename` | `{ from, to }` | 200 `{ moved: integer }` | 404 `course.not_found`, 404 `folder.not_found`, 409 `file.name_taken`, 422 `request.invalid` | `perm::CourseContentEdit` (course) |
 | `GET /api/v1/course-files/{course_file_id}` | | 200 `CourseFile` | 404 `file.not_found` | `perm::CourseViewAll` (the file's course) |
@@ -169,6 +180,9 @@ Common errors as in `../m0/02-organizations-and-accounts.md` -> API; unsafe meth
 | `POST /api/v1/course-files/{course_file_id}/url` | `{ disposition }` | 200 `SignedUrl` | 404 `file.not_found` | `perm::CourseViewAll` (the file's course) |
 | `POST /api/v1/items/{item_id}/file-url` | `{ disposition }` | 200 `SignedUrl` | 404 `item.not_found`, 403 `item.locked`, 422 `request.invalid` (not a file item) | `perm::CourseView` (the item's course) |
 | `GET /files/{token}` | `Range?`, `If-None-Match?` | 200, 206 or 304 with the bytes | 404 `file.not_found`, 416 `file.range_invalid` | none: the token is the credential |
+
+Every route above that reads or writes stored bytes (upload, both URL routes, `GET /files/{token}`)
+also answers 503 `storage.not_configured` when storage is not configured (B1a).
 
 Schemas: `CourseFile { id, course_id, folder, name, size, mime, sha256, created_at, updated_at }`;
 `FolderEntry` is `{ kind: "folder", path, name }` or `{ kind: "file", file: CourseFile }`;
@@ -180,7 +194,7 @@ Configuration added (ADR 0022; secrets with `_FILE`; all in `check-config`):
 
 | Variable | File key | Default |
 | --- | --- | --- |
-| `STEPCLIMB_STORAGE_URL` | `storage_url` | none: required (Q1) |
+| `STEPCLIMB_STORAGE_URL` | `storage_url` | none: unset means "not configured" (B1a, Q1) |
 | `STEPCLIMB_STORAGE_S3_ENDPOINT` | `storage_s3_endpoint` | the provider's |
 | `STEPCLIMB_STORAGE_S3_REGION` | `storage_s3_region` | `us-east-1` |
 | `STEPCLIMB_STORAGE_S3_ACCESS_KEY_ID` | `storage_s3_access_key_id` | none (S3 only) |
@@ -257,9 +271,14 @@ Storage tests run against the Compose MinIO in the gate's stack and against a te
 directory; no test reaches the network outside the stack. The permission suite gains
 `CourseFileTarget`.
 
-- **T1** (B1). `serve` without `storage_url` exits naming it; with a store it cannot write, it
-  exits naming the probe failure; `check-config` prints the storage settings with the secret
-  redacted.
+- **T1** (B1). With a store it cannot write, `serve` exits naming the probe failure; S3 settings
+  without `storage_url` exit 2 naming it; `check-config` prints the storage settings with the
+  secret redacted.
+- **T1a** (B1a). Without `storage_url`, `serve` starts and answers `/readyz` 200; `check-config`
+  prints `storage: not configured (STEPCLIMB_STORAGE_URL)` and exits 0; an upload, both signed URL
+  routes and `GET /files/<token>` answer 503 `storage.not_configured` with `detail` naming the
+  variable; listing course files answers 200. Mutation: making the upload route skip the check
+  turns the test red.
 - **T2** (B3, B4). Upload without `Content-Length` answers 411; with a length 1 byte over
   `max_file_bytes`, 413 before any byte is read (the test server sees the body unread); a name
   with `/`, a folder with `..` or 9 segments, and a 256-character name answer 422; a duplicate name
@@ -328,13 +347,16 @@ Each question below was delegated by the owner to the coordinator; each recommen
 and stands until the owner reviews it.
 
 - **Q1. Storage configuration and its default.** The plan names `object_store` and its backends,
-  not settings. Options: (a) `storage_url` required, with no default, and the Compose files
-  setting it; (b) default to a local directory such as `/var/lib/stepclimb/storage`; (c) optional,
-  with file routes answering 503 when unset. Recommendation: (a). A default directory inside a
-  container silently loses uploads when the container is replaced, and `code-quality.md` asks for
-  a missing value to be an error naming the field. Self-hosters upgrading from M0 add one setting,
-  which the release notes say.
-  Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
+  not settings. Options: (a) `storage_url` required, with no default, so `serve` refuses to start
+  without it; (b) default to a local directory such as `/var/lib/stepclimb/storage`; (c)
+  optional: the server starts without it, and every route that needs stored bytes answers 503
+  `storage.not_configured` naming the setting, with `check-config` saying storage is not
+  configured. Recommendation: (c). (a) would stop every M0 installation at its first M1 start,
+  and (b) is a silent fallback that loses uploads when a container is replaced. (c) keeps the
+  missing value an error naming the field (`code-quality.md`), raised where it matters, while the
+  rest of the server keeps working. The Compose files set it, so new installations have storage.
+  Coordinator decision (overnight, 2026-11-16, revised): (c), pending owner review. It replaces
+  the earlier (a), which broke upgrades from M0.
 - **Q2. A per-file size limit.** The plan's limits are per organization (`storage`); a single
   upload needs a bound too. Options: (a) an instance setting `max_file_bytes`, default 100 MiB;
   (b) a new plan limit; (c) none beyond `storage`. Recommendation: (a). It protects the server's
@@ -396,7 +418,9 @@ and stands until the owner reviews it.
 
 1. **I1. Storage and the files table.** `object_store` (pinned after `dependency-researcher`, in
    its own commit), the storage configuration and startup probe, Compose settings, the `files`
-   and `course_files` migration and repositories, `Limit::Storage`. Covers B1, B2, B22; T1.
+   and `course_files` migration and repositories, `Limit::Storage`, and the not-configured
+   answer. Covers B1, B1a, B2, B22; T1, T1a (for the routes that exist by then; I2 and I3 extend
+   T1a to theirs).
    Depends on: `02-courses-and-enrollments.md` I1.
 2. **I2. Upload and the files area.** The upload route with streaming, hashing, sniffing,
    dedupe and the limit check; listing, rename, folder rename, delete; `CourseFileTarget`;
