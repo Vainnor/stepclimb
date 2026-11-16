@@ -940,7 +940,7 @@ impl Write for Captured {
 }
 
 /// Spec 08 B46: registering a passkey through an enrollment link signs out every app signed in
-/// as the user; a refused registration signs out nothing.
+/// as the user and refuses a code issued before it; a refused registration signs out nothing.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn registering_through_a_link_signs_out_every_app(pool: PgPool) {
     let f = Fixture::new(pool).await;
@@ -959,8 +959,10 @@ async fn registering_through_a_link_signs_out_every_app(pool: PgPool) {
         app_tokens::signed_in(&f.app, f.org, &app, user).await,
         "a refused one keeps it"
     );
+    let ready = app_tokens::issue_code(&f.pool, scope(f.org), user, now()).await;
     let started = f.start(&f.link(user).await).await;
     let answer = f.enroll(&started, respond(started.options()), None).await;
     assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
     assert!(app_tokens::signed_out(&f.app, f.org, &app).await);
+    assert!(app_tokens::code_refused(&f.app, f.org, &ready).await);
 }

@@ -3,10 +3,11 @@
 //! B46: a new password, the use of an enrollment link). A test binary takes it with
 //! `mod app_tokens;` and uses each function, so none is dead in any binary that takes it.
 //!
-//! [`sign_in`] stores an authorization code the way `/oauth/authorize` stores one and exchanges it
-//! at `/oauth/token` with the RFC 7636 appendix B verifier; [`signed_in`] asks `GET /api/v1/me`
-//! with the access token; [`signed_out`] checks the refresh token is refused and the access token
-//! answers 401.
+//! [`sign_in`] stores an authorization code the way `/oauth/authorize` stores one
+//! ([`issue_code`]) and exchanges it at `/oauth/token` with the RFC 7636 appendix B verifier
+//! ([`exchange`]); [`code_refused`] checks a code stored before the change is refused;
+//! [`signed_in`] asks `GET /api/v1/me` with the access token; [`signed_out`] checks the refresh
+//! token is refused and the access token answers 401.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::SystemTime;
@@ -91,15 +92,9 @@ fn form(pairs: &[(&str, &str)]) -> String {
     form.finish()
 }
 
-/// Sign the app in as `user` of `org` (whose scope is `scope`) at `now`.
-pub async fn sign_in(
-    app: &Router,
-    pool: &PgPool,
-    scope: OrgScope,
-    org: Uuid,
-    user: Uuid,
-    now: SystemTime,
-) -> AppTokens {
+/// An authorization code for `user` of `org` (whose scope is `scope`), stored at `now` the way
+/// `/oauth/authorize` stores one, and not exchanged yet.
+pub async fn issue_code(pool: &PgPool, scope: OrgScope, user: Uuid, now: SystemTime) -> Token {
     let code = Token::generate().expect("a code");
     let hash = code.hash();
     let new = NewCode {
@@ -113,6 +108,16 @@ pub async fn sign_in(
     oauth_codes::create(pool, scope, &new, now)
         .await
         .expect("store a code");
+    code
+}
+
+/// Exchange `code` at `/oauth/token` with the RFC 7636 appendix B verifier: the tokens, or the
+/// refusal's status and `error`.
+pub async fn exchange(
+    app: &Router,
+    org: Uuid,
+    code: &Token,
+) -> Result<AppTokens, (StatusCode, Value)> {
     let body = form(&[
         ("grant_type", "authorization_code"),
         ("code", code.expose_secret()),
@@ -121,8 +126,10 @@ pub async fn sign_in(
         ("code_verifier", VERIFIER),
     ]);
     let (status, answer) = send(app, org, Method::POST, "/oauth/token", None, Some(body)).await;
-    assert_eq!(status, StatusCode::OK, "{answer}");
-    AppTokens {
+    if status != StatusCode::OK {
+        return Err((status, answer["error"].clone()));
+    }
+    Ok(AppTokens {
         access: answer["access_token"]
             .as_str()
             .expect("an access token")
@@ -131,7 +138,29 @@ pub async fn sign_in(
             .as_str()
             .expect("a refresh token")
             .to_owned(),
-    }
+    })
+}
+
+/// Sign the app in as `user` of `org` (whose scope is `scope`) at `now`.
+pub async fn sign_in(
+    app: &Router,
+    pool: &PgPool,
+    scope: OrgScope,
+    org: Uuid,
+    user: Uuid,
+    now: SystemTime,
+) -> AppTokens {
+    let code = issue_code(pool, scope, user, now).await;
+    exchange(app, org, &code).await.expect("the exchange")
+}
+
+/// Whether `code`, issued before a change that signs every app out, is refused with
+/// `invalid_grant`.
+pub async fn code_refused(app: &Router, org: Uuid, code: &Token) -> bool {
+    matches!(
+        exchange(app, org, code).await,
+        Err((StatusCode::BAD_REQUEST, error)) if error == "invalid_grant"
+    )
 }
 
 /// Whether the app's access token answers `GET /api/v1/me` as `user`.

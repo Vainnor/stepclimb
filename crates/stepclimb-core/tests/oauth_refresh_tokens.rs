@@ -604,33 +604,115 @@ async fn a_concurrent_refresh_waits_and_then_sees_the_token_spent(pool: PgPool) 
     assert_eq!(rows, 2);
 }
 
+/// A code for `user` with the hash `[hash; 32]`, stored at the start time.
+async fn store_code(pool: &PgPool, org: Uuid, user: Uuid, hash: u8) -> Uuid {
+    let code_hash = [hash; 32];
+    let code = NewCode {
+        id: new_id(),
+        user_id: user,
+        client_id: CLIENT,
+        code_hash: &code_hash,
+        redirect_uri: "http://127.0.0.1:43210/oauth/callback",
+        code_challenge: CHALLENGE,
+    };
+    oauth_codes::create(pool, scope(org), &code, start_time())
+        .await
+        .expect("store a code");
+    code.id
+}
+
+async fn code_exists(pool: &PgPool, org: Uuid, hash: u8) -> bool {
+    let mut conn = pool.acquire().await.expect("a connection");
+    oauth_codes::lock(&mut conn, scope(org), &[hash; 32])
+        .await
+        .expect("lock")
+        .is_some()
+}
+
+async fn revoke_all(pool: &PgPool, org: Uuid, user: Uuid) -> u64 {
+    let mut conn = pool.acquire().await.expect("a connection");
+    refresh::revoke_all_of_user(&mut conn, scope(org), user)
+        .await
+        .expect("revoke")
+}
+
 /// Spec 08 B46: a change that ends the user's other sessions deletes every refresh token of the
-/// user, in every family, and no other user's.
+/// user, in every family, and the user's unused codes; no other user's, and not a used code.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn every_family_of_a_user_can_be_revoked_at_once(pool: PgPool) {
+async fn every_family_and_unused_code_of_a_user_can_be_revoked_at_once(pool: PgPool) {
     let a = insert_org(&pool, "org-a").await;
     let b = insert_org(&pool, "org-b").await;
     let user = insert_user(&pool, a).await;
     let other = insert_user(&pool, a).await;
     let user_b = insert_user(&pool, b).await;
     family(&pool, a, user, 1, start_time()).await;
-    family(&pool, a, user, 2, start_time()).await;
+    let second = family(&pool, a, user, 2, start_time()).await;
     family(&pool, a, other, 3, start_time()).await;
     family(&pool, b, user_b, 4, start_time()).await;
-    assert_eq!(
-        refresh::revoke_all_of_user(&pool, scope(b), user)
+    store_code(&pool, a, user, 11).await;
+    let used = store_code(&pool, a, user, 12).await;
+    store_code(&pool, a, other, 13).await;
+    store_code(&pool, b, user_b, 14).await;
+    let mut conn = pool.acquire().await.expect("a connection");
+    assert!(
+        oauth_codes::mark_used(&mut conn, scope(a), used, second, start_time())
             .await
-            .expect("revoke elsewhere"),
-        0
+            .expect("mark")
     );
-    assert_eq!(
-        refresh::revoke_all_of_user(&pool, scope(a), user)
-            .await
-            .expect("revoke"),
-        2
-    );
+    drop(conn);
+
+    assert_eq!(revoke_all(&pool, b, user).await, 0, "another organization");
+    assert!(code_exists(&pool, a, 11).await);
+    assert_eq!(revoke_all(&pool, a, user).await, 2);
     assert!(lock(&pool, a, 1).await.is_none());
     assert!(lock(&pool, a, 2).await.is_none());
+    assert!(
+        !code_exists(&pool, a, 11).await,
+        "the unused code is deleted"
+    );
+    assert!(code_exists(&pool, a, 12).await, "the used code stays");
     assert!(lock(&pool, a, 3).await.is_some());
+    assert!(code_exists(&pool, a, 13).await);
     assert!(lock(&pool, b, 4).await.is_some());
+    assert!(code_exists(&pool, b, 14).await);
+}
+
+/// Spec 08 B46: a revocation that starts while an exchange of the user's code holds the code
+/// waits for it, then deletes the family the exchange started.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_revocation_during_an_exchange_ends_its_family(pool: PgPool) {
+    let org = insert_org(&pool, "org-a").await;
+    let user = insert_user(&pool, org).await;
+    store_code(&pool, org, user, 11).await;
+
+    let mut exchange = pool.begin().await.expect("the exchange");
+    let code = oauth_codes::lock(&mut exchange, scope(org), &[11; 32])
+        .await
+        .expect("lock")
+        .expect("the code");
+    let first = token(user, &[1; 32]);
+    refresh::start_family(&mut exchange, scope(org), &first, start_time())
+        .await
+        .expect("start a family");
+    assert!(
+        oauth_codes::mark_used(&mut exchange, scope(org), code.id, first.id, start_time())
+            .await
+            .expect("mark")
+    );
+
+    let revoke_pool = pool.clone();
+    let mut revoke = tokio::spawn(async move {
+        let mut tx = revoke_pool.begin().await.expect("the revocation");
+        let deleted = refresh::revoke_all_of_user(&mut tx, scope(org), user)
+            .await
+            .expect("revoke");
+        tx.commit().await.expect("commit the revocation");
+        deleted
+    });
+    let waited = tokio::time::timeout(Duration::from_millis(300), &mut revoke).await;
+    assert!(waited.is_err(), "the revocation waits for the exchange");
+    exchange.commit().await.expect("commit the exchange");
+    assert_eq!(revoke.await.expect("the revocation finishes"), 1);
+    assert!(lock(&pool, org, 1).await.is_none(), "the new family ends");
+    assert!(code_exists(&pool, org, 11).await, "the used code stays");
 }

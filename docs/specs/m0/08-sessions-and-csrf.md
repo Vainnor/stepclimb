@@ -482,16 +482,19 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
     from a page, and the M5 spec decides whether a web origin ever needs them.
   - **Cleanup.** The periodic cleanup (B21) deletes every family whose newest token has expired.
   - **Ending a user's sessions ends their app sign-ins** (security review of I8, coordinator
-    decision 2026-11-15). Wherever the server ends a user's other sessions, "session" includes
-    every app signed in as the user: a password change (`PUT /api/v1/me/password`), a password
-    set through an enrollment link, and a passkey registered through one delete every refresh
-    token of the user (`oauth_refresh_tokens::revoke_all_of_user`) in the same transaction, so
-    the apps' access tokens stop on their next request. A passkey registered through a link does
-    not end the user's browser sessions (`04-local-accounts.md`); it ends the app sign-ins all
-    the same, since the link is how an admin restores access. Suspension deletes nothing: it
-    refuses the refresh and the access token while it lasts and unsuspending restores them, as
-    it does sessions (B11). An admin's removal of a user's TOTP (#192) calls the same function
-    when it lands.
+    decision 2026-11-15). Wherever the server ends a user's other sessions, "session" includes every
+    app signed in as the user: a password change (`PUT /api/v1/me/password`), a password set through
+    an enrollment link, and a passkey registered through one delete, in the same transaction
+    (`oauth_refresh_tokens::revoke_all_of_user`), first the user's unused authorization codes and
+    then every refresh token of the user, so the apps' access tokens stop on their next request and
+    a code issued before the change, held by whoever had the old session, cannot start a new family.
+    The codes go first: an exchange in progress holds its code's row, so the revocation waits for it
+    and then deletes the family it started. Used codes stay, so a replay of one is still recognized
+    as reuse. A passkey registered through a link does not end the user's browser sessions
+    (`04-local-accounts.md`); it ends the app sign-ins all the same, since the link is how an admin
+    restores access. Suspension deletes nothing: it refuses the refresh and the access token while
+    it lasts and unsuspending restores them, as it does sessions (B11). An admin's removal of a
+    user's TOTP (#192) calls the same function when it lands.
   - **Code reuse needs the code's own proof** (security review of I8). A used code revokes its
     family only when the replay names the code's client and redirect URI and its verifier
     passes; any other replay is `invalid_grant` and changes nothing, so someone who saw the code

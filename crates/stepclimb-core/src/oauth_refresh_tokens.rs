@@ -4,7 +4,7 @@
 //!
 //! A refresh token belongs to a family: a code exchange starts one ([`start_family`]), each
 //! refresh adds the next token to it ([`rotate`]), and a family ends whole ([`revoke_family`]),
-//! or every family of a user at once ([`revoke_all_of_user`]).
+//! or every family of a user at once with the user's unused codes ([`revoke_all_of_user`]).
 //! A token lives [`LIFETIME`] from its issue, and no token outlives [`FAMILY_LIFETIME`] from the
 //! family's start (Q11 (b)). A token is spent once a row rotated from it exists; the rotated row
 //! stays, so presenting the spent token again is recognized as reuse, which ends the family and
@@ -262,22 +262,35 @@ pub async fn revoke_family(
     Ok(result.rows_affected())
 }
 
-/// Delete every refresh token of the user `user_id` in the scope's organization, every family
-/// and client alike, so every app signed in as the user is signed out and its access tokens stop
-/// on their next request. A change that ends the user's other browser sessions calls this in its
-/// transaction (a new password, the use of an enrollment link, spec 08 B46). Returns how many
-/// tokens were deleted.
+/// Sign out every app signed in as the user `user_id` in the scope's organization: delete the
+/// user's unused authorization codes, then every refresh token of the user, every family and
+/// client alike, so no app keeps or gains a sign-in from before the call and the apps' access
+/// tokens stop on their next request. A change that ends the user's other browser sessions calls
+/// this in its transaction (a new password, the use of an enrollment link, spec 08 B46).
+///
+/// The codes go first: a code exchange in progress holds its code's row lock, so the delete
+/// waits for it, skips the code it marked used, and the token delete, a later statement, sees the
+/// family it started. Used codes stay, so presenting one again is still recognized as reuse.
+/// Returns how many refresh tokens were deleted.
 pub async fn revoke_all_of_user(
-    db: impl PgExecutor<'_>,
+    conn: &mut PgConnection,
     scope: OrgScope,
     user_id: Uuid,
 ) -> Result<u64, Error> {
+    sqlx::query!(
+        "DELETE FROM oauth_authorization_codes \
+         WHERE org_id = $1 AND user_id = $2 AND used_at IS NULL",
+        scope.org_id(),
+        user_id,
+    )
+    .execute(&mut *conn)
+    .await?;
     let result = sqlx::query!(
         "DELETE FROM oauth_refresh_tokens WHERE org_id = $1 AND user_id = $2",
         scope.org_id(),
         user_id,
     )
-    .execute(db)
+    .execute(&mut *conn)
     .await?;
     Ok(result.rows_affected())
 }
