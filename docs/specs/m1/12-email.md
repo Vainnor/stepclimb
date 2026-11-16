@@ -142,7 +142,10 @@ a one-click unsubscribe that mail clients show next to the sender.
 - **B15.** Every email carries `Auto-Submitted: auto-generated`; non-required kinds also carry
   `List-Unsubscribe: <https://<public_url>/email/unsubscribe/<token>>` and
   `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (RFC 8058), and with a domain sender both
-  headers are covered by the DKIM signature, as RFC 8058 asks.
+  headers are covered by the DKIM signature, which RFC 8058 section 4 requires ("The
+  List-Unsubscribe and List-Unsubscribe-Post headers MUST be covered by the signature";
+  https://www.rfc-editor.org/rfc/rfc8058.html, accessed 2026-11-16). Mail sent through an SMTP
+  sender is signed, if at all, by that server, which this spec does not control.
 - **B16.** `email_messages` rows are kept 90 days, then deleted by a periodic job (Q5). Spec 13's
   reminder timeline reads them.
 

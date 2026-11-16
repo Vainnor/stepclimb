@@ -64,8 +64,8 @@ until it is answered only expiry does.
 - **B6.** Resetting a module for a learner deletes their `item_progress`, `video_progress` and
   `watch_reports` rows for the module's items and their `module_progress` row, then recomputes
   their course progress counts (`05` B6). The course's `completed_at` is kept: a course completion
-  has its own validity (B3). Modules that list the reset module as a prerequisite, and items after
-  it in sequential order, lock again for that learner through `04` B8 and B9, because the
+  has its own validity (B3). Modules that list the reset module as a prerequisite, and so every
+  item in them, lock again for that learner through `04` B8 and B9, because the
   prerequisite is no longer complete. This is the plan's "re-locks anything that depends on it".
 - **B7.** Resetting a course for a learner deletes all their progress rows in the course (items,
   video, modules, course), as B6 does for every module; the course is then not complete and every

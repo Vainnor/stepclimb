@@ -379,7 +379,11 @@ and stands until the owner reviews it.
 - **Q2. Rendition details the plan leaves open.** Bitrates, segment length and container. Options:
   (a) B11's ladder (800 kbit/s, 2.8 Mbit/s, 5 Mbit/s), 6 s segments, MPEG-TS segments, no
   upscaling, a 720p MP4; (b) fMP4 segments; (c) the MP4 at 1080p. Recommendation: (a). TS segments
-  play in hls.js and every Safari, and a 720p MP4 keeps offline downloads small. B11 is written
+  are an HLS segment format (RFC 8216 section 3.2), which hls.js transmuxes to fMP4 ("MPEG-2 TS ...
+  segments are transmuxed into fMP4", hls.js README, https://github.com/video-dev/hls.js,
+  accessed 2026-11-16) and Safari plays natively; that every Safari and the iOS web view play
+  them is unverified here and checked by 09 T9 and spec 17. A 720p MP4 keeps offline downloads
+  small. B11 is written
   for (a).
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
 - **Q3. Keeping the original upload.** Options: (a) delete the original parts once the transcode

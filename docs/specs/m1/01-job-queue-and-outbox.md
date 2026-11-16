@@ -130,13 +130,16 @@ and, in M4, webhooks run on it. It adds no HTTP route.
   `item.completed`), `payload` and `dispatched_at`. `stepclimb_jobs::outbox::emit` takes the
   caller's transaction and the caller's `OrgScope`, so an event exists exactly when the change it
   reports committed.
-- **B20.** The stored payload is the event envelope, the shape Standard Webhooks uses for its
-  body so M4's webhooks send it unchanged: `{ "type": <topic>, "timestamp": <RFC 3339 UTC, the
+- **B20.** The stored payload is the event envelope, the payload structure the Standard Webhooks
+  specification recommends (its "Payload structure" section: `type`, `timestamp` in ISO 8601,
+  `data`;
+  https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md,
+  accessed 2026-11-16), which it gives as a recommendation, not a required shape. Stepclimb stores
+  it as the body M4's webhooks send unchanged: `{ "type": <topic>, "timestamp": <RFC 3339 UTC, the
   change's clock time>, "data": { ... } }`. The event id is the row's id. `data` is defined by the
-  spec that emits the topic, carries ids and the facts of the change, and never a secret or a
-  field the event's future receivers could not otherwise read (M4 decides receivers' rights).
-  Topics are registered in code with a schema version; a topic's `data` only gains fields within
-  one version.
+  spec that emits the topic, carries ids and the facts of the change, and never a secret or a field
+  the event's future receivers could not otherwise read (M4 decides receivers' rights). Topics are
+  registered in code with a schema version; a topic's `data` only gains fields within one version.
 - **B21.** The dispatcher is a loop in every worker process (not a `jobs` row): when idle it runs
   every second, as job polling does (Q2), and immediately again after a pass that found a full
   batch. Each pass, in one transaction, claims up to 100 undispatched rows (`FOR UPDATE SKIP

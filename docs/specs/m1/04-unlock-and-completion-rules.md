@@ -109,7 +109,8 @@ reaches the client.
 - **B13.** Every route that hands a learner an item's content or accepts progress for it checks
   the lock first, with the same evaluator, and answers 403 `item.locked` (with the reasons in the
   problem's `reasons` member) when it is locked: spec 05's progress route, spec 06's file URL,
-  spec 07's page body, spec 09's video playback and watch reports, and M2 and M3's starts of an
+  spec 07's page body, spec 08's video session (`POST /api/v1/items/{item_id}/video-session`),
+  spec 09's watch reports, and M2 and M3's starts of an
   attempt or session. `GET /api/v1/items/{item_id}` answers 200 with B12's fields, since a learner
   may open a locked item to read why. A test sweeps the OpenAPI document for every route whose
   path holds `item_id` or a content id and checks it is in the lock suite's table (T13), either

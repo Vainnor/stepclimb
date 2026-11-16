@@ -95,15 +95,14 @@ watched percentage.
   video item is met by starting playback. When `percent` reaches the item's `watch.min_percent`,
   the request calls `progress::complete_item` (`05` B5) in the same transaction, which emits
   `item.completed` and rolls up.
-- **B12.** The plan's rule stands: watched segments are recorded for linked video, so skipping
-  ahead does not count. YouTube and Vimeo are tracked through their player APIs and direct URLs
-  through `<video>` and hls.js (B6, B7), all reporting through B8. A generic oEmbed iframe exposes
-  no player API, so how oEmbed videos meet that rule is open for the owner (Q3); until the owner
-  answers, no oEmbed source is built (I4 waits on Q3) and this spec decides nothing about it.
-  Changing a
-  video's duration with `force` recomputes `percent` for every learner of the items that use it in
-  a job (`video.recompute_progress`), which completes items whose new percent meets the
-  requirement and never un-completes one (`05` Q1).
+- **B12.** The plan's rule stands: watched segments are recorded for linked video, so skipping ahead
+  does not count. YouTube and Vimeo are tracked through their player APIs and direct URLs through
+  `<video>` and hls.js (B6, B7), all reporting through B8. A generic oEmbed iframe exposes no player
+  API, so how oEmbed videos meet that rule is open for the owner (Q3); until the owner answers, no
+  oEmbed source is built (I4 waits on Q3) and this spec decides nothing about it. Changing a video's
+  duration with `force` recomputes `percent` for every learner of the items that use it in a job
+  (`video.recompute_progress`), which completes items whose new percent meets the requirement and
+  never un-completes one (`05` Q1).
 
 ### Reading watch data
 
@@ -174,7 +173,11 @@ CREATE TABLE watch_reports (                -- not in the data model: B8's idemp
 );
 ```
 
-`int4multirange` and `range_agg` exist from PostgreSQL 14; the plan requires 16. `watch_reports`
+Multirange types such as `int4multirange` were added in PostgreSQL 14 (release notes, E.26.3.5,
+https://www.postgresql.org/docs/release/14.0/, accessed 2026-11-16), and PostgreSQL 16's
+`range_agg(anymultirange) -> anymultirange` computes their union (Table 9.59,
+https://www.postgresql.org/docs/16/functions-aggregate.html, accessed 2026-11-16); the plan
+requires 16. `watch_reports`
 rows older than 7 days are deleted by `jobs.prune` (`01` B18). An item with `video_progress` rows
 counts as having progress for `05` B16.
 
