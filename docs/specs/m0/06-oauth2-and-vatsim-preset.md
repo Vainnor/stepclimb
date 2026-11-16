@@ -320,20 +320,34 @@ server every sign-in test and the Playwright stack use instead of a real provide
     of an unknown id answers 404, not 403 (a departure from `10` B9's order, which one route
     for two features cannot keep). `DELETE` and the reads need no feature. The permission
     suite marks such entries `gated_by_target`.
-  - More than `provider.manage` (all 403, checked on the validated config):
+  - More than `provider.manage` (403 except rule 4's 422, checked on the validated config):
     1. trusting a provider for email matching (`trusted_for_email_matching: true` on create,
-       or turned on), or, while it is trusted, changing its kind, issuer, endpoint origins,
-       `claims.subject`, `claims.email` or `claims.email_verified`, needs every catalog
+       or turned on), or, while it is trusted, changing its kind or anchors (rule 2),
+       `claims.email` or `claims.email_verified`, needs every catalog
        permission at organization scope (`permission.escalation`, the rule of
        `roles::refuse_unless_holds_every_permission`; the paragraph above, extended to the
        other anchors, since they decide whose verified emails the provider asserts);
-    2. changing the kind, issuer, endpoint origins or `claims.subject` of a provider that
-       identities link users to needs every permission (`permission.escalation`): otherwise a
-       `provider.manage` holder could point an admin's provider at an IdP they control and sign
-       in as the admin. These are the trust anchors of I4's decision 5 for the file;
+    2. changing the kind or anchors of a provider that identities link users to needs every
+       permission (`permission.escalation`): otherwise a `provider.manage` holder could point
+       an admin's provider at an IdP they control and sign in as the admin. The anchors are
+       the `oidc` issuer, and for `oauth2` the `authorize` origin, the whole `token` and
+       `userinfo` URLs (scheme, host, port, path and query, compared after URL parsing) and
+       `claims.subject`. The file (I4's decision 5) compares only the endpoints' origins,
+       since its operator owns the instance; the API compares the two URLs whole because one
+       host can serve another account's user endpoint under another path (COORDINATOR
+       DECIDED (overnight) from the security review of PR #207);
     3. with `admission.signup_allowed` on, creating an enabled provider, enabling one, or
        changing those anchors of an enabled one needs `admission.manage` as well
-       (`permission.denied`; COORDINATOR DECIDED on #37 from the review of #178).
+       (`permission.denied`; COORDINATOR DECIDED on #37 from the review of #178);
+    4. an attribute that the organization's admission rules or the provider's own rules test
+       (`07-admission.md` B8) is read from where the provider maps it, so mapping it
+       differently, a new provider's first mapping included, needs `admission.manage` as well
+       (`permission.denied`), and a write that stops mapping it answers 422
+       `provider.config_invalid` with `provider.attribute_in_use` at
+       `/config/claims/attributes/{name}`, whatever the caller holds: the rules change first.
+       A stored list that does not parse counts as testing every attribute. The 422 tells a
+       `provider.manage` holder that a rule tests the name, never what the rule says
+       (COORDINATOR DECIDED (overnight) from the security review of PR #207).
     An API key's narrowed grants apply to each (`08` B27).
   - Disabling or deleting an enabled provider when the local methods offer no primary way in
     and no other outside provider is enabled answers 409 `local.last_method`

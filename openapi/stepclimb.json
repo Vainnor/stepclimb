@@ -8416,7 +8416,7 @@
         }
       },
       "ProviderInvalid": {
-        "description": "`provider.config_invalid`: the config breaks a rule; `errors` lists each one (at most 20) with a JSON Pointer under `/config` and a `provider.*` code. `provider.kind_unsupported`: the kind is not `oidc` or `oauth2`. `provider.preset_unknown`: this server has no such preset. `request.invalid`: `errors` names `/key` (`provider.key_invalid`) or `/label` (`provider.label_invalid`).",
+        "description": "`provider.config_invalid`: the config breaks a rule; `errors` lists each one (at most 20) with a JSON Pointer under `/config` and a `provider.*` code, `provider.attribute_in_use` for an attribute an admission rule tests that the config no longer maps. `provider.kind_unsupported`: the kind is not `oidc` or `oauth2`. `provider.preset_unknown`: this server has no such preset. `request.invalid`: `errors` names `/key` (`provider.key_invalid`) or `/label` (`provider.label_invalid`).",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -8446,7 +8446,7 @@
         }
       },
       "ProviderWriteForbidden": {
-        "description": "`entitlement.feature_unavailable`: the organization's plan does not include the provider's kind (`oidc_providers` for `oidc`, `oauth2_providers` for `oauth2`). `permission.denied`: the caller does not hold `provider.manage` at organization scope; or sign-up is on and the write turns the provider on, or changes the issuer, endpoint origins or subject pointer of an enabled one, without `admission.manage`. `permission.escalation`: the write trusts the provider for email matching, or changes the issuer, endpoint origins, subject pointer or email claims of a trusted one, or changes the issuer, endpoint origins or subject pointer of a provider identities link users to, and the caller does not hold every catalog permission at organization scope. `auth.csrf_refused`: the request did not come from this site.",
+        "description": "`entitlement.feature_unavailable`: the organization's plan does not include the provider's kind (`oidc_providers` for `oidc`, `oauth2_providers` for `oauth2`). `permission.denied`: the caller does not hold `provider.manage` at organization scope; or sign-up is on and the write turns the provider on, or changes the anchors of an enabled one, without `admission.manage`; or the write maps an attribute an admission rule tests differently without `admission.manage`. `permission.escalation`: the write trusts the provider for email matching, or changes the anchors or email claims of a trusted one, or changes the anchors of a provider identities link users to, and the caller does not hold every catalog permission at organization scope. The anchors are the issuer, the authorize origin, the whole token and userinfo URLs and the subject pointer. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
           "application/problem+json": {
             "schema": {

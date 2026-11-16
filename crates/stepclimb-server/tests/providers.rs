@@ -115,6 +115,7 @@ impl Answer {
 enum Auth<'a> {
     Cookie(&'a str),
     Key(&'a str),
+    Anonymous,
 }
 
 struct Fixture {
@@ -241,6 +242,7 @@ impl Fixture {
         request = match auth {
             Auth::Cookie(cookie) => request.header(header::COOKIE, cookie),
             Auth::Key(key) => request.header(header::AUTHORIZATION, format!("Bearer {key}")),
+            Auth::Anonymous => request,
         };
         if body.is_some() {
             request = request.header(header::CONTENT_TYPE, "application/json");
@@ -1135,4 +1137,170 @@ async fn the_trust_rule_reads_a_keys_narrowed_grants(pool: PgPool) {
     f.send(Method::PATCH, &uri, Auth::Key(&full), Some(claims))
         .await
         .ok(StatusCode::OK);
+}
+
+/// One host can serve another account's user endpoint under another path: on a provider that
+/// identities link users to, a same-origin change of the token or userinfo URL's path or query
+/// is a change of what the provider is and needs every permission.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_same_origin_endpoint_change_of_a_linked_provider_needs_every_permission(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (manager, _) = f.holder(&[ProviderManage::KEY]).await;
+    let admin = f.admin().await;
+    let id = f.created(&manager, f.oauth2("plain")).await;
+    f.link(&id, "1000001").await;
+    let userinfo = Url::parse(&f.mock.url(Endpoint::OAuth2Userinfo)).expect("a URL");
+    let token = Url::parse(&f.mock.url(Endpoint::OAuth2Token)).expect("a URL");
+    let elsewhere = |url: &Url, path: &str| url.join(path).expect("a URL").to_string();
+    let changes = [
+        ("userinfo", elsewhere(&userinfo, "/accounts/another-user")),
+        ("userinfo", format!("{userinfo}?account=another")),
+        ("token", elsewhere(&token, "/another/token")),
+    ];
+    let before = f.stored(&id).await;
+    for (member, url) in &changes {
+        let body = json!({ "config": { *member: url } });
+        f.patch(&manager, &id, body)
+            .await
+            .expect(StatusCode::FORBIDDEN, ESCALATION);
+    }
+    assert_eq!(f.stored(&id).await, before);
+    let (member, url) = &changes[0];
+    let changed = f
+        .patch(&admin, &id, json!({ "config": { *member: url } }))
+        .await;
+    assert_eq!(changed.ok(StatusCode::OK)["config"]["userinfo"], json!(url));
+}
+
+/// Sets the organization's own admission rules, as `PUT /api/v1/admin/admission` stores them.
+async fn organization_rules(pool: &PgPool, org: Uuid, rules: &Value) {
+    sqlx::query(
+        "UPDATE organizations
+         SET settings = settings || jsonb_build_object('admission',
+                            COALESCE(settings -> 'admission', '{}'::jsonb)
+                            || jsonb_build_object('rules', $2::jsonb))
+         WHERE id = $1",
+    )
+    .bind(org)
+    .bind(rules)
+    .execute(pool)
+    .await
+    .expect("set the organization's rules");
+}
+
+fn mapping(attributes: Value) -> Value {
+    json!({ "config": { "claims": { "attributes": attributes } } })
+}
+
+/// An admission rule reads an attribute from where the provider maps it, so mapping a tested
+/// attribute differently needs `admission.manage` as well as `provider.manage`, and removing
+/// it answers 422. The four cases (anonymous 401, `provider.manage` alone 403, another
+/// organization's provider 404, both permissions 200) and a removal; no refused write changes
+/// the row.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn mapping_an_attribute_a_rule_tests_needs_admission_manage(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (manager, _) = f.holder(&[ProviderManage::KEY]).await;
+    let (both, _) = f.holder(&[ProviderManage::KEY, AdmissionManage::KEY]).await;
+    let mut body = oidc("corp-sso");
+    body["config"]["claims"] = json!({ "attributes": { "rating": "/rating", "team": "/team" } });
+    body["enabled"] = json!(false);
+    let id = f.created(&manager, body).await;
+    let rules = json!([{ "attribute": "rating", "op": "in", "value": ["S3", "C1"] }]);
+    organization_rules(&f.pool, f.org, &rules).await;
+    let before = f.stored(&id).await;
+
+    let remap = mapping(json!({ "rating": "/always-c1", "team": "/team" }));
+    let uri = format!("{PATH}/{id}");
+    f.send(Method::PATCH, &uri, Auth::Anonymous, Some(remap.clone()))
+        .await
+        .expect(StatusCode::UNAUTHORIZED, "auth.unauthenticated");
+    f.patch(&manager, &id, remap.clone())
+        .await
+        .expect(StatusCode::FORBIDDEN, "permission.denied");
+    assert_eq!(f.stored(&id).await, before);
+
+    let untested = mapping(json!({ "rating": "/rating", "team": "/squad", "region": "/r" }));
+    f.patch(&manager, &id, untested).await.ok(StatusCode::OK);
+    let changed = f.patch(&both, &id, remap).await;
+    assert_eq!(
+        changed.ok(StatusCode::OK)["config"]["claims"]["attributes"]["rating"],
+        "/always-c1"
+    );
+
+    let after_remap = f.stored(&id).await;
+    let removed = f
+        .patch(&both, &id, mapping(json!({ "team": "/squad" })))
+        .await;
+    removed.expect(StatusCode::UNPROCESSABLE_ENTITY, "provider.config_invalid");
+    assert_eq!(
+        removed.body["errors"],
+        json!([{
+            "field": "/config/claims/attributes/rating",
+            "code": "provider.attribute_in_use",
+        }])
+    );
+    assert_eq!(f.stored(&id).await, after_remap);
+}
+
+/// A provider's own admission rules protect its attributes the same way.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_providers_own_rules_protect_its_attributes(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (manager, _) = f.holder(&[ProviderManage::KEY]).await;
+    let mut body = oidc("corp-sso");
+    body["config"]["claims"] = json!({ "attributes": { "team": "/team" } });
+    let id = f.created(&manager, body).await;
+    sqlx::query(
+        "UPDATE identity_providers
+         SET config = config || jsonb_build_object('admission_rules', $2::jsonb)
+         WHERE id = $1::uuid",
+    )
+    .bind(&id)
+    .bind(json!([{ "attribute": "team", "op": "exists" }]))
+    .execute(&f.pool)
+    .await
+    .expect("set the provider's rules");
+    f.patch(&manager, &id, mapping(json!({ "team": "/everyone" })))
+        .await
+        .expect(StatusCode::FORBIDDEN, "permission.denied");
+    f.patch(&manager, &id, mapping(json!({})))
+        .await
+        .expect(StatusCode::UNPROCESSABLE_ENTITY, "provider.config_invalid");
+}
+
+/// Another organization's provider is not found, whatever its rules, and stays as it was.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn another_organizations_provider_mapping_is_not_found(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (both, _) = f.holder(&[ProviderManage::KEY, AdmissionManage::KEY]).await;
+    let other = organizations::create(&f.pool, "org-b", "Org B", now())
+        .await
+        .expect("create organization")
+        .id;
+    let config = json!({
+        "label": "Org B SSO",
+        "issuer": "https://idp.example.test/org-b",
+        "client_id": "org-b",
+        "claims": { "attributes": { "rating": "/rating" } },
+    });
+    let id: Uuid = sqlx::query_scalar(
+        "INSERT INTO identity_providers (id, org_id, key, kind, config)
+         VALUES ($1, $2, 'org-b-sso', 'oidc', $3::jsonb) RETURNING id",
+    )
+    .bind(new_id())
+    .bind(other)
+    .bind(&config)
+    .fetch_one(&f.pool)
+    .await
+    .expect("insert org B's provider");
+    let rules = json!([{ "attribute": "rating", "op": "exists" }]);
+    organization_rules(&f.pool, other, &rules).await;
+    let before = f.stored(&id.to_string()).await;
+    for body in [mapping(json!({ "rating": "/always" })), mapping(json!({}))] {
+        f.patch(&both, &id.to_string(), body)
+            .await
+            .expect(StatusCode::NOT_FOUND, "provider.not_found");
+    }
+    assert_eq!(f.stored(&id.to_string()).await, before);
 }

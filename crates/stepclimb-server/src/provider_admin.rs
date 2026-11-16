@@ -28,9 +28,10 @@
 //!   keeps them;
 //! - disabling or deleting the organization's last way to sign in answers 409
 //!   `local.last_method`;
-//! - trusting a provider for email matching, changing what a provider with identities is, and,
-//!   with sign-up on, turning a provider on, each need more than `provider.manage`
-//!   ([`guard::Guard::check`]).
+//! - trusting a provider for email matching, changing what a provider with identities is,
+//!   with sign-up on, turning a provider on, and mapping an attribute an admission rule tests
+//!   differently each need more than `provider.manage`, and removing such an attribute answers
+//!   422 ([`guard::Guard::check`]).
 //!
 //! Each write goes through `identity_providers::admin`, which writes the config through
 //! `identity_providers::replace_config` (a row keeps its admission rules) and the audit entry.
@@ -113,17 +114,20 @@ pub mod code {
     /// In a 422's `errors`: the label is empty, longer than 200 characters or holds a control
     /// character.
     pub const PROVIDER_LABEL_INVALID: &str = "provider.label_invalid";
+    /// In a 422's `errors`, at `/config/claims/attributes/{name}`: an admission rule tests the
+    /// attribute, so the provider must keep mapping it.
+    pub const PROVIDER_ATTRIBUTE_IN_USE: &str = "provider.attribute_in_use";
 }
 
 problem_responses! {
     ProvidersForbidden => "`permission.denied`: the caller does not hold `provider.manage` at organization scope.",
-    ProviderWriteForbidden => "`entitlement.feature_unavailable`: the organization's plan does not include the provider's kind (`oidc_providers` for `oidc`, `oauth2_providers` for `oauth2`). `permission.denied`: the caller does not hold `provider.manage` at organization scope; or sign-up is on and the write turns the provider on, or changes the issuer, endpoint origins or subject pointer of an enabled one, without `admission.manage`. `permission.escalation`: the write trusts the provider for email matching, or changes the issuer, endpoint origins, subject pointer or email claims of a trusted one, or changes the issuer, endpoint origins or subject pointer of a provider identities link users to, and the caller does not hold every catalog permission at organization scope. `auth.csrf_refused`: the request did not come from this site.",
+    ProviderWriteForbidden => "`entitlement.feature_unavailable`: the organization's plan does not include the provider's kind (`oidc_providers` for `oidc`, `oauth2_providers` for `oauth2`). `permission.denied`: the caller does not hold `provider.manage` at organization scope; or sign-up is on and the write turns the provider on, or changes the anchors of an enabled one, without `admission.manage`; or the write maps an attribute an admission rule tests differently without `admission.manage`. `permission.escalation`: the write trusts the provider for email matching, or changes the anchors or email claims of a trusted one, or changes the anchors of a provider identities link users to, and the caller does not hold every catalog permission at organization scope. The anchors are the issuer, the authorize origin, the whole token and userinfo URLs and the subject pointer. `auth.csrf_refused`: the request did not come from this site.",
     ProviderDeleteForbidden => "`permission.denied`: the caller does not hold `provider.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site.",
     ProviderNotFound => "`provider.not_found`: the organization has no `oidc` or `oauth2` provider with this id. `org.not_found`: the request's organization cannot be determined.",
     ProviderCreateConflict => "`provider.key_taken`: another provider of the organization has the key.",
     ProviderUpdateConflict => "`provider.config_owned`: `stepclimb.toml` declares the provider; change it there. `local.last_method`: disabling it would leave the organization no way to sign in.",
     ProviderDeleteConflict => "`provider.config_owned`: `stepclimb.toml` declares the provider; remove it there, and the server disables it. `provider.in_use`: identities still link users to the provider; disable it instead. `local.last_method`: deleting it would leave the organization no way to sign in.",
-    ProviderInvalid => "`provider.config_invalid`: the config breaks a rule; `errors` lists each one (at most 20) with a JSON Pointer under `/config` and a `provider.*` code. `provider.kind_unsupported`: the kind is not `oidc` or `oauth2`. `provider.preset_unknown`: this server has no such preset. `request.invalid`: `errors` names `/key` (`provider.key_invalid`) or `/label` (`provider.label_invalid`).",
+    ProviderInvalid => "`provider.config_invalid`: the config breaks a rule; `errors` lists each one (at most 20) with a JSON Pointer under `/config` and a `provider.*` code, `provider.attribute_in_use` for an attribute an admission rule tests that the config no longer maps. `provider.kind_unsupported`: the kind is not `oidc` or `oauth2`. `provider.preset_unknown`: this server has no such preset. `request.invalid`: `errors` names `/key` (`provider.key_invalid`) or `/label` (`provider.label_invalid`).",
 }
 
 /// A provider's protocol.
