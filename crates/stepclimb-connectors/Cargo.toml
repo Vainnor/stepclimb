@@ -10,3 +10,7 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[features]
+# The VATSIM Connect sign-in preset (spec 06 Q4).
+vatsim = []
