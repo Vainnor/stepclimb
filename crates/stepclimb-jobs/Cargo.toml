@@ -8,5 +8,21 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[dependencies]
+stepclimb-core.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+# The jitter of retry backoff (docs/specs/m1/01-job-queue-and-outbox.md B7).
+getrandom.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["sync"] }
+tracing-subscriber.workspace = true
+
 [lints]
 workspace = true

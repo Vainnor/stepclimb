@@ -38,23 +38,27 @@ and, in M4, webhooks run on it. It adds no HTTP route.
   loops each worker process runs (B17, B21). The payload is at most 64 KiB serialized (larger is a
   programming error: `enqueue` returns an error and the caller's transaction fails); a job that
   needs more stores it in a table and passes the id.
-- **B3.** A job may carry a `dedupe_key`. While a job of the same kind and key is waiting (not
-  claimed), enqueueing another inserts nothing and moves the waiting job's `run_at` to the
+- **B3.** A job may carry a `dedupe_key`. While a job of the same kind, organization and key is
+  waiting (not claimed), enqueueing another inserts nothing and moves the waiting job's `run_at` to the
   earlier of the two. A job already claimed does not absorb a new one, so a change made while a
   job runs is never lost: the new job waits and runs after it. Spec 05 uses this to collapse many
-  rule changes into one recomputation.
+  rule changes into one recomputation. A job of another organization, or an instance job, never
+  absorbs an organization's job; instance jobs dedupe among themselves.
 - **B4.** A worker claims up to `n` due jobs of the queues it serves in one statement: rows with
   `run_at <= now`, no live lease (`locked_until` null or `<= now`) and not dead, in `run_at, id`
   order, locked with `FOR UPDATE SKIP LOCKED`, and updated to `attempts = attempts + 1` and
   `locked_until = now + lease`. The claim commits before the handler runs, so a handler's own
   transactions never hold the queue's row locks and two workers never run the same job at once
   while its lease is live. `now` comes from the worker's `Clock` (`stepclimb_core::clock`), passed
-  into the query, so tests move time instead of sleeping.
+  into the query, so tests move time instead of sleeping. A due row already claimed
+  `max_attempts` times is not claimed again: the same statement marks it dead (B8) with
+  `last_error` "lease lapsed on the last attempt" (B5).
 - **B5.** The lease is 5 minutes by default; a kind may set its own. A handler that runs longer
   extends it (`JobContext::extend_lease`), which updates `locked_until` only while the row is
   still this claim's (same id and same `attempts`), and reports a lost lease so the handler can
   stop. A worker that dies leaves the lease to run out; the job is then claimed again and counts
-  one more attempt.
+  one more attempt. When that was its last attempt, the next claim marks the job dead instead
+  (B4), so a handler that ends the process every time stops after `max_attempts`.
 - **B6.** A handler returns one of three outcomes:
   - **done:** the worker deletes the row (only while the claim is still its own, as in B5);
   - **retry** with an error: when `attempts < max_attempts` the worker clears the lease, sets
@@ -202,7 +206,7 @@ CREATE TABLE jobs (
     updated_at    timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX jobs_due ON jobs (queue, run_at, id) WHERE dead_at IS NULL;
-CREATE UNIQUE INDEX jobs_dedupe_waiting ON jobs (kind, dedupe_key)
+CREATE UNIQUE INDEX jobs_dedupe_waiting ON jobs (kind, org_id, dedupe_key) NULLS NOT DISTINCT
     WHERE dedupe_key IS NOT NULL AND locked_until IS NULL AND dead_at IS NULL;
 CREATE INDEX jobs_by_org ON jobs (org_id) WHERE org_id IS NOT NULL;
 
@@ -232,7 +236,10 @@ CREATE INDEX outbox_by_org ON outbox (org_id, id);
 `jobs.org_id` is nullable, like `roles.org_id` (`m0/09` Data): an instance job is not organization
 data. `job_schedules` holds no organization data and has no `org_id`, like `plans`. A retried job
 that would collide with a waiting duplicate under `jobs_dedupe_waiting` is deleted instead, since
-the waiting one covers it (B3). The permission suite's cross-organization table check (`m0/09` B20)
+the waiting one covers it (B3); the index includes `org_id`, so only a duplicate of the same
+organization (or, for an instance job, another instance job) covers it. `enqueue`'s upsert names
+the same columns in `ON CONFLICT (kind, org_id, dedupe_key) WHERE ...`, which PostgreSQL 16
+accepts as the arbiter (checked with `EXPLAIN`: "Conflict Arbiter Indexes: jobs_dedupe_waiting"). The permission suite's cross-organization table check (`m0/09` B20)
 lists `jobs` and `outbox` as tables with `org_id` and `job_schedules` as instance-wide.
 
 Repository and crate surface: `stepclimb_jobs::{enqueue, Job, JobContext, Outcome, Registry,
@@ -335,6 +342,23 @@ iteration at a time through a test hook rather than on timers.
    the claim, lease extension, outcomes, backoff with an injected random source, dead jobs, the
    registry and the scoped run of an organization's job. Covers B1 to B12, B25, B26; T1 to T10,
    T19. Depends on: none (M0 complete).
+   Coordinator decisions (2026-11-16, made while building I1, pending owner review):
+   - The dedupe index is `(kind, org_id, dedupe_key) NULLS NOT DISTINCT`, so a dedupe key
+     never reaches another organization's job, and a retry never deletes one (B3, B26, Data).
+   - A due row claimed `max_attempts` times is marked dead by the claim, with `last_error`
+     "lease lapsed on the last attempt" (B4, B5).
+   - A claim is still a worker's own while the row has the same id, organization and `attempts`
+     and still has a lease. Requiring the lease means a stale handler cannot delete or kill a job
+     that an unknown-kind release (B11) has put back to wait.
+   - An unknown-kind release that would collide with a waiting duplicate deletes the row, as a
+     retry does (Data).
+   - `organizations::list_ids` (B10) comes with the first instance job that iterates
+     organizations; I1 has no caller for it.
+   - A random generator failure counts as the lowest jitter draw and is logged at `warn` (B7).
+     NUL in a handler's error is stored as U+FFFD, since `text` cannot hold it (B9). A database
+     error while checking the job's organization is a retry outcome (B10).
+   - A kind needs a lease of 1 s to 24 h, a base of at least 1 ms, a cap from its base to
+     7 days and 1 to 1,000 attempts; `Registry::register` refuses anything else.
 2. **I2. Worker runtime and roles.** The claim loop with `worker_concurrency`, polling, graceful
    shutdown, `--role` and `STEPCLIMB_ROLE` in the configuration loader and `check-config`, and the
    worker-only listener for the probes. Covers B13 to B16; T11, T12. Depends on: I1.

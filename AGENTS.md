@@ -43,7 +43,7 @@ lookup every `web/` string goes through (spec 11 I1). `apps/app` is a Tauri 2 sh
 `web/`. `stepclimb-core` has UUID v7 ids, the permission catalog, the entitlement catalogs, the
 built-in role lists and the controllable clock; `stepclimb-auth` has tokens, token hashes and the encryption key ring (spec 08
 I1); the browser session (`stepclimb-core` `sessions`, `stepclimb-server` `session`) and the
-request-organization resolver (with its `RequestOrg` extractor for unauthenticated routes) exist and authenticate the `/api/v1` routes, but no sign-in route creates a session yet (specs 04 to 07). `stepclimb-mock-idp` is the test-only mock identity provider. Every other crate and package is a documented placeholder. M0's work is specified in
+request-organization resolver (with its `RequestOrg` extractor for unauthenticated routes) exist and authenticate the `/api/v1` routes, but no sign-in route creates a session yet (specs 04 to 07). `stepclimb-mock-idp` is the test-only mock identity provider. `stepclimb-jobs` has the job queue core (spec m1/01 I1: `jobs` table, `enqueue`, the claim, `Worker::run_once`, the `Registry`); nothing enqueues a job and no worker loop runs yet (I2). Every other crate and package is a documented placeholder. M0's work is specified in
 `docs/specs/m0/` and broken into issues on the GitHub Project.
 
 ## Workspace layout
@@ -61,7 +61,7 @@ The plan's layout (`docs/plan/technical.md` -> Architecture and stack).
 | `crates/stepclimb-interop` | lib | Course archive, CSV; later GIFT, QTI, LTI, Common Cartridge. Placeholder (M1 to M4). |
 | `crates/stepclimb-integrations` | lib | Sync API, SCIM, permission modes, reports and exports. Placeholder (M4). |
 | `crates/stepclimb-connectors` | lib | Optional connectors on the public API: vatsim, vatusa. Today: the VATSIM Connect sign-in preset's data (`vatsim::PRESET`, feature `vatsim`), which the server reads in `presets`; the connectors themselves are M4. |
-| `crates/stepclimb-jobs` | lib | Postgres queue, outbox, email, webhooks, push, auto-submit. Placeholder (M1, M4). |
+| `crates/stepclimb-jobs` | lib | Postgres queue, outbox, email, webhooks, push, auto-submit. Today: the job queue core (`enqueue` with dedupe, `queue::claim` with `SKIP LOCKED` and leases, `Worker::run_once`, the `Registry`, retry backoff). |
 | `crates/stepclimb-mock-idp` | lib + bin | The mock OIDC and OAuth 2 identity provider every sign-in test runs against, on 127.0.0.1 (spec 06 I1, ADR 0027). Dev-dependency only. The `stepclimb-mock-idp` binary runs it as the `mock-idp` service of the `just e2e` stack only (`deploy/compose/ci.yaml`, Dockerfile target `mock-idp`; spec 06 B3). |
 | `crates/stepclimb-media` | lib | tus uploads, ffmpeg transcode, captions, signed delivery. Placeholder (M1). |
 | `migrations/` | | SQL migrations, forward-only, embedded and run at startup. |

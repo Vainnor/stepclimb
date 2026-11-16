@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM jobs\n         WHERE id = $1 AND org_id IS NOT DISTINCT FROM $2 AND attempts = $3\n           AND locked_until IS NOT NULL AND dead_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a16655321ae577cff601bdfe12bf3ea3c280b1a7dd2caad68e2a8f64ca375ce8"
+}
