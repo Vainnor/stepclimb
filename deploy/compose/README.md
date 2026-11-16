@@ -287,8 +287,9 @@ The three limits have nothing to count until the sign-in and token routes arrive
 M0.
 
 Each `serve` process holds up to 10 database connections for HTTP, and an `all` or `worker`
-process another `worker_concurrency` + 1 for the job worker (11 with the default 4), so up to
-10 + `worker_concurrency` + 1 in all. PostgreSQL allows 100 connections by default
+process another `worker_concurrency` + 2 for the job worker and its scheduler (6 with the
+default 4), so up to 10 + `worker_concurrency` + 2 in all: 16 with the default, 76 with the
+largest concurrency, 64. PostgreSQL allows 100 connections by default
 (`max_connections`); when you run several processes against one database, keep their sum, plus
 what backups and administration use, under it. A `web` process opens no job connections.
 
@@ -296,6 +297,10 @@ The `stepclimb` service in `compose.production.yaml` sets `stop_grace_period: 40
 the job worker stops claiming and waits up to 30 s for the jobs it is running; Docker's default
 of 10 s would kill the process before then. A job still running at 30 s is left to its lease,
 which runs out so another worker takes it.
+
+Periodic jobs, such as the sign-in flow cleanup every 10 minutes and the hourly pruning of dead
+jobs, run only in `all` and `worker` processes. Keep at least one of those running; a deployment
+of `web` processes alone runs no jobs.
 
 
 ### Sign-in providers

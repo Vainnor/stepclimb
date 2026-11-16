@@ -148,6 +148,7 @@ async fn startup_migrations_create_the_schema_on_an_empty_database(pool: PgPool)
             "groups",
             "identities",
             "identity_providers",
+            "job_schedules",
             "jobs",
             "local_logins",
             "local_tokens",

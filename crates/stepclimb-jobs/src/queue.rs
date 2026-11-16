@@ -498,6 +498,55 @@ fn is_dedupe_conflict(error: &sqlx::Error) -> bool {
         .is_some_and(|c| c == DEDUPE_INDEX)
 }
 
+/// Delete up to `limit` dead jobs of `scope`'s organization that died at or before `cutoff`
+/// (B8: `jobs.prune`). Returns how many it deleted; fewer than `limit` means none is left.
+pub async fn prune_dead(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    cutoff: SystemTime,
+    limit: u32,
+) -> Result<u64, Error> {
+    // `jobs_dead` serves the inner select: `org_id = $1`, `dead_at <= $2`.
+    let done = sqlx::query!(
+        "DELETE FROM jobs
+         WHERE id IN (
+             SELECT id FROM jobs
+             WHERE org_id = $1 AND dead_at IS NOT NULL
+               AND dead_at <= timestamptz 'epoch' + $2::bigint * interval '1 microsecond'
+             LIMIT $3
+         )",
+        scope.org_id(),
+        epoch_micros(cutoff)?,
+        i64::from(limit),
+    )
+    .execute(db)
+    .await?;
+    Ok(done.rows_affected())
+}
+
+/// [`prune_dead`] for the instance's own dead jobs, those with no organization.
+pub async fn prune_dead_instance(
+    db: impl PgExecutor<'_>,
+    cutoff: SystemTime,
+    limit: u32,
+) -> Result<u64, Error> {
+    // Instance jobs only (`org_id IS NULL`); `jobs_dead` serves the inner select.
+    let done = sqlx::query!(
+        "DELETE FROM jobs
+         WHERE id IN (
+             SELECT id FROM jobs
+             WHERE org_id IS NULL AND dead_at IS NOT NULL
+               AND dead_at <= timestamptz 'epoch' + $1::bigint * interval '1 microsecond'
+             LIMIT $2
+         )",
+        epoch_micros(cutoff)?,
+        i64::from(limit),
+    )
+    .execute(db)
+    .await?;
+    Ok(done.rows_affected())
+}
+
 /// `error` as `last_error` stores it (B9): NUL, which PostgreSQL `text` cannot hold, becomes
 /// U+FFFD, and the result is cut to at most [`MAX_ERROR_BYTES`] at a character boundary.
 #[must_use]

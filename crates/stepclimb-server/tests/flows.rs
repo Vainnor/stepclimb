@@ -1,18 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Sign-in flows over HTTP headers (docs/specs/m0/08-sessions-and-csrf.md B17 to B21, Q8; T18,
-//! T19). The tests stand in for the sign-in steps of specs 04 to 07 that will call
+//! T19; spec m1/01 T14). The tests stand in for the sign-in steps of specs 04 to 07 that will call
 //! `flow::start` and `flow::finish`. Needs `DATABASE_URL` (`just up`).
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::http::{HeaderMap, HeaderValue, header};
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::PgPool;
 use stepclimb_auth::{encryption::KeyRing, token::TokenHash};
 use stepclimb_core::{
     OrgScope,
     auth_flows::{Kind, LIFETIME},
     clock::ManualClock,
     id::{Uuid, new_id},
+};
+use stepclimb_jobs::{
+    Worker,
+    backoff::Random,
+    schedule::{self, Tick},
 };
 use stepclimb_server::flow::{self, FinishError, Finished, FlowStart, Started};
 
@@ -410,35 +415,39 @@ async fn a_flow_moved_to_another_organization_does_not_open_there(pool: PgPool) 
     assert!(matches!(result, Err(FinishError::Decrypt(_))), "{result:?}");
 }
 
+// Spec m1/01 T14, B18; spec 08 B21: the scheduler enqueues `auth.flows_cleanup`, and the job
+// deletes the flow that has expired.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn the_cleanup_timer_deletes_an_expired_flow(pool: PgPool) {
+async fn the_cleanup_job_deletes_an_expired_flow(pool: PgPool) {
     let fixture = Fixture::new(pool).await;
     let started = fixture.start(Kind::Oidc, None).await;
     fixture.clock.advance(LIFETIME);
-    // Paused time jumps to the next timer whenever the runtime waits, database I/O included, so
-    // this pool has no client-side timeouts for the jump to fire; the jump only brings the
-    // cleanup timer's ticks sooner.
-    let untimed = PgPoolOptions::new()
-        .acquire_timeout(Duration::from_secs(365 * 24 * 60 * 60))
-        .idle_timeout(None)
-        .max_lifetime(None)
-        .connect_with(fixture.pool.connect_options().as_ref().clone())
+    let now = fixture.clock.clock().now();
+    let registry = stepclimb_server::jobs::registry().expect("the registry builds");
+    schedule::sync(&fixture.pool, &registry, now).await.unwrap();
+    let tick = schedule::tick(&fixture.pool, &registry, now).await.unwrap();
+    assert!(
+        matches!(&tick, Tick::Ran(names) if names.iter().any(|n| n == "auth.flows_cleanup")),
+        "{tick:?}"
+    );
+    let queues = registry.queues();
+    let worker = Worker::new(
+        fixture.pool.clone(),
+        registry,
+        fixture.clock.clock(),
+        Random::from_fn(|| 0),
+        queues,
+    );
+    worker.run_once(10).await.unwrap();
+    assert_eq!(
+        flow_count(&fixture.pool).await,
+        0,
+        "flow {} is still stored",
+        started.id
+    );
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs")
+        .fetch_one(&fixture.pool)
         .await
-        .expect("a second pool on the test database");
-    tokio::time::pause();
-
-    let cleanup = tokio::spawn(flow::run_cleanup(untimed.clone(), fixture.clock.clock()));
-    // Virtual time is free, so wait many intervals: a pass can still be on its way to the
-    // database when the test's sleep returns. A cleanup that never deletes fails after them all.
-    let mut left = flow_count(&untimed).await;
-    for _ in 0..1000 {
-        if left == 0 {
-            break;
-        }
-        tokio::time::sleep(flow::CLEANUP_INTERVAL).await;
-        left = flow_count(&untimed).await;
-    }
-    cleanup.abort();
-
-    assert_eq!(left, 0, "flow {} is still stored", started.id);
+        .unwrap();
+    assert_eq!(left, 0, "both periodic jobs ran and are done");
 }

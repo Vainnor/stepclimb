@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT name, interval_s FROM job_schedules\n         WHERE next_run_at <= timestamptz 'epoch' + $1::bigint * interval '1 microsecond'\n           AND name = ANY($2::text[])\n         ORDER BY name\n         FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "job_schedules",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "interval_s",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "job_schedules",
+            "name": "interval_s"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "8b95e64fc0c55cafbea488b35a905fe64a761e25dd2e549d0f22cc647aae3671"
+}
