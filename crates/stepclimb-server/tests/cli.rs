@@ -287,7 +287,8 @@ fn check_config_exits_0_printing_only_non_secret_values_without_connecting() {
              public_url: https://lms.example.org\nallowed_origins: (none)\n\
              trusted_proxies: (none)\nsign_in_rate_limit: 20\ntoken_rate_limit: 60\n\
              failed_sign_in_limit: 10\nallow_insecure_providers: false\nrole: all\n\
-             worker_concurrency: 4\nproviders: (none)\n",
+             worker_concurrency: 4\nproviders: (none)\n\
+             storage: not configured (STEPCLIMB_STORAGE_URL)\n",
             file.0.display()
         )
     );
@@ -295,6 +296,107 @@ fn check_config_exits_0_printing_only_non_secret_values_without_connecting() {
         assert!(!stdout.contains(secret), "stdout: {stdout}");
         assert!(!stderr.contains(secret), "stderr: {stderr}");
     }
+}
+
+/// docs/specs/m1/06-files.md T1: `check-config` prints the S3 settings, the secret access key
+/// only as set, without connecting to the store.
+#[test]
+fn check_config_prints_the_storage_settings_with_the_secret_hidden() {
+    let output = stepclimb()
+        .arg("check-config")
+        .env("STEPCLIMB_DATABASE_URL", UNREACHABLE_URL)
+        .env("STEPCLIMB_ENCRYPTION_KEYS", KEYS)
+        .env("STEPCLIMB_STORAGE_URL", "s3://stepclimb/lms")
+        .env("STEPCLIMB_STORAGE_S3_ENDPOINT", "http://127.0.0.1:1")
+        .env("STEPCLIMB_STORAGE_S3_ALLOW_HTTP", "true")
+        .env("STEPCLIMB_STORAGE_S3_ACCESS_KEY_ID", "test-key")
+        .env("STEPCLIMB_STORAGE_S3_SECRET_ACCESS_KEY", "zq-s3-secret")
+        .output()
+        .expect("the binary runs");
+    let (stdout, stderr) = (stdout_of(&output), stderr_of(&output));
+    assert_eq!(output.status.code(), Some(0), "stderr: {stderr}");
+    assert!(
+        stdout.ends_with(
+            "storage_url: s3://stepclimb/lms\nstorage_s3_endpoint: http://127.0.0.1:1\n\
+             storage_s3_region: us-east-1\nstorage_s3_access_key_id: test-key\n\
+             storage_s3_secret_access_key: (set, hidden)\nstorage_s3_allow_http: true\n"
+        ),
+        "stdout: {stdout}"
+    );
+    assert!(!stdout.contains("zq-s3-secret"), "stdout: {stdout}");
+    assert!(!stderr.contains("zq-s3-secret"), "stderr: {stderr}");
+}
+
+/// T1: S3 settings without `storage_url` stop `check-config` and `serve` with exit 2, naming the
+/// setting, before anything connects.
+#[test]
+fn an_s3_setting_without_a_storage_url_exits_2_naming_it() {
+    for command in ["check-config", "serve"] {
+        let output = stepclimb()
+            .arg(command)
+            .env("STEPCLIMB_DATABASE_URL", UNREACHABLE_URL)
+            .env("STEPCLIMB_ENCRYPTION_KEYS", KEYS)
+            .env("STEPCLIMB_STORAGE_S3_SECRET_ACCESS_KEY", "zq-s3-secret")
+            .output()
+            .expect("the binary runs");
+        let stderr = stderr_of(&output);
+        assert_eq!(output.status.code(), Some(2), "{command}: {stderr}");
+        assert!(
+            stderr.contains(
+                "STEPCLIMB_STORAGE_S3_SECRET_ACCESS_KEY: applies only to an s3:// storage URL, \
+                 and STEPCLIMB_STORAGE_URL is not set"
+            ),
+            "{command}: {stderr}"
+        );
+        assert!(!stderr.contains("zq-s3-secret"), "{command}: {stderr}");
+    }
+}
+
+/// T1: a store the server cannot write stops `serve` with exit 1 naming the probe's failed step,
+/// before it connects to the database.
+#[test]
+fn serve_with_a_store_it_cannot_write_exits_1_naming_the_probe() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = std::env::temp_dir().join(format!("stepclimb-cli-{}-read-only", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).expect("chmod");
+    let output = stepclimb()
+        .arg("serve")
+        .env("STEPCLIMB_DATABASE_URL", UNREACHABLE_URL)
+        .env("STEPCLIMB_ENCRYPTION_KEYS", KEYS)
+        .env("STEPCLIMB_STORAGE_URL", format!("file://{}", dir.display()))
+        .output()
+        .expect("the binary runs");
+    let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755));
+    let _ = std::fs::remove_dir_all(&dir);
+    let stderr = stderr_of(&output);
+    assert_eq!(output.status.code(), Some(1), "stderr: {stderr}");
+    assert!(
+        stderr.contains("stepclimb: the storage probe could not write .probe/"),
+        "stderr: {stderr}"
+    );
+    assert!(!stderr.contains("database"), "stderr: {stderr}");
+}
+
+/// T1: a directory that does not exist stops `serve` naming `STEPCLIMB_STORAGE_URL`.
+#[test]
+fn serve_with_a_missing_storage_directory_exits_1_naming_the_setting() {
+    let output = stepclimb()
+        .arg("serve")
+        .env("STEPCLIMB_DATABASE_URL", UNREACHABLE_URL)
+        .env("STEPCLIMB_ENCRYPTION_KEYS", KEYS)
+        .env(
+            "STEPCLIMB_STORAGE_URL",
+            "file:///nonexistent/stepclimb-storage",
+        )
+        .output()
+        .expect("the binary runs");
+    let stderr = stderr_of(&output);
+    assert_eq!(output.status.code(), Some(1), "stderr: {stderr}");
+    assert!(
+        stderr.contains("stepclimb: could not open the store STEPCLIMB_STORAGE_URL names"),
+        "stderr: {stderr}"
+    );
 }
 
 /// Spec 06 B11's canonical `[[providers]]` example, its secret in a file beside it.
@@ -342,7 +444,7 @@ fn check_config_lists_the_files_providers_without_their_secret() {
     let (stdout, stderr) = (stdout_of(&output), stderr_of(&output));
     assert_eq!(output.status.code(), Some(0), "stderr: {stderr}");
     assert!(
-        stdout.ends_with("\nproviders: vatsim (oauth2)\n"),
+        stdout.contains("\nproviders: vatsim (oauth2)\n"),
         "stdout: {stdout}"
     );
     for hidden in [PROVIDER_SECRET, "vatsim_client_secret"] {
@@ -1124,5 +1226,59 @@ fn check_config_refuses_a_bad_role_or_concurrency_naming_the_setting() {
     assert!(
         stderr.contains("STEPCLIMB_WORKER_CONCURRENCY: 65 is more than 64"),
         "stderr: {stderr}"
+    );
+}
+
+/// docs/specs/m1/06-files.md T1a: without `storage_url`, `serve` warns once naming
+/// `STEPCLIMB_STORAGE_URL`, starts, and answers `/readyz` 200.
+#[sqlx::test(migrations = false)]
+async fn serve_without_storage_warns_once_and_is_ready(pool: PgPool) {
+    use std::io::{Read as _, Write as _};
+    let addr = std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("a free port")
+        .local_addr()
+        .expect("its address");
+    let mut child = stepclimb()
+        .arg("serve")
+        .env(
+            "STEPCLIMB_DATABASE_URL",
+            pool.connect_options().to_url_lossy().as_str(),
+        )
+        .env("STEPCLIMB_ENCRYPTION_KEYS", KEYS)
+        .env("STEPCLIMB_BIND", addr.to_string())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the binary starts");
+    let mut ready = None;
+    for _ in 0..300 {
+        if let Ok(mut stream) = std::net::TcpStream::connect(addr) {
+            stream
+                .write_all(b"GET /readyz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                .expect("send");
+            let mut answer = String::new();
+            let _ = stream.read_to_string(&mut answer);
+            ready = answer.lines().next().map(str::to_owned);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    child.kill().expect("stop the server");
+    let output = child.wait_with_output().expect("its output");
+    let stderr = stderr_of(&output);
+    assert_eq!(
+        ready.as_deref(),
+        Some("HTTP/1.1 200 OK"),
+        "stderr: {stderr}"
+    );
+    let warnings: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.contains("object storage is not configured"))
+        .collect();
+    assert_eq!(warnings.len(), 1, "stderr: {stderr}");
+    assert!(warnings[0].contains(r#""level":"WARN""#), "{}", warnings[0]);
+    assert!(
+        warnings[0].contains("STEPCLIMB_STORAGE_URL"),
+        "{}",
+        warnings[0]
     );
 }

@@ -86,6 +86,7 @@ impl Fixture {
             allowed_origins: Vec::new(),
             rate_limits: RateLimiter::new(Limits::DEFAULT, trusted),
             passwords: Default::default(),
+            storage: None,
             providers: stepclimb_server::providers::Providers::new(false)
                 .expect("provider clients"),
         })
@@ -506,6 +507,7 @@ async fn a_change_without_the_peer_address_is_refused(pool: PgPool) {
         allowed_origins: Vec::new(),
         rate_limits: Default::default(),
         passwords: Default::default(),
+        storage: None,
         providers: stepclimb_server::providers::Providers::new(false).expect("provider clients"),
     };
     let request = Request::patch("/api/v1/organization")

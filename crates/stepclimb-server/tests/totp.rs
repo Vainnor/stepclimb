@@ -150,6 +150,7 @@ fn state(pool: &PgPool, clock: &ManualClock, limits: Limits) -> AppState {
         allowed_origins: Vec::new(),
         rate_limits: RateLimiter::new(limits, TrustedProxies::none()),
         passwords: Default::default(),
+        storage: None,
         providers: stepclimb_server::providers::Providers::new(false).expect("provider clients"),
     }
 }

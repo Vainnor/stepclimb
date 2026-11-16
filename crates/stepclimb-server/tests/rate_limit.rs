@@ -20,7 +20,7 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use sqlx::postgres::PgPoolOptions;
-use stepclimb_auth::{encryption::KeyRing, provider_config::ConfigSecrets};
+use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{OrgScope, clock::ManualClock, id::Uuid, local_logins::LoginEmail};
 use stepclimb_server::{
     AppState, Config,
@@ -128,6 +128,7 @@ fn setup(limits: Limits, trusted: &str) -> Setup {
         allowed_origins: Vec::new(),
         rate_limits: RateLimiter::new(limits, trusted),
         passwords: Default::default(),
+        storage: None,
         providers: stepclimb_server::providers::Providers::new(false).expect("provider clients"),
     };
     let ran = Arc::new(AtomicUsize::new(0));
@@ -435,7 +436,7 @@ async fn the_server_limits_with_its_configuration_over_tcp() {
     let server = tokio::spawn(startup::serve_on(
         listener,
         config,
-        ConfigSecrets::default(),
+        startup::Opened::default(),
         pool,
         ManualClock::new(now()).clock(),
         app,

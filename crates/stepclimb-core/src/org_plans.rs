@@ -27,6 +27,7 @@ use crate::{
     OrgScope,
     db::{TimeOutOfRange, epoch_micros},
     feature::Limit,
+    files,
     plans::{self, PlanEntitlements, UNLIMITED},
     users,
 };
@@ -98,9 +99,9 @@ pub enum Error {
     /// check's lock does not make its count current (see the module documentation).
     #[error("the limit check runs only at READ COMMITTED isolation, not {found}")]
     IsolationLevel { found: String },
-    /// Counting what a limit counts failed.
+    /// Counting what a limit counts failed: the repository function's error.
     #[error("counting the units of the limit failed")]
-    Count(#[source] users::Error),
+    Count(#[source] Box<dyn std::error::Error + Send + Sync>),
     /// A time that cannot be stored.
     #[error(transparent)]
     Time(#[from] TimeOutOfRange),
@@ -211,7 +212,10 @@ pub async fn check_room(
     let used = match limit {
         Limit::Users => users::count_for_limit(&mut **tx, scope)
             .await
-            .map_err(Error::Count)?,
+            .map_err(|e| Error::Count(e.into()))?,
+        Limit::Storage => files::count_for_limit(&mut **tx, scope)
+            .await
+            .map_err(|e| Error::Count(e.into()))?,
     };
     Ok(room(used, adding, max))
 }

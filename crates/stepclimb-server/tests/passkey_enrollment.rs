@@ -369,6 +369,7 @@ fn state(pool: &PgPool, clock: &ManualClock) -> AppState {
         allowed_origins: Vec::new(),
         rate_limits: RateLimiter::new(Limits::DEFAULT, TrustedProxies::none()),
         passwords: Default::default(),
+        storage: None,
         providers: stepclimb_server::providers::Providers::new(false).expect("provider clients"),
     }
 }

@@ -35,8 +35,15 @@ use stepclimb_jobs::{RunOptions, Worker, backoff::Random};
 use tokio::sync::watch;
 
 use crate::{
-    AppState, Config, app::probes_router, config_providers, flow, jobs,
-    password_hasher::PasswordHasher, providers::Providers, rate_limit::RateLimiter, router,
+    AppState, Config,
+    app::probes_router,
+    config::{STORAGE_URL, StorageConfig},
+    config_providers, flow, jobs,
+    password_hasher::PasswordHasher,
+    providers::Providers,
+    rate_limit::RateLimiter,
+    router,
+    storage::{Storage, StorageError},
 };
 
 /// How long a request waits for a database connection from the pool.
@@ -95,6 +102,8 @@ pub enum StartupError {
     ProviderClient(#[from] stepclimb_auth::outbound::BuildError),
     #[error(transparent)]
     ConfigProviders(#[from] config_providers::ApplyError),
+    #[error(transparent)]
+    Storage(#[from] StorageError),
 }
 
 impl StartupError {
@@ -392,7 +401,29 @@ pub fn log_configuration(config: &Config) {
         role = %config.role,
         worker_concurrency = %config.worker_concurrency,
         providers = %config.providers_or_none(),
+        storage = %config.storage,
         "configuration loaded"
+    );
+}
+
+/// The store `config` names, opened and probed (docs/specs/m1/06-files.md B1), or `None`
+/// after one warning naming `STEPCLIMB_STORAGE_URL` when storage is not configured (B1a).
+pub async fn open_storage(config: &StorageConfig) -> Result<Option<Storage>, StartupError> {
+    let Some(storage) = Storage::open(config)? else {
+        warn_storage_not_configured();
+        return Ok(None);
+    };
+    storage.probe().await?;
+    tracing::info!(storage = %config, "object storage passed the startup probe");
+    Ok(Some(storage))
+}
+
+/// The one warning `serve` logs when storage is not configured (B1a).
+fn warn_storage_not_configured() {
+    tracing::warn!(
+        "object storage is not configured: set {} to store course files; until then uploads \
+         and file downloads answer 503 storage.not_configured",
+        STORAGE_URL.var
     );
 }
 
@@ -415,6 +446,7 @@ pub async fn serve(config: Config) -> Result<(), StartupError> {
     log_configuration(&config);
     warn_about_development_keys(&config.encryption_keys);
     warn_about_insecure_providers(&config);
+    let storage = open_storage(&config.storage).await?;
     let pool = connect(&config.database_url).await?;
     let clock = Clock::system();
     prepare(&pool, &clock).await?;
@@ -439,15 +471,11 @@ pub async fn serve(config: Config) -> Result<(), StartupError> {
     } else {
         probes_router
     };
-    let http = serve_on(
-        listener,
-        config,
+    let opened = Opened {
         config_secrets,
-        pool,
-        clock,
-        app,
-        stop.wait(),
-    );
+        storage,
+    };
+    let http = serve_on(listener, config, opened, pool, clock, app, stop.wait());
     let jobs = async {
         if let Some((worker, options)) = worker {
             worker.run(options, stop.wait()).await;
@@ -512,14 +540,24 @@ impl Stop {
     }
 }
 
-/// Build the application state from `config`, the secrets of the providers `stepclimb.toml`
-/// declares, `db` and `clock`, with the rate limiter `config` sets, and serve `app(state)` on `listener` until `shutdown` completes. Each request carries
-/// its TCP peer's address (`ConnectInfo<SocketAddr>`), which the rate limits start from.
-/// [`serve`] passes [`router`]; a test passes a router with a rate-limited route.
+/// What [`serve`] made from the configuration before it listens.
+#[derive(Debug, Default)]
+pub struct Opened {
+    /// The secrets of the providers `stepclimb.toml` declares.
+    pub config_secrets: ConfigSecrets,
+    /// The probed store, or `None` when storage is not configured.
+    pub storage: Option<Storage>,
+}
+
+/// Build the application state from `config`, what [`serve`] `opened`, `db` and `clock`, with
+/// the rate limiter `config` sets, and serve `app(state)` on `listener` until `shutdown`
+/// completes. Each request carries its TCP peer's address (`ConnectInfo<SocketAddr>`), which the
+/// rate limits start from. [`serve`] passes [`router`]; a test passes a router with a
+/// rate-limited route.
 pub async fn serve_on(
     listener: TcpListener,
     config: Config,
-    config_secrets: ConfigSecrets,
+    opened: Opened,
     db: PgPool,
     clock: Clock,
     app: impl FnOnce(AppState) -> Router,
@@ -527,7 +565,7 @@ pub async fn serve_on(
 ) -> Result<(), StartupError> {
     let rate_limits = RateLimiter::new(config.limits(), config.trusted_proxies.clone());
     let providers =
-        Providers::new(config.allow_insecure_providers)?.with_config_secrets(config_secrets);
+        Providers::new(config.allow_insecure_providers)?.with_config_secrets(opened.config_secrets);
     let state = AppState {
         db,
         clock,
@@ -537,6 +575,7 @@ pub async fn serve_on(
         rate_limits,
         providers,
         passwords: PasswordHasher::default(),
+        storage: opened.storage,
     };
     axum::serve(
         listener,

@@ -236,6 +236,7 @@ impl Fixture {
             allowed_origins: Vec::new(),
             rate_limits: Default::default(),
             passwords: Default::default(),
+            storage: None,
             providers: providers.clone(),
         };
         let app = router(state).layer(Extension(ConnectInfo(CLIENT)));

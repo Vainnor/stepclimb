@@ -84,8 +84,8 @@
 # Until release images are published, the server image is built from this checkout with
 # deploy/Dockerfile and tagged stepclimb:local (SC_IMAGE changes the tag). The other images are
 # pinned by digest; MinIO's is Chainguard's build, which publishes only `latest`
-# (docs/adr/0019-minio-image.md). Nothing reads object storage before M1, so MinIO is off unless
-# the minio profile is named.
+# (docs/adr/0019-minio-image.md). The server stores course files on the `storage` volume, so
+# MinIO is off unless the minio profile is named.
 name: stepclimb-production
 
 services:
@@ -133,9 +133,16 @@ services:
       # holds .2, so every client is counted by the address it connects from. The server reads
       # no other forwarding header.
       STEPCLIMB_TRUSTED_PROXIES: ${SC_PROXY_NETWORK:-10.201.73}.2
+      # Course files, on the `storage` volume (docs/specs/m1/06-files.md B1). To keep them in the
+      # minio profile's MinIO instead, set STEPCLIMB_STORAGE_URL=s3://<bucket>,
+      # STEPCLIMB_STORAGE_S3_ENDPOINT=http://minio:9000, STEPCLIMB_STORAGE_S3_ALLOW_HTTP=true and
+      # the access key settings in a Compose override file, and make the bucket first.
+      STEPCLIMB_STORAGE_URL: file:///var/lib/stepclimb/storage
     secrets:
       - database_url
       - encryption_keys
+    volumes:
+      - storage:/var/lib/stepclimb/storage
     ports:
       - "${SC_HTTP_ADDRESS:-127.0.0.1}:${SC_HTTP_PORT:-8080}:8080"
     networks:
@@ -252,6 +259,9 @@ secrets:
 volumes:
   # The database: back it up.
   postgres:
+  # Course files (STEPCLIMB_STORAGE_URL): back it up with the database, since `files` rows name
+  # the objects it holds.
+  storage:
   # Object storage, with the minio profile: back it up once M1 stores media there.
   minio:
   # Nightly database dumps (the backup service): copy them off the host.

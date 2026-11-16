@@ -189,8 +189,10 @@ impl OutboundClient {
     }
 }
 
-/// rustls with ring and the platform verifier, HTTP/1.1 by ALPN.
-fn tls_config() -> Result<rustls::ClientConfig, BuildError> {
+/// rustls with ring and the platform verifier, HTTP/1.1 by ALPN: the TLS setup of every
+/// [`OutboundClient`], and of the server's object storage client, which talks to a store the
+/// operator configured rather than a URL an admin entered, so it has no [`UrlPolicy`].
+pub fn tls_config() -> Result<rustls::ClientConfig, BuildError> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let mut config = rustls::ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()

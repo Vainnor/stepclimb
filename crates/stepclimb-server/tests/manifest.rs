@@ -95,6 +95,7 @@ impl Fixture {
             rate_limits: Default::default(),
             providers: Providers::new(false).expect("provider clients"),
             passwords: Default::default(),
+            storage: None,
         };
         let app = router(state).layer(Extension(ConnectInfo(CLIENT)));
         Self { pool, app }

@@ -3027,6 +3027,7 @@ fn state_for(pool: &PgPool) -> AppState {
         // The insecure switch on, as the test setup sets it (spec 05 Q4): the mock IdP of the
         // provider sign-in case listens on http loopback.
         passwords: Default::default(),
+        storage: None,
         providers: stepclimb_server::providers::Providers::new(true).expect("provider clients"),
     }
 }

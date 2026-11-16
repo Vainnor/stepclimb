@@ -503,6 +503,21 @@ class StackCommandsTest(unittest.TestCase):
         )
         self.assertNotIn("55432", url)
 
+    def test_start_storage_uses_the_runs_own_minio(self) -> None:
+        answers = iter(["", "127.0.0.1:40007"])
+        with mock.patch.object(ci_gate, "checked", side_effect=lambda *_: next(answers)) as checked:
+            url = ci_gate.start_storage(Path("/r"), self.env)
+        self.assertEqual(url, "http://127.0.0.1:40007")
+        commands = [c.args[0] for c in checked.call_args_list]
+        project = "stepclimb-ci-0123abcd"
+        self.assertEqual(
+            commands,
+            [
+                ci_gate.compose_command(Path("/r"), project, "up", "--detach", "--wait", "minio"),
+                ci_gate.compose_command(Path("/r"), project, "port", "minio", "9000"),
+            ],
+        )
+
     def test_a_vanished_image_is_not_a_failure(self) -> None:
         inspected = iter([0, 1])  # present, then gone after another run removed it
         with (
@@ -529,6 +544,9 @@ class RunTeardownTest(unittest.TestCase):
             "start_database": mock.patch.object(
                 ci_gate, "start_database", return_value="postgres://db"
             ),
+            "start_storage": mock.patch.object(
+                ci_gate, "start_storage", return_value="http://127.0.0.1:20017"
+            ),
             "say": mock.patch.object(ci_gate, "say"),
         }
         self.mocks = {name: patch.start() for name, patch in patches.items()}
@@ -545,6 +563,7 @@ class RunTeardownTest(unittest.TestCase):
             [
                 "import os",
                 "assert os.environ['DATABASE_URL'] == 'postgres://db'",
+                "assert os.environ['SC_CI_MINIO_URL'] == 'http://127.0.0.1:20017'",
                 "assert os.environ['SC_PROD_CHECK_NETWORK'] == '10.201.101'",
                 "assert os.environ['SC_OPS_CHECK_NETWORK'] == '10.201.151'",
             ]
@@ -589,6 +608,7 @@ with contextlib.ExitStack() as patches:
     patch("free_slot")
     patch("remove_stack", side_effect=lambda *_: note("remove"))
     patch("start_database", side_effect=start)
+    patch("start_storage", return_value="http://minio")
     sys.exit(ci_gate.main(["run", "--", *sys.argv[4:]]))
 """
 

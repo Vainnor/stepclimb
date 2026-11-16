@@ -142,6 +142,7 @@ impl Fixture {
             allowed_origins: Vec::new(),
             rate_limits: Default::default(),
             passwords: Default::default(),
+            storage: None,
             // The mock listens on http loopback (spec 05 Q4's insecure switch).
             providers: stepclimb_server::providers::Providers::new(true).expect("provider clients"),
         };

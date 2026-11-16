@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Laid over compose.yaml for one gate run (bin/ci_gate.py), as the project
 # `stepclimb-ci-<id>`: nothing here is shared with the development stack or another worktree's run.
-# PostgreSQL keeps its data in memory. The published ports are the run's slot's (SC_CI_PG_PORT,
-# SC_CI_PORT, SC_CI_IDP_PORT), which no other run holds; the gate and `just e2e` read each back
-# with `docker compose port`. The gate sets SC_IMAGE to a tag of its own, and the mock identity
+# PostgreSQL and MinIO keep their data in memory. The published ports are the run's slot's
+# (SC_CI_PG_PORT, SC_CI_PORT, SC_CI_IDP_PORT, SC_CI_MINIO_PORT), which no other run holds; the gate
+# and `just e2e` read each back with `docker compose port`. The gate sets SC_IMAGE to a tag of its own, and the mock identity
 # provider's image is that tag with `-mock-idp`, so that one run never starts another's build. Each
 # container carries the slot's number, so that a later run on the slot can remove what a killed run
-# left on those ports. MinIO is not started.
+# left on those ports.
 services:
   postgres:
     labels:
@@ -16,6 +16,35 @@ services:
     volumes: !reset []
     tmpfs:
       - /var/lib/postgresql/data
+
+  # The storage tests' object store (docs/specs/m1/06-files.md, Test cases), started by the gate
+  # (bin/ci_gate.py start_storage), which hands its URL to the tests in SC_CI_MINIO_URL. The
+  # bucket `stepclimb` is made before MinIO starts: a top-level directory of a new data directory
+  # is a bucket to MinIO. The console is not published.
+  minio:
+    entrypoint: ["/bin/sh", "-c", "mkdir -p /data/stepclimb && exec minio server /data"]
+    command: !reset []
+    labels:
+      stepclimb.ci.slot: "${SC_CI_SLOT:?SC_CI_SLOT is set by bin/ci_gate.py}"
+    ports: !override
+      - "127.0.0.1:${SC_CI_MINIO_PORT:?SC_CI_MINIO_PORT is set by bin/ci_gate.py}:9000"
+    volumes: !reset []
+    tmpfs:
+      - /data
+    # The image has bash but no curl: ask MinIO's readiness endpoint over /dev/tcp.
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000
+          && printf 'GET /minio/health/ready HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n' >&3
+          && read -r status <&3
+          && [[ $$status == *" 200 "* ]]
+      interval: 2s
+      timeout: 3s
+      retries: 30
 
   stepclimb:
     environment:

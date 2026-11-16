@@ -17,7 +17,27 @@ const SECRET_SAMPLES: &[(Setting, &str, &str)] = &[
         "s1:ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=",
         "ICEiIyQlJico",
     ),
+    (
+        STORAGE_S3_SECRET_ACCESS_KEY,
+        "zq-s3-secret-access-key",
+        "zq-s3-secret",
+    ),
 ];
+
+/// The settings an S3 secret access key needs beside it: an `s3://` URL and the access key id.
+/// The secret tests below set them for every secret, so each secret is checked alone.
+const S3_COMPANIONS: [(&str, &str); 2] = [
+    ("STEPCLIMB_STORAGE_URL", "s3://stepclimb-test"),
+    ("STEPCLIMB_STORAGE_S3_ACCESS_KEY_ID", "test-access-key"),
+];
+
+/// `vars` with [`S3_COMPANIONS`] added.
+fn with_s3_companions(mut vars: Env) -> Env {
+    for (var, value) in S3_COMPANIONS {
+        vars.insert(var.to_owned(), value.to_owned());
+    }
+    vars
+}
 
 fn env(pairs: &[(&str, &str)]) -> Env {
     pairs
@@ -223,6 +243,13 @@ fn every_known_variable_is_accepted() {
             "STEPCLIMB_ALLOW_INSECURE_PROVIDERS",
             "STEPCLIMB_ROLE",
             "STEPCLIMB_WORKER_CONCURRENCY",
+            "STEPCLIMB_STORAGE_URL",
+            "STEPCLIMB_STORAGE_S3_ENDPOINT",
+            "STEPCLIMB_STORAGE_S3_REGION",
+            "STEPCLIMB_STORAGE_S3_ACCESS_KEY_ID",
+            "STEPCLIMB_STORAGE_S3_SECRET_ACCESS_KEY",
+            "STEPCLIMB_STORAGE_S3_SECRET_ACCESS_KEY_FILE",
+            "STEPCLIMB_STORAGE_S3_ALLOW_HTTP",
             "STEPCLIMB_CONFIG",
         ]
     );
@@ -423,6 +450,8 @@ fn every_config_field_is_a_classified_setting() {
         worker_concurrency: _,
         // `[[providers]]` is a record of the file, not a setting (`providers::tests`).
         providers: _,
+        // The six storage settings below (`storage::tests`).
+        storage: _,
     } = config;
     let fields = [
         (BIND, false),
@@ -438,6 +467,12 @@ fn every_config_field_is_a_classified_setting() {
         (ALLOW_INSECURE_PROVIDERS, false),
         (ROLE, false),
         (WORKER_CONCURRENCY, false),
+        (STORAGE_URL, false),
+        (STORAGE_S3_ENDPOINT, false),
+        (STORAGE_S3_REGION, false),
+        (STORAGE_S3_ACCESS_KEY_ID, false),
+        (STORAGE_S3_SECRET_ACCESS_KEY, true),
+        (STORAGE_S3_ALLOW_HTTP, false),
     ];
     for (setting, secret) in fields {
         assert!(
@@ -450,7 +485,8 @@ fn every_config_field_is_a_classified_setting() {
     assert_eq!(fields.len(), SETTINGS.len());
 }
 
-/// The environment with the public URL and every secret but `except` set directly.
+/// The environment with the public URL, [`S3_COMPANIONS`] and every secret but `except` set
+/// directly.
 fn other_secrets(except: Setting) -> Env {
     let mut vars: Env = SECRET_SAMPLES
         .iter()
@@ -458,7 +494,15 @@ fn other_secrets(except: Setting) -> Env {
         .map(|(s, v, _)| (s.var.to_owned(), (*v).to_owned()))
         .collect();
     vars.insert(PUBLIC_URL.var.to_owned(), PUBLIC.to_owned());
-    vars
+    with_s3_companions(vars)
+}
+
+/// The secret access key [`Config::load`] read, for the secret tests' checks.
+fn s3_secret(config: &Config) -> &str {
+    match &config.storage {
+        StorageConfig::S3(s3) => &s3.secret_access_key,
+        other => panic!("not an S3 store: {other:?}"),
+    }
 }
 
 #[test]
@@ -473,6 +517,7 @@ fn every_secret_is_read_and_trimmed_from_its_file_variable() {
         match *setting {
             DATABASE_URL => assert_eq!(config.database_url, *value),
             ENCRYPTION_KEYS => assert_eq!(config.encryption_keys.current_key_id(), "s1"),
+            STORAGE_S3_SECRET_ACCESS_KEY => assert_eq!(s3_secret(&config), *value),
             _ => panic!("no check for {}", setting.var),
         }
     }
@@ -487,6 +532,7 @@ fn every_secret_is_read_and_trimmed_from_its_file_key() {
         match *setting {
             DATABASE_URL => assert_eq!(config.database_url, *value),
             ENCRYPTION_KEYS => assert_eq!(config.encryption_keys.current_key_id(), "s1"),
+            STORAGE_S3_SECRET_ACCESS_KEY => assert_eq!(s3_secret(&config), *value),
             _ => panic!("no check for {}", setting.var),
         }
     }
@@ -694,7 +740,7 @@ fn debug_with_every_secret_set_shows_none_of_them() {
         .map(|(s, v, _)| (s.var.to_owned(), (*v).to_owned()))
         .collect();
     vars.insert(PUBLIC_URL.var.to_owned(), PUBLIC.to_owned());
-    let config = Config::load(&vars, None).unwrap();
+    let config = Config::load(&with_s3_companions(vars), None).unwrap();
     let printed = format!("{config:?}");
     assert!(
         printed.contains(
@@ -746,12 +792,14 @@ fn non_secret_values_list_every_non_secret_setting_and_no_secret() {
         ("STEPCLIMB_PUBLIC_URL", PUBLIC),
     ];
     pairs.extend(SECRET_SAMPLES.iter().map(|(s, value, _)| (s.var, *value)));
+    pairs.extend(S3_COMPANIONS);
     let config = Config::load(&env(&pairs), None).unwrap();
     let values = config.non_secret_values();
     let keys: Vec<&str> = values.iter().map(|(key, _)| *key).collect();
+    // The storage settings are listed by `StorageConfig::report` (`storage::tests`).
     let expected: Vec<&str> = SETTINGS
         .iter()
-        .filter(|s| !s.secret)
+        .filter(|s| !s.secret && !s.key.starts_with("storage_"))
         .map(|s| s.key)
         .collect();
     assert_eq!(keys, expected);
@@ -1210,6 +1258,9 @@ fn reference_rows() -> Vec<Vec<String>> {
 /// The Default cell the reference gives `setting`: `required` when the loader refuses its
 /// absence, `none` when its unset value is empty, otherwise the value the loader uses.
 fn reference_default(setting: &Setting) -> String {
+    if setting.key.starts_with("storage_") {
+        return storage_reference_default(setting);
+    }
     let all = with_required(&[]);
     let mut without = all.clone();
     without.remove(setting.var);
@@ -1230,6 +1281,44 @@ fn reference_default(setting: &Setting) -> String {
             )
         });
     if value == "(none)" {
+        "none".to_owned()
+    } else {
+        format!("`{value}`")
+    }
+}
+
+/// [`reference_default`] for a storage setting: `none` for `storage_url`, whose absence leaves
+/// storage not configured; for an S3 setting, unset beside an `s3://` URL, `required for
+/// `s3://`` when the loader refuses its absence, `none` when the report shows no value, and
+/// otherwise the value the report shows.
+fn storage_reference_default(setting: &Setting) -> String {
+    let all = with_s3_companions(with_required(&[(
+        STORAGE_S3_SECRET_ACCESS_KEY.var,
+        "zq-s3-secret-access-key",
+    )]));
+    if *setting == STORAGE_URL {
+        let mut without = with_required(&[]);
+        without.remove(STORAGE_URL.var);
+        let config = Config::load(&without, None).unwrap();
+        assert_eq!(config.storage, StorageConfig::NotConfigured);
+        return "none".to_owned();
+    }
+    let mut without = all.clone();
+    without.remove(setting.var);
+    let config = match Config::load(&without, None) {
+        Err(ConfigError::Missing(missing)) if missing == *setting => {
+            return "required for `s3://`".to_owned();
+        }
+        Err(error) => panic!("{} unset: {error}", setting.var),
+        Ok(config) => config,
+    };
+    let (_, value) = config
+        .storage
+        .report()
+        .into_iter()
+        .find(|(key, _)| *key == setting.key)
+        .unwrap_or_else(|| panic!("{} is not in the storage report", setting.var));
+    if value.starts_with('(') {
         "none".to_owned()
     } else {
         format!("`{value}`")
