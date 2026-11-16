@@ -5,7 +5,7 @@
 //! account on every request, so an account move carries its courses with it. Every query
 //! filters by `org_id = scope.org_id()`.
 //!
-//! [`create`] and [`move_to`] take the organization's account tree lock
+//! [`create`], [`copy`] and [`move_to`] take the organization's account tree lock
 //! (`accounts::lock_tree`, spec 02 B22), so a caller that checks its permission at the account
 //! under that lock on the same transaction knows the account cannot move before the write.
 //! [`lock`] reads a course `FOR NO KEY UPDATE` and its account `FOR SHARE`, which waits for an
@@ -14,8 +14,17 @@
 //! Who may do what to which course is the routes' to decide; this module checks only the rules
 //! of the course itself: its title, code and dates, the code's uniqueness (Q2), and which status
 //! changes are allowed (B4, Q4, Q5).
+//!
+//! [`copy`] (B12 to B14) copies the course row and its outline: the new course's account, code,
+//! title and `template` flag come from the caller, and its dates and `settings` from the source;
+//! every module and item is copied with a new id, its position and its `published` flag (spec
+//! 03). It copies no enrollment, progress or other learner data. The content specs add their
+//! parts to it, in its transaction.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{
+    collections::HashMap,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -28,7 +37,7 @@ use crate::{
     audit::{self, Action, Actor},
     db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
     id::new_id,
-    name,
+    items, name,
 };
 
 /// The longest course title, in characters once trimmed: the name rule's limit.
@@ -142,6 +151,20 @@ pub struct NewCourse {
     pub code: String,
 }
 
+/// What [`copy`] makes of a source course (B12).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CourseCopy {
+    /// The account the copy belongs to.
+    pub account_id: Uuid,
+    /// Trimmed; 1 to [`MAX_TITLE_CHARS`] characters. `None` keeps the source's title.
+    pub title: Option<String>,
+    /// Trimmed; 1 to [`MAX_CODE_CHARS`] characters, unique in the organization ignoring ASCII
+    /// case.
+    pub code: String,
+    /// Whether the copy is a template; copying a template without it makes an ordinary course.
+    pub template: bool,
+}
+
 /// A change to a course; `None` leaves a member as it is.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CoursePatch {
@@ -225,6 +248,15 @@ pub enum Error {
     /// [`CourseSettings`] keep from happening.
     #[error("the {column} of course {id} cannot be read")]
     Stored { id: Uuid, column: &'static str },
+    /// The source has an item [`copy`] cannot copy yet: a kind whose content spec, which copies
+    /// what its `ref_id` names, is not built (spec 03 B5, Data). No write of this release makes
+    /// one.
+    #[error("item {item_id} is a {kind}, which a course copy cannot copy yet")]
+    ContentNotCopyable { item_id: Uuid, kind: String },
+    /// The source has an external link whose stored URL [`items::url_is_valid`] refuses, which
+    /// no write of this release stores; the copy does not carry it into a new course.
+    #[error("item {item_id} has a URL that is not an absolute http or https link")]
+    CopiedUrlInvalid { item_id: Uuid },
     /// The tree lock or a path read failed.
     #[error(transparent)]
     Account(#[from] accounts::Error),
@@ -492,6 +524,205 @@ pub async fn create<'c>(
     let course = get(&mut *tx, scope, id).await?.ok_or(Error::NotFound)?;
     tx.commit().await?;
     Ok(course)
+}
+
+/// Copy the course `source_id` of the scope's organization into a new `draft` course as `copy`
+/// says, with `created_at` and `updated_at` set to `now`, and write the `course.copy` audit entry
+/// on the new course by `actor`, naming the source, the account and `template` (B12, B27).
+///
+/// The new course takes the source's dates and `settings`, and its title unless `copy` names
+/// one; it is a draft whatever the source's status, and a template exactly when
+/// `copy.template` is. Every module and item of the source is copied with a new id, its
+/// position, title and `published` flag, and an item's kind and URL ([`copy_outline`]). Nothing
+/// of the source's learners is copied: no enrollment, progress, attempt or other learner data
+/// (B13).
+///
+/// The source course row is read `FOR SHARE`, which every outline write's `FOR NO KEY UPDATE`
+/// (spec 03 B12) waits for, so the outline cannot change while it is copied.
+///
+/// Runs in one transaction (a savepoint when `db` is already one) under the tree lock, after
+/// reading the destination account there, as [`create`] does: a caller that checked its
+/// permissions at the source and the destination under the lock on the same transaction keeps
+/// those checks true up to the insert.
+pub async fn copy<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
+    scope: OrgScope,
+    source_id: Uuid,
+    copy: &CourseCopy,
+    now: SystemTime,
+    actor: Actor,
+) -> Result<Course, Error> {
+    let title = copy.title.as_deref().map(valid_title).transpose()?;
+    let code = valid_code(&copy.code)?;
+    let now = epoch_micros(now)?;
+    let mut tx = db.begin().await?;
+    accounts::lock_tree(&mut tx, scope).await?;
+    accounts::ancestors_path(&mut *tx, scope, copy.account_id)
+        .await?
+        .ok_or(Error::AccountNotFound)?;
+    sqlx::query_scalar!(
+        "SELECT id FROM courses WHERE org_id = $1 AND id = $2 FOR SHARE",
+        scope.org_id(),
+        source_id,
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(Error::NotFound)?;
+    let id = new_id();
+    let inserted = sqlx::query!(
+        "INSERT INTO courses (id, org_id, account_id, code, title, status, template, start_at,
+                              end_at, settings, created_at, updated_at)
+         SELECT $1, org_id, $3, $4, COALESCE($5, title), 'draft', $6, start_at, end_at, settings,
+                timestamptz 'epoch' + $7::bigint * interval '1 microsecond',
+                timestamptz 'epoch' + $7::bigint * interval '1 microsecond'
+         FROM courses
+         WHERE org_id = $2 AND id = $8",
+        id,
+        scope.org_id(),
+        copy.account_id,
+        code,
+        title,
+        copy.template,
+        now,
+        source_id,
+    )
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if inserted == 0 {
+        return Err(Error::NotFound);
+    }
+    copy_outline(&mut tx, scope, source_id, id, now).await?;
+    let data = json!({ "after": {
+        "source_id": source_id, "account_id": copy.account_id, "template": copy.template,
+    } });
+    audit::record(&mut tx, scope, actor, Action::CourseCopy, id, &data, now).await?;
+    let course = get(&mut *tx, scope, id).await?.ok_or(Error::NotFound)?;
+    tx.commit().await?;
+    Ok(course)
+}
+
+/// Copy every module and item of the course `from` into the new course `to`, both of the scope's
+/// organization, with new ids and the same positions, titles and `published` flags; each item
+/// keeps its kind and URL and goes into the copy of its module. `created_at` and `updated_at`
+/// are `now_us`. An item of a kind this release does not copy ([`items::Kind::copyable`]) is
+/// [`Error::ContentNotCopyable`]: its `ref_id` names content no copy of this release copies. A
+/// stored URL [`items::url_is_valid`] refuses is [`Error::CopiedUrlInvalid`], as every writer of
+/// an item's URL checks it (spec 03, "B7's absolute").
+async fn copy_outline(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    from: Uuid,
+    to: Uuid,
+    now_us: i64,
+) -> Result<(), Error> {
+    let modules = sqlx::query!(
+        "SELECT id, position, title, published FROM modules
+         WHERE org_id = $1 AND course_id = $2 ORDER BY position",
+        scope.org_id(),
+        from,
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    let copies: Vec<Uuid> = modules.iter().map(|_| new_id()).collect();
+    let new_ids: HashMap<Uuid, Uuid> = modules
+        .iter()
+        .map(|m| m.id)
+        .zip(copies.iter().copied())
+        .collect();
+    sqlx::query!(
+        "INSERT INTO modules (id, org_id, course_id, position, title, published, created_at,
+                              updated_at)
+         SELECT m.id, $1, $2, m.position, m.title, m.published,
+                timestamptz 'epoch' + $7::bigint * interval '1 microsecond',
+                timestamptz 'epoch' + $7::bigint * interval '1 microsecond'
+         FROM UNNEST($3::uuid[], $4::int4[], $5::text[], $6::bool[])
+              AS m (id, position, title, published)",
+        scope.org_id(),
+        to,
+        &copies,
+        &modules.iter().map(|m| m.position).collect::<Vec<_>>(),
+        &modules.iter().map(|m| m.title.clone()).collect::<Vec<_>>(),
+        &modules.iter().map(|m| m.published).collect::<Vec<_>>(),
+        now_us,
+    )
+    .execute(&mut *conn)
+    .await?;
+    copy_items(conn, scope, from, to, &new_ids, now_us).await
+}
+
+/// [`copy_outline`]'s items: each into the copy of its module, `modules` mapping a source
+/// module's id to its copy's.
+async fn copy_items(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    from: Uuid,
+    to: Uuid,
+    modules: &HashMap<Uuid, Uuid>,
+    now_us: i64,
+) -> Result<(), Error> {
+    let rows = sqlx::query!(
+        "SELECT id, module_id, position, kind, url, title, published FROM module_items
+         WHERE org_id = $1 AND course_id = $2 ORDER BY module_id, position",
+        scope.org_id(),
+        from,
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    if let Some(row) = rows
+        .iter()
+        .find(|r| !items::Kind::parse(&r.kind).is_some_and(items::Kind::copyable))
+    {
+        return Err(Error::ContentNotCopyable {
+            item_id: row.id,
+            kind: row.kind.clone(),
+        });
+    }
+    if let Some(row) = rows.iter().find(|r| {
+        r.url
+            .as_deref()
+            .is_some_and(|url| !items::url_is_valid(url))
+    }) {
+        return Err(Error::CopiedUrlInvalid { item_id: row.id });
+    }
+    // Every item's module is a module of `from` (the table's three-column foreign key), read in
+    // this transaction under the course row lock that every outline write waits for, so the
+    // lookup finds it; a miss is a stored row this function cannot place.
+    let module_ids = rows
+        .iter()
+        .map(|r| {
+            modules.get(&r.module_id).copied().ok_or(Error::Stored {
+                id: r.id,
+                column: "module_id",
+            })
+        })
+        .collect::<Result<Vec<Uuid>, Error>>()?;
+    sqlx::query!(
+        "INSERT INTO module_items (id, org_id, course_id, module_id, position, kind, url, title,
+                                   published, created_at, updated_at)
+         SELECT i.id, $1, $2, i.module_id, i.position, i.kind, i.url, i.title, i.published,
+                timestamptz 'epoch' + $10::bigint * interval '1 microsecond',
+                timestamptz 'epoch' + $10::bigint * interval '1 microsecond'
+         FROM UNNEST($3::uuid[], $4::uuid[], $5::int4[], $6::text[], $7::text[], $8::text[],
+                     $9::bool[])
+              AS i (id, module_id, position, kind, url, title, published)",
+        scope.org_id(),
+        to,
+        &rows.iter().map(|_| new_id()).collect::<Vec<_>>(),
+        &module_ids,
+        &rows.iter().map(|r| r.position).collect::<Vec<_>>(),
+        &rows.iter().map(|r| r.kind.clone()).collect::<Vec<_>>(),
+        &rows
+            .iter()
+            .map(|r| r.url.clone())
+            .collect::<Vec<Option<String>>>() as &[Option<String>],
+        &rows.iter().map(|r| r.title.clone()).collect::<Vec<_>>(),
+        &rows.iter().map(|r| r.published).collect::<Vec<_>>(),
+        now_us,
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
 }
 
 /// A course's changeable members, as [`update`] compares and writes them.

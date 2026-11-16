@@ -304,6 +304,10 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
             patch(items::update_item).delete(items::delete_item),
         ),
         ("/api/v1/items/{item_id}/move", post(items::move_item)),
+        (
+            "/api/v1/courses/{course_id}/copy",
+            post(courses::copy_course),
+        ),
         ("/api/v1/admin/permissions", get(roles::list_permissions)),
         (
             roles::ROLES_PATH,

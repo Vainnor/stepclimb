@@ -86,6 +86,18 @@ impl Kind {
         matches!(self, Self::Header | Self::ExternalLink)
     }
 
+    /// Whether `courses::copy` copies items of the kind (spec 02 B13). A kind whose `ref_id`
+    /// names content is copyable only once its content spec copies that content in the same
+    /// transaction; until then the copy refuses a course holding one. Every kind is listed, so a
+    /// new kind cannot be copied without a decision here.
+    #[must_use]
+    pub fn copyable(self) -> bool {
+        match self {
+            Self::Header | Self::ExternalLink => true,
+            Self::File | Self::Page | Self::Video | Self::Quiz | Self::Activity => false,
+        }
+    }
+
     /// Whether items of the kind carry a `url` (B5, B7).
     #[must_use]
     pub fn has_url(self) -> bool {
@@ -667,6 +679,29 @@ mod tests {
                 "{kind:?}"
             );
         }
+    }
+
+    /// Every kind this release creates is one a course copy copies: a course built through the
+    /// API can always be copied. The others are not copyable until their content spec copies
+    /// what their `ref_id` names (`courses::Error::ContentNotCopyable`).
+    #[test]
+    fn every_creatable_kind_is_copyable() {
+        let all = [
+            Kind::Header,
+            Kind::ExternalLink,
+            Kind::File,
+            Kind::Page,
+            Kind::Video,
+            Kind::Quiz,
+            Kind::Activity,
+        ];
+        for kind in all {
+            if kind.creatable() {
+                assert!(kind.copyable(), "{kind:?} is created but not copied");
+            }
+        }
+        let copyable: Vec<_> = all.into_iter().filter(|k| k.copyable()).collect();
+        assert_eq!(copyable, [Kind::Header, Kind::ExternalLink]);
     }
 
     #[test]

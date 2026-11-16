@@ -427,6 +427,23 @@ export interface paths {
         patch: operations["updateCourse"];
         trace?: never;
     };
+    "/api/v1/courses/{course_id}/copy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Copy a course into an account as a new draft, or as a template. */
+        post: operations["copyCourse"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/courses/{course_id}/modules": {
         parameters: {
             query?: never;
@@ -1646,6 +1663,23 @@ export interface components {
              * @description RFC 3339, UTC.
              */
             updated_at: string;
+        };
+        /** @description A copy to make of a course, as a draft. */
+        CourseCopy: {
+            /**
+             * Format: uuid
+             * @description The account the copy belongs to; you must hold `course.create` at a scope containing it.
+             */
+            account_id: string;
+            /** @description Trimmed; 1 to 50 characters; unique in the organization, ignoring ASCII case. */
+            code: string;
+            /**
+             * @description Whether the copy is a template. Omitted or `false`, the copy is an ordinary course, also
+             *     when the source is a template.
+             */
+            template?: boolean;
+            /** @description Trimmed; 1 to 200 characters. The source's title when omitted. */
+            title?: string;
         };
         /** @description What a learner sees first when opening the course. */
         CourseHome: {
@@ -3449,6 +3483,24 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `permission.denied`: you can see the course but do not hold `course.view_all` at a scope containing it. `permission.escalation`: the destination would give you, over the copy, a course permission (one grantable at course scope) you do not hold over the source. `auth.csrf_refused`: the request did not come from this site. */
+        CourseCopyForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it. `account.not_found`: the destination `account_id` does not exist or you do not hold `course.create` at a scope containing it. `org.not_found`: the request's organization cannot be determined. */
+        CourseCopyNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `permission.denied`: you hold `course.create` nowhere, or you can see the account without holding it there. `auth.csrf_refused`: the request did not come from this site. */
         CourseCreateForbidden: {
             headers: {
@@ -3485,7 +3537,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `permission.denied`: you can see the course but do not hold `course.manage` at a scope containing it. `permission.escalation`: the destination would give you, over the course, a permission you do not hold over it now. `auth.csrf_refused`: the request did not come from this site. */
+        /** @description `permission.denied`: you can see the course but do not hold `course.manage` at a scope containing it. `permission.escalation`: the destination would give you, over the course, a course permission (one grantable at course scope) you do not hold over it now. `auth.csrf_refused`: the request did not come from this site. */
         CourseMoveForbidden: {
             headers: {
                 [name: string]: unknown;
@@ -5755,6 +5807,45 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["CourseManageForbidden"];
             404: components["responses"]["CourseNotFound"];
+            409: components["responses"]["CourseCodeConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["UnprocessableEntity"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    copyCourse: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The source course's id. */
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CourseCopy"];
+            };
+        };
+        responses: {
+            /** @description The copy is created */
+            201: {
+                headers: {
+                    /** @description The copy's path */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Course"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["CourseCopyForbidden"];
+            404: components["responses"]["CourseCopyNotFound"];
             409: components["responses"]["CourseCodeConflict"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];

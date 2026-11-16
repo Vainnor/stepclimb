@@ -110,7 +110,8 @@ to `Require`, and makes the evaluator read enrollments. Modules and items are sp
   spec adds its part to the one copy function, `courses::copy`, which runs in one transaction:
   spec 03 modules and items (with prerequisites remapped to the new modules, spec 04), spec 06
   course files (new `course_files` rows pointing at the same stored files), spec 07 pages, and
-  M2 and M3 quizzes and activities. In this spec the copy holds the course row only.
+  M2 and M3 quizzes and activities. As built in I3, the copy holds the course row and spec 03's
+  modules and items.
 - **B14.** A copy is limited by spec 03's sizes (200 modules, 200 items per module), so it fits
   one transaction; it is synchronous and answers 201 with the new course.
 
@@ -606,6 +607,35 @@ Q13's answer replaces I1's B24 behavior (I4).
   `permission.escalation` when the destination would give the caller a permission over the copy
   that they do not hold over the source, comparing only the permissions grantable at course scope
   and leaving out `course.create` (B12).
+
+### Decisions made building I3
+
+Coordinator decisions (overnight, 2026-11-17), pending owner review. None depends on Q1 or Q12:
+a copy makes no enrollment, so no learner and no `course.participate` comes with it.
+
+- **Source rechecked under the lock.** The copy route checks `course.view_all` again on the
+  source's path as its transaction reads it under the tree lock, as move rechecks
+  `course.manage`: a source carried out of the caller's reach meanwhile answers 404.
+- **What a copy takes.** The copy is `draft` whatever the source's status; it takes the source's
+  `start_at`, `end_at` and `settings`, and its title unless the body names one. `template`
+  omitted means `false`; `null` for `title` or `template` is 400 `request.malformed`, as in a
+  patch. The copy writes one entry, `course.copy`, and no `course.create`.
+- **Templates come only from copies.** `POST /api/v1/courses` takes no `template` member (the API
+  table names none), so a template is made by copying with `template: true`; the list filter,
+  `GET` and the status refusal for templates are I1's.
+- **The outline comes with the copy.** Spec 03's modules and items landed before I3, so
+  `courses::copy` copies every module and item with new ids, their positions, titles and
+  `published` flags, and each item's kind and URL, in the copy's transaction. It reads the source
+  course row `FOR SHARE`, which every outline write's `FOR NO KEY UPDATE` (spec 03 B12) waits
+  for, so the outline cannot change while it is copied.
+- **Content a copy cannot take refuses the copy.** `items::Kind::copyable`, an exhaustive match
+  over every kind, says which kinds a copy takes: `header` and `external_link` in this release,
+  every kind this release can create. The others (`file`, `page`, `video`, `quiz`, `activity`)
+  point at content whose spec, which copies that content, is not built; no write of this release
+  makes one. Such an item fails the copy (500, nothing written) rather than being dropped or
+  copied with a `ref_id` into the source course. Each content spec makes its kind copyable when
+  it adds its part to `courses::copy` (B13). A stored URL that `items::url_is_valid` refuses
+  fails the copy the same way, since every writer of an item's URL checks it (spec 03).
 
 ## Issues
 

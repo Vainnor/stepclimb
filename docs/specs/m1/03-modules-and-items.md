@@ -300,7 +300,8 @@ or Q12.
 - **Course copy waits for `02` I3.** `courses::copy` does not exist yet (`02` I3 is not
   built), so I1 adds no copy code: a copy function nothing calls would be scaffolding. Whichever
   of `02` I3 and the copy part of this spec lands second adds modules and items to the one copy
-  transaction (`02` B13).
+  transaction (`02` B13). `02` I3 landed second and copies them (`02`, "Decisions made building
+  I3").
 - **Field codes.** A refused title answers 422 at `/title` with `name.empty`, `name.too_long` or
   `text.contains_nul`, as courses do. Besides the spec's `item.kind_unavailable` and
   `item.url_invalid`: `item.url_required` at `/url` (an external link without a URL),

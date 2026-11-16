@@ -2258,6 +2258,88 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/api/v1/courses/{course_id}/copy": {
+      "post": {
+        "tags": [
+          "courses"
+        ],
+        "summary": "Copy a course into an account as a new draft, or as a template.",
+        "operationId": "copyCourse",
+        "parameters": [
+          {
+            "name": "course_id",
+            "in": "path",
+            "description": "The source course's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CourseCopy"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The copy is created",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The copy's path"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Course"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/CourseCopyForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/CourseCopyNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/CourseCodeConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/api/v1/courses/{course_id}/modules": {
       "post": {
         "tags": [
@@ -6323,6 +6405,34 @@
           }
         }
       },
+      "CourseCopy": {
+        "type": "object",
+        "description": "A copy to make of a course, as a draft.",
+        "required": [
+          "account_id",
+          "code"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The account the copy belongs to; you must hold `course.create` at a scope containing it."
+          },
+          "code": {
+            "type": "string",
+            "description": "Trimmed; 1 to 50 characters; unique in the organization, ignoring ASCII case."
+          },
+          "template": {
+            "type": "boolean",
+            "description": "Whether the copy is a template. Omitted or `false`, the copy is an ordinary course, also\nwhen the source is a template."
+          },
+          "title": {
+            "type": "string",
+            "description": "Trimmed; 1 to 200 characters. The source's title when omitted."
+          }
+        },
+        "additionalProperties": false
+      },
       "CourseHome": {
         "type": "object",
         "description": "What a learner sees first when opening the course.",
@@ -10075,6 +10185,26 @@
           }
         }
       },
+      "CourseCopyForbidden": {
+        "description": "`permission.denied`: you can see the course but do not hold `course.view_all` at a scope containing it. `permission.escalation`: the destination would give you, over the copy, a course permission (one grantable at course scope) you do not hold over the source. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "CourseCopyNotFound": {
+        "description": "`course.not_found`: no course with this id exists in the organization, or you cannot see it. `account.not_found`: the destination `account_id` does not exist or you do not hold `course.create` at a scope containing it. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "CourseCreateForbidden": {
         "description": "`permission.denied`: you hold `course.create` nowhere, or you can see the account without holding it there. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
@@ -10116,7 +10246,7 @@
         }
       },
       "CourseMoveForbidden": {
-        "description": "`permission.denied`: you can see the course but do not hold `course.manage` at a scope containing it. `permission.escalation`: the destination would give you, over the course, a permission you do not hold over it now. `auth.csrf_refused`: the request did not come from this site.",
+        "description": "`permission.denied`: you can see the course but do not hold `course.manage` at a scope containing it. `permission.escalation`: the destination would give you, over the course, a course permission (one grantable at course scope) you do not hold over it now. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
           "application/problem+json": {
             "schema": {
