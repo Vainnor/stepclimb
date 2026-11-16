@@ -1476,8 +1476,9 @@ async fn the_set_up_logs_no_secret(pool: PgPool) {
 // An administrator removes a user's TOTP.
 
 /// An administrator removes another user's TOTP and recovery codes (`totp.disable` by the
-/// administrator) and every session of the user ends; the user's password signs in alone, or sets TOTP up again while it is
-/// required. Removing it twice, or the caller's own, is refused (409).
+/// administrator) and every session of the user ends; the user's password signs in alone, or
+/// sets TOTP up again while it is required. Removing it twice, or the caller's own, is refused
+/// (409).
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn an_admin_removes_a_users_totp(pool: PgPool) {
     let f = Fixture::new(pool).await;
@@ -1558,7 +1559,7 @@ async fn a_manager_cannot_remove_a_more_privileged_users_totp(pool: PgPool) {
     assert_eq!(f.totp_of(sam.id).await, (true, 10));
 }
 
-/// B15 (#205 review): the set-up flow is bound to the secret it showed. A second password
+/// B15: the set-up flow is bound to the secret it showed. A second password
 /// sign-in, or `POST /api/v1/me/totp` from an earlier session, replaces the waiting secret
 /// without confirming it; the first flow's code then answers 400 `auth.flow_invalid` (start
 /// again), not 401 (try again), since no code for its secret can work any more.

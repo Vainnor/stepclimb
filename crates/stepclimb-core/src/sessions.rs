@@ -299,9 +299,9 @@ pub enum Keep {
 }
 
 /// Delete every session of the user `user_id` in the scope's organization but the one `keep`
-/// names (all of them with [`Keep::Nothing`]), for a new password that ends the user's other sessions (a change or a reset through
-/// an enrollment link, docs/specs/m0/04-local-accounts.md B9, B17, Q8). Returns how many were
-/// deleted.
+/// names (all of them with [`Keep::Nothing`]), for a new password that ends the user's other
+/// sessions (a change or a reset through an enrollment link, docs/specs/m0/04-local-accounts.md
+/// B9, B17, Q8). Returns how many were deleted.
 pub async fn delete_others_of_user(
     db: impl PgExecutor<'_>,
     scope: OrgScope,
