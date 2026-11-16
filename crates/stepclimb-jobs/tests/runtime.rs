@@ -3,9 +3,12 @@
 //! B14, B15, Q2; T12). The poll interval and the grace period are shortened through
 //! `RunOptions`; the defaults are checked on their own. Needs `DATABASE_URL`.
 
+use std::future::Future;
 use std::num::NonZeroU32;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::json;
@@ -19,7 +22,7 @@ use stepclimb_jobs::{
     Enqueued, Kind, NewJob, Outcome, POLL_INTERVAL, Registry, RunOptions, SHUTDOWN_GRACE, Stopped,
     Worker, backoff::Random, enqueue,
 };
-use tokio::sync::{Semaphore, oneshot};
+use tokio::sync::{Notify, Semaphore, oneshot};
 use tokio::task::JoinHandle;
 
 /// Waits for a permit from `Shared::gate`, then returns done.
@@ -76,6 +79,7 @@ struct World {
     pool: PgPool,
     org: Uuid,
     shared: Shared,
+    clock: ManualClock,
     worker: Worker,
 }
 
@@ -102,13 +106,21 @@ async fn world(pool: PgPool) -> World {
         pool,
         org,
         shared,
+        clock,
         worker,
     }
 }
 
 async fn put(w: &World, kind: &Kind) -> Uuid {
+    put_at(w, kind, t0()).await
+}
+
+/// Enqueue a job of `kind` due at `run_at`.
+async fn put_at(w: &World, kind: &Kind, run_at: SystemTime) -> Uuid {
     let mut tx = w.pool.begin().await.expect("begin");
-    let job = NewJob::org(kind, scope(w.org), &json!({})).expect("a job");
+    let job = NewJob::org(kind, scope(w.org), &json!({}))
+        .expect("a job")
+        .run_at(run_at);
     let Enqueued::Inserted(id) = enqueue(&mut tx, job, t0()).await.expect("enqueue") else {
         panic!("a new row")
     };
@@ -133,18 +145,54 @@ fn options(concurrency: u32) -> RunOptions {
     }
 }
 
-/// Start `w`'s worker loop with `options`; the sender stops it.
-fn start(w: &World, options: RunOptions) -> (oneshot::Sender<()>, JoinHandle<Stopped>) {
-    let (stop, stopped) = oneshot::channel::<()>();
+/// The stop future a test hands the worker loop: it counts how often the loop has looked at
+/// it, and says when the loop has seen the stop.
+struct Probe {
+    stop: oneshot::Receiver<()>,
+    looks: Arc<AtomicUsize>,
+    seen: Arc<Notify>,
+}
+
+impl Future for Probe {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        self.looks.fetch_add(1, Ordering::SeqCst);
+        match Pin::new(&mut self.stop).poll(cx) {
+            Poll::Ready(_) => {
+                self.seen.notify_one();
+                Poll::Ready(())
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+/// A started worker loop: send on `stop` to stop it.
+struct Running {
+    stop: oneshot::Sender<()>,
+    looks: Arc<AtomicUsize>,
+    seen: Arc<Notify>,
+    handle: JoinHandle<Stopped>,
+}
+
+/// Start `w`'s worker loop with `options`.
+fn start(w: &World, options: RunOptions) -> Running {
+    let (stop, rx) = oneshot::channel::<()>();
+    let (looks, seen) = (Arc::new(AtomicUsize::new(0)), Arc::new(Notify::new()));
+    let probe = Probe {
+        stop: rx,
+        looks: Arc::clone(&looks),
+        seen: Arc::clone(&seen),
+    };
     let worker = w.worker.clone();
-    let handle = tokio::spawn(async move {
-        worker
-            .run(options, async move {
-                let _ = stopped.await;
-            })
-            .await
-    });
-    (stop, handle)
+    let handle = tokio::spawn(async move { worker.run(options, probe).await });
+    Running {
+        stop,
+        looks,
+        seen,
+        handle,
+    }
 }
 
 /// Wait until `check` holds, failing after [`PATIENCE`].
@@ -184,7 +232,7 @@ fn the_defaults_are_the_specs() {
 async fn the_worker_runs_at_most_its_concurrency_at_once(pool: PgPool) {
     let w = world(pool).await;
     let first = put(&w, &BLOCK).await;
-    let (stop, handle) = start(&w, options(2));
+    let Running { stop, handle, .. } = start(&w, options(2));
     started(&w, 1).await;
     // One slot is taken; two more jobs arrive, and the next poll may claim only one of them.
     let jobs = [first, put(&w, &BLOCK).await, put(&w, &BLOCK).await];
@@ -212,15 +260,30 @@ async fn the_worker_runs_at_most_its_concurrency_at_once(pool: PgPool) {
     assert_eq!(handle.await.expect("the loop ends"), Stopped::Drained);
 }
 
-// B14, Q2: an idle worker finds a job enqueued after it started on a later poll.
+// B14, Q2: an idle worker looks again every poll interval. The job becomes due only after the
+// loop has looked at its stop at least four times: the first fill, its wait, and one more fill
+// and wait that only the poll interval could have started, since nothing is running. It is
+// then claimed on a later poll.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn an_idle_worker_picks_up_a_new_job_on_its_next_poll(pool: PgPool) {
     let w = world(pool).await;
-    let (stop, handle) = start(&w, options(4));
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let id = put(&w, &DONE).await;
+    let due = t0() + Duration::from_secs(1);
+    let id = put_at(&w, &DONE, due).await;
+    let Running {
+        stop,
+        looks,
+        handle,
+        ..
+    } = start(&w, options(4));
+    eventually("the loop polled while idle", || {
+        let looks = Arc::clone(&looks);
+        async move { looks.load(Ordering::SeqCst) >= 4 }
+    })
+    .await;
+    assert_eq!(state(&w.pool, id).await, Some((0, false)), "not due yet");
+    w.clock.set(due);
     let pool = w.pool.clone();
-    eventually("the new job done", || {
+    eventually("the job done", || {
         let pool = pool.clone();
         async move { state(&pool, id).await.is_none() }
     })
@@ -229,20 +292,34 @@ async fn an_idle_worker_picks_up_a_new_job_on_its_next_poll(pool: PgPool) {
     assert_eq!(handle.await.expect("the loop ends"), Stopped::Drained);
 }
 
-// T12 (B15): a stopping worker claims nothing more and returns once its running job ends.
+// B15: a stop given before the loop starts lets it claim nothing at all.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn a_stopping_worker_claims_nothing_and_waits_for_its_job(pool: PgPool) {
+async fn a_worker_stopped_before_it_starts_claims_nothing(pool: PgPool) {
+    let w = world(pool).await;
+    let id = put(&w, &DONE).await;
+    let Running { stop, handle, .. } = start(&w, options(4));
+    stop.send(()).expect("the worker listens");
+    let stopped = tokio::time::timeout(PATIENCE, handle)
+        .await
+        .expect("the loop ends")
+        .expect("the loop does not panic");
+    assert_eq!(stopped, Stopped::Drained);
+    assert_eq!(state(&w.pool, id).await, Some((0, false)), "never claimed");
+}
+
+// T12 (B15): a stopping worker returns only once its running job ends. The job is released
+// after the loop has seen the stop, so the loop is waiting on it then.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_stopping_worker_waits_for_its_running_job(pool: PgPool) {
     let w = world(pool).await;
     let running = put(&w, &BLOCK).await;
-    let (stop, handle) = start(&w, options(4));
+    let Running {
+        stop, seen, handle, ..
+    } = start(&w, options(4));
     started(&w, 1).await;
     stop.send(()).expect("the worker listens");
-    let later = put(&w, &DONE).await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert!(
-        !handle.is_finished(),
-        "the worker waits for its running job"
-    );
+    seen.notified().await;
+    assert!(!handle.is_finished(), "the job is still blocked");
     w.shared.gate.add_permits(1);
     let stopped = tokio::time::timeout(PATIENCE, handle)
         .await
@@ -254,11 +331,6 @@ async fn a_stopping_worker_claims_nothing_and_waits_for_its_job(pool: PgPool) {
         None,
         "the running job finished"
     );
-    assert_eq!(
-        state(&w.pool, later).await,
-        Some((0, false)),
-        "the job enqueued after the stop was never claimed"
-    );
 }
 
 // T12 (B5, B15): a job still running when the grace period ends keeps its lease.
@@ -267,7 +339,7 @@ async fn a_job_still_running_after_the_grace_period_keeps_its_lease(pool: PgPool
     let w = world(pool).await;
     let running = put(&w, &BLOCK).await;
     let grace = Duration::from_millis(300);
-    let (stop, handle) = start(
+    let Running { stop, handle, .. } = start(
         &w,
         RunOptions {
             grace,

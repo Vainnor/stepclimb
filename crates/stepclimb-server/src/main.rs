@@ -273,12 +273,19 @@ fn runtime() -> Option<tokio::runtime::Runtime> {
     }
 }
 
+/// How long [`run`] waits for the runtime's blocking threads once `work` has returned.
+const RUNTIME_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Run `work` on a multi-threaded runtime; any error is logged and printed, and exits 1.
 fn run(work: impl Future<Output = Result<(), startup::StartupError>>) -> ExitCode {
     let Some(runtime) = runtime() else {
         return ExitCode::FAILURE;
     };
-    match runtime.block_on(work) {
+    let result = runtime.block_on(work);
+    // Tasks still running, such as a job handler past the worker's grace period, are dropped
+    // rather than waited for; blocking work gets this long to end.
+    runtime.shutdown_timeout(RUNTIME_SHUTDOWN_TIMEOUT);
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             tracing::error!(%error, "stopped");

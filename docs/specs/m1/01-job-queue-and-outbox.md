@@ -377,6 +377,16 @@ iteration at a time through a test hook rather than on timers.
      real port.
    - A worker serves every queue its registry names. No kind is registered yet, so the loop
      polls an empty queue list until I3 registers the first periodic jobs.
+   - Coordinator decision after review (option b): the job worker has its own PostgreSQL pool of
+     `worker_concurrency` + 1 connections (named `stepclimb-jobs` in `pg_stat_activity`); HTTP
+     keeps its pool of 10, and a `web` process opens no job pool. A process can therefore hold
+     up to 10 + `worker_concurrency` + 1 connections; the configuration reference says so,
+     against PostgreSQL's default `max_connections` of 100.
+   - The production Compose example gives the server `stop_grace_period: 40s`, so Docker's
+     default 10 s does not cut B15's 30 s short. After the loop returns, the process gives the
+     runtime's blocking threads 5 s before it exits.
+   - The panic hook also logs the thread's name and a backtrace when `RUST_BACKTRACE` asks for
+     one.
 3. **I3. Periodic jobs.** `job_schedules` (in I3's own migration), the scheduler under the
    advisory lock, startup sync of schedule rows, `jobs.prune` for dead jobs, and moving the
    sign-in flow cleanup from its `tokio` interval onto `auth.flows_cleanup` (updating `m0/08` B21 in

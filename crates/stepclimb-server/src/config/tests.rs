@@ -1395,20 +1395,32 @@ fn the_worker_concurrency_is_4_unless_set_and_1_to_64() {
 // Spec m1/01 B14, T11.
 #[test]
 fn a_worker_concurrency_outside_1_to_64_is_refused_naming_the_setting() {
-    for value in ["0", "65", "-1", "+4", "4.0", "four", "99999999999"] {
+    for value in ["0", "-1", "+4", "4.0", "four", "99999999999"] {
         let error =
             Config::load(&with_required(&[(WORKER_CONCURRENCY.var, value)]), None).unwrap_err();
         assert_eq!(
             error.to_string(),
             format!(
-                "STEPCLIMB_WORKER_CONCURRENCY: {value:?} is not a whole number from 1 to 64; \
+                "STEPCLIMB_WORKER_CONCURRENCY: {value:?} is not a whole number of 1 or more; \
                  for example {}",
                 WORKER_CONCURRENCY.example
             ),
             "{value:?}"
         );
     }
-    let file = toml("public_url = \"https://lms.example.org\"\nworker_concurrency = \"0\"\n");
+    for value in ["65", "1000"] {
+        let error =
+            Config::load(&with_required(&[(WORKER_CONCURRENCY.var, value)]), None).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "STEPCLIMB_WORKER_CONCURRENCY: {value} is more than 64; for example {}",
+                WORKER_CONCURRENCY.example
+            ),
+            "{value:?}"
+        );
+    }
+    let file = toml("public_url = \"https://lms.example.org\"\nworker_concurrency = \"65\"\n");
     let vars = env(&[
         ("STEPCLIMB_DATABASE_URL", URL),
         ("STEPCLIMB_ENCRYPTION_KEYS", KEYS),
@@ -1416,7 +1428,7 @@ fn a_worker_concurrency_outside_1_to_64_is_refused_naming_the_setting() {
     let error = Config::load(&vars, Some(&file)).unwrap_err();
     assert!(
         error.to_string().starts_with(
-            "`worker_concurrency` (/etc/stepclimb/stepclimb.toml line 2): \"0\" is not a whole number"
+            "`worker_concurrency` (/etc/stepclimb/stepclimb.toml line 2): 65 is more than 64"
         ),
         "{error}"
     );

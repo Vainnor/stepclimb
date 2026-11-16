@@ -674,23 +674,26 @@ fn role(value: &str, origin: Origin) -> Result<Role, ConfigError> {
     })
 }
 
-/// `worker_concurrency`: a whole number from 1 to [`MAX_WORKER_CONCURRENCY`], digits only, or
-/// [`DEFAULT_WORKER_CONCURRENCY`] when neither source sets it (spec m1/01 B14).
+/// `worker_concurrency`: [`Sources::count`] (a whole number of 1 or more, digits only), then at
+/// most [`MAX_WORKER_CONCURRENCY`]; [`DEFAULT_WORKER_CONCURRENCY`] when neither source sets it
+/// (spec m1/01 B14).
 fn worker_concurrency(sources: &Sources<'_>) -> Result<NonZeroU32, ConfigError> {
-    let Some((value, origin)) = sources.plain(&WORKER_CONCURRENCY)? else {
-        return Ok(DEFAULT_WORKER_CONCURRENCY);
-    };
-    let digits = value.bytes().all(|b| b.is_ascii_digit());
-    match value.parse::<NonZeroU32>() {
-        Ok(count) if digits && count.get() <= MAX_WORKER_CONCURRENCY => Ok(count),
-        _ => Err(ConfigError::Invalid {
-            origin,
-            problem: format!(
-                "{value:?} is not a whole number from 1 to {MAX_WORKER_CONCURRENCY}; for example {}",
-                WORKER_CONCURRENCY.example
-            ),
-        }),
+    let count = sources.count(&WORKER_CONCURRENCY, DEFAULT_WORKER_CONCURRENCY)?;
+    if count.get() <= MAX_WORKER_CONCURRENCY {
+        return Ok(count);
     }
+    // `count` only returns a value above the default when a source set it.
+    let origin = match sources.plain(&WORKER_CONCURRENCY)? {
+        Some((_, origin)) => origin,
+        None => Origin::Var(WORKER_CONCURRENCY.var.to_owned()),
+    };
+    Err(ConfigError::Invalid {
+        origin,
+        problem: format!(
+            "{count} is more than {MAX_WORKER_CONCURRENCY}; for example {}",
+            WORKER_CONCURRENCY.example
+        ),
+    })
 }
 
 /// A comma-separated list of origins; blanks around an entry are ignored, an empty entry is not.

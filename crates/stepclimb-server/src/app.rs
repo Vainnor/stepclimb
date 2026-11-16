@@ -98,12 +98,16 @@ pub fn router(state: AppState) -> Router {
 }
 
 /// The routes of a `worker` process (docs/specs/m1/01-job-queue-and-outbox.md B13): `/healthz`
-/// and `/readyz`, so a container health check works unchanged, and 404 for every other path.
+/// and `/readyz`, so a container health check works unchanged, and 404 for every other path. As
+/// in [`router`], a wrong method answers the problem-details 405 and an `https` public URL adds
+/// HSTS.
 pub fn probes_router(state: AppState) -> Router {
     let probes = routes()
         .into_iter()
         .filter(|(path, _)| PROBE_PATHS.contains(path));
-    mount(probes)
+    let https = state.public_url.is_https();
+    let app = mount(probes).method_not_allowed_fallback(method_not_allowed);
+    with_hsts(app, https)
         .layer(TraceLayer::new_for_http().make_span_with(request_span))
         .with_state(state)
 }

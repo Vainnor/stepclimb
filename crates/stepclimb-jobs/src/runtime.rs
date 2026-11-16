@@ -63,6 +63,13 @@ impl Worker {
         let mut shutdown = pin!(shutdown);
         let mut running = JoinSet::new();
         loop {
+            // A stop that came while a job ended or the poll slept is seen here, before any
+            // further claim starts.
+            tokio::select! {
+                biased;
+                () = &mut shutdown => break,
+                () = std::future::ready(()) => {}
+            }
             self.fill(&mut running, concurrency).await;
             let full = running.len() >= concurrency;
             tokio::select! {

@@ -1122,7 +1122,7 @@ fn check_config_refuses_a_bad_role_or_concurrency_naming_the_setting() {
     let stderr = stderr_of(&output);
     assert_eq!(output.status.code(), Some(2), "stderr: {stderr}");
     assert!(
-        stderr.contains("STEPCLIMB_WORKER_CONCURRENCY: \"65\" is not a whole number from 1 to 64"),
+        stderr.contains("STEPCLIMB_WORKER_CONCURRENCY: 65 is more than 64"),
         "stderr: {stderr}"
     );
 }

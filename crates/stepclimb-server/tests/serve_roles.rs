@@ -15,7 +15,7 @@ use serde_json::Value;
 use sqlx::{ConnectOptions, PgPool};
 use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::clock::ManualClock;
-use stepclimb_server::{AppState, app::probes_router, web_origin::WebOrigin};
+use stepclimb_server::{AppState, app::probes_router, startup, web_origin::WebOrigin};
 use tower::ServiceExt;
 
 const KEYS: &str = "k1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
@@ -134,6 +134,19 @@ impl Server {
     }
 }
 
+/// The connections to `pool`'s database named [`startup::JOBS_APPLICATION_NAME`], the job
+/// worker's pool. The worker connects it before the listener binds.
+async fn job_connections(pool: &PgPool) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM pg_stat_activity
+         WHERE datname = current_database() AND application_name = $1",
+    )
+    .bind(startup::JOBS_APPLICATION_NAME)
+    .fetch_one(pool)
+    .await
+    .expect("read pg_stat_activity")
+}
+
 /// The status code of a plain HTTP/1.1 GET of `path` from `addr`.
 fn status_of(addr: &str, path: &str) -> u16 {
     let mut stream = TcpStream::connect(addr).expect("connect to the server");
@@ -166,6 +179,10 @@ async fn a_worker_process_runs_jobs_and_answers_only_the_probes(pool: PgPool) {
     assert_eq!(status_of(&addr, "/readyz"), 200);
     assert_eq!(status_of(&addr, "/api/v1/me"), 404);
     assert_eq!(status_of(&addr, "/"), 404, "no SPA either");
+    assert!(
+        job_connections(&pool).await > 0,
+        "the worker has its own pool"
+    );
     let status = server.terminate();
     assert!(
         status.success(),
@@ -191,6 +208,7 @@ async fn a_web_process_serves_the_application_and_runs_no_worker(pool: PgPool) {
     let addr = server.listening();
     assert_eq!(status_of(&addr, "/healthz"), 200);
     assert_eq!(status_of(&addr, "/api/v1/me"), 401, "the API is served");
+    assert_eq!(job_connections(&pool).await, 0, "no job pool");
     let status = server.terminate();
     assert!(
         status.success(),
@@ -260,6 +278,47 @@ async fn probe_status(pool: &PgPool, path: &str) -> StatusCode {
         .await
         .expect("the router never fails")
         .status()
+}
+
+// B13: a wrong method on a probe answers the problem-details 405 the whole application does,
+// and an https public URL adds HSTS to a worker's answers too.
+#[sqlx::test(migrations = false)]
+async fn the_probes_router_answers_405_problems_and_sends_hsts(pool: PgPool) {
+    let response = probes_router(state(pool.clone()))
+        .oneshot(
+            Request::post("/healthz")
+                .body(Body::empty())
+                .expect("a request"),
+        )
+        .await
+        .expect("the router never fails");
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(
+        response.headers()["content-type"],
+        "application/problem+json"
+    );
+    assert!(
+        response
+            .headers()
+            .get("strict-transport-security")
+            .is_none()
+    );
+
+    let mut https = state(pool);
+    https.public_url = WebOrigin::parse("https://lms.example.org").expect("a valid origin");
+    let response = probes_router(https)
+        .oneshot(
+            Request::get("/healthz")
+                .body(Body::empty())
+                .expect("a request"),
+        )
+        .await
+        .expect("the router never fails");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["strict-transport-security"],
+        stepclimb_server::app::HSTS
+    );
 }
 
 // B13: a worker's router has the two probes and nothing else.
