@@ -48,6 +48,7 @@ use stepclimb_server::{
 };
 use tower::ServiceExt;
 
+mod app_tokens;
 mod common;
 
 const SIGN_IN: &str = "/auth/local/password";
@@ -1533,6 +1534,38 @@ async fn an_admin_removes_a_users_totp(pool: PgPool) {
     assert_eq!(
         (own.status, own.code()),
         (StatusCode::CONFLICT, "local.cannot_remove_own_totp")
+    );
+}
+
+/// Spec 08 B46: an administrator's removal of a user's TOTP signs out every app signed in as the
+/// user and refuses the user's code issued before it; a refused removal signs out nothing.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_admins_removal_of_a_users_totp_signs_out_every_app(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let sam = f.enrolled().await;
+    let (admin, cookie) = f.admin("admin@example.test").await;
+    let sams = app_tokens::sign_in(&f.app, &f.pool, scope(f.org), f.org, sam.id, now()).await;
+    let admins = app_tokens::sign_in(&f.app, &f.pool, scope(f.org), f.org, admin, now()).await;
+    let ready = app_tokens::issue_code(&f.pool, scope(f.org), sam.id, now()).await;
+
+    let own = f
+        .send(Method::DELETE, &user_totp(admin), Some(&cookie), None)
+        .await;
+    assert_eq!(own.status, StatusCode::CONFLICT, "{own:?}");
+    assert!(
+        app_tokens::signed_in(&f.app, f.org, &admins, admin).await,
+        "a refused removal keeps it"
+    );
+
+    let removed = f
+        .send(Method::DELETE, &user_totp(sam.id), Some(&cookie), None)
+        .await;
+    assert_eq!(removed.status, StatusCode::NO_CONTENT, "{removed:?}");
+    assert!(app_tokens::signed_out(&f.app, f.org, &sams).await);
+    assert!(app_tokens::code_refused(&f.app, f.org, &ready).await);
+    assert!(
+        app_tokens::signed_in(&f.app, f.org, &admins, admin).await,
+        "the administrator's app stays"
     );
 }
 

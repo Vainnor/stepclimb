@@ -484,17 +484,17 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   - **Ending a user's sessions ends their app sign-ins** (security review of I8, coordinator
     decision 2026-11-15). Wherever the server ends a user's other sessions, "session" includes every
     app signed in as the user: a password change (`PUT /api/v1/me/password`), a password set through
-    an enrollment link, and a passkey registered through one delete, in the same transaction
-    (`oauth_refresh_tokens::revoke_all_of_user`), first the user's unused authorization codes and
-    then every refresh token of the user, so the apps' access tokens stop on their next request and
-    a code issued before the change, held by whoever had the old session, cannot start a new family.
-    The codes go first: an exchange in progress holds its code's row, so the revocation waits for it
-    and then deletes the family it started. Used codes stay, so a replay of one is still recognized
-    as reuse. A passkey registered through a link does not end the user's browser sessions
-    (`04-local-accounts.md`); it ends the app sign-ins all the same, since the link is how an admin
-    restores access. Suspension deletes nothing: it refuses the refresh and the access token while
-    it lasts and unsuspending restores them, as it does sessions (B11). An admin's removal of a
-    user's TOTP (#192) calls the same function when it lands.
+    an enrollment link, a passkey registered through one, and an administrator's removal of the
+    user's TOTP (`DELETE /api/v1/admin/users/{user_id}/totp`, `04-local-accounts.md`) delete, in the
+    same transaction (`oauth_refresh_tokens::revoke_all_of_user`), first the user's unused
+    authorization codes and then every refresh token of the user, so the apps' access tokens stop on
+    their next request and a code issued before the change, held by whoever had the old session,
+    cannot start a new family. The codes go first: an exchange in progress holds its code's row, so
+    the revocation waits for it and then deletes the family it started. Used codes stay, so a replay
+    of one is still recognized as reuse. A passkey registered through a link does not end the user's
+    browser sessions (`04-local-accounts.md`); it ends the app sign-ins all the same, since the link
+    is how an admin restores access. Suspension deletes nothing: it refuses the refresh and the
+    access token while it lasts and unsuspending restores them, as it does sessions (B11).
   - **Code reuse needs the code's own proof** (security review of I8). A used code revokes its
     family only when the replay names the code's client and redirect URI and its verifier
     passes; any other replay is `invalid_grant` and changes nothing, so someone who saw the code
@@ -590,7 +590,7 @@ uuid NOT NULL`, `rotated_from uuid NULL REFERENCES oauth_refresh_tokens(id) ON D
 unique index on `rotated_from` (a token rotates at most once, which also makes two concurrent
 rotations of one token conflict instead of both succeeding). A token is "already rotated" when a
 row with `rotated_from = its id` exists. Organization: derived through `user_id`.
-As built by I8 (migration `20261116080000_oauth_refresh_tokens.sql`, B46; coordinator decision
+As built by I8 (migration `20261116130000_oauth_refresh_tokens.sql`, B46; coordinator decision
 2026-11-15): `org_id uuid NOT NULL REFERENCES organizations(id)` is direct, with `(org_id,
 user_id) REFERENCES users(org_id, id) ON DELETE CASCADE`, as on `oauth_authorization_codes`;
 `token_hash` is checked to 32 bytes; `family_id` references the family's first row `ON DELETE
