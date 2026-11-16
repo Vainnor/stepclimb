@@ -21,7 +21,7 @@ pub struct TimeOutOfRange;
 /// The workspace has no date-time crate yet, and sqlx binds `SystemTime` only through one.
 /// PostgreSQL multiplies the interval by the integer as a `float8`, which holds every
 /// microsecond count exactly up to 2^53 (the year 2255). Sub-microsecond parts are truncated.
-pub(crate) fn epoch_micros(time: SystemTime) -> Result<i64, TimeOutOfRange> {
+pub fn epoch_micros(time: SystemTime) -> Result<i64, TimeOutOfRange> {
     let since = time
         .duration_since(UNIX_EPOCH)
         .map_err(|_| TimeOutOfRange)?;
@@ -30,7 +30,7 @@ pub(crate) fn epoch_micros(time: SystemTime) -> Result<i64, TimeOutOfRange> {
 
 /// The time `micros` microseconds after the Unix epoch, for reading a `timestamptz` selected as
 /// `(extract(epoch FROM column) * 1000000)::bigint`. The inverse of [`epoch_micros`].
-pub(crate) fn from_epoch_micros(micros: i64) -> Result<SystemTime, TimeOutOfRange> {
+pub fn from_epoch_micros(micros: i64) -> Result<SystemTime, TimeOutOfRange> {
     let micros = u64::try_from(micros).map_err(|_| TimeOutOfRange)?;
     UNIX_EPOCH
         .checked_add(std::time::Duration::from_micros(micros))

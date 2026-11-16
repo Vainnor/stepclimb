@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE jobs\n         SET locked_until = NULL,\n             run_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond',\n             attempts = attempts - $5::integer,\n             last_error = coalesce($6, last_error),\n             updated_at = timestamptz 'epoch' + $7::bigint * interval '1 microsecond'\n         WHERE id = $1 AND org_id IS NOT DISTINCT FROM $2 AND attempts = $3\n           AND locked_until IS NOT NULL AND dead_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4",
+        "Int8",
+        "Int4",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "80a377a3b959bab140a47267de46a37456db72649a5c4a59fd7747a21b8b37f3"
+}

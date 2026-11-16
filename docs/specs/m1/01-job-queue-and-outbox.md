@@ -335,6 +335,22 @@ iteration at a time through a test hook rather than on timers.
    the claim, lease extension, outcomes, backoff with an injected random source, dead jobs, the
    registry and the scoped run of an organization's job. Covers B1 to B12, B25, B26; T1 to T10,
    T19. Depends on: none (M0 complete).
+   Coordinator decisions (2026-11-16, made while building I1, pending owner review):
+   - A dedupe key that matches a waiting job of another organization, or an instance job
+     matching an organization's, is an error (`DedupeKeyOfAnotherOrganization`); the waiting job
+     is left as it is (B3, B26).
+   - A claim is still a worker's own while the row has the same id, organization and `attempts`
+     and still has a lease. Requiring the lease means a stale handler cannot delete or kill a job
+     that an unknown-kind release (B11) has put back to wait.
+   - An unknown-kind release that would collide with a waiting duplicate deletes the row, as a
+     retry does (Data).
+   - `organizations::list_ids` (B10) comes with the first instance job that iterates
+     organizations; I1 has no caller for it.
+   - A random generator failure counts as the lowest jitter draw and is logged at `warn` (B7).
+     NUL in a handler's error is stored as U+FFFD, since `text` cannot hold it (B9). A database
+     error while checking the job's organization is a retry outcome (B10).
+   - A kind needs a lease of at least 1 s, a base of at least 1 ms, a cap no shorter than its
+     base and 1 to 1,000 attempts; `Registry::register` refuses anything else.
 2. **I2. Worker runtime and roles.** The claim loop with `worker_concurrency`, polling, graceful
    shutdown, `--role` and `STEPCLIMB_ROLE` in the configuration loader and `check-config`, and the
    worker-only listener for the probes. Covers B13 to B16; T11, T12. Depends on: I1.
