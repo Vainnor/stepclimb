@@ -271,16 +271,83 @@ async fn the_scheduler_ticks_at_once_and_stops_on_shutdown(pool: PgPool) {
             let _ = stopped.await;
         },
     ));
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while jobs(&pool).await.len() < 3 {
-        assert!(tokio::time::Instant::now() < deadline, "no first tick");
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    wait_for_jobs(&pool, 3, "the first tick").await;
+    // The jobs ran (deleted here, as a worker's done would) and the sweep's interval passed: a
+    // later tick of the same loop enqueues it again.
+    sqlx::query("DELETE FROM jobs")
+        .execute(&pool)
+        .await
+        .unwrap();
+    clock.advance(10 * MINUTE);
+    wait_for_jobs(&pool, 1, "a second tick").await;
+    assert_eq!(
+        jobs(&pool).await,
+        [("test.sweep".to_owned(), Some("test.sweep".to_owned()), None)]
+    );
     stop.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(10), loop_)
         .await
         .expect("the scheduler stops")
         .unwrap();
+}
+
+/// Wait until at least `n` jobs exist, failing after 10 s.
+async fn wait_for_jobs(pool: &PgPool, n: usize, what: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while jobs(pool).await.len() < n {
+        assert!(tokio::time::Instant::now() < deadline, "timed out: {what}");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+// B3, B17: a run still waiting when the next interval comes absorbs it; one row is left.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_waiting_run_absorbs_the_next_interval(pool: PgPool) {
+    let registry = registry(10 * MINUTE);
+    schedule::sync(&pool, &registry, t0()).await.unwrap();
+    schedule::tick(&pool, &registry, t0()).await.unwrap();
+    let next = t0() + 10 * MINUTE;
+    let tick = schedule::tick(&pool, &registry, next).await.unwrap();
+    assert_eq!(tick, ran(&["test.sweep"]), "the schedule ran again");
+    let sweeps: Vec<i64> = sqlx::query_scalar(
+        "SELECT (extract(epoch FROM run_at) * 1000000)::bigint FROM jobs WHERE kind = 'test.sweep'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(sweeps, [micros(t0())], "one row, its earlier run_at kept");
+}
+
+// B17: a shortened interval brings the next run forward; a longer one leaves it.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_shortened_interval_brings_the_next_run_forward(pool: PgPool) {
+    schedule::sync(&pool, &registry(10 * MINUTE), t0())
+        .await
+        .unwrap();
+    schedule::tick(&pool, &registry(10 * MINUTE), t0())
+        .await
+        .unwrap();
+    let sweep =
+        |rows: Vec<(String, i32, i64)>| rows.into_iter().find(|r| r.0 == "test.sweep").unwrap();
+    assert_eq!(sweep(schedules(&pool).await).2, micros(t0() + 10 * MINUTE));
+
+    let later = t0() + MINUTE;
+    schedule::sync(&pool, &registry(2 * MINUTE), later)
+        .await
+        .unwrap();
+    assert_eq!(
+        sweep(schedules(&pool).await),
+        ("test.sweep".to_owned(), 120, micros(later + 2 * MINUTE)),
+        "brought forward"
+    );
+    schedule::sync(&pool, &registry(30 * MINUTE), later)
+        .await
+        .unwrap();
+    assert_eq!(
+        sweep(schedules(&pool).await),
+        ("test.sweep".to_owned(), 1800, micros(later + 2 * MINUTE)),
+        "a longer interval leaves it"
+    );
 }
 
 #[expect(
@@ -382,4 +449,52 @@ async fn jobs_prune_deletes_dead_jobs_after_30_days(pool: PgPool) {
     }
     assert!(exists(&pool, younger).await, "died a day later: kept");
     assert!(exists(&pool, waiting).await, "a living job is never pruned");
+}
+
+// B8, B18: a backlog larger than one batch is pruned in full.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn jobs_prune_clears_a_backlog_larger_than_a_batch(pool: PgPool) {
+    let org = new_id();
+    sqlx::query("INSERT INTO organizations (id, slug, name) VALUES ($1, 'org-a', 'org-a')")
+        .bind(org)
+        .execute(&pool)
+        .await
+        .unwrap();
+    for target in [Some(org), None] {
+        sqlx::query(
+            "INSERT INTO jobs (id, org_id, queue, kind, payload, run_at, attempts, max_attempts,
+                               dead_at)
+             SELECT gen_random_uuid(), $1, 'default', 'test.fail', '{}', timestamptz 'epoch', 1, 1,
+                    timestamptz 'epoch' + $2::bigint * interval '1 microsecond'
+             FROM generate_series(1, 2500)",
+        )
+        .bind(target)
+        .bind(micros(t0()))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let registry = registry(10 * MINUTE);
+    let at = t0() + 30 * DAY;
+    schedule::sync(&pool, &registry, at).await.unwrap();
+    schedule::tick(&pool, &registry, at).await.unwrap();
+    let clock = ManualClock::new(at);
+    let worker = Worker::new(
+        pool.clone(),
+        registry,
+        clock.clock(),
+        Random::from_fn(|| 0),
+        vec!["default"],
+    );
+    worker.run_once(10).await.unwrap();
+    let dead: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs WHERE dead_at IS NOT NULL")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        dead,
+        0,
+        "2,500 dead jobs per owner, in batches of {}",
+        prune::BATCH
+    );
 }

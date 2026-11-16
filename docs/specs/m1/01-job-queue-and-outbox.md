@@ -377,11 +377,13 @@ iteration at a time through a test hook rather than on timers.
      real port.
    - A worker serves every queue its registry names. No kind is registered yet, so the loop
      polls an empty queue list until I3 registers the first periodic jobs.
-   - Coordinator decision after review (option b): the job worker has its own PostgreSQL pool of
-     `worker_concurrency` + 1 connections (named `stepclimb-jobs` in `pg_stat_activity`); HTTP
-     keeps its pool of 10, and a `web` process opens no job pool. A process can therefore hold
-     up to 10 + `worker_concurrency` + 1 connections; the configuration reference says so,
-     against PostgreSQL's default `max_connections` of 100.
+   - Coordinator decision after review (option b): the job worker has its own PostgreSQL pool
+     (named `stepclimb-jobs` in `pg_stat_activity`); HTTP keeps its pool of 10, and a `web`
+     process opens no job pool. With I3's scheduler on it, the pool is `worker_concurrency` + 2
+     connections (coordinator decision, 2026-11-17): one per job, one for claims, one for the
+     tick. A process can therefore hold up to 10 + `worker_concurrency` + 2 connections, 76 at
+     most (10 + 64 + 2); the configuration reference says so, against PostgreSQL's default
+     `max_connections` of 100.
    - The production Compose example gives the server `stop_grace_period: 40s`, so Docker's
      default 10 s does not cut B15's 30 s short. After the loop returns, the process gives the
      runtime's blocking threads 5 s before it exits.
@@ -403,6 +405,14 @@ iteration at a time through a test hook rather than on timers.
    - `jobs.prune` walks the organizations through the existing instance-wide
      `organizations::ids` and deletes each one's dead jobs with its scope, then the instance's
      own; B10's `organizations::list_ids` is that function under its existing name.
+   - Coordinator decisions after review: `jobs.prune` deletes in batches of 1,000 until a batch
+     comes back short, through a partial index `jobs_dead ON jobs (org_id, dead_at) WHERE
+     dead_at IS NOT NULL` (in I3's migration). A failure in one organization is logged and the
+     others still run; the job retries if any failed, as the flow cleanup does.
+   - Startup sync also brings `next_run_at` forward to `now` plus the new interval when that is
+     sooner, so a shortened interval takes effect at once; a longer one leaves it. During a
+     rolling upgrade an older binary that starts after a newer one writes its own interval
+     back, and the last process to start wins until every process runs the new release.
 4. **I4. Outbox and dispatch.** Migration `<version>_outbox.sql`, `outbox::emit`, topic
    registration with schema versions, the dispatch loop, subscriber registration, and
    pruning dispatched rows in `jobs.prune`. Covers B19 to B24; T15 to T18. Depends on: I3.

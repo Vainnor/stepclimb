@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO job_schedules (name, interval_s, next_run_at, created_at, updated_at)\n             VALUES ($1, $2,\n                     timestamptz 'epoch' + $3::bigint * interval '1 microsecond',\n                     timestamptz 'epoch' + $3::bigint * interval '1 microsecond',\n                     timestamptz 'epoch' + $3::bigint * interval '1 microsecond')\n             ON CONFLICT (name) DO UPDATE\n                 SET interval_s = EXCLUDED.interval_s,\n                     next_run_at = LEAST(\n                         job_schedules.next_run_at,\n                         EXCLUDED.next_run_at + EXCLUDED.interval_s * interval '1 second'\n                     ),\n                     updated_at = EXCLUDED.updated_at\n                 WHERE job_schedules.interval_s <> EXCLUDED.interval_s",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "888fa6bf4d539802673a8407721ad5ed7d7bd9c88ab3f35991439156558aa988"
+}

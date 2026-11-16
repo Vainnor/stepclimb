@@ -16,9 +16,10 @@ use std::pin::pin;
 use std::time::{Duration, SystemTime};
 
 use serde_json::json;
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 use stepclimb_core::{clock::Clock, db::epoch_micros};
 
+use crate::kind::Kind;
 use crate::queue::{Error, NewJob, enqueue};
 use crate::registry::Registry;
 
@@ -39,9 +40,13 @@ pub enum Tick {
 }
 
 /// Write a schedule row for every periodic kind of `registry` (B17): a new kind gets one due at
-/// `now`, and a row whose interval differs from the code's takes the code's. A row's
-/// `next_run_at` is never moved here, and rows of kinds this binary does not know, a newer
-/// release's, are left alone.
+/// `now`, and a row whose interval differs from the code's takes the code's, with its
+/// `next_run_at` brought forward to `now` plus the new interval when that is sooner, so a
+/// shortened interval takes effect at once. A longer interval leaves `next_run_at` as it is.
+/// Rows of kinds this binary does not know, a newer release's, are left alone.
+///
+/// During a rolling upgrade an older binary that starts after a newer one writes its own
+/// interval back; the last process to start wins until every process runs the new release.
 pub async fn sync(pool: &PgPool, registry: &Registry, now: SystemTime) -> Result<(), Error> {
     let now_us = epoch_micros(now)?;
     for (name, interval) in registry.periodic() {
@@ -55,7 +60,12 @@ pub async fn sync(pool: &PgPool, registry: &Registry, now: SystemTime) -> Result
                      timestamptz 'epoch' + $3::bigint * interval '1 microsecond',
                      timestamptz 'epoch' + $3::bigint * interval '1 microsecond')
              ON CONFLICT (name) DO UPDATE
-                 SET interval_s = EXCLUDED.interval_s, updated_at = EXCLUDED.updated_at
+                 SET interval_s = EXCLUDED.interval_s,
+                     next_run_at = LEAST(
+                         job_schedules.next_run_at,
+                         EXCLUDED.next_run_at + EXCLUDED.interval_s * interval '1 second'
+                     ),
+                     updated_at = EXCLUDED.updated_at
                  WHERE job_schedules.interval_s <> EXCLUDED.interval_s",
             name,
             interval_s,
@@ -103,27 +113,40 @@ pub async fn tick(pool: &PgPool, registry: &Registry, now: SystemTime) -> Result
     .await?;
     let mut enqueued = Vec::with_capacity(due.len());
     for row in due {
-        let Some(kind) = registry.kind(&row.name) else {
-            continue;
-        };
-        let job = NewJob::instance(kind, &json!({}))?.dedupe(&row.name)?;
-        enqueue(&mut tx, job, now).await?;
-        sqlx::query!(
-            "UPDATE job_schedules
-             SET next_run_at = timestamptz 'epoch'
-                     + ($2::bigint + $3::bigint * 1000000) * interval '1 microsecond',
-                 updated_at = timestamptz 'epoch' + $2::bigint * interval '1 microsecond'
-             WHERE name = $1",
-            row.name,
-            now_us,
-            i64::from(row.interval_s),
-        )
-        .execute(&mut *tx)
-        .await?;
-        enqueued.push(row.name);
+        if let Some(kind) = registry.kind(&row.name) {
+            run_due(&mut tx, kind, &row.name, row.interval_s, now).await?;
+            enqueued.push(row.name);
+        }
     }
     tx.commit().await?;
     Ok(Tick::Ran(enqueued))
+}
+
+/// Enqueue the instance job of the due schedule `name`, deduped by that name, and move the
+/// schedule's `next_run_at` to `now` plus `interval_s` seconds, in the tick's transaction.
+async fn run_due(
+    tx: &mut Transaction<'_, Postgres>,
+    kind: &Kind,
+    name: &str,
+    interval_s: i32,
+    now: SystemTime,
+) -> Result<(), Error> {
+    let job = NewJob::instance(kind, &json!({}))?.dedupe(name)?;
+    enqueue(tx, job, now).await?;
+    // Instance-wide: `job_schedules` has no organization (module docs).
+    sqlx::query!(
+        "UPDATE job_schedules
+         SET next_run_at = timestamptz 'epoch'
+                 + ($2::bigint + $3::bigint * 1000000) * interval '1 microsecond',
+             updated_at = timestamptz 'epoch' + $2::bigint * interval '1 microsecond'
+         WHERE name = $1",
+        name,
+        epoch_micros(now)?,
+        i64::from(interval_s),
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 /// Tick every `every` at `clock`'s time until `shutdown` completes, the first tick at once. A

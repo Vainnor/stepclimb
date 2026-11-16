@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM jobs\n         WHERE id IN (\n             SELECT id FROM jobs\n             WHERE org_id = $1 AND dead_at IS NOT NULL\n               AND dead_at <= timestamptz 'epoch' + $2::bigint * interval '1 microsecond'\n             LIMIT $3\n         )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6b51ea6ab5448ef3f7f3c1f92896b9f7723f4063b5b218d9a64a5d87fd73880a"
+}
