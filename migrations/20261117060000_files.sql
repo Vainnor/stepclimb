@@ -7,9 +7,12 @@
 -- `orgs/<org_id>/files/<sha256 hex>` (B2). `size` is what the `storage` limit sums (B22).
 --
 -- A `course_files` row places a file in a folder of a course under a name. `id` is not in the
--- plan's data model: items and routes name a course file. Both composite foreign keys keep the
--- course and the file in the row's organization, and `file_id`'s default `NO ACTION` stops a
--- referenced `files` row from being deleted (B21).
+-- plan's data model: items and routes name a course file. The checks hold B9's rules: `folder`
+-- is `/` or 1 to 8 segments and `name` one segment of up to 255 characters; a segment is 1 to 100
+-- characters, not `.` or `..`, with no `/`, `\` or control character (C0, DEL, C1; PostgreSQL
+-- text holds no NUL). NFC normalization is the repository's (I2). Both composite foreign keys
+-- keep the course and the file in the row's organization, and `file_id`'s default `NO ACTION`
+-- stops a referenced `files` row from being deleted (B21).
 CREATE TABLE files (
     id           uuid        PRIMARY KEY,
     org_id       uuid        NOT NULL REFERENCES organizations (id),
@@ -28,8 +31,14 @@ CREATE TABLE course_files (
     org_id      uuid        NOT NULL,
     course_id   uuid        NOT NULL,
     file_id     uuid        NOT NULL,
-    folder      text        NOT NULL CHECK (folder = '/' OR folder ~ '^(/[^/]+){1,8}$'),
-    name        text        NOT NULL CHECK (char_length(name) BETWEEN 1 AND 255 AND position('/' in name) = 0),
+    folder      text        NOT NULL CHECK (
+        folder = '/'
+        OR (folder ~ '^(/[^/\\\u0001-\u001f\u007f-\u009f]{1,100}){1,8}$'
+            AND folder !~ '/\.\.?(/|$)')
+    ),
+    name        text        NOT NULL CHECK (
+        name ~ '^[^/\\\u0001-\u001f\u007f-\u009f]{1,255}$' AND name NOT IN ('.', '..')
+    ),
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now(),
     UNIQUE (org_id, id),

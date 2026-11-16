@@ -23,7 +23,7 @@ use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{
     OrgScope,
     clock::ManualClock,
-    files::Sha256,
+    files::{Sha256Digest, Sha256Hasher},
     id::{Uuid, new_id},
 };
 use stepclimb_server::{
@@ -109,6 +109,13 @@ fn open(config: S3Config) -> Storage {
         .expect("storage is configured")
 }
 
+/// The digest the server's hasher computes over `bytes`.
+fn digest(bytes: &[u8]) -> Sha256Digest {
+    let mut hasher = Sha256Hasher::new();
+    hasher.update(bytes);
+    hasher.finish().sha256()
+}
+
 fn test_prefix() -> String {
     format!("tests/{}", new_id().simple())
 }
@@ -164,7 +171,7 @@ async fn a_files_object_is_at_its_organizations_hash_key() {
     let dir = TempDir::new("layout");
     let storage = dir.storage();
     let org = new_id();
-    let sha256 = Sha256([0x5a; 32]);
+    let sha256 = digest(b"layout");
     let path = storage.file_path(scope(org), sha256);
     storage
         .store()
@@ -176,7 +183,7 @@ async fn a_files_object_is_at_its_organizations_hash_key() {
         .join("orgs")
         .join(org.to_string())
         .join("files")
-        .join("5a".repeat(32));
+        .join(sha256.hex());
     assert_eq!(std::fs::read(on_disk).expect("the object's file"), b"bytes");
 }
 
@@ -195,7 +202,7 @@ async fn an_s3_files_object_is_under_the_prefix_at_its_organizations_hash_key() 
     let prefix = test_prefix();
     let storage = open(minio(&prefix));
     let org = new_id();
-    let sha256 = Sha256([0x0f; 32]);
+    let sha256 = digest(b"pdf");
     storage
         .store()
         .put(
@@ -207,11 +214,11 @@ async fn an_s3_files_object_is_under_the_prefix_at_its_organizations_hash_key() 
     let whole_bucket = open(minio(""));
     assert_eq!(
         list_keys(&whole_bucket, &whole_bucket.path(&prefix)).await,
-        [format!("{prefix}/orgs/{org}/files/{}", "0f".repeat(32))]
+        [format!("{prefix}/orgs/{org}/files/{}", sha256.hex())]
     );
     let read = whole_bucket
         .store()
-        .get(&whole_bucket.path(&format!("{prefix}/orgs/{org}/files/{}", "0f".repeat(32))))
+        .get(&whole_bucket.path(&format!("{prefix}/orgs/{org}/files/{}", sha256.hex())))
         .await
         .expect("get")
         .bytes()

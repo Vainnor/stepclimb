@@ -17,13 +17,11 @@ services:
     tmpfs:
       - /var/lib/postgresql/data
 
-  # The storage tests' object store (docs/specs/m1/06-files.md, Test cases), started by the gate
-  # (bin/ci_gate.py start_storage), which hands its URL to the tests in SC_CI_MINIO_URL. The
-  # bucket `stepclimb` is made before MinIO starts: a top-level directory of a new data directory
-  # is a bucket to MinIO. The console is not published.
+  # The object store of the storage tests (docs/specs/m1/06-files.md, Test cases) and of the e2e
+  # server, started by the gate (bin/ci_gate.py start_storage), which hands its URL to the tests
+  # in SC_CI_MINIO_URL. compose.yaml makes the bucket `stepclimb` and the health check. The console
+  # is not published.
   minio:
-    entrypoint: ["/bin/sh", "-c", "mkdir -p /data/stepclimb && exec minio server /data"]
-    command: !reset []
     labels:
       stepclimb.ci.slot: "${SC_CI_SLOT:?SC_CI_SLOT is set by bin/ci_gate.py}"
     ports: !override
@@ -31,20 +29,6 @@ services:
     volumes: !reset []
     tmpfs:
       - /data
-    # The image has bash but no curl: ask MinIO's readiness endpoint over /dev/tcp.
-    healthcheck:
-      test:
-        - CMD
-        - bash
-        - -c
-        - >-
-          exec 3<>/dev/tcp/127.0.0.1/9000
-          && printf 'GET /minio/health/ready HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n' >&3
-          && read -r status <&3
-          && [[ $$status == *" 200 "* ]]
-      interval: 2s
-      timeout: 3s
-      retries: 30
 
   stepclimb:
     environment:

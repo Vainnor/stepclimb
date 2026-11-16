@@ -31,9 +31,15 @@ services:
       timeout: 3s
       retries: 30
 
+  # The bucket `stepclimb`, which the server stores course files in, is made before MinIO
+  # starts: a top-level directory of the data directory is a bucket to MinIO, on a new volume and
+  # an existing one. The image has no `mc`.
   minio:
     image: cgr.dev/chainguard/minio:latest@sha256:96b6cf3e14084d3427ec46de10c2873af61b945ad9272eec266cfc8df551cba5
-    command: ["server", "/data", "--console-address", ":9001"]
+    entrypoint:
+      - /bin/sh
+      - -c
+      - mkdir -p /data/stepclimb && exec minio server /data --console-address :9001
     environment:
       MINIO_ROOT_USER: stepclimb
       MINIO_ROOT_PASSWORD: stepclimb-local
@@ -42,6 +48,20 @@ services:
       - "127.0.0.1:${SC_DEV_MINIO_CONSOLE_PORT:-59001}:9001"
     volumes:
       - minio:/data
+    # The image has bash but no curl: ask MinIO's readiness endpoint over /dev/tcp.
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000
+          && printf 'GET /minio/health/ready HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n' >&3
+          && read -r status <&3
+          && [[ $$status == *" 200 "* ]]
+      interval: 2s
+      timeout: 3s
+      retries: 30
 
   stepclimb:
     profiles: ["stack"]
@@ -58,12 +78,21 @@ services:
       # bytes spell "stepclimb-local-development-key!". The server warns about it at startup.
       # Never use it for real data.
       STEPCLIMB_ENCRYPTION_KEYS_FILE: /run/secrets/encryption_keys
+      # Course files in the MinIO above, bucket `stepclimb`, with its development credentials
+      # (docs/specs/m1/06-files.md, Configuration).
+      STEPCLIMB_STORAGE_URL: s3://stepclimb
+      STEPCLIMB_STORAGE_S3_ENDPOINT: http://minio:9000
+      STEPCLIMB_STORAGE_S3_ALLOW_HTTP: "true"
+      STEPCLIMB_STORAGE_S3_ACCESS_KEY_ID: stepclimb
+      STEPCLIMB_STORAGE_S3_SECRET_ACCESS_KEY: stepclimb-local
     secrets:
       - encryption_keys
     ports:
       - "127.0.0.1:${SC_DEV_PORT:-58080}:8080"
     depends_on:
       postgres:
+        condition: service_healthy
+      minio:
         condition: service_healthy
 
 secrets:

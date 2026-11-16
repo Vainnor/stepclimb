@@ -12,7 +12,7 @@ use stepclimb_core::{
     audit::Actor,
     courses::{self, NewCourse},
     feature::Limit,
-    files::{self, Error, NewFile, Sha256},
+    files::{self, Error, Hashed, NewFile, Sha256Digest, Sha256Hasher},
     id::{Uuid, new_id},
     org_plans::{self, Room},
     organizations,
@@ -38,10 +38,16 @@ async fn org(pool: &PgPool, slug: &str) -> Uuid {
         .id
 }
 
+/// What the server's hasher computes over `size` bytes of `byte`.
+fn hashed(byte: u8, size: u64) -> Hashed {
+    let mut hasher = Sha256Hasher::new();
+    hasher.update(&vec![byte; usize::try_from(size).expect("a test size")]);
+    hasher.finish()
+}
+
 fn new_file(byte: u8, size: u64) -> NewFile {
     NewFile {
-        sha256: Sha256([byte; 32]),
-        size,
+        hashed: hashed(byte, size),
         mime: "application/pdf".into(),
     }
 }
@@ -50,7 +56,7 @@ async fn insert(pool: &PgPool, org: Uuid, new: &NewFile) -> Result<files::File, 
     files::insert(pool, scope(org), new, now()).await
 }
 
-async fn find(pool: &PgPool, org: Uuid, sha256: Sha256) -> Option<files::File> {
+async fn find(pool: &PgPool, org: Uuid, sha256: Sha256Digest) -> Option<files::File> {
     let mut conn = pool.acquire().await.expect("a connection");
     files::find_by_hash(&mut conn, scope(org), sha256)
         .await
@@ -69,17 +75,15 @@ async fn an_inserted_file_is_found_by_its_hash_with_its_key(pool: PgPool) {
     let a = org(&pool, "org-a").await;
     let new = new_file(0xab, 1234);
     let file = insert(&pool, a, &new).await.unwrap();
-    assert_eq!(file.sha256, new.sha256);
+    let sha256 = new.hashed.sha256();
+    assert_eq!(file.sha256, sha256);
     assert_eq!(file.size, 1234);
     assert_eq!(file.mime, "application/pdf");
-    assert_eq!(
-        file.storage_key,
-        format!("orgs/{a}/files/{}", "ab".repeat(32))
-    );
-    assert_eq!(file.storage_key, files::storage_key(scope(a), new.sha256));
+    assert_eq!(file.storage_key, format!("orgs/{a}/files/{}", sha256.hex()));
+    assert_eq!(file.storage_key, files::storage_key(scope(a), sha256));
     assert_eq!((file.created_at, file.updated_at), (now(), now()));
-    assert_eq!(find(&pool, a, new.sha256).await, Some(file));
-    assert_eq!(find(&pool, a, Sha256([0xcd; 32])).await, None);
+    assert_eq!(find(&pool, a, sha256).await, Some(file));
+    assert_eq!(find(&pool, a, hashed(0xcd, 1).sha256()).await, None);
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
@@ -104,8 +108,8 @@ async fn a_hash_is_found_only_in_its_own_organization(pool: PgPool) {
     let b = org(&pool, "org-b").await;
     let new = new_file(0x22, 10);
     insert(&pool, a, &new).await.unwrap();
-    assert!(find(&pool, a, new.sha256).await.is_some());
-    assert_eq!(find(&pool, b, new.sha256).await, None);
+    assert!(find(&pool, a, new.hashed.sha256()).await.is_some());
+    assert_eq!(find(&pool, b, new.hashed.sha256()).await, None);
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
@@ -118,7 +122,7 @@ async fn a_hash_taken_in_a_transaction_aborts_it_and_the_retry_finds_the_row(poo
     assert!(matches!(lost, Err(Error::HashTaken)), "{lost:?}");
     tx.rollback().await.expect("roll back");
     let mut retry = pool.begin().await.expect("begin");
-    let found = files::find_by_hash(&mut retry, scope(a), new.sha256)
+    let found = files::find_by_hash(&mut retry, scope(a), new.hashed.sha256())
         .await
         .unwrap();
     assert_eq!(found, Some(committed));
@@ -132,7 +136,7 @@ async fn find_by_hash_holds_the_row_against_a_delete_until_the_transaction_ends(
     insert(&pool, a, &new).await.unwrap();
     let mut reusing = pool.begin().await.expect("begin");
     assert!(
-        files::find_by_hash(&mut reusing, scope(a), new.sha256)
+        files::find_by_hash(&mut reusing, scope(a), new.hashed.sha256())
             .await
             .unwrap()
             .is_some()
@@ -167,14 +171,6 @@ async fn insert_refuses_a_mime_type_the_table_cannot_store(pool: PgPool) {
         let refused = insert(&pool, a, &new).await;
         assert!(matches!(refused, Err(Error::MimeInvalid)), "{mime:?}");
     }
-    let too_big = NewFile {
-        size: u64::MAX,
-        ..new_file(0x55, 1)
-    };
-    assert!(matches!(
-        insert(&pool, a, &too_big).await,
-        Err(Error::SizeOutOfRange)
-    ));
     assert_eq!(row_count(&pool).await, 0);
 }
 
@@ -325,8 +321,23 @@ async fn a_course_file_stays_in_its_organization_and_folder_rules(pool: PgPool) 
         constraint(foreign_course.unwrap_err()).as_deref(),
         Some("course_files_org_id_course_id_fkey")
     );
+    let long_segment = format!("/{}", "s".repeat(101));
     let long = "n".repeat(256);
     for (folder, name) in [
+        ("/.", "x"),
+        ("/..", "x"),
+        ("/a/../b", "x"),
+        ("/a/.", "x"),
+        ("/a\\b", "x"),
+        ("/a\tb", "x"),
+        ("/a\u{7f}b", "x"),
+        ("/a\u{85}b", "x"),
+        (long_segment.as_str(), "x"),
+        ("/", "."),
+        ("/", ".."),
+        ("/", "a\\b"),
+        ("/", "a\nb"),
+        ("/", "a\u{9f}b"),
         ("", "x"),
         ("handouts", "x"),
         ("/a/", "x"),
@@ -338,6 +349,21 @@ async fn a_course_file_stays_in_its_organization_and_folder_rules(pool: PgPool) 
     ] {
         let refused = add_course_file(&pool, a, course_a, file_a, folder, name).await;
         assert!(refused.is_err(), "{folder:?} {name:?}");
+    }
+    // B9's edges that fit: 8 segments, a segment of 100 characters, dots inside a segment, a
+    // name of 255 characters.
+    let longest_segment = format!("/{}", "s".repeat(100));
+    let name_255 = "n".repeat(255);
+    for (folder, name) in [
+        ("/1/2/3/4/5/6/7/8", "x"),
+        (longest_segment.as_str(), "x"),
+        ("/.hidden/v1.2/..x", "a.b"),
+        ("/", name_255.as_str()),
+        ("/notes", "..."),
+    ] {
+        add_course_file(&pool, a, course_a, file_a, folder, name)
+            .await
+            .unwrap_or_else(|e| panic!("{folder:?} {name:?}: {e}"));
     }
     // A referenced `files` row cannot be deleted (B21).
     let referenced = sqlx::query("DELETE FROM files WHERE id = $1")

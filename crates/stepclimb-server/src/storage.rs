@@ -37,7 +37,7 @@ use object_store::{
 };
 use stepclimb_core::{
     OrgScope,
-    files::{self, Sha256},
+    files::{self, Sha256Digest},
     id::new_id,
 };
 
@@ -149,7 +149,7 @@ impl Storage {
 
     /// The location of the scope's organization's file with `sha256` (B2).
     #[must_use]
-    pub fn file_path(&self, scope: OrgScope, sha256: Sha256) -> Path {
+    pub fn file_path(&self, scope: OrgScope, sha256: Sha256Digest) -> Path {
         self.path(&files::storage_key(scope, sha256))
     }
 
@@ -287,7 +287,9 @@ pub fn not_configured() -> ApiError {
 }
 
 /// A handler that reads or writes stored bytes takes [`Storage`]; without `storage_url` the
-/// request is refused with [`not_configured`] before the handler runs.
+/// request is refused with [`not_configured`] before the handler runs. A protected handler takes
+/// it after its `Require<P>`: axum runs extractors in argument order, so an anonymous caller gets
+/// 401 and a caller without the permission 403 before storage is looked at.
 impl FromRequestParts<AppState> for Storage {
     type Rejection = ApiError;
 
