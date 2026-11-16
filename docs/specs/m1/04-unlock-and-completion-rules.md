@@ -234,7 +234,8 @@ Evaluator tests (T1 to T8) are unit tests over plain values; route tests use `#[
 - Storing progress and emitting completion events: spec 05.
 - Watch tracking: spec 09. Quiz submit and score: M2. Activity mastery: M3.
 - Expiry that re-locks dependent content (plan: an expired completion "re-locks anything that
-  depends on it"): spec 14, which adds a reason kind.
+  depends on it"): spec 14, which clears the expired progress so B8's `prerequisites` and B9's
+  `sequential` reasons apply again; no new reason kind.
 - Per-learner overrides of unlock dates and accommodations: M2 (quizzes) and not in the plan for
   modules.
 - Prerequisites across courses: not in the plan.

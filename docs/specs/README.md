@@ -5,7 +5,8 @@ from a spec, one issue at a time; each issue is one reviewable PR. Rules:
 `.claude/rules/research-and-decisions.md` -> Specs. Template: `0000-template.md`.
 
 A spec decides nothing the plan leaves open: such points are under its **Open questions** for the
-owner. For the M0 specs the owner accepted every recommended answer on 13 Nov 2026. Code that departs from its spec updates the spec in the same PR.
+owner. For the M0 specs the owner accepted every recommended answer on 13 Nov 2026. Code that
+departs from its spec updates the spec in the same PR.
 
 ## M0 Foundations (full specs)
 
@@ -28,8 +29,9 @@ owner. For the M0 specs the owner accepted every recommended answer on 13 Nov 20
 
 ## M1 Learning (full specs)
 
-The owner approved a 17-spec split of M1; each spec is written before its work starts. Open
-questions in the written specs carry coordinator decisions pending the owner's review.
+The owner approved a 17-spec split of M1. Open questions carry coordinator decisions pending the
+owner's review, except those marked "open, for the owner" (`09` Q3, `14` Q5, `16` Q1, `17` Q5),
+which narrow or move what the plan says and wait for the owner.
 
 | # | Spec | Review |
 | --- | --- | --- |
@@ -45,11 +47,11 @@ questions in the written specs carry coordinator decisions pending the owner's r
 | 10 | [Learner dashboard and Next up](m1/10-learner-dashboard-and-next-up.md) | standard |
 | 11 | [Announcements and in-app notifications](m1/11-announcements-and-in-app-notifications.md) | standard |
 | 12 | [Email](m1/12-email.md) | maintainer line-by-line |
-| 13 | Assignments, due dates, reminders and escalation | to be written |
-| 14 | Recurrence and expiring completions | to be written |
-| 15 | Installable web app and offline reading | to be written |
-| 16 | Learning UI components | to be written |
-| 17 | Tauri iPhone test | to be written |
+| 13 | [Assignments, due dates, reminders and escalation](m1/13-assignments-due-dates-reminders-and-escalation.md) | standard |
+| 14 | [Recurrence and expiring completions](m1/14-recurrence-and-expiring-completions.md) | maintainer line-by-line |
+| 15 | [Installable web app and offline reading](m1/15-installable-web-app-and-offline-reading.md) | standard |
+| 16 | [Learning UI components](m1/16-learning-ui-components.md) | standard |
+| 17 | [Tauri iPhone test](m1/17-tauri-iphone-test.md) | standard |
 
 ## Later milestones (stubs)
 

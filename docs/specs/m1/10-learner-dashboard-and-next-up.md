@@ -130,8 +130,8 @@ No new catalog entry; the route is `AuthOnly`. Entitlements: none.
 
 - Deadlines, due badges and overdue ordering: spec 13.
 - Recent announcements on the dashboard: spec 11.
-- The NextUp, ProgressRail and other Learning components themselves: spec 16 (this spec's page
-  uses them; I2 depends on them).
+- The NextUp, ProgressRail and other Learning components themselves: spec 16 I6 and I7 (this
+  spec's page uses them; I2 depends on them).
 - Calendar and Grades navigation entries: later specs.
 - Instructors' and managers' dashboards (roster heat map, team view): later specs and M4.
 
@@ -164,4 +164,4 @@ and stands until the owner reviews it.
    I3, `06-files.md` I4 (cover URLs).
 2. **I2. The dashboard page.** Home as the dashboard with the NextUp panel, the course list, empty
    states and refetching. Covers B10 to B12; T10. Depends on: I1, `16-learning-ui-components.md`
-   (NextUp, ProgressBar rows; to be written).
+   I6 (course rows) and I7 (NextUp).
