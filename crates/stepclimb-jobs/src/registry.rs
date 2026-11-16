@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::kind::{Kind, KindError};
+use crate::outbox::{Topic, TopicError};
 use crate::worker::{JobContext, Outcome};
 
 /// What a handler returns: a future the worker runs on a task of its own.
@@ -24,6 +25,12 @@ pub enum RegistryError {
     Kind(#[from] KindError),
     #[error("the job kind `{0}` is registered twice")]
     Duplicate(&'static str),
+    #[error(transparent)]
+    Topic(#[from] TopicError),
+    #[error("the event topic `{0}` is registered twice")]
+    DuplicateTopic(&'static str),
+    #[error("the event topic `{0}` is not registered with this schema version")]
+    UnknownTopic(&'static str),
     #[error(
         "the periodic job kind `{0}` needs an interval of whole seconds, at least 10 s and below \
          2^31 s"
@@ -40,6 +47,10 @@ pub struct Registry {
     entries: HashMap<&'static str, (Kind, Handler)>,
     /// The interval of each periodic kind, by name (B17).
     periodic: HashMap<&'static str, Duration>,
+    /// Every event topic this binary emits or subscribes to, by name (B20).
+    topics: HashMap<&'static str, Topic>,
+    /// The kinds of each topic's subscribers, by topic name, in registration order (B21).
+    subscribers: HashMap<&'static str, Vec<Kind>>,
 }
 
 impl Registry {
@@ -84,6 +95,62 @@ impl Registry {
         self.register(kind, handler)?;
         self.periodic.insert(kind.name, interval);
         Ok(())
+    }
+
+    /// Register an event topic with its schema version (B20). The dispatcher claims only events
+    /// of registered topics, so an event of a topic this binary does not know, a newer
+    /// release's, waits for a process that knows it instead of being marked dispatched without
+    /// that release's subscribers.
+    pub fn register_topic(&mut self, topic: Topic) -> Result<(), RegistryError> {
+        topic.validate()?;
+        if self.topics.contains_key(topic.name) {
+            return Err(RegistryError::DuplicateTopic(topic.name));
+        }
+        self.topics.insert(topic.name, topic);
+        self.subscribers.entry(topic.name).or_default();
+        Ok(())
+    }
+
+    /// Register `handler` for `kind`, and make `kind` a subscriber of `topic` (B21): the
+    /// dispatcher enqueues one job of `kind` for each event of `topic`, with the event's
+    /// organization and the payload `{ "event_id": <id> }` ([`crate::outbox::event`] reads it).
+    /// `topic` must be registered first, with the same schema version.
+    pub fn subscribe<F, Fut>(
+        &mut self,
+        topic: &Topic,
+        kind: Kind,
+        handler: F,
+    ) -> Result<(), RegistryError>
+    where
+        F: Fn(JobContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Outcome> + Send + 'static,
+    {
+        if !self.knows_topic(topic) {
+            return Err(RegistryError::UnknownTopic(topic.name));
+        }
+        self.register(kind, handler)?;
+        self.subscribers.entry(topic.name).or_default().push(kind);
+        Ok(())
+    }
+
+    /// Whether `topic` is registered with exactly this schema version. Each crate that emits
+    /// events has a test that asserts this for every topic constant it passes to
+    /// [`crate::outbox::emit`].
+    #[must_use]
+    pub fn knows_topic(&self, topic: &Topic) -> bool {
+        self.topics.get(topic.name) == Some(topic)
+    }
+
+    /// Every registered topic with the kinds of its subscribers, sorted by topic name.
+    #[must_use]
+    pub fn topics(&self) -> Vec<(&'static str, &[Kind])> {
+        let mut topics: Vec<_> = self
+            .subscribers
+            .iter()
+            .map(|(name, kinds)| (*name, kinds.as_slice()))
+            .collect();
+        topics.sort_unstable_by_key(|(name, _)| *name);
+        topics
     }
 
     /// Every periodic kind with its interval, sorted by name.
@@ -134,7 +201,12 @@ impl fmt::Debug for Registry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut kinds: Vec<_> = self.entries.keys().collect();
         kinds.sort();
-        f.debug_struct("Registry").field("kinds", &kinds).finish()
+        let mut topics: Vec<_> = self.topics.keys().collect();
+        topics.sort();
+        f.debug_struct("Registry")
+            .field("kinds", &kinds)
+            .field("topics", &topics)
+            .finish()
     }
 }
 
@@ -203,6 +275,66 @@ mod tests {
             registry.register(SEND, done),
             Err(RegistryError::Duplicate("email.send"))
         );
+    }
+
+    const HAPPENED: Topic = Topic::new("test.happened", 1);
+
+    #[test]
+    fn a_subscriber_is_a_registered_kind_of_a_registered_topic() {
+        let mut registry = Registry::new();
+        assert_eq!(
+            registry.subscribe(&HAPPENED, SEND, done),
+            Err(RegistryError::UnknownTopic("test.happened")),
+            "the topic is not registered yet"
+        );
+        assert!(!registry.knows(&SEND), "nothing registered");
+        registry.register_topic(HAPPENED).unwrap();
+        registry
+            .register_topic(Topic::new("test.ignored", 1))
+            .unwrap();
+        assert_eq!(
+            registry.subscribe(&Topic::new("test.happened", 2), SEND, done),
+            Err(RegistryError::UnknownTopic("test.happened")),
+            "another schema version"
+        );
+        registry.subscribe(&HAPPENED, SEND, done).unwrap();
+        registry.subscribe(&HAPPENED, TRANSCODE, done).unwrap();
+        assert!(registry.knows(&SEND));
+        assert!(registry.knows_topic(&HAPPENED));
+        assert!(!registry.knows_topic(&Topic::new("test.happened", 2)));
+        assert_eq!(
+            registry.topics(),
+            [
+                ("test.happened", &[SEND, TRANSCODE][..]),
+                ("test.ignored", &[][..]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_topic_is_registered_once_and_valid() {
+        let mut registry = Registry::new();
+        registry.register_topic(HAPPENED).unwrap();
+        assert_eq!(
+            registry.register_topic(Topic::new("test.happened", 2)),
+            Err(RegistryError::DuplicateTopic("test.happened"))
+        );
+        assert_eq!(
+            registry.register_topic(Topic::new("happened", 1)),
+            Err(RegistryError::Topic(TopicError::Name("happened")))
+        );
+    }
+
+    #[test]
+    fn a_kind_subscribes_once() {
+        let mut registry = Registry::new();
+        registry.register_topic(HAPPENED).unwrap();
+        registry.subscribe(&HAPPENED, SEND, done).unwrap();
+        assert_eq!(
+            registry.subscribe(&HAPPENED, SEND, done),
+            Err(RegistryError::Duplicate("email.send"))
+        );
+        assert_eq!(registry.topics(), [("test.happened", &[SEND][..])]);
     }
 
     #[test]

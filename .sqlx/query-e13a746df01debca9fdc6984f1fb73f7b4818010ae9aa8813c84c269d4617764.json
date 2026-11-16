@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE outbox\n         SET dispatched_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond',\n             updated_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond'\n         WHERE (id, org_id) IN (SELECT * FROM unnest($1::uuid[], $2::uuid[]))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "UuidArray",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e13a746df01debca9fdc6984f1fb73f7b4818010ae9aa8813c84c269d4617764"
+}

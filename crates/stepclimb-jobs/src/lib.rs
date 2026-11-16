@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The Postgres job queue (`FOR UPDATE SKIP LOCKED`), and later the transactional outbox, email,
-//! webhooks, push and auto-submit.
+//! The Postgres job queue (`FOR UPDATE SKIP LOCKED`) and the transactional outbox, and later
+//! email, webhooks, push and auto-submit.
 //!
 //! Today it holds the queue core of `docs/specs/m1/01-job-queue-and-outbox.md` (issue I1):
 //! [`enqueue`] inserts a job in the caller's transaction, with dedupe; [`queue::claim`] takes
@@ -9,13 +9,15 @@
 //! done, retried after [`backoff::backoff`], or dead. [`Worker::run`] is the loop a server runs
 //! (issue I2): up to `worker_concurrency` jobs at once, a poll every second when idle, and a
 //! graceful stop. [`schedule`] runs periodic kinds (issue I3) under an advisory lock, and
-//! [`prune`] is the first of them. The outbox (I4) comes next.
+//! [`prune`] is the first of them. [`outbox`] (issue I4) writes events in the caller's
+//! transaction, and its dispatcher turns each into one job per subscriber of its topic.
 //!
 //! Jobs run at least once (B12): a lost lease or a crash between a handler's commit and the
 //! row's delete runs a handler again, so every handler is written to be safe to run twice.
 
 pub mod backoff;
 pub mod kind;
+pub mod outbox;
 pub mod prune;
 pub mod queue;
 mod registry;

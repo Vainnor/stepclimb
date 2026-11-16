@@ -229,7 +229,7 @@ CREATE TABLE outbox (
     updated_at     timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX outbox_undispatched ON outbox (id) WHERE dispatched_at IS NULL;
-CREATE INDEX outbox_dispatched ON outbox (dispatched_at) WHERE dispatched_at IS NOT NULL;
+CREATE INDEX outbox_dispatched ON outbox (org_id, dispatched_at) WHERE dispatched_at IS NOT NULL;  -- I4 decision
 CREATE INDEX outbox_by_org ON outbox (org_id, id);
 ```
 
@@ -416,3 +416,24 @@ iteration at a time through a test hook rather than on timers.
 4. **I4. Outbox and dispatch.** Migration `<version>_outbox.sql`, `outbox::emit`, topic
    registration with schema versions, the dispatch loop, subscriber registration, and
    pruning dispatched rows in `jobs.prune`. Covers B19 to B24; T15 to T18. Depends on: I3.
+   Coordinator decisions (2026-11-17, made while building I4, pending owner review):
+   - A topic is a `Topic { name, version }` constant, registered with
+     `Registry::register_topic`; a subscriber is a job kind registered with
+     `Registry::subscribe(&topic, kind, handler)`, which refuses a topic not registered with the
+     same version. The schema version lives in code only: B20's envelope and the `outbox` table
+     have no field for it, and M4 decides how receivers see it.
+   - The dispatcher claims only events of topics its registry knows. An event of a newer
+     release's topic stays undispatched for a process that knows it, as an unknown job kind is
+     released (B11), rather than being marked dispatched without that release's subscribers.
+     B21's "a topic with no subscriber is marked dispatched" applies to registered topics.
+   - The envelope's `timestamp` is RFC 3339 in UTC with six fractional digits
+     (`2025-11-13T02:13:20.123456Z`), as the API writes times. `data` must serialize to a JSON
+     object; `emit` refuses anything else.
+   - `outbox_dispatched` is `(org_id, dispatched_at) WHERE dispatched_at IS NOT NULL`, not
+     `(dispatched_at)`, since `jobs.prune` deletes each organization's dispatched events with its
+     scope, as `jobs_dead` serves dead jobs (I3).
+   - `outbox::event(&ctx)` is how a subscriber reads its event: with the job's organization
+     scope, a missing event (pruned, or deleted) failing the job (B6), a database error retrying.
+   - The dispatcher runs on the job pool, which grows to `worker_concurrency` + 3 connections
+     (one more for the dispatcher), so a process holds up to 10 + `worker_concurrency` + 3, 77
+     at most; the configuration reference says so.
