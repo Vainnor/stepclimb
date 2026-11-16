@@ -2427,6 +2427,88 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/api/v1/courses/{course_id}/copy": {
+      "post": {
+        "tags": [
+          "courses"
+        ],
+        "summary": "Copy a course into an account as a new draft, or as a template.",
+        "operationId": "copyCourse",
+        "parameters": [
+          {
+            "name": "course_id",
+            "in": "path",
+            "description": "The source course's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CourseCopy"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The copy is created",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The copy's path"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Course"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/CourseCopyForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/CourseCopyNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/CourseCodeConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/api/v1/courses/{course_id}/files": {
       "get": {
         "tags": [
@@ -3035,7 +3117,7 @@
         "tags": [
           "modules"
         ],
-        "summary": "Rename, publish or unpublish an item, or change an external link's URL. A patch naming only\ncurrent values changes nothing.",
+        "summary": "Rename, publish or unpublish an item, change an external link's URL, or set or remove its\nrequirement. A patch naming only current values changes nothing.",
         "operationId": "updateItem",
         "parameters": [
           {
@@ -3896,7 +3978,7 @@
         "tags": [
           "modules"
         ],
-        "summary": "Rename, publish or unpublish a module. A patch naming only current values changes nothing.",
+        "summary": "Rename, publish or unpublish a module, or change its rules: unlock date, prerequisites,\nsequential order and completion rule. A patch naming only current values changes nothing.",
         "operationId": "updateModule",
         "parameters": [
           {
@@ -3941,10 +4023,10 @@
             "$ref": "#/components/responses/ContentEditForbidden"
           },
           "404": {
-            "$ref": "#/components/responses/ModuleNotFound"
+            "$ref": "#/components/responses/ModulePatchNotFound"
           },
           "409": {
-            "$ref": "#/components/responses/ModuleWriteConflict"
+            "$ref": "#/components/responses/ModulePatchConflict"
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
@@ -3953,7 +4035,7 @@
             "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "422": {
-            "$ref": "#/components/responses/UnprocessableEntity"
+            "$ref": "#/components/responses/ModulePatchInvalid"
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
@@ -6590,6 +6672,14 @@
           }
         }
       },
+      "CompletionRule": {
+        "type": "string",
+        "description": "Whether all or one of a module's requirements complete it.",
+        "enum": [
+          "all",
+          "one"
+        ]
+      },
       "ContrastPair": {
         "type": "object",
         "description": "One measured pair: `foreground` on `background`.",
@@ -6756,6 +6846,34 @@
             "description": "RFC 3339, UTC."
           }
         }
+      },
+      "CourseCopy": {
+        "type": "object",
+        "description": "A copy to make of a course, as a draft.",
+        "required": [
+          "account_id",
+          "code"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The account the copy belongs to; you must hold `course.create` at a scope containing it."
+          },
+          "code": {
+            "type": "string",
+            "description": "Trimmed; 1 to 50 characters; unique in the organization, ignoring ASCII case."
+          },
+          "template": {
+            "type": "boolean",
+            "description": "Whether the copy is a template. Omitted or `false`, the copy is an ordinary course, also\nwhen the source is a template."
+          },
+          "title": {
+            "type": "string",
+            "description": "Trimmed; 1 to 200 characters. The source's title when omitted."
+          }
+        },
+        "additionalProperties": false
       },
       "CourseFile": {
         "type": "object",
@@ -7454,6 +7572,7 @@
           "title",
           "position",
           "published",
+          "requirement",
           "created_at",
           "updated_at"
         ],
@@ -7490,6 +7609,17 @@
             "type": "string",
             "format": "uuid",
             "description": "What the item points at; only for kinds that point at a row."
+          },
+          "requirement": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Requirement",
+                "description": "What completes the item for a learner."
+              }
+            ]
           },
           "title": {
             "type": "string"
@@ -7562,6 +7692,17 @@
           "published": {
             "type": "boolean",
             "description": "Whether learners see the item."
+          },
+          "requirement": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Requirement",
+                "description": "What completes the item for a learner; `null` removes it. A header takes none."
+              }
+            ]
           },
           "title": {
             "type": "string",
@@ -7802,11 +7943,19 @@
           "title",
           "position",
           "published",
+          "unlock_at",
+          "prerequisite_ids",
+          "require_sequential",
+          "completion_rule",
           "items",
           "created_at",
           "updated_at"
         ],
         "properties": {
+          "completion_rule": {
+            "$ref": "#/components/schemas/CompletionRule",
+            "description": "Whether all or one of the module's requirements complete it."
+          },
           "course_id": {
             "type": "string",
             "format": "uuid"
@@ -7831,11 +7980,30 @@
             "format": "int32",
             "description": "0-based, dense within the course."
           },
+          "prerequisite_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The modules of the course this one waits for, in course order."
+          },
           "published": {
             "type": "boolean"
           },
+          "require_sequential": {
+            "type": "boolean",
+            "description": "Whether the module's items go in order."
+          },
           "title": {
             "type": "string"
+          },
+          "unlock_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "RFC 3339, UTC: the module stays locked to learners before this time."
           },
           "updated_at": {
             "type": "string",
@@ -7879,13 +8047,35 @@
         "type": "object",
         "description": "A change to a module; an omitted member is left as it is.",
         "properties": {
+          "completion_rule": {
+            "$ref": "#/components/schemas/CompletionRule"
+          },
+          "prerequisite_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The whole new set of modules of the same course this one waits for: not itself, each\nonce, at most 20, and closing no cycle."
+          },
           "published": {
             "type": "boolean",
             "description": "Whether learners see the module."
           },
+          "require_sequential": {
+            "type": "boolean",
+            "description": "Whether the module's items go in order."
+          },
           "title": {
             "type": "string",
             "description": "Trimmed; 1 to 200 characters."
+          },
+          "unlock_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "RFC 3339 with an offset, from 1970 up to 2200; `null` clears it."
           }
         },
         "additionalProperties": false
@@ -9763,6 +9953,60 @@
         },
         "additionalProperties": false
       },
+      "Requirement": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "view"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "mark_done"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "min_percent",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "watch"
+                ]
+              },
+              "min_percent": {
+                "type": "integer",
+                "format": "int32",
+                "description": "1 to 100.",
+                "minimum": 0
+              }
+            }
+          }
+        ],
+        "description": "What completes an item for a learner: `view` (open it) and `mark_done` (mark it done) on a\npage, file, external link or video; `watch` (at least `min_percent`, 1 to 100, of a video).\n`submit`, `score` and `mastery` are reserved for quizzes and activities."
+      },
       "RevokeForm": {
         "type": "object",
         "description": "The revocation request's form, for the document; the handler reads the body itself.",
@@ -10731,6 +10975,26 @@
           }
         }
       },
+      "CourseCopyForbidden": {
+        "description": "`permission.denied`: you can see the course but do not hold `course.view_all` at a scope containing it. `permission.escalation`: the destination would give you, over the copy, a course permission (one grantable at course scope) you do not hold over the source. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "CourseCopyNotFound": {
+        "description": "`course.not_found`: no course with this id exists in the organization, or you cannot see it. `account.not_found`: the destination `account_id` does not exist or you do not hold `course.create` at a scope containing it. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "CourseCreateForbidden": {
         "description": "`permission.denied`: you hold `course.create` nowhere, or you can see the account without holding it there. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
@@ -10812,7 +11076,7 @@
         }
       },
       "CourseMoveForbidden": {
-        "description": "`permission.denied`: you can see the course but do not hold `course.manage` at a scope containing it. `permission.escalation`: the destination would give you, over the course, a permission you do not hold over it now. `auth.csrf_refused`: the request did not come from this site.",
+        "description": "`permission.denied`: you can see the course but do not hold `course.manage` at a scope containing it. `permission.escalation`: the destination would give you, over the course, a course permission (one grantable at course scope) you do not hold over it now. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -11112,7 +11376,7 @@
         }
       },
       "ItemInvalid": {
-        "description": "`request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space, control or Unicode format character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none), or `/position` with `item.position_out_of_range` (outside 0 to the module's item count).",
+        "description": "`request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space, control or Unicode format character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none), `/position` with `item.position_out_of_range` (outside 0 to the module's item count), or, on a patch, `/requirement` with `requirement.invalid` (an unknown shape or member, `min_percent` outside 1 to 100, or a requirement the item's kind does not take, such as any on a header) or `requirement.unavailable` (`submit`, `score` or `mastery`, reserved for quizzes and activities).",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -11263,6 +11527,36 @@
       },
       "ModuleOrderConflict": {
         "description": "`course.archived`: the course is archived and takes no content change. `order.stale`: the list is not exactly the current set of ids (one is missing, extra or repeated); reload and try again.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ModulePatchConflict": {
+        "description": "`course.archived`: the course is archived and takes no content change. `module.prerequisite_cycle`: the prerequisites would form a cycle in the course's modules.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ModulePatchInvalid": {
+        "description": "`request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/unlock_at` with `module.date_out_of_range` (before 1970 or from 2200 on), or `/prerequisite_ids` with `module.prerequisite_self` (the module itself), `module.prerequisite_duplicate` (an id named twice) or `module.prerequisites_too_many` (more than 20).",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ModulePatchNotFound": {
+        "description": "`module.not_found`: no module with this id exists in the organization, or you cannot see its course, or a `prerequisite_ids` entry is not a module of the same course. `org.not_found`: the request's organization cannot be determined.",
         "content": {
           "application/problem+json": {
             "schema": {
