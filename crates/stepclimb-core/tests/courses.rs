@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The courses repository and the `courses` table against a fresh database per test
-//! (docs/specs/m1/02-courses-and-enrollments.md B1 to B11, B27, Data; T3 to T5, T7 at the
+//! (docs/specs/m1/02-courses-and-enrollments.md B1 to B14, B27, Data; T3 to T5, T7, T10 at the
 //! repository level). Needs `DATABASE_URL` (`just up`).
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -11,8 +11,13 @@ use stepclimb_core::{
     OrgScope, accounts,
     accounts::Reach,
     audit::{self, Actor},
-    courses::{self, Course, CoursePatch, Error, Home, ListFilter, NewCourse, Status, Visibility},
+    courses::{
+        self, Course, CourseCopy, CoursePatch, Error, Home, ListFilter, NewCourse, Status,
+        Visibility,
+    },
     id::Uuid,
+    items::{self, Item, Kind, NewItem},
+    modules::{self, Module, ModulePatch},
     organizations,
 };
 
@@ -573,4 +578,467 @@ async fn the_list_shows_drafts_only_where_view_all_reaches(pool: PgPool) {
     .await
     .unwrap();
     assert_eq!(page.iter().map(|c| c.id).collect::<Vec<_>>(), [in_tower.id]);
+}
+
+// Copying (B12 to B14).
+
+fn copy_to(account: Uuid, code: &str) -> CourseCopy {
+    CourseCopy {
+        account_id: account,
+        title: None,
+        code: code.into(),
+        template: false,
+    }
+}
+
+/// T10 at the repository level: the copy is a new draft in the named account with the given
+/// code, the source's title, dates and settings, and one `course.copy` entry on the copy; the
+/// source is unchanged.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_copy_is_a_draft_with_the_sources_details_and_one_entry(pool: PgPool) {
+    let a = Org::new(&pool, "org-a").await;
+    let source = create(&pool, a, a.tower, "S1").await.unwrap();
+    let start = UNIX_EPOCH + Duration::from_secs(1_767_225_600);
+    let patch = CoursePatch {
+        start_at: Some(Some(start)),
+        end_at: Some(Some(start + Duration::from_secs(86_400))),
+        ..CoursePatch::default()
+    };
+    let source = courses::update(
+        &pool,
+        a.scope(),
+        source.id,
+        &patch,
+        request_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+    for status in [Status::Published, Status::Archived] {
+        courses::set_status(
+            &pool,
+            a.scope(),
+            source.id,
+            status,
+            request_time(),
+            Actor::Instance,
+        )
+        .await
+        .unwrap();
+    }
+    let source = courses::get(&pool, a.scope(), source.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let before = entries(&pool, a).await.len();
+
+    let copy = courses::copy(
+        &pool,
+        a.scope(),
+        source.id,
+        &copy_to(a.enroute, " S1-COPY "),
+        later_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+
+    assert_ne!(copy.id, source.id);
+    assert_eq!(copy.account_id, a.enroute);
+    assert_eq!(copy.account_path, [a.root, a.enroute]);
+    assert_eq!(copy.code, "S1-COPY");
+    assert_eq!(copy.title, source.title);
+    assert_eq!(
+        copy.status,
+        Status::Draft,
+        "a copy of an archived course is a draft"
+    );
+    assert!(!copy.template);
+    assert_eq!(
+        (copy.start_at, copy.end_at),
+        (source.start_at, source.end_at)
+    );
+    assert_eq!(copy.settings, source.settings);
+    assert_eq!(
+        (copy.created_at, copy.updated_at),
+        (later_time(), later_time())
+    );
+    assert_eq!(
+        courses::get(&pool, a.scope(), source.id)
+            .await
+            .unwrap()
+            .unwrap(),
+        source,
+        "the source is unchanged"
+    );
+    let log = entries(&pool, a).await;
+    let new: Vec<_> = log.iter().skip(before).collect();
+    assert_eq!(new.len(), 1, "{new:#?}");
+    assert_eq!(new[0].action, "course.copy");
+    assert_eq!(new[0].target_id, copy.id);
+    assert_eq!(
+        new[0].data,
+        json!({ "after": { "source_id": source.id, "account_id": a.enroute, "template": false } })
+    );
+}
+
+/// B12: a given title replaces the source's; `template` makes a template, and copying a
+/// template without it makes an ordinary course; a template copy cannot be published (Q5).
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_copy_takes_a_title_and_the_template_flag(pool: PgPool) {
+    let a = Org::new(&pool, "org-a").await;
+    let source = create(&pool, a, a.tower, "S1").await.unwrap();
+    let as_template = CourseCopy {
+        title: Some("  S1 template ".into()),
+        template: true,
+        ..copy_to(a.tower, "T1")
+    };
+
+    let template = courses::copy(
+        &pool,
+        a.scope(),
+        source.id,
+        &as_template,
+        later_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+    let from_template = courses::copy(
+        &pool,
+        a.scope(),
+        template.id,
+        &copy_to(a.tower, "S2"),
+        later_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        (template.title.as_str(), template.template),
+        ("S1 template", true)
+    );
+    assert_eq!(template.status, Status::Draft);
+    assert_eq!(
+        (from_template.title.as_str(), from_template.template),
+        ("S1 template", false)
+    );
+    let published = courses::set_status(
+        &pool,
+        a.scope(),
+        template.id,
+        Status::Published,
+        later_time(),
+        Actor::Instance,
+    )
+    .await;
+    assert!(matches!(published, Err(Error::Template)), "{published:?}");
+    let entry = entries(&pool, a)
+        .await
+        .into_iter()
+        .find(|e| e.action == "course.copy" && e.target_id == template.id)
+        .expect("the template's entry");
+    assert_eq!(entry.data["after"]["template"], true);
+}
+
+/// A refused copy inserts nothing and writes no entry: an unknown or other organization's
+/// source or account, a taken code, an invalid title or code.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_refused_copy_writes_nothing(pool: PgPool) {
+    let a = Org::new(&pool, "org-a").await;
+    let b = Org::new(&pool, "org-b").await;
+    let source = create(&pool, a, a.tower, "S1").await.unwrap();
+    let theirs = create(&pool, b, b.tower, "B1").await.unwrap();
+    let before = (rows(&pool, a).await, entries(&pool, a).await.len());
+    let before_b = rows(&pool, b).await;
+    let copy = |source: Uuid, copy: CourseCopy| {
+        let pool = &pool;
+        async move {
+            courses::copy(
+                pool,
+                a.scope(),
+                source,
+                &copy,
+                later_time(),
+                Actor::Instance,
+            )
+            .await
+        }
+    };
+
+    let cases = [
+        (copy(theirs.id, copy_to(a.tower, "X1")).await, "not found"),
+        (copy(Uuid::nil(), copy_to(a.tower, "X2")).await, "not found"),
+        (copy(source.id, copy_to(b.tower, "X3")).await, "account"),
+        (copy(source.id, copy_to(Uuid::nil(), "X4")).await, "account"),
+        (copy(source.id, copy_to(a.tower, "s1")).await, "taken"),
+        (copy(source.id, copy_to(a.tower, " ")).await, "invalid"),
+        (
+            copy(
+                source.id,
+                CourseCopy {
+                    title: Some(" ".into()),
+                    ..copy_to(a.tower, "X5")
+                },
+            )
+            .await,
+            "invalid",
+        ),
+    ];
+    for (result, expected) in cases {
+        let got = match &result {
+            Err(Error::NotFound) => "not found",
+            Err(Error::AccountNotFound) => "account",
+            Err(Error::CodeTaken) => "taken",
+            Err(Error::CodeEmpty | Error::TitleEmpty) => "invalid",
+            _ => "other",
+        };
+        assert_eq!(got, expected, "{result:?}");
+    }
+    assert_eq!(
+        (rows(&pool, a).await, entries(&pool, a).await.len()),
+        before
+    );
+    assert_eq!(rows(&pool, b).await, before_b);
+}
+
+/// A module titled `title` in `course`, published when `published`.
+async fn module(pool: &PgPool, org: Org, course: Uuid, title: &str, published: bool) -> Uuid {
+    let id = modules::create(pool, org.scope(), course, title, request_time())
+        .await
+        .expect("create module")
+        .id;
+    if published {
+        let patch = ModulePatch {
+            published: Some(true),
+            ..ModulePatch::default()
+        };
+        modules::update(pool, org.scope(), id, &patch, request_time())
+            .await
+            .expect("publish module");
+    }
+    id
+}
+
+/// An item of `kind` titled `title` last in `module`, published when `published`.
+async fn item(pool: &PgPool, org: Org, module: Uuid, kind: Kind, title: &str, published: bool) {
+    let new = NewItem {
+        kind,
+        title: title.into(),
+        ref_id: None,
+        url: (kind == Kind::ExternalLink).then(|| "https://example.org/sop".into()),
+        position: None,
+    };
+    let id = items::create(pool, org.scope(), module, &new, request_time())
+        .await
+        .expect("create item")
+        .id;
+    if published {
+        let patch = items::ItemPatch {
+            published: Some(true),
+            ..items::ItemPatch::default()
+        };
+        items::update(pool, org.scope(), id, &patch, request_time())
+            .await
+            .expect("publish item");
+    }
+}
+
+/// What a copy must keep of a module: title, position, published.
+fn module_shape(m: &Module) -> (String, i32, bool) {
+    (m.title.clone(), m.position, m.published)
+}
+
+/// What a copy must keep of an item, with its module's position in place of the module's id.
+fn item_shape(
+    i: &Item,
+    modules: &[Module],
+) -> (i32, i32, &'static str, String, bool, Option<String>) {
+    let module = modules
+        .iter()
+        .find(|m| m.id == i.module_id)
+        .expect("the item's module");
+    (
+        module.position,
+        i.position,
+        i.kind.as_str(),
+        i.title.clone(),
+        i.published,
+        i.url.clone(),
+    )
+}
+
+async fn outline(pool: &PgPool, org: Org, course: Uuid) -> (Vec<Module>, Vec<Item>) {
+    let modules = modules::list_for_course(pool, org.scope(), course)
+        .await
+        .expect("read the outline");
+    let items = items::list_for_course(pool, org.scope(), course)
+        .await
+        .expect("read the outline");
+    (modules, items)
+}
+
+/// B13 with spec 03: a copy holds every module and item of the source with new ids, in the
+/// same places, with the same titles, kinds, URLs and published flags; the source keeps its own.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_copy_copies_the_outline_with_positions_and_published_flags(pool: PgPool) {
+    let a = Org::new(&pool, "org-a").await;
+    let source = create(&pool, a, a.tower, "S1").await.unwrap().id;
+    let first = module(&pool, a, source, "Ground", true).await;
+    let second = module(&pool, a, source, "Local", false).await;
+    item(&pool, a, first, Kind::Header, "Reading", true).await;
+    item(&pool, a, first, Kind::ExternalLink, "SOP", false).await;
+    item(&pool, a, first, Kind::Header, "Practice", true).await;
+    item(&pool, a, second, Kind::ExternalLink, "Charts", true).await;
+    let before = outline(&pool, a, source).await;
+
+    let copy = courses::copy(
+        &pool,
+        a.scope(),
+        source,
+        &copy_to(a.enroute, "S1-B"),
+        later_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+
+    let (modules, items) = outline(&pool, a, copy.id).await;
+    let (source_modules, source_items) = outline(&pool, a, source).await;
+    assert_eq!(
+        (source_modules.clone(), source_items.clone()),
+        before,
+        "the source is unchanged"
+    );
+    assert_eq!(
+        modules.iter().map(module_shape).collect::<Vec<_>>(),
+        source_modules.iter().map(module_shape).collect::<Vec<_>>()
+    );
+    let shapes = |items: &[Item], modules: &[Module]| {
+        let mut shapes: Vec<_> = items.iter().map(|i| item_shape(i, modules)).collect();
+        shapes.sort();
+        shapes
+    };
+    assert_eq!(
+        shapes(&items, &modules),
+        shapes(&source_items, &source_modules)
+    );
+    assert_eq!(items.len(), 4);
+    for m in &modules {
+        assert!(
+            !source_modules.iter().any(|s| s.id == m.id),
+            "a new module id"
+        );
+        assert_eq!((m.course_id, m.created_at), (copy.id, later_time()));
+    }
+    for i in &items {
+        assert!(!source_items.iter().any(|s| s.id == i.id), "a new item id");
+        assert_eq!(i.course_id, copy.id);
+        assert!(
+            modules.iter().any(|m| m.id == i.module_id),
+            "in the copy's module"
+        );
+    }
+}
+
+/// An item whose kind this release cannot copy (its content spec is not built) refuses the
+/// copy, and nothing is written.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_source_with_content_no_copy_can_take_is_refused(pool: PgPool) {
+    let a = Org::new(&pool, "org-a").await;
+    let source = create(&pool, a, a.tower, "S1").await.unwrap().id;
+    let first = module(&pool, a, source, "Ground", true).await;
+    item(&pool, a, first, Kind::Header, "Reading", true).await;
+    sqlx::query(
+        "INSERT INTO module_items (id, org_id, course_id, module_id, position, kind, ref_id, title)
+         VALUES (gen_random_uuid(), $1, $2, $3, 1, 'page', gen_random_uuid(), 'A page')",
+    )
+    .bind(a.id)
+    .bind(source)
+    .bind(first)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let before = (rows(&pool, a).await, entries(&pool, a).await.len());
+
+    let refused = courses::copy(
+        &pool,
+        a.scope(),
+        source,
+        &copy_to(a.tower, "S1-B"),
+        later_time(),
+        Actor::Instance,
+    )
+    .await;
+
+    assert!(
+        matches!(&refused, Err(Error::ContentNotCopyable { kind, .. }) if kind == "page"),
+        "{refused:?}"
+    );
+    assert_eq!(
+        (rows(&pool, a).await, entries(&pool, a).await.len()),
+        before
+    );
+    let modules: i64 = sqlx::query_scalar("SELECT count(*) FROM modules WHERE org_id = $1")
+        .bind(a.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(modules, 1, "no module was copied");
+}
+
+/// The copy reads the outline under the source's course row, which every outline write locks
+/// first (spec 03 B12): a write in progress is waited for and its module is copied.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_copy_waits_for_an_outline_write_in_progress(pool: PgPool) {
+    let a = Org::new(&pool, "org-a").await;
+    let source = create(&pool, a, a.tower, "S1").await.unwrap().id;
+    module(&pool, a, source, "Ground", true).await;
+    let mut writer = pool.begin().await.unwrap();
+    modules::create(&mut *writer, a.scope(), source, "Local", request_time())
+        .await
+        .unwrap();
+
+    let copying = {
+        let pool = pool.clone();
+        tokio::spawn(async move {
+            courses::copy(
+                &pool,
+                a.scope(),
+                source,
+                &copy_to(a.tower, "S1-B"),
+                later_time(),
+                Actor::Instance,
+            )
+            .await
+        })
+    };
+    for _ in 0..500 {
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        if waiting > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    writer.commit().await.unwrap();
+
+    let copy = tokio::time::timeout(Duration::from_secs(10), copying)
+        .await
+        .expect("the copy finishes once the write commits")
+        .expect("the task does not panic")
+        .unwrap();
+    let titles: Vec<String> = modules::list_for_course(&pool, a.scope(), copy.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|m| m.title)
+        .collect();
+    assert_eq!(titles, ["Ground", "Local"]);
 }

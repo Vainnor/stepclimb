@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO module_items (id, org_id, course_id, module_id, position, kind, url, title,\n                                   published, created_at, updated_at)\n         SELECT i.id, $1, $2, i.module_id, i.position, i.kind, i.url, i.title, i.published,\n                timestamptz 'epoch' + $10::bigint * interval '1 microsecond',\n                timestamptz 'epoch' + $10::bigint * interval '1 microsecond'\n         FROM UNNEST($3::uuid[], $4::uuid[], $5::int4[], $6::text[], $7::text[], $8::text[],\n                     $9::bool[])\n              AS i (id, module_id, position, kind, url, title, published)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "UuidArray",
+        "UuidArray",
+        "Int4Array",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "BoolArray",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f85dcbc8ffdb1e46e8f427e461dcc63106ecccb33701f7fcb3e4a5360d854e08"
+}

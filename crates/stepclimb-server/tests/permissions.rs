@@ -85,8 +85,9 @@ use stepclimb_core::{
     items, modules, organizations,
     perm::{
         self, AccountManage, AccountView, AdmissionManage, BrandingManage, CourseContentEdit,
-        CourseCreate, CourseManage, CourseView, OrgManage, Permission, ProviderManage, RoleAssign,
-        RoleManage, RoleView, ScopeType, ServiceAccountManage, UserManage, UserView,
+        CourseCreate, CourseManage, CourseView, CourseViewAll, OrgManage, Permission,
+        ProviderManage, RoleAssign, RoleManage, RoleView, ScopeType, ServiceAccountManage,
+        UserManage, UserView,
     },
     role_assignments::{self, NewAssignment, Scope},
     roles::{self, NewRole},
@@ -285,6 +286,18 @@ const TABLE: &[Entry] = &[
     Entry {
         operation_id: "deleteItem",
         access: permission(CourseContentEdit::KEY, ITEM_NOT_FOUND, item_in_module),
+    },
+    Entry {
+        operation_id: "copyCourse",
+        // The source needs `course.view_all` and the destination `course.create` (B12).
+        access: Access::Permission {
+            key: CourseViewAll::KEY,
+            target: COURSE_NOT_FOUND,
+            extra: &[CourseCreate::KEY],
+            feature: None,
+            feature_by_target: false,
+            setup: copy_course_to_ground,
+        },
     },
     Entry {
         operation_id: "listPermissions",
@@ -1362,6 +1375,21 @@ fn item_in_module(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> 
         Call {
             params: vec![("item_id", org.header(module).await)],
             body: None,
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A draft course in Tower copied to Ground, inside Tower's subtree, so a grant at Tower covers
+/// the source and the destination.
+fn copy_course_to_ground(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let hex = new_id().simple().to_string();
+        Call {
+            params: vec![("course_id", org.course(org.tower, false).await)],
+            body: Some(serde_json::json!({
+                "account_id": org.ground, "code": format!("K{}", &hex[hex.len() - 12..]),
+            })),
             at: At::Account(org.tower),
         }
     })

@@ -81,6 +81,7 @@ pub enum Action {
     CourseUpdate,
     CourseSetStatus,
     CourseMove,
+    CourseCopy,
 }
 
 impl Action {
@@ -126,6 +127,7 @@ impl Action {
             Self::CourseUpdate => "course.update",
             Self::CourseSetStatus => "course.set_status",
             Self::CourseMove => "course.move",
+            Self::CourseCopy => "course.copy",
         }
     }
 
@@ -159,9 +161,11 @@ impl Action {
             | Self::AdmissionWebhookRotateSecret
             | Self::AdmissionWebhookDelete => "admission_webhook",
             Self::RefreshTokenReuse => "refresh_token",
-            Self::CourseCreate | Self::CourseUpdate | Self::CourseSetStatus | Self::CourseMove => {
-                "course"
-            }
+            Self::CourseCreate
+            | Self::CourseUpdate
+            | Self::CourseSetStatus
+            | Self::CourseMove
+            | Self::CourseCopy => "course",
         }
     }
 }
@@ -304,7 +308,7 @@ impl TryFrom<Row> for Entry {
 mod tests {
     use super::*;
 
-    const ALL: [Action; 34] = [
+    const ALL: [Action; 35] = [
         Action::RoleCreate,
         Action::RoleUpdate,
         Action::RoleDelete,
@@ -339,6 +343,7 @@ mod tests {
         Action::CourseUpdate,
         Action::CourseSetStatus,
         Action::CourseMove,
+        Action::CourseCopy,
     ];
 
     #[test]

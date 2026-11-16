@@ -209,6 +209,7 @@ async fn the_openapi_document_is_3_1_and_lists_every_route() {
             "/api/v1/admin/users/{user_id}/totp",
             "/api/v1/courses",
             "/api/v1/courses/{course_id}",
+            "/api/v1/courses/{course_id}/copy",
             "/api/v1/courses/{course_id}/modules",
             "/api/v1/courses/{course_id}/modules/order",
             "/api/v1/courses/{course_id}/move",

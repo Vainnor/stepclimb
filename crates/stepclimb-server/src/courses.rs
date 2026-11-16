@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Courses under `/api/v1/courses` (docs/specs/m1/02-courses-and-enrollments.md B1 to B11, B24,
+//! Courses under `/api/v1/courses` (docs/specs/m1/02-courses-and-enrollments.md B1 to B14, B24,
 //! B27 and API).
 //!
 //! A course sits in one account, and course permissions held at an account cover every course
@@ -11,8 +11,16 @@
 //! an account the caller cannot see does, and a move may not give the caller a permission over
 //! the course it lacks there now (403 `permission.escalation`), as an account move may not.
 //!
+//! Copying (B12) needs `course.view_all` at the source, since a copy carries everything, and
+//! `course.create` at the destination, with the same 404 for a destination without it. A copy
+//! is refused with 403 `permission.escalation` when the destination would give the caller a
+//! permission over the course that it does not hold at the source: the check a move makes,
+//! applied to the source and the copy's place (coordinator decision, spec 02 I3). The copy is a
+//! draft and carries no enrollment (Q1, Q12: no learner and no `course.participate` comes with
+//! it).
+//!
 //! The `Require` extractor checks the course before the handler runs. Every write checks again
-//! on the course's path as its own transaction reads it: create and move under the
+//! on the course's path as its own transaction reads it: create, copy and move under the
 //! organization's account tree lock (`stepclimb_core::accounts::lock_tree`, B2, B9), which every
 //! account move takes; update and status change on `courses::lock`, which reads the course's
 //! account `FOR SHARE` and so waits for a move in progress over it. A concurrent account move
@@ -77,6 +85,8 @@ problem_responses! {
     CourseCreateForbidden => "`permission.denied`: you hold `course.create` nowhere, or you can see the account without holding it there. `auth.csrf_refused`: the request did not come from this site.",
     CourseManageForbidden => "`permission.denied`: you can see the course but do not hold `course.manage` at a scope containing it. `auth.csrf_refused`: the request did not come from this site.",
     CourseMoveForbidden => "`permission.denied`: you can see the course but do not hold `course.manage` at a scope containing it. `permission.escalation`: the destination would give you, over the course, a permission you do not hold over it now. `auth.csrf_refused`: the request did not come from this site.",
+    CourseCopyNotFound => "`course.not_found`: no course with this id exists in the organization, or you cannot see it. `account.not_found`: the destination `account_id` does not exist or you do not hold `course.create` at a scope containing it. `org.not_found`: the request's organization cannot be determined.",
+    CourseCopyForbidden => "`permission.denied`: you can see the course but do not hold `course.view_all` at a scope containing it. `permission.escalation`: the destination would give you, over the copy, a permission you do not hold over the source. `auth.csrf_refused`: the request did not come from this site.",
     CourseCodeConflict => "`course.code_taken`: another course of the organization has this code, ignoring ASCII case.",
     CourseStatusConflict => "`course.status_invalid`: the course cannot change from its status to this one; the allowed changes are draft to published, published to archived, archived to published and published to draft. `course.template`: a template cannot be published.",
 }
@@ -319,6 +329,26 @@ pub struct CourseMove {
     /// changes nothing.
     #[schema(value_type = String, format = "uuid")]
     pub account_id: Uuid,
+}
+
+/// A copy to make of a course, as a draft.
+#[derive(Clone, Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CourseCopy {
+    /// The account the copy belongs to; you must hold `course.create` at a scope containing it.
+    #[schema(value_type = String, format = "uuid")]
+    pub account_id: Uuid,
+    /// Trimmed; 1 to 200 characters. The source's title when omitted.
+    #[serde(default, deserialize_with = "present")]
+    #[schema(value_type = String)]
+    pub title: Option<String>,
+    /// Trimmed; 1 to 50 characters; unique in the organization, ignoring ASCII case.
+    pub code: String,
+    /// Whether the copy is a template. Omitted or `false`, the copy is an ordinary course, also
+    /// when the source is a template.
+    #[serde(default, deserialize_with = "present")]
+    #[schema(value_type = bool)]
+    pub template: Option<bool>,
 }
 
 /// The filters of the courses list.
@@ -637,24 +667,123 @@ pub async fn move_course(
     let (grants, id) = (require.grants(), require.target().id);
     let mut tx = locked_tree(&state, grants.scope()).await?;
     let from = recheck_manage(&mut tx, grants, id).await?;
-    let destination = accounts::ancestors_path(&mut *tx, grants.scope(), body.account_id)
-        .await
-        .map_err(|error| ApiError::internal(&error))?
-        .ok_or(Denied::AccountNotFound)?;
-    if !grants.holds::<CourseCreate>(&Target::Account(destination.clone())) {
-        return Err(Denied::AccountNotFound.into());
-    }
+    let destination = creatable_destination(&mut tx, grants, body.account_id).await?;
     let to = Target::Course {
         account_path: destination,
         course_id: id,
     };
-    refuse_escalation(grants, &from, &to)?;
+    let detail = "The destination would give you permissions over this course that you do not hold over it now.";
+    refuse_escalation(grants, &from, &to, detail)?;
     let (now, actor) = (state.clock.now(), client.actor(require.principal()));
     let moved = courses::move_to(&mut *tx, grants.scope(), id, body.account_id, now, actor)
         .await
         .map_err(course_error)?;
     commit(tx).await?;
     Ok(Json(Course::from_repo(moved, grants)?))
+}
+
+/// Copy a course into an account as a new draft, or as a template.
+#[utoipa::path(
+    post,
+    path = "/api/v1/courses/{course_id}/copy",
+    operation_id = "copyCourse",
+    tag = "courses",
+    extensions(("x-stepclimb-mutates" = json!(true))),
+    params(("course_id" = String, Path, format = "uuid", description = "The source course's id.")),
+    request_body = CourseCopy,
+    responses(
+        (
+            status = 201,
+            description = "The copy is created",
+            body = Course,
+            headers(("Location" = String, description = "The copy's path"))
+        ),
+        (status = 400, response = crate::openapi::BadRequest),
+        (status = 401, response = crate::openapi::Unauthenticated),
+        (status = 403, response = CourseCopyForbidden),
+        (status = 404, response = CourseCopyNotFound),
+        (status = 409, response = CourseCodeConflict),
+        (status = 413, response = crate::openapi::PayloadTooLarge),
+        (status = 415, response = crate::openapi::UnsupportedMediaType),
+        (status = 422, response = crate::openapi::UnprocessableEntity),
+        (status = 500, response = crate::openapi::InternalError),
+        (status = 503, response = crate::openapi::NoOrganization),
+    )
+)]
+pub async fn copy_course(
+    require: Require<CourseViewAll, CourseTarget>,
+    client: ClientAddress,
+    State(state): State<AppState>,
+    ApiJson(body): ApiJson<CourseCopy>,
+) -> Result<Response, ApiError> {
+    let (grants, id) = (require.grants(), require.target().id);
+    let mut tx = locked_tree(&state, grants.scope()).await?;
+    let from = recheck_view_all(&mut tx, grants, id).await?;
+    let destination = creatable_destination(&mut tx, grants, body.account_id).await?;
+    let to = Target::Course {
+        account_path: destination,
+        course_id: id,
+    };
+    let detail = "The destination would give you permissions over the copy that you do not hold over this course.";
+    refuse_escalation(grants, &from, &to, detail)?;
+    let copy = courses::CourseCopy {
+        account_id: body.account_id,
+        title: body.title,
+        code: body.code,
+        template: body.template.unwrap_or(false),
+    };
+    let (now, actor) = (state.clock.now(), client.actor(require.principal()));
+    let course = courses::copy(&mut *tx, grants.scope(), id, &copy, now, actor)
+        .await
+        .map_err(course_error)?;
+    commit(tx).await?;
+    let location = format!("{COURSES_PATH}/{}", course.id);
+    let course = Course::from_repo(course, grants)?;
+    Ok((
+        StatusCode::CREATED,
+        [(header::LOCATION, location)],
+        Json(course),
+    )
+        .into_response())
+}
+
+/// The path of the account `account_id`, read in the transaction under the tree lock, when the
+/// caller holds `course.create` there; otherwise 404 `account.not_found`, as for an account
+/// that does not exist (B9, B12).
+async fn creatable_destination(
+    tx: &mut Transaction<'static, Postgres>,
+    grants: &Grants,
+    account_id: Uuid,
+) -> Result<Vec<Uuid>, ApiError> {
+    let destination = accounts::ancestors_path(&mut **tx, grants.scope(), account_id)
+        .await
+        .map_err(|error| ApiError::internal(&error))?
+        .ok_or(Denied::AccountNotFound)?;
+    if !grants.holds::<CourseCreate>(&Target::Account(destination.clone())) {
+        return Err(Denied::AccountNotFound.into());
+    }
+    Ok(destination)
+}
+
+/// The extractor's `course.view_all` check again, on the course's path as the transaction reads
+/// it under the tree lock, which a course or account move also takes: 404 when the course is
+/// gone or out of the caller's reach, 403 when it is visible without `course.view_all`. Returns
+/// the course as the evaluator's target.
+async fn recheck_view_all(
+    tx: &mut Transaction<'static, Postgres>,
+    grants: &Grants,
+    id: Uuid,
+) -> Result<Target, ApiError> {
+    let account_path = courses::path(&mut **tx, grants.scope(), id)
+        .await
+        .map_err(course_error)?
+        .ok_or(Denied::CourseNotFound)?;
+    let target = Target::Course {
+        account_path,
+        course_id: id,
+    };
+    grants.check::<CourseViewAll>(&target)?;
+    Ok(target)
 }
 
 /// The extractor's `course.manage` check again, on the course's path as `courses::lock` reads
@@ -677,10 +806,15 @@ async fn recheck_manage(
     Ok(target)
 }
 
-/// 403 `permission.escalation` when moving the course from `from` to `to` would give the caller
-/// a permission over it they do not hold over it now, as an account move refuses (m0 spec 02 B23):
-/// after the move, every grant on the destination's path contains the course.
-fn refuse_escalation(grants: &Grants, from: &Target, to: &Target) -> Result<(), ApiError> {
+/// 403 `permission.escalation`, with `detail`, when the course at `to` would give the caller a
+/// permission they do not hold over it at `from`, as an account move refuses (m0 spec 02 B23):
+/// every grant on the destination's path contains a course moved or copied there.
+fn refuse_escalation(
+    grants: &Grants,
+    from: &Target,
+    to: &Target,
+    detail: &'static str,
+) -> Result<(), ApiError> {
     let gained = perm::ALL
         .iter()
         .any(|p| grants.holds_key(p.key(), to) && !grants.holds_key(p.key(), from));
@@ -690,7 +824,7 @@ fn refuse_escalation(grants: &Grants, from: &Target, to: &Target) -> Result<(), 
     Err(ApiError::new(
         StatusCode::FORBIDDEN,
         PERMISSION_ESCALATION,
-        "The destination would give you permissions over this course that you do not hold over it now.",
+        detail,
     ))
 }
 
@@ -749,9 +883,11 @@ fn course_error(error: courses::Error) -> ApiError {
             "The course cannot change from its status to this one.",
         ),
         E::Template => conflict(code::COURSE_TEMPLATE, "A template cannot be published."),
-        other @ (E::Stored { .. } | E::Account(_) | E::Time(_) | E::Database(_)) => {
-            ApiError::internal(&other)
-        }
+        other @ (E::Stored { .. }
+        | E::ContentNotCopyable { .. }
+        | E::Account(_)
+        | E::Time(_)
+        | E::Database(_)) => ApiError::internal(&other),
     }
 }
 

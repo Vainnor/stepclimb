@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The course routes over the router (docs/specs/m1/02-courses-and-enrollments.md B1 to B11,
-//! B24, B27; T1 to T9, T7a, T19 and T20 for the course routes). The permission suite's
+//! The course routes over the router (docs/specs/m1/02-courses-and-enrollments.md B1 to B14,
+//! B24, B27; T1 to T10, T7a, T19 and T20 for the course routes). The permission suite's
 //! generated cases for each route are in `tests/permissions.rs`.
 //!
 //! Enrollments arrive with the spec's issue I2, so a learner here is a Student assigned at an
@@ -27,7 +27,7 @@ use stepclimb_core::{
     clock::ManualClock,
     courses,
     id::{Uuid, new_id},
-    organizations,
+    modules, organizations,
     role_assignments::{self, NewAssignment, Scope},
     roles::{self, NewRole},
     users::{self, NewUser},
@@ -325,6 +325,11 @@ impl Fixture {
     async fn status(&self, org: Uuid, cookie: &str, id: Uuid, status: &str) -> Answer {
         let uri = format!("{}/status", one(id));
         let body = json!({ "status": status });
+        self.send(Method::POST, &uri, org, cookie, Some(body)).await
+    }
+
+    async fn copy(&self, org: Uuid, cookie: &str, id: Uuid, body: Value) -> Answer {
+        let uri = format!("{}/copy", one(id));
         self.send(Method::POST, &uri, org, cookie, Some(body)).await
     }
 
@@ -992,6 +997,14 @@ async fn t19_a_student_gets_403_on_patch_of_their_own_course(pool: PgPool) {
     f.move_to(t.org, &student, id, t.tower)
         .await
         .expect(StatusCode::FORBIDDEN, "permission.denied");
+    f.copy(
+        t.org,
+        &student,
+        id,
+        json!({ "account_id": t.tower, "code": "S1-B" }),
+    )
+    .await
+    .expect(StatusCode::FORBIDDEN, "permission.denied");
     assert_eq!(f.rows(t.org).await, before);
 }
 
@@ -1038,13 +1051,307 @@ async fn t20_every_course_route_refuses_another_organizations_ids(pool: PgPool) 
         .await,
         "account.not_found",
     );
+    not_found(
+        f.copy(
+            a.org,
+            &admin,
+            theirs,
+            json!({ "account_id": a.tower, "code": "X" }),
+        )
+        .await,
+        "course.not_found",
+    );
+    not_found(
+        f.copy(
+            a.org,
+            &admin,
+            mine,
+            json!({ "account_id": b.tower, "code": "X" }),
+        )
+        .await,
+        "account.not_found",
+    );
     let listed = f.get(COURSES, a.org, &admin).await;
     assert_eq!(listed.ids(), [mine]);
     assert_eq!(f.rows(b.org).await, before_b, "org B is unchanged");
     assert_eq!(f.rows(a.org).await, before_a, "org A is unchanged");
 }
 
+// Copying (B12 to B14).
+
+/// T10: an organization admin copies a published course into another account: a draft with the
+/// given code, the source's title and its module, at its `Location`, with one `course.copy`
+/// entry; the source is unchanged.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t10_a_copy_is_a_draft_in_the_destination_with_one_entry(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    let admin = f.org_admin(t.org).await;
+    let source = f.published(t.org, t.tower, "S1").await;
+    modules::create(&f.pool, scope(t.org), source, "Ground", now())
+        .await
+        .expect("create module");
+    let before = f.get(&one(source), t.org, &admin).await;
+
+    let copied = f
+        .copy(
+            t.org,
+            &admin,
+            source,
+            json!({ "account_id": t.enroute, "code": "S1-B" }),
+        )
+        .await;
+
+    let body = copied.ok(StatusCode::CREATED).clone();
+    assert_schema("Course", &body);
+    let id = copied.id();
+    assert_eq!(copied.headers[header::LOCATION], one(id).as_str());
+    assert_eq!(body["account_id"], t.enroute.to_string());
+    assert_eq!(
+        (
+            &body["code"],
+            &body["title"],
+            &body["status"],
+            &body["template"]
+        ),
+        (
+            &json!("S1-B"),
+            &json!("Course S1"),
+            &json!("draft"),
+            &json!(false)
+        )
+    );
+    assert_eq!(f.get(&one(id), t.org, &admin).await.body, body);
+    assert_eq!(f.get(&one(source), t.org, &admin).await.body, before.body);
+    assert_eq!(
+        f.entries(t.org, "course.copy").await,
+        [json!({ "after": { "source_id": source, "account_id": t.enroute, "template": false } })]
+    );
+    let outline = modules::list_for_course(&f.pool, scope(t.org), id)
+        .await
+        .expect("the copy's modules");
+    let titles: Vec<_> = outline.iter().map(|m| m.title.as_str()).collect();
+    assert_eq!(titles, ["Ground"], "the outline came with the copy");
+}
+
+/// T10: `template: true` makes a template that cannot be published; copying it without the
+/// flag makes an ordinary course with the given title.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t10_a_template_copy_cannot_be_published_and_creates_ordinary_courses(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    let admin = f.org_admin(t.org).await;
+    let source = f.course(t.org, t.tower, "S1").await;
+
+    let template = f
+        .copy(
+            t.org,
+            &admin,
+            source,
+            json!({ "account_id": t.root, "code": "T1", "template": true }),
+        )
+        .await;
+    let template_id = template.id();
+    assert_eq!(template.ok(StatusCode::CREATED)["template"], true);
+    f.status(t.org, &admin, template_id, "published")
+        .await
+        .expect(StatusCode::CONFLICT, "course.template");
+    let course = f
+        .copy(
+            t.org,
+            &admin,
+            template_id,
+            json!({ "account_id": t.tower, "code": "S2", "title": "From template" }),
+        )
+        .await;
+    let body = course.ok(StatusCode::CREATED);
+    assert_eq!(
+        (&body["template"], &body["title"]),
+        (&json!(false), &json!("From template"))
+    );
+    let published = f.status(t.org, &admin, course.id(), "published").await;
+    published.ok(StatusCode::OK);
+}
+
+/// T10: `course.view_all` at the source without `course.create` at the destination answers 404
+/// `account.not_found`, as an account the caller cannot see; `course.view` alone at the source
+/// answers 403. Nothing is written.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t10_a_copy_needs_view_all_at_the_source_and_create_at_the_destination(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    let source = f.published(t.org, t.tower, "S1").await;
+    let designer = f
+        .holder(t.org, "course_designer", Scope::Account(t.tower))
+        .await;
+    let visible_there = f
+        .custom_holder(
+            t.org,
+            &["course.view", "course.view_all"],
+            &[Scope::Account(t.tower), Scope::Account(t.enroute)],
+        )
+        .await;
+    let student = f.holder(t.org, "student", Scope::Account(t.tower)).await;
+    let before = f.rows(t.org).await;
+    let body = json!({ "account_id": t.enroute, "code": "S1-B" });
+
+    for cookie in [&designer, &visible_there] {
+        f.copy(t.org, cookie, source, body.clone())
+            .await
+            .expect(StatusCode::NOT_FOUND, "account.not_found");
+    }
+    let tower = json!({ "account_id": t.tower, "code": "S1-B" });
+    f.copy(t.org, &designer, source, tower.clone())
+        .await
+        .expect(StatusCode::NOT_FOUND, "account.not_found");
+    f.copy(t.org, &student, source, tower)
+        .await
+        .expect(StatusCode::FORBIDDEN, "permission.denied");
+    assert_eq!(f.rows(t.org).await, before);
+
+    let admin = f
+        .holder(t.org, "account_admin", Scope::Account(t.tower))
+        .await;
+    let into_ground = json!({ "account_id": t.ground, "code": "S1-G" });
+    f.copy(t.org, &admin, source, into_ground)
+        .await
+        .ok(StatusCode::CREATED);
+}
+
+/// The account move's escalation rule for a copy: a destination that would give the caller a
+/// permission over the copy it does not hold over the source is refused, and nothing is written;
+/// a destination that gives nothing new is allowed.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_copy_that_would_widen_the_callers_reach_is_refused(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    let source = f.course(t.org, t.tower, "S1").await;
+    let (cookie, user) = f.user(t.org).await;
+    let reader = NewRole {
+        key: "tower_reader".into(),
+        name: "Tower reader".into(),
+        permissions: vec!["course.view".into(), "course.view_all".into()],
+    };
+    let reader = roles::create_custom(&f.pool, scope(t.org), &reader, now(), Actor::Instance)
+        .await
+        .expect("create role")
+        .id;
+    f.assign(t.org, user, reader, Scope::Account(t.tower)).await;
+    let account_admin =
+        sqlx::query_scalar("SELECT id FROM roles WHERE org_id IS NULL AND key = 'account_admin'")
+            .fetch_one(&f.pool)
+            .await
+            .expect("the built-in role");
+    f.assign(t.org, user, account_admin, Scope::Account(t.enroute))
+        .await;
+    let before = f.rows(t.org).await;
+
+    f.copy(
+        t.org,
+        &cookie,
+        source,
+        json!({ "account_id": t.enroute, "code": "S1-B" }),
+    )
+    .await
+    .expect(StatusCode::FORBIDDEN, "permission.escalation");
+
+    assert_eq!(f.rows(t.org).await, before, "nothing copied, no entry");
+    let admin = f
+        .holder(t.org, "account_admin", Scope::Account(t.root))
+        .await;
+    f.copy(
+        t.org,
+        &admin,
+        source,
+        json!({ "account_id": t.enroute, "code": "S1-B" }),
+    )
+    .await
+    .ok(StatusCode::CREATED);
+}
+
+/// B12's body rules: the code is required and unique, title and code are validated, `null` is
+/// malformed for `title` and `template`, and an unknown member is refused. Nothing is written.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_copy_body_that_breaks_a_rule_writes_nothing(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    let admin = f.org_admin(t.org).await;
+    let source = f.course(t.org, t.tower, "S1").await;
+    let before = f.rows(t.org).await;
+    let to = |extra: Value| {
+        let mut body = json!({ "account_id": t.tower, "code": "S1-B" });
+        body.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        body
+    };
+
+    f.copy(t.org, &admin, source, to(json!({ "code": "s1" })))
+        .await
+        .expect(StatusCode::CONFLICT, "course.code_taken");
+    let invalid = f
+        .copy(t.org, &admin, source, to(json!({ "title": " " })))
+        .await;
+    invalid.expect(StatusCode::UNPROCESSABLE_ENTITY, "request.invalid");
+    assert_eq!(invalid.errors(), [("/title".into(), "name.empty".into())]);
+    let invalid = f
+        .copy(t.org, &admin, source, to(json!({ "code": "" })))
+        .await;
+    assert_eq!(invalid.errors(), [("/code".into(), "name.empty".into())]);
+    for malformed in [
+        json!({ "title": null }),
+        json!({ "template": null }),
+        json!({ "status": "published" }),
+    ] {
+        f.copy(t.org, &admin, source, to(malformed))
+            .await
+            .expect(StatusCode::BAD_REQUEST, "request.malformed");
+    }
+    f.copy(t.org, &admin, source, json!({ "account_id": t.tower }))
+        .await
+        .expect(StatusCode::BAD_REQUEST, "request.malformed");
+    assert_eq!(f.rows(t.org).await, before);
+}
+
 // The checks under the tree lock.
+
+/// A copy into a destination carried out of the caller's subtree meanwhile answers 404 and
+/// copies nothing.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_copy_to_a_destination_carried_out_of_reach_meanwhile_is_not_found(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    let admin = f
+        .holder(t.org, "account_admin", Scope::Account(t.tower))
+        .await;
+    let id = f.course(t.org, t.tower, "S1").await;
+    let body = json!({ "account_id": t.ground, "code": "S1-G" }).to_string();
+    let uri = format!("{}/copy", one(id));
+    let request = f.request(Method::POST, &uri, t.org, &admin, Some(&body));
+    racing_a_move(&f, t.ground, t.enroute, request)
+        .await
+        .expect(StatusCode::NOT_FOUND, "account.not_found");
+    assert!(f.entries(t.org, "course.copy").await.is_empty());
+}
+
+/// A copy of a source carried out of the caller's subtree meanwhile answers 404
+/// `course.not_found` and copies nothing.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_copy_of_a_source_carried_out_of_reach_meanwhile_is_not_found(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    let admin = f
+        .holder(t.org, "account_admin", Scope::Account(t.tower))
+        .await;
+    let id = f.course(t.org, t.ground, "S1").await;
+    let body = json!({ "account_id": t.tower, "code": "S1-T" }).to_string();
+    let uri = format!("{}/copy", one(id));
+    let request = f.request(Method::POST, &uri, t.org, &admin, Some(&body));
+    racing_a_move(&f, t.ground, t.enroute, request)
+        .await
+        .expect(StatusCode::NOT_FOUND, "course.not_found");
+    assert!(f.entries(t.org, "course.copy").await.is_empty());
+}
 
 /// Waits until a session of this test's database waits on a lock.
 async fn until_a_call_waits_on_a_lock(pool: &PgPool) {
