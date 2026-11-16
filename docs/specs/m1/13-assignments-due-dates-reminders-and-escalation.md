@@ -120,6 +120,22 @@ everything that happened for one person and one assignment. Recurrence and expir
   clears it. A user whose `source` is not `local` keeps an editable manager in M1, since no sync
   writes it before M4. The change writes `user.set_manager` (`m0/09` B22).
 
+  Coordinator decisions (overnight, 2026-11-16), for I2, pending owner review:
+  - `User` gains `manager_id` (uuid or `null`), so `GET /api/v1/users` and the PATCH answer show
+    the manager that was set. Reading it needs `user.view` at organization scope, as every other
+    member of `User`.
+  - The user themself is refused with 409 `user.manager_cycle`: managing yourself is the
+    shortest cycle. A suspended manager is refused with 409 `user.manager_inactive`.
+  - Changing `manager_id` falls under the escalation rule of `email` and `status` (403
+    `permission.escalation`, `../m0/03-users-and-identities.md`): the caller cannot redraw the
+    reporting line of a user who holds a permission the caller lacks. An API key or app token
+    cannot change its own user's manager (403 `auth.session_required`, `m0/08` B44).
+  - `users::set_manager` locks the organization row `FOR NO KEY UPDATE`, as a suspension does,
+    so two concurrent changes cannot close a cycle between them; the lock also keeps the new
+    manager from being suspended between the check and the write.
+  - Being someone's manager grants no permission and no read access (B13, Q9 (b)); no
+    permission check reads `manager_id`.
+
 ### Timeline
 
 - **B16.** The timeline of one row lists, oldest first: assigned (with the due date then), due date

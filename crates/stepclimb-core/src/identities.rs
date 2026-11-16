@@ -221,7 +221,7 @@ pub async fn find_user(
     let Some(row) = sqlx::query!(
         r#"SELECT i.id AS identity_id,
                   u.id, u.display_name, u.given_name, u.family_name, u.email, u.locale, u.tz,
-                  u.status, u.source, u.external_id,
+                  u.status, u.source, u.external_id, u.manager_id,
                   (extract(epoch FROM u.created_at) * 1000000)::bigint AS "created_at_us!",
                   (extract(epoch FROM u.updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM identities i
@@ -247,6 +247,7 @@ pub async fn find_user(
         status: row.status,
         source: row.source,
         external_id: row.external_id,
+        manager_id: row.manager_id,
         created_at_us: row.created_at_us,
         updated_at_us: row.updated_at_us,
     })?;

@@ -3492,7 +3492,7 @@
         "tags": [
           "users"
         ],
-        "summary": "Change a user's names, email, locale, time zone or status. A patch naming nothing changes\nnothing.",
+        "summary": "Change a user's names, email, locale, time zone, status or manager. A patch naming nothing\nchanges nothing.",
         "operationId": "updateUser",
         "parameters": [
           {
@@ -3537,7 +3537,7 @@
             "$ref": "#/components/responses/UserWriteForbidden"
           },
           "404": {
-            "$ref": "#/components/responses/UserNotFound"
+            "$ref": "#/components/responses/UserUpdateNotFound"
           },
           "409": {
             "$ref": "#/components/responses/UserUpdateConflict"
@@ -7582,6 +7582,7 @@
                 "status",
                 "source",
                 "external_id",
+                "manager_id",
                 "created_at",
                 "updated_at"
               ],
@@ -7622,6 +7623,14 @@
                 "locale": {
                   "type": "string",
                   "description": "`en` in M0."
+                },
+                "manager_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "The user's manager, another user of the organization; `null` when they have none."
                 },
                 "source": {
                   "$ref": "#/components/schemas/UserSource"
@@ -8689,6 +8698,7 @@
           "status",
           "source",
           "external_id",
+          "manager_id",
           "created_at",
           "updated_at"
         ],
@@ -8729,6 +8739,14 @@
           "locale": {
             "type": "string",
             "description": "`en` in M0."
+          },
+          "manager_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The user's manager, another user of the organization; `null` when they have none."
           },
           "source": {
             "$ref": "#/components/schemas/UserSource"
@@ -8797,7 +8815,7 @@
       },
       "UserPatch": {
         "type": "object",
-        "description": "A change to a user; an omitted member is left as it is. A member sent as `null` is\nmalformed, except `email`, where `null` removes the email.",
+        "description": "A change to a user; an omitted member is left as it is. A member sent as `null` is\nmalformed, except `email` and `manager_id`, where `null` removes the value.",
         "properties": {
           "display_name": {
             "type": "string",
@@ -8821,6 +8839,14 @@
           "locale": {
             "type": "string",
             "description": "`en` in M0."
+          },
+          "manager_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The user's manager: an active user of the organization, not the user themself and not\nanyone whose chain of managers reaches the user; `null` removes it. Allowed whatever the\nuser's source. The manager gets no access to anything of the user's."
           },
           "status": {
             "$ref": "#/components/schemas/UserStatus",
@@ -10154,7 +10180,17 @@
         }
       },
       "UserUpdateConflict": {
-        "description": "`user.externally_managed`: an identity provider, the sync API, SCIM or a connector owns the user's names and email; change them there. `user.cannot_suspend_self`: you cannot suspend yourself. `user.email_taken`: another user of the organization has this email, in any letter case. `role_assignment.last_org_admin`: the user is the organization's last active Organization admin.",
+        "description": "`user.externally_managed`: an identity provider, the sync API, SCIM or a connector owns the user's names and email; change them there. `user.cannot_suspend_self`: you cannot suspend yourself. `user.email_taken`: another user of the organization has this email, in any letter case. `role_assignment.last_org_admin`: the user is the organization's last active Organization admin. `user.manager_cycle`: the manager is the user themself, or someone whose chain of managers reaches the user. `user.manager_inactive`: the manager is suspended.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "UserUpdateNotFound": {
+        "description": "`user.not_found`: no user of the organization has this id, or, for `manager_id`, the manager's id. `org.not_found`: the request's organization cannot be determined.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -10164,7 +10200,7 @@
         }
       },
       "UserWriteForbidden": {
-        "description": "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email` or `status` of a user who holds a permission the caller does not hold at organization scope. `auth.session_required`: an API key changes `email` or `status` of its own owner, or an app token of its own user. `auth.csrf_refused`: the request did not come from this site.",
+        "description": "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email`, `status` or `manager_id` of a user who holds a permission the caller does not hold at organization scope. `auth.session_required`: an API key changes `email`, `status` or `manager_id` of its own owner, or an app token of its own user. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
           "application/problem+json": {
             "schema": {

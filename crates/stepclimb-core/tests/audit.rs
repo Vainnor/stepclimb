@@ -267,7 +267,7 @@ async fn each_account_change_writes_one_entry(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn each_organization_and_user_status_change_writes_one_entry(pool: PgPool) {
+async fn each_organization_user_status_and_manager_change_writes_one_entry(pool: PgPool) {
     let a = org(&pool, "org-a").await;
     let s = scope(a.id);
 
@@ -285,6 +285,21 @@ async fn each_organization_and_user_status_change_writes_one_entry(pool: PgPool)
         .unwrap();
     let data = json!({ "before": { "status": "active" }, "after": { "status": "suspended" } });
     only_new_entry(&pool, &a, n, Action::UserSetStatus, member, data).await;
+
+    // docs/specs/m1/13-assignments-due-dates-reminders-and-escalation.md B15.
+    let manager = user(&pool, a.id, "Manager").await;
+    let n = count(&pool, a.id).await;
+    users::set_manager(&pool, s, member, Some(manager), now(), a.actor())
+        .await
+        .unwrap();
+    let data = json!({ "before": { "manager_id": null }, "after": { "manager_id": manager } });
+    only_new_entry(&pool, &a, n, Action::UserSetManager, member, data).await;
+    let n = count(&pool, a.id).await;
+    users::set_manager(&pool, s, member, None, now(), a.actor())
+        .await
+        .unwrap();
+    let data = json!({ "before": { "manager_id": manager }, "after": { "manager_id": null } });
+    only_new_entry(&pool, &a, n, Action::UserSetManager, member, data).await;
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]

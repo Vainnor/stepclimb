@@ -22,9 +22,18 @@
 //! is refused by `stepclimb_core::users::set_status` (409 `role_assignment.last_org_admin`),
 //! which writes the `user.set_status` audit entry.
 //!
-//! Changing the `email` or `status` of a user with an effective permission, at any scope, that
-//! the caller does not hold at organization scope is refused (403 `permission.escalation`, owner
-//! decision of 2026-11-14). Such a PATCH takes the organization's account tree lock first, which
+//! `PATCH` also sets or clears the user's `manager_id`
+//! (docs/specs/m1/13-assignments-due-dates-reminders-and-escalation.md B15, Q7), for a user of
+//! any source: `stepclimb_core::users::set_manager` refuses a manager of another organization
+//! (404 `user.not_found`), a suspended one (409 `user.manager_inactive`) and the user themself or
+//! anyone whose chain of managers reaches the user (409 `user.manager_cycle`), and writes the
+//! `user.set_manager` audit entry. Being someone's manager grants no read access to anything of
+//! theirs (spec 13 B13, Q9).
+//!
+//! Changing the `email`, `status` or `manager_id` of a user with an effective permission, at any
+//! scope, that the caller does not hold at organization scope is refused (403
+//! `permission.escalation`, owner decision of 2026-11-14; extended to `manager_id` by
+//! coordinator decision, spec 13 B15). Such a PATCH takes the organization's account tree lock first, which
 //! the role assignment routes take before they create or remove an assignment; then locks `FOR
 //! KEY SHARE` the custom roles the user holds, which an edit of a role's permissions
 //! (`roles::update_custom`) waits for; and only then reads the user's grants. Until the PATCH
@@ -32,9 +41,9 @@
 //! roles, which change only when startup syncs them, and assignments written by the repository
 //! without the tree lock (none through the API in M0).
 //!
-//! The status change runs before the field changes, so every `PATCH` locks the organization row
-//! before the user row; both run in one transaction, so a refused status leaves the fields as
-//! they were.
+//! The status change runs first, then the manager change, then the field changes, so every
+//! `PATCH` locks the organization row before the user row; all run in one transaction, so a
+//! refused status or manager leaves the fields as they were.
 
 use std::time::SystemTime;
 
@@ -113,14 +122,20 @@ pub mod code {
     pub const EMAIL_INVALID_CHARACTER: &str = "email.invalid_character";
     /// In a 422's `errors`: the string is longer than its limit.
     pub const TEXT_TOO_LONG: &str = "text.too_long";
+    /// The manager is the user themself, or someone whose chain of managers reaches the user
+    /// (409).
+    pub const USER_MANAGER_CYCLE: &str = "user.manager_cycle";
+    /// The manager is a suspended user (409).
+    pub const USER_MANAGER_INACTIVE: &str = "user.manager_inactive";
 }
 
 problem_responses! {
     UserNotFound => "`user.not_found`: no user of the organization has this id. `org.not_found`: the request's organization cannot be determined.",
-    UserWriteForbidden => "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email` or `status` of a user who holds a permission the caller does not hold at organization scope. `auth.session_required`: an API key changes `email` or `status` of its own owner, or an app token of its own user. `auth.csrf_refused`: the request did not come from this site.",
+    UserUpdateNotFound => "`user.not_found`: no user of the organization has this id, or, for `manager_id`, the manager's id. `org.not_found`: the request's organization cannot be determined.",
+    UserWriteForbidden => "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email`, `status` or `manager_id` of a user who holds a permission the caller does not hold at organization scope. `auth.session_required`: an API key changes `email`, `status` or `manager_id` of its own owner, or an app token of its own user. `auth.csrf_refused`: the request did not come from this site.",
     UserCreateForbidden => "`permission.denied`: the caller does not hold `user.manage` at organization scope. `entitlement.limit_reached`: the organization's plan allows no more users; `limit` and `max` name the limit and its value. `auth.csrf_refused`: the request did not come from this site.",
     UserCreateConflict => "`user.external_id_taken`: another user of the organization has this external id. `user.email_taken`: another user of the organization has this email, in any letter case. `identity.taken`: one of `identities` is already linked to a user.",
-    UserUpdateConflict => "`user.externally_managed`: an identity provider, the sync API, SCIM or a connector owns the user's names and email; change them there. `user.cannot_suspend_self`: you cannot suspend yourself. `user.email_taken`: another user of the organization has this email, in any letter case. `role_assignment.last_org_admin`: the user is the organization's last active Organization admin.",
+    UserUpdateConflict => "`user.externally_managed`: an identity provider, the sync API, SCIM or a connector owns the user's names and email; change them there. `user.cannot_suspend_self`: you cannot suspend yourself. `user.email_taken`: another user of the organization has this email, in any letter case. `role_assignment.last_org_admin`: the user is the organization's last active Organization admin. `user.manager_cycle`: the manager is the user themself, or someone whose chain of managers reaches the user. `user.manager_inactive`: the manager is suspended.",
 }
 
 /// A user of the caller's organization.
@@ -144,6 +159,9 @@ pub struct User {
     /// The owning system's id for the user; `null` when there is none.
     #[schema(required = true)]
     pub external_id: Option<String>,
+    /// The user's manager, another user of the organization; `null` when they have none.
+    #[schema(required = true, value_type = Option<String>, format = "uuid")]
+    pub manager_id: Option<Uuid>,
     /// RFC 3339, UTC.
     #[schema(format = DateTime)]
     pub created_at: String,
@@ -168,6 +186,7 @@ impl User {
             status: user.status.into(),
             source: user.source.into(),
             external_id: user.external_id,
+            manager_id: user.manager_id,
         })
     }
 }
@@ -217,7 +236,7 @@ pub struct NewUserIdentity {
 }
 
 /// A change to a user; an omitted member is left as it is. A member sent as `null` is
-/// malformed, except `email`, where `null` removes the email.
+/// malformed, except `email` and `manager_id`, where `null` removes the value.
 #[derive(Clone, Debug, Default, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UserPatch {
@@ -251,6 +270,12 @@ pub struct UserPatch {
     #[serde(default, deserialize_with = "present")]
     #[schema(value_type = UserStatus)]
     pub status: Option<UserStatus>,
+    /// The user's manager: an active user of the organization, not the user themself and not
+    /// anyone whose chain of managers reaches the user; `null` removes it. Allowed whatever the
+    /// user's source. The manager gets no access to anything of the user's.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schema(value_type = Option<String>, format = "uuid")]
+    pub manager_id: Option<Option<Uuid>>,
 }
 
 /// A member that may be `null`: present, it reads as `Some(value)` with `value` `None` for
@@ -545,8 +570,8 @@ async fn link(
         .map_err(|error| identity_error(index, error))
 }
 
-/// Change a user's names, email, locale, time zone or status. A patch naming nothing changes
-/// nothing.
+/// Change a user's names, email, locale, time zone, status or manager. A patch naming nothing
+/// changes nothing.
 #[utoipa::path(
     patch,
     path = "/api/v1/users/{user_id}",
@@ -560,7 +585,7 @@ async fn link(
         (status = 400, response = crate::openapi::BadRequest),
         (status = 401, response = crate::openapi::Unauthenticated),
         (status = 403, response = UserWriteForbidden),
-        (status = 404, response = UserNotFound),
+        (status = 404, response = UserUpdateNotFound),
         (status = 409, response = UserUpdateConflict),
         (status = 413, response = crate::openapi::PayloadTooLarge),
         (status = 415, response = crate::openapi::UnsupportedMediaType),
@@ -579,7 +604,7 @@ pub async fn update_user(
     let principal = require.principal();
     let scope = principal.scope();
     let now = state.clock.now();
-    let guarded = body.email.is_some() || body.status.is_some();
+    let guarded = body.email.is_some() || body.status.is_some() || body.manager_id.is_some();
     let mut tx = state.db.begin().await.map_err(|e| ApiError::internal(&e))?;
     if guarded {
         // Before the target's grants are read: an assignment created or removed meanwhile
@@ -594,8 +619,7 @@ pub async fn update_user(
         .ok_or_else(user_not_found)?;
     refuse_patch(&body, &user, principal.user_id)?;
     if guarded {
-        let detail =
-            "This user holds permissions you do not. You cannot change their email or status.";
+        let detail = "This user holds permissions you do not. You cannot change their email, status or manager.";
         refuse_escalation(&mut tx, principal, require.grants(), user_id, detail).await?;
     }
     // The status first: `set_status` locks the organization row, then the user row, and the
@@ -603,6 +627,14 @@ pub async fn update_user(
     if let Some(status) = body.status {
         let actor = client.actor(principal);
         user = repo::set_status(&mut *tx, scope, user_id, status.into(), now, actor)
+            .await
+            .map_err(user_error)?;
+    }
+    // After the status, before the fields: `set_manager` locks the organization row, then the
+    // user row, as `set_status` does.
+    if let Some(manager_id) = body.manager_id {
+        let actor = client.actor(principal);
+        user = repo::set_manager(&mut *tx, scope, user_id, manager_id, now, actor)
             .await
             .map_err(user_error)?;
     }
@@ -639,7 +671,8 @@ fn refuse_patch(patch: &UserPatch, user: &repo::User, caller: Uuid) -> Result<()
 /// 403 `permission.escalation` when a permission effective for the user `user_id`, at any
 /// scope, is not effective for the caller at organization scope, the scope the user routes act on
 /// (owner decision of 2026-11-14): changing such a user's email or status could take over or lock
-/// out someone with more rights than the caller.
+/// out someone with more rights than the caller, and changing their manager would let the caller
+/// redraw the reporting line of someone with more rights (spec 13 B15, coordinator decision).
 ///
 /// Runs in the PATCH's transaction after the account tree lock, which role assignment writes
 /// take too. It first locks the custom roles the user holds `FOR KEY SHARE`, which a change of
@@ -678,11 +711,12 @@ pub(crate) async fn refuse_escalation(
 
 /// 403 `auth.session_required` when `principal` is a bearer credential (an API key or an app
 /// access token) and `user_id` is its own user: only a browser session changes its own user's
-/// email, status or sign-in methods (spec 08 B44, extended to app tokens with I8).
+/// email, status, manager or sign-in methods (spec 08 B44, extended to app tokens with I8, and to
+/// the manager by coordinator decision, spec 13 B15).
 fn refuse_key_on_owner(principal: Authenticated, user_id: Uuid) -> Result<(), ApiError> {
     if !matches!(principal.via(), Via::Session) && principal.user_id == user_id {
         return Err(session_required(
-            "An API key or app token cannot change its own user's email, status or sign-in methods. Use a signed-in browser session.",
+            "An API key or app token cannot change its own user's email, status, manager or sign-in methods. Use a signed-in browser session.",
         ));
     }
     Ok(())
@@ -736,6 +770,19 @@ fn user_error(error: repo::Error) -> ApiError {
         E::LastOrgAdmin => conflict(
             ROLE_ASSIGNMENT_LAST_ORG_ADMIN,
             "This is the last active Organization admin. Make someone else Organization admin first.",
+        ),
+        E::ManagerNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            USER_NOT_FOUND,
+            "No user with the manager's id exists in this organization.",
+        ),
+        E::ManagerInactive => conflict(
+            code::USER_MANAGER_INACTIVE,
+            "The manager is suspended. Choose an active user.",
+        ),
+        E::ManagerCycle => conflict(
+            code::USER_MANAGER_CYCLE,
+            "A user cannot manage themself or anyone above them in their chain of managers.",
         ),
         other @ (E::UnknownStoredValue { .. }
         | E::Time(_)

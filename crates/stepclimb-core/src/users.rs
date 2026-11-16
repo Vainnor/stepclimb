@@ -18,13 +18,16 @@
 //! - `now`, the request's clock reading, which `created_at` and `updated_at` are set from
 //!   (spec 02 B5).
 //!
-//! `manager_id` and `profile` are columns this module neither reads nor writes: M0 never sets a
-//! manager (B8) and defines no profile fields (B2).
+//! `manager_id`, the user's manager (B8), is written only by [`set_manager`], which keeps the
+//! reporting lines free of cycles
+//! (docs/specs/m1/13-assignments-due-dates-reminders-and-escalation.md B15). It grants the
+//! manager nothing: no permission check reads it. `profile` is a column this module neither
+//! reads nor writes: there are no profile fields yet (B2).
 
 use std::time::SystemTime;
 
 use serde_json::json;
-use sqlx::{Acquire, PgExecutor, Postgres};
+use sqlx::{Acquire, PgConnection, PgExecutor, Postgres};
 use uuid::Uuid;
 
 use crate::{
@@ -101,6 +104,10 @@ pub struct User {
     pub status: Status,
     pub source: Source,
     pub external_id: Option<String>,
+    /// The user's manager, another user of the organization; `None` when they have none
+    /// (docs/specs/m1/13-assignments-due-dates-reminders-and-escalation.md B15). Only
+    /// [`set_manager`] writes it.
+    pub manager_id: Option<Uuid>,
     pub created_at: SystemTime,
     pub updated_at: SystemTime,
 }
@@ -198,9 +205,21 @@ pub enum Error {
     #[error("the last active organization admin cannot be suspended")]
     LastOrgAdmin,
     /// The transaction runs at an isolation level other than `READ COMMITTED`, where the
-    /// last-admin count could miss a concurrent change.
-    #[error("users can be suspended only at READ COMMITTED isolation, not {found}")]
+    /// last-admin count or the manager chain could miss a concurrent change.
+    #[error(
+        "users can be suspended or given a manager only at READ COMMITTED isolation, not {found}"
+    )]
     IsolationLevel { found: String },
+    /// The manager given to [`set_manager`] is no user of the scope's organization.
+    #[error("the manager does not exist")]
+    ManagerNotFound,
+    /// The manager given to [`set_manager`] is suspended.
+    #[error("the manager is not an active user")]
+    ManagerInactive,
+    /// The manager given to [`set_manager`] is the user themself, or someone whose chain of
+    /// managers reaches the user.
+    #[error("the manager's chain of managers reaches the user")]
+    ManagerCycle,
     /// Reading the organization's admins before a suspension failed otherwise.
     #[error("checking the organization's admins failed: {0}")]
     AdminCheck(#[source] Box<role_assignments::Error>),
@@ -245,6 +264,7 @@ pub(crate) struct Row {
     pub(crate) status: String,
     pub(crate) source: String,
     pub(crate) external_id: Option<String>,
+    pub(crate) manager_id: Option<Uuid>,
     pub(crate) created_at_us: i64,
     pub(crate) updated_at_us: i64,
 }
@@ -272,6 +292,7 @@ impl TryFrom<Row> for User {
             status,
             source,
             external_id: row.external_id,
+            manager_id: row.manager_id,
             created_at: from_epoch_micros(row.created_at_us)?,
             updated_at: from_epoch_micros(row.updated_at_us)?,
         })
@@ -287,7 +308,7 @@ pub async fn get(
     sqlx::query_as!(
         Row,
         r#"SELECT id, display_name, given_name, family_name, email, locale, tz, status, source,
-                  external_id,
+                  external_id, manager_id,
                   (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
                   (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM users
@@ -312,7 +333,7 @@ pub async fn find_by_email(
     sqlx::query_as!(
         Row,
         r#"SELECT id, display_name, given_name, family_name, email, locale, tz, status, source,
-                  external_id,
+                  external_id, manager_id,
                   (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
                   (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM users
@@ -349,7 +370,7 @@ pub async fn find_email_match(
     sqlx::query_as!(
         Row,
         r#"SELECT id, display_name, given_name, family_name, email, locale, tz, status, source,
-                  external_id,
+                  external_id, manager_id,
                   (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
                   (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM users
@@ -422,7 +443,7 @@ pub async fn list(
     let rows = sqlx::query_as!(
         Row,
         r#"SELECT id, display_name, given_name, family_name, email, locale, tz, status, source,
-                  external_id,
+                  external_id, manager_id,
                   (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
                   (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM users
@@ -468,7 +489,7 @@ pub async fn create(
                    timestamptz 'epoch' + $11::bigint * interval '1 microsecond',
                    timestamptz 'epoch' + $11::bigint * interval '1 microsecond')
            RETURNING id, display_name, given_name, family_name, email, locale, tz, status, source,
-                     external_id,
+                     external_id, manager_id,
                      (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
                      (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!""#,
         new_id(),
@@ -519,7 +540,7 @@ pub async fn update(
                updated_at = timestamptz 'epoch' + $10::bigint * interval '1 microsecond'
            WHERE org_id = $1 AND id = $2
            RETURNING id, display_name, given_name, family_name, email, locale, tz, status, source,
-                     external_id,
+                     external_id, manager_id,
                      (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
                      (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!""#,
         scope.org_id(),
@@ -579,7 +600,7 @@ pub async fn set_status<'c>(
                updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond'
            WHERE org_id = $1 AND id = $2
            RETURNING id, display_name, given_name, family_name, email, locale, tz, status, source,
-                     external_id,
+                     external_id, manager_id,
                      (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
                      (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!""#,
         scope.org_id(),
@@ -594,6 +615,145 @@ pub async fn set_status<'c>(
     audit::record(&mut tx, scope, actor, Action::UserSetStatus, id, &data, now).await?;
     tx.commit().await?;
     User::try_from(row)
+}
+
+/// Set the manager of the user `id` of the scope's organization to `manager_id` (`None` clears
+/// it), set `updated_at` to `now`, and write the `user.set_manager` audit entry by `actor` with
+/// the manager before and after
+/// (docs/specs/m1/13-assignments-due-dates-reminders-and-escalation.md B15). The manager the
+/// user already has writes nothing and returns the user as they are (spec 09 B22).
+///
+/// A new manager must be a user of the organization ([`Error::ManagerNotFound`]), active
+/// ([`Error::ManagerInactive`]), and neither the user nor anyone whose chain of managers reaches
+/// the user ([`Error::ManagerCycle`]). Any user may be given a manager, whatever their source
+/// (B15).
+///
+/// It first locks the organization row `FOR NO KEY UPDATE`, as a suspension does
+/// (`role_assignments::lock_removals`), so two manager changes in one organization take turns:
+/// each reads the chain the other committed, and two changes cannot close a cycle between them.
+/// The same lock keeps a suspension of the new manager from committing between the check and
+/// this write. It refuses an isolation level above `READ COMMITTED` ([`Error::IsolationLevel`]),
+/// where the chain would be read from a snapshot taken before the lock. Runs in one transaction
+/// (a savepoint when `db` is already one).
+pub async fn set_manager<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
+    scope: OrgScope,
+    id: Uuid,
+    manager_id: Option<Uuid>,
+    now: SystemTime,
+    actor: Actor,
+) -> Result<User, Error> {
+    let now = epoch_micros(now)?;
+    let mut tx = db.begin().await?;
+    lock_reporting_lines(&mut tx, scope).await?;
+    let before = sqlx::query_scalar!(
+        "SELECT manager_id FROM users WHERE org_id = $1 AND id = $2 FOR NO KEY UPDATE",
+        scope.org_id(),
+        id,
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(Error::NotFound)?;
+    if before == manager_id {
+        return get(&mut *tx, scope, id).await?.ok_or(Error::NotFound);
+    }
+    if let Some(manager_id) = manager_id {
+        refuse_manager(&mut tx, scope, id, manager_id).await?;
+    }
+    let row = sqlx::query_as!(
+        Row,
+        r#"UPDATE users
+           SET manager_id = $3,
+               updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond'
+           WHERE org_id = $1 AND id = $2
+           RETURNING id, display_name, given_name, family_name, email, locale, tz, status, source,
+                     external_id, manager_id,
+                     (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
+                     (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!""#,
+        scope.org_id(),
+        id,
+        manager_id,
+        now,
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(Error::NotFound)?;
+    let data = json!({ "before": { "manager_id": before }, "after": { "manager_id": manager_id } });
+    audit::record(
+        &mut tx,
+        scope,
+        actor,
+        Action::UserSetManager,
+        id,
+        &data,
+        now,
+    )
+    .await?;
+    tx.commit().await?;
+    User::try_from(row)
+}
+
+/// Lock the scope's organization row `FOR NO KEY UPDATE` for [`set_manager`], and refuse an
+/// isolation level other than `READ COMMITTED`.
+async fn lock_reporting_lines(conn: &mut PgConnection, scope: OrgScope) -> Result<(), Error> {
+    let isolation = sqlx::query_scalar!(
+        r#"SELECT current_setting('transaction_isolation') AS "isolation!"
+           FROM organizations WHERE id = $1
+           FOR NO KEY UPDATE"#,
+        scope.org_id(),
+    )
+    .fetch_optional(conn)
+    .await?
+    .ok_or(Error::NotFound)?;
+    if isolation != "read committed" {
+        return Err(Error::IsolationLevel { found: isolation });
+    }
+    Ok(())
+}
+
+/// The refusals of `manager_id` as the new manager of the user `id`, in [`set_manager`]'s
+/// transaction after its lock: the user themself, no user of the organization, a suspended user,
+/// then a manager whose chain of managers reaches the user.
+async fn refuse_manager(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    id: Uuid,
+    manager_id: Uuid,
+) -> Result<(), Error> {
+    if manager_id == id {
+        return Err(Error::ManagerCycle);
+    }
+    let status = sqlx::query_scalar!(
+        "SELECT status FROM users WHERE org_id = $1 AND id = $2",
+        scope.org_id(),
+        manager_id,
+    )
+    .fetch_optional(&mut *conn)
+    .await?
+    .ok_or(Error::ManagerNotFound)?;
+    if status != Status::Active.as_str() {
+        return Err(Error::ManagerInactive);
+    }
+    // The chain from the new manager upwards. `UNION` drops a row it has already seen, so the
+    // walk ends even on a cycle written around this function.
+    let cycle = sqlx::query_scalar!(
+        r#"WITH RECURSIVE chain (id) AS (
+               SELECT manager_id FROM users WHERE org_id = $1 AND id = $2
+               UNION
+               SELECT u.manager_id FROM users u JOIN chain c ON u.id = c.id
+               WHERE u.org_id = $1
+           )
+           SELECT EXISTS (SELECT 1 FROM chain WHERE id = $3) AS "cycle!""#,
+        scope.org_id(),
+        manager_id,
+        id,
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    if cycle {
+        return Err(Error::ManagerCycle);
+    }
+    Ok(())
 }
 
 /// How many users count against the organization's `users` limit

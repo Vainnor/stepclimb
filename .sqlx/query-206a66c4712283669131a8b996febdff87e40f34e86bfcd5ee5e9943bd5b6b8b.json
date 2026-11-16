@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE users\n           SET display_name = COALESCE($3, display_name),\n               given_name = COALESCE($4, given_name),\n               family_name = COALESCE($5, family_name),\n               email = CASE WHEN $6 THEN $7 ELSE email END,\n               verified_email = CASE\n                   WHEN NOT $6\n                       OR lower($7 COLLATE \"C\") IS NOT DISTINCT FROM lower(email COLLATE \"C\")\n                       THEN verified_email\n                   WHEN source = 'local' THEN lower($7 COLLATE \"C\")\n               END,\n               locale = COALESCE($8, locale),\n               tz = COALESCE($9, tz),\n               updated_at = timestamptz 'epoch' + $10::bigint * interval '1 microsecond'\n           WHERE org_id = $1 AND id = $2\n           RETURNING id, display_name, given_name, family_name, email, locale, tz, status, source,\n                     external_id,\n                     (extract(epoch FROM created_at) * 1000000)::bigint AS \"created_at_us!\",\n                     (extract(epoch FROM updated_at) * 1000000)::bigint AS \"updated_at_us!\"",
+  "query": "UPDATE users\n           SET status = $3,\n               updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond'\n           WHERE org_id = $1 AND id = $2\n           RETURNING id, display_name, given_name, family_name, email, locale, tz, status, source,\n                     external_id, manager_id,\n                     (extract(epoch FROM created_at) * 1000000)::bigint AS \"created_at_us!\",\n                     (extract(epoch FROM updated_at) * 1000000)::bigint AS \"updated_at_us!\"",
   "describe": {
     "columns": [
       {
@@ -115,12 +115,23 @@
       },
       {
         "ordinal": 10,
+        "name": "manager_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "manager_id"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
         "name": "created_at_us!",
         "type_info": "Int8",
         "origin": "Expression"
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "updated_at_us!",
         "type_info": "Int8",
         "origin": "Expression"
@@ -130,12 +141,6 @@
       "Left": [
         "Uuid",
         "Uuid",
-        "Text",
-        "Text",
-        "Text",
-        "Bool",
-        "Text",
-        "Text",
         "Text",
         "Int8"
       ]
@@ -151,9 +156,10 @@
       false,
       false,
       true,
+      true,
       null,
       null
     ]
   },
-  "hash": "a0c5f1948d9e44866e0442224c6c91695678512044b8aa6374edba2195be18a7"
+  "hash": "206a66c4712283669131a8b996febdff87e40f34e86bfcd5ee5e9943bd5b6b8b"
 }
