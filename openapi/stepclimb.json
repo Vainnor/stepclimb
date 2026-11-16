@@ -4267,6 +4267,141 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/oauth/revoke": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Revoke an app's refresh token, or the family of its access token.",
+        "description": "RFC 7009 token revocation for Stepclimb's own apps: `token` (a refresh token or an access token), `token_type_hint` (optional, either kind) and `client_id`. Revoking either kind deletes every refresh token of its family, so the family's access tokens stop working too. Answers 200 whether or not the token was known. Refusals are RFC 6749 JSON with status 400: `invalid_request` or `invalid_client`.",
+        "operationId": "revokeAppToken",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The token's family is revoked, or the token was not one of this client's",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`no-store`"
+              }
+            }
+          },
+          "400": {
+            "description": "An RFC 6749 section 5.2 error",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`no-store`"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/oauth/token": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Exchange an authorization code, or refresh, for an access token and a refresh token.",
+        "description": "The token endpoint of the OAuth 2.1 server for Stepclimb's own apps (public clients, no client secret). `grant_type=authorization_code` with `code`, `redirect_uri`, `client_id` and `code_verifier` exchanges a code from `/oauth/authorize` once; `grant_type=refresh_token` with `refresh_token` and `client_id` rotates a refresh token: the presented one stops working, and presenting a used code or a rotated refresh token again revokes every token of its family. Refusals are RFC 6749 JSON with status 400: `invalid_request`, `invalid_client`, `invalid_grant` (any code or refresh token that does not pass, and a suspended user's) or `unsupported_grant_type`. Every answer carries `Cache-Control: no-store`.",
+        "operationId": "requestAppToken",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The access token (15 minutes) and the next refresh token",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`no-store`"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An RFC 6749 section 5.2 error",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`no-store`"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/readyz": {
       "get": {
         "tags": [
@@ -5175,7 +5310,9 @@
         "description": "The OAuth 2.1 server's issuer and endpoints, as absolute URLs on the public URL.",
         "required": [
           "issuer",
-          "authorization_endpoint"
+          "authorization_endpoint",
+          "token_endpoint",
+          "revocation_endpoint"
         ],
         "properties": {
           "authorization_endpoint": {
@@ -5185,6 +5322,14 @@
           "issuer": {
             "type": "string",
             "description": "The server's issuer identifier, the public URL. Every answer the authorization endpoint\nsends to a redirect URI carries it as `iss` (RFC 9207); an app checks the two agree, and\nthat this value is the URL it fetched the document from."
+          },
+          "revocation_endpoint": {
+            "type": "string",
+            "description": "`<public URL>/oauth/revoke`, where the app ends its sign-in (RFC 7009)."
+          },
+          "token_endpoint": {
+            "type": "string",
+            "description": "`<public URL>/oauth/token`, where the app exchanges its code and refreshes its tokens."
           }
         }
       },
@@ -5985,6 +6130,24 @@
           "totp",
           "totp_enroll"
         ]
+      },
+      "OAuthError": {
+        "type": "object",
+        "description": "A refused token or revocation request (RFC 6749 section 5.2).",
+        "required": [
+          "error",
+          "error_description"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "`invalid_request`, `invalid_client`, `invalid_grant` or `unsupported_grant_type`."
+          },
+          "error_description": {
+            "type": "string",
+            "description": "A fixed sentence for the app's developer."
+          }
+        }
       },
       "Oauth2ProviderClaims": {
         "type": "object",
@@ -7224,6 +7387,31 @@
         },
         "additionalProperties": false
       },
+      "RevokeForm": {
+        "type": "object",
+        "description": "The revocation request's form, for the document; the handler reads the body itself.",
+        "required": [
+          "token",
+          "client_id"
+        ],
+        "properties": {
+          "client_id": {
+            "type": "string",
+            "description": "The app's client id, `stepclimb-app`."
+          },
+          "token": {
+            "type": "string",
+            "description": "A refresh token or an access token."
+          },
+          "token_type_hint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`refresh_token` or `access_token`; the server tries both whatever it says."
+          }
+        }
+      },
       "Role": {
         "type": "object",
         "description": "A built-in role or a custom role of the organization.",
@@ -7545,6 +7733,84 @@
           "dark",
           "high-contrast"
         ]
+      },
+      "TokenForm": {
+        "type": "object",
+        "description": "The token request's form, for the document; the handler reads the body itself.",
+        "required": [
+          "grant_type",
+          "client_id"
+        ],
+        "properties": {
+          "client_id": {
+            "type": "string",
+            "description": "The app's client id, `stepclimb-app`."
+          },
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With `authorization_code`: the code from the redirect URI."
+          },
+          "code_verifier": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With `authorization_code`: the PKCE verifier, 43 to 128 characters."
+          },
+          "grant_type": {
+            "type": "string",
+            "description": "`authorization_code` or `refresh_token`."
+          },
+          "redirect_uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With `authorization_code`: the redirect URI the authorization request named."
+          },
+          "refresh_token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With `refresh_token`: the current refresh token."
+          }
+        }
+      },
+      "TokenResponse": {
+        "type": "object",
+        "description": "The answer to a granted token request (RFC 6749 section 5.1).",
+        "required": [
+          "access_token",
+          "token_type",
+          "expires_in",
+          "refresh_token"
+        ],
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "description": "The access token: a bearer credential for `/api/v1`, valid `expires_in` seconds."
+          },
+          "expires_in": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds the access token is valid: 900.",
+            "example": 900,
+            "minimum": 0
+          },
+          "refresh_token": {
+            "type": "string",
+            "description": "The refresh token: single use, valid 30 days, and never past 90 days from sign-in."
+          },
+          "token_type": {
+            "type": "string",
+            "description": "Always `Bearer`.",
+            "example": "Bearer"
+          }
+        }
       },
       "TotpCode": {
         "type": "object",
@@ -8192,7 +8458,7 @@
         }
       },
       "IdentityWriteForbidden": {
-        "description": "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the user holds a permission, at any scope, that the caller does not hold at organization scope. `auth.session_required`: an API key acts on its own owner. `auth.csrf_refused`: the request did not come from this site.",
+        "description": "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the user holds a permission, at any scope, that the caller does not hold at organization scope. `auth.session_required`: an API key acts on its own owner, or an app token on its own user. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -8850,7 +9116,7 @@
         }
       },
       "Unauthenticated": {
-        "description": "`auth.unauthenticated`: no credential, or one that names no session of the organization, or a bearer credential that is not an API key. `auth.session_expired`: the session passed its idle or absolute expiry. `auth.api_key_invalid`: the API key is malformed, fails its checksum, or names no service account of the organization. `auth.suspended`: the user, or the API key's owner, is suspended.",
+        "description": "`auth.unauthenticated`: no credential, or one that names no session of the organization, or an `Authorization` header that is not one `Bearer <credential>`. `auth.session_expired`: the session passed its idle or absolute expiry. `auth.api_key_invalid`: the API key is malformed, fails its checksum, or names no service account of the organization. `auth.access_token_invalid`: the bearer credential is not an app access token this server issued for the organization, or its sign-in was revoked. `auth.access_token_expired`: the app access token is past its 15 minutes; refresh it. `auth.suspended`: the user, or the API key's owner, is suspended.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -8950,7 +9216,7 @@
         }
       },
       "UserWriteForbidden": {
-        "description": "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email` or `status` of a user who holds a permission the caller does not hold at organization scope. `auth.session_required`: an API key changes `email` or `status` of its own owner. `auth.csrf_refused`: the request did not come from this site.",
+        "description": "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email` or `status` of a user who holds a permission the caller does not hold at organization scope. `auth.session_required`: an API key changes `email` or `status` of its own owner, or an app token of its own user. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
           "application/problem+json": {
             "schema": {

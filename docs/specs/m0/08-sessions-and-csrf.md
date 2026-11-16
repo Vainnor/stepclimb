@@ -590,7 +590,7 @@ uuid NOT NULL`, `rotated_from uuid NULL REFERENCES oauth_refresh_tokens(id) ON D
 unique index on `rotated_from` (a token rotates at most once, which also makes two concurrent
 rotations of one token conflict instead of both succeeding). A token is "already rotated" when a
 row with `rotated_from = its id` exists. Organization: derived through `user_id`.
-As built by I8 (migration `20261116060000_oauth_refresh_tokens.sql`, B46; coordinator decision
+As built by I8 (migration `20261116080000_oauth_refresh_tokens.sql`, B46; coordinator decision
 2026-11-15): `org_id uuid NOT NULL REFERENCES organizations(id)` is direct, with `(org_id,
 user_id) REFERENCES users(org_id, id) ON DELETE CASCADE`, as on `oauth_authorization_codes`;
 `token_hash` is checked to 32 bytes; `family_id` references the family's first row `ON DELETE
