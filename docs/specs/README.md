@@ -26,11 +26,36 @@ owner. For the M0 specs the owner accepted every recommended answer on 13 Nov 20
 | 13 | [Base UI components](m0/13-base-ui-components.md) | standard |
 | 14 | [Compose deploy](m0/14-compose-deploy.md) | standard |
 
+## M1 Learning (full specs)
+
+The owner approved a 17-spec split of M1; each spec is written before its work starts. Open
+questions in the written specs carry coordinator decisions pending the owner's review.
+
+| # | Spec | Review |
+| --- | --- | --- |
+| 01 | [Job queue and outbox](m1/01-job-queue-and-outbox.md) | standard |
+| 02 | [Courses and enrollments](m1/02-courses-and-enrollments.md) | maintainer line-by-line |
+| 03 | [Modules and items](m1/03-modules-and-items.md) | standard |
+| 04 | [Unlock and completion rules](m1/04-unlock-and-completion-rules.md) | maintainer line-by-line |
+| 05 | [Progress and events](m1/05-progress-and-events.md) | standard |
+| 06 | [Files](m1/06-files.md) | maintainer line-by-line |
+| 07 | Pages and the editor | to be written |
+| 08 | Uploaded video | to be written |
+| 09 | Linked video and watch tracking | to be written |
+| 10 | Learner dashboard and Next up | to be written |
+| 11 | Announcements and in-app notifications | to be written |
+| 12 | Email | to be written |
+| 13 | Assignments, due dates, reminders and escalation | to be written |
+| 14 | Recurrence and expiring completions | to be written |
+| 15 | Installable web app and offline reading | to be written |
+| 16 | Learning UI components | to be written |
+| 17 | Tauri iPhone test | to be written |
+
 ## Later milestones (stubs)
 
 | Milestone | Stub |
 | --- | --- |
-| M1 Learning | [m1.md](m1.md) |
+| M1 Learning | [m1.md](m1.md) (full specs in `m1/`, above) |
 | M2 Assessment | [m2.md](m2.md) |
 | M3 Activities | [m3.md](m3.md) |
 | M4 Integrations and pilot readiness | [m4.md](m4.md) |
