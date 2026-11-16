@@ -223,13 +223,15 @@ CREATE TABLE outbox (
     id             uuid        PRIMARY KEY,
     org_id         uuid        NOT NULL REFERENCES organizations (id),
     topic          text        NOT NULL CHECK (topic ~ '^[a-z][a-z_]*(\.[a-z][a-z_]*)+$'),
+    version        integer     NOT NULL CHECK (version >= 1),                          -- I4 decision
     payload        jsonb       NOT NULL CHECK (jsonb_typeof(payload) = 'object'),
     dispatched_at  timestamptz,
     created_at     timestamptz NOT NULL DEFAULT now(),
     updated_at     timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX outbox_undispatched ON outbox (id) WHERE dispatched_at IS NULL;
-CREATE INDEX outbox_dispatched ON outbox (dispatched_at) WHERE dispatched_at IS NOT NULL;
+CREATE INDEX outbox_undispatched ON outbox (id) INCLUDE (topic, version)
+    WHERE dispatched_at IS NULL;                                                      -- I4 decision
+CREATE INDEX outbox_dispatched ON outbox (org_id, dispatched_at) WHERE dispatched_at IS NOT NULL;  -- I4 decision
 CREATE INDEX outbox_by_org ON outbox (org_id, id);
 ```
 
@@ -380,8 +382,8 @@ iteration at a time through a test hook rather than on timers.
    - Coordinator decision after review (option b): the job worker has its own PostgreSQL pool
      (named `stepclimb-jobs` in `pg_stat_activity`); HTTP keeps its pool of 10, and a `web`
      process opens no job pool. With I3's scheduler on it, the pool is `worker_concurrency` + 2
-     connections (coordinator decision, 2026-11-17): one per job, one for claims, one for the
-     tick. A process can therefore hold up to 10 + `worker_concurrency` + 2 connections, 76 at
+     connections (coordinator decision, 2026-11-17): one per job, and headroom of one each for
+     claims and the tick (a shared pool reserves nothing). A process can therefore hold up to 10 + `worker_concurrency` + 2 connections, 76 at
      most (10 + 64 + 2); the configuration reference says so, against PostgreSQL's default
      `max_connections` of 100.
    - The production Compose example gives the server `stop_grace_period: 40s`, so Docker's
@@ -416,3 +418,45 @@ iteration at a time through a test hook rather than on timers.
 4. **I4. Outbox and dispatch.** Migration `<version>_outbox.sql`, `outbox::emit`, topic
    registration with schema versions, the dispatch loop, subscriber registration, and
    pruning dispatched rows in `jobs.prune`. Covers B19 to B24; T15 to T18. Depends on: I3.
+   Coordinator decisions (2026-11-17, made while building I4, pending owner review):
+   - A topic is a `Topic { name, version }` constant, registered with
+     `Registry::register_topic`; a subscriber is a job kind registered with
+     `Registry::subscribe(&topic, kind, handler)`, which refuses a topic not registered with the
+     same version.
+   - Coordinator decision after review: `outbox` has a `version integer NOT NULL CHECK (version
+     >= 1)` column. `emit` writes the topic's version, `Event` exposes it, and the dispatcher
+     claims only the (topic, version) pairs its registry knows. B20's envelope stays `type`,
+     `timestamp`, `data`; M4 decides how webhook receivers see the version.
+   - The dispatcher leaves an event of a topic or version its registry does not know
+     undispatched for a process that knows it, as an unknown job kind is released (B11), rather
+     than marking it dispatched without that release's subscribers. B21's "a topic with no
+     subscriber is marked dispatched" applies to registered topics. A topic and version
+     therefore stay registered for as long as events of them can exist undispatched. At startup
+     and in every `jobs.prune` run, each process logs at `warn` the topics, versions and counts of
+     undispatched events its registry does not know.
+     Known limit (coordinator decision after review): subscribers are tracked per topic, not per
+     event. During a rolling deploy, or after a rollback, a process of the older release can
+     dispatch an event of a topic both releases know, enqueuing only the older release's
+     subscribers; a subscriber the newer release added never gets that event. A single process
+     restarted in place, the self-hosted default, is unaffected, since one release dispatches
+     everything before or after the restart. Per-subscriber delivery tracking (a row per event and
+     subscriber, or dispatch that records which subscribers it covered) must be designed before
+     the first deployment that runs several processes of different releases at once. It belongs
+     to M4, with the webhook delivery log (`webhook_deliveries`) and before the vZDC pilot, and
+     its hosting guide must say until then that a rolling deploy can drop new subscribers' events.
+   - The envelope's `timestamp` is RFC 3339 in UTC with six fractional digits
+     (`2025-11-13T02:13:20.123456Z`), as the API writes times. `data` must serialize to a JSON
+     object; `emit` refuses anything else.
+   - `outbox_undispatched` is `(id) INCLUDE (topic, version) WHERE dispatched_at IS NULL`, so the
+     claim and the unknown-topic count read only the index. `outbox_dispatched` is `(org_id,
+     dispatched_at) WHERE dispatched_at IS NOT NULL`, not `(dispatched_at)`, since `jobs.prune`
+     deletes each organization's dispatched events with its scope, as `jobs_dead` serves dead
+     jobs (I3).
+   - `outbox::event(&ctx)` is how a subscriber reads its event: with the job's organization
+     scope, a missing event (pruned, or deleted) failing the job (B6), a database error retrying.
+   - `Registry::subscribe` refuses a kind whose longest time in the queue, every attempt holding
+     its full lease and every retry its longest delay before jitter, exceeds the 30 days an event
+     is kept after dispatch (B23), so a subscriber's last attempt still finds its event.
+   - The dispatcher runs on the job pool, which grows to `worker_concurrency` + 3 connections:
+     one per job and headroom of one each for claims, the tick and the dispatcher. A process
+     holds up to 10 + `worker_concurrency` + 3, 77 at most; the configuration reference says so.

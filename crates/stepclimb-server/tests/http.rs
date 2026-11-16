@@ -159,6 +159,7 @@ async fn startup_migrations_create_the_schema_on_an_empty_database(pool: PgPool)
             "oauth_refresh_tokens",
             "org_plans",
             "organizations",
+            "outbox",
             "passkeys",
             "plans",
             "role_assignments",

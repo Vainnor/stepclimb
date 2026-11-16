@@ -1,0 +1,54 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT o.id, o.org_id, o.topic FROM outbox o\n         WHERE o.dispatched_at IS NULL\n           AND (o.topic, o.version) IN (SELECT * FROM unnest($1::text[], $2::integer[]))\n         ORDER BY o.id\n         LIMIT $3\n         FOR UPDATE OF o SKIP LOCKED",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "outbox",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "org_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "outbox",
+            "name": "org_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "topic",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "outbox",
+            "name": "topic"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Int4Array",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d13ddb5ffad516a292868688211a6ad811b467f71e30564099c30a3a523c6b6b"
+}

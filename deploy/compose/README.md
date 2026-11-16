@@ -287,9 +287,9 @@ The three limits have nothing to count until the sign-in and token routes arrive
 M0.
 
 Each `serve` process holds up to 10 database connections for HTTP, and an `all` or `worker`
-process another `worker_concurrency` + 2 for the job worker and its scheduler (6 with the
-default 4), so up to 10 + `worker_concurrency` + 2 in all: 16 with the default, 76 with the
-largest concurrency, 64. PostgreSQL allows 100 connections by default
+process another `worker_concurrency` + 3 for the job worker: one per job, and headroom for
+its claims, the scheduler and the outbox dispatcher (7 with the default 4), so up to 10 + `worker_concurrency` + 3 in all: 17 with the
+default, 77 with the largest concurrency, 64. PostgreSQL allows 100 connections by default
 (`max_connections`); when you run several processes against one database, keep their sum, plus
 what backups and administration use, under it. A `web` process opens no job connections.
 

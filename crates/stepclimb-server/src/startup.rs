@@ -31,7 +31,9 @@ use tokio::net::TcpListener;
 
 use stepclimb_auth::provider_config::ConfigSecrets;
 
-use stepclimb_jobs::{Registry, RegistryError, RunOptions, Worker, backoff::Random, schedule};
+use stepclimb_jobs::{
+    POLL_INTERVAL, Registry, RegistryError, RunOptions, Worker, backoff::Random, outbox, schedule,
+};
 use tokio::sync::watch;
 
 use crate::{
@@ -100,6 +102,8 @@ pub enum StartupError {
     Registry(#[source] RegistryError),
     #[error("could not write the periodic job schedules: {0}")]
     Schedules(#[source] stepclimb_jobs::queue::Error),
+    #[error("could not count the outbox events of unknown topics: {0}")]
+    UnknownTopics(#[source] stepclimb_jobs::outbox::Error),
     #[error("the HTTP server failed: {0}")]
     Serve(#[source] std::io::Error),
     #[error(transparent)]
@@ -132,12 +136,14 @@ pub async fn connect(database_url: &str) -> Result<PgPool, StartupError> {
         .map_err(StartupError::Connect)
 }
 
-/// The job worker's pool (spec m1/01 B14, B17): one connection per job it may run at once, one
-/// for its claims and one for the scheduler's tick, so a busy worker never waits on the HTTP
-/// pool or the HTTP pool on it, and a tick never waits on the jobs.
+/// The job worker's pool (spec m1/01 B14, B17, B21): one connection per job it may run at once,
+/// and headroom of one each for the worker's claims, the scheduler's tick and the outbox
+/// dispatcher. The pool is shared, so these are not reserved: a handler that opens a second
+/// connection can still make the others wait. The HTTP pool is separate, so neither waits on
+/// the other.
 pub fn jobs_pool_options(concurrency: std::num::NonZeroU32) -> PgPoolOptions {
     PgPoolOptions::new()
-        .max_connections(concurrency.get().saturating_add(2))
+        .max_connections(concurrency.get().saturating_add(3))
         .acquire_timeout(ACQUIRE_TIMEOUT)
 }
 
@@ -503,8 +509,9 @@ async fn listen(config: &Config) -> Result<TcpListener, StartupError> {
     Ok(listener)
 }
 
-/// What an `all` or `worker` process runs besides HTTP: the job worker and the scheduler of
-/// periodic jobs (spec m1/01 B14, B17), on the job pool ([`connect_jobs`]).
+/// What an `all` or `worker` process runs besides HTTP: the job worker, the scheduler of
+/// periodic jobs and the outbox dispatcher (spec m1/01 B14, B17, B21), on the job pool
+/// ([`connect_jobs`]).
 struct JobRunner {
     worker: Worker,
     options: RunOptions,
@@ -514,8 +521,16 @@ struct JobRunner {
 }
 
 impl JobRunner {
-    /// Run the worker and the scheduler until `stop`, then let each finish (B15).
+    /// Run the worker, the scheduler and the dispatcher until `stop`, then let each finish
+    /// (B15).
     async fn run(self, stop: &Stop) {
+        let dispatcher = outbox::dispatch::run(
+            self.pool.clone(),
+            self.registry.clone(),
+            self.clock.clone(),
+            POLL_INTERVAL,
+            stop.wait(),
+        );
         let scheduler = schedule::run(
             self.pool,
             self.registry,
@@ -523,7 +538,11 @@ impl JobRunner {
             schedule::TICK,
             stop.wait(),
         );
-        tokio::join!(self.worker.run(self.options, stop.wait()), scheduler);
+        tokio::join!(
+            self.worker.run(self.options, stop.wait()),
+            scheduler,
+            dispatcher
+        );
     }
 }
 
@@ -536,6 +555,9 @@ async fn job_worker(config: &Config, clock: Clock) -> Result<JobRunner, StartupE
     schedule::sync(&pool, &registry, clock.now())
         .await
         .map_err(StartupError::Schedules)?;
+    outbox::warn_unknown_topics(&pool, &registry)
+        .await
+        .map_err(StartupError::UnknownTopics)?;
     let queues = registry.queues();
     tracing::info!(
         concurrency = %config.worker_concurrency,
@@ -802,8 +824,8 @@ mod tests {
     }
 
     #[test]
-    fn the_job_pool_has_a_connection_per_job_and_one_each_for_claims_and_ticks() {
-        for (concurrency, max) in [(1, 3), (4, 6), (64, 66)] {
+    fn the_job_pool_has_a_connection_per_job_and_one_each_for_claims_ticks_and_dispatch() {
+        for (concurrency, max) in [(1, 4), (4, 7), (64, 67)] {
             let concurrency = std::num::NonZeroU32::new(concurrency).unwrap();
             let options = jobs_pool_options(concurrency);
             assert_eq!(options.get_max_connections(), max, "{concurrency}");
