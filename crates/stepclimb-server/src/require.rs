@@ -54,10 +54,15 @@ pub mod code {
     pub const PERMISSION_DENIED: &str = "permission.denied";
     /// The account does not exist in the organization or is not visible to the caller (404).
     pub const ACCOUNT_NOT_FOUND: &str = "account.not_found";
+    /// The course does not exist in the organization or is not visible to the caller (404).
+    pub const COURSE_NOT_FOUND: &str = "course.not_found";
 }
 
 /// The path parameter [`AccountTarget`] and [`AccountParentTarget`] read.
 pub const ACCOUNT_ID_PARAM: &str = "account_id";
+
+/// The path parameter [`CourseTarget`] reads.
+pub const COURSE_ID_PARAM: &str = "course_id";
 
 /// A request whose principal holds the permission `R` at the target `T` resolves to (B17), or
 /// whose organization's plan includes the feature `R` (spec 10 B9).
@@ -132,7 +137,7 @@ impl Target for AccountTarget {
         state: &AppState,
         grants: &Grants,
     ) -> Result<Self, ApiError> {
-        let id = account_id(parts, state).await?;
+        let id = uuid_param(parts, state, ACCOUNT_ID_PARAM).await?;
         let path = ancestors_path(state, grants, id).await?;
         grants.check::<P>(&grants::Target::Account(path.clone()))?;
         Ok(Self { id, path })
@@ -156,7 +161,7 @@ impl Target for AccountParentTarget {
         state: &AppState,
         grants: &Grants,
     ) -> Result<Self, ApiError> {
-        let id = account_id(parts, state).await?;
+        let id = uuid_param(parts, state, ACCOUNT_ID_PARAM).await?;
         let path = ancestors_path(state, grants, id).await?;
         let parent_id = check_at_parent::<P>(grants, path)?;
         Ok(Self { id, parent_id })
@@ -185,6 +190,44 @@ pub fn check_at_parent<P: Permission>(
     Ok(Some(parent_id))
 }
 
+/// The course named by the path parameter `course_id`, which `P` must be effective over (M1 spec
+/// 02 B24): resolved to its account's path inside the principal's organization, then B17 steps
+/// 3 to 5 with code `course.not_found`. A course is visible to a principal holding any
+/// effective permission at a scope containing it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CourseTarget {
+    pub id: Uuid,
+    /// The ids on the path of the course's account: the root first, the account last.
+    pub account_path: Vec<Uuid>,
+}
+
+impl CourseTarget {
+    /// The evaluator's target for this course.
+    pub fn target(&self) -> grants::Target {
+        grants::Target::Course {
+            account_path: self.account_path.clone(),
+            course_id: self.id,
+        }
+    }
+}
+
+impl Target for CourseTarget {
+    async fn resolve<P: Permission>(
+        parts: &mut Parts,
+        state: &AppState,
+        grants: &Grants,
+    ) -> Result<Self, ApiError> {
+        let id = uuid_param(parts, state, COURSE_ID_PARAM).await?;
+        let account_path = stepclimb_core::courses::path(&state.db, grants.scope(), id)
+            .await
+            .map_err(|error| ApiError::internal(&error))?
+            .ok_or(Denied::CourseNotFound)?;
+        let course = Self { id, account_path };
+        grants.check::<P>(&course.target())?;
+        Ok(course)
+    }
+}
+
 /// For list routes and routes whose target is in the body: passes when `P` is effective at any
 /// scope, otherwise 403. The handler then filters by `grants().scopes_with::<P>()`, or checks a
 /// body target with `grants().require_at::<P>(..)`.
@@ -205,8 +248,12 @@ impl Target for AnyScope {
     }
 }
 
-/// The `account_id` path parameter: 400 when it is not a UUID, 500 when the route has none.
-async fn account_id(parts: &mut Parts, state: &AppState) -> Result<Uuid, ApiError> {
+/// The path parameter `name`: 400 when it is not a UUID, 500 when the route has none.
+async fn uuid_param(
+    parts: &mut Parts,
+    state: &AppState,
+    name: &'static str,
+) -> Result<Uuid, ApiError> {
     let params = RawPathParams::from_request_parts(parts, state)
         .await
         .map_err(|rejection| {
@@ -218,16 +265,17 @@ async fn account_id(parts: &mut Parts, state: &AppState) -> Result<Uuid, ApiErro
         })?;
     let value = params
         .iter()
-        .find_map(|(key, value)| (key == ACCOUNT_ID_PARAM).then_some(value))
-        .ok_or_else(|| ApiError::internal(&MissingAccountIdParam))?;
+        .find_map(|(key, value)| (key == name).then_some(value))
+        .ok_or_else(|| ApiError::internal(&MissingParam(name)))?;
     Uuid::try_parse(value)
         .map_err(|_| ApiError::malformed("A path parameter is not valid for this operation."))
 }
 
-/// A route took an account target without an `{account_id}` segment: a bug in the router.
+/// A route took a target without its path segment (`{account_id}`, `{course_id}`): a bug in
+/// the router.
 #[derive(Debug, thiserror::Error)]
-#[error("the route has no {ACCOUNT_ID_PARAM} path parameter for its account target")]
-struct MissingAccountIdParam;
+#[error("the route has no {0} path parameter for its target")]
+struct MissingParam(&'static str);
 
 /// The path of the account `id` in the grants' organization, or 404 when it has none.
 async fn ancestors_path(
@@ -248,6 +296,11 @@ impl From<Denied> for ApiError {
                 StatusCode::NOT_FOUND,
                 code::ACCOUNT_NOT_FOUND,
                 "No account with this id exists, or you cannot see it.",
+            ),
+            Denied::CourseNotFound => ApiError::new(
+                StatusCode::NOT_FOUND,
+                code::COURSE_NOT_FOUND,
+                "No course with this id exists, or you cannot see it.",
             ),
             Denied::OrganizationNotFound => ApiError::new(
                 StatusCode::NOT_FOUND,
@@ -565,6 +618,9 @@ mod tests {
         let other_org = ApiError::from(Denied::OrganizationNotFound);
         assert_eq!(other_org.status(), StatusCode::NOT_FOUND);
         assert_eq!(other_org.code(), "org.not_found");
+        let course = ApiError::from(Denied::CourseNotFound);
+        assert_eq!(course.status(), StatusCode::NOT_FOUND);
+        assert_eq!(course.code(), "course.not_found");
         let forbidden = ApiError::from(RequireError::Denied(Denied::Forbidden));
         assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
         assert_eq!(forbidden.code(), "permission.denied");

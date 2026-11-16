@@ -11,7 +11,8 @@
 //! id the caller cannot see does. A move may not give the caller a permission over the moved
 //! account it lacks there now (403 `permission.escalation`): every grant on the destination's
 //! path contains the account after the move. Deleting refuses an account that role assignments
-//! are scoped to; the role-assignment routes remove them.
+//! are scoped to, which the role-assignment routes remove, and an account that holds a course,
+//! which the course move route moves out (M1 spec 02 B8, B9).
 //!
 //! The `Require` extractor checks the path's account before the handler runs. Create, move and
 //! delete then check again, inside the transaction that holds the organization's tree lock
@@ -64,6 +65,8 @@ pub mod code {
     pub const ACCOUNT_HAS_CHILDREN: &str = "account.has_children";
     /// Role assignments are still scoped to the account (409).
     pub const ACCOUNT_HAS_ASSIGNMENTS: &str = "account.has_assignments";
+    /// A course, in any status, still belongs to the account (409).
+    pub const ACCOUNT_HAS_COURSES: &str = "account.has_courses";
     /// The create or move would put an account more than 16 levels below the root (409).
     pub const ACCOUNT_TOO_DEEP: &str = "account.too_deep";
 }
@@ -78,7 +81,7 @@ problem_responses! {
     MoveForbidden => "`permission.denied`: you can see the account's parent but do not hold `account.manage` there. `permission.escalation`: the destination would give you, over the moved account, a permission you do not hold over it now. `auth.csrf_refused`: the request did not come from this site.",
     CreateConflict => "`account.too_deep`: the new account would be more than 16 levels below the root.",
     MoveConflict => "`account.root_immutable`: the root account cannot be moved. `account.move_into_descendant`: the destination is the account itself or one of its descendants. `account.too_deep`: an account of the moved subtree would end more than 16 levels below the root.",
-    DeleteConflict => "`account.root_immutable`: the root account cannot be deleted. `account.has_children`: the account has child accounts; move or delete them first. `account.has_assignments`: role assignments are scoped to the account; remove them first.",
+    DeleteConflict => "`account.root_immutable`: the root account cannot be deleted. `account.has_children`: the account has child accounts; move or delete them first. `account.has_assignments`: role assignments are scoped to the account; remove them first. `account.has_courses`: courses, archived ones included, belong to the account; move them to another account first.",
 }
 
 /// An account of the caller's organization.
@@ -407,7 +410,8 @@ pub async fn move_account(
     Ok(Json(Account::from_repo(moved)?))
 }
 
-/// Delete an account that has no child accounts, and the role assignments scoped to it.
+/// Delete an account that has no child accounts, no role assignments scoped to it and no
+/// courses.
 #[utoipa::path(
     delete,
     path = "/api/v1/accounts/{account_id}",
@@ -558,6 +562,10 @@ fn account_error(error: accounts::Error) -> ApiError {
             code::ACCOUNT_HAS_ASSIGNMENTS,
             "Role assignments are scoped to the account. Remove them first.",
         ),
+        E::HasCourses => conflict(
+            code::ACCOUNT_HAS_COURSES,
+            "Courses belong to the account. Move them to another account first.",
+        ),
         E::TooDeep => conflict(
             code::ACCOUNT_TOO_DEEP,
             "Accounts cannot be nested more than 16 levels below the root.",
@@ -639,6 +647,12 @@ mod tests {
                 None,
             ),
             (accounts::Error::TooDeep, 409, "account.too_deep", None),
+            (
+                accounts::Error::HasCourses,
+                409,
+                "account.has_courses",
+                None,
+            ),
             (
                 accounts::Error::HasAssignments,
                 409,

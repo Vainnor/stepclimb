@@ -408,12 +408,21 @@ each recommendation is taken and stands until the owner reviews it.
   Canvas's enrollments do, M4's enrollment rules (group to course as role R) write the same rows,
   and the evaluator reads one source per scope type. Until the owner answers, nothing is built on
   any option (I2 is blocked), and `m0/09` B12's "until the M1 courses spec enables it" stands.
+  Note for the owner (I1 review, 2026-11-16): Student and Observer now list `course.view`, which
+  is grantable at organization and account scope, so an existing Student assignment at the
+  organization or an account (M0 allowed it there, with no effect) now shows every published
+  course in its scope; Observer cannot be assigned (`m0/09` B13). Under (a) Student and Observer would be given at course scope
+  only; whether to refuse them at organization and account scope is part of this question.
 - **Q2. Course code rules.** The plan names a code and no rule. Options: (a) required, 1 to 50
   characters, unique per organization ignoring ASCII case; (b) optional and not unique; (c)
   required and unique per account. Recommendation: (a). A code is how staff and reports name a
   course ("S1"), and a duplicate would make a report ambiguous; deep links use ids, so a code can
   still change.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
+  Note for the owner (I1 review, 2026-11-16): with organization-wide codes, a create or a patch
+  answering 409 `course.code_taken` tells a caller that a course with that code exists somewhere
+  in the organization, including accounts it cannot see. Option (c) would confine that to one
+  account; (a) accepts it, since a code names a course and says nothing of its content.
 - **Q3. What a course's dates do.** The plan lists "dates" without a rule. Options: (a) shown to
   learners and staff only, with no access rule; (b) learners cannot open the course before
   `start_at`, and it becomes read-only after `end_at`; (c) (b) as an opt-in setting.
@@ -487,6 +496,52 @@ each recommendation is taken and stands until the owner reviews it.
   course-only permission. Recommendation: (a); the left-out permissions give the enrolled person a
   relation to the course, not power over anyone else. Every option changes how `m0/09` B12 step 5
   reads for enrollments, so it waits for the owner; I2 is blocked until then.
+- **Q13. What a draft or a template answers to a caller without `course.view_all` (open, for
+  the owner).** B10 hides a draft or a template behind 404 on `GET` only. B24 makes a course
+  visible to any effective permission, so on `PATCH`, status and move a caller with some course
+  permission but no `course.view_all` gets 403 rather than 404 (a draft's existence shows), and a
+  caller with `course.manage` but no `course.view_all` gets the draft's body back from a change.
+  No built-in role holds `course.manage` without `course.view_all`; a custom role can. Options:
+  (a) as built in I1: B10's 404 on `GET` and the list only; (b) every course route answers 404
+  `course.not_found` for a draft or a template to a caller without `course.view_all` there;
+  (c) as (a), and a change made without `course.view_all` answers 204 with no body.
+  Recommendation: (b), one rule for every route, so a draft's existence and content reach only
+  those who may read it. I1 builds (a) and leaves the change to the owner.
+
+### Decisions made building I1
+
+Coordinator decisions (overnight, 2026-11-16), pending owner review. None depends on Q1 or Q12.
+
+- **Field codes.** A blank title or code answers 422 `name.empty` at `/title` or `/code`; a title
+  over 200 characters `name.too_long`; a code over 50 characters `text.too_long`. Codes are
+  trimmed like titles. These are the codes accounts and users already answer.
+- **Dates.** `start_at` and `end_at` take RFC 3339 with an offset (`Z` or `±hh:mm`) and are
+  stored in UTC; anything else is 400 `request.malformed`. A date before 1970 or from
+  2200-01-01 on answers 422 `course.date_out_of_range`: the server writes neither end of that
+  range back as RFC 3339 exactly.
+- **Reach rechecked at the write.** `PATCH` and the status route read the course `FOR NO KEY
+  UPDATE` and its account `FOR SHARE` and check `course.manage` again on that path, as account
+  renames do (`m0/02` B22); create and move do it under the tree lock (B2, B9).
+- **B4 without learners.** Published back to draft is allowed in I1, which has no enrollments;
+  I2 adds the 409 `course.has_learners` check to `courses::set_status`.
+- **Templates in I1.** B4's 409 `course.template`, B10's rule for templates and B11's
+  `template` filter are built in I1, which covers B1 to B11; only the copy route creates
+  templates (I3).
+- **`permissions` (B10)** lists the catalog keys grantable at course scope that the caller
+  holds at the course, sorted. Organization and account keys are left out.
+- **`account_id` filter (B11).** 404 only for an account the caller cannot see; a visible
+  account where the caller holds no `course.view` lists nothing.
+- **B9 in place.** A move to the course's own account still needs `course.create` there; it
+  writes nothing.
+- **`course.participate` waits for I2.** I1 adds seven of the eight catalog entries; Student's
+  list in I1 is `course.view` alone. `course.participate` is grantable at course scope only, so
+  no assignment makes it effective, and with it in the catalog `m0/09` B12 step 5 and the "holds
+  every permission" rule of the sign-in settings would refuse every Organization admin. How those
+  rules treat a course-only permission is Q12's to settle; I2 adds the entry and Student's key
+  once it is answered.
+- **Course moves refuse a gain.** As an account move does (`m0/02` B23), a course move answers
+  403 `permission.escalation` when the destination would give the caller a permission over the
+  course it does not hold over it now, checked under the tree lock with the paths read there.
 
 ## Issues
 

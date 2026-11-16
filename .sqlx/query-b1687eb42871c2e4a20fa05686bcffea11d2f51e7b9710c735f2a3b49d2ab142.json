@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT a.path::text AS \"path!\"\n           FROM courses c JOIN accounts a ON a.org_id = c.org_id AND a.id = c.account_id\n           WHERE c.org_id = $1 AND c.id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "path!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b1687eb42871c2e4a20fa05686bcffea11d2f51e7b9710c735f2a3b49d2ab142"
+}

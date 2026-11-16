@@ -377,7 +377,14 @@ async fn a_builtin_role_reads_its_permissions_from_code(pool: PgPool) {
             "account.manage",
             "user.view",
             "role.view",
-            "role.assign"
+            "role.assign",
+            "course.view",
+            "course.view_all",
+            "course.create",
+            "course.manage",
+            "course.content_edit",
+            "enrollment.view",
+            "enrollment.manage"
         ])
     );
 }

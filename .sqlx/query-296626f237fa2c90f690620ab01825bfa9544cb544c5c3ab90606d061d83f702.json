@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE courses\n         SET account_id = $3,\n             updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond'\n         WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "296626f237fa2c90f690620ab01825bfa9544cb544c5c3ab90606d061d83f702"
+}

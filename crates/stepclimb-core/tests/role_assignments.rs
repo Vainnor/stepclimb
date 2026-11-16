@@ -428,7 +428,14 @@ async fn grants_carry_the_scope_path_and_builtin_permissions_from_code(pool: PgP
             "account.manage",
             "user.view",
             "role.view",
-            "role.assign"
+            "role.assign",
+            "course.view",
+            "course.view_all",
+            "course.create",
+            "course.manage",
+            "course.content_edit",
+            "enrollment.view",
+            "enrollment.manage",
         ]
     );
     assert_eq!(

@@ -29,6 +29,7 @@ use stepclimb_core::{
     OrgScope, Source, accounts,
     audit::{self, Actor},
     clock::ManualClock,
+    courses,
     id::{Uuid, new_id},
     organizations,
     role_assignments::{self, NewAssignment, Scope},
@@ -251,6 +252,19 @@ impl Fixture {
         roles::create_custom(&self.pool, scope(self.org), &role, now(), Actor::Instance)
             .await
             .expect("create role")
+            .id
+    }
+
+    /// A new course in Tower: its id.
+    async fn course(&self) -> Uuid {
+        let new = courses::NewCourse {
+            account_id: self.tower,
+            title: "Walked course".into(),
+            code: format!("W{}", &new_id().simple().to_string()[20..]),
+        };
+        courses::create(&self.pool, scope(self.org), &new, now(), Actor::Instance)
+            .await
+            .expect("create course")
             .id
     }
 
@@ -938,8 +952,8 @@ const EMPTY_SCOPE_ALLOWED: &[&str] = &[
 
 /// B27, B44: a key with no scopes, whose owner holds every catalog permission at the
 /// organization, is refused on every `/api/v1` operation of the document but
-/// [`EMPTY_SCOPE_ALLOWED`]: 403, or for a route on an account the 404 B17 answers for an account
-/// the principal cannot see. The walk reads the document, which lists every route the router
+/// [`EMPTY_SCOPE_ALLOWED`]: 403, or for a route on an account or a course the 404 B17 answers
+/// for a target the principal cannot see. The walk reads the document, which lists every route the router
 /// mounts (`tests/csrf.rs` T17), so a new route is walked without being named here.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn an_empty_scope_key_is_refused_on_every_operation_but_the_allowed_ones(pool: PgPool) {
@@ -957,6 +971,10 @@ async fn an_empty_scope_key_is_refused_on_every_operation_but_the_allowed_ones(p
             let id = operation["operationId"].as_str().expect("an operationId");
             walked.push(id.to_owned());
             let mut uri = path.replace("{account_id}", &f.tower.to_string());
+            if uri.contains("{course_id}") {
+                let course = f.course().await;
+                uri = uri.replace("{course_id}", &course.to_string());
+            }
             if uri.contains("{user_id}") {
                 let target = f.user("Walk target").await;
                 uri = uri.replace("{user_id}", &target.to_string());
@@ -977,9 +995,11 @@ async fn an_empty_scope_key_is_refused_on_every_operation_but_the_allowed_ones(p
             }
             let hidden_account =
                 path.contains("{account_id}") && answer.code() == "account.not_found";
+            let hidden_course = path.contains("{course_id}") && answer.code() == "course.not_found";
             assert!(
                 answer.status == StatusCode::FORBIDDEN
-                    || (answer.status == StatusCode::NOT_FOUND && hidden_account),
+                    || (answer.status == StatusCode::NOT_FOUND
+                        && (hidden_account || hidden_course)),
                 "{id} answered an empty-scope key: {answer:?}"
             );
         }
