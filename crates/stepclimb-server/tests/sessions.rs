@@ -568,7 +568,8 @@ async fn t16_a_bearer_header_is_never_answered_with_the_cookie_beside_it(pool: P
 
     for (authorization, code) in [
         ("Bearer sc_someone-else_000000", "auth.api_key_invalid"),
-        ("bearer x", "auth.unauthenticated"),
+        ("bearer x", "auth.access_token_invalid"),
+        ("Bearer", "auth.unauthenticated"),
     ] {
         let answer = whoami_with_authorization(&fixture, &cookie, authorization).await;
         assert_eq!(answer.status, StatusCode::UNAUTHORIZED, "{authorization}");

@@ -23,7 +23,7 @@
 //! `/api/v1` endpoints on the conventions in [`error`] (problem details), [`extract`]
 //! (extractors that reject with them) and [`pagination`] (cursor pages), authenticate them with
 //! [`session`] (the browser session cookie and the `Authenticated` extractor, which hands bearer
-//! requests to [`api_key`]) within the
+//! requests to [`api_key`] and [`app_token`]) within the
 //! organization [`request_org`] resolves (whose `RequestOrg` extractor gives unauthenticated
 //! routes their organization), and protect them with [`require`] (`Require<P, T>`, the
 //! permission check, and `Require<F>`, the feature check of [`entitlements`], which also
@@ -33,7 +33,9 @@
 //! generic OAuth 2 steps in [`oauth2_sign_in`]; their requests to the provider go through
 //! [`providers`]. The providers `stepclimb.toml` declares are written to their organizations at
 //! startup by [`config_providers`]. The OAuth 2.1 server for Stepclimb's own apps authorizes an
-//! app at `/oauth/authorize` ([`oauth_authorize`], drawing its pages with [`oauth_page`]). Every
+//! app at `/oauth/authorize` ([`oauth_authorize`], drawing its pages with [`oauth_page`]) and
+//! issues, refreshes and revokes its tokens at `/oauth/token` and `/oauth/revoke`
+//! ([`oauth_token`]); an app access token authenticates `/api/v1` requests ([`app_token`]). Every
 //! unsafe request passes [`csrf`]
 //! first. Sign-in and token routes declare a [`rate_limit`] budget, counted per client address
 //! as [`client_ip`] finds it; a route that changes roles, assignments, accounts or the
@@ -48,6 +50,7 @@ pub mod admission_webhook_call;
 pub mod admission_webhook_limits;
 pub mod api_key;
 pub mod app;
+pub mod app_token;
 pub mod appearance;
 pub mod audit;
 pub mod auth;
@@ -74,6 +77,7 @@ pub mod my_passkeys;
 pub mod oauth2_sign_in;
 pub mod oauth_authorize;
 mod oauth_page;
+pub mod oauth_token;
 pub mod openapi;
 pub mod organization;
 pub mod pagination;

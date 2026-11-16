@@ -225,6 +225,8 @@ async fn a_new_organization_offers_its_default_local_methods(pool: PgPool) {
         json!({
             "issuer": "https://lms.example.org",
             "authorization_endpoint": "https://lms.example.org/oauth/authorize",
+            "token_endpoint": "https://lms.example.org/oauth/token",
+            "revocation_endpoint": "https://lms.example.org/oauth/revoke",
         })
     );
     let errors = common::schema_errors(&document(), "Discovery", &body);

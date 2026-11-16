@@ -13,7 +13,8 @@
 //! [`role_assignments`] repositories, with the startup sync of built-in role rows
 //! ([`roles::sync_builtin`]); the permission evaluator, [`grants::Grants`]; and the
 //! [`auth_flows`] repository, the state of a sign-in that spans several requests, and
-//! [`oauth_codes`], the authorization codes of the OAuth 2.1 server for Stepclimb's own apps; and the
+//! [`oauth_codes`], the authorization codes of the OAuth 2.1 server for Stepclimb's own apps, and
+//! [`oauth_refresh_tokens`], its refresh token families and the app access token resolver; and the
 //! [`identity_providers`] and [`identities`] repositories, which link a user to an identity
 //! provider by the provider's subject; and [`local_sign_in`], the local provider row and its
 //! method switches, with [`local_tokens`] (enrollment links), [`passkeys`], [`local_logins`]
@@ -51,6 +52,7 @@ pub mod local_tokens;
 pub mod local_totp;
 mod name;
 pub mod oauth_codes;
+pub mod oauth_refresh_tokens;
 pub mod org_plans;
 pub mod organizations;
 pub mod passkeys;

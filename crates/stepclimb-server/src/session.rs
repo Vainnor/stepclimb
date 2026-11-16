@@ -180,9 +180,10 @@ pub(crate) fn presented_hash(headers: &HeaderMap) -> Option<TokenHash> {
     }
 }
 
-/// A request a valid browser session (B8 to B11) or API key (B26, B27) authenticates.
+/// A request a valid browser session (B8 to B11), API key (B26, B27) or app access token (B36)
+/// authenticates.
 ///
-/// `user_id` is the session's user, or the key's owner. This type carries no permissions: a key
+/// `user_id` is the session's or app token's user, or the key's owner. This type carries no permissions: a key
 /// acts with its owner's grants narrowed to its scopes, which only `require::Require` and
 /// `require::AuthOnly` compute, so a handler that checks a permission takes one of those, never
 /// this type alone.
@@ -200,6 +201,8 @@ pub enum Via {
     Session,
     /// An `Authorization: Bearer sc_...` API key of this service account.
     ApiKey { service_account_id: Uuid },
+    /// An `Authorization: Bearer` app access token of this refresh family (B36).
+    AppToken { family_id: Uuid },
 }
 
 impl Authenticated {
@@ -220,13 +223,21 @@ impl Authenticated {
             via: Via::ApiKey { service_account_id },
         }
     }
+
+    pub(crate) fn by_app_token(user_id: Uuid, scope: OrgScope, family_id: Uuid) -> Self {
+        Self {
+            user_id,
+            scope,
+            via: Via::AppToken { family_id },
+        }
+    }
 }
 
 /// An authenticated request and, for an API key, the key's scopes, which its owner's grants are
 /// narrowed to (B27).
 pub(crate) struct Credentialed {
     pub(crate) principal: Authenticated,
-    /// `None` for a browser session, which acts with all of its user's grants.
+    /// `None` for a browser session or app token, which act with all of their user's grants.
     pub(crate) key_scopes: Option<Vec<String>>,
 }
 
@@ -298,7 +309,8 @@ impl FromRequestParts<AppState> for Authenticated {
 /// Authenticate the request by its bearer credential or its session cookie.
 ///
 /// B16: a bearer request is authenticated by its bearer credential only, never by a cookie
-/// beside it, and its cookie is left alone; `crate::api_key` answers it. Any other request is
+/// beside it, and its cookie is left alone; `crate::api_key` answers it, handing an app access
+/// token to `crate::app_token`. Any other request is
 /// the session cookie's.
 pub(crate) async fn authenticate(
     parts: &mut Parts,
@@ -352,15 +364,17 @@ pub(crate) async fn by_cookie(
     }
 }
 
-/// 401 `auth.suspended`: the credential's user, or the API key's owner, is suspended (B11, B27).
+/// 401 `auth.suspended`: the credential's user, or the API key's owner, is suspended (B11, B27,
+/// B36).
 pub(crate) fn suspended() -> ApiError {
     unauthorized(code::AUTH_SUSPENDED, "The account is suspended.")
 }
 
-/// The organization the session or API key must belong to (B6, B8, B26): the request's.
+/// The organization the session, API key or app token must belong to (B6, B8, B26, B36): the
+/// request's.
 #[expect(
     clippy::disallowed_methods,
-    reason = "spec 08 B8, B13, B26: the credential extractor and sign-out look the session or key up within the request's organization"
+    reason = "spec 08 B8, B13, B26, B36: the credential extractor and sign-out look the session, key or app token up within the request's organization"
 )]
 pub(crate) async fn request_organization(
     state: &AppState,

@@ -390,10 +390,17 @@ async fn t22_a_wrong_checksum_is_refused_without_a_query(pool: PgPool) {
     f.get(ME, &[Auth::Key(unknown.expose_secret())])
         .await
         .expect(StatusCode::UNAUTHORIZED, "auth.api_key_invalid");
-    // A bearer credential that is not an API key is no credential this server accepts.
-    f.get(ME, &[Auth::Key("not-an-api-key")])
-        .await
-        .expect(StatusCode::UNAUTHORIZED, "auth.unauthenticated");
+    // A bearer credential that is not an API key is read as an app access token, and this one
+    // is none, refused before any query.
+    send(
+        &offline,
+        Method::GET,
+        ME,
+        &[Auth::Key("not-an-api-key")],
+        None,
+    )
+    .await
+    .expect(StatusCode::UNAUTHORIZED, "auth.access_token_invalid");
 }
 
 /// T23 (B27): a key scoped to `user.view` whose owner holds `user.view` and `account.view` can

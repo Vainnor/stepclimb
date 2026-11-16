@@ -30,6 +30,8 @@ export function discoveryFixture(
     oauth: {
       issuer: "http://localhost",
       authorization_endpoint: "http://localhost/oauth/authorize",
+      token_endpoint: "http://localhost/oauth/token",
+      revocation_endpoint: "http://localhost/oauth/revoke",
     },
   };
 }

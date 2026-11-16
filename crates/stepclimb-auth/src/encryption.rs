@@ -40,6 +40,13 @@
 //! (`deploy/compose/development-encryption-keys`). The ring accepts it, and
 //! [`KeyRing::development_key_ids`] names it so the server can warn.
 //!
+//! Each key also derives the key the app access tokens of the OAuth 2.1 server are signed with
+//! (docs/specs/m0/08-sessions-and-csrf.md Q12, B46, ADR 0032): HMAC-SHA-256 keyed with the AES key
+//! over [`ACCESS_TOKEN_KEY_LABEL`]. The AES key itself never signs, and the derived key never
+//! encrypts. Only `oauth_server::access_token` reads the derived keys: the current key's signs, and
+//! the key a token names checks it, so a rotation keeps the tokens signed before it valid until
+//! they expire.
+//!
 //! Errors and `Debug` output name key ids and entry positions, never key material or plaintext.
 
 use std::fmt;
@@ -49,6 +56,8 @@ use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
 use crate::token::{RandomError, random_bytes};
@@ -59,6 +68,10 @@ const NONCE_BYTES: usize = 12;
 const TAG_BYTES: usize = 16;
 const FORMAT_VERSION: u8 = 1;
 const MAX_KEY_ID_LEN: usize = 32;
+
+/// What the key that signs app access tokens is derived for: the message HMAC-SHA-256 under the
+/// AES key authenticates to make it.
+pub const ACCESS_TOKEN_KEY_LABEL: &[u8] = b"stepclimb oauth access token signing key v1";
 
 /// The bytes of the published local development key. Anything encrypted under it is readable by
 /// anyone with this repository.
@@ -74,6 +87,8 @@ pub struct KeyRing {
 struct RingKey {
     id: String,
     cipher: Aes256Gcm,
+    /// The HMAC-SHA-256 key app access tokens are signed with, derived from the AES key.
+    access_token_key: [u8; KEY_BYTES],
     is_development_key: bool,
 }
 
@@ -193,6 +208,22 @@ impl KeyRing {
             .map_err(|_| DecryptError::Inauthentic)
     }
 
+    /// The current key's id and the access token key derived from it, which new access tokens
+    /// are signed with.
+    pub(crate) fn current_access_token_key(&self) -> (&str, &[u8; KEY_BYTES]) {
+        let key = self.current();
+        (key.id.as_str(), &key.access_token_key)
+    }
+
+    /// The access token key derived from the key `key_id`, or `None` when the ring does not
+    /// hold it.
+    pub(crate) fn access_token_key(&self, key_id: &str) -> Option<&[u8; KEY_BYTES]> {
+        self.keys
+            .iter()
+            .find(|key| key.id == key_id)
+            .map(|key| &key.access_token_key)
+    }
+
     fn current(&self) -> &RingKey {
         // `parse` refuses an empty ring, and no other constructor exists.
         &self.keys[0]
@@ -230,8 +261,19 @@ fn parse_entry(position: usize, entry: &str) -> Result<RingKey, KeyRingError> {
     Ok(RingKey {
         id: id.to_owned(),
         cipher: Aes256Gcm::new(&Key::<Aes256Gcm>::from(bytes)),
+        access_token_key: hmac_sha256(&bytes, ACCESS_TOKEN_KEY_LABEL),
         is_development_key: bytes.ct_eq(&DEVELOPMENT_KEY).into(),
     })
+}
+
+/// HMAC-SHA-256 of `message` under `key`: how an access token key is derived.
+fn hmac_sha256(key: &[u8; KEY_BYTES], message: &[u8]) -> [u8; KEY_BYTES] {
+    Hmac::<Sha256>::new_from_slice(key)
+        .expect("HMAC takes any key length")
+        .chain_update(message)
+        .finalize()
+        .into_bytes()
+        .into()
 }
 
 /// The header, then each context part prefixed by its length. The header carries its own id
@@ -539,5 +581,29 @@ mod tests {
             ring.decrypt(&sealed, &[]).unwrap_err(),
             DecryptError::NoContext
         );
+    }
+    /// The derived key for key A, computed outside this code (Python's `hmac` over the label).
+    const DERIVED_FROM_A: &str = "1b6062085b7977aa56b1b218d9aa0b06a97a92232d3ece7912eb7f37ce227ca4";
+
+    #[test]
+    fn the_access_token_key_is_hmac_sha256_of_the_label_under_the_aes_key() {
+        let ring = ring(KEY_A);
+        let (id, key) = ring.current_access_token_key();
+        assert_eq!(id, "a");
+        assert_eq!(key.to_vec(), hex(DERIVED_FROM_A));
+        assert_eq!(ring.access_token_key("a"), Some(key));
+        assert_eq!(ring.access_token_key("b"), None);
+        let other = KeyRing::parse(KEY_A_OTHER).unwrap();
+        assert_ne!(other.access_token_key("a"), Some(key));
+    }
+
+    #[test]
+    fn a_rotated_ring_signs_with_the_new_key_and_keeps_the_old() {
+        let old = ring(KEY_A);
+        let rotated = ring(&format!("{KEY_B},{KEY_A}"));
+        let (id, new_key) = rotated.current_access_token_key();
+        assert_eq!(id, "b");
+        assert_ne!(Some(new_key), old.access_token_key("a"));
+        assert_eq!(rotated.access_token_key("a"), old.access_token_key("a"));
     }
 }

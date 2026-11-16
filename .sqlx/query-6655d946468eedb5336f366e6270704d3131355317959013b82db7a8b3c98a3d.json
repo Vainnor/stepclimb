@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO oauth_refresh_tokens\n               (id, org_id, client_id, user_id, token_hash, family_id, rotated_from, expires_at,\n                created_at, updated_at)\n           SELECT $1, u.org_id, $4, u.id, $5, $1, NULL,\n                  timestamptz 'epoch' + $7::bigint * interval '1 microsecond',\n                  timestamptz 'epoch' + $6::bigint * interval '1 microsecond',\n                  timestamptz 'epoch' + $6::bigint * interval '1 microsecond'\n           FROM users u\n           WHERE u.org_id = $2 AND u.id = $3\n           RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "oauth_refresh_tokens",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Bytea",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6655d946468eedb5336f366e6270704d3131355317959013b82db7a8b3c98a3d"
+}

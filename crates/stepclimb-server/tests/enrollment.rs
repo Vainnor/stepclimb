@@ -830,6 +830,8 @@ async fn every_sign_in_route_is_rate_limited(pool: PgPool) {
         (Method::POST, "/auth/local/totp/enrollment".to_owned()),
         (Method::POST, "/api/v1/me/totp/confirm".to_owned()),
         (Method::POST, "/api/v1/me/totp/disable".to_owned()),
+        (Method::POST, "/oauth/token".to_owned()),
+        (Method::POST, "/oauth/revoke".to_owned()),
     ] {
         assert!(
             operations.contains(&expected),

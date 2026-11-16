@@ -644,8 +644,10 @@ creates and hands over.
   it goes through B21's route with a code, so a stolen admin session cannot drop its own second
   factor without one. The route does not check that TOTP is offered, so TOTP can be cleaned up
   while it is switched off. In the same transaction it ends every session of the user
-  (`sessions::delete_others_of_user` keeping none), so a session that passed the removed second
-  factor, or a thief's, does not outlive it (from the security review of #205).
+  (`sessions::delete_others_of_user` keeping none) and every app sign-in of the user with the
+  user's unused authorization codes (`oauth_refresh_tokens::revoke_all_of_user`,
+  `08-sessions-and-csrf.md` B46), so a session that passed the removed second factor, or a
+  thief's, does not outlive it (from the security review of #205).
 
 ### Magic link
 

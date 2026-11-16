@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! API-key authentication of bearer requests (docs/specs/m0/08-sessions-and-csrf.md B16, B25 to
-//! B27, B29).
+//! Bearer authentication: API keys here, app access tokens in [`crate::app_token`]
+//! (docs/specs/m0/08-sessions-and-csrf.md B16, B25 to B27, B29, B36).
 //!
 //! `session::authenticate` hands every request that carries an `Authorization: Bearer` header
 //! here, whether or not it also carries a session cookie, which is never read or cleared. The
@@ -11,7 +11,8 @@
 //! up by its SHA-256 within the request's organization
 //! (`stepclimb_core::service_accounts::authenticate`): an unknown key, another organization's
 //! and a deleted account's answer the same 401, and a suspended owner answers 401
-//! `auth.suspended`. Any other bearer credential is not one this server accepts and answers 401
+//! `auth.suspended`. Any other credential after `Bearer ` is an app access token and goes to
+//! [`crate::app_token`]. A header that is not one `Bearer <credential>` answers 401
 //! `auth.unauthenticated`.
 //!
 //! The key's text never reaches a log line or an error body: `ApiKey` has no `Display` and a
@@ -22,7 +23,7 @@ use stepclimb_auth::token::{API_KEY_PREFIX, ApiKey};
 use stepclimb_core::service_accounts::{self, KeyAuthentication};
 
 use crate::{
-    AppState,
+    AppState, app_token,
     error::ApiError,
     session::{
         Authenticated, Credentialed, Rejection, request_organization, suspended, unauthenticated,
@@ -46,17 +47,19 @@ fn invalid() -> ApiError {
 
 /// What the request's `Authorization` header presents.
 #[derive(Debug)]
-enum Presented {
+enum Presented<'h> {
     /// A well-formed API key with a matching checksum.
     Key(ApiKey),
     /// A credential that starts with `sc_` but is not a well-formed key.
     MalformedKey,
-    /// Anything else: several headers, a value that is not `Bearer <credential>`, or a
-    /// credential of another kind.
+    /// Any other credential, non-empty and without spaces: an app access token, checked by
+    /// [`crate::app_token`].
+    AccessToken(&'h str),
+    /// Several headers, or a value that is not `Bearer <credential>`.
     Other,
 }
 
-fn presented(headers: &HeaderMap) -> Presented {
+fn presented(headers: &HeaderMap) -> Presented<'_> {
     let mut values = headers.get_all(header::AUTHORIZATION).iter();
     let (Some(value), None) = (values.next(), values.next()) else {
         return Presented::Other;
@@ -64,16 +67,22 @@ fn presented(headers: &HeaderMap) -> Presented {
     let Some((scheme, credential)) = value.to_str().ok().and_then(|v| v.split_once(' ')) else {
         return Presented::Other;
     };
-    if !scheme.eq_ignore_ascii_case("bearer") || !credential.starts_with(API_KEY_PREFIX) {
+    if !scheme.eq_ignore_ascii_case("bearer") {
         return Presented::Other;
     }
-    match ApiKey::parse(credential) {
-        Ok(key) => Presented::Key(key),
-        Err(_) => Presented::MalformedKey,
+    if credential.starts_with(API_KEY_PREFIX) {
+        return match ApiKey::parse(credential) {
+            Ok(key) => Presented::Key(key),
+            Err(_) => Presented::MalformedKey,
+        };
     }
+    if credential.is_empty() || credential.contains(|c: char| c.is_ascii_whitespace()) {
+        return Presented::Other;
+    }
+    Presented::AccessToken(credential)
 }
 
-/// The principal and scopes of a bearer request's API key.
+/// The principal of a bearer request: an API key's, with its scopes, or an app access token's.
 pub(crate) async fn authenticate(
     parts: &Parts,
     state: &AppState,
@@ -81,6 +90,7 @@ pub(crate) async fn authenticate(
     let key = match presented(&parts.headers) {
         Presented::Key(key) => key,
         Presented::MalformedKey => return Err(Rejection::keep(invalid())),
+        Presented::AccessToken(token) => return app_token::authenticate(token, parts, state).await,
         Presented::Other => return Err(Rejection::keep(unauthenticated())),
     };
     let request_org = request_organization(state, &parts.headers)
@@ -123,8 +133,8 @@ mod tests {
     #[test]
     fn a_well_formed_key_is_presented_in_any_case_of_the_scheme() {
         for value in [format!("Bearer {GOOD}"), format!("bEaReR {GOOD}")] {
-            let presented = presented(&with(&[&value]));
-            assert!(matches!(presented, Presented::Key(_)), "{value}");
+            let headers = with(&[&value]);
+            assert!(matches!(presented(&headers), Presented::Key(_)), "{value}");
         }
     }
 
@@ -145,13 +155,26 @@ mod tests {
     }
 
     #[test]
-    fn other_credentials_and_repeated_headers_are_no_key() {
+    fn any_other_bearer_credential_is_an_access_token() {
+        for value in ["Bearer eyJhbGciOiJIUzI1NiJ9.e30.x", "bearer x", "Bearer s"] {
+            assert!(
+                matches!(presented(&with(&[value])), Presented::AccessToken(_)),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_headers_and_other_schemes_are_no_credential() {
         let good = format!("Bearer {GOOD}");
         for headers in [
-            with(&["Bearer eyJhbGciOiJIUzI1NiJ9.e30.x"]),
             with(&["Bearer"]),
+            with(&["Bearer "]),
+            with(&["Bearer  eyJ.e30.x"]),
+            with(&["Bearer eyJ.e30.x x"]),
             with(&[&format!("Basic {GOOD}")]),
             with(&[&good, &good]),
+            with(&[&good, "Bearer eyJ.e30.x"]),
             HeaderMap::new(),
         ] {
             assert!(

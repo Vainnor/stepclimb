@@ -117,7 +117,7 @@ pub mod code {
 
 problem_responses! {
     UserNotFound => "`user.not_found`: no user of the organization has this id. `org.not_found`: the request's organization cannot be determined.",
-    UserWriteForbidden => "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email` or `status` of a user who holds a permission the caller does not hold at organization scope. `auth.session_required`: an API key changes `email` or `status` of its own owner. `auth.csrf_refused`: the request did not come from this site.",
+    UserWriteForbidden => "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email` or `status` of a user who holds a permission the caller does not hold at organization scope. `auth.session_required`: an API key changes `email` or `status` of its own owner, or an app token of its own user. `auth.csrf_refused`: the request did not come from this site.",
     UserCreateForbidden => "`permission.denied`: the caller does not hold `user.manage` at organization scope. `entitlement.limit_reached`: the organization's plan allows no more users; `limit` and `max` name the limit and its value. `auth.csrf_refused`: the request did not come from this site.",
     UserCreateConflict => "`user.external_id_taken`: another user of the organization has this external id. `user.email_taken`: another user of the organization has this email, in any letter case. `identity.taken`: one of `identities` is already linked to a user.",
     UserUpdateConflict => "`user.externally_managed`: an identity provider, the sync API, SCIM or a connector owns the user's names and email; change them there. `user.cannot_suspend_self`: you cannot suspend yourself. `user.email_taken`: another user of the organization has this email, in any letter case. `role_assignment.last_org_admin`: the user is the organization's last active Organization admin.",
@@ -647,10 +647,10 @@ fn refuse_patch(patch: &UserPatch, user: &repo::User, caller: Uuid) -> Result<()
 /// neither a new or removed assignment nor an edited custom role can change what was checked.
 /// The identity admin routes (`crate::identities`) apply it too, with their own `detail`.
 ///
-/// Before anything is read, a request authenticated by an API key whose target is the key's own
-/// owner answers 403 `auth.session_required`, whatever the key's scopes: these writes change how
-/// the user signs in, and a key must not take over or lock out the user it acts for (spec 08
-/// B44).
+/// Before anything is read, a request authenticated by an API key or app access token whose
+/// target is its own user answers 403 `auth.session_required`, whatever the key's scopes: these
+/// writes change how the user signs in, and a bearer credential must not take over or lock out
+/// the user it acts for (spec 08 B44).
 pub(crate) async fn refuse_escalation(
     tx: &mut Transaction<'static, Postgres>,
     principal: Authenticated,
@@ -676,11 +676,13 @@ pub(crate) async fn refuse_escalation(
     ))
 }
 
-/// 403 `auth.session_required` when `principal` is an API key and `user_id` is its owner.
+/// 403 `auth.session_required` when `principal` is a bearer credential (an API key or an app
+/// access token) and `user_id` is its own user: only a browser session changes its own user's
+/// email, status or sign-in methods (spec 08 B44, extended to app tokens with I8).
 fn refuse_key_on_owner(principal: Authenticated, user_id: Uuid) -> Result<(), ApiError> {
-    if matches!(principal.via(), Via::ApiKey { .. }) && principal.user_id == user_id {
+    if !matches!(principal.via(), Via::Session) && principal.user_id == user_id {
         return Err(session_required(
-            "An API key cannot change its owner's email, status or sign-in methods. Use a signed-in browser session.",
+            "An API key or app token cannot change its own user's email, status or sign-in methods. Use a signed-in browser session.",
         ));
     }
     Ok(())

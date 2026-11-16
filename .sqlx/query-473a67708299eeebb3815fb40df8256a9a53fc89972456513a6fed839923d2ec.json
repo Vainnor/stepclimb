@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n               SELECT 1 FROM oauth_refresh_tokens WHERE org_id = $1 AND rotated_from = $2\n           ) AS \"rotated!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "rotated!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "473a67708299eeebb3815fb40df8256a9a53fc89972456513a6fed839923d2ec"
+}

@@ -67,7 +67,7 @@ use stepclimb_core::{
     identities, local_logins,
     local_sign_in::{LocalSignIn, Method},
     local_totp::{self, Totp},
-    organizations,
+    oauth_refresh_tokens, organizations,
     perm::UserManage,
     sessions::{self, Keep},
 };
@@ -688,7 +688,7 @@ pub async fn disable_my_totp(
     extensions(("x-stepclimb-mutates" = json!(true))),
     params(UserIdParam),
     responses(
-        (status = 204, description = "The user's TOTP is off; its secret and recovery codes are deleted, and every session of the user has ended."),
+        (status = 204, description = "The user's TOTP is off; its secret and recovery codes are deleted, and every session and app sign-in of the user has ended."),
         (status = 400, response = crate::openapi::BadRequest),
         (status = 401, response = crate::openapi::Unauthenticated),
         (status = 403, response = UserTotpForbidden),
@@ -724,8 +724,12 @@ pub async fn remove_user_totp(
     sessions::delete_others_of_user(&mut *tx, scope, user_id, Keep::Nothing)
         .await
         .map_err(internal)?;
+    // The app sign-ins end with the sessions (spec 08 B46).
+    oauth_refresh_tokens::revoke_all_of_user(&mut tx, scope, user_id)
+        .await
+        .map_err(internal)?;
     tx.commit().await.map_err(internal)?;
-    tracing::info!(%user_id, by = %principal.user_id, "TOTP removed by an administrator; the user's sessions ended");
+    tracing::info!(%user_id, by = %principal.user_id, "TOTP removed by an administrator; the user's sessions and app sign-ins ended");
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 

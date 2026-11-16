@@ -145,6 +145,7 @@ async fn startup_migrations_create_the_schema_on_an_empty_database(pool: PgPool)
             "local_logins",
             "local_tokens",
             "oauth_authorization_codes",
+            "oauth_refresh_tokens",
             "org_plans",
             "organizations",
             "passkeys",
@@ -227,6 +228,8 @@ async fn the_openapi_document_is_3_1_and_lists_every_route() {
             "/auth/{provider}/start",
             "/healthz",
             "/oauth/authorize",
+            "/oauth/revoke",
+            "/oauth/token",
             "/readyz",
             "/theme.css"
         ]
