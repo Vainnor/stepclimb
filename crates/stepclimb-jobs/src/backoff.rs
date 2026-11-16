@@ -56,6 +56,8 @@ pub fn backoff(retry: &Retry, attempts: u32, random: &Random) -> Duration {
     let half = full / 2;
     let span = full - half + 1;
     let jitter = u128::from(random.draw()) % span;
+    // At most `cap`, and a registered kind's cap is at most 7 days (`Kind::validate`), so the
+    // value fits; saturating keeps an unchecked `Retry` in range rather than failing.
     let micros = u64::try_from(half + jitter).unwrap_or(u64::MAX);
     Duration::from_micros(micros)
 }
@@ -114,6 +116,16 @@ mod tests {
             backoff(&retry, 11, &fixed(u64::MAX))
         );
         assert!(backoff(&retry, u32::MAX, &fixed(u64::MAX)) <= secs(3600));
+    }
+
+    #[test]
+    fn the_system_source_draws_from_the_os_generator() {
+        let random = Random::system();
+        let draws: Vec<u64> = (0..4).map(|_| random.draw()).collect();
+        // Four equal 64-bit draws from a working generator have a chance of 2^-192.
+        assert!(draws.windows(2).any(|pair| pair[0] != pair[1]), "{draws:?}");
+        let delay = backoff(&Retry::DEFAULT, 1, &random);
+        assert!(secs(5) / 2 <= delay && delay <= secs(5), "{delay:?}");
     }
 
     #[test]

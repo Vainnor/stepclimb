@@ -148,21 +148,30 @@ impl Worker {
     }
 
     /// Claim up to `limit` due jobs, run them at once and settle their outcomes. Returns how
-    /// many jobs it claimed. A database error while settling one job is logged and leaves that
+    /// many jobs it claimed to run; a job the claim found dead with its last lease lapsed is
+    /// logged and not counted (B5, B8). A database error while settling one job is logged and leaves that
     /// job's lease to run out, so another claim runs it again (B12).
     pub async fn run_once(&self, limit: u32) -> Result<usize, Error> {
         let inner = &self.inner;
         let leases = inner.registry.leases();
         let now = inner.clock.now();
-        let claimed = queue::claim(&inner.pool, &inner.queues, &leases, limit, now).await?;
-        let count = claimed.len();
+        let claims = queue::claim(&inner.pool, &inner.queues, &leases, limit, now).await?;
+        for job in &claims.lapsed {
+            tracing::error!(
+                kind = job.kind, job_id = %job.id, org_id = %OrgField(job.org_id),
+                attempts = job.attempts, error = queue::LAPSED_ON_LAST_ATTEMPT, "job dead"
+            );
+        }
+        let count = claims.claimed.len();
         let mut running = JoinSet::new();
-        for job in claimed {
+        for job in claims.claimed {
             running.spawn(process(Arc::clone(inner), job));
         }
         while let Some(joined) = running.join_next().await {
+            // Only that it ended: a panic's message may quote a payload value (B25).
             if let Err(error) = joined {
-                tracing::error!(%error, "a job's settling task ended abnormally");
+                let panicked = error.is_panic();
+                tracing::error!(panicked, "a job's settling task ended abnormally");
             }
         }
         Ok(count)
@@ -238,6 +247,7 @@ async fn run_handler(inner: &Inner, claimed: &Claimed, kind: &Kind, handler: Han
             id: claimed.id,
             kind: kind.name,
             org_id: claimed.org_id,
+            // `jobs` checks `attempts >= 0` and `max_attempts >= 1`, so neither conversion fails.
             attempt: u32::try_from(claimed.attempts).unwrap_or(0),
             max_attempts: u32::try_from(claimed.max_attempts).unwrap_or(0),
         },
@@ -252,10 +262,12 @@ async fn run_handler(inner: &Inner, claimed: &Claimed, kind: &Kind, handler: Han
     // a `JoinError` instead of ending the worker.
     match tokio::spawn(handler(context)).await {
         Ok(outcome) => outcome,
+        // The `JoinError` is not logged: a panic's message may quote a payload value (B25).
         Err(error) => {
+            let panicked = error.is_panic();
             tracing::error!(
-                kind = kind.name, job_id = %claimed.id, org_id = %OrgField(claimed.org_id), %error,
-                "the job's handler panicked"
+                kind = kind.name, job_id = %claimed.id, org_id = %OrgField(claimed.org_id),
+                panicked, "the job's handler panicked or was cancelled"
             );
             Outcome::retry("the job's handler panicked")
         }
@@ -301,6 +313,7 @@ async fn settle(
             });
         }
         Outcome::Retry(error) if claimed.attempts < claimed.max_attempts => {
+            // A claimed row has `attempts >= 1` (the claim added one), so this never falls back.
             let attempts = u32::try_from(claimed.attempts).unwrap_or(1);
             let run_at = now + backoff(&kind.retry, attempts, &inner.random);
             return Ok(

@@ -32,7 +32,8 @@ pub const MAX_ERROR_BYTES: usize = 2048;
 /// The longest `dedupe_key`, in characters, as the column's check allows.
 const MAX_DEDUPE_KEY_CHARS: usize = 200;
 
-/// The partial unique index that keeps one waiting job per kind and dedupe key (B3).
+/// The partial unique index that keeps one waiting job per kind, organization and dedupe key
+/// (B3).
 const DEDUPE_INDEX: &str = "jobs_dedupe_waiting";
 
 /// Why a queue call failed.
@@ -49,12 +50,6 @@ pub enum Error {
     /// The dedupe key is empty, longer than 200 characters or holds NUL.
     #[error("a dedupe key must be 1 to {MAX_DEDUPE_KEY_CHARS} characters without NUL")]
     DedupeKeyInvalid,
-    /// A waiting job of the same kind and dedupe key belongs to another organization (or is an
-    /// instance job while this one is an organization's, or the reverse). Dedupe keys are
-    /// expected to name the thing the job is about, such as a course id, so this is a
-    /// programming error; the waiting job is left as it is.
-    #[error("a waiting job of this kind and dedupe key belongs to another organization")]
-    DedupeKeyOfAnotherOrganization,
     #[error(transparent)]
     Time(#[from] TimeOutOfRange),
     #[error(transparent)]
@@ -101,7 +96,7 @@ impl<'a> NewJob<'a> {
         })
     }
 
-    /// Collapse this job into a waiting one of the same kind and key (B3).
+    /// Collapse this job into a waiting one of the same kind, organization and key (B3).
     pub fn dedupe(self, key: &'a str) -> Result<Self, Error> {
         let chars = key.chars().count();
         if chars == 0 || chars > MAX_DEDUPE_KEY_CHARS || key.contains('\0') {
@@ -128,7 +123,7 @@ impl<'a> NewJob<'a> {
 pub enum Enqueued {
     /// A new row with this id.
     Inserted(Uuid),
-    /// A waiting job with this id and the same kind and key absorbed the new one; its `run_at`
+    /// A waiting job with this id and the same kind, organization and key absorbed the new one; its `run_at`
     /// is now the earlier of the two (B3).
     Merged(Uuid),
 }
@@ -137,8 +132,9 @@ pub enum Enqueued {
 /// that asked for it commits (B2). `now` is the caller's clock reading: the row's `created_at`,
 /// and its `run_at` unless the job sets one.
 ///
-/// A waiting job (never claimed, or released) of the same kind and dedupe key absorbs this one
-/// (B3). A job already claimed does not: the new row waits and runs after it.
+/// A waiting job (never claimed, or released) of the same kind, organization and dedupe key
+/// absorbs this one (B3); a job of another organization never does, since the organization is
+/// part of the unique index the upsert's conflict names. A job already claimed does not: the new row waits and runs after it.
 pub async fn enqueue(
     tx: &mut Transaction<'_, Postgres>,
     job: NewJob<'_>,
@@ -149,8 +145,6 @@ pub async fn enqueue(
     let run_at_us = job.run_at.map(epoch_micros).transpose()?.unwrap_or(now_us);
     let max_attempts = i32::try_from(job.kind.retry.max_attempts)
         .map_err(|_| KindError::Settings(job.kind.name))?;
-    // The upsert only updates a waiting row of the same organization (the `WHERE` of `DO
-    // UPDATE`); a waiting row of another one returns no row, which is an error below.
     let row = sqlx::query!(
         r#"INSERT INTO jobs (id, org_id, queue, kind, payload, dedupe_key, run_at, max_attempts,
                              created_at, updated_at)
@@ -158,11 +152,10 @@ pub async fn enqueue(
                    timestamptz 'epoch' + $7::bigint * interval '1 microsecond', $8,
                    timestamptz 'epoch' + $9::bigint * interval '1 microsecond',
                    timestamptz 'epoch' + $9::bigint * interval '1 microsecond')
-           ON CONFLICT (kind, dedupe_key)
+           ON CONFLICT (kind, org_id, dedupe_key)
                WHERE dedupe_key IS NOT NULL AND locked_until IS NULL AND dead_at IS NULL
            DO UPDATE SET run_at = LEAST(jobs.run_at, EXCLUDED.run_at),
                          updated_at = EXCLUDED.updated_at
-               WHERE jobs.org_id IS NOT DISTINCT FROM EXCLUDED.org_id
            RETURNING id"#,
         id,
         job.org.map(OrgScope::org_id),
@@ -174,9 +167,8 @@ pub async fn enqueue(
         max_attempts,
         now_us,
     )
-    .fetch_optional(&mut **tx)
-    .await?
-    .ok_or(Error::DedupeKeyOfAnotherOrganization)?;
+    .fetch_one(&mut **tx)
+    .await?;
     Ok(if row.id == id {
         Enqueued::Inserted(id)
     } else {
@@ -231,10 +223,35 @@ impl Owned {
     }
 }
 
+/// The `last_error` of a job whose lease lapsed on its last attempt.
+pub const LAPSED_ON_LAST_ATTEMPT: &str = "lease lapsed on the last attempt";
+
+/// A job [`claim`] found with a lapsed lease and no attempt left, and marked dead.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Lapsed {
+    pub id: Uuid,
+    pub org_id: Option<Uuid>,
+    pub kind: String,
+    pub attempts: i32,
+}
+
+/// What one [`claim`] did.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Claims {
+    /// The jobs to run now.
+    pub claimed: Vec<Claimed>,
+    /// The due jobs that had used every attempt, now dead.
+    pub lapsed: Vec<Lapsed>,
+}
+
 /// Claim up to `limit` due jobs of `queues` at `now` (B4): rows with `run_at <= now`, no live
 /// lease and not dead, in `run_at, id` order, skipping rows another claim has locked. Each gets
 /// `attempts + 1` and a lease to `now` plus its kind's lease from `leases` (`(kind, lease)`
 /// pairs), or [`crate::kind::DEFAULT_LEASE`] for a kind not listed.
+///
+/// A due row that has already been claimed `max_attempts` times is one whose lease lapsed on its
+/// last attempt (its worker died, or its handler ended the process): it is marked dead with
+/// [`LAPSED_ON_LAST_ATTEMPT`] instead of being claimed again (B5), and counts against `limit`.
 ///
 /// Run it outside any other transaction: the claim commits on its own, before a handler runs,
 /// so a handler's transactions never hold the queue's row locks.
@@ -244,7 +261,7 @@ pub async fn claim(
     leases: &[(&str, Duration)],
     limit: u32,
     now: SystemTime,
-) -> Result<Vec<Claimed>, Error> {
+) -> Result<Claims, Error> {
     let now_us = epoch_micros(now)?;
     let queues: Vec<String> = queues.iter().map(|&q| q.to_owned()).collect();
     let kinds: Vec<String> = leases.iter().map(|(k, _)| (*k).to_owned()).collect();
@@ -252,13 +269,12 @@ pub async fn claim(
     let default_lease_us = micros(crate::kind::DEFAULT_LEASE);
     // Instance-wide by design (B26): a worker serves every organization's jobs of its queues,
     // and the instance's. Each claimed job then runs with its own organization's scope (B10).
-    let rows = sqlx::query_as!(
-        Claimed,
+    let rows = sqlx::query!(
         r#"WITH now AS (
                SELECT timestamptz 'epoch' + $1::bigint * interval '1 microsecond' AS t
            ),
            due AS (
-               SELECT j.id FROM jobs j, now
+               SELECT j.id, j.attempts >= j.max_attempts AS exhausted FROM jobs j, now
                WHERE j.queue = ANY($2::text[])
                  AND j.dead_at IS NULL
                  AND j.run_at <= now.t
@@ -269,27 +285,65 @@ pub async fn claim(
            ),
            leases AS (
                SELECT * FROM unnest($4::text[], $5::bigint[]) AS l (kind, lease_us)
+           ),
+           lapsed AS (
+               UPDATE jobs j
+               SET dead_at = now.t, locked_until = NULL, last_error = $7, updated_at = now.t
+               FROM due, now
+               WHERE j.id = due.id AND due.exhausted
+               RETURNING j.id, j.org_id, j.kind, j.attempts, j.max_attempts
+           ),
+           claimed AS (
+               UPDATE jobs j
+               SET attempts = j.attempts + 1,
+                   locked_until = now.t + coalesce(
+                       (SELECT l.lease_us FROM leases l WHERE l.kind = j.kind), $6::bigint
+                   ) * interval '1 microsecond',
+                   updated_at = now.t
+               FROM due, now
+               WHERE j.id = due.id AND NOT due.exhausted
+               RETURNING j.id, j.org_id, j.kind, j.payload::text AS payload, j.attempts,
+                         j.max_attempts
            )
-           UPDATE jobs j
-           SET attempts = j.attempts + 1,
-               locked_until = now.t + coalesce(
-                   (SELECT l.lease_us FROM leases l WHERE l.kind = j.kind), $6::bigint
-               ) * interval '1 microsecond',
-               updated_at = now.t
-           FROM due, now
-           WHERE j.id = due.id
-           RETURNING j.id, j.org_id, j.kind, j.payload::text AS "payload!", j.attempts,
-                     j.max_attempts"#,
+           SELECT id AS "id!", org_id, kind AS "kind!", payload, attempts AS "attempts!",
+                  max_attempts AS "max_attempts!", false AS "lapsed!"
+           FROM claimed
+           UNION ALL
+           SELECT id, org_id, kind, NULL, attempts, max_attempts, true
+           FROM lapsed"#,
         now_us,
         &queues,
         i64::from(limit),
         &kinds,
         &lease_us,
         default_lease_us,
+        LAPSED_ON_LAST_ATTEMPT,
     )
     .fetch_all(db)
     .await?;
-    Ok(rows)
+    let mut claims = Claims::default();
+    for row in rows {
+        if row.lapsed {
+            claims.lapsed.push(Lapsed {
+                id: row.id,
+                org_id: row.org_id,
+                kind: row.kind,
+                attempts: row.attempts,
+            });
+        } else {
+            claims.claimed.push(Claimed {
+                id: row.id,
+                org_id: row.org_id,
+                kind: row.kind,
+                // `jobs.payload` is NOT NULL, so a claimed row always has one; only the lapsed
+                // half of the union selects NULL.
+                payload: row.payload.unwrap_or_default(),
+                attempts: row.attempts,
+                max_attempts: row.max_attempts,
+            });
+        }
+    }
+    Ok(claims)
 }
 
 /// Move the claim's lease to `now + lease` (B5), while the row is still the claim's own.
@@ -453,8 +507,10 @@ pub fn stored_error(error: &str) -> String {
     cleaned[..end].to_owned()
 }
 
-/// `duration` in whole microseconds, saturating at `i64::MAX`.
+/// `duration` in whole microseconds.
 fn micros(duration: Duration) -> i64 {
+    // A lease is at most 24 hours (`Kind::validate`), about 8.6e10 µs, far below `i64::MAX`;
+    // saturating keeps a lease the registry never checked in range rather than wrapping.
     i64::try_from(duration.as_micros()).unwrap_or(i64::MAX)
 }
 

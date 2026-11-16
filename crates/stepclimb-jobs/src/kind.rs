@@ -7,6 +7,12 @@ use std::time::Duration;
 /// The lease a claim takes unless the kind sets its own (B5).
 pub const DEFAULT_LEASE: Duration = Duration::from_secs(5 * 60);
 
+/// The longest lease a kind may set.
+pub const MAX_LEASE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// The longest backoff cap a kind may set.
+pub const MAX_CAP: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
 /// The longest kind name, as the `jobs.kind` check constraint allows.
 const MAX_KIND_LEN: usize = 100;
 
@@ -60,7 +66,7 @@ pub enum KindError {
         queue: &'static str,
     },
     #[error(
-        "job kind `{0}` needs a lease of at least 1 s, a base of at least 1 ms, a cap no shorter than its base and 1 to 1000 attempts"
+        "job kind `{0}` needs a lease of 1 s to 24 h, a base of at least 1 ms, a cap from its base to 7 days and 1 to 1000 attempts"
     )]
     Settings(&'static str),
 }
@@ -105,9 +111,9 @@ impl Kind {
             cap,
             max_attempts,
         } = self.retry;
-        let settings_ok = self.lease >= Duration::from_secs(1)
+        let settings_ok = (Duration::from_secs(1)..=MAX_LEASE).contains(&self.lease)
             && base >= Duration::from_millis(1)
-            && cap >= base
+            && (base..=MAX_CAP).contains(&cap)
             && (1..=1000).contains(&max_attempts);
         if !settings_ok {
             return Err(KindError::Settings(self.name));
@@ -198,6 +204,11 @@ mod tests {
         let retry = Retry::DEFAULT;
         let bad = [
             kind.with_lease(Duration::from_millis(999)),
+            kind.with_lease(MAX_LEASE + Duration::from_micros(1)),
+            kind.with_retry(Retry {
+                cap: MAX_CAP + Duration::from_micros(1),
+                ..retry
+            }),
             kind.with_retry(Retry {
                 max_attempts: 0,
                 ..retry
@@ -218,6 +229,17 @@ mod tests {
         for kind in bad {
             assert_eq!(kind.validate(), Err(KindError::Settings("a.b")), "{kind:?}");
         }
+    }
+
+    #[test]
+    fn the_longest_lease_and_cap_are_allowed() {
+        let kind = Kind::new("a.b", "default")
+            .with_lease(MAX_LEASE)
+            .with_retry(Retry {
+                cap: MAX_CAP,
+                ..Retry::DEFAULT
+            });
+        assert_eq!(kind.validate(), Ok(()));
     }
 
     #[test]

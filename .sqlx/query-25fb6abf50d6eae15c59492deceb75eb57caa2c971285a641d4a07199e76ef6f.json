@@ -1,0 +1,71 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH now AS (\n               SELECT timestamptz 'epoch' + $1::bigint * interval '1 microsecond' AS t\n           ),\n           due AS (\n               SELECT j.id, j.attempts >= j.max_attempts AS exhausted FROM jobs j, now\n               WHERE j.queue = ANY($2::text[])\n                 AND j.dead_at IS NULL\n                 AND j.run_at <= now.t\n                 AND (j.locked_until IS NULL OR j.locked_until <= now.t)\n               ORDER BY j.run_at, j.id\n               LIMIT $3\n               FOR UPDATE OF j SKIP LOCKED\n           ),\n           leases AS (\n               SELECT * FROM unnest($4::text[], $5::bigint[]) AS l (kind, lease_us)\n           ),\n           lapsed AS (\n               UPDATE jobs j\n               SET dead_at = now.t, locked_until = NULL, last_error = $7, updated_at = now.t\n               FROM due, now\n               WHERE j.id = due.id AND due.exhausted\n               RETURNING j.id, j.org_id, j.kind, j.attempts, j.max_attempts\n           ),\n           claimed AS (\n               UPDATE jobs j\n               SET attempts = j.attempts + 1,\n                   locked_until = now.t + coalesce(\n                       (SELECT l.lease_us FROM leases l WHERE l.kind = j.kind), $6::bigint\n                   ) * interval '1 microsecond',\n                   updated_at = now.t\n               FROM due, now\n               WHERE j.id = due.id AND NOT due.exhausted\n               RETURNING j.id, j.org_id, j.kind, j.payload::text AS payload, j.attempts,\n                         j.max_attempts\n           )\n           SELECT id AS \"id!\", org_id, kind AS \"kind!\", payload, attempts AS \"attempts!\",\n                  max_attempts AS \"max_attempts!\", false AS \"lapsed!\"\n           FROM claimed\n           UNION ALL\n           SELECT id, org_id, kind, NULL, attempts, max_attempts, true\n           FROM lapsed",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "org_id",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "kind!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "payload",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "attempts!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "max_attempts!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "lapsed!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "TextArray",
+        "Int8",
+        "TextArray",
+        "Int8Array",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "25fb6abf50d6eae15c59492deceb75eb57caa2c971285a641d4a07199e76ef6f"
+}

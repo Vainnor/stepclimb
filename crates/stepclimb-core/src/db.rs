@@ -30,7 +30,7 @@ pub fn epoch_micros(time: SystemTime) -> Result<i64, TimeOutOfRange> {
 
 /// The time `micros` microseconds after the Unix epoch, for reading a `timestamptz` selected as
 /// `(extract(epoch FROM column) * 1000000)::bigint`. The inverse of [`epoch_micros`].
-pub fn from_epoch_micros(micros: i64) -> Result<SystemTime, TimeOutOfRange> {
+pub(crate) fn from_epoch_micros(micros: i64) -> Result<SystemTime, TimeOutOfRange> {
     let micros = u64::try_from(micros).map_err(|_| TimeOutOfRange)?;
     UNIX_EPOCH
         .checked_add(std::time::Duration::from_micros(micros))

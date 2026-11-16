@@ -21,7 +21,8 @@ CREATE TABLE jobs (
 );
 -- The claim's scan: due rows of a queue in `run_at, id` order (B4).
 CREATE INDEX jobs_due ON jobs (queue, run_at, id) WHERE dead_at IS NULL;
--- At most one waiting (never claimed, or released) job per kind and key (B3).
-CREATE UNIQUE INDEX jobs_dedupe_waiting ON jobs (kind, dedupe_key)
+-- At most one waiting (never claimed, or released) job per kind, organization and key (B3).
+-- `NULLS NOT DISTINCT` so instance jobs (null `org_id`) dedupe among themselves too.
+CREATE UNIQUE INDEX jobs_dedupe_waiting ON jobs (kind, org_id, dedupe_key) NULLS NOT DISTINCT
     WHERE dedupe_key IS NOT NULL AND locked_until IS NULL AND dead_at IS NULL;
 CREATE INDEX jobs_by_org ON jobs (org_id) WHERE org_id IS NOT NULL;

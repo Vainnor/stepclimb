@@ -39,7 +39,7 @@ const RETRY_THRICE: Kind = Kind::new("test.retry_thrice", "default").with_retry(
 });
 /// Returns fail.
 const FAIL: Kind = Kind::new("test.fail", "default");
-/// Panics.
+/// Panics with its payload in the message.
 const PANIC: Kind = Kind::new("test.panic", "default");
 /// On its first attempt waits for `Shared::release`, then extends its lease and returns done.
 const SLOW: Kind = Kind::new("test.slow", "default");
@@ -93,7 +93,9 @@ fn registry(shared: &Shared) -> Registry {
         })
         .expect("test setup");
     registry
-        .register(PANIC, |_| async { panic!("a handler bug") })
+        .register(PANIC, |ctx| async move {
+            panic!("a handler bug on {}", ctx.payload())
+        })
         .expect("test setup");
     let s = shared.clone();
     registry
@@ -311,6 +313,7 @@ async fn claim_at(
     queue::claim(db, &["default"], &[], limit, now)
         .await
         .expect("claim")
+        .claimed
 }
 
 #[test]
@@ -419,9 +422,9 @@ async fn a_waiting_job_absorbs_a_duplicate_and_a_claimed_one_does_not(pool: PgPo
     assert_eq!(job_count(&pool).await, 2);
 }
 
-// B26: a dedupe key never reaches another organization's job.
+// B3, B26: a dedupe key never reaches another organization's job, nor an instance job.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn a_duplicate_of_another_organizations_job_is_refused(pool: PgPool) {
+async fn the_same_key_in_another_organization_is_another_job(pool: PgPool) {
     let (a, b) = (
         insert_org(&pool, "org-a").await,
         insert_org(&pool, "org-b").await,
@@ -438,16 +441,50 @@ async fn a_duplicate_of_another_organizations_job_is_refused(pool: PgPool) {
         panic!("a new row")
     };
     for other in [Some(b), None] {
-        let mut tx = pool.begin().await.unwrap();
-        let refused = enqueue(&mut tx, of(other, t0()), t0()).await.unwrap_err();
-        assert!(
-            matches!(refused, Error::DedupeKeyOfAnotherOrganization),
-            "{refused:?}"
-        );
+        let enqueued = put(&pool, of(other, t0()), t0()).await;
+        assert!(matches!(enqueued, Enqueued::Inserted(_)), "{enqueued:?}");
     }
     let kept = row(&pool, first).await.unwrap();
     assert_eq!((kept.org_id, kept.run_at), (Some(a), micros(later)));
-    assert_eq!(job_count(&pool).await, 1);
+    assert_eq!(job_count(&pool).await, 3);
+    // Instance jobs dedupe among themselves (`NULLS NOT DISTINCT`).
+    let again = put(&pool, of(None, later), t0()).await;
+    assert!(matches!(again, Enqueued::Merged(_)), "{again:?}");
+    assert_eq!(job_count(&pool).await, 3);
+}
+
+// B3, B26, Data: a retry collides only with a waiting job of its own organization.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_retry_beside_another_organizations_waiting_duplicate_survives(pool: PgPool) {
+    let (a, b) = (
+        insert_org(&pool, "org-a").await,
+        insert_org(&pool, "org-b").await,
+    );
+    let keyed = |org: Uuid| {
+        NewJob::org(&RETRY, scope(org), &json!({}))
+            .unwrap()
+            .dedupe("course-1")
+            .unwrap()
+    };
+    let Enqueued::Inserted(running) = put(&pool, keyed(b), t0()).await else {
+        panic!("a new row")
+    };
+    let claimed = claim_at(&pool, 1, t0()).await;
+    assert_eq!(claimed[0].id, running);
+    let Enqueued::Inserted(waiting) = put(&pool, keyed(a), t0()).await else {
+        panic!("a new row")
+    };
+    let later = t0() + 10 * SECOND;
+    let released = queue::retry(&pool, claimed[0].claim(), later, "busy", t0())
+        .await
+        .unwrap();
+    assert_eq!(released, queue::Released::Waiting);
+    let kept = row(&pool, running).await.expect("org B's job survives");
+    assert_eq!(
+        (kept.org_id, kept.run_at, kept.locked_until),
+        (Some(b), micros(later), None)
+    );
+    assert_eq!(row(&pool, waiting).await.unwrap().org_id, Some(a));
 }
 
 #[test]
@@ -562,7 +599,8 @@ async fn a_kind_claims_with_its_own_lease_and_extends_it(pool: PgPool) {
     let id = put_org(&pool, &EXTEND, org, json!({})).await;
     let claimed = queue::claim(&pool, &["default"], &[(EXTEND.name, EXTEND.lease)], 1, t0())
         .await
-        .unwrap();
+        .unwrap()
+        .claimed;
     assert_eq!(claimed.len(), 1);
     let stored = row(&pool, id).await.unwrap();
     assert_eq!(stored.locked_until, Some(micros(t0() + 30 * SECOND)));
@@ -693,9 +731,15 @@ async fn a_job_that_uses_its_attempts_is_dead(pool: PgPool) {
 async fn a_panicking_handler_is_retried_and_the_worker_goes_on(pool: PgPool) {
     let w = world(pool.clone(), lowest_jitter());
     let org = insert_org(&pool, "org-a").await;
-    let panics = put_org(&pool, &PANIC, org, json!({})).await;
+    let marker = "payload-marker-90ab";
+    let panics = put_org(&pool, &PANIC, org, json!({ "note": marker })).await;
     let done = put_org(&pool, &DONE, org, json!({})).await;
-    assert_eq!(w.worker.run_once(10).await.unwrap(), 2);
+    let log = run_logged(&w, 10).await;
+    assert!(log.contains("the job's handler panicked"), "{log}");
+    assert!(
+        !log.contains(marker),
+        "the panic message is not logged: {log}"
+    );
     let stored = row(&pool, panics).await.unwrap();
     assert_eq!((stored.attempts, stored.dead_at), (1, None));
     assert_eq!(
@@ -818,6 +862,58 @@ async fn a_retry_covered_by_a_waiting_duplicate_is_deleted(pool: PgPool) {
     assert!(row(&pool, waiting).await.is_some());
 }
 
+// B4, B5, B8: a job whose lease lapses on its last attempt (its worker died, or its handler
+// ended the process) is dead, not claimed again.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_lease_lapsed_on_the_last_attempt_kills_the_job(pool: PgPool) {
+    let w = world(pool.clone(), lowest_jitter());
+    let org = insert_org(&pool, "org-a").await;
+    let id = put_org(&pool, &RETRY_THRICE, org, json!({})).await;
+    for attempt in 1..=3 {
+        let now = w.clock.clock().now();
+        let claimed = claim_at(&pool, 1, now).await;
+        assert_eq!(claimed.len(), 1, "attempt {attempt}");
+        assert_eq!(claimed[0].attempts, attempt);
+        w.clock.advance(DEFAULT_LEASE);
+    }
+    assert_eq!(
+        w.worker.run_once(10).await.unwrap(),
+        0,
+        "nothing left to run"
+    );
+    let stored = row(&pool, id).await.expect("a dead job keeps its row");
+    assert_eq!(stored.attempts, 3);
+    assert_eq!(stored.dead_at, Some(micros(t0() + 3 * DEFAULT_LEASE)));
+    assert_eq!(stored.locked_until, None);
+    assert_eq!(
+        stored.last_error.as_deref(),
+        Some(queue::LAPSED_ON_LAST_ATTEMPT)
+    );
+    w.clock.advance(Duration::from_secs(365 * 24 * 60 * 60));
+    assert!(claim_at(&pool, 10, w.clock.clock().now()).await.is_empty());
+}
+
+// B5, B11: a claim is its worker's own only while the row still has a lease. A stale worker's
+// done-delete leaves alone a job that an unknown-kind release put back to wait, even though the
+// release took `attempts` back to the stale claim's value.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_stale_done_delete_leaves_a_released_job_alone(pool: PgPool) {
+    let org = insert_org(&pool, "org-a").await;
+    let id = put_org(&pool, &UNKNOWN, org, json!({})).await;
+    let stale = claim_at(&pool, 1, t0()).await[0].claim();
+    let later = t0() + DEFAULT_LEASE;
+    let newer = claim_at(&pool, 1, later).await[0].claim();
+    assert_eq!((stale.attempts, newer.attempts), (1, 2));
+    let released = queue::release_unknown(&pool, newer, later + 60 * SECOND, later)
+        .await
+        .unwrap();
+    assert_eq!(released, queue::Released::Waiting);
+    assert_eq!(row(&pool, id).await.unwrap().attempts, stale.attempts);
+    assert_eq!(queue::complete(&pool, stale).await.unwrap(), Lease::Lost);
+    let kept = row(&pool, id).await.expect("the released job still waits");
+    assert_eq!((kept.locked_until, kept.dead_at), (None, None));
+}
+
 #[derive(Clone, Default)]
 struct Captured(Arc<Mutex<Vec<u8>>>);
 
@@ -831,13 +927,8 @@ impl Write for Captured {
     }
 }
 
-// T19 (B25).
-#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn a_job_run_logs_its_identity_and_outcome_and_never_its_payload(pool: PgPool) {
-    let w = world(pool.clone(), lowest_jitter());
-    let org = insert_org(&pool, "org-a").await;
-    let marker = "payload-marker-5d1c";
-    let id = put_org(&pool, &DONE, org, json!({ "note": marker })).await;
+/// One `run_once(limit)` of `w`'s worker, with every log line it wrote.
+async fn run_logged(w: &World, limit: u32) -> String {
     let captured = Captured::default();
     let writer = captured.clone();
     let subscriber = tracing_subscriber::fmt()
@@ -846,9 +937,20 @@ async fn a_job_run_logs_its_identity_and_outcome_and_never_its_payload(pool: PgP
         .with_writer(move || writer.clone())
         .finish();
     let guard = tracing::subscriber::set_default(subscriber);
-    w.worker.run_once(1).await.unwrap();
+    w.worker.run_once(limit).await.expect("run once");
     drop(guard);
-    let log = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+    let bytes = captured.0.lock().expect("the log buffer").clone();
+    String::from_utf8(bytes).expect("UTF-8 logs")
+}
+
+// T19 (B25).
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_job_run_logs_its_identity_and_outcome_and_never_its_payload(pool: PgPool) {
+    let w = world(pool.clone(), lowest_jitter());
+    let org = insert_org(&pool, "org-a").await;
+    let marker = "payload-marker-5d1c";
+    let id = put_org(&pool, &DONE, org, json!({ "note": marker })).await;
+    let log = run_logged(&w, 1).await;
     let started = log.lines().find(|l| l.contains("job started")).expect(&log);
     let ended = log.lines().find(|l| l.contains("job ended")).expect(&log);
     for line in [started, ended] {
@@ -858,6 +960,7 @@ async fn a_job_run_logs_its_identity_and_outcome_and_never_its_payload(pool: PgP
         assert!(line.contains("attempt=1"), "{line}");
     }
     assert!(started.contains("DEBUG"), "{started}");
-    assert!(ended.contains("INFO") && ended.contains("done"), "{ended}");
+    assert!(ended.contains("INFO"), "{ended}");
+    assert!(ended.contains(r#"outcome="done""#), "{ended}");
     assert!(!log.contains(marker), "{log}");
 }

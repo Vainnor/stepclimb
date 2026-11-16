@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO jobs (id, org_id, queue, kind, payload, dedupe_key, run_at, max_attempts,\n                             created_at, updated_at)\n           VALUES ($1, $2, $3, $4, $5::text::jsonb, $6,\n                   timestamptz 'epoch' + $7::bigint * interval '1 microsecond', $8,\n                   timestamptz 'epoch' + $9::bigint * interval '1 microsecond',\n                   timestamptz 'epoch' + $9::bigint * interval '1 microsecond')\n           ON CONFLICT (kind, org_id, dedupe_key)\n               WHERE dedupe_key IS NOT NULL AND locked_until IS NULL AND dead_at IS NULL\n           DO UPDATE SET run_at = LEAST(jobs.run_at, EXCLUDED.run_at),\n                         updated_at = EXCLUDED.updated_at\n           RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int8",
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b89a7948dd1862e8b040c540cd1fef745d59f4d9e379c99032d42d71fb92d613"
+}
