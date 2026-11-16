@@ -99,6 +99,9 @@ regex-syntax = "=0.8.11"
 # (docs/specs/m0/14-compose-deploy.md B8 to B10). Parse and serde only; nothing writes TOML.
 toml = { version = "=1.1.8", default-features = false, features = ["std", "parse", "serde"] }
 clap = { version = "=4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
+# NFC normalization of course file names and folders (docs/specs/m1/06-files.md B9): the
+# version sqlx's stringprep and webauthn-rs already bring.
+unicode-normalization = { version = "=0.1.26", default-features = false }
 # The database URL's query parameters, read with the parser sqlx itself uses, so the loader can
 # refuse one sqlx would ignore (docs/specs/m0/14-compose-deploy.md B10). The version sqlx brings.
 url = { version = "=2.5.8", default-features = false, features = ["std"] }

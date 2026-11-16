@@ -28,6 +28,8 @@ regex.workspace = true
 regex-syntax.workspace = true
 # The form check of an external link's URL (docs/specs/m1/03-modules-and-items.md B7).
 url.workspace = true
+# NFC normalization of course file names and folders (docs/specs/m1/06-files.md B9).
+unicode-normalization.workspace = true
 
 [dev-dependencies]
 stepclimb-core = { path = ".", features = ["test-support"] }
