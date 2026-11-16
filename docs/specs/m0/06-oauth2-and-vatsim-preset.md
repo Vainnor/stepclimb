@@ -221,8 +221,8 @@ server every sign-in test and the Playwright stack use instead of a real provide
   of `client_secret` and `client_secret_file`, the secret pair of ADR 0022 (a file's contents
   trimmed, a relative path resolved against the directory holding `stepclimb.toml`). Every other
   member belongs to the kind's config and goes through the same validation as the admin API
-  (B4 for `oauth2`, `05-oidc.md` B1 for `oidc`), so a member neither has, `preset` included
-  until I6, is refused. Values use TOML's own types (`scopes` is an array, `enabled` and `pkce`
+  (B4 for `oauth2`, `05-oidc.md` B1 for `oidc`), so a member neither has is refused; I6 adds
+  `preset` as an entry's own member (B20's decisions). Values use TOML's own types (`scopes` is an array, `enabled` and `pkce`
   booleans), unlike the top-level settings, which are all strings. The error reads
   `<file>: [[providers]] entry <n> (key "<key>"): <problems>`, each problem naming the member
   as TOML writes it (`claims.subject`, `scopes.0`); no problem repeats a value or a
@@ -299,7 +299,8 @@ server every sign-in test and the Playwright stack use instead of a real provide
     for a sealed secret or a row of the file. The label is stored as the config's `label`
     member, as I4 stores it. The list is sorted by key and paged by key.
   - `POST` takes `{key, kind, preset?, label, enabled, config}`; `enabled` defaults to `true`,
-    as in the file. `preset` answers 422 `provider.preset_unknown` until I6 adds one. A key
+    as in the file. `preset` names a preset (B20's decisions for I6); a name this server lacks
+    answers 422 `provider.preset_unknown`. A key
     or label breaking its rule answers 422 `request.invalid` with `provider.key_invalid` at
     `/key` or `provider.label_invalid` at `/label` (the label rule of B13).
   - `PATCH` takes `label`, `enabled` and `config`, each optional and none `null`. Each named
@@ -387,6 +388,51 @@ server every sign-in test and the Playwright stack use instead of a real provide
   API).
 - **B20.** The admin API and `/.well-known/stepclimb` report a preset provider as `kind:
   "oauth2"`; the API also returns `preset: "vatsim"`.
+
+  Coordinator decisions (2026-11-16, overnight), for I6 (`stepclimb_connectors::vatsim::PRESET`,
+  `stepclimb_server::presets`):
+
+  - Where (Q4 (a)): the preset is the TOML file `crates/stepclimb-connectors/src/vatsim/preset.toml`
+    (`kind`, `key`, `label`, and under `config` the B11 values), exposed as the constant
+    `PRESET` behind the connectors crate's `vatsim` feature. The server takes the crate as an
+    optional dependency under its own `vatsim` feature, on by default so the release binary has
+    it. `stepclimb_server::presets` reads every preset compiled in and names none in code; core
+    and `stepclimb-auth` know nothing of presets.
+  - Overrides (Q4 (a)): a provider may name any config member; each replaces the preset's
+    whole (`claims` as one object), as a `PATCH` names members. `kind` may be left out or name
+    the preset's kind; another kind answers 422 `provider.kind_unsupported` at `/kind` in the
+    API and stops startup in the file. `key` and `label` default to the preset's.
+  - Storage (Data): a write validates the preset's members under the provider's own as one
+    config, then stores only the members whose value differs from the preset's, and `preset`.
+    Every reader (sign-in, the admin API's answer, the write rules of B14, admission's mapped
+    attributes, and the file's anchor check and secret fingerprint) reads the row through
+    `presets::resolve`, the preset's members under the row's own. A member equal to the
+    preset's at the time of a write follows later preset fixes. No preset may supply a member
+    core reads straight from the row (`allow_local_passkeys`, `trusted_for_email_matching`,
+    `label`, `source`, `client_secret`, `admission_rules`); a unit test holds that.
+  - The answer's `config` is the resolved config, the one sign-in uses; `preset` names the
+    preset. A stored row naming a preset this server lacks (built without its feature) is
+    answered as stored, cannot be changed (422 `provider.preset_unknown`, `DELETE` still
+    works), and does not sign in.
+  - A change to a preset is a change to every organization's provider at once, with no
+    admin's write and none of B14's checks. A different `claims.subject` pointer, endpoint
+    origin or attribute pointer in `preset.toml` re-points every linked identity or changes
+    what admission rules read, so it needs its own review and a release note. The file's
+    header says so, and the unit test
+    `changing_a_vatsim_anchor_or_attribute_pointer_re_points_every_linked_identity_and_needs_a_release_note`
+    (`stepclimb_server::presets`) pins those values apart from T14 (COORDINATOR DECIDED
+    (overnight) from the security review of PR #212).
+  - No second preset for VATSIM's development environment (Q4's open part): it is
+    `https://auth-dev.vatsim.net` (vatsim.dev, Connect sandbox, accessed 2026-11-16), and an
+    organization reaches it by overriding `authorize`, `token` and `userinfo`, which the preset
+    file's comment says.
+  - PKCE (Q3, issue #38's note): the preset keeps `pkce = true`. VATSIM's Connect API
+    documentation (vatsim.dev, `/oauth/authorize` and `/oauth/token`, accessed 2026-11-16) does
+    not mention PKCE either way; no real sign-in against Connect has run (it needs the owner's
+    client). Its token page documents the client secret in the form body, while the `oauth2`
+    flow sends it with HTTP Basic (B10's decision); whether Connect accepts Basic is unverified
+    too. An organization whose sign-ins fail at the token step can override `pkce = false`,
+    with the risk Q3 states.
 
 ## API
 
@@ -487,12 +533,14 @@ Every sign-in test runs against the mock IdP (B1) on `127.0.0.1`. Database tests
   `provider.kind_unsupported`.
 - **T14.** (B18) A `preset = "vatsim"` provider resolves to exactly the plan's URLs, scopes and
   claims (a test compares every field to the values in B11).
-- **T15.** (B18) Signing in through a preset provider whose URLs a test-only override points at
+- **T15.** (B18) Signing in through a preset provider whose URLs an override (Q4 (a)) points at
   the mock, with a VATSIM-shaped synthetic userinfo body, yields subject `1000001`, the mapped
   names and email, and attributes `rating = "S1"` and `subdivision = "USA"`. How the test
   redirects preset URLs to the mock depends on Q4.
 - **T16.** (B19) With the preset compiled out, `preset = "vatsim"` gives
-  `provider.preset_unknown`; `bin/check-layering.sh` passes.
+  `provider.preset_unknown`; `bin/check-layering.sh` passes. The `just ci` gate builds with
+  default features, so this test runs only under `cargo nextest run -p stepclimb-server
+  --no-default-features`.
 - **T17.** Four-case test for each `/api/v1/admin/providers` route: anonymous 401; a user
   without `perm::ProviderManage` 403; wrong scope 404 (the permission held only below
   organization scope, if `09-permissions-and-roles.md` allows that grant); an organization

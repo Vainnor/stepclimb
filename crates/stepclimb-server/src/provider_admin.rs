@@ -10,6 +10,10 @@
 //! line or audit entry holds the secret: answers carry `client_secret_set` and the config
 //! without it (`identity_providers::public_config`).
 //!
+//! A provider may name a preset (`crate::presets`, spec 06 B18 to B20): it then takes the
+//! preset's kind, key, label and config members, overriding any it names, the row stores only
+//! what differs from the preset, and every rule below reads the resolved config.
+//!
 //! A `PATCH` names what it changes: `label`, `enabled`, and `config` members, each named member
 //! replacing the stored one whole and an absent `client_secret` keeping the stored secret. A
 //! named `client_secret` is always a change: the stored secret is not opened to compare. The
@@ -81,6 +85,7 @@ use crate::{
     openapi::problem_responses,
     organization::present,
     pagination::{Page, PageParams},
+    presets::{self, Preset, UnknownPreset},
     provider_sign_in::redirect_uri,
     require::Require,
     web_origin::WebOrigin,
@@ -104,7 +109,8 @@ pub mod code {
     pub const PROVIDER_IN_USE: &str = "provider.in_use";
     /// The kind is not `oidc` or `oauth2` (422).
     pub const PROVIDER_KIND_UNSUPPORTED: &str = "provider.kind_unsupported";
-    /// This server has no preset of that name (422).
+    /// This server has no preset of that name, or a stored provider names one it does not
+    /// have (a server built without the preset) (422).
     pub const PROVIDER_PRESET_UNKNOWN: &str = "provider.preset_unknown";
     /// The config breaks a rule; `errors` lists each one, under `/config` (422).
     pub const PROVIDER_CONFIG_INVALID: &str = "provider.config_invalid";
@@ -158,6 +164,10 @@ pub struct Provider {
     /// The `{provider}` of `/auth/{provider}/start`; fixed once created.
     pub key: String,
     pub kind: ProviderKind,
+    /// The preset the provider takes its other config members from, such as `vatsim`; absent
+    /// for a provider without one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
     /// The text of the provider's sign-in button.
     pub label: String,
     /// Whether people can sign in through it. A disabled provider keeps its identities.
@@ -167,7 +177,8 @@ pub struct Provider {
     pub redirect_uri: String,
     /// Whether the provider has a client secret. The secret itself is never answered.
     pub client_secret_set: bool,
-    /// The kind's configuration, without the client secret.
+    /// The kind's configuration, without the client secret. For a preset provider, the
+    /// config sign-in uses: the preset's members under the provider's own.
     #[schema(value_type = schema::ProviderConfig)]
     pub config: Map<String, Value>,
 }
@@ -185,10 +196,14 @@ impl Provider {
             .label()
             .ok_or_else(|| ApiError::internal(&Unshowable("a row without a label")))?;
         let from_file = provider.is_from_config_file();
+        // A preset this server lacks shows the row as stored, `preset` included.
+        let shown = presets::resolve(&provider.config)
+            .unwrap_or(std::borrow::Cow::Borrowed(&provider.config));
         Ok(Self {
             id: provider.id,
             key: provider.key.clone(),
             kind,
+            preset: presets::named(&provider.config).map(str::to_owned),
             label: label.to_owned(),
             enabled: provider.enabled,
             source: if from_file {
@@ -198,7 +213,7 @@ impl Provider {
             },
             redirect_uri: redirect_uri(public_url, &provider.key),
             client_secret_set: from_file || provider.config.contains_key(providers::CLIENT_SECRET),
-            config: public_config(&provider.config),
+            config: public_config(&shown),
         })
     }
 }
@@ -220,17 +235,28 @@ fn yes() -> bool {
 #[serde(deny_unknown_fields)]
 pub struct NewProvider {
     /// 1 to 32 lowercase letters, digits and hyphens, starting with a letter or digit; not
-    /// `local`. It is part of the redirect URI and never changes.
-    pub key: String,
-    /// `oidc` or `oauth2`; anything else answers 422 `provider.kind_unsupported`.
-    pub kind: String,
-    /// A preset to take the provider's endpoints and claims from. This server has none, so any
-    /// value answers 422 `provider.preset_unknown`.
+    /// `local`. It is part of the redirect URI and never changes. Required without a preset;
+    /// with one, the preset's key when omitted (`vatsim` for `vatsim`).
+    #[serde(default, deserialize_with = "present")]
+    #[schema(value_type = String)]
+    pub key: Option<String>,
+    /// `oidc` or `oauth2`; anything else answers 422 `provider.kind_unsupported`. Required
+    /// without a preset; with one, omitted or the preset's kind.
+    #[serde(default, deserialize_with = "present")]
+    #[schema(value_type = String)]
+    pub kind: Option<String>,
+    /// A preset to take the provider's endpoints, scopes and claims from, such as `vatsim`
+    /// (VATSIM Connect, an `oauth2` provider). The config then needs only `client_id` and
+    /// `client_secret`; any other member it names replaces the preset's whole. A name this
+    /// server does not have answers 422 `provider.preset_unknown`.
     #[serde(default, deserialize_with = "present")]
     #[schema(value_type = String)]
     pub preset: Option<String>,
-    /// 1 to 200 characters without control characters.
-    pub label: String,
+    /// 1 to 200 characters without control characters. Required without a preset; with one,
+    /// the preset's label when omitted ("Sign in with VATSIM" for `vatsim`).
+    #[serde(default, deserialize_with = "present")]
+    #[schema(value_type = String)]
+    pub label: Option<String>,
     /// Whether people can sign in through it; `true` when omitted.
     #[serde(default = "yes")]
     pub enabled: bool,
@@ -402,10 +428,18 @@ pub async fn create_provider(
     State(state): State<AppState>,
     ApiJson(body): ApiJson<NewProvider>,
 ) -> Result<Response, ApiError> {
-    let kind = new_kind(&body)?;
+    let (kind, preset) = new_kind(&body)?;
     require_kind_feature(&entitlements, kind)?;
-    check_key(&body.key)?;
-    check_label(&body.label)?;
+    let key = body.key.clone().or_else(|| preset.map(|p| p.key.clone()));
+    let label = body
+        .label
+        .clone()
+        .or_else(|| preset.map(|p| p.label.clone()));
+    let (Some(key), Some(label)) = (key, label) else {
+        return Err(missing_key_or_label(&body));
+    };
+    check_key(&key)?;
+    check_label(&label)?;
     let principal = require.principal();
     let scope = principal.scope();
     let mut tx = state.db.begin().await.map_err(|e| ApiError::internal(&e))?;
@@ -419,7 +453,8 @@ pub async fn create_provider(
             provider_id: id,
         },
     };
-    let config = sealing.config(kind, body.config, None, &body.label)?;
+    let input = preset.map_or_else(|| body.config.clone(), |p| p.apply(&body.config));
+    let config = sealing.config(kind, input, None, &label)?;
     let enabled = body.enabled;
     guard.check(
         None,
@@ -429,9 +464,10 @@ pub async fn create_provider(
             enabled,
         },
     )?;
+    let config = preset.map_or(config.clone(), |p| p.strip(config));
     let row = NewRow {
         id,
-        key: &body.key,
+        key: &key,
         kind,
         config: &config,
         enabled,
@@ -490,17 +526,19 @@ pub async fn update_provider(
     let current = locked(&mut tx, scope, provider_id).await?;
     require_kind_feature(&entitlements, current.kind)?;
     refuse_config_owned(&current)?;
-    let (config, enabled) = patched(&state, &mut tx, scope, &current, body).await?;
+    let resolved = presets::resolve_provider(&current).map_err(preset_unknown)?;
+    let (config, enabled) = patched(&state, &mut tx, scope, &current, &resolved, body).await?;
     let identities = providers::identity_count(&mut *tx, scope, current.id)
         .await
         .map_err(|e| ApiError::internal(&e))?;
     let before = Current {
-        provider: &current,
+        provider: &resolved,
         identities,
     };
+    let resolved_after = presets::resolve(&config).map_err(preset_unknown)?;
     let after = Proposed {
         kind: current.kind,
-        config: &config,
+        config: &resolved_after,
         enabled,
     };
     guard.check(Some(&before), &after)?;
@@ -573,14 +611,16 @@ async fn locked(
         .ok_or_else(provider_not_found)
 }
 
-/// The config and `enabled` `current` would have after `patch`. A patch naming no config
-/// member keeps the stored config as it is (with the new label); one naming any is validated
-/// whole, the named members over the stored ones.
+/// The stored config and `enabled` `current` would have after `patch`; `resolved` is
+/// `current` with its preset applied. A patch naming no config member keeps the stored config
+/// as it is (with the new label); one naming any is validated whole, the named members over
+/// the resolved ones, and a preset row then stores what differs from its preset.
 async fn patched(
     state: &AppState,
     conn: &mut PgConnection,
     scope: OrgScope,
     current: &IdentityProvider,
+    resolved: &IdentityProvider,
     patch: ProviderPatch,
 ) -> Result<(Map<String, Value>, bool), ApiError> {
     if let Some(label) = &patch.label {
@@ -594,7 +634,7 @@ async fn patched(
     let mut config = match patch.config {
         None => current.config.clone(),
         Some(members) => {
-            let mut merged = public_config(&current.config);
+            let mut merged = public_config(&resolved.config);
             merged.extend(members);
             let sealing = Sealing {
                 policy: policy(state, conn).await?,
@@ -604,8 +644,12 @@ async fn patched(
                     provider_id: current.id,
                 },
             };
-            let stored = sealed_secret(current);
-            sealing.config(current.kind, merged, stored, &label)?
+            let stored = sealed_secret(resolved);
+            let full = sealing.config(current.kind, merged, stored, &label)?;
+            match presets::named(&current.config).and_then(presets::find) {
+                Some(preset) => preset.strip(full),
+                None => full,
+            }
         }
     };
     config.remove(stepclimb_core::admission_rules::PROVIDER_MEMBER);
@@ -672,23 +716,55 @@ async fn policy(state: &AppState, conn: &mut PgConnection) -> Result<UrlPolicy, 
     Ok(state.providers.client(tenancy).policy())
 }
 
-/// The kind a new provider's body names, or 422.
-fn new_kind(body: &NewProvider) -> Result<Kind, ApiError> {
-    if body.preset.is_some() {
-        return Err(ApiError::new(
+/// The kind a new provider's body names, and its preset, or 422. With a preset the kind is
+/// the preset's, and a `kind` the body names must be that one.
+fn new_kind(body: &NewProvider) -> Result<(Kind, Option<&'static Preset>), ApiError> {
+    let Some(name) = &body.preset else {
+        return match body.kind.as_deref().and_then(Kind::parse) {
+            Some(kind @ (Kind::Oidc | Kind::Oauth2)) => Ok((kind, None)),
+            Some(Kind::Local) | None => Err(kind_unsupported()),
+        };
+    };
+    let preset = presets::find(name).ok_or_else(|| preset_unknown(UnknownPreset(name.clone())))?;
+    match body.kind.as_deref() {
+        Some(kind) if Kind::parse(kind) != Some(preset.kind) => Err(ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
-            code::PROVIDER_PRESET_UNKNOWN,
-            "This server has no provider preset of that name.",
+            code::PROVIDER_KIND_UNSUPPORTED,
+            "A preset's provider has the preset's kind; leave `kind` out.",
         )
         .with_errors(vec![FieldError::at(
-            &["preset"],
-            code::PROVIDER_PRESET_UNKNOWN,
-        )]));
+            &["kind"],
+            code::PROVIDER_KIND_UNSUPPORTED,
+        )])),
+        _ => Ok((preset.kind, Some(preset))),
     }
-    match Kind::parse(&body.kind) {
-        Some(kind @ (Kind::Oidc | Kind::Oauth2)) => Ok(kind),
-        Some(Kind::Local) | None => Err(kind_unsupported()),
+}
+
+/// 422 `provider.preset_unknown`: a preset this server does not have, named by the body or
+/// by a stored row (a server built without the preset's feature, spec 06 B19).
+fn preset_unknown(_: UnknownPreset) -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        code::PROVIDER_PRESET_UNKNOWN,
+        "This server has no provider preset of that name.",
+    )
+    .with_errors(vec![FieldError::at(
+        &["preset"],
+        code::PROVIDER_PRESET_UNKNOWN,
+    )])
+}
+
+/// 422 `request.invalid` naming `key` and `label` where a body without a preset leaves them
+/// out.
+fn missing_key_or_label(body: &NewProvider) -> ApiError {
+    let mut errors = Vec::new();
+    if body.key.is_none() {
+        errors.push(FieldError::at(&["key"], code::PROVIDER_KEY_INVALID));
     }
+    if body.label.is_none() {
+        errors.push(FieldError::at(&["label"], code::PROVIDER_LABEL_INVALID));
+    }
+    ApiError::invalid(errors)
 }
 
 /// 403 `entitlement.feature_unavailable` when the plan lacks `kind`'s feature.

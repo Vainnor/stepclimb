@@ -87,6 +87,7 @@ pub mod passkey_sign_in;
 pub mod password;
 pub mod password_check;
 pub mod password_hasher;
+pub mod presets;
 pub mod provider_admin;
 pub mod provider_callback;
 pub mod provider_sign_in;

@@ -312,6 +312,25 @@ URLs, `client_id`, `scopes`, `pkce`, `claims` and `allow_local_passkeys`
 instance with more than one organization, `org = "<slug>"` names the provider's organization. An entry
 cannot set `admission_rules`; those are managed through the admin API and kept across restarts.
 
+A server built with the `vatsim` feature, as the release image is, has a VATSIM Connect preset
+that supplies the kind, key, label, URLs, scopes and claims above, so the entry needs only the
+client:
+
+```toml
+[[providers]]
+preset = "vatsim"
+client_id = "<your client id>"
+client_secret_file = "/run/secrets/vatsim_client_secret"
+```
+
+Any member the entry names replaces the preset's, `claims` as a whole. To use VATSIM's
+development environment, set `authorize`, `token` and `userinfo` to the same paths on
+`https://auth-dev.vatsim.net`. The database row keeps only what differs from the preset, so a
+release that corrects the preset reaches the provider on its next read. VATSIM's documentation
+does not say whether Connect accepts PKCE, which the preset sends; if sign-in fails at the token
+step, `pkce = false` turns it off, at the cost of the protection against a stolen authorization
+code (`docs/specs/m0/06-oauth2-and-vatsim-preset.md` Q3).
+
 - The file owns the providers it declares. Every start of `serve` writes them to their
   organization by `key`, taking over a provider of that key created any other way, and disables
   (never deletes) one that is no longer in the file, so its users' sign-in links are kept.

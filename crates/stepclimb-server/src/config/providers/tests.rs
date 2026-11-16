@@ -358,8 +358,8 @@ fn an_unreadable_secret_file_is_refused_without_its_path() {
 
 #[test]
 fn a_member_neither_kind_has_is_refused() {
-    let text = canonical_with("label", "label = \"VATSIM\"\npreset = \"vatsim\"");
-    assert!(refused(&text).contains("`preset` is not a member of this kind of provider"));
+    let text = canonical_with("label", "label = \"VATSIM\"\ndiscovery = true");
+    assert!(refused(&text).contains("`discovery` is not a member of this kind of provider"));
     let text = canonical_with("client_id", "client_id = 1979-05-27");
     assert!(refused(&text).contains("`client_id` has the wrong type"));
 }
@@ -449,4 +449,106 @@ fn core_and_auth_name_the_source_member_alike() {
         identity_providers::SOURCE_CONFIG,
         provider_config::SOURCE_CONFIG
     );
+}
+
+/// A preset entry: the organization's client id and secret file, and nothing else.
+const PRESET: &str = r#"
+[[providers]]
+preset = "vatsim"
+client_id = "stepclimb-test-client"
+client_secret_file = "vatsim_client_secret"
+"#;
+
+/// T14 (B18): `preset = "vatsim"` resolves to exactly B11's URLs, scopes and claims, the
+/// canonical example's stored config member for member; the row stores only what the
+/// organization gave.
+#[cfg(feature = "vatsim")]
+#[test]
+fn the_vatsim_preset_resolves_to_the_canonical_example() {
+    let policy = UrlPolicy::new(false, false);
+    let config = load(PRESET).expect("loads");
+    let [provider] = config.providers.as_slice() else {
+        panic!("one provider: {:?}", config.providers);
+    };
+    assert_eq!(provider.key, "vatsim");
+    assert_eq!(provider.kind, Kind::Oauth2);
+    assert_eq!(provider.label, "Sign in with VATSIM");
+    assert_eq!(provider.secret().expose_secret(), SECRET);
+    let stored = provider.stored(policy).expect("valid");
+    assert_eq!(
+        Value::Object(stored.clone()),
+        json!({
+            "preset": "vatsim",
+            "client_id": "stepclimb-test-client",
+            "source": "config",
+            "allow_local_passkeys": false,
+            "trusted_for_email_matching": false,
+            "label": "Sign in with VATSIM",
+        })
+    );
+    let canonical = load(CANONICAL).expect("loads").providers[0]
+        .stored(policy)
+        .expect("valid");
+    let resolved = crate::presets::resolve(&stored)
+        .expect("resolves")
+        .into_owned();
+    assert_eq!(resolved, canonical);
+}
+
+/// Q4 (a): an entry overrides any member, each whole, and names its own key and label; the row
+/// keeps the overrides.
+#[cfg(feature = "vatsim")]
+#[test]
+fn a_preset_entry_overrides_members_key_and_label() {
+    let text = format!(
+        "{PRESET}key = \"vatsim-dev\"\nlabel = \"VATSIM (development)\"\n\
+         authorize = \"https://auth-dev.vatsim.net/oauth/authorize\"\nscopes = [\"full_name\"]\n"
+    );
+    let config = load(&text).expect("loads");
+    let provider = &config.providers[0];
+    assert_eq!(provider.key, "vatsim-dev");
+    assert_eq!(provider.label, "VATSIM (development)");
+    let stored = provider
+        .stored(UrlPolicy::new(false, false))
+        .expect("valid");
+    assert_eq!(
+        stored["authorize"],
+        "https://auth-dev.vatsim.net/oauth/authorize"
+    );
+    assert_eq!(stored["scopes"], json!(["full_name"]));
+    assert!(
+        !stored.contains_key("token"),
+        "the preset's token URL is not copied"
+    );
+}
+
+/// B19: a preset this server lacks, or another kind than the preset's, stops startup.
+#[test]
+fn an_unknown_preset_or_a_conflicting_kind_is_refused() {
+    let unknown = PRESET.replace("\"vatsim\"", "\"no-such-preset\"");
+    let message = refused(&format!("{unknown}key = \"x\"\nlabel = \"X\"\n"));
+    assert!(
+        message.contains("`preset` names no preset this server has (provider.preset_unknown)"),
+        "{message}"
+    );
+    assert!(message.contains("`kind` is required"), "{message}");
+    #[cfg(feature = "vatsim")]
+    {
+        let message = refused(&format!("{PRESET}kind = \"oidc\"\n"));
+        assert!(
+            message.contains("`kind` must be \"oauth2\", the kind of preset \"vatsim\""),
+            "{message}"
+        );
+    }
+}
+
+/// T16 (B19): a server built without the `vatsim` feature has no such preset.
+#[cfg(not(feature = "vatsim"))]
+#[test]
+fn without_its_feature_the_vatsim_preset_is_unknown() {
+    let message = refused(&format!(
+        "{PRESET}kind = \"oauth2\"\nkey = \"v\"\nlabel = \"V\"\n"
+    ));
+    assert!(message.contains("(provider.preset_unknown)"), "{message}");
+    assert!(crate::presets::find("vatsim").is_none());
 }

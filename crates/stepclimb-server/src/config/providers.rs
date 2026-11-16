@@ -8,12 +8,16 @@
 //!
 //! | Member | Rule | When absent |
 //! | --- | --- | --- |
-//! | `kind` | `"oidc"` or `"oauth2"` | refused |
-//! | `key` | 1 to 32 lowercase letters, digits and hyphens, starting with a letter or digit (Q5); not `local` | refused |
-//! | `label` | a non-empty string of at most 200 characters without control characters | refused |
+//! | `preset` | the name of a preset this server has (`crate::presets`, spec 06 B18) | no preset |
+//! | `kind` | `"oidc"` or `"oauth2"`; with a preset, the preset's kind | refused, or the preset's |
+//! | `key` | 1 to 32 lowercase letters, digits and hyphens, starting with a letter or digit (Q5); not `local` | refused, or the preset's |
+//! | `label` | a non-empty string of at most 200 characters without control characters | refused, or the preset's |
 //! | `enabled` | a boolean | `true` |
 //! | `org` | the slug of the organization the provider belongs to; required on an instance with more than one | the instance's one organization |
 //! | `client_secret`, `client_secret_file` | exactly one: the secret, or a file whose trimmed contents are the secret, relative to the directory holding `stepclimb.toml` | refused |
+//!
+//! With a preset, the entry's config members override the preset's, each whole (Q4 (a)), and
+//! the row stores only the members that differ from the preset's (`crate::presets`).
 //!
 //! An entry may not set `admission_rules`: a provider's admission rules are managed through the
 //! admin API only, and startup keeps the ones its row has (spec 07).
@@ -37,11 +41,13 @@ use stepclimb_auth::provider_config::{ClientSecret, ConfigErrors, ConfigProblem,
 use stepclimb_core::identity_providers::{self, Kind};
 
 use super::ConfigFile;
+use crate::presets::{self, Preset};
 
 pub use identity_providers::LABEL_MAX_CHARS;
 
 /// The members of an entry that are the provider's own, not its kind's config.
-const OWN_MEMBERS: [&str; 7] = [
+const OWN_MEMBERS: [&str; 8] = [
+    "preset",
     "kind",
     "key",
     "label",
@@ -72,7 +78,10 @@ pub struct ConfigProvider {
     pub enabled: bool,
     /// The organization's slug, when the entry names one.
     pub org: Option<String>,
-    /// The kind's config members as JSON, without the secret.
+    /// The preset the entry names, if any.
+    pub preset: Option<&'static Preset>,
+    /// The kind's config members as JSON, without the secret: the entry's own, without the
+    /// preset's.
     config: Map<String, Value>,
     secret: ClientSecret,
 }
@@ -85,6 +94,7 @@ impl fmt::Debug for ConfigProvider {
             .field("kind", &self.kind)
             .field("enabled", &self.enabled)
             .field("org", &self.org)
+            .field("preset", &self.preset.map(|p| p.name))
             .finish_non_exhaustive()
     }
 }
@@ -96,10 +106,14 @@ impl ConfigProvider {
     }
 
     /// The row's stored `config` under `policy`: the kind's config with `source: "config"` and
-    /// no secret, plus `label`. The problems are the kind's validation's, as messages naming
-    /// the TOML member.
+    /// no secret, plus `label`; with a preset, only the members that differ from the preset's,
+    /// and `preset` ([`Preset::strip`]). The problems are the kind's validation's, as messages
+    /// naming the TOML member.
     pub fn stored(&self, policy: UrlPolicy) -> Result<Map<String, Value>, Vec<String>> {
-        let mut input = self.config.clone();
+        let mut input = match self.preset {
+            Some(preset) => preset.apply(&self.config),
+            None => self.config.clone(),
+        };
         input.insert("client_secret".into(), SECRET_STAND_IN.into());
         let input = Value::Object(input);
         let mut stored = match self.kind {
@@ -113,7 +127,10 @@ impl ConfigProvider {
             problems.iter().map(problem_message).collect::<Vec<_>>()
         })?;
         stored.insert(identity_providers::LABEL.into(), self.label.as_str().into());
-        Ok(stored)
+        Ok(match self.preset {
+            Some(preset) => preset.strip(stored),
+            None => stored,
+        })
     }
 }
 
@@ -214,9 +231,17 @@ fn parse_entry(
         key: key.map(str::to_owned),
         problems,
     };
-    let kind = kind(table.get("kind"), &mut problems);
-    let key = valid_key(table.get("key"), &mut problems);
-    let label = label(table.get("label"), &mut problems);
+    let preset = preset(table.get(presets::MEMBER), &mut problems);
+    let named = preset.flatten();
+    let kind = kind(table.get("kind"), named, &mut problems);
+    let key = match (table.get("key"), named) {
+        (None, Some(preset)) => Some(preset.key.clone()),
+        (value, _) => valid_key(value, &mut problems),
+    };
+    let label = match (table.get("label"), named) {
+        (None, Some(preset)) => Some(preset.label.clone()),
+        (value, _) => label(value, &mut problems),
+    };
     let enabled = flag(table.get("enabled"), "enabled", true, &mut problems);
     let org = org(table.get("org"), &mut problems);
     let secret = secret(table, file, &mut problems);
@@ -230,8 +255,9 @@ fn parse_entry(
     if !problems.is_empty() {
         return Err(fail(problems));
     }
-    match (kind, key, label, enabled, org, secret, config) {
+    match (preset, kind, key, label, enabled, org, secret, config) {
         (
+            Some(preset),
             Some(kind),
             Some(key),
             Some(label),
@@ -246,6 +272,7 @@ fn parse_entry(
             label,
             enabled,
             org,
+            preset,
             config,
             secret,
         }),
@@ -254,8 +281,47 @@ fn parse_entry(
     }
 }
 
-fn kind(value: Option<&toml::Value>, problems: &mut Vec<String>) -> Option<Kind> {
-    match value.map(toml::Value::as_str) {
+/// `preset`: `Some(None)` when absent, `None` (with a problem) for a name this server lacks.
+fn preset(
+    value: Option<&toml::Value>,
+    problems: &mut Vec<String>,
+) -> Option<Option<&'static Preset>> {
+    let Some(value) = value else {
+        return Some(None);
+    };
+    let found = value.as_str().and_then(presets::find);
+    if found.is_none() {
+        problems.push(format!(
+            "`preset` names no preset this server has ({})",
+            crate::provider_admin::code::PROVIDER_PRESET_UNKNOWN
+        ));
+    }
+    found.map(Some)
+}
+
+/// `kind`: required without a preset; with one, absent or the preset's kind.
+fn kind(
+    value: Option<&toml::Value>,
+    preset: Option<&Preset>,
+    problems: &mut Vec<String>,
+) -> Option<Kind> {
+    match (value.map(toml::Value::as_str), preset) {
+        (None, Some(preset)) => return Some(preset.kind),
+        (Some(Some(kind)), Some(preset)) if Kind::parse(kind) == Some(preset.kind) => {
+            return Some(preset.kind);
+        }
+        (Some(_), Some(preset)) => problems.push(format!(
+            "`kind` must be {:?}, the kind of preset {:?}, or be left out",
+            preset.kind.as_str(),
+            preset.name
+        )),
+        (value, None) => return kind_alone(value, problems),
+    }
+    None
+}
+
+fn kind_alone(value: Option<Option<&str>>, problems: &mut Vec<String>) -> Option<Kind> {
+    match value {
         None => problems.push("`kind` is required (\"oidc\" or \"oauth2\")".to_owned()),
         Some(Some("oidc")) => return Some(Kind::Oidc),
         Some(Some("oauth2")) => return Some(Kind::Oauth2),

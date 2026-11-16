@@ -1747,16 +1747,25 @@ export interface components {
             enabled?: boolean;
             /**
              * @description 1 to 32 lowercase letters, digits and hyphens, starting with a letter or digit; not
-             *     `local`. It is part of the redirect URI and never changes.
+             *     `local`. It is part of the redirect URI and never changes. Required without a preset;
+             *     with one, the preset's key when omitted (`vatsim` for `vatsim`).
              */
-            key: string;
-            /** @description `oidc` or `oauth2`; anything else answers 422 `provider.kind_unsupported`. */
-            kind: string;
-            /** @description 1 to 200 characters without control characters. */
-            label: string;
+            key?: string;
             /**
-             * @description A preset to take the provider's endpoints and claims from. This server has none, so any
-             *     value answers 422 `provider.preset_unknown`.
+             * @description `oidc` or `oauth2`; anything else answers 422 `provider.kind_unsupported`. Required
+             *     without a preset; with one, omitted or the preset's kind.
+             */
+            kind?: string;
+            /**
+             * @description 1 to 200 characters without control characters. Required without a preset; with one,
+             *     the preset's label when omitted ("Sign in with VATSIM" for `vatsim`).
+             */
+            label?: string;
+            /**
+             * @description A preset to take the provider's endpoints, scopes and claims from, such as `vatsim`
+             *     (VATSIM Connect, an `oauth2` provider). The config then needs only `client_id` and
+             *     `client_secret`; any other member it names replaces the preset's whole. A name this
+             *     server does not have answers 422 `provider.preset_unknown`.
              */
             preset?: string;
         };
@@ -1990,7 +1999,10 @@ export interface components {
             items: {
                 /** @description Whether the provider has a client secret. The secret itself is never answered. */
                 client_secret_set: boolean;
-                /** @description The kind's configuration, without the client secret. */
+                /**
+                 * @description The kind's configuration, without the client secret. For a preset provider, the
+                 *     config sign-in uses: the preset's members under the provider's own.
+                 */
                 config: components["schemas"]["ProviderConfig"];
                 /** @description Whether people can sign in through it. A disabled provider keeps its identities. */
                 enabled: boolean;
@@ -2001,6 +2013,11 @@ export interface components {
                 kind: components["schemas"]["ProviderKind"];
                 /** @description The text of the provider's sign-in button. */
                 label: string;
+                /**
+                 * @description The preset the provider takes its other config members from, such as `vatsim`; absent
+                 *     for a provider without one.
+                 */
+                preset?: string | null;
                 /** @description The URI to register at the provider as the client's redirect URI. */
                 redirect_uri: string;
                 source: components["schemas"]["ProviderSource"];
@@ -2248,7 +2265,10 @@ export interface components {
         Provider: {
             /** @description Whether the provider has a client secret. The secret itself is never answered. */
             client_secret_set: boolean;
-            /** @description The kind's configuration, without the client secret. */
+            /**
+             * @description The kind's configuration, without the client secret. For a preset provider, the
+             *     config sign-in uses: the preset's members under the provider's own.
+             */
             config: components["schemas"]["ProviderConfig"];
             /** @description Whether people can sign in through it. A disabled provider keeps its identities. */
             enabled: boolean;
@@ -2259,6 +2279,11 @@ export interface components {
             kind: components["schemas"]["ProviderKind"];
             /** @description The text of the provider's sign-in button. */
             label: string;
+            /**
+             * @description The preset the provider takes its other config members from, such as `vatsim`; absent
+             *     for a provider without one.
+             */
+            preset?: string | null;
             /** @description The URI to register at the provider as the client's redirect URI. */
             redirect_uri: string;
             source: components["schemas"]["ProviderSource"];

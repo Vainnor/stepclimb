@@ -16,6 +16,8 @@
 //! - While a row has identities, the file may not take it over from the admin API or change
 //!   what the provider is: its kind, issuer, endpoint origins or subject pointer
 //!   ([`changed_anchors`]). Either stops startup; with no identity it goes ahead with a warning.
+//! - A preset entry's row stores only what differs from its preset (`crate::presets`); the
+//!   anchors and the fingerprint below are those of the resolved config, which sign-in reads.
 //! - The client secrets stay in memory ([`ConfigSecrets`], by row), never in the database, each
 //!   with the fingerprint of the config written, so a row another server rewrote from another
 //!   file gets no secret here. Every server of an instance must read the same file.
@@ -23,6 +25,7 @@
 //! An instance with no organization yet has nowhere to put them: startup logs a warning and
 //! goes on, and the next start after `stepclimb admin create` writes them.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::SystemTime;
 
@@ -39,6 +42,7 @@ use stepclimb_core::{
 
 use crate::config::ConfigProvider;
 use crate::config::providers::EntryError;
+use crate::presets;
 
 /// Why the file's providers could not be written.
 #[derive(Debug, thiserror::Error)]
@@ -205,7 +209,7 @@ async fn write_org(
                 provider_id,
             },
             provider.secret().clone(),
-            Fingerprint::of(config),
+            Fingerprint::of(&resolved(config)),
         );
         keys.insert(provider.key.clone());
     }
@@ -271,6 +275,13 @@ pub(crate) fn changed_anchors(
     changed
 }
 
+/// `stored` as the sign-in reads it ([`presets::resolve`]), the anchors and the fingerprint
+/// being those of the config sign-in uses. A preset this server lacks leaves `stored` as it
+/// is: it then has no endpoints, which [`changed_anchors`] counts as changed.
+fn resolved(stored: &Map<String, Value>) -> Map<String, Value> {
+    presets::resolve(stored).map_or_else(|_| stored.clone(), Cow::into_owned)
+}
+
 /// Refuse, while the row has identities, an entry that would take over a row the admin API
 /// wrote or change what the provider is ([`changed_anchors`]): the users linked to it would
 /// then sign in as whoever the new provider says (spec 06 B13). With no identity it goes ahead
@@ -286,7 +297,12 @@ async fn check_trust_anchors(
         return Ok(());
     };
     let takeover = !existing.is_from_config_file();
-    let changed = changed_anchors(existing.kind, &existing.config, provider.kind, config);
+    let changed = changed_anchors(
+        existing.kind,
+        &resolved(&existing.config),
+        provider.kind,
+        &resolved(config),
+    );
     if !takeover && changed.is_empty() {
         return Ok(());
     }

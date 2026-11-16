@@ -1387,3 +1387,374 @@ async fn creating_a_provider_that_maps_a_tested_attribute_needs_admission_manage
     assert!(f.entries().await.is_empty());
     f.post(&both, body).await.ok(StatusCode::CREATED);
 }
+
+/// The plan's VATSIM Connect values (spec 06 B11), which the `vatsim` preset supplies.
+#[cfg(feature = "vatsim")]
+fn vatsim_claims() -> Value {
+    json!({
+        "subject": "/data/cid",
+        "given_name": "/data/personal/name_first",
+        "family_name": "/data/personal/name_last",
+        "email": "/data/personal/email",
+        "attributes": {
+            "rating": "/data/vatsim/rating/short",
+            "subdivision": "/data/vatsim/subdivision/id",
+        },
+    })
+}
+
+/// A VATSIM-shaped synthetic `/api/user` body (VATSIM documents `cid` as a string).
+#[cfg(feature = "vatsim")]
+fn vatsim_user() -> Value {
+    json!({
+        "data": {
+            "cid": "1000001",
+            "personal": {
+                "name_first": "Test",
+                "name_last": "Student",
+                "email": "test.student@example.test",
+            },
+            "vatsim": {
+                "rating": { "id": 2, "short": "S1", "long": "Student 1" },
+                "subdivision": { "id": "USA", "name": "Synthetic Subdivision" },
+            },
+        },
+    })
+}
+
+/// B18: a preset provider needs only the organization's client; it takes the preset's key,
+/// label, kind, endpoints, scopes and claims, the row stores only the organization's members
+/// and `preset`, and the answer shows the resolved config with `preset: "vatsim"` (B20).
+#[cfg(feature = "vatsim")]
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn b18_a_preset_provider_needs_only_the_organizations_client(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let admin = f.admin().await;
+    let body = json!({
+        "preset": "vatsim",
+        "config": { "client_id": "vzdc-client", "client_secret": SECRET },
+    });
+    let answer = f.post(&admin, body).await;
+    let created = answer.ok(StatusCode::CREATED).clone();
+    assert_schema("Provider", &created);
+    assert_eq!(created["key"], "vatsim");
+    assert_eq!(created["label"], "Sign in with VATSIM");
+    assert_eq!(created["kind"], "oauth2");
+    assert_eq!(created["preset"], "vatsim");
+    let config = &created["config"];
+    assert_eq!(
+        config["authorize"],
+        "https://auth.vatsim.net/oauth/authorize"
+    );
+    assert_eq!(config["token"], "https://auth.vatsim.net/oauth/token");
+    assert_eq!(config["userinfo"], "https://auth.vatsim.net/api/user");
+    assert_eq!(
+        config["scopes"],
+        json!(["full_name", "vatsim_details", "email"])
+    );
+    assert_eq!(config["pkce"], true);
+    assert_eq!(config["claims"], vatsim_claims());
+    assert_eq!(config["client_id"], "vzdc-client");
+    assert!(!answer.text.contains(SECRET));
+
+    let id = created["id"].as_str().expect("an id");
+    let stored: Value = serde_json::from_str(&f.stored(id).await).expect("JSON");
+    let mut members: Vec<&str> = stored
+        .as_object()
+        .expect("an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    members.sort_unstable();
+    assert_eq!(
+        members,
+        [
+            "allow_local_passkeys",
+            "client_id",
+            "client_secret",
+            "label",
+            "preset",
+            "trusted_for_email_matching",
+        ]
+    );
+
+    let scopes = json!({ "config": { "scopes": ["full_name", "vatsim_details"] } });
+    let changed = f.patch(&admin, id, scopes).await;
+    let changed = changed.ok(StatusCode::OK);
+    assert_eq!(
+        changed["config"]["scopes"],
+        json!(["full_name", "vatsim_details"])
+    );
+    assert_eq!(changed["config"]["claims"], vatsim_claims());
+    let stored: Value = serde_json::from_str(&f.stored(id).await).expect("JSON");
+    assert_eq!(stored["scopes"], json!(["full_name", "vatsim_details"]));
+    assert!(stored.get("claims").is_none(), "{stored}");
+
+    let listed = f.get(&admin, PATH).await;
+    assert_eq!(listed.ok(StatusCode::OK)["items"][0]["preset"], "vatsim");
+    let discovery = f
+        .send(Method::GET, "/.well-known/stepclimb", Auth::Anonymous, None)
+        .await;
+    let providers = discovery.ok(StatusCode::OK)["sign_in"].clone();
+    assert!(
+        providers.as_array().is_some_and(|p| p
+            .iter()
+            .any(|p| p["key"] == "vatsim" && p["kind"] == "oauth2")),
+        "{}",
+        discovery.text
+    );
+}
+
+/// T15: a preset provider whose URLs are overridden to point at the mock signs in with a
+/// VATSIM-shaped body: subject `1000001`, the mapped names and email, and the attributes
+/// `rating` and `subdivision`; the authorize request carries the preset's scopes and PKCE.
+#[cfg(feature = "vatsim")]
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t15_a_preset_provider_signs_in_against_the_mock(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    f.mock.set_oauth2_userinfo(Some(vatsim_user()));
+    let admin = f.admin().await;
+    let body = json!({
+        "preset": "vatsim",
+        "config": {
+            "authorize": f.mock.url(Endpoint::OAuth2Authorize),
+            "token": f.mock.url(Endpoint::OAuth2Token),
+            "userinfo": f.mock.url(Endpoint::OAuth2Userinfo),
+            "client_id": f.mock.client_id(),
+            "client_secret": f.mock.client_secret(),
+        },
+    });
+    let id = f.created(&admin, body).await;
+    f.signup(true).await;
+
+    assert_eq!(f.sign_in("vatsim").await, "/c/s1");
+
+    let authorize = f.mock.requests_to(Endpoint::OAuth2Authorize);
+    assert_eq!(
+        authorize[0].query_param("scope"),
+        Some("full_name vatsim_details email")
+    );
+    assert!(authorize[0].query_param("code_challenge").is_some());
+    let (subject, attributes, given, family, email): (
+        String,
+        Value,
+        String,
+        String,
+        Option<String>,
+    ) = sqlx::query_as(
+        "SELECT i.subject, i.attributes, u.given_name, u.family_name, u.email
+             FROM identities i JOIN users u ON u.id = i.user_id
+             WHERE i.org_id = $1 AND i.provider_id = $2::uuid",
+    )
+    .bind(f.org)
+    .bind(&id)
+    .fetch_one(&f.pool)
+    .await
+    .expect("the identity");
+    assert_eq!(subject, "1000001");
+    assert_eq!(attributes, json!({ "rating": "S1", "subdivision": "USA" }));
+    assert_eq!((given.as_str(), family.as_str()), ("Test", "Student"));
+    assert_eq!(email.as_deref(), Some("test.student@example.test"));
+}
+
+/// B19: a preset this server does not have is refused on create, and a stored row naming one
+/// (a server built without the preset) still lists, as stored, but cannot be changed.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn b19_a_preset_this_server_lacks_is_refused(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let admin = f.admin().await;
+    let body = json!({
+        "preset": "no-such-preset",
+        "config": { "client_id": "c", "client_secret": SECRET },
+    });
+    let refused = f.post(&admin, body).await;
+    refused.expect(StatusCode::UNPROCESSABLE_ENTITY, "provider.preset_unknown");
+    assert_eq!(refused.body["errors"][0]["field"], "/preset");
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM identity_providers WHERE org_id = $1")
+        .bind(f.org)
+        .fetch_one(&f.pool)
+        .await
+        .expect("count");
+
+    let id: Uuid = sqlx::query_scalar(
+        "INSERT INTO identity_providers (id, org_id, key, kind, config)
+         VALUES ($1, $2, 'gone', 'oauth2', $3::jsonb) RETURNING id",
+    )
+    .bind(new_id())
+    .bind(f.org)
+    .bind(json!({ "preset": "no-such-preset", "client_id": "c", "label": "Gone" }))
+    .fetch_one(&f.pool)
+    .await
+    .expect("insert");
+    let shown = f.get(&admin, &format!("{PATH}/{id}")).await;
+    let shown = shown.ok(StatusCode::OK);
+    assert_eq!(shown["preset"], "no-such-preset");
+    assert_eq!(shown["config"]["client_id"], "c");
+    f.patch(&admin, &id.to_string(), json!({ "label": "Back" }))
+        .await
+        .expect(StatusCode::UNPROCESSABLE_ENTITY, "provider.preset_unknown");
+    let after: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM identity_providers WHERE org_id = $1")
+            .bind(f.org)
+            .fetch_one(&f.pool)
+            .await
+            .expect("count");
+    assert_eq!(after, rows + 1);
+}
+
+/// The write rules read a preset row's resolved config: replacing the secret of a linked
+/// preset provider needs `provider.manage` alone, and overriding its userinfo URL changes what
+/// the provider is (spec 06 B14 rule 2).
+#[cfg(feature = "vatsim")]
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_linked_preset_providers_anchors_are_its_presets(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (manager, _) = f.holder(&[ProviderManage::KEY]).await;
+    let body = json!({
+        "preset": "vatsim",
+        "config": { "client_id": "vzdc-client", "client_secret": SECRET },
+    });
+    let id = f.created(&manager, body).await;
+    f.link(&id, "1000001").await;
+    f.patch(
+        &manager,
+        &id,
+        json!({ "config": { "client_secret": "rotated-secret" } }),
+    )
+    .await
+    .ok(StatusCode::OK);
+    f.patch(&manager, &id, json!({ "label": "VATSIM" }))
+        .await
+        .ok(StatusCode::OK);
+    let elsewhere = json!({ "config": { "userinfo": "https://auth.vatsim.net/api/other-user" } });
+    f.patch(&manager, &id, elsewhere)
+        .await
+        .expect(StatusCode::FORBIDDEN, ESCALATION);
+}
+
+/// Admission rules may test the attributes a preset provider maps through its preset
+/// (`07-admission.md` B8: a rule names only attributes its provider maps).
+#[cfg(feature = "vatsim")]
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn admission_rules_see_the_attributes_a_preset_maps(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let admin = f.admin().await;
+    let body = json!({
+        "preset": "vatsim",
+        "config": { "client_id": "vzdc-client", "client_secret": SECRET },
+    });
+    f.created(&admin, body).await;
+    let rules = json!({ "rules": {
+        "providers": { "vatsim": [{ "attribute": "rating", "op": "in", "value": ["S1", "S2"] }] },
+    } });
+    let answer = f
+        .send(
+            Method::PUT,
+            "/api/v1/admin/admission",
+            Auth::Cookie(&admin),
+            Some(rules),
+        )
+        .await;
+    answer.ok(StatusCode::OK);
+    let unmapped = json!({ "rules": {
+        "providers": { "vatsim": [{ "attribute": "division", "op": "exists" }] },
+    } });
+    let refused = f
+        .send(
+            Method::PUT,
+            "/api/v1/admin/admission",
+            Auth::Cookie(&admin),
+            Some(unmapped),
+        )
+        .await;
+    refused.expect(StatusCode::UNPROCESSABLE_ENTITY, "request.invalid");
+    assert_eq!(
+        refused.body["errors"][0]["code"],
+        "admission.attribute_unknown"
+    );
+}
+
+/// Switching a linked preset provider's anchors back is a change too: after an admin
+/// overrides `userinfo`, `provider.manage` alone may still relabel it, but may not put the
+/// preset's own URL back (spec 06 B14 rule 2, on the resolved config).
+#[cfg(feature = "vatsim")]
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn putting_a_linked_preset_providers_url_back_needs_every_permission(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (manager, _) = f.holder(&[ProviderManage::KEY]).await;
+    let admin = f.admin().await;
+    let body = json!({
+        "preset": "vatsim",
+        "config": { "client_id": "vzdc-client", "client_secret": SECRET },
+    });
+    let id = f.created(&admin, body).await;
+    f.link(&id, "1000001").await;
+    let elsewhere = json!({ "config": { "userinfo": "https://auth.vatsim.net/api/other-user" } });
+    f.patch(&admin, &id, elsewhere).await.ok(StatusCode::OK);
+    f.patch(&manager, &id, json!({ "label": "VATSIM" }))
+        .await
+        .ok(StatusCode::OK);
+    let before = f.stored(&id).await;
+    let back = json!({ "config": { "userinfo": "https://auth.vatsim.net/api/user" } });
+    f.patch(&manager, &id, back.clone())
+        .await
+        .expect(StatusCode::FORBIDDEN, ESCALATION);
+    assert_eq!(f.stored(&id).await, before);
+    f.patch(&admin, &id, back).await.ok(StatusCode::OK);
+    let stored: Value = serde_json::from_str(&f.stored(&id).await).expect("JSON");
+    assert!(
+        stored.get("userinfo").is_none(),
+        "back to the preset's: {stored}"
+    );
+}
+
+/// `preset` is a provider's own member, never a config member: naming it under `config`, on
+/// create or change, is refused at `/config/preset`.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn preset_is_not_a_config_member(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let admin = f.admin().await;
+    let id = f.created(&admin, f.oauth2("plain")).await;
+    let mut body = f.oauth2("other");
+    body["config"]["preset"] = json!("x");
+    for answer in [
+        f.patch(&admin, &id, json!({ "config": { "preset": "x" } }))
+            .await,
+        f.post(&admin, body).await,
+    ] {
+        answer.expect(StatusCode::UNPROCESSABLE_ENTITY, "provider.config_invalid");
+        let fields: Vec<&str> = answer.body["errors"]
+            .as_array()
+            .expect("errors")
+            .iter()
+            .filter_map(|e| e["field"].as_str())
+            .collect();
+        assert_eq!(fields, ["/config/preset"], "{}", answer.text);
+    }
+}
+
+/// While the organization's rules test `rating`, which a VATSIM preset provider maps through
+/// its preset, overriding its `token` URL changes the document `rating` is read from: it needs
+/// `admission.manage` as well (spec 06 B14 rule 4).
+#[cfg(feature = "vatsim")]
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn overriding_a_preset_providers_token_while_rating_is_tested_needs_admission_manage(
+    pool: PgPool,
+) {
+    let f = Fixture::new(pool).await;
+    let (manager, _) = f.holder(&[ProviderManage::KEY]).await;
+    let (both, _) = f.holder(&[ProviderManage::KEY, AdmissionManage::KEY]).await;
+    let body = json!({
+        "preset": "vatsim",
+        "config": { "client_id": "vzdc-client", "client_secret": SECRET },
+        "enabled": false,
+    });
+    let id = f.created(&both, body).await;
+    let rules = json!([{ "attribute": "rating", "op": "in", "value": ["S1", "S2"] }]);
+    organization_rules(&f.pool, f.org, &rules).await;
+    let token = json!({ "config": { "token": "https://auth.vatsim.net/oauth/other-token" } });
+    f.patch(&manager, &id, token.clone())
+        .await
+        .expect(StatusCode::FORBIDDEN, "permission.denied");
+    f.patch(&both, &id, token).await.ok(StatusCode::OK);
+}

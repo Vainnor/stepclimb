@@ -47,33 +47,61 @@ fn bodies_refuse_unknown_members_nulls_and_non_object_configs() {
 }
 
 #[test]
-fn only_the_two_outside_kinds_and_no_preset_are_accepted() {
-    let body = |kind: &str, preset: Option<&str>| NewProvider {
-        key: "sso".into(),
-        kind: kind.into(),
+fn only_the_two_outside_kinds_and_known_presets_are_accepted() {
+    let body = |kind: Option<&str>, preset: Option<&str>| NewProvider {
+        key: Some("sso".into()),
+        kind: kind.map(str::to_owned),
         preset: preset.map(str::to_owned),
-        label: "SSO".into(),
+        label: Some("SSO".into()),
         enabled: true,
         config: Map::new(),
     };
-    assert_eq!(new_kind(&body("oidc", None)).unwrap(), Kind::Oidc);
-    assert_eq!(new_kind(&body("oauth2", None)).unwrap(), Kind::Oauth2);
-    for kind in ["local", "saml", "OIDC", ""] {
-        let refused = new_kind(&body(kind, None)).unwrap_err().problem();
+    let kind =
+        |kind, preset| new_kind(&body(kind, preset)).map(|(kind, p)| (kind, p.map(|p| p.name)));
+    assert_eq!(kind(Some("oidc"), None).unwrap(), (Kind::Oidc, None));
+    assert_eq!(kind(Some("oauth2"), None).unwrap(), (Kind::Oauth2, None));
+    for name in [Some("local"), Some("saml"), Some("OIDC"), Some(""), None] {
+        let refused = kind(name, None).unwrap_err().problem();
         assert_eq!(
             (refused.status, refused.code.as_str()),
             (422, "provider.kind_unsupported"),
-            "{kind:?}"
+            "{name:?}"
         );
         assert_eq!(refused.errors[0].field, "/kind");
     }
-    let preset = new_kind(&body("oauth2", Some("vatsim")))
+    let unknown = kind(Some("oauth2"), Some("no-such-preset"))
         .unwrap_err()
         .problem();
     assert_eq!(
-        (preset.status, preset.code.as_str()),
+        (unknown.status, unknown.code.as_str()),
         (422, "provider.preset_unknown")
     );
+    assert_eq!(unknown.errors[0].field, "/preset");
+}
+
+/// With the `vatsim` preset compiled in, its provider is `oauth2`, whether the body leaves the
+/// kind out or names it; another kind is refused at `/kind`.
+#[cfg(feature = "vatsim")]
+#[test]
+fn a_preset_gives_its_kind() {
+    let body = |kind: Option<&str>| NewProvider {
+        key: None,
+        kind: kind.map(str::to_owned),
+        preset: Some("vatsim".into()),
+        label: None,
+        enabled: true,
+        config: Map::new(),
+    };
+    for named in [None, Some("oauth2")] {
+        let (kind, preset) = new_kind(&body(named)).unwrap();
+        assert_eq!(
+            (kind, preset.map(|p| p.name)),
+            (Kind::Oauth2, Some("vatsim"))
+        );
+    }
+    let refused = new_kind(&body(Some("oidc"))).unwrap_err().problem();
+    assert_eq!(refused.code, "provider.kind_unsupported");
+    assert_eq!(refused.errors[0].field, "/kind");
 }
 
 #[test]

@@ -57,7 +57,7 @@ use stepclimb_auth::{
     claims::MappedSignIn,
     oauth2_flow,
     oidc::{self, IdTokenError, ProviderSignIn},
-    oidc_config::{OidcConfig, ProviderRow},
+    oidc_config::ProviderRow,
 };
 use stepclimb_core::{
     OrgScope,
@@ -342,7 +342,7 @@ async fn redeem(
     secrets: &oidc::FlowSecrets,
     code: &str,
 ) -> Result<Result<MappedSignIn, &'static str>, ApiError> {
-    let config = match OidcConfig::from_stored(&provider.config) {
+    let config = match crate::presets::oidc_config(provider) {
         Ok(config) => config,
         Err(error) => {
             tracing::warn!(provider = key, %error, "the provider's stored config does not read");

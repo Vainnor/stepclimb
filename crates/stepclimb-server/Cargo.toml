@@ -17,10 +17,16 @@ path = "src/main.rs"
 # the dev-dependency on this crate below, so a build without dev-dependencies or `--all-features`
 # (`cargo build`, the release image) never has it.
 test-support = []
+# The VATSIM Connect sign-in preset, `preset = "vatsim"` (spec 06 B18, Q4), whose data lives in
+# `stepclimb-connectors`. On by default, so the release binary has it; a build without it
+# refuses the preset with `provider.preset_unknown` (B19).
+default = ["vatsim"]
+vatsim = ["dep:stepclimb-connectors", "stepclimb-connectors/vatsim"]
 
 [dependencies]
 stepclimb-core.workspace = true
 stepclimb-auth.workspace = true
+stepclimb-connectors = { workspace = true, optional = true }
 axum.workspace = true
 # `sync` for the semaphore that caps concurrent password hashes (spec 04 B16).
 tokio = { workspace = true, features = ["sync"] }
@@ -44,7 +50,8 @@ tracing-subscriber.workspace = true
 [dev-dependencies]
 # `test-util` for `tokio::time::pause` in the sign-in flow cleanup timer test.
 tokio = { workspace = true, features = ["test-util"] }
-stepclimb-server = { path = ".", features = ["test-support"] }
+# `default-features = false`, so `--no-default-features` builds the tests without `vatsim` too.
+stepclimb-server = { path = ".", default-features = false, features = ["test-support"] }
 stepclimb-core = { workspace = true, features = ["test-support"] }
 stepclimb-auth = { workspace = true, features = ["test-support"] }
 base64.workspace = true
