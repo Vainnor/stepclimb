@@ -897,9 +897,62 @@ async fn a_preset_file_row_with_identities_restarts_unchanged(pool: PgPool) {
     link(&pool, a, id_of(&pool, a, "toml").await, "1000001").await;
     apply(&pool, &file, restart()).await.expect("unchanged");
     let moved = format!("{file}\n[providers.claims]\nsubject = \"/data/id\"\n");
-    let refused = apply(&pool, &moved, restart()).await;
-    assert!(
-        refused.is_err(),
-        "overriding the preset's subject pointer is an anchor change"
+    let refused = apply(&pool, &moved, restart())
+        .await
+        .expect_err("overriding the preset's subject pointer is an anchor change")
+        .to_string();
+    assert!(refused.contains("`claims.subject`"), "{refused}");
+}
+
+/// A row with identities may switch between a plain entry and a preset entry only when the
+/// resolved anchors stay: a plain file row restarted as `preset = "vatsim"` with the preset's
+/// own URLs is refused, and with the same URLs and subject it goes ahead.
+#[cfg(feature = "vatsim")]
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_linked_plain_row_becomes_a_preset_row_only_with_the_same_anchors(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    let mock = mock().await;
+    apply(&pool, &mock_entry(&mock, "s"), start())
+        .await
+        .expect("applies");
+    link(&pool, a, id_of(&pool, a, "toml").await, "1000001").await;
+    let vatsim_urls = format!(
+        "[[providers]]\npreset = \"vatsim\"\nkey = \"toml\"\nclient_id = \"{}\"\n\
+         client_secret = \"s\"\n",
+        mock.client_id()
     );
+    let refused = apply(&pool, &vatsim_urls, restart())
+        .await
+        .expect_err("the preset's URLs are other origins")
+        .to_string();
+    assert!(refused.contains("`authorize`"), "{refused}");
+    apply(&pool, &preset_entry(&mock), restart())
+        .await
+        .expect("the same resolved anchors");
+    let [(_, _, _, _, config, _)] = rows(&pool).await.try_into().expect("one row");
+    assert_eq!(config["preset"], "vatsim");
+}
+
+/// The reverse: a linked preset row restarted as a plain entry goes ahead with the same
+/// resolved anchors, and is refused when the plain entry names another subject pointer.
+#[cfg(feature = "vatsim")]
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_linked_preset_row_becomes_a_plain_row_only_with_the_same_anchors(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    let mock = mock().await;
+    apply(&pool, &preset_entry(&mock), start())
+        .await
+        .expect("applies");
+    link(&pool, a, id_of(&pool, a, "toml").await, "1000001").await;
+    let other_subject = mock_entry(&mock, "s").replace("/data/cid", "/data/id");
+    let refused = apply(&pool, &other_subject, restart())
+        .await
+        .expect_err("another subject pointer")
+        .to_string();
+    assert!(refused.contains("`claims.subject`"), "{refused}");
+    apply(&pool, &mock_entry(&mock, "s"), restart())
+        .await
+        .expect("the same resolved anchors");
+    let [(_, _, _, _, config, _)] = rows(&pool).await.try_into().expect("one row");
+    assert!(config.get("preset").is_none(), "{config}");
 }

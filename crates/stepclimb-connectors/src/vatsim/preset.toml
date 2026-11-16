@@ -1,5 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
+# CHANGING THIS FILE RE-POINTS EVERY LINKED IDENTITY. Every organization's VATSIM provider reads
+# these values at each sign-in (rows store only their overrides). A different `claims.subject`
+# pointer, an endpoint origin (`authorize`, `token`, `userinfo`) or an attribute pointer changes
+# whose account an existing identity signs in as, or what admission rules read, in every
+# organization at once, with no admin's write and none of the API's permission checks. Such a
+# change needs its own review and a release note; `stepclimb_server::presets` pins these values
+# in a test named for that risk.
+#
 # VATSIM Connect as a sign-in preset (docs/specs/m0/06-oauth2-and-vatsim-preset.md B18, Q4).
 # The values are the plan's `[[providers]]` example (spec 06 B11). VATSIM documents the
 # endpoints, scopes and the `/api/user` body at https://vatsim.dev/api/connect-api; its

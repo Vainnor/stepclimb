@@ -320,4 +320,43 @@ mod tests {
             Err(UnknownPreset(String::new()))
         );
     }
+
+    /// The `vatsim` preset's anchors and attribute pointers, apart from T14: every linked
+    /// identity in every organization reads them, so a change here re-points those identities
+    /// or changes what admission rules read, with no admin's write. A failure means such a
+    /// change was made: it needs its own review and a release note (spec 06 B20).
+    #[cfg(feature = "vatsim")]
+    #[test]
+    fn changing_a_vatsim_anchor_or_attribute_pointer_re_points_every_linked_identity_and_needs_a_release_note()
+     {
+        let preset = find("vatsim").expect("compiled in");
+        let origin = |member: &str| {
+            let url = preset.config[member].as_str().expect("a URL");
+            url::Url::parse(url)
+                .expect("parses")
+                .origin()
+                .ascii_serialization()
+        };
+        for member in ["authorize", "token", "userinfo"] {
+            assert_eq!(origin(member), "https://auth.vatsim.net", "{member}");
+        }
+        assert_eq!(
+            preset.config["token"],
+            "https://auth.vatsim.net/oauth/token"
+        );
+        assert_eq!(
+            preset.config["userinfo"],
+            "https://auth.vatsim.net/api/user"
+        );
+        let claims = &preset.config["claims"];
+        assert_eq!(claims["subject"], "/data/cid");
+        assert_eq!(
+            claims["attributes"],
+            serde_json::json!({
+                "rating": "/data/vatsim/rating/short",
+                "subdivision": "/data/vatsim/subdivision/id",
+            })
+        );
+        assert_eq!(preset.kind, Kind::Oauth2);
+    }
 }

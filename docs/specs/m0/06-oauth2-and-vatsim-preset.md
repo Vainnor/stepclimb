@@ -414,6 +414,14 @@ server every sign-in test and the Playwright stack use instead of a real provide
     preset. A stored row naming a preset this server lacks (built without its feature) is
     answered as stored, cannot be changed (422 `provider.preset_unknown`, `DELETE` still
     works), and does not sign in.
+  - A change to a preset is a change to every organization's provider at once, with no
+    admin's write and none of B14's checks. A different `claims.subject` pointer, endpoint
+    origin or attribute pointer in `preset.toml` re-points every linked identity or changes
+    what admission rules read, so it needs its own review and a release note. The file's
+    header says so, and the unit test
+    `changing_a_vatsim_anchor_or_attribute_pointer_re_points_every_linked_identity_and_needs_a_release_note`
+    (`stepclimb_server::presets`) pins those values apart from T14 (COORDINATOR DECIDED
+    (overnight) from the security review of PR #212).
   - No second preset for VATSIM's development environment (Q4's open part): it is
     `https://auth-dev.vatsim.net` (vatsim.dev, Connect sandbox, accessed 2026-11-16), and an
     organization reaches it by overriding `authorize`, `token` and `userinfo`, which the preset

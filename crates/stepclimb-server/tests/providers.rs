@@ -1673,3 +1673,88 @@ async fn admission_rules_see_the_attributes_a_preset_maps(pool: PgPool) {
         "admission.attribute_unknown"
     );
 }
+
+/// Switching a linked preset provider's anchors back is a change too: after an admin
+/// overrides `userinfo`, `provider.manage` alone may still relabel it, but may not put the
+/// preset's own URL back (spec 06 B14 rule 2, on the resolved config).
+#[cfg(feature = "vatsim")]
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn putting_a_linked_preset_providers_url_back_needs_every_permission(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (manager, _) = f.holder(&[ProviderManage::KEY]).await;
+    let admin = f.admin().await;
+    let body = json!({
+        "preset": "vatsim",
+        "config": { "client_id": "vzdc-client", "client_secret": SECRET },
+    });
+    let id = f.created(&admin, body).await;
+    f.link(&id, "1000001").await;
+    let elsewhere = json!({ "config": { "userinfo": "https://auth.vatsim.net/api/other-user" } });
+    f.patch(&admin, &id, elsewhere).await.ok(StatusCode::OK);
+    f.patch(&manager, &id, json!({ "label": "VATSIM" }))
+        .await
+        .ok(StatusCode::OK);
+    let before = f.stored(&id).await;
+    let back = json!({ "config": { "userinfo": "https://auth.vatsim.net/api/user" } });
+    f.patch(&manager, &id, back.clone())
+        .await
+        .expect(StatusCode::FORBIDDEN, ESCALATION);
+    assert_eq!(f.stored(&id).await, before);
+    f.patch(&admin, &id, back).await.ok(StatusCode::OK);
+    let stored: Value = serde_json::from_str(&f.stored(&id).await).expect("JSON");
+    assert!(
+        stored.get("userinfo").is_none(),
+        "back to the preset's: {stored}"
+    );
+}
+
+/// `preset` is a provider's own member, never a config member: naming it under `config`, on
+/// create or change, is refused at `/config/preset`.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn preset_is_not_a_config_member(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let admin = f.admin().await;
+    let id = f.created(&admin, f.oauth2("plain")).await;
+    let mut body = f.oauth2("other");
+    body["config"]["preset"] = json!("x");
+    for answer in [
+        f.patch(&admin, &id, json!({ "config": { "preset": "x" } }))
+            .await,
+        f.post(&admin, body).await,
+    ] {
+        answer.expect(StatusCode::UNPROCESSABLE_ENTITY, "provider.config_invalid");
+        let fields: Vec<&str> = answer.body["errors"]
+            .as_array()
+            .expect("errors")
+            .iter()
+            .filter_map(|e| e["field"].as_str())
+            .collect();
+        assert_eq!(fields, ["/config/preset"], "{}", answer.text);
+    }
+}
+
+/// While the organization's rules test `rating`, which a VATSIM preset provider maps through
+/// its preset, overriding its `token` URL changes the document `rating` is read from: it needs
+/// `admission.manage` as well (spec 06 B14 rule 4).
+#[cfg(feature = "vatsim")]
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn overriding_a_preset_providers_token_while_rating_is_tested_needs_admission_manage(
+    pool: PgPool,
+) {
+    let f = Fixture::new(pool).await;
+    let (manager, _) = f.holder(&[ProviderManage::KEY]).await;
+    let (both, _) = f.holder(&[ProviderManage::KEY, AdmissionManage::KEY]).await;
+    let body = json!({
+        "preset": "vatsim",
+        "config": { "client_id": "vzdc-client", "client_secret": SECRET },
+        "enabled": false,
+    });
+    let id = f.created(&both, body).await;
+    let rules = json!([{ "attribute": "rating", "op": "in", "value": ["S1", "S2"] }]);
+    organization_rules(&f.pool, f.org, &rules).await;
+    let token = json!({ "config": { "token": "https://auth.vatsim.net/oauth/other-token" } });
+    f.patch(&manager, &id, token.clone())
+        .await
+        .expect(StatusCode::FORBIDDEN, "permission.denied");
+    f.patch(&both, &id, token).await.ok(StatusCode::OK);
+}
