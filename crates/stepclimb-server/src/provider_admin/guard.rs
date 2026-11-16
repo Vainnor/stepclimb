@@ -29,9 +29,11 @@ use crate::{
 const EMAIL_CLAIMS: [&str; 2] = ["/claims/email", "/claims/email_verified"];
 
 /// The config members that decide which document a mapped attribute is read from: the client
-/// the provider answers as, the scopes it grants, and whether (`oidc`) or where (`oauth2`) the
-/// user endpoint is read.
-const ATTRIBUTE_SOURCE: [&str; 3] = ["client_id", "scopes", "userinfo"];
+/// the provider answers as, the scopes it grants, whether (`oidc`) or where (`oauth2`) the user
+/// endpoint is read, the `oidc` issuer whose ID token and discovery it reads, and the `oauth2`
+/// token URL whose access token the user endpoint answers to. Each kind lacks the other's
+/// member, so comparing it is a no-op there.
+const ATTRIBUTE_SOURCE: [&str; 5] = ["client_id", "scopes", "userinfo", "issuer", "token"];
 
 const TRUST_DETAIL: &str = "A provider trusted for email matching can sign people in as the existing users whose verified email it asserts, including users with permissions you do not hold. Only someone holding every permission can trust a provider, or change the issuer, endpoints, subject or email claims of a trusted one.";
 
@@ -661,9 +663,9 @@ mod tests {
         assert_eq!(code(with(&manager).check(None, &new(&untested))), None);
     }
 
-    /// While a tested attribute is mapped, the client, the scopes and the user endpoint flag
-    /// decide which document it is read from: changing one is a remap. Without a tested
-    /// attribute mapped, `provider.manage` is enough.
+    /// While a tested attribute is mapped, the client, the scopes, the user endpoint flag and
+    /// the issuer decide which document it is read from: changing one is a remap. Without a
+    /// tested attribute mapped, `provider.manage` is enough.
     #[test]
     fn changing_where_a_tested_attribute_is_read_needs_admission_manage() {
         let manager = grants(&[ProviderManage::KEY]);
@@ -690,6 +692,7 @@ mod tests {
                 ("client_id", json!("another-client")),
                 ("scopes", json!(["openid", "profile", "roles"])),
                 ("userinfo", json!(false)),
+                ("issuer", json!("https://other.example.test/realm")),
             ] {
                 let mut config = with_source(tested.clone());
                 config.insert(member.into(), value);
@@ -711,6 +714,46 @@ mod tests {
                     "{member}"
                 );
             }
+        }
+    }
+
+    /// On an `oauth2` provider the token URL decides whose access token the user endpoint
+    /// answers to, so while a tested attribute is mapped, changing it (even to another path on
+    /// the same host) is a remap; on a provider no identity links, that is the only rule it
+    /// meets. Without a tested attribute mapped, `provider.manage` is enough.
+    #[test]
+    fn changing_an_oauth2_token_url_under_a_tested_attribute_needs_admission_manage() {
+        let manager = grants(&[ProviderManage::KEY]);
+        let both = grants(&[ProviderManage::KEY, AdmissionManage::KEY]);
+        let organization = rules(json!([{ "attribute": "rating", "op": "exists" }]));
+        let userinfo = "https://accounts.example.test/api/user";
+        let with_mapping = |token: &str, attributes: Value| {
+            let mut config = oauth2(token, userinfo);
+            config["claims"]["attributes"] = attributes;
+            config
+        };
+        let token = "https://accounts.example.test/oauth/token";
+        let moved = "https://accounts.example.test/other/token";
+        let denied = Some("permission.denied");
+        for (attributes, expected) in [
+            (json!({ "rating": "/data/rating" }), denied),
+            (json!({ "region": "/data/region" }), None),
+        ] {
+            let row = stored_oauth2(with_mapping(token, attributes.clone()));
+            let current = Current {
+                provider: &row,
+                identities: 0,
+            };
+            let config = with_mapping(moved, attributes);
+            let after = Proposed {
+                kind: Kind::Oauth2,
+                config: &config,
+                enabled: false,
+            };
+            let as_manager = with_rules(&manager, Ok(organization.clone()));
+            let as_both = with_rules(&both, Ok(organization.clone()));
+            assert_eq!(code(as_manager.check(Some(&current), &after)), expected);
+            assert_eq!(code(as_both.check(Some(&current), &after)), None);
         }
     }
 }

@@ -1305,8 +1305,8 @@ async fn another_organizations_provider_mapping_is_not_found(pool: PgPool) {
     assert_eq!(f.stored(&id.to_string()).await, before);
 }
 
-/// While the provider maps an attribute a rule tests, its client, scopes and user endpoint
-/// flag decide which document the attribute is read from: changing one needs
+/// While the provider maps an attribute a rule tests, its client, scopes, user endpoint flag
+/// and issuer decide which document the attribute is read from: changing one needs
 /// `admission.manage` as well.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn changing_where_a_tested_attribute_is_read_needs_admission_manage(pool: PgPool) {
@@ -1323,6 +1323,7 @@ async fn changing_where_a_tested_attribute_is_read_needs_admission_manage(pool: 
         json!({ "config": { "client_id": "another-client" } }),
         json!({ "config": { "scopes": ["openid", "profile", "roles"] } }),
         json!({ "config": { "userinfo": false } }),
+        json!({ "config": { "issuer": "https://other.example.test/realm" } }),
     ];
     for change in &changes {
         f.patch(&manager, &id, change.clone())
@@ -1333,6 +1334,32 @@ async fn changing_where_a_tested_attribute_is_read_needs_admission_manage(pool: 
     for change in changes {
         f.patch(&both, &id, change).await.ok(StatusCode::OK);
     }
+}
+
+/// On an `oauth2` provider no identity links, the token URL decides whose access token the
+/// user endpoint answers to: while it maps an attribute a rule tests, moving the token URL,
+/// even to another path on the same host, needs `admission.manage` as well. Refused, the row
+/// stays as it was.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn changing_a_token_url_under_a_tested_attribute_needs_admission_manage(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (manager, _) = f.holder(&[ProviderManage::KEY]).await;
+    let (both, _) = f.holder(&[ProviderManage::KEY, AdmissionManage::KEY]).await;
+    let mut body = f.oauth2("plain");
+    body["config"]["claims"]["attributes"] = json!({ "rating": "/data/rating" });
+    let id = f.created(&manager, body).await;
+    let rules = json!([{ "attribute": "rating", "op": "exists" }]);
+    organization_rules(&f.pool, f.org, &rules).await;
+    let token = Url::parse(&f.mock.url(Endpoint::OAuth2Token)).expect("a URL");
+    let moved = token.join("/another/token").expect("a URL").to_string();
+    let change = json!({ "config": { "token": moved } });
+    let before = f.stored(&id).await;
+    f.patch(&manager, &id, change.clone())
+        .await
+        .expect(StatusCode::FORBIDDEN, "permission.denied");
+    assert_eq!(f.stored(&id).await, before);
+    let changed = f.patch(&both, &id, change).await;
+    assert_eq!(changed.ok(StatusCode::OK)["config"]["token"], json!(moved));
 }
 
 /// A new provider mapping an attribute the organization's rules test needs

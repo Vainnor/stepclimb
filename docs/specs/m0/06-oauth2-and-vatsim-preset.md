@@ -351,7 +351,12 @@ server every sign-in test and the Playwright stack use instead of a real provide
        provider maps a tested attribute, changing `client_id`, `scopes` or `userinfo` (the
        `oidc` flag, or the `oauth2` URL) also counts as mapping it differently and needs
        `admission.manage`: they decide which document the attribute is read from
-       (COORDINATOR DECIDED (overnight) from the re-review of PR #207).
+       (COORDINATOR DECIDED (overnight) from the re-review of PR #207). So does changing the
+       `oidc` `issuer` or the `oauth2` `token` URL, compared as written: the issuer decides
+       whose ID token and discovery are read, the token URL whose access token the user
+       endpoint answers to. On a provider that identities link, rule 1 already asks every
+       permission for both (Coordinator decision (2026-11-16), issue #209, pending the owner's
+       review).
     An API key's narrowed grants apply to each (`08` B27).
   - Disabling or deleting an enabled provider when the local methods offer no primary way in
     and no other outside provider is enabled answers 409 `local.last_method`
