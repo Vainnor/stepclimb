@@ -442,3 +442,110 @@ async fn another_organizations_modules_and_items_are_not_found(pool: PgPool) {
         .unwrap();
     assert_eq!(read.requirement, None);
 }
+
+/// The course lock protects positions and the prerequisite graph only at `READ COMMITTED`:
+/// every content write in a transaction at another level is refused before it writes.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn content_writes_refuse_isolation_levels_but_read_committed(pool: PgPool) {
+    let a = Org::new(&pool, "org-a").await;
+    let (ma, mb) = (a.module(&pool).await, a.module(&pool).await);
+    let link = a.item(&pool, ma, Kind::ExternalLink).await;
+    let before = prerequisite_rows(&pool, a).await;
+    for level in ["REPEATABLE READ", "SERIALIZABLE"] {
+        let calls: [&str; 6] = [
+            "set_rules",
+            "set_requirement",
+            "create module",
+            "reorder modules",
+            "create item",
+            "move item",
+        ];
+        for call in calls {
+            let mut tx = pool.begin().await.expect("begin");
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "SET TRANSACTION ISOLATION LEVEL {level}"
+            )))
+            .execute(&mut *tx)
+            .await
+            .expect("set the isolation level");
+            let s = a.scope();
+            let result = match call {
+                "set_rules" => modules::set_rules(&mut *tx, s, mb, &requires(&[ma]), later())
+                    .await
+                    .map(|_| ()),
+                "set_requirement" => {
+                    items::set_requirement(&mut *tx, s, link, Some(Requirement::View), later())
+                        .await
+                        .map(|_| ())
+                }
+                "create module" => modules::create(&mut *tx, s, a.course, "X", later())
+                    .await
+                    .map(|_| ()),
+                "reorder modules" => modules::reorder(&mut *tx, s, a.course, &[mb, ma])
+                    .await
+                    .map(|_| ()),
+                "create item" => items::create(
+                    &mut *tx,
+                    s,
+                    ma,
+                    &NewItem {
+                        kind: Kind::Header,
+                        title: "X".into(),
+                        ref_id: None,
+                        url: None,
+                        position: None,
+                    },
+                    later(),
+                )
+                .await
+                .map(|_| ()),
+                _ => items::move_to(&mut *tx, s, link, mb, 0, later())
+                    .await
+                    .map(|_| ()),
+            };
+            assert!(
+                matches!(&result, Err(Error::IsolationLevel { found }) if found == &level.to_lowercase()),
+                "{level} {call}: {result:?}"
+            );
+        }
+    }
+    assert_eq!(prerequisite_rows(&pool, a).await, before);
+    assert_eq!(
+        modules::list_for_course(&pool, a.scope(), a.course)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+/// An unlock date sent with nanoseconds is stored to the microsecond, and sending it again
+/// writes nothing.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_unlock_date_with_nanoseconds_compares_to_the_microsecond(pool: PgPool) {
+    let a = Org::new(&pool, "org-a").await;
+    let module = a.module(&pool).await;
+    // 2030-01-02T03:04:05.123456789Z.
+    let precise = UNIX_EPOCH + Duration::new(1_893_553_445, 123_456_789);
+    let patch = RulesPatch {
+        unlock_at: Some(Some(precise)),
+        ..RulesPatch::default()
+    };
+    let stored = modules::set_rules(&pool, a.scope(), module, &patch, later())
+        .await
+        .unwrap();
+    assert_eq!(
+        stored.unlock_at,
+        Some(UNIX_EPOCH + Duration::new(1_893_553_445, 123_456_000))
+    );
+    let again = modules::set_rules(
+        &pool,
+        a.scope(),
+        module,
+        &patch,
+        later() + Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+    assert_eq!(again.updated_at, later(), "nothing written");
+}

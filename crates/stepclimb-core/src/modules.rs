@@ -145,6 +145,10 @@ pub enum Error {
     /// A requirement kind reserved for M2 or M3 (spec 04 B3).
     #[error("this requirement kind is not available yet")]
     RequirementUnavailable,
+    /// The transaction runs at an isolation level other than `READ COMMITTED`, where the course
+    /// lock does not protect positions or the prerequisite graph ([`lock_course`]).
+    #[error("course content can be changed only at READ COMMITTED isolation, not {found}")]
+    IsolationLevel { found: String },
     /// A stored value this release cannot read: a kind the table's check keeps from happening.
     #[error("the {column} of {id} cannot be read")]
     Stored { id: Uuid, column: &'static str },
@@ -194,20 +198,31 @@ impl TryFrom<Row> for Module {
 /// Lock the course `id` of the scope's organization `FOR NO KEY UPDATE` for a content write in
 /// the transaction `conn` belongs to (B12): [`Error::CourseNotFound`] when it has no such
 /// course, [`Error::CourseArchived`] when the course is archived.
+///
+/// The lock keeps positions dense and the prerequisite graph acyclic only at `READ COMMITTED`,
+/// PostgreSQL's default, where each statement after the lock reads what the previous holder
+/// committed. Under `REPEATABLE READ` or `SERIALIZABLE` a write would read the snapshot taken
+/// before it waited, so any other level is refused with [`Error::IsolationLevel`].
 pub(crate) async fn lock_course(
     conn: &mut PgConnection,
     scope: OrgScope,
     id: Uuid,
 ) -> Result<(), Error> {
-    let status = sqlx::query_scalar!(
-        "SELECT status FROM courses WHERE org_id = $1 AND id = $2 FOR NO KEY UPDATE",
+    let locked = sqlx::query!(
+        r#"SELECT status, current_setting('transaction_isolation') AS "isolation!"
+           FROM courses WHERE org_id = $1 AND id = $2 FOR NO KEY UPDATE"#,
         scope.org_id(),
         id,
     )
     .fetch_optional(conn)
     .await?
     .ok_or(Error::CourseNotFound)?;
-    if status == "archived" {
+    if locked.isolation != "read committed" {
+        return Err(Error::IsolationLevel {
+            found: locked.isolation,
+        });
+    }
+    if locked.status == "archived" {
         return Err(Error::CourseArchived);
     }
     Ok(())
@@ -475,7 +490,12 @@ pub async fn set_rules<'c>(
     let now = epoch_micros(now)?;
     let mut tx = db.begin().await?;
     let module = locked(&mut tx, scope, id).await?;
-    let unlock_at = patch.unlock_at.unwrap_or(module.unlock_at);
+    // The column keeps microseconds, so a time equal to the stored one once truncated is the
+    // same value and writes nothing.
+    let unlock_at = match patch.unlock_at {
+        Some(at) => at.map(truncate_micros).transpose()?,
+        None => module.unlock_at,
+    };
     let sequential = patch
         .require_sequential
         .unwrap_or(module.require_sequential);
@@ -597,6 +617,11 @@ async fn replace_prerequisites(
     .execute(&mut *conn)
     .await?;
     Ok(())
+}
+
+/// `time` truncated to whole microseconds, the resolution of `timestamptz`.
+fn truncate_micros(time: SystemTime) -> Result<SystemTime, Error> {
+    Ok(from_epoch_micros(epoch_micros(time)?)?)
 }
 
 /// The first instant an unlock date cannot be: the course dates' bound.

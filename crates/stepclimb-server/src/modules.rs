@@ -652,9 +652,10 @@ pub(crate) fn content_error(error: Error) -> ApiError {
         Error::UnlockAtOutOfRange => invalid("unlock_at", code::MODULE_DATE_OUT_OF_RANGE),
         Error::RequirementInvalid => invalid("requirement", code::REQUIREMENT_INVALID),
         Error::RequirementUnavailable => invalid("requirement", code::REQUIREMENT_UNAVAILABLE),
-        other @ (Error::Stored { .. } | Error::Time(_) | Error::Database(_)) => {
-            ApiError::internal(&other)
-        }
+        other @ (Error::Stored { .. }
+        | Error::IsolationLevel { .. }
+        | Error::Time(_)
+        | Error::Database(_)) => ApiError::internal(&other),
     }
 }
 

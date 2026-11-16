@@ -296,6 +296,13 @@ Coordinator decisions (overnight, 2026-11-17), pending owner review.
   header answers `requirement.invalid`. A `requirement` that is not a JSON object (a string,
   an array) answers 400 `request.malformed`, as any other non-object in a body does. A
   requirement is set only through `PATCH`, as the API table lists, not on item create.
+- **The course lock needs `READ COMMITTED`.** Every module and item write (`03` and these
+  rules) takes the course lock through one function, which refuses a transaction at any other
+  isolation level (a 500 to the route), as the account tree lock and the reporting-line lock
+  do: at `REPEATABLE READ` a write would read positions and prerequisites from the snapshot
+  taken before it waited.
+- **`unlock_at` is kept to the microsecond**, PostgreSQL's resolution; a date sent with more
+  digits is truncated before it is compared and stored.
 - **No-op writes.** A rule patch naming the current values, or a prerequisite list equal to the
   current set in any order, writes nothing; any rule change sets `updated_at`. Rule changes are
   not audited (`02` B27: content edits are not).
