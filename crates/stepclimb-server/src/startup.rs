@@ -38,6 +38,10 @@ use crate::{
 /// How long a request waits for a database connection from the pool.
 pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The most connections the pool opens. The admission webhook's instance-wide limit is half of
+/// it (`crate::admission_webhook_limits`).
+pub const POOL_MAX_CONNECTIONS: u32 = 10;
+
 /// Why the server stopped before or while serving.
 #[derive(Debug, thiserror::Error)]
 pub enum StartupError {
@@ -94,6 +98,7 @@ impl StartupError {
 /// Open the connection pool.
 pub async fn connect(database_url: &str) -> Result<PgPool, StartupError> {
     PgPoolOptions::new()
+        .max_connections(POOL_MAX_CONNECTIONS)
         .acquire_timeout(ACQUIRE_TIMEOUT)
         .connect(database_url)
         .await

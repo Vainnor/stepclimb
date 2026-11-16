@@ -710,8 +710,14 @@ overrule one, which then updates this spec.
      sign-in never calls it. The call checks no plan feature (Permissions): skipping it after a
      downgrade would admit people it refused.
    - The call runs inside the sign-in's transaction, after step 3, so a refusal rolls back
-     every write the steps made. A sign-in holds its database connection for up to the 3 s
-     limit while it waits.
+     every write the steps made. A sign-in holds its database connection, and the row locks
+     the earlier steps took, for up to the 3 s limit while it waits. So that one organization's
+     slow webhook cannot take the whole pool, the calls in flight are capped at half the pool's
+     connections on the instance (at least 1) and at 3 per organization. A call only tries to
+     take a place under both caps and never waits: with either full, nothing is sent, the
+     sign-in is refused with `auth.admission_unavailable` and no marker changes. The pool is
+     sized explicitly at startup, at 10 connections (`startup::POOL_MAX_CONNECTIONS`, sqlx's
+     default), so the instance cap is 5; neither number is configurable.
    - `allow: false` refuses with `auth.admission_refused` and, for a known or email-matched
      user, records the refusal marker as a rule refusal does (I3), so a local sign-in is
      refused too until a sign-in the webhook allows clears it. A webhook that cannot decide
@@ -732,9 +738,12 @@ overrule one, which then updates this spec.
      opened bytes are wiped once the request is signed.
    - A failure is logged once at warn with the provider key and the reason (the policy's
      refusal, the status, the shape at fault, or the transport error with the URL removed),
-     never the URL, a header or the body. Nothing is retried.
+     never the URL, a header or the body. A TLS failure, a certificate refusal included, has a
+     fixed reason, since rustls's message names the host and the certificate's names. Nothing
+     is retried.
    - Reply members other than `allow`, `groups` and `attributes` are ignored. `groups` is
-     checked (an array of strings) and not applied until I7. `attributes` replaces mapped
+     checked (an array of strings) and not applied until I7. `attributes` must be an object
+     with no NUL in any key or string at any depth, which `jsonb` cannot store. It replaces mapped
      keys of the same name before the identity's attributes are stored (B7); the webhook gets the
      mapped attributes only. `AdmissionWebhookCall` and `AdmissionWebhookReply` are schema
      components of the OpenAPI document.

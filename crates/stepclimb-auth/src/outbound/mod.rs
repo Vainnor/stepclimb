@@ -93,7 +93,11 @@ pub enum OutboundError {
     /// The request could not be built from what the caller passed.
     #[error("the request is not one the client can send")]
     Request,
-    /// The connection, TLS or HTTP exchange failed.
+    /// The TLS handshake failed, the server's certificate included. The reason is fixed: rustls
+    /// names the host and the certificate's names, which a caller may have to keep out of logs.
+    #[error("the request failed: the TLS handshake or the server's certificate was refused")]
+    Tls,
+    /// The connection or HTTP exchange failed.
     #[error("the request failed: {reason}")]
     Transport { reason: String },
 }
@@ -199,8 +203,9 @@ fn tls_config() -> Result<rustls::ClientConfig, BuildError> {
     Ok(config)
 }
 
-/// A refusal from the resolver, found in the error's source chain, or a transport error whose
-/// reason is the chain's messages (`without_url` keeps the URL out of reqwest's own).
+/// A refusal from the resolver, found in the error's source chain; a TLS failure, with no
+/// detail; or a transport error whose reason is the chain's messages (`without_url` keeps the
+/// URL out of reqwest's own).
 fn transport_error(error: reqwest::Error) -> OutboundError {
     let mut source: Option<&(dyn StdError + 'static)> = Some(&error);
     while let Some(current) = source {
@@ -209,9 +214,34 @@ fn transport_error(error: reqwest::Error) -> OutboundError {
         }
         source = current.source();
     }
+    if is_tls(&error) {
+        return OutboundError::Tls;
+    }
     OutboundError::Transport {
         reason: error_chain(&error.without_url()),
     }
+}
+
+/// Whether `error` or anything in its source chain is a rustls error. An I/O error's `source`
+/// skips the error it wraps while its message repeats it, so a wrapped error (I/O errors nest)
+/// is searched too.
+fn is_tls(error: &(dyn StdError + 'static)) -> bool {
+    let mut source = Some(error);
+    while let Some(current) = source {
+        if current.is::<rustls::Error>() {
+            return true;
+        }
+        let wrapped = current
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::get_ref);
+        if let Some(wrapped) = wrapped
+            && is_tls(wrapped)
+        {
+            return true;
+        }
+        source = current.source();
+    }
+    false
 }
 
 fn error_chain(error: &(dyn StdError + 'static)) -> String {

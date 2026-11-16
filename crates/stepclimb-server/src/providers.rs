@@ -16,7 +16,8 @@
 //! organization count ([`Providers::client`]); a client's policy is fixed when it is built, and
 //! its connection pool is kept across requests. The admission webhook has its own pair under
 //! the same two policies, with its 3-second timeout and 64 KiB reply limit
-//! ([`Providers::admission_webhook`]). It also holds the caches of discovery documents
+//! ([`Providers::admission_webhook`]), and the limits on how many webhook calls may be in flight
+//! ([`Providers::admission_webhook_limits`]). It also holds the caches of discovery documents
 //! and signing keys, and the client secrets of the providers `stepclimb.toml` declares, which
 //! are never stored ([`Providers::config_secrets`]).
 
@@ -29,6 +30,9 @@ use stepclimb_auth::{
 };
 use stepclimb_core::organizations::Tenancy;
 
+use crate::admission_webhook_limits::{self as limits, WebhookLimits};
+use crate::startup::POOL_MAX_CONNECTIONS;
+
 /// The provider clients and the discovery cache, shared by every clone.
 #[derive(Clone, Debug)]
 pub struct Providers {
@@ -36,6 +40,7 @@ pub struct Providers {
     multi_org: OutboundClient,
     webhook_single_org: OutboundClient,
     webhook_multi_org: OutboundClient,
+    webhook_limits: WebhookLimits,
     discovery: DiscoveryCache,
     jwks: JwksCache,
     config_secrets: Arc<ConfigSecrets>,
@@ -51,6 +56,10 @@ impl Providers {
             multi_org: OutboundClient::for_providers(multi)?,
             webhook_single_org: OutboundClient::for_admission_webhook(single)?,
             webhook_multi_org: OutboundClient::for_admission_webhook(multi)?,
+            webhook_limits: WebhookLimits::new(
+                limits::instance_limit(POOL_MAX_CONNECTIONS),
+                limits::PER_ORGANIZATION,
+            ),
             discovery: DiscoveryCache::default(),
             jwks: JwksCache::default(),
             config_secrets: Arc::default(),
@@ -63,6 +72,18 @@ impl Providers {
     pub fn with_config_secrets(mut self, secrets: ConfigSecrets) -> Self {
         self.config_secrets = Arc::new(secrets);
         self
+    }
+
+    /// These clients with other webhook call limits than the pool's, for tests.
+    #[must_use]
+    pub fn with_admission_webhook_limits(mut self, limits: WebhookLimits) -> Self {
+        self.webhook_limits = limits;
+        self
+    }
+
+    /// How many admission webhook calls may be in flight, shared by every clone.
+    pub fn admission_webhook_limits(&self) -> &WebhookLimits {
+        &self.webhook_limits
     }
 
     /// The client secrets of the providers `stepclimb.toml` declares, by row.

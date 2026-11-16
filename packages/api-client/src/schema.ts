@@ -1205,7 +1205,8 @@ export interface components {
             allow: boolean;
             /**
              * @description Attributes merged over the provider's mapped attributes before they are stored; these
-             *     keys win. An object when present, never `null`.
+             *     keys win. An object when present, never `null`, with no NUL character (`\u0000`) in any
+             *     key or string.
              */
             attributes?: Record<string, never>;
             /**

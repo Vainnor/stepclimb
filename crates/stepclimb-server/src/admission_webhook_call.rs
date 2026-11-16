@@ -18,6 +18,10 @@
 //! redirect, uses no proxy, and allows 3 seconds from the start of the connection to the end of
 //! a reply of at most 64 KiB (B14, B16).
 //!
+//! A call first takes a place under the instance's and the organization's limits on calls in
+//! flight (`crate::admission_webhook_limits`), without waiting; with either full, it is not
+//! sent and fails closed.
+//!
 //! Everything but a well-formed reply fails closed ([`Decision::Unavailable`], which admission
 //! answers with `auth.admission_unavailable`): a secret that does not open (another key ring,
 //! another row's context), a URL the policy refuses, a timeout, a connection or TLS error, a
@@ -78,7 +82,8 @@ pub struct AdmissionWebhookReply {
     #[schema(value_type = Vec<String>, required = false)]
     pub groups: Option<Vec<String>>,
     /// Attributes merged over the provider's mapped attributes before they are stored; these
-    /// keys win. An object when present, never `null`.
+    /// keys win. An object when present, never `null`, with no NUL character (`\u0000`) in any
+    /// key or string.
     #[schema(value_type = Object, required = false)]
     pub attributes: Option<Map<String, Value>>,
 }
@@ -108,6 +113,10 @@ pub enum Decision {
 /// Why the webhook could not decide. None of these carries the URL, a header or a body.
 #[derive(Debug, thiserror::Error)]
 pub enum Unavailable {
+    /// The instance or the organization already has its limit of calls in flight
+    /// (`crate::admission_webhook_limits`); nothing was sent.
+    #[error("too many admission webhook calls are in flight")]
+    Busy,
     /// The stored secret does not open with this key ring for this row, or is not a secret.
     #[error("the webhook's signing secret could not be opened")]
     Secret,
@@ -144,6 +153,13 @@ pub async fn decide(
         .map_err(|e| ApiError::internal(&e))?;
     let Some(webhook) = webhook.filter(|webhook| webhook.enabled) else {
         return Ok(Decision::Skipped);
+    };
+    // Held until the reply has been read; dropped with this function.
+    let Some(_permit) = providers
+        .admission_webhook_limits()
+        .try_acquire(scope.org_id())
+    else {
+        return Ok(Decision::Unavailable(Unavailable::Busy));
     };
     let tenancy = organizations::tenancy(&mut *conn)
         .await
@@ -246,10 +262,25 @@ fn parse(status: StatusCode, body: &[u8]) -> Result<Reply, Unavailable> {
     }
     let attributes = match reply.remove("attributes") {
         None => Map::new(),
-        Some(Value::Object(attributes)) => attributes,
+        Some(Value::Object(attributes)) if !attributes.iter().any(has_nul) => attributes,
         Some(_) => return Err(Unavailable::Malformed("attributes")),
     };
     Ok(Reply { allow, attributes })
+}
+
+/// Whether the member `key: value` holds a NUL in a key or a string at any depth, which
+/// PostgreSQL's `jsonb` cannot store.
+fn has_nul((key, value): (&String, &Value)) -> bool {
+    key.contains('\0') || value_has_nul(value)
+}
+
+fn value_has_nul(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text.contains('\0'),
+        Value::Array(items) => items.iter().any(value_has_nul),
+        Value::Object(members) => members.iter().any(has_nul),
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+    }
 }
 
 #[cfg(test)]
@@ -300,6 +331,7 @@ mod tests {
             json!({ "rating": 5 }).as_object().cloned().unwrap()
         );
         assert!(parsed(json!({ "allow": true, "groups": [] })).is_ok());
+        assert!(parsed(json!({ "allow": true, "attributes": { "a": ["\\u0000", 0] } })).is_ok());
         for body in [
             json!({ "allow": true, "groups": "a" }),
             json!({ "allow": true, "groups": ["a", 1] }),
@@ -307,6 +339,10 @@ mod tests {
             json!({ "allow": true, "attributes": [] }),
             json!({ "allow": true, "attributes": null }),
             json!({ "allow": false, "attributes": "x" }),
+            json!({ "allow": true, "attributes": { "a\u{0}": 1 } }),
+            json!({ "allow": true, "attributes": { "a": "b\u{0}" } }),
+            json!({ "allow": true, "attributes": { "a": [{ "b": ["c\u{0}"] }] } }),
+            json!({ "allow": true, "attributes": { "a": { "b\u{0}": true } } }),
         ] {
             assert!(
                 matches!(parsed(body.clone()), Err(Unavailable::Malformed(_))),

@@ -9,6 +9,7 @@
 
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -44,6 +45,7 @@ use stepclimb_server::{
     admission::{self, Admission, Completion, Context, Profile, Step, Verified},
     admission_webhook::seal_secret,
     admission_webhook_call::{self, Unavailable},
+    admission_webhook_limits::WebhookLimits,
     audit::ClientAddress,
     providers::Providers,
     request_org::TEST_ORG_HEADER,
@@ -51,6 +53,7 @@ use stepclimb_server::{
     web_origin::WebOrigin,
 };
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 use tower::ServiceExt;
 
 mod common;
@@ -89,6 +92,8 @@ struct Answer {
     status: StatusCode,
     body: Vec<u8>,
     delay: Duration,
+    /// When set, each request waits for a permit of this semaphore before it is answered.
+    hold: Option<Arc<Semaphore>>,
 }
 
 impl Answer {
@@ -101,6 +106,15 @@ impl Answer {
             status,
             body,
             delay: Duration::ZERO,
+            hold: None,
+        }
+    }
+
+    /// `allow: true`, sent only once `gate` has a permit for the request.
+    fn held(gate: &Arc<Semaphore>) -> Self {
+        Self {
+            hold: Some(Arc::clone(gate)),
+            ..Self::json(json!({ "allow": true }))
         }
     }
 }
@@ -168,6 +182,9 @@ async fn receive(State(receiver): State<Receiver>, headers: HeaderMap, body: Byt
         body: body.to_vec(),
     });
     let answer = receiver.answer.lock().expect("answer").clone();
+    if let Some(gate) = &answer.hold {
+        drop(gate.acquire().await.expect("an open gate"));
+    }
     tokio::time::sleep(answer.delay).await;
     (answer.status, answer.body).into_response()
 }
@@ -701,6 +718,13 @@ async fn t11_every_failure_refuses_with_admission_unavailable(pool: PgPool) {
             Answer::json(json!({ "allow": true, "attributes": [] })),
         ),
         ("65 KiB", Answer::raw(StatusCode::OK, big)),
+        (
+            "NUL in attributes",
+            Answer::raw(
+                StatusCode::OK,
+                br#"{"allow": true, "attributes": {"a": "b\u0000"}}"#.to_vec(),
+            ),
+        ),
     ];
     for (calls, (name, answer)) in (1..).zip(failures) {
         f.receiver.answer(answer);
@@ -756,6 +780,27 @@ async fn a_refused_connection_fails_closed_and_the_url_is_never_logged(pool: PgP
     assert!(log.contains("status 502"), "{log}");
     for part in [
         format!(":{}", f.receiver.port),
+        "hook-path-x7".into(),
+        "t-query-x7".into(),
+    ] {
+        assert!(!log.contains(&part), "{part} in {log}");
+    }
+
+    // A TLS handshake with the plain-HTTP receiver fails; rustls's message, which can name the
+    // host and the certificate's names, stays out of the log.
+    let port = f.receiver.port;
+    f.put(json!({ "url": format!("https://127.0.0.1:{port}{HOOK_PATH}") }))
+        .await;
+    captured.clear();
+    assert_eq!(
+        f.outcome(&f.sign_in("sub-new", json!({}))).await,
+        UNAVAILABLE
+    );
+    let log = captured.text();
+    assert!(log.contains("TLS handshake"), "{log}");
+    for part in [
+        format!(":{port}"),
+        "127.0.0.1".into(),
         "hook-path-x7".into(),
         "t-query-x7".into(),
     ] {
@@ -1143,4 +1188,135 @@ async fn a_local_sign_in_never_calls_the_webhook(pool: PgPool) {
     assert_eq!(f.admitted(&sign_in).await.id, pat.id);
     assert_eq!(f.local_sign_in(pat.id).await, None);
     assert_eq!(f.receiver.count(), 0);
+}
+
+/// Wait, at most 10 s, until `receiver` holds `calls` requests.
+async fn until_received(receiver: &Receiver, calls: usize) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while receiver.count() < calls {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the calls reach the receiver");
+}
+
+/// Organization B, with sign-up allowed, an `oidc` provider `sso` and an enabled webhook at its
+/// own receiver, stored directly under the fixture's key ring.
+async fn org_b_with_webhook(f: &Fixture) -> (Uuid, IdentityProvider, Receiver) {
+    let b = org(&f.pool, "org-b").await;
+    allow_signup(&f.pool, b).await;
+    let sso_b = provider_in(&f.pool, b, "sso", json!({})).await;
+    let receiver = Receiver::start().await;
+    let id = new_id();
+    let secret = Secret::generate().expect("a secret");
+    let sealed = seal_secret(&f.keys, scope(b), id, &secret).expect("seal");
+    sqlx::query(
+        "INSERT INTO admission_webhooks (id, org_id, url, secret, enabled)
+         VALUES ($1, $2, $3, $4, true)",
+    )
+    .bind(id)
+    .bind(b)
+    .bind(receiver.url())
+    .bind(sealed)
+    .execute(&f.pool)
+    .await
+    .expect("insert B's webhook");
+    (b, sso_b, receiver)
+}
+
+/// Spec 07 I6: an organization has at most 3 webhook calls in flight. A fourth concurrent
+/// sign-in is refused with `auth.admission_unavailable` without a call and changes no marker,
+/// while another organization's sign-in still gets in.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_fourth_concurrent_call_of_an_organization_is_refused_while_another_gets_in(
+    pool: PgPool,
+) {
+    let f = Fixture::new(pool).await;
+    f.webhook().await;
+    let (b, sso_b, receiver_b) = org_b_with_webhook(&f).await;
+    let pat = f.member("sub-pat", json!({})).await;
+    let gate = Arc::new(Semaphore::new(0));
+    f.receiver.answer(Answer::held(&gate));
+    let (one, two, three) = (
+        f.sign_in("sub-1", json!({})),
+        f.sign_in("sub-2", json!({})),
+        f.sign_in("sub-3", json!({})),
+    );
+
+    let held = async { tokio::join!(f.outcome(&one), f.outcome(&two), f.outcome(&three)) };
+    let probe = async {
+        until_received(&f.receiver, 3).await;
+        let fourth = f.outcome(&f.sign_in("sub-pat", json!({}))).await;
+        let other = Verified {
+            provider: &sso_b,
+            ..f.sign_in("sub-b", json!({}))
+        };
+        let context = Context {
+            scope: scope(b),
+            ..f.context()
+        };
+        let of_b = f.admit_in(&other, &context).await;
+        gate.add_permits(16);
+        (fourth, of_b)
+    };
+    let (held, (fourth, of_b)) = tokio::join!(held, probe);
+
+    assert_eq!(fourth, UNAVAILABLE);
+    assert!(!f.marked(pat.id).await, "a busy webhook marks no one");
+    assert!(matches!(of_b, Admission::Admitted(_)));
+    assert_eq!(receiver_b.count(), 1);
+    assert_eq!(held, (None, None, None));
+    assert_eq!(f.receiver.count(), 3, "the fourth call was never sent");
+    f.admitted(&f.sign_in("sub-pat", json!({}))).await;
+}
+
+/// Spec 07 I6: the instance has at most its limit of webhook calls in flight, whatever the
+/// organization: with a limit of 2 held by organization A, organization B's sign-in is refused
+/// with `auth.admission_unavailable` without a call.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_instance_limit_refuses_a_call_of_any_organization(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    f.webhook().await;
+    let (b, sso_b, receiver_b) = org_b_with_webhook(&f).await;
+    let limits = WebhookLimits::new(
+        NonZeroUsize::new(2).expect("two"),
+        NonZeroUsize::new(3).expect("three"),
+    );
+    let providers = f.providers.clone().with_admission_webhook_limits(limits);
+    let context_a = Context {
+        providers: &providers,
+        ..f.context()
+    };
+    let gate = Arc::new(Semaphore::new(0));
+    f.receiver.answer(Answer::held(&gate));
+    let (one, two) = (f.sign_in("sub-1", json!({})), f.sign_in("sub-2", json!({})));
+
+    let held = async { tokio::join!(f.admit_in(&one, &context_a), f.admit_in(&two, &context_a)) };
+    let probe = async {
+        until_received(&f.receiver, 2).await;
+        let other = Verified {
+            provider: &sso_b,
+            ..f.sign_in("sub-b", json!({}))
+        };
+        let context_b = Context {
+            scope: scope(b),
+            providers: &providers,
+            ..f.context()
+        };
+        let of_b = f.admit_in(&other, &context_b).await;
+        gate.add_permits(16);
+        of_b
+    };
+    let (held, of_b) = tokio::join!(held, probe);
+
+    let Admission::Refused(refusal) = of_b else {
+        panic!("B was admitted past the instance limit");
+    };
+    assert_eq!(Some((refusal.step(), refusal.code())), UNAVAILABLE);
+    assert_eq!(receiver_b.count(), 0);
+    assert!(matches!(
+        held,
+        (Admission::Admitted(_), Admission::Admitted(_))
+    ));
 }

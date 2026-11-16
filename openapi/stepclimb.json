@@ -4725,7 +4725,7 @@
           },
           "attributes": {
             "type": "object",
-            "description": "Attributes merged over the provider's mapped attributes before they are stored; these\nkeys win. An object when present, never `null`."
+            "description": "Attributes merged over the provider's mapped attributes before they are stored; these\nkeys win. An object when present, never `null`, with no NUL character (`\\u0000`) in any\nkey or string."
           },
           "groups": {
             "type": "array",
