@@ -35,6 +35,7 @@ unicode-normalization.workspace = true
 stepclimb-core = { path = ".", features = ["test-support"] }
 sqlx.workspace = true
 tokio.workspace = true
+proptest.workspace = true
 
 [lints]
 workspace = true
