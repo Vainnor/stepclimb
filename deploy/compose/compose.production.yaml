@@ -102,8 +102,10 @@ services:
       - postgres:/var/lib/postgresql/data
     networks:
       - backend
+    # Over TCP, as the server connects: while the image initializes a new data directory it runs
+    # a server on the Unix socket only, which a socket check would report healthy.
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U stepclimb -d stepclimb"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U stepclimb -d stepclimb"]
       interval: 10s
       timeout: 5s
       retries: 5
