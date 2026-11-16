@@ -23,6 +23,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+
 use axum::{extract::FromRequestParts, http::StatusCode, http::request::Parts};
 use http_body_util::BodyExt as _;
 use object_store::{
@@ -74,13 +76,35 @@ fn retry_config() -> RetryConfig {
     }
 }
 
-/// The configured store, the prefix every key lives under, and the largest file one upload may
-/// send (`max_file_bytes`, B4), which only the upload route reads. Cloning is cheap.
+/// How the upload route bounds the uploads it serves (docs/specs/m1/06-files.md B5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UploadLimits {
+    /// How long an upload's body may go without sending a frame before the upload is refused
+    /// and its multipart upload aborted.
+    pub idle: Duration,
+    /// How many uploads one server streams at once; one more answers 503 `file.uploads_busy`.
+    pub in_flight: usize,
+}
+
+impl UploadLimits {
+    /// 30 seconds without a frame, 16 uploads at once. With 5 MiB parts an upload holds about
+    /// 15 MiB, so 16 hold about 240 MiB.
+    pub const DEFAULT: Self = Self {
+        idle: Duration::from_secs(30),
+        in_flight: 16,
+    };
+}
+
+/// The configured store, the prefix every key lives under, the largest file one upload may send
+/// (`max_file_bytes`, B4), and the uploads in flight, which only the upload route reads. Cloning
+/// is cheap, and clones share the uploads in flight.
 #[derive(Clone)]
 pub struct Storage {
     store: Arc<dyn ObjectStore>,
     prefix: Path,
     max_file_bytes: u64,
+    limits: UploadLimits,
+    uploads: Arc<Semaphore>,
 }
 
 impl std::fmt::Debug for Storage {
@@ -89,6 +113,7 @@ impl std::fmt::Debug for Storage {
             .field("store", &self.store.to_string())
             .field("prefix", &self.prefix.as_ref())
             .field("max_file_bytes", &self.max_file_bytes)
+            .field("limits", &self.limits)
             .finish()
     }
 }
@@ -136,7 +161,33 @@ impl Storage {
             store,
             prefix: Path::from_iter(prefix.split('/').filter(|s| !s.is_empty())),
             max_file_bytes,
+            limits: UploadLimits::DEFAULT,
+            uploads: Arc::new(Semaphore::new(UploadLimits::DEFAULT.in_flight)),
         }))
+    }
+
+    /// This store with `limits` instead of [`UploadLimits::DEFAULT`], and uploads in flight of
+    /// its own.
+    #[must_use]
+    pub fn with_upload_limits(self, limits: UploadLimits) -> Self {
+        Self {
+            limits,
+            uploads: Arc::new(Semaphore::new(limits.in_flight)),
+            ..self
+        }
+    }
+
+    /// The bounds of the uploads this store serves.
+    #[must_use]
+    pub fn upload_limits(&self) -> UploadLimits {
+        self.limits
+    }
+
+    /// A place for one more upload in flight, held until the permit drops, or `None` when
+    /// [`UploadLimits::in_flight`] uploads are already streaming.
+    #[must_use]
+    pub fn try_start_upload(&self) -> Option<OwnedSemaphorePermit> {
+        self.uploads.clone().try_acquire_owned().ok()
     }
 
     /// The largest file one upload may send, in bytes (`max_file_bytes`, B4).

@@ -2593,6 +2593,9 @@
           "404": {
             "$ref": "#/components/responses/UploadCourseNotFound"
           },
+          "408": {
+            "$ref": "#/components/responses/UploadTimeout"
+          },
           "409": {
             "$ref": "#/components/responses/UploadConflict"
           },
@@ -11957,7 +11960,17 @@
         }
       },
       "UploadStorageUnavailable": {
-        "description": "`storage.not_configured`: the server has no object storage configured, so it cannot store files; the operator sets `STEPCLIMB_STORAGE_URL`. `org.none`: the instance has no organization yet.",
+        "description": "`storage.not_configured`: the server has no object storage configured, so it cannot store files; the operator sets `STEPCLIMB_STORAGE_URL`. `file.uploads_busy`: the server is receiving as many uploads as it takes at once; try again shortly. `org.none`: the instance has no organization yet.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "UploadTimeout": {
+        "description": "`file.body_timeout`: the body sent nothing for 30 seconds; send the file again.",
         "content": {
           "application/problem+json": {
             "schema": {

@@ -4702,8 +4702,17 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `storage.not_configured`: the server has no object storage configured, so it cannot store files; the operator sets `STEPCLIMB_STORAGE_URL`. `org.none`: the instance has no organization yet. */
+        /** @description `storage.not_configured`: the server has no object storage configured, so it cannot store files; the operator sets `STEPCLIMB_STORAGE_URL`. `file.uploads_busy`: the server is receiving as many uploads as it takes at once; try again shortly. `org.none`: the instance has no organization yet. */
         UploadStorageUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `file.body_timeout`: the body sent nothing for 30 seconds; send the file again. */
+        UploadTimeout: {
             headers: {
                 [name: string]: unknown;
             };
@@ -6219,6 +6228,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["UploadForbidden"];
             404: components["responses"]["UploadCourseNotFound"];
+            408: components["responses"]["UploadTimeout"];
             409: components["responses"]["UploadConflict"];
             411: components["responses"]["UploadLengthRequired"];
             413: components["responses"]["UploadTooLarge"];

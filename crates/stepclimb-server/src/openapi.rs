@@ -380,6 +380,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             upload::UploadBadRequest,
             upload::UploadLengthRequired,
             upload::UploadTooLarge,
+            upload::UploadTimeout,
             upload::UploadStorageUnavailable,
             roles::RoleNotFound,
             roles::WriteForbidden,

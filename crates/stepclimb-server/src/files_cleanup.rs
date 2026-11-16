@@ -2,7 +2,9 @@
 //! `files.cleanup` (docs/specs/m1/06-files.md B8, B21): every hour, in each organization,
 //!
 //! 1. delete the temporary upload objects (`orgs/<org_id>/uploads/`) last written 24 hours ago
-//!    or more, which only a crashed upload leaves;
+//!    or more, which only a crashed upload leaves. A server that stopped in the middle of an S3
+//!    upload leaves an incomplete multipart upload instead, which is not an object and which no
+//!    listing here shows: the bucket's lifecycle rule removes it (`deploy/compose/README.md`);
 //! 2. delete up to `files::UNREFERENCED_BATCH` `files` rows nothing has referenced for 24 hours,
 //!    each with its object after the row's commit;
 //! 3. delete the file objects (`orgs/<org_id>/files/`) no row names: an object whose delete in

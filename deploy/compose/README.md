@@ -190,6 +190,13 @@ The server stores course files on the `storage` volume (`STEPCLIMB_STORAGE_URL` 
 and make the bucket before the server starts: `serve` writes, reads and deletes a probe object at
 startup and stops when it cannot.
 
+An upload streams to an S3 store as a multipart upload. If the server stops in the middle of one,
+the parts it sent stay in the bucket as an incomplete multipart upload: not an object, so the
+hourly `files.cleanup` job never sees it, yet the store keeps (and AWS bills) its parts. On AWS
+S3, add a lifecycle rule with `AbortIncompleteMultipartUpload` (`DaysAfterInitiation: 1`) to the
+bucket. On another S3-compatible store, check how it expires incomplete multipart uploads and
+set the same up. A local directory (`file://`) needs nothing.
+
 ## Compose variables
 
 These `SC_*` variables configure the Compose file, not the server. Set them in the environment or

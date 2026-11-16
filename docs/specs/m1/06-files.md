@@ -90,7 +90,9 @@ inline in a preview. A plan's `storage` limit bounds what an organization stores
 
 - **B9.** A course file has a `folder` and a `name`. `folder` is `/` or a path of 1 to 8 segments
   (`/handouts/week-1`), each 1 to 100 characters, not `.` or `..`, with no `/`, `\`, NUL or other
-  control character; `name` follows the segment rule and is at most 255 characters. Both are
+  control character, and no Unicode format character (general category Cf: bidirectional
+  overrides and isolates, zero-width characters, the byte order mark), which would let one name
+  show as another; `name` follows the segment rule and is at most 255 characters. Both are
   stored NFC-normalized and compared exactly; `(course_id, folder, name)` is unique. A folder
   exists while a file is in it (Q4); there are no empty folders.
 - **B10.** `PATCH /api/v1/course-files/{course_file_id}` with `{ folder?, name? }` renames or moves
@@ -244,6 +246,11 @@ Coordinator decisions (overnight, 2026-11-16, I2), pending owner review:
   therefore refuses only when the length does not fit and the organization holds no file of
   exactly that length; B7's check with the real size refuses the rest after the body is
   streamed, and the upload leaves no object behind.
+- B7's order changes: under the hash lock alone the upload looks the hash up and, for a new hash,
+  copies the temporary object to the file's key; only then does it lock the course, run
+  `check_room` (with the `org_plans` lock) and insert the rows. The store copies up to 5 GiB, and
+  no course or plan row stays locked meanwhile. A `storage` limit refused after the copy deletes
+  the copy under the hash lock, as any other failure before the commit does.
 - Uploads of the same bytes take turns on a transaction-scoped advisory lock on the
   organization's hash (`files::lock_hash`), taken before the `files` row is looked up and held
   to the commit. The loser of a race finds the winner's row and adds 0, so B7's retry after a
@@ -272,8 +279,21 @@ Coordinator decisions (overnight, 2026-11-16, I2), pending owner review:
   file are `application/octet-stream`, so no markup is ever labeled as text a browser shows.
 - `max_file_bytes` is at most 5 GiB, the largest object one S3 copy request takes (B7 copies the
   temporary object to its file's key), and the server carries it with the store, since only the
-  upload route reads it. NFC normalization uses `unicode-normalization` 0.1.26, which the
-  lockfile already held through sqlx and webauthn-rs.
+  upload route reads it. NFC normalization uses `unicode-normalization` 0.1.26
+  (`(MIT OR Apache-2.0) AND Unicode-3.0`), which the lockfile already held through sqlx and
+  webauthn-rs.
+- An upload body that sends no frame for 30 seconds answers 408 `file.body_timeout`, and its
+  multipart upload is aborted, so a client cannot hold an upload open forever. One server
+  streams at most 16 uploads at once; one more answers 503 `file.uploads_busy` without reading
+  its body. An upload holds at most three 5 MiB parts and one body frame in memory, about 15 MiB,
+  so 16 hold about 240 MiB. Both bounds are constants (`storage::UploadLimits::DEFAULT`), not
+  settings, until an operator needs another value.
+- B9 refuses Unicode format characters (Cf) in folder segments and names, as item URLs and group
+  keys do, in `course_files::{Folder, Name}` and in a table check
+  (`course_files_no_format_characters`).
+- A server that stops in the middle of an S3 upload leaves an incomplete multipart upload, which
+  is not an object and which `files.cleanup` cannot see. `deploy/compose/README.md` asks AWS S3
+  operators for an `AbortIncompleteMultipartUpload` lifecycle rule.
 - B11's `file.in_use` covers `file` items here; the cover joins it with I4, which adds the
   column. `GET /api/v1/course-files/{course_file_id}` from the API table comes with I2, as part
   of the files area.

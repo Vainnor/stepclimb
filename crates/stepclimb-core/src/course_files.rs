@@ -22,6 +22,7 @@ use crate::{
     db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
     files::{self, Sha256Digest},
     id::new_id,
+    users::is_format_char,
 };
 
 /// The most segments a folder has (B9).
@@ -43,8 +44,8 @@ const FOLDER_CHECK: &str = "course_files_folder_check";
 /// Why a folder or a name breaks B9's rules.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PathError {
-    /// An empty segment or name, `.` or `..`, a `/`, `\`, NUL or other control character, or a
-    /// folder that is not `/` and does not start with `/` or ends with it.
+    /// An empty segment or name, `.` or `..`, a `/`, `\`, NUL or other control character, a
+    /// Unicode format character, or a folder that is not `/` and does not start with `/` or ends with it.
     #[error("not a valid folder or name")]
     Invalid,
     /// A segment over [`MAX_SEGMENT_CHARS`] or a name over [`MAX_NAME_CHARS`] characters.
@@ -56,7 +57,9 @@ pub enum PathError {
 }
 
 /// One segment of B9: `max` characters at most once NFC-normalized, not empty, `.` or `..`,
-/// with no `/`, `\` or control character (C0, DEL, C1; NUL is one).
+/// with no `/`, `\`, control character (C0, DEL, C1; NUL is one) or Unicode format character
+/// (general category Cf: bidirectional overrides and isolates, zero-width characters, the byte
+/// order mark), which would let one name show as another.
 fn segment(value: &str, max: usize) -> Result<(), PathError> {
     let chars = value.chars().count();
     if chars == 0 || value == "." || value == ".." {
@@ -64,7 +67,7 @@ fn segment(value: &str, max: usize) -> Result<(), PathError> {
     }
     if value
         .chars()
-        .any(|c| c == '/' || c == '\\' || c.is_control())
+        .any(|c| c == '/' || c == '\\' || c.is_control() || is_format_char(c))
     {
         return Err(PathError::Invalid);
     }
@@ -627,6 +630,8 @@ mod tests {
             ("/a\u{7f}", PathError::Invalid),
             ("/a\u{85}", PathError::Invalid),
             ("/a\tb", PathError::Invalid),
+            ("/rtl\u{202E}gpj.exe", PathError::Invalid),
+            ("/a/zero\u{200B}width", PathError::Invalid),
             ("/a/b/c/d/e/f/g/h/i", PathError::TooDeep),
             (long.as_str(), PathError::TooLong),
         ];
@@ -644,7 +649,21 @@ mod tests {
             Name::parse(&"n".repeat(MAX_NAME_CHARS + 1)),
             Err(PathError::TooLong)
         );
-        for bad in ["", ".", "..", "a/b", "a\\b", "a\nb", "a\u{9b}"] {
+        for bad in [
+            "",
+            ".",
+            "..",
+            "a/b",
+            "a\\b",
+            "a\nb",
+            "a\u{9b}",
+            "invoice\u{202E}fdp.exe",
+            "a\u{2066}b\u{2069}",
+            "zero\u{200B}width",
+            "\u{FEFF}bom",
+            "soft\u{AD}hyphen",
+            "tag\u{E0041}",
+        ] {
             assert_eq!(Name::parse(bad), Err(PathError::Invalid), "{bad:?}");
         }
         assert!(Name::parse("..hidden").is_ok());

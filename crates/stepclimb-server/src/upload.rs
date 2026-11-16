@@ -8,24 +8,33 @@
 //!    not archived and the name is free in the folder (409); and the length fits the plan's
 //!    `storage` limit (403), unless the organization holds a file of exactly that length, which
 //!    the upload may turn out to repeat at no cost.
-//! 2. [`stream`] writes the body to a temporary object `orgs/<org_id>/uploads/<uuid>` with a
-//!    multipart upload, feeding every chunk to `files::Sha256Hasher` as it goes and keeping the
-//!    first 8 KiB for `stepclimb_core::sniff`. At most one part (5 MiB) and the parts in flight
-//!    are in memory; a body longer or shorter than its `Content-Length` answers 400 and the
-//!    upload is aborted.
-//! 3. [`store`] records the file in one transaction (B7): permission and course checked again
-//!    under the course lock, the hash locked (`files::lock_hash`), the organization's `files` row
-//!    for the hash read `FOR KEY SHARE`, `check_room` with the real size or 0 when the row
-//!    exists, then, for a new hash, the temporary object copied to the file's key and the
-//!    `files` row inserted, then the `course_files` row, and the commit. A failure before the
-//!    commit deletes the copy of a new hash while the hash lock is still held, so no other
-//!    upload can have committed a row naming it. The temporary object is deleted last, whatever
-//!    happened.
+//! 2. [`stream`] takes one of the server's places for uploads in flight
+//!    (`storage::UploadLimits`, 16 unless set; 503 `file.uploads_busy` when none is free) and
+//!    writes the body to a temporary object `orgs/<org_id>/uploads/<uuid>` with a multipart
+//!    upload, feeding every chunk to `files::Sha256Hasher` as it goes and keeping the first 8 KiB
+//!    for `stepclimb_core::sniff`. A body longer or shorter than its `Content-Length` answers
+//!    400, one that sends no frame for 30 seconds answers 408 `file.body_timeout`, and either
+//!    way the multipart upload is aborted.
+//! 3. [`store`] records the file (B7). In one transaction it locks the hash
+//!    (`files::lock_hash`), reads the organization's `files` row for it `FOR KEY SHARE` and, for
+//!    a new hash, copies the temporary object to the file's key, holding no course or plan row
+//!    while the store copies. Only then does it check the permission again under the course lock,
+//!    run `check_room` with the real size or 0 when the row exists, insert the `files` row of a
+//!    new hash and the `course_files` row, and commit. A failure before the commit, a full
+//!    `storage` limit included, deletes the copy of a new hash while the hash lock is still held,
+//!    so no other upload can have committed a row naming it. The temporary object is deleted
+//!    last, whatever happened.
+//!
+//! A server that stops in the middle of an S3 upload leaves an incomplete multipart upload in the
+//! bucket. It is not an object, so `files.cleanup` never lists it: the operator removes those
+//! with the bucket's lifecycle rule (`deploy/compose/README.md`).
 //!
 //! The hash lock is held from before the lookup until the commit, so two uploads of the same
 //! new bytes take turns: the second finds the first one's row and adds nothing, and the unique
 //! index on `(org_id, sha256)` is never raced. `files.cleanup` takes the same lock before it
 //! deletes a row and its object ([`crate::files_cleanup`]).
+
+use std::time::Duration;
 
 use axum::{
     Json,
@@ -37,6 +46,7 @@ use axum::{
 use http_body_util::BodyExt as _;
 use object_store::{ObjectStoreExt as _, WriteMultipart, path::Path};
 use serde::Deserialize;
+use sqlx::{Postgres, Transaction};
 use stepclimb_core::{
     OrgScope, course_files, courses,
     feature::Limit,
@@ -65,10 +75,15 @@ pub mod code {
     pub const LENGTH_REQUIRED: &str = "file.length_required";
     /// `Content-Length` is over the instance's `max_file_bytes` (413).
     pub const TOO_LARGE: &str = "file.too_large";
+    /// The body sent no frame for `UploadLimits::idle` (408).
+    pub const BODY_TIMEOUT: &str = "file.body_timeout";
+    /// The server is streaming as many uploads as it takes at once (503).
+    pub const UPLOADS_BUSY: &str = "file.uploads_busy";
 }
 
-/// How many parts of one upload may be on their way to the store at once. With object_store's
-/// 5 MiB parts, an upload holds at most about 15 MiB in memory.
+/// How many parts of one upload may be on their way to the store when the next chunk is
+/// written. Writing a chunk can start one more part, so an upload holds at most three 5 MiB parts
+/// (two in flight, one filling) and one body frame: about 15 MiB.
 const PARTS_IN_FLIGHT: usize = 2;
 
 problem_responses! {
@@ -78,7 +93,8 @@ problem_responses! {
     UploadBadRequest => "`request.malformed`: `Content-Length` is not a number, the body is longer or shorter than it says, or a query parameter does not parse.",
     UploadLengthRequired => "`file.length_required`: the request has no `Content-Length`; send the file with its length.",
     UploadTooLarge => "`file.too_large`: `Content-Length` is over the largest file this server accepts (`max_file_bytes`, 100 MiB unless the operator set another).",
-    UploadStorageUnavailable => "`storage.not_configured`: the server has no object storage configured, so it cannot store files; the operator sets `STEPCLIMB_STORAGE_URL`. `org.none`: the instance has no organization yet.",
+    UploadTimeout => "`file.body_timeout`: the body sent nothing for 30 seconds; send the file again.",
+    UploadStorageUnavailable => "`storage.not_configured`: the server has no object storage configured, so it cannot store files; the operator sets `STEPCLIMB_STORAGE_URL`. `file.uploads_busy`: the server is receiving as many uploads as it takes at once; try again shortly. `org.none`: the instance has no organization yet.",
 }
 
 /// Where to put an uploaded file.
@@ -120,6 +136,7 @@ pub struct UploadParams {
         (status = 401, response = crate::openapi::Unauthenticated),
         (status = 403, response = UploadForbidden),
         (status = 404, response = UploadCourseNotFound),
+        (status = 408, response = UploadTimeout),
         (status = 409, response = UploadConflict),
         (status = 411, response = UploadLengthRequired),
         (status = 413, response = UploadTooLarge),
@@ -146,6 +163,13 @@ pub async fn upload_course_file(
     let length = content_length(&headers, storage.max_file_bytes())?;
     let place = Place::parse(&params)?;
     upload.precheck(&place, length).await?;
+    let _in_flight = storage.try_start_upload().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            code::UPLOADS_BUSY,
+            "The server is receiving as many uploads as it takes at once; try again shortly.",
+        )
+    })?;
     let streamed = upload.stream(body, length).await?;
     let stored = upload.store(&place, &streamed).await;
     upload.delete_temporary(&streamed.temporary).await;
@@ -281,7 +305,8 @@ impl Upload<'_> {
             .await
             .map_err(|error| ApiError::internal(&error))?;
         let mut writer = WriteMultipart::new(multipart);
-        let copied = copy_body(body, length, &mut writer).await;
+        let idle = self.storage.upload_limits().idle;
+        let copied = copy_body(body, length, idle, &mut writer).await;
         let (hasher, head) = match copied {
             Ok(done) => done,
             Err(error) => {
@@ -311,34 +336,28 @@ impl Upload<'_> {
     ) -> Result<course_files::CourseFile, ApiError> {
         let (scope, sha256) = (self.scope(), streamed.hashed.sha256());
         let mut tx = begin(self.state).await?;
-        recheck(&mut tx, self.require, self.course_id(), COURSE_NOT_FOUND).await?;
         files::lock_hash(&mut tx, scope, sha256)
             .await
             .map_err(|error| ApiError::internal(&error))?;
         let existing = files::find_by_hash(&mut tx, scope, sha256)
             .await
-            .map_err(|error| ApiError::internal(&error))?;
-        let adding = if existing.is_some() {
-            0
-        } else {
-            streamed.hashed.size()
-        };
-        self.entitlements
-            .check_room(&mut tx, Limit::Storage, adding)
-            .await?;
+            .map_err(|error| ApiError::internal(&error))?
+            .map(|file| file.id);
         let copy = self.storage.file_path(scope, sha256);
-        let is_new = existing.is_none();
-        let placed = match existing {
-            Some(file) => self.place(&mut tx, place, file.id).await,
-            None => self.add(&mut tx, place, streamed, &copy).await,
+        let recorded = match existing {
+            Some(_) => self.record(&mut tx, place, streamed, existing).await,
+            None => match self.storage.store().copy(&streamed.temporary, &copy).await {
+                Ok(()) => self.record(&mut tx, place, streamed, None).await,
+                Err(error) => Err(ApiError::internal(&error)),
+            },
         };
-        match placed {
+        match recorded {
             Ok(file) => {
                 commit(tx).await?;
                 Ok(file)
             }
             Err(error) => {
-                if is_new {
+                if existing.is_none() {
                     // The hash lock is still held: no other upload can have a row naming it.
                     self.delete_object(&copy).await;
                 }
@@ -350,27 +369,38 @@ impl Upload<'_> {
         }
     }
 
-    /// Copy a new hash's bytes to its key, insert its `files` row, and place it.
-    async fn add(
+    /// The rows of B7 once the bytes are at their key: the permission again under the course
+    /// lock, the `storage` limit with the bytes this upload adds (none for `existing`), the
+    /// `files` row of a new hash and the `course_files` row.
+    async fn record(
         &self,
-        tx: &mut sqlx::PgConnection,
+        tx: &mut Transaction<'static, Postgres>,
         place: &Place,
         streamed: &Streamed,
-        copy: &Path,
+        existing: Option<stepclimb_core::id::Uuid>,
     ) -> Result<course_files::CourseFile, ApiError> {
-        self.storage
-            .store()
-            .copy(&streamed.temporary, copy)
-            .await
-            .map_err(|error| ApiError::internal(&error))?;
-        let new = NewFile {
-            hashed: streamed.hashed,
-            mime: streamed.mime.to_owned(),
+        recheck(tx, self.require, self.course_id(), COURSE_NOT_FOUND).await?;
+        let adding = match existing {
+            Some(_) => 0,
+            None => streamed.hashed.size(),
         };
-        let file = files::insert(&mut *tx, self.scope(), &new, self.state.clock.now())
-            .await
-            .map_err(|error| ApiError::internal(&error))?;
-        self.place(tx, place, file.id).await
+        self.entitlements
+            .check_room(tx, Limit::Storage, adding)
+            .await?;
+        let file_id = match existing {
+            Some(id) => id,
+            None => {
+                let new = NewFile {
+                    hashed: streamed.hashed,
+                    mime: streamed.mime.to_owned(),
+                };
+                files::insert(&mut **tx, self.scope(), &new, self.state.clock.now())
+                    .await
+                    .map_err(|error| ApiError::internal(&error))?
+                    .id
+            }
+        };
+        self.place(tx, place, file_id).await
     }
 
     /// The `course_files` row of the stored file `file_id` in the course.
@@ -407,17 +437,28 @@ impl Upload<'_> {
 
 /// Every chunk of `body` fed to the hasher and the writer in order, with back pressure on the
 /// store; the hasher and the first [`sniff::HEAD_BYTES`]. 400 when the body is longer or
-/// shorter than `length` or breaks off.
+/// shorter than `length` or breaks off, 408 when it sends no frame for `idle`.
 async fn copy_body(
     mut body: Body,
     length: u64,
+    idle: Duration,
     writer: &mut WriteMultipart,
 ) -> Result<(Sha256Hasher, Vec<u8>), ApiError> {
     let wrong_length =
         || ApiError::malformed("The body is not as long as its Content-Length says.");
+    let stalled = || {
+        ApiError::new(
+            StatusCode::REQUEST_TIMEOUT,
+            code::BODY_TIMEOUT,
+            "The body sent nothing for too long; send the file again.",
+        )
+    };
     let mut hasher = Sha256Hasher::new();
     let mut head = Vec::new();
-    while let Some(frame) = body.frame().await {
+    while let Some(frame) = tokio::time::timeout(idle, body.frame())
+        .await
+        .map_err(|_| stalled())?
+    {
         let frame = frame.map_err(|_| ApiError::malformed("The body broke off."))?;
         let Ok(chunk) = frame.into_data() else {
             continue;

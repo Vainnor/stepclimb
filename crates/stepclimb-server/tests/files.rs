@@ -20,7 +20,7 @@ use axum::{
     extract::ConnectInfo,
     http::{HeaderMap, Method, Request, StatusCode, header},
 };
-use http_body_util::{BodyExt, Full};
+use http_body_util::{BodyExt, Channel, Full};
 use object_store::{ObjectStoreExt as _, PutPayload};
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -43,7 +43,7 @@ use stepclimb_server::{
     files_cleanup,
     request_org::TEST_ORG_HEADER,
     router, session,
-    storage::Storage,
+    storage::{Storage, UploadLimits},
     web_origin::WebOrigin,
 };
 use tower::ServiceExt;
@@ -193,6 +193,12 @@ impl Fixture {
     async fn new(pool: PgPool, backend: Backend) -> Self {
         let (storage, dir) = storage(backend);
         Self::with(pool, Some(storage), dir).await
+    }
+
+    /// [`Self::new`] with uploads bounded by `limits`.
+    async fn limited(pool: PgPool, backend: Backend, limits: UploadLimits) -> Self {
+        let (storage, dir) = storage(backend);
+        Self::with(pool, Some(storage.with_upload_limits(limits)), dir).await
     }
 
     async fn with(pool: PgPool, storage: Option<Storage>, dir: Option<TempDir>) -> Self {
@@ -1288,4 +1294,89 @@ async fn cleanup_keeps_the_object_of_an_upload_still_committing(pool: PgPool) {
     let report = cleanup.await.expect("the task").expect("the run");
     assert_eq!(report.orphans_deleted, 0);
     assert_eq!(f.read_object(&key).await, bytes);
+}
+
+/// An upload of `length` bytes whose body the returned sender feeds, and the request.
+fn held_open(
+    f: &Fixture,
+    name: &str,
+    length: usize,
+) -> (http_body_util::channel::Sender<Bytes>, Request<Body>) {
+    let (sender, body) = Channel::<Bytes>::new(1);
+    let uri = format!("/api/v1/courses/{}/files?name={name}", f.a.course);
+    let request = f
+        .base(Method::POST, &uri, f.a.org, &f.admin)
+        .header(header::CONTENT_LENGTH, length)
+        .body(Body::new(body))
+        .expect("a request");
+    (sender, request)
+}
+
+/// B5: a body that stops sending is refused after the idle deadline, its multipart upload
+/// aborted, instead of holding a place for uploads forever.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_stalled_upload_is_refused_and_leaves_nothing(pool: PgPool) {
+    let limits = UploadLimits {
+        idle: Duration::from_millis(300),
+        in_flight: 1,
+    };
+    for backend in [Backend::Minio, Backend::Local] {
+        let f = Fixture::limited(pool.clone(), backend, limits).await;
+        let t = f.a;
+        let (mut sender, request) = held_open(&f, "stalled.txt", 10);
+        sender
+            .send_data(Bytes::from_static(b"abc"))
+            .await
+            .expect("the first frame");
+        let stalled = tokio::time::timeout(Duration::from_secs(10), answer(&f.app, request))
+            .await
+            .expect("the server answered a stalled body");
+        stalled.expect(StatusCode::REQUEST_TIMEOUT, "file.body_timeout");
+        drop(sender);
+        assert_eq!(f.objects(t.org).await, Vec::<String>::new(), "{backend:?}");
+        assert_eq!(f.count("files", t.org).await, 0);
+        // The stalled upload gave its place back.
+        f.upload(t.course, "next.txt", b"next")
+            .await
+            .ok(StatusCode::CREATED);
+    }
+}
+
+/// B5: one server streams at most `in_flight` uploads at once; one more answers 503 until a
+/// place is free.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn uploads_past_the_in_flight_limit_answer_503(pool: PgPool) {
+    let limits = UploadLimits {
+        idle: Duration::from_secs(10),
+        in_flight: 1,
+    };
+    let f = Fixture::limited(pool, Backend::Local, limits).await;
+    let t = f.a;
+    let (mut sender, request) = held_open(&f, "first.txt", 5);
+    let app = f.app.clone();
+    let first = tokio::spawn(async move { answer(&app, request).await });
+    // Wait until the first upload holds the place: it has read its first frame.
+    sender
+        .send_data(Bytes::from_static(b"fir"))
+        .await
+        .expect("a frame");
+    sender
+        .send_data(Bytes::from_static(b"s"))
+        .await
+        .expect("a frame");
+    let busy = f.upload(t.course, "second.txt", b"second").await;
+    busy.expect(StatusCode::SERVICE_UNAVAILABLE, "file.uploads_busy");
+    sender
+        .send_data(Bytes::from_static(b"t"))
+        .await
+        .expect("the last frame");
+    drop(sender);
+    first
+        .await
+        .expect("the first upload")
+        .ok(StatusCode::CREATED);
+    f.upload(t.course, "second.txt", b"second")
+        .await
+        .ok(StatusCode::CREATED);
+    assert_eq!(f.count("course_files", t.org).await, 2);
 }

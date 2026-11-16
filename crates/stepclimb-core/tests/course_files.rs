@@ -503,3 +503,47 @@ async fn the_hash_lock_makes_an_upload_and_cleanup_take_turns(pool: PgPool) {
             .unwrap()
     );
 }
+
+/// B9: the table refuses a format character in a folder or a name, whatever writes the row.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_table_refuses_format_characters_in_paths(pool: PgPool) {
+    let (org, course) = org_with_course(&pool, "org-a").await;
+    let file = stored(&pool, org, b"x").await;
+    let insert = |folder: &'static str, name: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                "INSERT INTO course_files (id, org_id, course_id, file_id, folder, name)
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+            )
+            .bind(new_id())
+            .bind(org)
+            .bind(course)
+            .bind(file)
+            .bind(folder)
+            .bind(name)
+            .execute(&pool)
+            .await
+        }
+    };
+    for (folder, name) in [
+        ("/", "invoice\u{202E}fdp.exe"),
+        ("/", "a\u{2066}b\u{2069}"),
+        ("/", "zero\u{200B}width"),
+        ("/", "\u{FEFF}bom"),
+        ("/", "tag\u{E0041}"),
+        ("/rtl\u{202E}x", "a.txt"),
+        ("/a/soft\u{AD}hyphen", "a.txt"),
+    ] {
+        let refused = insert(folder, name).await.expect_err("a format character");
+        let constraint = refused.as_database_error().and_then(|e| e.constraint());
+        assert_eq!(
+            constraint,
+            Some("course_files_no_format_characters"),
+            "{folder:?} {name:?}"
+        );
+    }
+    insert("/plain", "caf\u{e9}.txt")
+        .await
+        .expect("no format character");
+}
