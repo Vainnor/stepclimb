@@ -52,24 +52,26 @@ when spec 13 adds due dates, and recent announcements when spec 11 adds them.
   Spec 13 puts overdue and due-soon courses first when it lands.
 - **B6.** At most 50 courses are returned (the most relevant by B5); `has_more` tells the web app
   to link the full list (`GET /api/v1/courses`, `02` B11).
-- **B7.** The route needs only authentication (`AuthOnly`, `09` B21): every member reads their own
-  dashboard, and the answer is built only from the caller's own enrollments and progress through
+- **B7.** The route needs only authentication (`AuthOnly`, `m0/09` B21): every member reads their
+  own dashboard, and the answer is built only from the caller's own enrollments and progress through
   `OrgScope`.
 - **B8.** The dashboard loads with a bounded number of queries whatever the number of courses:
   one for the enrollments and course rows, one for the rule data of those courses, one for the
-  learner's item progress in them, one for course progress. It is within the plan's page budget
+  learner's item progress in them, one for course progress. The target is the plan's page budget
   (p95 at most 150 ms at 100 concurrent users on 1 vCPU) for a learner with 50 courses of 200
-  items each; I1 measures it with a seeded database and records the number in the PR (the k6
-  check is a release task).
+  items each. I1 measures one learner's request against a seeded database and records the number
+  and the machine in the PR; whether the budget holds under load is the k6 check before each
+  minor release, not this spec's claim.
 - **B9.** Staff who take no course see an empty `courses` list; the web app then shows the
   staff empty state (B11).
 
 ### The page
 
-- **B10.** Home (`/`, `11` Q2) becomes the dashboard: a Next up panel for the first course in B5's
-  order with the one primary "Continue" button (brand color), then the list of the other courses,
-  each a row with its title, a progress bar, the next item's title and a secondary "Continue"
-  link. Under 768 px the same order stacks in one column. No statistics tiles (plan pitfall).
+- **B10.** Home (`/`, `m0/11` Q2) becomes the dashboard: a Next up panel for the first course in
+  B5's order with the one primary "Continue" button (brand color), then the list of the other
+  courses, each a row with its title, a progress bar, the next item's title and a secondary
+  "Continue" link. Under 768 px the same order stacks in one column. No statistics tiles (plan
+  pitfall).
 - **B11.** Empty states: a learner with no course sees "You have no {courses} yet." (M0's text,
   with the organization's terminology); a course waiting on a date shows "Opens on <date>" in the
   user's time zone; a completed course shows "Completed <date>".

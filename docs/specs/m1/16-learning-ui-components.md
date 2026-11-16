@@ -33,8 +33,8 @@ listed here with a pointer so the inventory is complete in one place.
 - **B2.** Every component meets `ui.md`'s definition of done: the listed states, the three themes
   with the default brand, vZDC and the two extreme brands in both densities, axe with no violation,
   1280 and 375 px stories, 44 px touch targets, Vitest behavior tests and Playwright story
-  screenshots in `just ci` (`13` I2). The iOS Safari and Tauri iOS web-view row stays
-  experimental until the iPhone test (`17`), as `13` Q8 decided.
+  screenshots in `just ci` (`m0/13` I2). The iOS Safari and Tauri iOS web-view row stays
+  experimental until the iPhone test (`17`), as `m0/13` Q8 decided.
 - **B3.** Learning states have one shape, icon and token each everywhere (`ui.md` Principles):
   locked (`state-locked`, lock icon), available (`state-available`, outline circle, regular
   weight), in progress (`state-progress`, half circle), complete (`state-complete`, filled check,
@@ -49,7 +49,7 @@ listed here with a pointer so the inventory is complete in one place.
   VideoUploader (`08` I5), VideoPlayer (`09` I3), the notification bell and list (`11` I3), and
   the dashboard page (`10` I2), which uses NextUp and the course rows from this spec.
 
-### Forms and Data (the M1 part of `13` Q1)
+### Forms and Data (the M1 part of `m0/13` Q1)
 
 - **B5.** DatePicker, DateRangePicker and TimeField (React Aria's date components) take and give
   values with an explicit time zone (`ZonedDateTime`), show the zone's short name beside the
@@ -98,8 +98,8 @@ listed here with a pointer so the inventory is complete in one place.
   editing in a side sheet (not a modal, `ui.md` pitfalls).
 - **B14.** BrandPreview shows a sample screen (top bar, a course row, a button, a callout, text) in
   a draft brand in light, dark and high contrast side by side, with the contrast report of the
-  generator (`12`). The branding screen gains it and ColorField, replacing M0's minimal screen
-  (`12` Q14 (b)).
+  generator (`m0/12`). The branding screen gains it and ColorField, replacing M0's minimal screen
+  (`m0/12` Q14 (b)).
 
 ### Screens
 
@@ -156,10 +156,10 @@ grants in `/me`; every route checks on the server.
   reloads and keeps the user's place; screen readers hear the move announced.
 - **T6** (B14). BrandPreview shows the generator's contrast failures for a brand the generator
   refuses, and the branding screen cannot save it.
-- **T7** (B15 to B21). Playwright journeys against the Compose stack: an instructor creates a
-  course, adds a module with a page and a file, sets a requirement, publishes, enrolls a learner,
+- **T7** (B15 to B21). Playwright journeys against the Compose stack: an organization admin creates
+  a course, adds a module with a page and a file, sets a requirement, publishes, enrolls a learner,
   assigns the course with a due date; the learner opens the course home, follows Next up, reads,
-  marks done and sees the rail fill; the instructor sees the progress in the roster.
+  marks done and sees the rail fill; the organization admin sees the progress in the roster.
 - **T8** (B17, B18). Actions the caller lacks are absent (a Course designer sees no status
   change or roster actions), and the server's 403 is shown as an error, not a crash, when a stale
   page tries one.
@@ -211,7 +211,7 @@ PR with stories, tests and screenshots.
 **Stage 1: Forms and Data (M1 part).**
 
 1. **I1. Date and time fields.** DatePicker, DateRangePicker, TimeField with zones. Covers B5; T3.
-   Depends on: `13` I10 and I11 (M0 fields, merged).
+   Depends on: `m0/13` I10 and I11 (M0 fields, merged).
 2. **I2. TagField, Slider and ColorField.** Covers B6 (these three). Depends on: I1's patterns.
 3. **I3. FileDrop.** Covers B6 (FileDrop). Depends on: none beyond M0.
 4. **I4. Tree and StatusChip.** Covers B3, B7; T2 (StatusChip). Depends on: none beyond M0.

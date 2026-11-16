@@ -106,11 +106,21 @@ enrolled to observe.
 
 ### Deleting progress
 
-- **B15.** Deleting an enrollment (`02` B18) deletes, in the same transaction, the user's
-  `item_progress`, `module_progress` and `course_progress` rows for the course when no other
-  active or concluded enrollment of theirs in the course has `course.participate`; otherwise it
-  keeps them. Deleting writes no event. The `enrollment.delete` audit entry gains the count of
-  progress rows removed.
+- **B15.** Deleting an enrollment (`02` B18), in the same transaction:
+  - always deletes the enrollment's own `enrollment_observees` rows (an Observer's links, B17)
+    and every `enrollment_observees` row that names the user in this course when the user keeps no
+    learner enrollment there (B20);
+  - when no other active or concluded enrollment of the user in the course has
+    `course.participate`, deletes the user's learner data for the course: `item_progress`,
+    `module_progress` and `course_progress` (this spec), `video_progress` and `watch_reports` for
+    the course's items (spec 09, added by 09 I2), and `completions` for the course and its modules
+    (spec 14, added by 14 I1);
+  - otherwise keeps all of it.
+  Kept in every case: `assignment_users`, `reminders_sent` and `assignment_events` (spec 13: the
+  record that the person was assigned and reminded), `email_messages` (spec 12, deleted by its
+  90-day prune) and `audit_events`. Deleting writes no event. The `enrollment.delete` audit entry
+  gains the count of rows removed per table. Each later spec that adds learner data for a course
+  adds its table to this list and to T12, in the issue named above.
 - **B16.** Deleting an item that has any `item_progress` row answers 409 `item.has_progress`
   (`03` B9); the check and the delete run under the course lock.
 
@@ -147,7 +157,7 @@ scope (`02-courses-and-enrollments.md` Q9).
 ## API
 
 Common errors as in `../m0/02-organizations-and-accounts.md` -> API; unsafe methods also answer
-`08`'s CSRF refusals.
+`m0/08`'s CSRF refusals.
 
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
@@ -268,7 +278,7 @@ for_learner_in_course, list_for_course, recompute_course, delete_for_enrollment}
 | Permission | Key | Grantable at | Built-in roles (M1) |
 | --- | --- | --- | --- |
 | `perm::ProgressView` | `progress.view` | organization, account, course | Organization admin, Account admin, Instructor (Q2) |
-| `perm::ProgressViewObserved` | `progress.view_observed` | course | Observer (B18; `09` B5) |
+| `perm::ProgressViewObserved` | `progress.view_observed` | course | Observer (B18; `m0/09` B5) |
 
 Recording progress takes `perm::CourseParticipate` (`02`). Entitlements: none.
 
@@ -302,16 +312,25 @@ Database tests use `#[sqlx::test]` and a `ManualClock`; route tests use the perm
   progress never appears in it.
 - **T11** (B14). An Instructor lists both learners' progress; `?status=concluded` lists the
   concluded one only; a user with no enrollment answers 404 `progress.not_found`.
-- **T12** (B15). Deleting a Student enrollment removes that learner's three kinds of rows for the
-  course and leaves their rows in another course; with a second participating enrollment in the
-  course, nothing is removed. The audit entry records the count. Mutation: skipping the delete
-  turns the test red.
+- **T12** (B15). Deleting a Student enrollment removes that learner's progress rows for the
+  course (and, as 09 I2 and 14 I1 add them, video progress, watch reports and completions) and
+  leaves their rows in another course and their assignment rows and timeline; it removes the
+  Observer links that named them; with a second participating enrollment in the course, no
+  learner data is removed. Deleting an Observer enrollment removes its links only. The audit entry
+  records the counts. Mutation: skipping the delete turns the test red.
 - **T13** (B16). Deleting an item with one learner's `started` row answers 409
   `item.has_progress`.
 - **T14** (every route). Four cases: anonymous 401; every permission but the route's at the course
   403 (for `POST /progress`, a user with every grantable permission through an account
   assignment, which cannot hold `course.participate`, and a concluded Student); every permission at
   a sibling account 404; only the route's permission 2xx.
+- **T14a** (B20, the two staff progress routes). These take `Require<perm::CourseView>` and decide
+  in the handler, so the permission suite has one entry per granting permission: an entry for
+  `progress.view` (2xx with every learner) and an entry for `progress.view_observed` (2xx with only
+  the observed learners), each with its own 401, 403 and 404 cases. Explicit tests: a Student
+  (holding `course.view` and `course.participate`) gets 403 `permission.denied` on both routes; a
+  caller holding only `course.view` at the course gets 403 `permission.denied`; an Observer with no
+  active observed learner gets 200 with an empty list.
 - **T15** (every route). Cross-organization: org A's admin with org B's course, item or user id
   gets 404, and org B's progress rows and outbox are unchanged.
 - **T16** (B17, B19). An Instructor enrolls an Observer naming two Students (201); naming a user
@@ -349,9 +368,9 @@ and stands until the owner reviews it.
   (spec 14), which the plan names, takes a completion away.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
 - **Q2. Who reads other learners' progress.** The plan: Instructor and Account admin see progress
-  (roster heat map), Observer named students (M4, `02` Q9). Options: (a) a new `progress.view`
-  for Organization admin, Account admin and Instructor; (b) reuse `enrollment.view`; (c) also
-  Course designer. Recommendation: (a). A separate key lets an organization give a reviewer
+  (roster heat map), Observer named students (M1: B17 to B20, `02` Q9). Options: (a) a new
+  `progress.view` for Organization admin, Account admin and Instructor; (b) reuse `enrollment.view`;
+  (c) also Course designer. Recommendation: (a). A separate key lets an organization give a reviewer
   progress without enrollment changes, and designers edit content, not people.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
 - **Q3. Which steps the client reports.** Options: (a) the client posts `view` for pages, files and
@@ -362,7 +381,7 @@ and stands until the owner reviews it.
   are (watch, score, mastery) are decided by the server's own engines.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
 
-- **Q4. How an Observer's named learners are recorded.** `09` B5 fixes the Observer's scope as
+- **Q4. How an Observer's named learners are recorded.** `m0/09` B5 fixes the Observer's scope as
   named students and its milestone as M1; the shape is open. Options: (a) per course, on the
   Observer's enrollment (`enrollment_observees`), so an Observer sees named learners in the courses
   they are enrolled in; (b) per organization, an observer-to-learner link covering every course
@@ -375,7 +394,8 @@ and stands until the owner reviews it.
 
 1. **I1. Progress tables, recording and roll-up.** Migration, `record_step`, `complete_item` with
    the course-row lock and roll-up, the three events and their topics, the progress route with
-   the lock check, the learner's own progress in reads, and the `item.has_progress` refusal.
+   the lock check (`04-unlock-and-completion-rules.md` I2's `require_unlocked` and `item.locked`),
+   the learner's own progress in reads, and the `item.has_progress` refusal.
    Covers B1 to B7, B10 to B13, B16; T1 to T7, T9, T10, T13, T14 and T15 for `POST`. Depends on:
    `01-job-queue-and-outbox.md` I4, `04-unlock-and-completion-rules.md` I2,
    `02-courses-and-enrollments.md` I2.
@@ -386,5 +406,6 @@ and stands until the owner reviews it.
    `progress.view_observed` in the catalog and roles, the two roster routes with the observed
    filter, Observer enrollments with `enrollment_observees` (lifting `02` B17's Observer refusal),
    and progress removal on enrollment delete (maintainer line-by-line: permissions and learner data
-   deletion). Covers B9, B14, B15, B17 to B20; T11, T12, T14 to T18 for these routes. Depends on:
+   deletion), with one permission-suite entry per granting permission. Covers B9, B14, B15, B17
+   to B20; T11, T12, T14, T14a, T15 to T18 for these routes. Depends on:
    I1, `02-courses-and-enrollments.md` I2.

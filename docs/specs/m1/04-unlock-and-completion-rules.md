@@ -282,10 +282,12 @@ Order across specs 04 and 05: 04 I1, 04 I2, 05 I1, 04 I3, 05 I2 and on.
    check, item requirements with the typed `Requirement`, copy mapping, author reads showing the
    rules. Covers B1 to B3; T9, T10, T15. Depends on: `03-modules-and-items.md` I1.
 2. **I2. The evaluator.** `stepclimb_core::unlock::{load_course_rules, evaluate}` and the
-   completion definitions, with unit and property tests. Covers B4, B6 to B11; T1 to T8. Depends
-   on: I1.
+   completion definitions, with unit and property tests, plus the `item.locked` problem (403 with
+   `reasons`) and `unlock::require_unlocked`, the check every content and progress route calls, so
+   `05-progress-and-events.md` I1 can use it before I3. Covers B4, B6 to B11, B13 (the problem and
+   the helper); T1 to T8. Depends on: I1.
 3. **I3. Enforcement in learner reads and the lock suite.** `lock` on module and item reads,
-   withholding of references and URLs, the `item.locked` problem, the `CourseViewAll` bypass, and
+   withholding of references and URLs, the `CourseViewAll` bypass, and
    the OpenAPI-driven lock suite that later content routes join. Covers B5, B12 to B14; T11 to
    T14. Depends on: I2; `05-progress-and-events.md` I1 (the progress the evaluator reads, and the
    first route the suite covers).

@@ -29,12 +29,13 @@ and, in M4, webhooks run on it. It adds no HTTP route.
 - **B1.** A job is one `jobs` row: the queue it runs on, its kind (which handler runs it), a JSON
   payload, the time it may run from (`run_at`), how many times it has been claimed (`attempts`),
   how many it may be (`max_attempts`), its lease (`locked_until`), its last error and, for an
-  organization's job, the organization (`org_id`). Keys are UUID v7 (`02` B4).
+  organization's job, the organization (`org_id`). Keys are UUID v7 (`m0/02` B4).
 - **B2.** `stepclimb_jobs::enqueue` takes the caller's transaction and inserts the row in it, so a
-  job exists exactly when the change that asked for it committed. A caller that wants a job
-  without a change passes a transaction of its own. An organization's job is enqueued with the
-  caller's `OrgScope`; an instance job (the flow cleanup, the outbox dispatcher, the periodic
-  scheduler) with no organization. The payload is at most 64 KiB serialized (larger is a
+  job exists exactly when the change that asked for it committed. A caller that wants a job without
+  a change passes a transaction of its own. An organization's job is enqueued with the caller's
+  `OrgScope`; an instance job (the periodic jobs of B18, such as `jobs.prune` and the flow cleanup)
+  with no organization. The outbox dispatcher and the periodic scheduler are not jobs: they are
+  loops each worker process runs (B17, B21). The payload is at most 64 KiB serialized (larger is a
   programming error: `enqueue` returns an error and the caller's transaction fails); a job that
   needs more stores it in a table and passes the id.
 - **B3.** A job may carry a `dedupe_key`. While a job of the same kind and key is waiting (not
@@ -62,10 +63,11 @@ and, in M4, webhooks run on it. It adds no HTTP route.
     exists, any error that a retry cannot fix): the job is dead at once.
   A handler that panics counts as retry; the panic is caught at the job's task boundary and
   logged.
-- **B7.** `backoff(n)` is `min(base * 2^(n-1), cap)` with full jitter (a random delay between half
-  that value and that value), `base` 5 s and `cap` 1 h by default; a kind may set its own `base`,
-  `cap` and `max_attempts` (default 8, about 10 to 21 minutes of retries in all). The random
-  source is passed in, so tests fix it.
+- **B7.** `backoff(n)` is `min(base * 2^(n-1), cap)` with equal jitter: a random delay between
+  half that value and that value. `base` is 5 s and `cap` 1 h by default; a kind may set its own
+  `base`, `cap` and `max_attempts` (default 8). With the defaults a job is retried 7 times, after
+  5, 10, 20, 40, 80, 160 and 320 s before jitter (635 s), so its retries span about 5.3 to 10.6
+  minutes in all. The random source is passed in, so tests fix it.
 - **B8.** A dead job keeps its row with `dead_at` set and its `last_error`, is never claimed
   again, and is logged once at `error` with its kind, id, organization and attempts. Dead rows are
   deleted 30 days after `dead_at` by the periodic `jobs.prune` job. There is no API or UI for
@@ -73,7 +75,7 @@ and, in M4, webhooks run on it. It adds no HTTP route.
 - **B9.** `last_error` holds at most 2,048 bytes, cut at a character boundary. Handlers write
   errors that hold no secret, token, password or personal data beyond ids; the error type's
   `Display` is what is stored, so a handler error that wraps a value must leave it out.
-- **B10.** A worker runs an organization's job with `OrgScope::instance(org_id)` (`02` B9 lists
+- **B10.** A worker runs an organization's job with `OrgScope::instance(org_id)` (`m0/02` B9 lists
   job workers as an allowed call site; one wrapper function in `stepclimb-jobs` carries the
   `#[expect(clippy::disallowed_methods)]`). Before the handler runs, the worker checks that the
   organization exists; a job whose organization is gone fails (B6). An instance job gets no
@@ -118,9 +120,9 @@ and, in M4, webhooks run on it. It adds no HTTP route.
   interval of rows whose interval changed; rows for kinds this binary does not know are left
   alone. The advisory lock is the plan's "scheduled jobs use advisory locks".
 - **B18.** M1's periodic jobs from this spec: `jobs.prune` (hourly: dead jobs after 30 days, B8;
-  dispatched outbox rows after 30 days, B23) and `auth.flows_cleanup` (every 10 minutes: the
-  sign-in flow cleanup that `08` B21 runs on a `tokio` interval until the jobs runner exists; this
-  spec moves it onto the runner and removes the interval). Other specs add theirs.
+  dispatched outbox rows after 30 days, B23) and `auth.flows_cleanup` (every 10 minutes: the sign-in
+  flow cleanup that `m0/08` B21 runs on a `tokio` interval until the jobs runner exists; this spec
+  moves it onto the runner and removes the interval). Other specs add theirs.
 
 ### Outbox and event dispatch
 
@@ -135,13 +137,14 @@ and, in M4, webhooks run on it. It adds no HTTP route.
   field the event's future receivers could not otherwise read (M4 decides receivers' rights).
   Topics are registered in code with a schema version; a topic's `data` only gains fields within
   one version.
-- **B21.** The dispatcher is the instance job kind `outbox.dispatch`, run continuously by the
-  workers: it claims up to 100 undispatched rows (`FOR UPDATE SKIP LOCKED`, `id` order), and in
-  the same transaction enqueues, for each row and each subscriber registered for its topic, one
-  job of the subscriber's kind with payload `{ "event_id": <id> }` and the row's organization,
-  then sets `dispatched_at`. An event therefore becomes each subscriber's job exactly once, and a
-  subscriber's handler reads the event row by id. A topic with no subscriber is marked dispatched
-  with no job.
+- **B21.** The dispatcher is a loop in every worker process (not a `jobs` row): when idle it runs
+  every second, as job polling does (Q2), and immediately again after a pass that found a full
+  batch. Each pass, in one transaction, claims up to 100 undispatched rows (`FOR UPDATE SKIP
+  LOCKED`, `id` order), and in the same transaction enqueues, for each row and each subscriber
+  registered for its topic, one job of the subscriber's kind with payload `{ "event_id": <id> }` and
+  the row's organization, then sets `dispatched_at`. An event therefore becomes each subscriber's
+  job exactly once, and a subscriber's handler reads the event row by id. A topic with no subscriber
+  is marked dispatched with no job.
 - **B22.** Delivery order is not guaranteed. Rows are claimed in `id` order (UUID v7, so roughly
   creation order), but two transactions can commit out of order and subscriber jobs retry
   independently; subscribers use the event's `timestamp` and are idempotent per `event_id`.
@@ -223,11 +226,11 @@ CREATE INDEX outbox_dispatched ON outbox (dispatched_at) WHERE dispatched_at IS 
 CREATE INDEX outbox_by_org ON outbox (org_id, id);
 ```
 
-`jobs.org_id` is nullable, like `roles.org_id` (`09` Data): an instance job is not organization
-data. `job_schedules` holds no organization data and has no `org_id`, like `plans`. A retried
-job that would collide with a waiting duplicate under `jobs_dedupe_waiting` is deleted instead,
-since the waiting one covers it (B3). The permission suite's cross-organization table check
-(`09` B20) lists `jobs` and `outbox` as tables with `org_id` and `job_schedules` as instance-wide.
+`jobs.org_id` is nullable, like `roles.org_id` (`m0/09` Data): an instance job is not organization
+data. `job_schedules` holds no organization data and has no `org_id`, like `plans`. A retried job
+that would collide with a waiting duplicate under `jobs_dedupe_waiting` is deleted instead, since
+the waiting one covers it (B3). The permission suite's cross-organization table check (`m0/09` B20)
+lists `jobs` and `outbox` as tables with `org_id` and `job_schedules` as instance-wide.
 
 Repository and crate surface: `stepclimb_jobs::{enqueue, Job, JobContext, Outcome, Registry,
 Worker, outbox::{emit, Topic}}`. The SQL lives in `stepclimb-jobs` (it depends on
@@ -275,7 +278,7 @@ iteration at a time through a test hook rather than on timers.
   row is created at startup for a new periodic kind, and its interval updated when the code's
   changes.
 - **T14** (B18). An expired sign-in flow is deleted by the `auth.flows_cleanup` job, and the
-  server no longer starts the `tokio` interval (`08` B21's tests move to the job).
+  server no longer starts the `tokio` interval (`m0/08` B21's tests move to the job).
 - **T15** (B19). An event emitted in a transaction that rolls back does not exist.
 - **T16** (B20, B21). With two subscribers to `test.happened` and none to `test.ignored`, one
   dispatch of three `test.happened` rows and one `test.ignored` row enqueues six jobs, each with
@@ -317,7 +320,8 @@ iteration at a time through a test hook rather than on timers.
   tables bounded; a setting can come with M4's retention settings.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
 - **Q4. Retry defaults.** The plan names exponential backoff and no numbers. Options: (a) base
-  5 s, cap 1 h, 8 attempts, full jitter, each kind may override; (b) a fixed 1-minute delay, 5
+  5 s, cap 1 h, 8 attempts, equal jitter (retries over about 5.3 to 10.6 minutes), each kind may
+  override; (b) a fixed 1-minute delay, 5
   attempts. Recommendation: (a); kinds such as M4's webhooks set their own to reach the plan's
   24 h.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
@@ -333,8 +337,8 @@ iteration at a time through a test hook rather than on timers.
    worker-only listener for the probes. Covers B13 to B16; T11, T12. Depends on: I1.
 3. **I3. Periodic jobs.** `job_schedules` (in I3's own migration), the scheduler under the
    advisory lock, startup sync of schedule rows, `jobs.prune` for dead jobs, and moving the
-   sign-in flow cleanup from its `tokio` interval onto `auth.flows_cleanup` (updating `08` B21 in
+   sign-in flow cleanup from its `tokio` interval onto `auth.flows_cleanup` (updating `m0/08` B21 in
    the same PR). Covers B17, B18; T13, T14, T6 (prune). Depends on: I2.
 4. **I4. Outbox and dispatch.** Migration `<version>_outbox.sql`, `outbox::emit`, topic
-   registration with schema versions, the `outbox.dispatch` job, subscriber registration, and
+   registration with schema versions, the dispatch loop, subscriber registration, and
    pruning dispatched rows in `jobs.prune`. Covers B19 to B24; T15 to T18. Depends on: I3.

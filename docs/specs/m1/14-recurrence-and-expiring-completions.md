@@ -23,7 +23,9 @@ new cycle for each person, with its own due date and reminders, and the history 
 kept. A course or module can also say how long its completion stays valid; when that time passes
 the completion expires, the learner's progress in it is cleared so they take it again, anything
 that required it locks again through spec 04's rules, and the next cycle of a recurring assignment
-starts. This is the one place where a completion recorded by spec 05 is taken away.
+starts. Expiry is the one place where a completion recorded by spec 05 is taken away; whether a
+cycle that starts before the completion expires also clears progress is the owner's open Q6, and
+until it is answered only expiry does.
 
 ## Behavior
 
@@ -85,14 +87,22 @@ starts. This is the one place where a completion recorded by spec 05 is taken aw
   minutes, or by an expiry, B5): in one transaction, close the previous cycle's row
   (`assignment_users`, `13` B2) as it stands (completed, or recorded as `incomplete` when it was
   not), insert the new row with `cycle + 1`, `assigned_at` = the cycle's start and `due_at` from the
-  relative due rule, schedule its reminders (`13` B11), reset the learner's progress in the course
-  (B7) when the previous cycle had completed it, and write `assignment_events` `cycle_started`.
-  "Each cycle is a new assignment" (plan) is this per-person row (Q4).
-- **B11.** A course completion's validity and a recurrence are independent: with `every_months:
-  12`, `start_days_before: 30` and a 12-month validity, the next cycle starts 30 days before the
-  completion expires and is due when it expires (with `relative_days: 30`). Starting the cycle
-  resets progress (B10) while the earlier completion stays valid in `completions` until its
-  `expires_at` (Q6); the learner retakes the course before the old completion lapses.
+  relative due rule, schedule its reminders (`13` B11), and write `assignment_events`
+  `cycle_started`. Starting a cycle does not touch progress: the plan re-locks only on expiry, so
+  the learner retakes the course once their previous completion has expired (B5, B7). Whether a
+  cycle start should also clear progress, so a retake can begin before the old completion lapses,
+  is Q6 (open, for the owner). "Each cycle is a new assignment" (plan) is this per-person row
+  (Q4).
+- **B10a.** Until Q6 is answered, a recurring assignment needs a course with
+  `completion_valid_months` (422 `assignment.recurrence_needs_validity`), so every cycle's retake
+  is opened by an expiry, and a scheduled cycle start that finds the learner's course completion
+  still valid waits until that completion expires; `start_days_before` is accepted and stored but
+  has no effect.
+- **B11.** With `every_months: 12` and a 12-month validity, cycle 2 starts when cycle 1's
+  completion expires (B5 step 4, B10a), the expiry clears the learner's progress (B7), and cycle 2
+  is due `relative_days` later. If the owner answers Q6 with its recommendation, `start_days_before:
+  30` would start cycle 2 30 days before the expiry with progress cleared then, while the earlier
+  completion stays valid in `completions` until its `expires_at`.
 - **B12.** A cycle's row completes when the course completes on or after the cycle's
   `assigned_at` (`13` B8, Q5 there). Ending the assignment stops new cycles; adding a recurrence to
   an existing assignment applies from the next completion.
@@ -110,7 +120,7 @@ starts. This is the one place where a completion recorded by spec 05 is taken aw
 ## API
 
 Common errors as in `../m0/02-organizations-and-accounts.md` -> API; unsafe methods also answer
-`08`'s CSRF refusals.
+`m0/08`'s CSRF refusals.
 
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
@@ -191,18 +201,25 @@ Tests use a `ManualClock` and run the periodic jobs by hand.
 - **T4** (B9). Recurrence on a module-target assignment answers 422
   `assignment.recurrence_needs_course`; with a fixed due date 422
   `assignment.recurrence_needs_relative_due`.
-- **T5** (B9, B10). `every_months: 12, start_days_before: 30` with `relative_days: 30`: completion
-  on 2026-03-10 starts cycle 2 on 2027-02-08 due 2027-03-10; cycle 1 is closed `completed`; the
-  learner's progress is reset; reminders of cycle 2 follow `13`.
-- **T6** (B9, B10). `every_year_in: 1`: on 1 January cycle 2 starts for every assignee; one who had
-  not completed cycle 1 gets cycle 1 closed `incomplete`.
-- **T7** (B11). Between cycle 2's start and cycle 1's expiry, the completions history shows cycle
-  1 valid; at expiry it shows it expired; the learner's progress, already reset at cycle start, is
-  not reset twice.
+- **T5** (B9, B10, B10a). `every_months: 12` with `relative_days: 30` on a course valid 12 months:
+  a completion on 2026-03-10 expires on 2027-03-10, which clears the learner's progress and starts
+  cycle 2, due 2027-04-09; cycle 1 is closed `completed`; reminders of cycle 2 follow `13`. A
+  recurring assignment on a course without validity answers 422
+  `assignment.recurrence_needs_validity`.
+- **T6** (B9, B10a). `every_year_in: 1` on a course valid 12 months: on 1 January cycle 2 starts
+  for an assignee who never completed cycle 1 (closed `incomplete`); for one whose completion is
+  still valid, cycle 2 waits until that completion expires.
+- **T7** (B10, Q6). Starting a cycle changes no `item_progress`, `module_progress` or
+  `course_progress` row (until Q6 is answered); mutation: a reset at cycle start turns the test
+  red.
 - **T8** (B12). Completing the course after cycle 2 started completes cycle 2's row, not cycle 1's.
 - **T9** (B3). Changing a course's validity leaves earlier `expires_at` values as they were.
 - **T10** (B13). An Instructor lists a learner's history across cycles; the learner reads their
   own; another learner gets none of it.
+- **T10a** (B13, `GET /courses/{id}/completions`). The route decides in the handler, so the
+  permission suite has one entry for `progress.view` and one for `progress.view_observed`, each with
+  its own cases. Explicit tests: a Student gets 403 `permission.denied`; a caller holding only
+  `course.view` gets 403 `permission.denied`; an Observer sees only observed learners' rows.
 - **T11** (routes). Four cases for `GET /courses/{id}/completions` and the changed `PATCH` fields;
   `AuthOnly` cases for `/me/completions`.
 - **T12** (routes, jobs). Cross-organization: org A's admin with org B's course or user id gets 404;
@@ -219,8 +236,8 @@ Tests use a `ManualClock` and run the periodic jobs by hand.
 
 ## Open questions
 
-Q1 to Q4 and Q6 were delegated by the owner to the coordinator; each recommendation is taken and
-stands until the owner reviews it. Q5 is the owner's and stays open.
+Q1 to Q4 were delegated by the owner to the coordinator; each recommendation is taken and stands
+until the owner reviews it. Q5 and Q6 are the owner's and stay open.
 
 - **Q1. How recurrence rules are written.** The plan's examples are "every 12 months" and "every
   January". Options: (a) the two forms of B9, each with an optional earlier start; (b) a cron-like
@@ -247,24 +264,33 @@ stands until the owner reviews it. Q5 is the owner's and stays open.
   its module's, and a module of one item covers the case; (b) items too, with B6's reset applied to
   one item and sequential order re-locking what follows; (c) courses only. Recommendation: (a).
   Until the owner answers, items do not expire (B4); answering (b) adds an issue.
-- **Q6. What a new cycle clears.** "History is kept per cycle". Options: (a) the learner's live
-  progress in the course is cleared at the cycle's start, and the history kept is the completions
-  per cycle and the assignment rows and timeline per cycle; (b) keep every progress row per cycle,
-  adding a cycle column to spec 05's tables; (c) do not clear, so the learner cannot retake.
-  Recommendation: (a). (c) makes a retake impossible because completion is final (`05` Q1), and
-  (b) changes every progress table for detail no report in the plan reads.
-  Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
+- **Q6. Whether a new cycle clears progress before expiry (open, for the owner).** The plan
+  re-locks content only when a completion expires ("An expired completion re-locks anything that
+  depends on it"), and `05` Q1 and `04` B4 make completion final apart from that. Clearing progress
+  when a cycle starts would re-lock content before any expiry, which the plan does not say, so this
+  is the owner's. Options: (a) a cycle start clears the learner's live progress in the course, so a
+  retake can start before the old completion lapses (`start_days_before`), with history kept as
+  completions per cycle and the assignment rows and timeline per cycle; (b) expiry only: a cycle
+  starts no earlier than the expiry that clears progress, and recurrence requires a validity
+  (B10a); (c) keep every progress row per cycle, adding a cycle column to spec 05's tables.
+  Recommendation: (a), since compliance training is usually retaken before it lapses. Until the
+  owner answers, the spec builds (b), the plan's expiry-only re-lock.
 
 ## Issues
 
 1. **I1. Completion history and validity.** Migration, recording completions in spec 05's roll-up
-   transaction, validity on courses and modules, history routes, `expires_at` in reads. Covers B1
+   transaction, validity on courses and modules, history routes, `expires_at` in reads, and
+   `completions` added to `05` B15's enrollment deletion (with its T12 case). Covers B1
    to B4, B13; T1, T9 to T12 (routes). Depends on: `05-progress-and-events.md` I3,
    `02-courses-and-enrollments.md` I1.
 2. **I2. Expiry and re-locking.** The `completions.expire` job, module and course resets, the
-   `completion.expired` event and notification, `05`'s text on the exception. Covers B5 to B8;
+   `completion.expired` event and notification, and the texts that state completion is final,
+   updated to name expiry as the exception: `05` B4, `05` B10 (events once per learner and target
+   become once per cycle) and `04` B4. Covers B5 to B8;
    T2, T3, T12 (jobs). Depends on: I1, `04-unlock-and-completion-rules.md` I3,
    `11-announcements-and-in-app-notifications.md` I2, `12-email.md` I3.
-3. **I3. Recurrence and cycles.** Migration, recurrence validation, the `assignments.cycles` job,
-   cycle start with reset and closing, expiry-triggered cycles, timeline entries. Covers B9 to B12,
+3. **I3. Recurrence and cycles.** Migration, recurrence validation (including B10a's validity rule),
+   the `assignments.cycles` job, cycle start and closing without touching progress, cycles started
+   by expiry, timeline entries. Q6 (owner) decides whether a later issue adds the cycle-start
+   reset. Covers B9 to B12,
    B14; T4 to T8. Depends on: I2, `13-assignments-due-dates-reminders-and-escalation.md` I4.

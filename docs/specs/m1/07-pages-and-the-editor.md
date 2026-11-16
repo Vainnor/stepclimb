@@ -45,7 +45,7 @@ author typed ever reaches a learner's browser unchecked. Readers see pages throu
   + `S`); it keeps unsaved changes in the browser's local storage, keyed by page and base version,
   and offers to restore them when the page is opened again.
 - **B5.** `GET /api/v1/pages/{page_id}/versions` lists versions newest first, without bodies
-  (`02` B3 pagination); `GET /api/v1/pages/{page_id}/versions/{version_id}` returns one with its
+  (`m0/02` B3 pagination); `GET /api/v1/pages/{page_id}/versions/{version_id}` returns one with its
   body; `POST /api/v1/pages/{page_id}/versions/{version_id}/restore` saves that version's body as a
   new version (B3's conflict check against `base_version_id` in the request). All need
   `perm::CourseViewAll` (reads) or `perm::CourseContentEdit` (restore).
@@ -68,7 +68,7 @@ author typed ever reaches a learner's browser unchecked. Readers see pages throu
   Marks: bold, italic, underline, strike, inline code, link, subscript, superscript. Text is plain
   Unicode; NUL and other control characters except tab and newline are refused.
 - **B9.** A link's `href` is an absolute `https`, `http` or `mailto` URL, or a path on the same
-  origin starting with one `/` (`08` B19's rules); anything else is refused. Links to other
+  origin starting with one `/` (`m0/08` B19's rules); anything else is refused. Links to other
   origins render with `rel="noopener noreferrer"` and `target="_blank"`.
 - **B10.** An image names a course file of the same course (`course_file_id`, 404
   `file.not_found` otherwise; type PNG, JPEG, GIF or WebP, 422 otherwise), with required `alt`
@@ -82,7 +82,7 @@ author typed ever reaches a learner's browser unchecked. Readers see pages throu
   paste a URL; the editor extracts the id; the server never stores a URL for an embed. An embed is
   not tracked: video with watch tracking is a `video` item (spec 09).
 - **B13.** Ungraded "check your understanding" questions need `stepclimb-assess`, which is M2;
-  the schema has no question node in M1, and M2 adds it (Q3).
+  the schema has no question node in M1, pending Q3 (the owner's).
 
 ### Rendering
 
@@ -137,7 +137,7 @@ author typed ever reaches a learner's browser unchecked. Readers see pages throu
 ## API
 
 Common errors as in `../m0/02-organizations-and-accounts.md` -> API; unsafe methods also answer
-`08`'s CSRF refusals; writes in an archived course answer 409 `course.archived`.
+`m0/08`'s CSRF refusals; writes in an archived course answer 409 `course.archived`.
 
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
@@ -197,11 +197,39 @@ ALTER TABLE pages ADD CONSTRAINT pages_current_version
     FOREIGN KEY (current_version_id) REFERENCES page_versions (id) DEFERRABLE INITIALLY DEFERRED;
 ```
 
+Migration `migrations/<version>_page_render_cache.sql` (I2), version fixed the same way:
+
+```sql
+-- in <version>_pages.sql (I1): the course files a version's body names (not in the data model)
+CREATE TABLE page_version_files (
+    org_id          uuid        NOT NULL,
+    version_id      uuid        NOT NULL REFERENCES page_versions (id) ON DELETE CASCADE,
+    course_file_id  uuid        NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_at      timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (version_id, course_file_id),
+    FOREIGN KEY (org_id, course_file_id) REFERENCES course_files (org_id, id)
+);
+CREATE INDEX page_version_files_by_file ON page_version_files (course_file_id);
+
+-- <version>_page_render_cache.sql (I2): B15's rendered HTML per version (not in the data model)
+CREATE TABLE page_renders (
+    org_id            uuid        NOT NULL,
+    version_id        uuid        PRIMARY KEY REFERENCES page_versions (id) ON DELETE CASCADE,
+    renderer_version  integer     NOT NULL,      -- a renderer change invalidates every row
+    html              text        NOT NULL,      -- image URLs as placeholders, never a token
+    created_at        timestamptz NOT NULL DEFAULT now(),
+    updated_at        timestamptz NOT NULL DEFAULT now()
+);
+```
+
 A trigger refuses `UPDATE` of `page_versions.body`, `number`, `page_id` and `author_id`, so
-versions stay immutable (B2). `course_files` referenced by bodies are recorded in
-`page_version_files(org_id, version_id, course_file_id)` (written on save, from the parsed body)
-so `06` B11's `file.in_use` covers images used by any version and B20's copy maps them without
-reparsing; this table is not in the data model.
+versions stay immutable (B2). `page_version_files` is written on save from the parsed body, so
+`06` B11's `file.in_use` covers images used by any version (its foreign key's `NO ACTION` refuses
+deleting such a course file) and B20's copy maps them without reparsing. A `page_renders` row is
+written on the first read of a version and replaced when `renderer_version` in code is higher;
+its `html` holds `data-sc-image="<course_file_id>"` placeholders that the read fills with signed
+URLs (B15).
 
 ## Permissions
 
@@ -260,8 +288,9 @@ writes `perm::CourseContentEdit`. Entitlements: none.
 
 ## Open questions
 
-Each question below was delegated by the owner to the coordinator; each recommendation is taken
-and stands until the owner reviews it.
+Q1, Q2 and Q4 were delegated by the owner to the coordinator; each recommendation is taken and
+stands until the owner reviews it. Q3 narrows the plan's M1 page blocks, so it is the owner's and
+stays open.
 
 - **Q1. When a version is made, and two authors at once.** Options: (a) every explicit save is a
   version, with a conflict check on the base version and unsaved work kept in the browser; (b)
@@ -275,11 +304,12 @@ and stands until the owner reviews it.
   terminology; (b) a block with fixed "Controller" and "Pilot" lines in the core; (c) move it to
   the ATC pack. Recommendation: (a).
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
-- **Q3. "Check your understanding" questions in M1.** They need question types from
-  `stepclimb-assess` (M2). Options: (a) leave them to M2, which adds the node; (b) a simple
-  multiple-choice node in M1 graded in the browser; (c) a placeholder node. Recommendation: (a);
-  (b) would build a second question model that M2 replaces.
-  Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
+- **Q3. "Check your understanding" questions in M1 (open, for the owner).** They need question types
+  from `stepclimb-assess` (M2). Options: (a) leave them to M2, which adds the node; (b) a simple
+  multiple-choice node in M1 graded in the browser; (c) a placeholder node. Recommendation: (a); (b)
+  would build a second question model that M2 replaces. The plan lists these questions among M1 page
+  blocks, so moving them to M2 is the owner's call; until the owner answers, B13 stands as written
+  (no question node in M1) and nothing is built for them.
 - **Q4. How VersionDiff compares.** Options: (a) top-level blocks compared as JSON, changed blocks
   marked; (b) a text diff inside blocks; (c) no diff in M1. Recommendation: (a), no dependency, and
   enough to see what changed between saves.
@@ -289,12 +319,13 @@ and stands until the owner reviews it.
 
 1. **I1. Page storage, versions and the document model.** Migration, `page_doc` typed model and
    validation, page CRUD, saves with the conflict check, versions list, read and restore,
-   `PageTarget`, `page_version_files`. Covers B1 to B11 (validation), B12; T1 to T5, T10, T11,
-   T14 and T15 for these routes. Depends on: `03-modules-and-items.md` I1, `06-files.md` I2.
+   `PageTarget`, `page_version_files` (in I1's migration). Covers B1 to B11 (validation), B12; T1 to
+   T5, T10, T11, T14 and T15 for these routes. Depends on: `03-modules-and-items.md` I1,
+   `06-files.md` I2.
 2. **I2. Rendering and reading.** The renderer, `ammonia` (pinned after `dependency-researcher`, in
-   its own commit), the per-version cache with image placeholders, signed image URLs, embeds,
-   `GET /pages/{id}` with B18's access rules and the lock suite entry, `page` items and the home
-   page option, copying pages. Covers B14 to B20; T6 to T9, T12. Depends on: I1, `06-files.md`
+   its own commit), the `page_renders` cache migration with image placeholders, signed image URLs,
+   embeds, `GET /pages/{id}` with B18's access rules and the lock suite entry, `page` items and the
+   home page option, copying pages. Covers B14 to B20; T6 to T9, T12. Depends on: I1, `06-files.md`
    I3, `04-unlock-and-completion-rules.md` I3, `02-courses-and-enrollments.md` I3.
 3. **I3. The editor.** `packages/ui/src/editor` with Tiptap (pinned after `dependency-researcher`,
    in its own commit), toolbar, slash menu, block toolbar, local unsaved-work recovery, the

@@ -98,6 +98,7 @@ a one-click unsubscribe that mail clients show next to the sender.
   | `magic_link` | organization | yes | `link`, `expires_at` |
   | `security_notice` | platform | yes | `user_name`, `event`, `at`, `ip` |
   | `sender_verification` | platform | yes | `code` |
+  | `signup_verification` | organization | yes | `link`, `expires_at` (pending Q8, B22) |
 
   Every template can also use `org_name`, `user_name` and `preferences_link`. Spec 13 adds
   `due_reminder` and `escalation`; M2 adds `grade_released`.
@@ -112,7 +113,7 @@ a one-click unsubscribe that mail clients show next to the sender.
   for HTML (and as plain text in the text part); `announcement_body` is the announcement's
   rendered HTML (`07` B14) and its text form. The HTML part is the body inside a fixed layout
   (a single-column table with inline styles, since mail clients ignore style sheets) using the
-  organization's brand color and on-brand text color from its stored branding (`12`), its name,
+  organization's brand color and on-brand text color from its stored branding (`m0/12`), its name,
   and a footer with the preferences link and, for non-required kinds, the unsubscribe link. The
   text part is generated from the same document. Both pass `ammonia` (`07` B14). `POST
   /api/v1/admin/email/templates/{kind}/preview` renders a draft with the kind's example values.
@@ -126,7 +127,7 @@ a one-click unsubscribe that mail clients show next to the sender.
   enqueues `email.send` on the `email` queue (`01`) in the caller's transaction. A secret variable
   (a sign-in link) is stored sealed (`[org_id, b"email_messages", id, b"secret"]`) and only in
   that row; no rendered body is stored, so no secret sits in plaintext in the database, a job
-  payload or a log (`08` B4).
+  payload or a log (`m0/08` B4).
 - **B13.** Before queueing an email to a user, `queue` checks: the user is `active` and has an
   email address; for non-required kinds, their email preference for the kind is on (`11` B10);
   email is configured (B1). A failed check records the row as `skipped` with the reason
@@ -150,10 +151,10 @@ a one-click unsubscribe that mail clients show next to the sender.
 - **B17.** An unsubscribe token seals `{ org_id, user_id, kind }` with the key ring (context
   `[b"email_unsubscribe"]`); it does not expire, and stops working when the key that sealed it
   leaves the ring. `POST /email/unsubscribe/<token>` (no session, exempt from CSRF's Fetch Metadata
-  check because mail clients post it cross-site; `08`'s exemption list gains it) turns the email
+  check because mail clients post it cross-site; `m0/08`'s exemption list gains it) turns the email
   channel of that kind off for that user and answers 200 with no body; an invalid token answers 404
-  `email.unsubscribe_invalid`. It is rate limited per client address like the sign-in routes (`08`
-  B22).
+  `email.unsubscribe_invalid`. It is rate limited per client address like the sign-in routes
+  (`m0/08` B22).
 - **B18.** `GET /email/unsubscribe/<token>` serves the web app's confirmation page, which shows the
   kind and the organization and a "Unsubscribe" button that sends the `POST`; a `GET` never changes
   anything, so link scanners cannot unsubscribe anyone. The page also links to the preferences.
@@ -163,21 +164,37 @@ a one-click unsubscribe that mail clients show next to the sender.
 - **B19.** Announcements: spec 11's event gets a second subscriber, `email.announcement_fan_out`,
   which queues one `announcement` email per recipient (B13's checks applying the preference),
   idempotent per `(announcement, user)`.
-- **B20.** Enrollment links (`04` B10): `POST /api/v1/admin/users/{user_id}/enrollment-links` gains
-  a body `{ "send_email": true }`, which queues an `enrollment_link` email to the user's address
-  with the link instead of (also) returning it, and answers 503 `email.not_configured` when email is
-  not configured. Magic links (`04` B22, I8) queue `magic_link` emails through `queue`; `04` I8
-  builds its routes on this spec.
+- **B20.** Enrollment links (`m0/04` B10): `POST /api/v1/admin/users/{user_id}/enrollment-links`
+  gains a body `{ "send_email": true }`, which queues an `enrollment_link` email to the user's
+  address with the link instead of (also) returning it, and answers 503 `email.not_configured` when
+  email is not configured. Magic links (`m0/04` B22, I8) queue `magic_link` emails through `queue`;
+  `m0/04` I8 builds its routes on this spec.
 - **B21.** Security notices: when a user's password is set (`password.set`), a passkey is added
   or removed (`passkey.create`, `passkey.delete`), or TOTP is turned on or off (`totp.enable`,
   `totp.disable`), the same transaction queues a `security_notice` to that user, from the platform
   sender (Q6), naming the event, the time in the user's time zone and the client address recorded
   in the audit entry.
 
+### Local self sign-up
+
+- **B22.** `m0/04` Q6, decided by the owner, says local self sign-up "waits for M1 email
+  verification", and no M1 spec but this one sends email. The plan lists self sign-up "if
+  enabled" as a way in and says nothing of its shape, which is open for the owner (Q8). Under Q8's
+  recommendation: when the organization allows sign-up (`admission.signup_allowed`, `m0/07` B20)
+  and the local provider's email method is on, `POST /auth/local/sign-up` with `{ email,
+  display_name }` answers 202 whatever the address (no enumeration, rate limited as `m0/08` B22)
+  and queues a `signup_verification` email with a one-time link valid 24 hours (stored hashed like
+  `m0/04`'s enrollment tokens); an address that already has a user gets a message saying so
+  instead. Opening the link shows a page whose button posts the token (as `m0/04` B22 does for
+  magic links); a valid token runs admission's step 3 and 5 (`m0/07`: refused in sync-only mode,
+  the users limit checked), creates a `local`, `active` user with a verified email, and continues
+  into the enrollment flow that sets a passkey or password (`m0/04` B6). Nothing is built until the
+  owner answers Q8 (I7 is blocked).
+
 ## API
 
 Common errors as in `../m0/02-organizations-and-accounts.md` -> API; unsafe methods also answer
-`08`'s CSRF refusals except the unsubscribe `POST` (B17).
+`m0/08`'s CSRF refusals except the unsubscribe `POST` (B17).
 
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
@@ -195,7 +212,7 @@ Common errors as in `../m0/02-organizations-and-accounts.md` -> API; unsafe meth
 | `POST /email/unsubscribe/{token}` | `List-Unsubscribe=One-Click` (form) | 200 | 404 `email.unsubscribe_invalid`, 429 | none: the token is the credential |
 | `GET /email/unsubscribe/{token}` | | 200 the web app | | none (serves the SPA) |
 
-Changed: `POST /api/v1/admin/users/{user_id}/enrollment-links` (`04`) takes `send_email` (B20).
+Changed: `POST /api/v1/admin/users/{user_id}/enrollment-links` (`m0/04`) takes `send_email` (B20).
 Schemas: `EmailSender { kind, status: "pending" | "verified" | "disabled", from_name, from_address,
 smtp?: { host, port, tls, username }, domain?: { domain, dns_records: [{ type, name, value }] },
 verified_at, last_error }` (never the password or private key); `EmailTemplate { kind, category,
@@ -281,7 +298,7 @@ message is sent, failed or skipped, so a sealed link lives only while it is wait
 | `perm::EmailManage` | `email.manage` | organization | Organization admin |
 
 Entitlement feature: `custom_email_sender` (`feature::CustomEmailSender`), added to the catalog
-(`10` Q1's pattern), checked on sender setup and verification (B7). Templates are not gated: the
+(`m0/10` Q1's pattern), checked on sender setup and verification (B7). Templates are not gated: the
 plan gives every organization editable templates.
 
 ## Test cases
@@ -331,12 +348,17 @@ crate after `dependency-researcher`), never the network; DNS tests against a stu
 - **T15** (B16). Messages older than 90 days are deleted (manual clock).
 - **T16** (every route). Four cases for the admin routes: anonymous 401; every permission but
   `email.manage` 403; the wrong-scope case recorded as not applicable (organization-only
-  permission, `09` B20); `email.manage` alone 2xx. With a test plan lacking
+  permission, `m0/09` B20); `email.manage` alone 2xx. With a test plan lacking
   `custom_email_sender`, sender setup answers 403 `entitlement.feature_unavailable` while `GET` and
   `DELETE` work.
 - **T17** (every route). Cross-organization: org A's admin's sender, templates and messages never
   include org B's; org B's sender and templates are unchanged; an unsubscribe token of org B
   changes only org B's user.
+
+- **T18** (B22, after Q8). Sign-up with a new address and with an existing one each answer 202 and
+  send the matching email; the link works once and expires after 24 hours; in sync-only mode or
+  with sign-up off the link creates no user; with the users limit reached it answers
+  `entitlement.limit_reached`.
 
 ## Out of scope
 
@@ -353,8 +375,8 @@ crate after `dependency-researcher`), never the network; DNS tests against a stu
 
 ## Open questions
 
-Each question below was delegated by the owner to the coordinator; each recommendation is taken
-and stands until the owner reviews it.
+Q1 to Q7 were delegated by the owner to the coordinator; each recommendation is taken and stands
+until the owner reviews it. Q8 is the owner's and stays open.
 
 - **Q1. An instance without email.** As with storage (`06` Q1), requiring SMTP would stop every
   M0 installation at its first M1 start. Options: (a) optional: the server starts, sending routes
@@ -377,7 +399,7 @@ and stands until the owner reviews it.
   before building).
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
 - **Q4. Gating custom senders.** Options: (a) a `custom_email_sender` feature on sender setup,
-  everything enabled on `unlimited`; (b) no feature. Recommendation: (a), as `10` Q1 gates other
+  everything enabled on `unlimited`; (b) no feature. Recommendation: (a), as `m0/10` Q1 gates other
   capabilities a paid tier could hold back; the fallback keeps email working without it.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
 - **Q5. Keeping the email log.** Options: (a) metadata only, 90 days; (b) full rendered bodies, 90
@@ -395,6 +417,15 @@ and stands until the owner reviews it.
   from its sender or "via Stepclimb"); (b) platform email. Recommendation: (a).
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
 
+- **Q8. Local self sign-up (open, for the owner).** `m0/04` Q6 (owner, 13 Nov 2026) put local self
+  sign-up after M1 email verification; the plan says only "self sign-up (if enabled)". The shape is
+  the owner's. Options: (a) B22: a verify-your-address email whose link creates the user and goes
+  on into passkey or password setup, gated by `admission.signup_allowed` and sync-only mode;
+  (b) the user is created at once, inactive until the address is verified; (c) no local self
+  sign-up in M1 (only through identity providers and admins). Recommendation: (a): no account
+  exists for an unverified address, and every existing gate (sign-up switch, sync-only, users
+  limit) applies.
+
 ## Issues
 
 1. **I1. Platform sender, messages and the send job.** `lettre` (pinned, own commit), the SMTP
@@ -406,7 +437,7 @@ and stands until the owner reviews it.
 2. **I2. Unsubscribe.** Tokens, the RFC 8058 headers, the `POST` route with its CSRF exemption and
    rate limit, the confirmation page. Covers B17, B18; T11, T12. Depends on: I1.
 3. **I3. Callers.** Announcement emails, enrollment links by email, security notices, and the
-   `queue` hook `04` I8 uses for magic links. Covers B19 to B21; T13, T14. Depends on: I1, I2.
+   `queue` hook `m0/04` I8 uses for magic links. Covers B19 to B21; T13, T14. Depends on: I1, I2.
 4. **I4. SMTP senders.** `email_senders` and codes migration, `email.manage` and the
    `custom_email_sender` feature, sender routes, the address policy, verification by code, the
    fallback and failure handling, the email messages list. Covers B3 to B5, B7; T2 to T4, T16,
@@ -416,3 +447,6 @@ and stands until the owner reviews it.
 6. **I6. Domain senders.** DKIM key generation and signing, DNS records, verification through a
    resolver (pinned after `dependency-researcher`, own commit), the daily re-check. Covers B6;
    T5. Depends on: I4.
+7. **I7. Local self sign-up.** The sign-up route, the `signup_verification` kind and template, the
+   verification page, and the hand-off to admission and enrollment (`m0/04`, `m0/07`). Covers B22;
+   T18. Depends on: I3, `m0/04` I2. **Blocked on Q8 (owner).**

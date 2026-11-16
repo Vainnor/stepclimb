@@ -118,7 +118,7 @@ watched percentage.
 ## API
 
 Common errors as in `../m0/02-organizations-and-accounts.md` -> API; unsafe methods also answer
-`08`'s CSRF refusals; writes in an archived course answer 409 `course.archived`.
+`m0/08`'s CSRF refusals; writes in an archived course answer 409 `course.archived`.
 
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
@@ -127,7 +127,7 @@ Common errors as in `../m0/02-organizations-and-accounts.md` -> API; unsafe meth
 | `POST /api/v1/items/{item_id}/watch` | `{ segments, position_s, idempotency_key }` | 200 `WatchState` | 404 `item.not_found`, 403 `item.locked`, 409 `course.archived`, 409 `video.duration_missing` (only for completing), 422 | `perm::CourseParticipate` (the item's course) |
 | `GET /api/v1/items/{item_id}/watch-progress` | `?cursor&limit` | 200 `Page<LearnerWatch>` | 404 | `perm::CourseView`, then `progress.view` or `progress.view_observed` (`05` B20) |
 
-Changed: `08`'s `POST /api/v1/items/{item_id}/video-session` serves linked sources (B4) and
+Changed: `m0/08`'s `POST /api/v1/items/{item_id}/video-session` serves linked sources (B4) and
 carries `watch: { percent, watched_ranges, position_s }` for a learner. Schemas: `WatchState {
 percent, watched_s, duration_s, position_s, completed }`; `LearnerWatch { user: { id,
 display_name }, percent, watched_s, last_report_at }`. `OrgSettings` gains
@@ -212,6 +212,11 @@ Entitlements: none (linked videos store nothing).
   finds no violation.
 - **T10** (B14). An Instructor lists both learners' percents; an Observer sees only observed
   learners.
+- **T10a** (B14). `GET /items/{id}/watch-progress` takes `Require<perm::CourseView>` and decides in
+  the handler, so the permission suite has one entry for `progress.view` and one for
+  `progress.view_observed`, each with its own cases. Explicit tests: a Student gets 403
+  `permission.denied`; a caller holding only `course.view` gets 403 `permission.denied`; an
+  Observer with no observed learner who watched gets 200 with an empty list.
 - **T11** (every route). Four cases: anonymous 401; every permission but the route's at the course
   403; every permission at a sibling account 404; only the route's permission 2xx.
 - **T12** (every route). Cross-organization: org A's admin with org B's course, video or item ids
@@ -268,7 +273,9 @@ taken and stands until the owner reviews it. Q3 is the owner's and stays open.
    T12 for these routes. Depends on: `08-uploaded-video.md` I3.
 2. **I2. Watch recording.** `video_progress` and `watch_reports`, the watch route with clamping,
    the cap, merging, percent, view and completion through `complete_item`, the recompute job, the
-   staff read, the lock suite entry. Covers B8 to B14; T4 to T8, T10 to T12. Depends on: I1,
+   staff read with one permission-suite entry per granting permission, the lock suite entry, and
+   `video_progress` and `watch_reports` added to `05` B15's enrollment deletion (with its T12
+   case). Covers B8 to B14; T4 to T8, T10 to T12. Depends on: I1,
    `05-progress-and-events.md` I3.
 3. **I3. VideoPlayer.** The component with hls.js (pinned after `dependency-researcher`, own
    commit), the YouTube and Vimeo adapters, the segment tracker and reporting, captions and

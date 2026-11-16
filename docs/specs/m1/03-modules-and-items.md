@@ -105,11 +105,11 @@ names that cannot be created. Unlock and completion rules are spec 04.
 
 ### Deep links and the return URL
 
-- **B16.** The web app route `/c/:course/m/:module/i/:item` (`11` B7) takes ids. It loads
+- **B16.** The web app route `/c/:course/m/:module/i/:item` (`m0/11` B7) takes ids. It loads
   `GET /api/v1/items/{item}`; when the item's `module_id` and `course_id` match the path it opens
-  the item in the course layout, and otherwise, or on any 404, it shows the not-found view (`11`
-  B27). Without a session it goes through sign-in with the deep link as `return_to` (`08` B19,
-  `11`), so a link from a host site lands on the item after sign-in. `/c/:course` and
+  the item in the course layout, and otherwise, or on any 404, it shows the not-found view (`m0/11`
+  B27). Without a session it goes through sign-in with the deep link as `return_to` (`m0/08` B19,
+  `m0/11`), so a link from a host site lands on the item after sign-in. `/c/:course` and
   `/c/:course/m/:module` open the course home and the module.
 - **B17.** A deep link may carry `?return=<url>`, the plan's optional return URL (Q2). The web app
   keeps it for the browser tab's session (`sessionStorage`) and shows a "Back to <host>" link in
@@ -120,12 +120,12 @@ names that cannot be created. Unlock and completion rules are spec 04.
   silently, never shown. The setting holds at most 20 origins, each `https://host[:port]`
   without a path (422 `request.invalid`, `settings.return_origin_invalid` at the entry).
 - **B18.** `return` survives the sign-in round trip because the deep link, query included, is the
-  `return_to` path; `08` B19's rules for that path still apply.
+  `return_to` path; `m0/08` B19's rules for that path still apply.
 
 ## API
 
 Common errors as in `../m0/02-organizations-and-accounts.md` -> API; unsafe methods also answer
-`08`'s CSRF refusals; every write in an archived course answers 409 `course.archived`.
+`m0/08`'s CSRF refusals; every write in an archived course answers 409 `course.archived`.
 
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
@@ -286,7 +286,7 @@ and stands until the owner reviews it.
   learner records as a side effect of editing.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
 - **Q4. Size limits.** The plan sets none. Options: (a) 200 modules per course and 200 items per
-  module, 200-character titles (the `02` Q6 name limit); (b) no limits. Recommendation: (a). One
+  module, 200-character titles (the `m0/02` Q6 name limit); (b) no limits. Recommendation: (a). One
   outline response and one copy transaction stay bounded (40,000 items at most).
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
 

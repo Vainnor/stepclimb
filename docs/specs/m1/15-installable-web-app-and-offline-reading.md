@@ -26,15 +26,15 @@ locked is ever downloaded, and signing out removes every download.
 ### Installing
 
 - **B1.** The server serves `GET /manifest.webmanifest` (`application/manifest+json`, no
-  authentication, from the request's organization, `02` B11): `name` and `short_name` from the
+  authentication, from the request's organization, `m0/02` B11): `name` and `short_name` from the
   organization's name (`short_name` cut to 12 characters), `start_url: "/"`, `scope: "/"`,
   `display: "standalone"`, `theme_color` and `background_color` from the organization's light
-  theme (`brand` and `bg-canvas`, `12`), and Stepclimb's default icons (192 and 512 px, plus a
+  theme (`brand` and `bg-canvas`, `m0/12`), and Stepclimb's default icons (192 and 512 px, plus a
   maskable 512 px), which this spec adds to the web build from the default brand (ADR 0014).
-  Organization icons arrive with logo upload (`12` Q6), not here.
-- **B2.** `web/index.html` links the manifest and sets `theme-color`, `viewport-fit=cover`
-  (already set by `11`) and the `apple-touch-icon`. The app adds no install prompt of its own in M1
-  (Q3); browsers offer installation.
+  Organization icons arrive with logo upload (`m0/12` Q6), not here.
+- **B2.** `web/index.html` links the manifest and sets `theme-color`, `viewport-fit=cover` (already
+  set by `m0/11`) and the `apple-touch-icon`. The app adds no install prompt of its own in M1 (Q3);
+  browsers offer installation.
 
 ### The service worker
 
@@ -84,7 +84,7 @@ locked is ever downloaded, and signing out removes every download.
   route answering 404 or 403 deletes the download (the learner lost access); a different `version`
   shows "Update available" on the course and the DownloadButton refreshes it on request. A
   download older than 30 days without a successful check is deleted (Q4).
-- **B12.** Signing out (`11` B12) deletes every offline cache, every package and the progress
+- **B12.** Signing out (`m0/11` B12) deletes every offline cache, every package and the progress
   queue before the sign-in screen shows; when a different user signs in on the same browser, any
   data of another user found is deleted first. The account page lists downloads with their sizes
   and a "Remove" action.
@@ -98,7 +98,7 @@ locked is ever downloaded, and signing out removes every download.
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
 | `GET /api/v1/courses/{course_id}/offline` | | 200 `OfflinePackage` | 404 `course.not_found`, 403 `offline.disabled`, 503 `storage.not_configured` (only when the package would hold files) | `perm::CourseView` (course) |
-| `GET /manifest.webmanifest` | | 200 manifest | 404 `org.not_found`, 503 `org.none` (`02` B11) | none (public, listed in the walker) |
+| `GET /manifest.webmanifest` | | 200 manifest | 404 `org.not_found`, 503 `org.none` (`m0/02` B11) | none (public, listed in the walker) |
 | `GET /sw.js` | | 200 the worker | | none (a static asset of the web build) |
 
 Schemas: `OfflinePackage { version, size_bytes, course, modules: [Module with items: [Item &
@@ -143,7 +143,7 @@ rules. Entitlements: none (Q5).
   `course.view` 403; a sibling account's grants 404; `course.view` alone 200.
   Cross-organization: org A's admin with org B's course id gets 404.
 - **T11** (B2, cross-platform). WebKit in Playwright at 375 px: the installed-mode layout keeps
-  fixed bars inside the safe areas (`11`); the iOS home-screen check is by hand, recorded in the
+  fixed bars inside the safe areas (`m0/11`); the iOS home-screen check is by hand, recorded in the
   PR as run or not run.
 
 ## Out of scope
@@ -174,7 +174,8 @@ and stands until the owner reviews it.
 - **Q3. An install prompt.** Options: (a) none: browsers offer installation, and iOS needs "Add to
   Home Screen" from the share sheet; (b) a custom prompt with instructions per browser.
   Recommendation: (a) in M1; M4 Web Push needs the iOS home-screen install and can add instructions
-  then. Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
+  then.
+  Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
 - **Q4. How long downloads live.** Options: (a) until removed, signed out, access lost, or 30 days
   without a successful check; (b) until removed; (c) 7 days. Recommendation: (a): content a
   learner no longer has a right to does not stay on the device for long.

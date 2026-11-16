@@ -58,7 +58,7 @@ player and watch tracking are spec 09; this spec makes a video ready to play.
   stored offset appends the body (409 `video.upload_offset_mismatch` otherwise) and answers 204
   with the new offset; `DELETE` ends the upload and deletes the video and its parts. Each request
   needs `perm::CourseContentEdit` at the video's course and runs the same CSRF checks as every
-  unsafe route (`08`); the tus `Tus-Resumable` header is required and answered.
+  unsafe route (`m0/08`); the tus `Tus-Resumable` header is required and answered.
 - **B6.** Each `PATCH` body is stored as its own object `orgs/<org>/videos/<id>/upload/<offset>`
   and its length added to the row in one statement under the row's lock, so any server of the
   instance can take the next chunk and no chunk is buffered whole in memory. A chunk is at most 64
@@ -135,6 +135,16 @@ player and watch tracking are spec 09; this spec makes a video ready to play.
   and the HLS types (`application/vnd.apple.mpegurl`, `video/mp2t` or `video/mp4`). Playlists hold
   only relative segment names, so every segment URL carries the same token and nothing is
   rewritten. An expired token answers 404; the player asks for a new session and resumes.
+- **B18a.** Cross-origin clients. The web app plays media from its own origin, so it needs no CORS.
+  hls.js fetches playlists and segments with `fetch`/XHR, which a client on another origin (the
+  Tauri app's bundle origin) can read only with CORS. `/media/` and `/files/` responses therefore
+  add `Access-Control-Allow-Origin: <origin>` and `Vary: Origin` when the request's `Origin` is in
+  the server's allowed origins (`m0/08`'s allowlist, `STEPCLIMB_ALLOWED_ORIGINS`), and answer an
+  `OPTIONS` preflight for `GET` with the `Range` header allowed and `Content-Range` and
+  `Content-Length` exposed; no credentials are allowed (the token is in the path). Evidence points
+  at `Cross-Origin-Resource-Policy: same-origin` blocking a cross-origin `<video>` or `<img>` load
+  in WebKit, which would block the Tauri app even with CORS; spec 17 I1 checks it on the device
+  (Q5), and until then CORP stays `same-origin`.
 - **B19.** Every route that serves bytes answers 503 `storage.not_configured` when storage is not
   configured (`06` B1a).
 
@@ -147,8 +157,8 @@ player and watch tracking are spec 09; this spec makes a video ready to play.
   it; the last detach deletes the video.
 - **B21.** `Limit::VideoStorage` (`video_storage`, bytes) counts `storage_bytes` of the
   organization's videos plus incomplete upload lengths; `Limit::TranscodeMinutes`
-  (`transcode_minutes`, per calendar month) counts `transcode_usage` for the current month. `10` B2
-  names both; this spec adds them to `feature::Limit`.
+  (`transcode_minutes`, per calendar month) counts `transcode_usage` for the current month. `m0/10`
+  B2 names both; this spec adds them to `feature::Limit`.
 
 ### VideoUploader
 
@@ -160,8 +170,8 @@ player and watch tracking are spec 09; this spec makes a video ready to play.
 ## API
 
 Common errors as in `../m0/02-organizations-and-accounts.md` -> API; unsafe methods also answer
-`08`'s CSRF refusals; writes in an archived course answer 409 `course.archived`; byte routes answer
-503 `storage.not_configured` (B19).
+`m0/08`'s CSRF refusals; writes in an archived course answer 409 `course.archived`; byte routes
+answer 503 `storage.not_configured` (B19).
 
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
@@ -288,7 +298,7 @@ stays in `stepclimb-core`.
 
 No new catalog entry: uploads, captions and chapters take `perm::CourseContentEdit`, staff reads
 `perm::CourseViewAll`, learner playback `perm::CourseView` with the lock check. Entitlements:
-`Limit::VideoStorage` and `Limit::TranscodeMinutes` (B21), named by `10` B2; `unlimited` leaves
+`Limit::VideoStorage` and `Limit::TranscodeMinutes` (B21), named by `m0/10` B2; `unlimited` leaves
 both `null`. No feature flag: video is core (plan, Decided).
 
 ## Test cases
@@ -338,6 +348,12 @@ sources, 3 s), never a downloaded file. Storage tests use the gate's MinIO and a
 - **T16** (every route). Cross-organization: org A's admin with org B's course, video, upload or
   item ids gets 404; org B's videos, uploads, objects and usage rows are unchanged; a media token
   issued in org B cannot be edited to reach org A's objects.
+- **T17** (I6). `bin/check-image.sh` runs `ffmpeg -version` and `ffprobe -version` in the amd64 and
+  arm64 images and transcodes a 1 s `testsrc` clip to a 360p HLS rendition inside each; the image's
+  `LICENSES/` holds ffmpeg's license and source offer.
+- **T18** (B18a). A `GET` of a media playlist with `Origin` in the allowlist gets
+  `Access-Control-Allow-Origin` echoing it and `Vary: Origin`; with another `Origin`, no CORS
+  header; a preflight for `GET` with `Range` succeeds; no response allows credentials.
 
 ## Out of scope
 
@@ -379,15 +395,28 @@ and stands until the owner reviews it.
 - **Q5. Signed delivery for HLS.** A playlist names many segments. Options: (a) a token in the
   path that covers one video's output prefix for 2 hours, so relative segment names work
   unchanged; (b) the server rewrites each playlist with a signed URL per segment; (c) a cookie
-  scoped to `/media/`. Recommendation: (a). One token per session, no playlist rewriting, works in
-  Safari's native player and the Tauri app; 2 hours covers a long lecture, and the player renews
-  the session on 404.
+  scoped to `/media/`. Recommendation: (a). One token per session and no playlist rewriting; 2
+  hours covers a long lecture, and the player renews the session on 404. Evidence points at it
+  working in Safari's native player, since relative segment URLs keep the token; for the Tauri app
+  it depends on B18a's CORS and on whether CORP `same-origin` blocks a cross-origin media load,
+  which spec 17 I1 checks. If it blocks, an issue against this spec sets CORP to `cross-origin` on
+  `/media/` and `/files/`, leaving access control to the token.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
 - **Q6. Where the videos table's courses come from.** The data model's `videos` has no course.
   Options: (a) a `course_videos` join, so copies share renditions; (b) `videos.course_id`, with
   copies duplicating rows that point at shared objects; (c) no link, any video of the
   organization usable anywhere. Recommendation: (a), the shape `course_files` uses.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
+- **Q7. How ffmpeg gets into the image.** The plan says "the image bundles ffmpeg" and the images
+  are distroless and non-root; today's final stage holds only the binary. Options: (a) copy a
+  pinned static ffmpeg and ffprobe build (version and checksum pinned, per architecture) into the
+  distroless image; (b) build ffmpeg from source in a Dockerfile stage with only the codecs B11
+  needs, a long cold build for two architectures (ADR 0021's long jobs); (c) a second image for
+  `--role transcoder` on a Debian base with Debian's ffmpeg, leaving the main image without it.
+  Recommendation: (a), the plan's single image with the smallest change, subject to
+  `dependency-researcher` finding a static build with a published source and license; I6 records
+  the choice in an ADR for the owner.
+  Coordinator decision (overnight, 2026-11-16): (a), pending owner review and I6's ADR.
 
 ## Issues
 
@@ -398,16 +427,27 @@ and stands until the owner reviews it.
    on: `06-files.md` I2, `01-job-queue-and-outbox.md` I3.
 2. **I2. Transcoder.** `stepclimb-media`'s ffmpeg runner with the B10 limits, the
    `video.transcode` job, outputs and their upload, `--role transcoder` and its settings, the
-   startup ffmpeg check, `Limit::TranscodeMinutes` with `transcode_usage`, retry; the image's
-   ffmpeg (already bundled, checked by the image test). Covers B8 to B13, B21 (minutes); T4 to T8,
-   T13. Depends on: I1, `01-job-queue-and-outbox.md` I2.
+   startup ffmpeg check, `Limit::TranscodeMinutes` with `transcode_usage`, retry. Developed and
+   tested with the dev shell's ffmpeg; the release image gets ffmpeg in I6. Covers B8 to B13, B21
+   (minutes); T4 to T8, T13. Depends on: I1, `01-job-queue-and-outbox.md` I2.
 3. **I3. Playback sessions and media delivery.** The two session routes, prefix tokens,
-   `/media/<token>/<path>`, `video` items with the lock suite entry, detach and delete. Covers B3,
-   B17 to B20; T11, T12, T15 and T16 for these routes. Depends on: I2, `06-files.md` I3,
-   `04-unlock-and-completion-rules.md` I3.
+   `/media/<token>/<path>` with B18a's CORS, `video` items with the lock suite entry, detach and
+   delete. Covers B3, B17 to B20, B18a; T11, T12, T15 and T16 for these routes. Depends on: I2, I6,
+   `06-files.md` I3, `04-unlock-and-completion-rules.md` I3.
 4. **I4. Captions and chapters.** `video_captions` migration, WebVTT validation, caption and
    chapter routes, captions in sessions, copy attaching videos. Covers B14 to B16, B1 (copy); T9,
    T10. Depends on: I3, `02-courses-and-enrollments.md` I3.
 5. **I5. VideoUploader.** The component with tus-js-client (pinned after `dependency-researcher`,
    own commit) or a small client of our own if research finds it too large, and the authoring
    screen's video panel. Covers B22; T14. Depends on: I1.
+6. **I6. ffmpeg and ffprobe in the image.** The final image stage of `deploy/Dockerfile` is
+   `gcr.io/distroless/cc-debian12` with only the `stepclimb` binary; nothing bundles ffmpeg today.
+   This issue adds `ffmpeg` and `ffprobe` (Q7), pinned by version and checksum, at
+   `/usr/local/bin`, for amd64 and arm64; extends `bin/check-image.sh` to run `ffmpeg -version`
+   and `ffprobe -version` in both architectures and to transcode a 1 s `testsrc` clip to one HLS
+   rendition inside the image; and writes an ADR (Proposed, for the owner) on the build used and
+   its license. A build with libx264 is GPL, a separate program the AGPL server runs as a child
+   process: the ADR records the license, the source offer the image must carry (`LICENSES/` in
+   the image and the release notes) and why it is compatible, after `dependency-researcher`.
+   Covers T17. Depends on: I2. I3 waits for it, so no release ships uploads without a
+   transcoder.

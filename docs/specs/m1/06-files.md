@@ -35,7 +35,7 @@ inline in a preview. A plan's `storage` limit bounds what an organization stores
   `storage_s3_access_key_id`, `storage_s3_secret_access_key` (with `_FILE`) and
   `storage_s3_allow_http` (for a local MinIO). When `storage_url` is set, `serve` checks at
   startup that it can write, read and delete a probe object under `<prefix>/.probe/` and refuses
-  to start, naming the probe failure, when it cannot; S3 settings without `storage_url`, or an
+  to start, naming the probe failure, when it cannot; S3 settings without `storage_url`, or a
   `storage_url` that does not parse, stop startup naming the setting. `check-config` validates the
   values without connecting.
 - **B1a.** Storage is optional, so an M0 installation upgrades without new settings (Q1). Without
@@ -58,10 +58,10 @@ inline in a preview. A plan's `storage` limit bounds what an organization stores
   409 `course.archived`. A missing `Content-Length` answers 411 `file.length_required`.
 - **B4.** Before reading the body the server refuses, in order: a length above `max_file_bytes`
   (instance setting, default 100 MiB, 1 MiB to 5 GiB; 413 `file.too_large`, Q2); a `name` or
-  `folder` that breaks B9's rules (422); a name already used in that folder (409
-  `file.name_taken`); and a length that does not fit the plan's `storage` limit
-  (`Entitlements::check_room(Limit::Storage, length)`, 403 `entitlement.limit_reached`, `10` B10).
-  The route's body limit is `max_file_bytes`, replacing axum's 2 MiB for this route only.
+  `folder` that breaks B9's rules (422); a name already used in that folder (409 `file.name_taken`);
+  and a length that does not fit the plan's `storage` limit
+  (`Entitlements::check_room(Limit::Storage, length)`, 403 `entitlement.limit_reached`, `m0/10`
+  B10). The route's body limit is `max_file_bytes`, replacing axum's 2 MiB for this route only.
 - **B5.** The server streams the body to a temporary key `orgs/<org_id>/uploads/<uuid>` with a
   multipart upload while computing its SHA-256 and counting its bytes; a body whose byte count
   differs from `Content-Length` answers 400 `request.malformed` and the temporary object is
@@ -162,12 +162,12 @@ inline in a preview. A plan's `storage` limit bounds what an organization stores
   and retried on the next run (a key for which no row exists).
 - **B22.** `Limit::Storage` (`storage`, bytes) counts the sum of `size` over the organization's
   `files` rows (`files::count_for_limit`), so a file shared by several courses counts once.
-  `10` B2 names the limit; this spec adds it to `feature::Limit`.
+  `m0/10` B2 names the limit; this spec adds it to `feature::Limit`.
 
 ## API
 
 Common errors as in `../m0/02-organizations-and-accounts.md` -> API; unsafe methods also answer
-`08`'s CSRF refusals; writes in an archived course answer 409 `course.archived`.
+`m0/08`'s CSRF refusals; writes in an archived course answer 409 `course.archived`.
 
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
@@ -263,12 +263,13 @@ referenced}`. `stepclimb-media` is not involved: it is spec 08's.
 No new catalog entry: uploads and edits take `perm::CourseContentEdit`, the files area and staff
 URLs `perm::CourseViewAll`, learner URLs `perm::CourseView` with the lock check
 (`02-courses-and-enrollments.md`). Entitlements: `Limit::Storage` (`storage`, bytes), named by
-`10` B2 and added here; `unlimited` leaves it `null`.
+`m0/10` B2 and added here; `unlimited` leaves it `null`.
 
 ## Test cases
 
-Storage tests run against the Compose MinIO in the gate's stack and against a temporary local
-directory; no test reaches the network outside the stack. The permission suite gains
+Storage tests run against a MinIO in the gate's own Compose project (I1 adds it: today the gate's
+stack has PostgreSQL only, and `deploy/compose/compose.yaml`'s MinIO serves `just up`) and against a
+temporary local directory; no test reaches the network outside the stack. The permission suite gains
 `CourseFileTarget`.
 
 - **T1** (B1). With a store it cannot write, `serve` exits naming the probe failure; S3 settings
@@ -313,8 +314,11 @@ directory; no test reaches the network outside the stack. The permission suite g
   `sandbox`; an SVG or HTML file with an inline token gets `attachment`, `nosniff` and `sandbox`; a
   name with non-ASCII characters is encoded with `filename*`; `Range: bytes=0-99` answers 206 with
   100 bytes; `Range: bytes=999999-` answers 416; `If-None-Match` with the hash answers 304.
-- **T15** (B18). Playwright on Chromium: a PDF item shows the preview frame or its fallback and a
-  download button whose URL has `attachment`; an image item shows the image. Screenshots in the
+- **T15** (B18, Q8). Playwright on Chromium, Firefox and WebKit: a PDF item shows the preview
+  frame with the PDF rendered (checked by a screenshot that is not the fallback) or, where a
+  browser shows no inline PDF, the fallback with a working download; the download button's URL has
+  `attachment`; an image item shows the image. Each browser's outcome is recorded in the PR, and a
+  browser where neither works fails the test. Screenshots in the
   default and vZDC themes, light and dark, at 1280 and 375 px. The iOS WKWebView check runs with
   the spec 17 iPhone test and is recorded as not run until then.
 - **T16** (B19). A PDF as cover answers 422 `course.cover_invalid`; a PNG cover gives `cover_url`
@@ -416,12 +420,13 @@ and stands until the owner reviews it.
 
 ## Issues
 
-1. **I1. Storage and the files table.** `object_store` (pinned after `dependency-researcher`, in
-   its own commit), the storage configuration and startup probe, Compose settings, the `files`
-   and `course_files` migration and repositories, `Limit::Storage`, and the not-configured
-   answer. Covers B1, B1a, B2, B22; T1, T1a (for the routes that exist by then; I2 and I3 extend
-   T1a to theirs).
-   Depends on: `02-courses-and-enrollments.md` I1.
+1. **I1. Storage and the files table.** `object_store` (pinned after `dependency-researcher`, in its
+   own commit), the storage configuration and startup probe, Compose settings, the `files` and
+   `course_files` migration and repositories, `Limit::Storage`, the not-configured answer, and a
+   MinIO service with its own slot port in the gate's per-run Compose project (`bin/ci_gate.py`),
+   with the bucket created at start, so storage tests run inside `just ci`. Covers B1, B1a, B2, B22;
+   T1, T1a (for the routes that exist by then; I2 and I3 extend T1a to theirs). Depends on:
+   `02-courses-and-enrollments.md` I1.
 2. **I2. Upload and the files area.** The upload route with streaming, hashing, sniffing,
    dedupe and the limit check; listing, rename, folder rename, delete; `CourseFileTarget`;
    `files.cleanup` for temporary objects and unreferenced files. Covers B3 to B12, B21; T2 to

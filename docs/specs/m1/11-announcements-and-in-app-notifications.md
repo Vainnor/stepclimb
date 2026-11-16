@@ -11,11 +11,12 @@
 - **Depends on:** `01-job-queue-and-outbox.md` (outbox, jobs), `02-courses-and-enrollments.md`
   (courses, enrollments, accounts), `07-pages-and-the-editor.md` (the document model and renderer
   for announcement bodies)
-- **Review:** standard
+- **Review:** maintainer line-by-line (a new permission and its grants, and who receives
+  account-wide messages)
 
 ## Summary
 
-Instructors post announcements to a course, and account admins to every course in an account's
+Staff post announcements to a course, or to every course in an account's
 subtree. Posting writes an event; a job turns it into one in-app notification per recipient, and
 spec 12 sends the email copy to those whose preferences allow it. Each user has a notification
 list with an unread count behind the bell, and one place to choose, per kind of notification and
@@ -44,7 +45,7 @@ preferences so nothing changes shape then.
   served as HTML from spec 07's renderer.
 - **B5.** Deleting an announcement (`perm::AnnouncementPost` at its scope) deletes it and the
   notifications it made. Every post, edit and delete writes an audit entry
-  (`announcement.create`, `announcement.update`, `announcement.delete`; `09` B22), because an
+  (`announcement.create`, `announcement.update`, `announcement.delete`; `m0/09` B22), because an
   account-wide post reaches many people.
 
 ### From event to notification
@@ -81,7 +82,7 @@ preferences so nothing changes shape then.
   partially (422 `notification.required` for turning off a required channel, 422
   `notification.kind_unknown`). An organization cannot change a user's preferences in M1 (Q4).
 - **B12.** The bell in the top bar shows the unread count (polled every 60 s and on focus) and
-  opens the list in a popover on wide screens and as the Notifications tab under 768 px (`11`'s
+  opens the list in a popover on wide screens and as the Notifications tab under 768 px (`m0/11`'s
   layout). Each entry links to its target; opening it marks it read. The preferences live on the
   account page (`/account`).
 - **B13.** `GET /api/v1/me/dashboard` (`10` B4) gains `announcements`: the three most recent
@@ -91,7 +92,7 @@ preferences so nothing changes shape then.
 ## API
 
 Common errors as in `../m0/02-organizations-and-accounts.md` -> API; unsafe methods also answer
-`08`'s CSRF refusals.
+`m0/08`'s CSRF refusals.
 
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
@@ -171,7 +172,7 @@ CREATE TABLE notification_preferences (       -- not in the data model: B10
 );
 ```
 
-`scope_id` has no foreign key (course or account by `scope_type`), as `role_assignments` (`09`);
+`scope_id` has no foreign key (course or account by `scope_type`), as `role_assignments` (`m0/09`);
 the repository checks it, and `courses`/`accounts` deletion paths check for announcements (`02`
 B21's delete refuses an account with announcements: 409 `account.has_announcements`, added here).
 Only rows that differ from the default are stored in `notification_preferences`.
@@ -180,14 +181,14 @@ Only rows that differ from the default are stored in `notification_preferences`.
 
 | Permission | Key | Grantable at | Built-in roles (M1) |
 | --- | --- | --- | --- |
-| `perm::AnnouncementPost` | `announcement.post` | organization, account, course | Organization admin, Account admin, Instructor |
+| `perm::AnnouncementPost` | `announcement.post` | organization, account, course | Organization admin (through `perm::ALL`); Account admin and Instructor pending Q5 (the owner's) |
 
 Entitlements: none.
 
 ## Test cases
 
-- **T1** (B1, B2). An Instructor posts to their course (201); a Student gets 403; a body with an
-  image node answers 422 `page.body_invalid`; an archived course answers 409.
+- **T1** (B1, B2). A user holding `announcement.post` at the course posts (201); a Student gets 403;
+  a body with an image node answers 422 `page.body_invalid`; an archived course answers 409.
 - **T2** (B3, B6). A course announcement notifies every active enrollment's user once (a user
   with two roles gets one), not concluded ones, not suspended users, not the author; an account
   announcement notifies users enrolled in published courses of the subtree, once each.
@@ -205,9 +206,18 @@ Entitlements: none.
   to the caller.
 - **T8** (B5). Deleting an announcement deletes its notifications and writes one audit entry.
 - **T9** (B1). Editing does not create notifications and sets `edited_at`.
-- **T10** (B12). Playwright: an Instructor posts; a Student sees the bell count, opens the list,
-  follows the link and the count drops. Screenshots of the bell, list and preferences in the
-  default and vZDC themes, light and dark, at 1280 and 375 px; axe finds no violation.
+- **T10** (B12). Playwright: a user holding `announcement.post` posts; a Student sees the bell
+  count, opens the list, follows the link and the count drops. Screenshots of the bell, list and
+  preferences in the default and vZDC themes, light and dark, at 1280 and 375 px; axe finds no
+  violation.
+- **T11a** (B4, `GET /api/v1/announcements/{announcement_id}`). The read route decides in the
+  handler, so the permission suite has one entry per way in: `course.view` at the announcement's
+  course (course announcements), `announcement.post` at its scope, and being a recipient
+  (`AuthOnly` with the recipient check), each with its own cases. Explicit tests: a Student of
+  another course gets 404 for a course announcement; a Student whose only grant is `course.view`
+  in a course of the account, and who is not a recipient (enrolled only after it was posted), gets
+  403 `permission.denied` for an account announcement; `GET /api/v1/me/announcements` for a user
+  with no enrollment answers an empty list.
 - **T11** (every route). Four cases for the permission routes (anonymous 401; every permission but
   `announcement.post` at the scope 403; every permission at a sibling account 404; only the
   permission 2xx) and `AuthOnly` cases for the `/me` routes.
@@ -224,8 +234,9 @@ Entitlements: none.
 
 ## Open questions
 
-Each question below was delegated by the owner to the coordinator; each recommendation is taken
-and stands until the owner reviews it.
+Q1 to Q4 were delegated by the owner to the coordinator; each recommendation is taken and stands
+until the owner reviews it. Q5 extends the plan's role definitions, so it is the owner's and stays
+open.
 
 - **Q1. Drafts and scheduling.** Options: (a) posting publishes at once, edits never re-notify;
   (b) drafts and a scheduled publish time; (c) (a) plus drafts. Recommendation: (a), the plan's
@@ -246,11 +257,24 @@ and stands until the owner reviews it.
   settings if asked.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
 
+- **Q5. Which built-in roles post announcements (open, for the owner).** The plan's role table
+  does not mention announcements: Instructor has "designer permissions plus grading, overrides,
+  accommodations and enrollments", Account admin "courses, users, roles and reports within an
+  account subtree". Giving either `announcement.post` extends those definitions. Options: (a)
+  Account admin (account and its courses) and Instructor (their courses) as well as Organization
+  admin; (b) Organization admin only, others through custom roles; (c) (a) plus Course designer.
+  Recommendation: (a): an announcement is how instructors reach their learners, and an account
+  admin runs the account's courses. Until the owner answers, only Organization admin holds it
+  (through `perm::ALL`) and organizations grant it through custom roles; I1 adds it to no other
+  built-in list.
+
 ## Issues
 
 1. **I1. Announcements.** Migration, `announcement.post` in the catalog and roles, the course and
    account routes, the read route's rules, the body subset on spec 07's model and renderer, the
-   event, audit entries, account deletion check. Covers B1 to B5; T1, T7 to T9, T11 and T12 for
+   event, audit entries, account deletion check, and one permission-suite entry per way into the
+   read route. The built-in grants follow Q5 (owner). Covers B1 to B5; T1, T7 to T9, T11, T11a and
+   T12 for
    these routes. Depends on: `07-pages-and-the-editor.md` I2, `01-job-queue-and-outbox.md` I4,
    `02-courses-and-enrollments.md` I2.
 2. **I2. Notifications and preferences.** Migration, `notify`, the fan-out subscriber, the list,

@@ -30,8 +30,9 @@ departs from its spec updates the spec in the same PR.
 ## M1 Learning (full specs)
 
 The owner approved a 17-spec split of M1. Open questions carry coordinator decisions pending the
-owner's review, except those marked "open, for the owner" (`09` Q3, `14` Q5, `16` Q1, `17` Q5),
-which narrow or move what the plan says and wait for the owner.
+owner's review, except those marked "open, for the owner", which change an owner-accepted spec or
+narrow, move or extend what the plan says, and wait for the owner. The full list is in each spec's
+Open questions.
 
 | # | Spec | Review |
 | --- | --- | --- |
@@ -39,15 +40,15 @@ which narrow or move what the plan says and wait for the owner.
 | 02 | [Courses and enrollments](m1/02-courses-and-enrollments.md) | maintainer line-by-line |
 | 03 | [Modules and items](m1/03-modules-and-items.md) | standard |
 | 04 | [Unlock and completion rules](m1/04-unlock-and-completion-rules.md) | maintainer line-by-line |
-| 05 | [Progress and events](m1/05-progress-and-events.md) | standard |
+| 05 | [Progress and events](m1/05-progress-and-events.md) | standard; issue I3 maintainer line-by-line |
 | 06 | [Files](m1/06-files.md) | maintainer line-by-line |
 | 07 | [Pages and the editor](m1/07-pages-and-the-editor.md) | standard |
 | 08 | [Uploaded video](m1/08-uploaded-video.md) | maintainer line-by-line |
 | 09 | [Linked video and watch tracking](m1/09-linked-video-and-watch-tracking.md) | standard |
 | 10 | [Learner dashboard and Next up](m1/10-learner-dashboard-and-next-up.md) | standard |
-| 11 | [Announcements and in-app notifications](m1/11-announcements-and-in-app-notifications.md) | standard |
+| 11 | [Announcements and in-app notifications](m1/11-announcements-and-in-app-notifications.md) | maintainer line-by-line |
 | 12 | [Email](m1/12-email.md) | maintainer line-by-line |
-| 13 | [Assignments, due dates, reminders and escalation](m1/13-assignments-due-dates-reminders-and-escalation.md) | standard |
+| 13 | [Assignments, due dates, reminders and escalation](m1/13-assignments-due-dates-reminders-and-escalation.md) | maintainer line-by-line |
 | 14 | [Recurrence and expiring completions](m1/14-recurrence-and-expiring-completions.md) | maintainer line-by-line |
 | 15 | [Installable web app and offline reading](m1/15-installable-web-app-and-offline-reading.md) | standard |
 | 16 | [Learning UI components](m1/16-learning-ui-components.md) | standard |

@@ -17,7 +17,8 @@
   `11-announcements-and-in-app-notifications.md` (`notify`, preferences), `12-email.md` (`queue`,
   templates, the email log), `../m0/03-users-and-identities.md` (`users.manager_id`, B8),
   `../m0/07-admission.md` I7 (groups, for group assignees)
-- **Review:** standard
+- **Review:** maintainer line-by-line (a new permission, and what an escalation lets a manager
+  see)
 
 ## Summary
 
@@ -99,13 +100,16 @@ everything that happened for one person and one assignment. Recurrence and expir
   It then sets `next_step_at` to the next step's time. Steps whose time passed more than 24 hours
   ago when the job finds them (the server was down) are recorded as `missed` and not sent, so a
   restart does not flood people with stale reminders.
-- **B13.** An escalation names the assignee, the target and how long it is overdue, and links to
-  the assignee's timeline. The manager may read that timeline (B17) and nothing else of the
-  assignee's through this spec; the Manager role's wider scope is M4.
+- **B13.** An escalation names the assignee, the target, the due date and how long it is overdue,
+  in the message itself. Whether the manager may also open the assignee's timeline is Q9 (the
+  owner's): until answered, the manager gets the message only, with no read access to anything of
+  the assignee's, and the message links to nothing behind a login. The Manager role's scope over
+  reports is M4.
 - **B14.** Notification and email kinds added: `due_reminder` (not required; defaults in-app on,
-  email on) and `escalation` (not required; defaults in-app on, email on), with templates
-  (`12` B8) whose variables are `assignee_name`, `target_title`, `course_title`, `due_at` (in the
-  recipient's time zone), `days_overdue` and `link`.
+  email on) and `escalation` (not required; defaults in-app on, email on), with templates (`12` B8)
+  whose variables are `assignee_name`, `target_title`, `course_title`, `due_at` (in the recipient's
+  time zone), `days_overdue` and `link` (the target's deep link, for `due_reminder` only; an
+  escalation carries no link, B13).
 
 ### Managers
 
@@ -114,7 +118,7 @@ everything that happened for one person and one assignment. Recurrence and expir
   organization) (Q7): the manager is an active user of the organization, not the user themself,
   and not someone whose management chain reaches the user (409 `user.manager_cycle`); `null`
   clears it. A user whose `source` is not `local` keeps an editable manager in M1, since no sync
-  writes it before M4. The change writes `user.set_manager` (`09` B22).
+  writes it before M4. The change writes `user.set_manager` (`m0/09` B22).
 
 ### Timeline
 
@@ -122,8 +126,9 @@ everything that happened for one person and one assignment. Recurrence and expir
   changes, each reminder or escalation step (sent, skipped and why, missed) with the email's status
   from `email_messages` (`12` B12) when one was queued, completion (on time or late) and removal
   from a group. It is built from `assignment_users`, `assignment_events` and `reminders_sent`.
-- **B17.** Readers: the assignee (their own), holders of `perm::AssignmentManage` or
-  `perm::ProgressView` at the course, and the assignee's manager for rows that escalated to them.
+- **B17.** Readers: the assignee (their own), and holders of `perm::AssignmentManage` or
+  `perm::ProgressView` at the course; the assignee's manager only if the owner answers Q9 with its
+  option (a).
 
 ### Learners and the dashboard
 
@@ -139,7 +144,7 @@ everything that happened for one person and one assignment. Recurrence and expir
 ## API
 
 Common errors as in `../m0/02-organizations-and-accounts.md` -> API; unsafe methods also answer
-`08`'s CSRF refusals.
+`m0/08`'s CSRF refusals.
 
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
@@ -149,7 +154,7 @@ Common errors as in `../m0/02-organizations-and-accounts.md` -> API; unsafe meth
 | `PATCH /api/v1/assignments/{assignment_id}` | `{ due?, reminders? }` | 200 `Assignment` | 404, 422 | `perm::AssignmentManage` |
 | `POST /api/v1/assignments/{assignment_id}/end` | | 200 `Assignment` | 404 | `perm::AssignmentManage` |
 | `GET /api/v1/assignments/{assignment_id}/users` | `?status&cursor&limit` | 200 `Page<AssignmentUser>` | 404 | `perm::AssignmentManage` or `perm::ProgressView` (its course) |
-| `GET /api/v1/assignments/{assignment_id}/users/{user_id}/timeline` | | 200 `TimelineEntry[]` | 404 `assignment_user.not_found` | B17: the assignee, the escalated manager, or `AssignmentManage`/`ProgressView` at its course |
+| `GET /api/v1/assignments/{assignment_id}/users/{user_id}/timeline` | | 200 `TimelineEntry[]` | 404 `assignment_user.not_found` | B17: the assignee, or `AssignmentManage`/`ProgressView` at its course (the manager pending Q9) |
 | `GET /api/v1/me/assignments` | `?cursor&limit` | 200 `Page<MyAssignment>` | | authenticated |
 
 Changed: `PATCH /api/v1/users/{user_id}` takes `manager_id` (B15, 409 `user.manager_cycle`, 404
@@ -247,7 +252,7 @@ Deleting an item or module that an assignment targets is refused (409 `item.assi
 
 | Permission | Key | Grantable at | Built-in roles (M1) |
 | --- | --- | --- | --- |
-| `perm::AssignmentManage` | `assignment.manage` | organization, account, course | Organization admin, Account admin, Instructor |
+| `perm::AssignmentManage` | `assignment.manage` | organization, account, course | Organization admin (through `perm::ALL`); Account admin and Instructor pending Q8 (the owner's) |
 
 Entitlements: none.
 
@@ -255,8 +260,9 @@ Entitlements: none.
 
 Tests use a `ManualClock`; reminder tests run the periodic job by hand.
 
-- **T1** (B1, B3). An Instructor assigns a course to an unenrolled user: a Student enrollment and
-  one row appear; without `enrollment.manage` the same request answers 403 and creates nothing.
+- **T1** (B1, B3). A user holding `assignment.manage` and `enrollment.manage` assigns a course to an
+  unenrolled user: a Student enrollment and one row appear; without `enrollment.manage` the same
+  request answers 403 and creates nothing.
 - **T2** (B4). `relative_days: 14` for a user assigned 2026-03-01 10:00 UTC in an organization in
   `America/New_York` gives a due time of 2026-03-15 23:59:59 local; a fixed due date is kept as
   given; across a DST change the local time stays 23:59:59.
@@ -276,12 +282,17 @@ Tests use a `ManualClock`; reminder tests run the periodic job by hand.
   ending the assignment stops all steps.
 - **T9** (B2, B6). A group assignment reaches current members; a member added later is assigned by
   `assignments.sync_groups` with `assigned_at` at that run; one who leaves stops receiving
-  reminders and keeps their timeline. (Runs once groups exist, `07` I7.)
+  reminders and keeps their timeline. (Runs once groups exist, `m0/07` I7.)
 - **T10** (B15). Setting a manager forms no cycle (A manages B, B manages A answers 409
   `user.manager_cycle`); a manager from org B answers 404; the change writes one audit entry.
 - **T11** (B16, B17). The timeline lists assigned, reminders with email status, escalation and
-  late completion in order; the assignee and the escalated manager read it; another learner gets
-  404.
+  late completion in order; the assignee reads it; the escalated manager gets 403 (until Q9).
+- **T11a** (B17, the timeline and `GET /assignments/{id}/users`). These decide in the handler, so
+  the permission suite has one entry per granting permission (`assignment.manage`,
+  `progress.view`) plus the assignee's own entry for the timeline, each with its own cases.
+  Explicit tests: another Student of the course gets 403 `permission.denied` on both routes; a
+  caller holding only `course.view` gets 403 `permission.denied`; the assignee gets 403 on
+  another assignee's timeline.
 - **T12** (B18, B19). `GET /me/assignments` orders overdue first; the dashboard puts the overdue
   course first and lists deadlines.
 - **T13** (every route). Four cases: anonymous 401; every permission but the route's at the course
@@ -302,8 +313,9 @@ Tests use a `ManualClock`; reminder tests run the periodic job by hand.
 
 ## Open questions
 
-Each question below was delegated by the owner to the coordinator; each recommendation is taken
-and stands until the owner reviews it.
+Q1 to Q7 were delegated by the owner to the coordinator; each recommendation is taken and stands
+until the owner reviews it. Q8 and Q9 extend the plan's role definitions, so they are the
+owner's and stay open.
 
 - **Q1. What a relative due date counts from and ends at.** The plan's example is "within 14 days
   of joining". Options: (a) from the moment the assignment reaches the person (creation, or joining
@@ -339,14 +351,30 @@ and stands until the owner reviews it.
   escalation work in M1.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
 
+- **Q8. Which built-in roles manage assignments (open, for the owner).** The plan's role table
+  does not name assignments; giving `assignment.manage` to Account admin and Instructor extends
+  their definitions. Options: (a) Account admin and Instructor as well as Organization admin; (b)
+  Organization admin only, others through custom roles; (c) (a) plus Manager in M4.
+  Recommendation: (a): assigning training is what account admins and instructors in the plan's
+  vZDC mapping do. Until the owner answers, only Organization admin holds it, and I1 adds it to no
+  other built-in list.
+- **Q9. What an escalated manager may read (open, for the owner).** The plan escalates overdue
+  work to "their manager", and the Manager role ("see and remind their own reports, receive
+  escalations") arrives in M4. Reading through `users.manager_id` before then gives Manager-like
+  scope without the role. Options: (a) the manager reads the timeline of rows escalated to them;
+  (b) the escalation message carries the facts and grants no read access until M4's Manager role;
+  (c) no escalation to managers until M4. Recommendation: (b): escalation works in M1 as the plan
+  asks, and every read right stays with the roles the owner defines. Until the owner answers, the
+  spec builds (b).
+
 ## Issues
 
 1. **I1. Assignments to users with due dates.** Migration, `assignment.manage` in the catalog and
-   roles, the assignment routes for user assignees, enrollment on assignment, due rules with time
-   zones, status, the completion subscriber, the lock on deleting targeted items and modules.
-   Covers B1 to B5, B7 to B9; T1 to T3, T8 (due changes), T13 and T14. Depends on:
-   `05-progress-and-events.md` I1, `01-job-queue-and-outbox.md` I4, `02-courses-and-enrollments.md`
-   I2.
+   roles (built-in grants per Q8, the owner's), the assignment routes for user assignees, enrollment
+   on assignment, due rules with time zones, status, the completion subscriber, the lock on deleting
+   targeted items and modules. Covers B1 to B5, B7 to B9; T1 to T3, T8 (due changes), T13 and T14.
+   Depends on: `05-progress-and-events.md` I1, `01-job-queue-and-outbox.md` I4,
+   `02-courses-and-enrollments.md` I2.
 2. **I2. Managers.** `manager_id` on the user `PATCH` with the cycle check and audit entry. Covers
    B15; T10. Depends on: none beyond M0.
 3. **I3. Reminders and escalation.** Reminder rules and the organization default, step scheduling,
