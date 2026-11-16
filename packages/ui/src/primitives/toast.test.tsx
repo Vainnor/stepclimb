@@ -99,11 +99,36 @@ describe("Toast", () => {
     expect(item).toHaveAttribute("data-tone", "error");
   });
 
+  it("keeps a toast with an action until it is dismissed or the action is taken", async () => {
+    vi.useFakeTimers();
+    const queue = createToastQueue();
+    const onAction = vi.fn();
+    const onClose = vi.fn();
+    renderWithStrings(<ToastRegion queue={queue} />);
+    act(() => {
+      queue.add(
+        { title: "A new version is available", action: { label: "Reload", onAction } },
+        { timeout: 5000, onClose },
+      );
+    });
+    act(() => vi.advanceTimersByTime(60 * 60 * 1000));
+    const item = screen.getByRole("alertdialog", { name: "A new version is available" });
+    const action = within(item).getByRole("button", { name: "Reload" });
+    expect(action).toHaveAttribute("data-slot", "toast-action");
+    vi.useRealTimers();
+    await userEvent.setup().click(action);
+    expect(onAction).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
   it("raises a timeout under the minimum, and keeps a longer one", () => {
     expect(toastTimeout({ title: "a" }, 1000)).toBe(TOAST_MIN_TIMEOUT_MS);
     expect(toastTimeout({ title: "a" }, 9000)).toBe(9000);
     expect(toastTimeout({ title: "a" })).toBe(TOAST_TIMEOUT_MS);
     expect(toastTimeout({ title: "a", tone: "error" }, 9000)).toBeUndefined();
+    const action = { label: "Reload", onAction: () => {} };
+    expect(toastTimeout({ title: "a", action }, 9000)).toBeUndefined();
   });
 
   it("pauses its timer while the region is hovered or has focus (WCAG 2.2.1)", () => {

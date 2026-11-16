@@ -19,7 +19,9 @@ const meta = {
 
 **Do** keep it to one sentence, and use it for the result of something the person just did.
 
-**Don't** make a toast the only place an error shows: the field, form or page that failed says so too, where the person will look for it. Don't put actions in it (it may be gone before they are reached), and don't use it for something the person must decide (that is an \`AlertDialog\`).`,
+**Action.** \`action: { label, onAction }\` adds one button under the text, such as "Reload" on "A new version is available". A toast with an action has no timer: it stays until the person takes the action or dismisses it, so the button is still there when they reach it.
+
+**Don't** make a toast the only place an error shows: the field, form or page that failed says so too, where the person will look for it. Don't give a toast more than one action, or an action the app cannot do without (the toast can be dismissed), and don't use it for something the person must decide (that is an \`AlertDialog\`).`,
       },
     },
   },
@@ -77,6 +79,20 @@ export const Neutral: Story = {
 export const ErrorToast: Story = {
   name: "Error",
   render: () => <Page initial={[failed]} />,
+};
+
+/** A notice with one action, which stays until it is taken or dismissed. */
+export const WithAction: Story = {
+  render: () => (
+    <Page
+      initial={[
+        {
+          title: "A new version is available",
+          action: { label: "Reload", onAction: () => {} },
+        },
+      ]}
+    />
+  ),
 };
 
 /** Three at once, the newest first. */

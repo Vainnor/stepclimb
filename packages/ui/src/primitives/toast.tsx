@@ -7,7 +7,10 @@
 //
 // A new toast is announced through a live region and never takes focus. The region is a landmark
 // (F6 reaches it); hovering it or focusing inside it pauses every timer. An error toast has no
-// timer: it stays until it is dismissed. It does not move: no motion to reduce.
+// timer: it stays until it is dismissed. A toast may carry one action (the app's "A new version
+// is available" with "Reload", docs/specs/m1/15-installable-web-app-and-offline-reading.md B5);
+// such a toast has no timer either, so the action is still there when keyboard or screen reader
+// users reach it. It does not move: no motion to reduce.
 import { CheckCircleIcon, InfoIcon, WarningCircleIcon, XIcon } from "@phosphor-icons/react";
 import {
   Text as AriaText,
@@ -22,6 +25,7 @@ import { tv } from "../lib/tv";
 import { useStepclimbStrings } from "../strings/strings";
 import { Icon } from "../theme/icon";
 import { useAppearanceAttributes } from "../theme/theme-provider";
+import { Button } from "./button";
 import { IconButton } from "./icon-button";
 
 /** How long a toast that is not an error stays, unless the caller asks for longer. */
@@ -52,6 +56,7 @@ export const toast = tv({
     ],
     icon: "mt-0.5 shrink-0",
     content: "flex min-w-0 flex-1 flex-col gap-0.5 py-0.5",
+    action: "mt-2 self-start",
     title: "text-sm font-medium text-fg-strong",
     description: "text-sm text-fg-sub",
     close: "-me-1 -mt-1 shrink-0",
@@ -76,12 +81,24 @@ export interface ToastMessage {
   description?: string;
   /** Neutral by default. An error stays until it is dismissed; it never has a timer. */
   tone?: ToastTone;
+  /**
+   * One thing the person can do about it, such as reloading. A toast with an action stays until
+   * it is dismissed or the action is taken; it never has a timer.
+   */
+  action?: ToastAction;
+}
+
+/** A toast's one action: a button under its text. Pressing it runs `onAction` and closes it. */
+export interface ToastAction {
+  /** A verb, from `useStepclimbStrings()`. */
+  label: string;
+  onAction: () => void;
 }
 
 export interface ToastOptions {
   /**
    * How long a toast that is not an error stays, in milliseconds: TOAST_TIMEOUT_MS by default,
-   * at least TOAST_MIN_TIMEOUT_MS. An error toast ignores it.
+   * at least TOAST_MIN_TIMEOUT_MS. An error toast and a toast with an action ignore it.
    */
   timeout?: number;
   /** Called once the toast has closed, by its timer or by a person. */
@@ -98,9 +115,12 @@ export interface ToastQueue {
 
 const ariaQueues = new WeakMap<ToastQueue, AriaToastQueue<ToastMessage>>();
 
-/** The timeout React Aria gets: none for an error, at least the minimum for anything else. */
+/**
+ * The timeout React Aria gets: none for an error or a toast with an action, at least the minimum
+ * for anything else.
+ */
 export function toastTimeout(message: ToastMessage, timeout?: number): number | undefined {
-  if (message.tone === "error") return undefined;
+  if (message.tone === "error" || message.action !== undefined) return undefined;
   return Math.max(timeout ?? TOAST_TIMEOUT_MS, TOAST_MIN_TIMEOUT_MS);
 }
 
@@ -124,9 +144,15 @@ export function createToastQueue({ maxVisibleToasts = 3 } = {}): ToastQueue {
 
 const icons = { neutral: InfoIcon, success: CheckCircleIcon, error: WarningCircleIcon } as const;
 
-function ToastItem({ queued }: { queued: QueuedToast<ToastMessage> }) {
+function ToastItem({
+  queued,
+  queue,
+}: {
+  queued: QueuedToast<ToastMessage>;
+  queue: AriaToastQueue<ToastMessage>;
+}) {
   const { t } = useStepclimbStrings();
-  const { title, description, tone = "neutral" } = queued.content;
+  const { title, description, tone = "neutral", action } = queued.content;
   const styles = toast({ tone });
   return (
     <AriaToast data-slot="toast" data-tone={tone} toast={queued} className={styles.root()}>
@@ -143,6 +169,21 @@ function ToastItem({ queued }: { queued: QueuedToast<ToastMessage> }) {
           >
             {description}
           </AriaText>
+        )}
+        {action === undefined ? null : (
+          // `slot={null}`: the toast's button context names only its close slot.
+          <Button
+            slot={null}
+            data-slot="toast-action"
+            size="sm"
+            className={styles.action()}
+            onPress={() => {
+              queue.close(queued.key);
+              action.onAction();
+            }}
+          >
+            {action.label}
+          </Button>
         )}
       </AriaToastContent>
       <IconButton
@@ -184,7 +225,7 @@ export function ToastRegion({ queue, className }: ToastRegionProps) {
       className={styles.region({ className })}
     >
       <AriaToastList<ToastMessage> data-slot="toast-list" className={styles.list()}>
-        {({ toast: queued }) => <ToastItem queued={queued} />}
+        {({ toast: queued }) => <ToastItem queued={queued} queue={ariaQueue} />}
       </AriaToastList>
     </AriaToastRegion>
   );
