@@ -26,7 +26,8 @@
 //! answers with `auth.admission_unavailable`): a secret that does not open (another key ring,
 //! another row's context), a URL the policy refuses, a timeout, a connection or TLS error, a
 //! status other than 200 (a 3xx included), a body over the limit or not JSON, `allow` missing
-//! or not a boolean, `groups` not an array of strings, or `attributes` not an object. The
+//! or not a boolean, `groups` not an array of at most 1,000 usable group keys
+//! (`stepclimb_core::groups::usable_key`), or `attributes` not an object. The
 //! secret's opened bytes are wiped as soon as the request is signed. No reason carries the URL,
 //! a header or the body.
 
@@ -44,6 +45,7 @@ use stepclimb_auth::{
 use stepclimb_core::{
     OrgScope,
     admission_webhooks::{self, AdmissionWebhook},
+    groups,
     id::new_id,
     organizations,
 };
@@ -77,8 +79,12 @@ pub struct Call<'a> {
 pub struct AdmissionWebhookReply {
     /// `true` admits the sign-in; `false` refuses it with `auth.admission_refused`.
     pub allow: bool,
-    /// Group keys for the user: an array of strings when present, never `null`. This release
-    /// checks them and does not apply them yet.
+    /// The groups the user is in, by key: at most 1,000 strings of 1 to 255 characters with no
+    /// control character, no Unicode format character (category Cf) and neither U+2028 nor
+    /// U+2029, never `null`. They replace the memberships earlier replies gave the user, so a
+    /// group left out is removed; an absent `groups` is no groups. A group the organization
+    /// does not have yet is created, named by its key, while it has fewer than 10,000 groups;
+    /// past that, a key naming no group is left out. Keys are matched exactly.
     #[schema(value_type = Vec<String>, required = false)]
     pub groups: Option<Vec<String>>,
     /// Attributes merged over the provider's mapped attributes before they are stored; these
@@ -88,13 +94,23 @@ pub struct AdmissionWebhookReply {
     pub attributes: Option<Map<String, Value>>,
 }
 
-/// A well-formed reply (B14). `groups`, when present, has been checked to be an array of
-/// strings; applying them is spec 07 I7's.
+/// A well-formed reply (B14).
 #[derive(Debug, PartialEq)]
 pub struct Reply {
     pub allow: bool,
     /// The reply's `attributes`, empty when it sent none.
     pub attributes: Map<String, Value>,
+    /// The reply's `groups`, each a usable key, empty when it sent none.
+    pub groups: Vec<String>,
+}
+
+/// What an `allow: true` reply gives the sign-in (B18, B19).
+#[derive(Debug, PartialEq)]
+pub struct Allowed {
+    /// Merged over the mapped attributes.
+    pub attributes: Map<String, Value>,
+    /// The user's memberships from the webhook.
+    pub groups: Vec<String>,
 }
 
 /// What step 4 decided.
@@ -102,8 +118,8 @@ pub struct Reply {
 pub enum Decision {
     /// The organization has no webhook, or it is not enabled.
     Skipped,
-    /// The webhook answered `allow: true`, with the attributes it sent.
-    Allowed(Map<String, Value>),
+    /// The webhook answered `allow: true`, with the attributes and groups it sent.
+    Allowed(Allowed),
     /// The webhook answered `allow: false` (B15).
     Refused,
     /// The webhook could not decide (B14).
@@ -178,7 +194,8 @@ pub async fn decide(
         Ok(Reply {
             allow: true,
             attributes,
-        }) => Decision::Allowed(attributes),
+            groups,
+        }) => Decision::Allowed(Allowed { attributes, groups }),
         Ok(Reply { allow: false, .. }) => Decision::Refused,
         Err(reason) => Decision::Unavailable(reason),
     })
@@ -255,17 +272,36 @@ fn parse(status: StatusCode, body: &[u8]) -> Result<Reply, Unavailable> {
         return Err(Unavailable::Malformed("allow"));
     };
     let allow = *allow;
-    match reply.get("groups") {
-        None => {}
-        Some(Value::Array(groups)) if groups.iter().all(Value::is_string) => {}
+    let groups = match reply.remove("groups") {
+        None => Vec::new(),
+        Some(Value::Array(groups)) => group_keys(groups).ok_or(Unavailable::Malformed("groups"))?,
         Some(_) => return Err(Unavailable::Malformed("groups")),
-    }
+    };
     let attributes = match reply.remove("attributes") {
         None => Map::new(),
         Some(Value::Object(attributes)) if !attributes.iter().any(has_nul) => attributes,
         Some(_) => return Err(Unavailable::Malformed("attributes")),
     };
-    Ok(Reply { allow, attributes })
+    Ok(Reply {
+        allow,
+        attributes,
+        groups,
+    })
+}
+
+/// `items` as group keys, when every one is a [usable](groups::usable_key) string and there are
+/// at most [`groups::MAX_KEYS`] of them.
+fn group_keys(items: Vec<Value>) -> Option<Vec<String>> {
+    if items.len() > groups::MAX_KEYS {
+        return None;
+    }
+    items
+        .into_iter()
+        .map(|item| match item {
+            Value::String(key) if groups::usable_key(&key) => Some(key),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Whether the member `key: value` holds a NUL in a key or a string at any depth, which
@@ -299,7 +335,8 @@ mod tests {
             parsed(json!({ "allow": true })).unwrap(),
             Reply {
                 allow: true,
-                attributes: Map::new()
+                attributes: Map::new(),
+                groups: Vec::new(),
             }
         );
         assert!(!parsed(json!({ "allow": false, "extra": 1 })).unwrap().allow);
@@ -330,12 +367,30 @@ mod tests {
             reply.attributes,
             json!({ "rating": 5 }).as_object().cloned().unwrap()
         );
+        assert_eq!(reply.groups, ["a", "b"]);
         assert!(parsed(json!({ "allow": true, "groups": [] })).is_ok());
+        let most: Vec<String> = (0..groups::MAX_KEYS).map(|n| format!("g{n}")).collect();
+        let longest = "k".repeat(groups::MAX_KEY_CHARS);
+        assert_eq!(
+            parsed(json!({ "allow": true, "groups": most }))
+                .unwrap()
+                .groups
+                .len(),
+            groups::MAX_KEYS
+        );
+        assert!(parsed(json!({ "allow": true, "groups": [longest] })).is_ok());
+        let too_many: Vec<String> = (0..=groups::MAX_KEYS).map(|n| format!("g{n}")).collect();
+        let too_long = "k".repeat(groups::MAX_KEY_CHARS + 1);
         assert!(parsed(json!({ "allow": true, "attributes": { "a": ["\\u0000", 0] } })).is_ok());
         for body in [
             json!({ "allow": true, "groups": "a" }),
             json!({ "allow": true, "groups": ["a", 1] }),
             json!({ "allow": true, "groups": null }),
+            json!({ "allow": true, "groups": [""] }),
+            json!({ "allow": true, "groups": ["a\u{0}"] }),
+            json!({ "allow": true, "groups": ["a\nb"] }),
+            json!({ "allow": true, "groups": [too_long] }),
+            json!({ "allow": true, "groups": too_many }),
             json!({ "allow": true, "attributes": [] }),
             json!({ "allow": true, "attributes": null }),
             json!({ "allow": false, "attributes": "x" }),

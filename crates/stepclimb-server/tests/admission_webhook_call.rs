@@ -307,6 +307,7 @@ impl Fixture {
             profile: Profile::default(),
             email_verified: false,
             attributes: object(attrs),
+            groups: None,
         }
     }
 
@@ -1026,6 +1027,7 @@ async fn t2_a_webhook_refusal_after_an_email_match_links_nothing(pool: PgPool) {
         },
         email_verified: true,
         attributes: Map::new(),
+        groups: None,
     };
     f.receiver.answer(Answer::json(json!({ "allow": false })));
 

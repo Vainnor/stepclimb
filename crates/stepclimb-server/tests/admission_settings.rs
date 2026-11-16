@@ -280,6 +280,7 @@ async fn new_person_refused(
         profile: Profile::default(),
         email_verified: false,
         attributes: Map::new(),
+        groups: None,
     };
     let context = Context {
         scope: scope(org),

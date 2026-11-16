@@ -437,6 +437,7 @@ pub(crate) async fn complete_sign_in(
             email: profile.email,
         },
         attributes: profile.attributes,
+        groups: profile.groups,
     };
     let context = Context {
         scope: request.scope,

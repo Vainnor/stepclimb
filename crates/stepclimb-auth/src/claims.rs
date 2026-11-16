@@ -10,10 +10,13 @@
 //! | subject (`oauth2` only) | a [usable](usable_subject) string, or an integer as its decimal string | the sign-in fails with [`SubjectMissing`] |
 //! | `given_name`, `family_name`, `email` | a non-empty string without NUL | absent |
 //! | `email_verified` | a boolean | absent |
-//! | `groups` | an array of strings | absent |
+//! | `groups` | an array of strings | an empty list (absent only when unmapped) |
 //! | `attributes.<name>` | any JSON value with no NUL in any string or key | the attribute is absent |
 //!
-//! An unmapped field and a pointer that names nothing are absent too. NUL is refused because
+//! An unmapped field and a pointer that names nothing are absent too, except `groups`: a
+//! provider that maps them always says which groups the person is in, so a claim that is missing
+//! or not an array of strings is no groups, and admission removes the provider's memberships
+//! (`07-admission.md` B22). NUL is refused because
 //! PostgreSQL `text` and `jsonb` cannot store it, so a value holding one could never be saved. Values are kept as the
 //! provider sent them, without trimming or case folding.
 
@@ -118,7 +121,12 @@ pub fn profile(document: &Value, mapping: &ProfileMapping) -> MappedProfile {
         family_name: text(&mapping.family_name),
         email: text(&mapping.email),
         email_verified: find(&mapping.email_verified).and_then(Value::as_bool),
-        groups: find(&mapping.groups).and_then(string_list),
+        groups: mapping.groups.as_ref().map(|pointer| {
+            pointer
+                .resolve(document)
+                .and_then(string_list)
+                .unwrap_or_default()
+        }),
         attributes: mapping
             .attributes
             .iter()
@@ -270,9 +278,19 @@ mod tests {
         assert_eq!(mapped.family_name, None);
         assert_eq!(mapped.email, None);
         assert_eq!(mapped.email_verified, None);
-        assert_eq!(mapped.groups, None);
+        assert_eq!(mapped.groups, Some(Vec::new()));
         let single = profile(&json!({ "groups": "alpha" }), &full_mapping());
-        assert_eq!(single.groups, None);
+        assert_eq!(single.groups, Some(Vec::new()));
+        let missing = profile(&json!({}), &full_mapping());
+        assert_eq!(missing.groups, Some(Vec::new()));
+        let unmapped = ProfileMapping {
+            groups: None,
+            ..full_mapping()
+        };
+        assert_eq!(
+            profile(&json!({ "groups": ["alpha"] }), &unmapped).groups,
+            None
+        );
     }
 
     #[test]

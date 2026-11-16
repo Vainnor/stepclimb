@@ -167,6 +167,7 @@ impl Fixture {
             profile: with_email(email),
             email_verified,
             attributes: Map::new(),
+            groups: None,
         }
     }
 
@@ -560,6 +561,7 @@ async fn two_matching_first_sign_ins_at_once_link_once(pool: PgPool) {
             profile: with_email(EMAIL),
             email_verified: true,
             attributes: Map::new(),
+            groups: None,
         };
         let mut tx = pool.begin().await.expect("begin");
         let answer = admission::admit(&mut tx, &sign_in, &context).await;

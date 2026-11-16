@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Admission: after a provider has proved who someone is, whether they may sign in to the
-//! organization, and as which user (docs/specs/m0/07-admission.md B1 to B17, B19 to B21, Q3,
-//! Q4, Q6, Q7).
+//! organization, and as which user (docs/specs/m0/07-admission.md B1 to B22, Q3, Q4, Q6 to
+//! Q8).
 //!
 //! A sign-in through an identity provider ends in [`complete`], with the [`Verified`] its
 //! provider proved: the provider row, the subject, the mapped profile fields and attributes.
@@ -87,6 +87,9 @@
 //! none, and so is an email another user of the organization has (users' emails are unique,
 //! spec 03 B12): the field is left as it is, or a new user is created without it.
 //!
+//! An admitted user, known or new, then gets the group memberships the claims and the webhook
+//! gave the sign-in (B18, B22, `crate::admission_groups`), in the same savepoint.
+//!
 //! A refusal answers 403 problem details with its code at a JSON endpoint
 //! ([`Refusal::into_error`]) and a 303 to the sign-in page with `?error=<code>` at a browser
 //! callback ([`Refusal::redirect`]); neither says more than the code. The server logs the
@@ -119,7 +122,8 @@ use stepclimb_core::{
 };
 
 use crate::{
-    admission_webhook_call::{self as webhook_call, Call, Decision},
+    admission_groups::{self, Given},
+    admission_webhook_call::{self as webhook_call, Allowed, Call, Decision},
     audit::ClientAddress,
     entitlements::{Entitlements, limit_reached},
     error::ApiError,
@@ -165,6 +169,9 @@ pub struct Verified<'a> {
     pub email_verified: bool,
     /// The mapped attributes; empty for a local sign-in (spec 04 B5).
     pub attributes: Map<String, Value>,
+    /// The mapped group keys, when the provider's mapping names a groups claim (B22); `None`
+    /// for one that does not, and for a local sign-in.
+    pub groups: Option<Vec<String>>,
 }
 
 /// Where and when the sign-in happens, and what step 4 calls the webhook with.
@@ -444,6 +451,7 @@ pub async fn admit(
         profile: sign_in.profile.clone(),
         email_verified: sign_in.email_verified,
         attributes: sign_in.attributes.clone(),
+        groups: sign_in.groups.clone(),
     };
     let mut sp = tx.begin().await.map_err(|e| ApiError::internal(&e))?;
     let provider = stored.key.as_str();
@@ -532,8 +540,8 @@ async fn steps(
     {
         return Ok(Admission::Refused(refusal));
     }
-    let attributes = match webhook(sp, sign_in, context, known).await? {
-        Ok(attributes) => attributes,
+    let answered = match webhook(sp, sign_in, context, known).await? {
+        Ok(answered) => answered,
         Err(refusal) => return Ok(Admission::Refused(refusal)),
     };
     let sign_in = &Verified {
@@ -541,16 +549,32 @@ async fn steps(
         subject: sign_in.subject,
         profile: sign_in.profile.clone(),
         email_verified: sign_in.email_verified,
-        attributes,
+        attributes: answered.attributes,
+        groups: sign_in.groups.clone(),
     };
-    match (candidate, settings) {
+    let admission = match (candidate, settings) {
         (Some(Candidate::Linked { identity_id, user }), _) => {
-            admit_known(sp, sign_in, context, identity_id, user).await
+            admit_known(sp, sign_in, context, identity_id, user).await?
         }
-        (Some(Candidate::Matched(user)), _) => admit_matched(sp, sign_in, context, user).await,
-        (None, Some(settings)) => just_in_time(sp, sign_in, context, settings).await,
-        (None, None) => Err(ApiError::internal(&Fault::LocalWithoutIdentity)),
+        (Some(Candidate::Matched(user)), _) => admit_matched(sp, sign_in, context, user).await?,
+        (None, Some(settings)) => just_in_time(sp, sign_in, context, settings).await?,
+        (None, None) => return Err(ApiError::internal(&Fault::LocalWithoutIdentity)),
+    };
+    if let Admission::Admitted(user) = &admission {
+        let given = Given {
+            claims: sign_in.groups.as_deref(),
+            webhook: answered.groups.as_deref(),
+        };
+        admission_groups::apply(sp, scope, user.id, provider, given, context.now).await?;
     }
+    Ok(admission)
+}
+
+/// What step 4 gives the writes after it: the attributes to store, and the webhook's groups
+/// when it was called (`None` when it was not).
+struct Answered {
+    attributes: Map<String, Value>,
+    groups: Option<Vec<String>>,
 }
 
 /// Step 1 (B4, B5): the candidate, or the refusal of a suspended one. For a sign-in no
@@ -637,18 +661,23 @@ fn sync_only(settings: &OrgSettings) -> Option<Refusal> {
         .then(|| Refusal::new(Step::SyncOnly, not_provisioned()))
 }
 
-/// Step 4 (B13 to B17, B19): the attributes the later writes store, the mapped ones with the
-/// webhook's merged over them, or the webhook's refusal. `known` is the candidate user, whom an
-/// `allow: false` marks. A local sign-in calls no webhook and keeps its attributes.
+/// Step 4 (B13 to B19): the attributes the later writes store, the mapped ones with the
+/// webhook's merged over them, and the webhook's groups; or the webhook's refusal. `known` is
+/// the candidate user, whom an `allow: false` marks. A local sign-in calls no webhook and keeps
+/// its attributes.
 async fn webhook(
     conn: &mut PgConnection,
     sign_in: &Verified<'_>,
     context: &Context<'_>,
     known: Option<Uuid>,
-) -> Result<Result<Map<String, Value>, Refusal>, ApiError> {
+) -> Result<Result<Answered, Refusal>, ApiError> {
     let provider = sign_in.provider;
+    let unanswered = || Answered {
+        attributes: sign_in.attributes.clone(),
+        groups: None,
+    };
     if provider.kind == Kind::Local {
-        return Ok(Ok(sign_in.attributes.clone()));
+        return Ok(Ok(unanswered()));
     }
     log_step(Step::Webhook);
     let call = Call {
@@ -660,11 +689,14 @@ async fn webhook(
     let decision =
         webhook_call::decide(conn, context.scope, context.now, keys, providers, &call).await?;
     Ok(match decision {
-        Decision::Skipped => Ok(sign_in.attributes.clone()),
-        Decision::Allowed(extra) => {
+        Decision::Skipped => Ok(unanswered()),
+        Decision::Allowed(Allowed { attributes, groups }) => {
             let mut merged = sign_in.attributes.clone();
-            merged.extend(extra);
-            Ok(merged)
+            merged.extend(attributes);
+            Ok(Answered {
+                attributes: merged,
+                groups: Some(groups),
+            })
         }
         Decision::Refused => Err(Refusal::by_webhook(known)),
         Decision::Unavailable(reason) => {

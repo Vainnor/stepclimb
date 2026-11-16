@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO group_members (org_id, group_id, user_id, source, provider_id, created_at,\n                                    updated_at)\n         SELECT g.org_id, g.id, $2, $3, $4,\n                timestamptz 'epoch' + $6::bigint * interval '1 microsecond',\n                timestamptz 'epoch' + $6::bigint * interval '1 microsecond'\n         FROM groups g\n         WHERE g.org_id = $1 AND g.key = ANY($5::text[])\n         ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "TextArray",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "30d69089e77e600139d562d6471621fe78befc52d6e77fa2684ddc292cb166fd"
+}
