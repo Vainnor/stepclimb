@@ -279,9 +279,11 @@ and stands until the owner reviews it.
 
 Coordinator decisions (overnight, 2026-11-17), pending owner review.
 
-- **Copy mapping waits for `courses::copy`.** `02` I3 (#220) is not on `next` yet, so I1 adds
-  no copy code. Whichever lands second copies the rule columns, each item's `requirement`, and
-  `module_prerequisites` with both ids mapped to the copied modules.
+- **Copy mapping.** `courses::copy` (`02` B12, B13) copies each module's `unlock_at`,
+  `require_sequential` and `completion_rule`, each item's `requirement`, and every
+  `module_prerequisites` row with both ids mapped to the copied modules, in the copy's
+  transaction. A row whose modules the copy cannot map fails the copy rather than being
+  dropped.
 - **Author reads are the write responses.** The `GET` routes are `03` I2. Until then, every
   route that answers a `Module` or `Item` (`03`'s create, patch, reorder and move) carries the
   rule fields: `unlock_at`, `prerequisite_ids` (in course order), `require_sequential`,

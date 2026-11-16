@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO module_prerequisites\n             (org_id, course_id, module_id, requires_id, created_at, updated_at)\n         SELECT $1, $2, mm.new_id, mr.new_id,\n                timestamptz 'epoch' + $6::bigint * interval '1 microsecond',\n                timestamptz 'epoch' + $6::bigint * interval '1 microsecond'\n         FROM module_prerequisites p\n         JOIN UNNEST($3::uuid[], $4::uuid[]) AS mm (old_id, new_id) ON mm.old_id = p.module_id\n         JOIN UNNEST($3::uuid[], $4::uuid[]) AS mr (old_id, new_id) ON mr.old_id = p.requires_id\n         WHERE p.org_id = $1 AND p.course_id = $5",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "UuidArray",
+        "UuidArray",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f67fa9b68d2fb720e1fe81b3c3aa1c602702b51b636158054fb80db6657a9bb2"
+}
