@@ -11,9 +11,10 @@
   target_type, target_id, cycle, completed_at, expires_at?)`), Decided (recurring training in the
   core from M1); the owner's answers of 2026-11-16 (Q5, Q6)
 - **Depends on:** `13-assignments-due-dates-reminders-and-escalation.md` (assignments, per-person
-  rows, reminders), `05-progress-and-events.md` (progress, roll-up, final completion and its one
-  exception), `04-unlock-and-completion-rules.md` (locks), `01-job-queue-and-outbox.md` (periodic
-  jobs, outbox), `11-announcements-and-in-app-notifications.md` (`notify`)
+  rows, reminders), `05-progress-and-events.md` (progress, roll-up, final completion and its two
+  exceptions, enrollment deletion), `04-unlock-and-completion-rules.md` (locks),
+  `09-linked-video-and-watch-tracking.md` (`video_progress`), `01-job-queue-and-outbox.md`
+  (periodic jobs, outbox), `11-announcements-and-in-app-notifications.md` (`notify`)
 - **Review:** maintainer line-by-line (an expiry takes a completion away and re-locks content)
 
 ## Summary
@@ -26,8 +27,9 @@ that required it locks again through spec 04's rules, and the next cycle of a re
 starts. A new cycle also clears the learner's progress when it starts, so a retake can begin
 before the old completion lapses. Expiry and a cycle start are the two places where progress
 recorded by spec 05 is taken away, and neither loses it: each reset first copies what it clears
-into a progress archive that staff holding `progress.view` can read, and nothing prunes archives,
-completions or timelines automatically, because schools keep such records for years.
+into a progress archive that staff holding `progress.view` can read. Deleting an enrollment
+archives the same way. Nothing prunes archives, completions or timelines automatically: the
+owner's retention requirement (Q6) is that a school keeps such records for years.
 
 ## Behavior
 
@@ -55,11 +57,16 @@ completions or timelines automatically, because schools keep such records for ye
   with `expires_at <= now` and `expired_at` null, and for each, in one transaction under the
   learner's `course_progress` lock (`05` B6):
   1. sets `completions.expired_at`;
-  2. when the learner's current progress is still the expiring cycle's (no reset happened since,
-     B10), resets it (B6 for a module, B7 for a course), archiving it first (B15);
-  3. emits `completion.expired` (`01` B19) with `{ user_id, course_id, target_type, target_id,
-     cycle, expired_at }`, an internal topic for this spec's subscribers and spec 11's
-     notification; whether M4 webhooks publish it is M4's;
+  2. when no reset happened since the completion, resets it (B6 for a module, B7 for a course),
+     archiving it first (B15). A reset happened since when the learner has a `progress_archives`
+     row in the course with `archived_at >= completions.completed_at` whose target is the course
+     or, for a module completion, that module: a course reset clears every module, a module reset
+     only its own;
+  3. unless the learner has a newer completion of the same target (a higher `cycle`, so they
+     retook it before this one lapsed), emits `completion.expired` (`01` B19) with `{ user_id,
+     course_id, target_type, target_id, cycle, expired_at }`, an internal topic for this spec's
+     subscribers and spec 11's notification, whose publication by M4 webhooks is M4's; with a
+     newer completion, it emits nothing and B8 sends nothing;
   4. for a course, starts the next cycle of every recurring assignment of the course for that
      learner whose next cycle has not started (B10).
   It is idempotent: a completion already expired is skipped.
@@ -73,7 +80,7 @@ completions or timelines automatically, because schools keep such records for ye
   in the course (items, video, modules, course), as B6 does for every module; the course is then not
   complete and every module with a prerequisite locks again.
 - **B8.** The learner gets a `completion_expired` notification (in-app and email, not required;
-  `11` B10, `12` B8) naming the target and linking to it.
+  `11` B10, `12` B8) naming the target and linking to it, when B5 step 3 emits the event.
 
 ### Recurrence
 
@@ -91,7 +98,12 @@ completions or timelines automatically, because schools keep such records for ye
   not), insert the new row with `cycle + 1`, `assigned_at` = the cycle's start and `due_at` from the
   relative due rule, schedule its reminders (`13` B11), write `assignment_events`
   `cycle_started`, and reset the learner's course (B7), which archives their progress first
-  (B15) (Q6). The reset runs under the learner's `course_progress` lock (`05` B6), as an expiry's
+  (B15) (Q6). The reset is skipped when the person already has another open `assignment_users`
+  row of the same course, from any assignment, whose `assigned_at` is later than their latest
+  completion of the course: a retake for that other assignment is under way, and the new cycle
+  joins it rather than clearing it. A person with two recurring assignments of one course (a
+  direct one and a group one, or two `every_year_in` months) therefore resets once per retake.
+  The reset runs under the learner's `course_progress` lock (`05` B6), as an expiry's
   does, so a completion and a cycle start take turns. A learner who had not finished the previous
   cycle starts the new one from the beginning too; what they had done is in the archive. "Each
   cycle is a new assignment" (plan) is this per-person row (Q4).
@@ -123,38 +135,43 @@ completions or timelines automatically, because schools keep such records for ye
 ### Progress archives
 
 - **B15.** Every reset (a cycle start, B10; a module or course expiry, B6, B7) first writes one
-  `progress_archives` row for the learner, the course and the reset, with `reason`
-  (`cycle_start` or `expiry`), `target_type` and `target_id` (the course, or the expiring
-  module), the `assignment_users` row that the cycle start closed (null for an expiry), and
-  `archived_at`. In the same transaction it copies every row the reset is about to delete into
-  the archive tables, keyed by that archive: `item_progress`, `module_progress`,
-  `course_progress` and `video_progress`, each with its stored values (state, score, counts,
-  timestamps, watched ranges, percent). `watch_reports` (idempotency keys, `09`) are not copied. A
-  reset that finds no progress row writes no archive. The copy and the delete commit together, so a
-  reset never loses a row.
+  `progress_archives` row for the learner, the course and the reset, with `reason` (`cycle_start`,
+  `expiry` or `enrollment_deleted`), `target_type` and `target_id` (the course, or the expiring
+  module), the `assignment_users` row that the cycle start closed (null otherwise), and
+  `archived_at`. In the same transaction it copies every row the reset is about to delete into the
+  archive tables, keyed by that archive: `item_progress`, `module_progress`, `course_progress` and
+  `video_progress`, each with every stored column, its own `created_at` and `updated_at` included
+  (as `live_created_at` and `live_updated_at`), and each item and module row with the item's or
+  module's title at that moment, so the record reads the same after the content is renamed or
+  deleted. `watch_reports` (idempotency keys, `09`) are not copied. A reset that finds no progress
+  row writes no archive. Deleting an enrollment (`05` B15) archives the same way, with `reason`
+  `enrollment_deleted` and the course as target. The copy and the delete commit together, so a reset
+  never loses a row.
 - **B16.** Archives, `completions`, `assignment_users`, `assignment_events` and `reminders_sent`
-  are never pruned by any job: a school keeps a student's records until graduation plus two
-  years, about six years, and Stepclimb does not guess a shorter time. They are deleted only with
-  the learner's data in a course (`05` B15, B19 here) and by M4's user and organization deletion.
-  The email delivery status a timeline shows comes from the 90-day email log (`12` B16) and is the
-  one part of the history that ages out.
+  are never pruned by any job and survive enrollment deletion (`05` B15): the owner's retention
+  requirement (Q6) is that a school keeps a student's records until graduation plus two years,
+  about six years, and Stepclimb does not guess a shorter time. The only way to erase them is M4's
+  per-user data deletion (plan, Privacy). The email delivery status a timeline shows comes from
+  the 90-day email log (`email.prune`, `12` B16) and is the one part of the history that ages
+  out.
 - **B17.** `GET /api/v1/courses/{course_id}/progress/{user_id}/archives` lists one learner's
-  archives in the course, newest first, paginated (`02` B3): each with `id`, `reason`, `target`
-  (type, id and title, or a null title when the module no longer exists), `assignment` (id and
+  archives in the course, newest first, paginated (`02` B3): each with `id`, `user` (id and display
+  name), `reason`, `target` (type, id and the title stored at reset time), `assignment` (id and
   cycle, or null), `archived_at`, and the archived course row's counts and `completed_at` when
-  there is one. A user with no enrollment and no archive in the course answers 404
-  `progress.not_found`, as `05` B14 does; a concluded enrollment still finds them.
+  there is one. The learner is found while they have any enrollment in the course (active or
+  concluded), any archive or any completion there, so a learner whose enrollment was deleted
+  still lists; anyone else answers 404 `progress.not_found`.
 - **B18.** `GET /api/v1/progress-archives/{archive_id}` returns one archive with its archived
-  item, module, course and video rows, each item with its title when the item still exists.
+  item, module, course and video rows, each with the title stored at reset time.
   `ProgressArchiveTarget` resolves `archive_id` to its course and then acts as `CourseTarget` with
   the code `progress_archive.not_found`.
 - **B19.** Both routes need `perm::ProgressView` at the course, which an organization or account
   grant covers through the course's account path (`02` B23): an admin of the organization or of
   the course's account, or a course role holding `progress.view`, reads every learner's archives.
   Observers (`progress.view_observed`) and learners do not read archives (Q6). Deleting an
-  enrollment that deletes the learner's data in the course (`05` B15) deletes their archives and
-  archived rows for the course with the rest; concluding an enrollment keeps everything, which is
-  how an organization that must keep records removes a learner from a course.
+  enrollment keeps the learner's archives and completions and adds an `enrollment_deleted`
+  archive of any live progress (`05` B15), so neither concluding nor deleting an enrollment loses
+  history.
 
 ## API
 
@@ -178,7 +195,8 @@ title }, cycle, completed_at, expires_at, expired_at }`; `Recurrence` as in B9;
 assignment: { id, cycle } | null, archived_at, course: { required_count, completed_count,
 completed_at } | null }`; `ProgressArchive` adds `modules: [{ module_id, title, required_count,
 completed_count, completed_at }]`, `items: [{ item_id, module_id, title, state, score, started_at,
-completed_at }]` and `videos: [{ item_id, watched_s, percent, duration_s }]`.
+completed_at }]` and `videos: [{ item_id, watched_s, percent, duration_s, position_s,
+last_report_at }]`. Titles are the ones stored at reset time.
 
 ## Data
 
@@ -218,31 +236,40 @@ CREATE TABLE progress_archives (
     org_id              uuid        NOT NULL,
     user_id             uuid        NOT NULL,
     course_id           uuid        NOT NULL,
-    reason              text        NOT NULL CHECK (reason IN ('cycle_start', 'expiry')),
+    reason              text        NOT NULL
+                                    CHECK (reason IN ('cycle_start', 'expiry', 'enrollment_deleted')),
     target_type         text        NOT NULL CHECK (target_type IN ('course', 'module')),
     target_id           uuid        NOT NULL,
-    assignment_user_id  uuid,                              -- the closed cycle's row; null for an expiry
+    target_title        text        NOT NULL,                -- the title at reset time (B17)
+    assignment_user_id  uuid,                                -- the closed cycle's row (B15)
     archived_at         timestamptz NOT NULL,
     created_at          timestamptz NOT NULL DEFAULT now(),
     updated_at          timestamptz NOT NULL DEFAULT now(),
     UNIQUE (org_id, id),
     FOREIGN KEY (org_id, user_id) REFERENCES users (org_id, id),
     FOREIGN KEY (org_id, course_id) REFERENCES courses (org_id, id),
-    CHECK ((reason = 'cycle_start') = (assignment_user_id IS NOT NULL))
+    CHECK ((reason = 'cycle_start') = (assignment_user_id IS NOT NULL)),
+    CHECK (reason <> 'enrollment_deleted' OR target_type = 'course')
 );
-CREATE INDEX progress_archives_by_learner ON progress_archives (org_id, course_id, user_id, archived_at DESC);
+CREATE INDEX progress_archives_by_learner
+    ON progress_archives (org_id, course_id, user_id, archived_at DESC);
 
+-- Each archived row keeps every column of the live row it copies; live_created_at and
+-- live_updated_at are the live row's own timestamps, created_at and updated_at the copy's.
 CREATE TABLE archived_item_progress (
-    archive_id    uuid        NOT NULL,
-    org_id        uuid        NOT NULL,
-    item_id       uuid        NOT NULL,                    -- no foreign key: the item may be deleted later
-    module_id     uuid        NOT NULL,
-    state         text        NOT NULL CHECK (state IN ('started', 'completed')),
-    score         numeric,
-    started_at    timestamptz NOT NULL,
-    completed_at  timestamptz,
-    created_at    timestamptz NOT NULL DEFAULT now(),
-    updated_at    timestamptz NOT NULL DEFAULT now(),
+    archive_id       uuid        NOT NULL,
+    org_id           uuid        NOT NULL,
+    item_id          uuid        NOT NULL,                   -- no foreign key: the item may go
+    module_id        uuid        NOT NULL,
+    title            text        NOT NULL,                   -- the item's title at reset time
+    state            text        NOT NULL CHECK (state IN ('started', 'completed')),
+    score            numeric,
+    started_at       timestamptz NOT NULL,
+    completed_at     timestamptz,
+    live_created_at  timestamptz NOT NULL,
+    live_updated_at  timestamptz NOT NULL,
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    updated_at       timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (archive_id, item_id),
     FOREIGN KEY (org_id, archive_id) REFERENCES progress_archives (org_id, id) ON DELETE CASCADE
 );
@@ -250,10 +277,13 @@ CREATE TABLE archived_item_progress (
 CREATE TABLE archived_module_progress (
     archive_id       uuid        NOT NULL,
     org_id           uuid        NOT NULL,
-    module_id        uuid        NOT NULL,                 -- no foreign key, as above
+    module_id        uuid        NOT NULL,                   -- no foreign key, as above
+    title            text        NOT NULL,                   -- the module's title at reset time
     required_count   integer     NOT NULL,
     completed_count  integer     NOT NULL,
     completed_at     timestamptz,
+    live_created_at  timestamptz NOT NULL,
+    live_updated_at  timestamptz NOT NULL,
     created_at       timestamptz NOT NULL DEFAULT now(),
     updated_at       timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (archive_id, module_id),
@@ -266,20 +296,26 @@ CREATE TABLE archived_course_progress (
     required_count   integer     NOT NULL,
     completed_count  integer     NOT NULL,
     completed_at     timestamptz,
+    live_created_at  timestamptz NOT NULL,
+    live_updated_at  timestamptz NOT NULL,
     created_at       timestamptz NOT NULL DEFAULT now(),
     updated_at       timestamptz NOT NULL DEFAULT now(),
     FOREIGN KEY (org_id, archive_id) REFERENCES progress_archives (org_id, id) ON DELETE CASCADE
 );
 
 CREATE TABLE archived_video_progress (
-    archive_id      uuid           NOT NULL,
-    org_id          uuid           NOT NULL,
-    item_id         uuid           NOT NULL,
-    watched_ranges  int4multirange NOT NULL,
-    duration_s      integer,
-    percent         smallint       NOT NULL,
-    created_at      timestamptz    NOT NULL DEFAULT now(),
-    updated_at      timestamptz    NOT NULL DEFAULT now(),
+    archive_id       uuid           NOT NULL,
+    org_id           uuid           NOT NULL,
+    item_id          uuid           NOT NULL,
+    watched_ranges   int4multirange NOT NULL,
+    duration_s       integer,
+    percent          smallint       NOT NULL,
+    position_s       integer        NOT NULL,
+    last_report_at   timestamptz,
+    live_created_at  timestamptz    NOT NULL,
+    live_updated_at  timestamptz    NOT NULL,
+    created_at       timestamptz    NOT NULL DEFAULT now(),
+    updated_at       timestamptz    NOT NULL DEFAULT now(),
     PRIMARY KEY (archive_id, item_id),
     FOREIGN KEY (org_id, archive_id) REFERENCES progress_archives (org_id, id) ON DELETE CASCADE
 );
@@ -297,7 +333,7 @@ deleted. `assignments.recurrence` (created by `13`) holds B9's JSON, validated b
 exceptions, expiry (stated in `05` by I2's PR) and a cycle start (by I3's PR).
 
 The archive tables hold copies, so they have no foreign key to items or modules: deleting an item
-or module later leaves its archived rows, and the reads show a null title for it.
+or module later leaves its archived rows, and the reads show the title stored at reset time.
 `assignment_user_id` has no foreign key because I4 does not depend on `13`'s migration;
 `progress::archive_and_reset` checks that the row is in the organization and the course when it
 is set. Repository functions (each takes `OrgScope`): `progress::archive_and_reset`
@@ -341,21 +377,36 @@ Tests use a `ManualClock` and run the periodic jobs by hand.
   and another learner's rows are untouched. Mutation: skipping the archive step turns the test
   red, and so does skipping the delete.
 - **T7a** (B15). A module expiry archives only that module's rows (`target_type` `module`,
-  `reason` `expiry`); a course expiry after a cycle start finds the reset and writes no archive; a
-  reset with no progress writes none. The archived rows equal the live rows read just before the
-  reset, column for column.
+  `reason` `expiry`); a course expiry after a cycle start finds the reset (a `cycle_start` archive
+  with `archived_at` after the completion) and writes no archive; a module expiry after a course
+  reset writes none either; a reset with no progress writes none. Each archived row equals the
+  live row read just before the reset, column for column (the live `created_at` and `updated_at`
+  as `live_created_at` and `live_updated_at`, `position_s` and `last_report_at` for video), with
+  the item's and module's titles of that moment. Renaming the item afterwards leaves the archived
+  title as it was.
+- **T7e** (B5, B8). A learner who completes cycle 2 before cycle 1's completion expires gets no
+  `completion.expired` event and no notification for cycle 1, whose `expired_at` is still set; a
+  learner without a newer completion gets one of each.
+- **T7f** (B10). A person holding a group assignment and a direct `every_year_in` assignment of
+  the same course: the second cycle start, while the retake opened by the first is in progress,
+  closes and opens rows as usual and leaves the learner's progress and archives unchanged.
+  Mutation: dropping the "newer open row" check turns the test red.
 - **T7b** (B16). Running every periodic job (`completions.expire`, `assignments.cycles`,
-  `jobs.prune`, `email` prune) with the manual clock moved 7 years ahead deletes no archive,
+  `jobs.prune`, `email.prune`) with the manual clock moved 7 years ahead deletes no archive,
   completion, `assignment_users`, `assignment_events` or `reminders_sent` row.
 - **T7c** (B17, B18, B19). An organization admin, an account admin of the course's account and an
   Instructor of the course (all holding `progress.view`) list a learner's archives newest first
   and read one with its item, module, course and video rows; a Student, the learner themself and
   an Observer of the learner get 403 `permission.denied`; a caller with every permission at a
-  sibling account gets 404. After the archived item is deleted, the archive still reads, with a
-  null title. A user never enrolled answers 404 `progress.not_found`; a concluded learner's
+  sibling account gets 404. After the archived item is deleted, the archive still reads, with the
+  stored title. A user never enrolled answers 404 `progress.not_found`; a concluded learner's
   archives still list.
-- **T7d** (B19, `05` B15). Deleting the learner's only Student enrollment deletes their archives
-  and archived rows for that course and no other course's; concluding it deletes nothing.
+- **T7d** (B19, `05` B15). Deleting the learner's only Student enrollment while they have live
+  progress writes one `enrollment_deleted` archive holding it and deletes the live rows; their
+  earlier archives and their `completions` stay, and still list through B17 although they have
+  no enrollment. Deleting an enrollment with no live progress writes no archive. Concluding an
+  enrollment changes nothing. Mutation: deleting archives with the enrollment turns the test
+  red.
 - **T8** (B12). Completing the course after cycle 2 started completes cycle 2's row, not cycle 1's.
 - **T9** (B3). Changing a course's validity leaves earlier `expires_at` values as they were.
 - **T10** (B13). An Instructor lists a learner's history across cycles; the learner reads their
@@ -427,6 +478,10 @@ owner answered them on 2026-11-16.
   previous cycle's data must be kept and viewable by an admin or anyone holding the right
   permission. Schools keep student records until graduation plus two years, which can be about
   six years, so cycle history is never pruned automatically (B10, B15 to B19).
+  Owner decision (2026-11-16), on retention: deleting an enrollment keeps history. It archives
+  any live progress (reason `enrollment_deleted`, no row when there is none) and deletes only the
+  live rows; `completions` and archives stay and join `05` B15's "Kept in every case" list.
+  Erasing them is possible only through M4's per-user data deletion (B16, B19).
   Coordinator decisions (2026-11-16), pending owner review, for the points the answer leaves open:
   - The kept data is a progress archive per reset: one row naming the reset and copies of the
     item, module, course and video progress it cleared (B15), rather than a cycle column on spec
@@ -436,33 +491,40 @@ owner answered them on 2026-11-16.
     course grant (B19). Observers and learners do not read archives in M1: the owner named admins
     and permission holders, and the archive holds more than the completion history Observers
     already read (B13).
-  - Deleting an enrollment still deletes the learner's data in the course, archives included
-    (`05` B15), because it is the explicit act of deleting that data (`02` Q8); concluding keeps
-    everything. The owner may prefer refusing the delete while history exists.
+  - Archives copy every live column and store titles at reset time, so a record read years
+    later shows what the learner saw (B15).
+  - "No reset since" is an archive of the course, or of the same module, dated at or after the
+    completion (B5 step 2). An expiry with a newer completion of the same target sends no event
+    or notification (B5 step 3).
+  - A cycle start does not reset while another open cycle row of the course, newer than the
+    person's latest completion, exists for them (B10).
   - A configurable retention policy is out of scope; nothing is pruned until one exists.
 
 ## Issues
 
 1. **I1. Completion history and validity.** Migration, recording completions in spec 05's roll-up
    transaction, validity on courses and modules, history routes, `expires_at` in reads, and
-   `completions` added to `05` B15's enrollment deletion (with its T12 case). Covers B1
+   `completions` added to `05` B15's "Kept in every case" list (with its T12 case). Covers B1
    to B4, B13; T1, T9 to T12 (routes). Depends on: `05-progress-and-events.md` I3,
    `02-courses-and-enrollments.md` I1.
 2. **I2. Expiry and re-locking.** The `completions.expire` job, module and course resets through
    I4's `progress::archive_and_reset`, the `completion.expired` event and notification, and the
    texts that state completion is final, updated to name expiry as an exception: `05` B4, `05` B10
-   (events once per learner and target become once per cycle) and `04` B4. Covers B5 to B8;
-   T2, T3, T7a (expiry), T12 (jobs). Depends on: I1, I4, `04-unlock-and-completion-rules.md` I3,
+   (events once per learner and target become once per cycle) and `04` B4, the "no reset since"
+   test and the skip for a newer completion. Covers B5 to B8; T2, T3, T7a (expiry), T7e, T12
+   (jobs). Depends on: I1, I4, `04-unlock-and-completion-rules.md` I3,
    `11-announcements-and-in-app-notifications.md` I2, `12-email.md` I3.
 3. **I3. Recurrence and cycles.** Migration, recurrence validation (no validity needed), the
    `assignments.cycles` job, cycle start and closing with the course reset through
    `progress::archive_and_reset`, cycles started by expiry, timeline entries, and `05` B4 and `04`
-   B4 updated to name a cycle start as the second exception. Covers B9 to B12, B14; T4 to T8.
+   B4 updated to name a cycle start as the second exception, and the rule for several recurring
+   assignments of one course. Covers B9 to B12, B14; T4 to T8, T7f.
    Depends on: I2, `13-assignments-due-dates-reminders-and-escalation.md` I4.
 4. **I4. Progress archives.** Migration `<version>_progress_archives.sql`,
    `progress::archive_and_reset` (archive, then delete, in one transaction under the learner's
-   course lock), the two read routes with `ProgressArchiveTarget`, archives added to `05` B15's
-   enrollment deletion, and the no-prune test. Covers B15 to B19; T7a (copy), T7b to T7d, T11 and
+   course lock, with titles and every live column), the two read routes with
+   `ProgressArchiveTarget`, the `enrollment_deleted` archive in `05` B15's enrollment deletion,
+   and the no-prune test. Covers B15 to B19; T7a (copy), T7b to T7d, T11 and
    T12 for these routes. Depends on: I1, `05-progress-and-events.md` I3,
    `09-linked-video-and-watch-tracking.md` I2 (`video_progress`). Maintainer line-by-line
    review (a new read of learner data).

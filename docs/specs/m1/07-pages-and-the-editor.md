@@ -155,11 +155,11 @@ Common errors as in `../m0/02-organizations-and-accounts.md` -> API; unsafe meth
 | `POST /api/v1/courses/{course_id}/pages` | `{ title, slug?, body? }` | 201 `PageSummary`, `Location` | 404 `course.not_found`, 409 `page.slug_taken`, 422 `request.invalid` | `perm::CourseContentEdit` (course) |
 | `GET /api/v1/pages/{page_id}` | `?format=html\|json` | 200 `PageView` | 404 `page.not_found`, 403 `item.locked` | `perm::CourseView` (the page's course), then B18 |
 | `PATCH /api/v1/pages/{page_id}` | `{ title?, slug? }` | 200 `PageSummary` | 404 `page.not_found`, 409 `page.slug_taken`, 422 | `perm::CourseContentEdit` |
-| `PUT /api/v1/pages/{page_id}/body` | `{ body, base_version_id }` | 200 `PageSummary` | 404, 409 `page.version_conflict`, 422 `page.body_invalid`/`page.image_type`, 404 `file.not_found` | `perm::CourseContentEdit` |
+| `PUT /api/v1/pages/{page_id}/body` | `{ body, base_version_id }` | 200 `PageSummary` | 404, 409 `page.version_conflict`, 422 `request.invalid` (`page.body_invalid`, `page.image_type`), 404 `file.not_found` | `perm::CourseContentEdit` |
 | `DELETE /api/v1/pages/{page_id}` | | 204 | 404, 409 `page.in_use` | `perm::CourseContentEdit` |
 | `GET /api/v1/pages/{page_id}/versions` | `?cursor&limit` | 200 `Page<PageVersionSummary>` | 404 | `perm::CourseViewAll` |
 | `GET /api/v1/pages/{page_id}/versions/{version_id}` | `?format=html\|json` | 200 `PageVersion` | 404 `page_version.not_found` | `perm::CourseViewAll` |
-| `POST /api/v1/pages/{page_id}/versions/{version_id}/restore` | `{ base_version_id }` | 200 `PageSummary` | 404, 409 `page.version_conflict`, 422 `page.image_type` | `perm::CourseContentEdit` |
+| `POST /api/v1/pages/{page_id}/versions/{version_id}/restore` | `{ base_version_id }` | 200 `PageSummary` | 404, 409 `page.version_conflict`, 422 `request.invalid` (`page.image_type`) | `perm::CourseContentEdit` |
 
 Schemas: `PageSummary { id, course_id, title, slug, current_version: { id, number, author_id,
 created_at }, created_at, updated_at }`; `PageView { id, course_id, title, slug, version, html? ,
@@ -266,13 +266,13 @@ writes `perm::CourseContentEdit`. Entitlements: none.
 - **T7** (B10, B10a, B15). An image of another course answers 404 `file.not_found`; an image
   without `alt` and not decorative 422. A rendered image's URL serves the file; two
   requests get two different URLs; the cache row contains no `/files/` token.
-- **T7a** (B10a). Course files uploaded through spec 06's route with fixture bytes: a PNG, a
-  JPEG, a GIF and a WebP each save as an image (200). A PDF, an SVG, a plain-text file, a file
-  whose bytes match no signature (`application/octet-stream`) and a PDF named `photo.png` uploaded
-  with `Content-Type: image/png` each answer 422 `page.image_type` at the image node's
-  `/attrs/course_file_id`, and no version is written. Restoring a version that names the PDF
-  (inserted by the test in SQL) answers the same 422. Mutation: removing the type check turns
-  this test red.
+- **T7a** (B10a). Course files uploaded through spec 06's route with fixture bytes: a PNG, a JPEG, a
+  GIF and a WebP each save as an image (200). A PDF, an SVG, a plain-text file, a file whose bytes
+  match no signature (`application/octet-stream`) and a PDF named `photo.png` uploaded with
+  `Content-Type: image/png` each answer 422 `request.invalid` with `page.image_type` at the image
+  node's `/attrs/course_file_id`, and no version is written. Restoring a version that names the PDF
+  (inserted by the test in SQL) answers the same 422. Mutation: removing the type check turns this
+  test red.
 - **T8** (B12, B16). A YouTube id with 12 characters is refused; a valid one renders the
   `youtube-nocookie.com` iframe with the sandbox attribute and nothing from the author but the id.
 - **T9** (B18). A Student reads a page through an unlocked item (200, HTML); through a locked one
@@ -306,8 +306,8 @@ writes `perm::CourseContentEdit`. Entitlements: none.
 ## Open questions
 
 Q1, Q2 and Q4 were delegated by the owner to the coordinator; each recommendation is taken and
-stands until the owner reviews it. Q3 narrowed the plan's M1 page blocks and Q5 came from a
-review, so both were the owner's; the owner answered them on 2026-11-16.
+stands until the owner reviews it. Q3 narrowed the plan's M1 page blocks, and Q5 was put to the
+owner after a review; the owner answered both on 2026-11-16.
 
 - **Q1. When a version is made, and two authors at once.** Options: (a) every explicit save is a
   version, with a conflict check on the base version and unsaved work kept in the browser; (b)

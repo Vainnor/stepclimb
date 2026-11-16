@@ -112,15 +112,18 @@ enrolled to observe.
     and every `enrollment_observees` row that names the user in this course when the user keeps no
     learner enrollment there (B20);
   - when no other active or concluded enrollment of the user in the course has
-    `course.participate`, deletes the user's learner data for the course: `item_progress`,
+    `course.participate`, deletes the user's live progress in the course: `item_progress`,
     `module_progress` and `course_progress` (this spec), `video_progress` and `watch_reports` for
-    the course's items (spec 09, added by 09 I2), `completions` for the course and its modules
-    (spec 14, added by 14 I1), and the user's progress archives for the course with their
-    archived rows (spec 14 B15, added by 14 I4);
+    the course's items (spec 09, added by 09 I2). From 14 I4 it first archives those rows (all but
+    `watch_reports`) as one progress archive with reason `enrollment_deleted` (spec 14 B15),
+    writing no archive when there is no live progress;
   - otherwise keeps all of it.
-  Kept in every case: `assignment_users`, `reminders_sent` and `assignment_events` (spec 13: the
-  record that the person was assigned and reminded), `email_messages` (spec 12, deleted by its
-  90-day prune) and `audit_events`. Deleting writes no event. The `enrollment.delete` audit entry
+  Kept in every case (owner decision, 2026-11-16: deleting an enrollment keeps history):
+  `completions` for the course and its modules (spec 14, added by 14 I1), the user's progress
+  archives and archived rows (spec 14), `assignment_users`, `reminders_sent` and `assignment_events`
+  (spec 13: the record that the person was assigned and reminded), `email_messages` (spec 12,
+  deleted by its 90-day prune) and `audit_events`. Erasing completions and archives is possible only
+  through M4's per-user data deletion. Deleting writes no event. The `enrollment.delete` audit entry
   gains the count of rows removed per table. Each later spec that adds learner data for a course
   adds its table to this list and to T12, in the issue named above.
 - **B16.** Deleting an item that has any `item_progress` row answers 409 `item.has_progress`
@@ -314,12 +317,13 @@ Database tests use `#[sqlx::test]` and a `ManualClock`; route tests use the perm
   progress never appears in it.
 - **T11** (B14). An Instructor lists both learners' progress; `?status=concluded` lists the
   concluded one only; a user with no enrollment answers 404 `progress.not_found`.
-- **T12** (B15). Deleting a Student enrollment removes that learner's progress rows for the
-  course (and, as 09 I2 and 14 I1 add them, video progress, watch reports and completions) and
-  leaves their rows in another course and their assignment rows and timeline; it removes the
-  Observer links that named them; with a second participating enrollment in the course, no
-  learner data is removed. Deleting an Observer enrollment removes its links only. The audit entry
-  records the counts. Mutation: skipping the delete turns the test red.
+- **T12** (B15). Deleting a Student enrollment removes that learner's progress rows for the course
+  (and, as 09 I2 adds them, video progress and watch reports) and leaves their rows in another
+  course, their assignment rows and timeline, and (as 14 I1 and I4 add them) their completions and
+  archives, with one `enrollment_deleted` archive of the removed rows; it removes the Observer links
+  that named them; with a second participating enrollment in the course, no learner data is removed.
+  Deleting an Observer enrollment removes its links only. The audit entry records the counts.
+  Mutation: skipping the delete turns the test red.
 - **T13** (B16). Deleting an item with one learner's `started` row answers 409
   `item.has_progress`.
 - **T14** (every route). Four cases: anonymous 401; every permission but the route's at the course

@@ -147,7 +147,8 @@ a one-click unsubscribe that mail clients show next to the sender.
   List-Unsubscribe and List-Unsubscribe-Post headers MUST be covered by the signature";
   https://www.rfc-editor.org/rfc/rfc8058.html, accessed 2026-11-16). Mail sent through an SMTP
   sender is signed, if at all, by that server, which this spec does not control.
-- **B16.** `email_messages` rows are kept 90 days, then deleted by a periodic job (Q5). Spec 13's
+- **B16.** `email_messages` rows are kept 90 days, then deleted by the periodic job `email.prune`
+  (daily, `01` B17) (Q5). Spec 13's
   reminder timeline reads them.
 
 ### Unsubscribe and preferences
@@ -188,19 +189,27 @@ a one-click unsubscribe that mail clients show next to the sender.
   B22a to B22g, is how that works; the points the plan and the owner's answer leave open are
   coordinator decisions pending owner review (Q8).
 - **B22a. The `unverified` status.** `users.status` gains a third value, `unverified`, next to
-  `active` and `suspended` (`m0/03` B7). Only self sign-up creates it and only verification
-  (B22d) leaves it. An unverified user has no credential, no identity, no role assignment, no
-  enrollment and no `verified_email`, and none can be given to it: every route that reads or
-  names users other than sign-up and verification treats an unverified user as absent (404
-  `user.not_found` on `GET`, `PATCH`, enrollment, assignment, role assignment and enrollment-link
-  routes; left out of `GET /api/v1/users` and of every count shown to admins). It cannot sign in
-  by any method: it has no passkey, password or TOTP; a magic-link request for its address
-  answers 202 and sends nothing (`m0/04` B22); admission step 1 (`m0/07` B4) refuses any user
-  whose status is not `active`; email matching (`m0/07` B5) never links an identity to it,
-  since matching needs `verified_email`. The request authenticator (`m0/08`) admits only an
-  `active` user. I7 changes every status check in the server from "is suspended" to "is not
-  active", so a user in any other status is refused (fail closed). An unverified user does not
-  count toward the users limit (`m0/10` B10), which counts `active` and `suspended` users.
+  `active` and `suspended` (`m0/03` B7). Only self sign-up creates it and only verification (B22d)
+  leaves it: every other status write refuses it, and refuses to touch an unverified user. `PATCH
+  /api/v1/users/{user_id}` with `status: "unverified"` answers 422 `request.invalid`
+  (`user.status_invalid` at `/status`), and so do `stepclimb admin` commands and the M4 sync API and
+  SCIM when they write `status`; the repository's `users::set_status` takes only `active` and
+  `suspended`, so no caller can write the value. An unverified user has no credential, no identity,
+  no role assignment, no enrollment and no `verified_email`, and none can be given to it: every
+  route that reads or names users other than sign-up and verification treats an unverified user as
+  absent (404 `user.not_found` on `GET`, `PATCH`, enrollment, assignment, role assignment and
+  enrollment-link routes and as a `manager_id`; left out of `GET /api/v1/users` and of
+  `users::count_for_limit`, the users limit's count and the only user count the server computes in
+  M1). The one intended exception is the email log: `GET /api/v1/admin/email/messages` lists the
+  `signup_verification` messages with their `user_id` and `to_address`, since an admin who supports
+  sign-up needs to see whether the link went out. The `user_id` resolves to nothing else. It cannot
+  sign in by any method: it has no passkey, password or TOTP; a magic-link request for its address
+  answers 202 and sends nothing (`m0/04` B22); admission step 1 (`m0/07` B4) refuses any user whose
+  status is not `active`; email matching (`m0/07` B5) never links an identity to it, since matching
+  needs `verified_email`. The request authenticator (`m0/08`) admits only an `active` user. I7
+  changes every status check in the server from "is suspended" to "is not active", so a user in any
+  other status is refused (fail closed). An unverified user does not count toward the users limit
+  (`m0/10` B10), which counts `active` and `suspended` users.
 - **B22b. Signing up.** When the organization allows sign-up (`admission.signup_allowed`, `m0/07`
   B20), sync-only mode is off (`m0/07` B11) and the local provider is enabled, `POST
   /auth/local/sign-up` with `{ email, display_name }` (`m0/03` B2's rules for each; 422
@@ -219,9 +228,14 @@ a one-click unsubscribe that mail clients show next to the sender.
   - **an `active` or `suspended` user's address**: writes no user or token and queues a
     `signup_existing` email to that user, which says an account exists and links to the sign-in
     page;
-  - **an `unverified` user's address**: keeps the user and its first `display_name` (a second
-    request cannot rename it), replaces its unused token with a new one and queues a new
-    `signup_verification` email. Signing up again is the resend; there is no other resend route.
+  - **an `unverified` user's address**: keeps the user, sets its `display_name` to the newest
+    request's, replaces its unused token with a new one and queues a new `signup_verification`
+    email. Signing up again is the resend; there is no other resend route. The person who opens
+    the link therefore gets the name they last typed, not one a stranger chose first.
+  The branches do different work (a new address inserts two rows; an existing one inserts none),
+  so their response times can differ by a few database writes. That difference is accepted: the
+  status and body are the same, both queue one email in one transaction, and the per-address and
+  per-client rate limits bound how many addresses anyone can probe.
 - **B22c. The verification token.** A `local_tokens` row of kind `signup_verification`, stored as
   the SHA-256 of a 256-bit token like `m0/04`'s enrollment tokens, valid 24 hours by the request's
   clock, one-time, with no creator (`created_by` null, `created_by_instance` false); `m0/04` B6's
@@ -242,10 +256,12 @@ a one-click unsubscribe that mail clients show next to the sender.
   No session is created until that flow finishes. A person who leaves before setting a
   credential has an active user with no way to sign in; a magic link (when the method is on) or
   an admin's enrollment link gets them in, as for any user without a credential.
-- **B22e. Expiry.** A periodic job, `users.prune_unverified` (hourly, `01` B17's scheduler, by
-  the controllable clock), deletes every `unverified` user that has no unused, unexpired
-  `signup_verification` token, with its tokens and its `email_messages` rows, organization by
-  organization. An unverified user therefore lasts at most 24 hours after its newest sign-up
+- **B22e. Expiry.** A periodic job, `users.prune_unverified` (hourly, `01` B17's scheduler, by the
+  controllable clock), deletes every user with `status = 'unverified'`, `source = 'local'`, no
+  enrollment, no role assignment and no identity that has no unused, unexpired `signup_verification`
+  token, with its tokens and its `email_messages` rows, organization by organization. The extra
+  conditions are a second guard: a user that somehow has any of them is left alone and logged as an
+  error, never deleted. An unverified user therefore lasts at most 24 hours after its newest sign-up
   request, plus up to one hour. Signing up again after expiry but before the prune reuses the row
   (B22b); after the prune it is a new address again.
 - **B22f. An address a verified source claims.** Every write that gives an `active` or
@@ -438,9 +454,9 @@ crate after `dependency-researcher`), never the network; DNS tests against a stu
   answers 403 `auth.signup_closed` and writes nothing; with the users limit reached it answers
   403 `entitlement.limit_reached` for a new address and for an existing one alike. Two
   concurrent sign-ups for one new address create one user (two connections).
-- **T18a** (B22b, B22c). Signing up again for an unverified address answers 202, keeps the first
-  `display_name`, invalidates the first link (400 `auth.signup_invalid`) and sends a working
-  second one.
+- **T18a** (B22b, B22c). Signing up again for an unverified address answers 202, takes the second
+  request's `display_name`, invalidates the first link (400 `auth.signup_invalid`) and sends a
+  working second one.
 - **T18b** (B22d). The link activates the user once: `status` becomes `active`,
   `verified_email` is set, the response carries an enrollment token that starts `m0/04` B7's
   flow, and one `user.verify_signup` entry is written; a second use, an unknown token and a token
@@ -452,11 +468,16 @@ crate after `dependency-researcher`), never the network; DNS tests against a stu
   /api/v1/users` and the users-limit count leave it out; enrolling, assigning or giving it a role
   answers 404; a magic-link request for its address answers 202 and queues nothing; an identity
   provider sign-in with email matching on and the same address does not link to it; a session
-  row inserted for it by the test is refused by the request authenticator. Mutation: changing
-  the authenticator's check back to "is suspended" turns the last case red.
+  row inserted for it by the test is refused by the request authenticator; naming it as another
+  user's `manager_id` answers 404 `user.not_found`. `PATCH /api/v1/users/{id}` with `status:
+  "unverified"` on an active user answers 422 `user.status_invalid` at `/status` and changes
+  nothing. `GET /api/v1/admin/email/messages` lists its `signup_verification` message (B22a's
+  exception). Mutations: changing the authenticator's check back to "is suspended" turns the
+  session case red; accepting `unverified` in `users::set_status` turns the status case red.
 - **T18d** (B22e). With the manual clock, an unverified user whose token expired is deleted by
   `users.prune_unverified` with its token and email rows; one with an unexpired token is kept; an
-  active or suspended user is never touched; a run for org A deletes nothing of org B's.
+  active or suspended user is never touched; an unverified user given an enrollment or a non-local
+  `source` by the test in SQL is kept and logged; a run for org A deletes nothing of org B's.
 - **T18e** (B22f). An admin creating a user, or a provider sign-in creating one, with the address
   of an unverified user succeeds, the unverified user is gone, and its link answers 400
   `auth.signup_invalid`.
@@ -477,7 +498,7 @@ crate after `dependency-researcher`), never the network; DNS tests against a stu
 ## Open questions
 
 Q1 to Q7 were delegated by the owner to the coordinator; each recommendation is taken and stands
-until the owner reviews it. Q8 is the owner's and stays open.
+until the owner reviews it. Q8 was the owner's; the owner answered it on 2026-11-16.
 
 - **Q1. An instance without email.** As with storage (`06` Q1), requiring SMTP would stop every
   M0 installation at its first M1 start. Options: (a) optional: the server starts, sending routes
@@ -537,7 +558,13 @@ until the owner reviews it. Q8 is the owner's and stays open.
     anyone fill the limit with sign-ups.
   - The answer is 202 for every address, the limit is checked before the lookup, and an
     existing account gets a `signup_existing` email, so the route reveals no address (B22b).
-  - Resend is signing up again; the first `display_name` stays (B22b).
+  - Resend is signing up again; the newest request's `display_name` wins, so a stranger who signs
+    up first cannot choose the name on the victim's account (B22b).
+  - The timing difference between the branches is accepted under the rate limits rather than
+    padded away (B22b).
+  - Only sign-up writes `unverified`; every other status write refuses it, and the prune also
+    requires a local user with no enrollment, role assignment or identity (B22a, B22e).
+  - The admin email log is the one place an unverified sign-up shows (B22a).
   - The link lasts 24 hours and the prune runs hourly, so an unconfirmed address is held at most
     about 25 hours (B22c, B22e).
   - Verification activates the user and hands over an instance-made enrollment link, so the
@@ -566,11 +593,11 @@ until the owner reviews it. Q8 is the owner's and stays open.
    T5. Depends on: I4.
 7. **I7. Local self sign-up.** Migration adding `unverified` to `users.status` and
    `signup_verification` to `local_tokens.kind`; every server status check changed to "is not
-   active"; `unverified` users left out of the admin user routes, the users limit, enrollment,
-   assignment and role-assignment lookups, magic links and email matching; the sign-up route with
-   its rate limits; the `signup_verification` and `signup_existing` kinds and templates; the
-   verification route and page with the hand-off to `m0/04`'s enrollment flow; the
-   `users.prune_unverified` job; the address hand-over in user creation, email changes and
-   just-in-time creation. Covers B22 to B22g; T18 to T18e. Depends on: I3, `m0/04` I2,
-   `01-job-queue-and-outbox.md` I3 (periodic jobs). Q8 is answered (owner, 2026-11-16).
-   Maintainer line-by-line review.
+   active"; every other status write refusing `unverified` (422 `user.status_invalid`); `unverified`
+   users left out of the admin user routes, the users limit, enrollment, assignment, role-assignment
+   and manager lookups, magic links and email matching; the sign-up route with its rate limits; the
+   `signup_verification` and `signup_existing` kinds and templates; the verification route and page
+   with the hand-off to `m0/04`'s enrollment flow; the `users.prune_unverified` job with its second
+   guard; the address hand-over in user creation, email changes and just-in-time creation. Covers
+   B22 to B22g; T18 to T18e. Depends on: I3, `m0/04` I2, `01-job-queue-and-outbox.md` I3 (periodic
+   jobs). Q8 is answered (owner, 2026-11-16). Maintainer line-by-line review.
