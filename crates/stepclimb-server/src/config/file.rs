@@ -35,6 +35,8 @@ pub(super) struct FileKeys {
     token_rate_limit: Option<Spanned<toml::Value>>,
     failed_sign_in_limit: Option<Spanned<toml::Value>>,
     allow_insecure_providers: Option<Spanned<toml::Value>>,
+    role: Option<Spanned<toml::Value>>,
+    worker_concurrency: Option<Spanned<toml::Value>>,
     providers: Option<Spanned<toml::Value>>,
 }
 
@@ -54,6 +56,8 @@ impl FileKeys {
             "token_rate_limit" => self.token_rate_limit.as_ref(),
             "failed_sign_in_limit" => self.failed_sign_in_limit.as_ref(),
             "allow_insecure_providers" => self.allow_insecure_providers.as_ref(),
+            "role" => self.role.as_ref(),
+            "worker_concurrency" => self.worker_concurrency.as_ref(),
             _ => None,
         }
     }

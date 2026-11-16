@@ -286,7 +286,8 @@ fn check_config_exits_0_printing_only_non_secret_values_without_connecting() {
             "stepclimb: the configuration is valid\nfile: {}\nbind: 0.0.0.0:9000\nlog: info\n\
              public_url: https://lms.example.org\nallowed_origins: (none)\n\
              trusted_proxies: (none)\nsign_in_rate_limit: 20\ntoken_rate_limit: 60\n\
-             failed_sign_in_limit: 10\nallow_insecure_providers: false\nproviders: (none)\n",
+             failed_sign_in_limit: 10\nallow_insecure_providers: false\nrole: all\n\
+             worker_concurrency: 4\nproviders: (none)\n",
             file.0.display()
         )
     );
@@ -1066,4 +1067,62 @@ fn admin_create_against_an_unreachable_database_exits_1() {
         "stderr: {stderr}"
     );
     assert!(!stderr.contains("zq-db-secret"), "stderr: {stderr}");
+}
+
+// Spec m1/01 T11: `check-config` prints `role` and `worker_concurrency` as set.
+#[test]
+fn check_config_prints_the_role_and_the_worker_concurrency() {
+    let file = TomlFile::new("check-role", "role = \"worker\"\n");
+    let output = stepclimb()
+        .args(["check-config", "--config"])
+        .arg(&file.0)
+        .env("STEPCLIMB_DATABASE_URL", UNREACHABLE_URL)
+        .env("STEPCLIMB_ENCRYPTION_KEYS", KEYS)
+        .env("STEPCLIMB_WORKER_CONCURRENCY", "12")
+        .output()
+        .expect("the binary runs");
+    let stdout = stdout_of(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_of(&output)
+    );
+    assert!(stdout.contains("\nrole: worker\n"), "{stdout}");
+    assert!(stdout.contains("\nworker_concurrency: 12\n"), "{stdout}");
+}
+
+// Spec m1/01 T11: a bad role or concurrency stops `check-config` with exit 2 naming it.
+#[test]
+fn check_config_refuses_a_bad_role_or_concurrency_naming_the_setting() {
+    let role = TomlFile::new("check-bad-role", "role = \"other\"\n");
+    let concurrency = TomlFile::new("check-bad-concurrency", "worker_concurrency = \"0\"\n");
+    for (file, named) in [
+        (&role, "`role` ("),
+        (&concurrency, "`worker_concurrency` ("),
+    ] {
+        let output = stepclimb()
+            .args(["check-config", "--config"])
+            .arg(&file.0)
+            .env("STEPCLIMB_DATABASE_URL", UNREACHABLE_URL)
+            .env("STEPCLIMB_ENCRYPTION_KEYS", KEYS)
+            .output()
+            .expect("the binary runs");
+        let stderr = stderr_of(&output);
+        assert_eq!(output.status.code(), Some(2), "stderr: {stderr}");
+        assert!(stderr.contains(named), "stderr: {stderr}");
+    }
+    let output = stepclimb()
+        .arg("check-config")
+        .env("STEPCLIMB_DATABASE_URL", UNREACHABLE_URL)
+        .env("STEPCLIMB_ENCRYPTION_KEYS", KEYS)
+        .env("STEPCLIMB_WORKER_CONCURRENCY", "65")
+        .output()
+        .expect("the binary runs");
+    let stderr = stderr_of(&output);
+    assert_eq!(output.status.code(), Some(2), "stderr: {stderr}");
+    assert!(
+        stderr.contains("STEPCLIMB_WORKER_CONCURRENCY: \"65\" is not a whole number from 1 to 64"),
+        "stderr: {stderr}"
+    );
 }

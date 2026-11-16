@@ -2,7 +2,8 @@
 //! `stepclimb serve` (connect, migrate, sync the built-in roles and the `unlimited` plan, give
 //! every organization a plan and its local provider row, re-render saved branding an older
 //! generator version wrote, write the providers of `stepclimb.toml`, start the sign-in flow
-//! cleanup, listen) and `stepclimb migrate` (connect, migrate, exit). The branding pass runs in
+//! cleanup, start the job worker when the role runs one, listen) and `stepclimb migrate`
+//! (connect, migrate, exit). The branding pass runs in
 //! [`prepare`], before the providers: the two touch different rows, and a re-render is correct
 //! for this release whether or not a bad `[[providers]]` entry then stops it (an older release
 //! started afterwards re-renders the newer record in memory for each read).
@@ -30,9 +31,12 @@ use tokio::net::TcpListener;
 
 use stepclimb_auth::provider_config::ConfigSecrets;
 
+use stepclimb_jobs::{RunOptions, Worker, backoff::Random};
+use tokio::sync::watch;
+
 use crate::{
-    AppState, Config, config_providers, flow, password_hasher::PasswordHasher,
-    providers::Providers, rate_limit::RateLimiter, router,
+    AppState, Config, app::probes_router, config_providers, flow, jobs,
+    password_hasher::PasswordHasher, providers::Providers, rate_limit::RateLimiter, router,
 };
 
 /// How long a request waits for a database connection from the pool.
@@ -353,6 +357,8 @@ pub fn log_configuration(config: &Config) {
         token_rate_limit = %config.token_rate_limit,
         failed_sign_in_limit = %config.failed_sign_in_limit,
         allow_insecure_providers = %config.allow_insecure_providers,
+        role = %config.role,
+        worker_concurrency = %config.worker_concurrency,
         providers = %config.providers_or_none(),
         "configuration loaded"
     );
@@ -368,7 +374,11 @@ pub async fn migrate_only(config: &Config) -> Result<(), StartupError> {
     Ok(())
 }
 
-/// Connect, [`prepare`] the database, then serve HTTP on `config.bind` until SIGINT or SIGTERM.
+/// Connect, [`prepare`] the database, then run what `config.role` asks for until SIGINT or
+/// SIGTERM (spec m1/01 B13 to B16): the whole HTTP application (`all`, `web`) or only the probes
+/// (`worker`) on `config.bind`, and the job worker (`all`, `worker`). On the signal the listener
+/// stops taking connections and the worker stops claiming; `serve` returns once both have
+/// finished, the worker after at most [`stepclimb_jobs::SHUTDOWN_GRACE`].
 pub async fn serve(config: Config) -> Result<(), StartupError> {
     log_configuration(&config);
     warn_about_development_keys(&config.encryption_keys);
@@ -383,24 +393,82 @@ pub async fn serve(config: Config) -> Result<(), StartupError> {
         clock.now(),
     )
     .await?;
+    // Built before the listener exists, so `/readyz` never answers before it (B16).
+    let worker = config
+        .role
+        .runs_jobs()
+        .then(|| job_worker(&config, pool.clone(), clock.clone()));
     let listener = TcpListener::bind(config.bind)
         .await
         .map_err(|source| StartupError::Bind {
             addr: config.bind,
             source,
         })?;
-    tracing::info!(addr = %config.bind, "listening");
+    let addr = listener.local_addr().unwrap_or(config.bind);
+    tracing::info!(%addr, role = %config.role, "listening");
     flow::spawn_cleanup(pool.clone(), clock.clone());
-    serve_on(
+    let stop = Stop::on_signal();
+    let app: fn(AppState) -> Router = if config.role.serves_app() {
+        router
+    } else {
+        probes_router
+    };
+    let http = serve_on(
         listener,
         config,
         config_secrets,
         pool,
         clock,
-        router,
-        shutdown_signal(),
-    )
-    .await
+        app,
+        stop.wait(),
+    );
+    let jobs = async {
+        if let Some((worker, options)) = worker {
+            worker.run(options, stop.wait()).await;
+        }
+        Ok(())
+    };
+    tokio::try_join!(http, jobs).map(|_| ())
+}
+
+/// The job worker of an `all` or `worker` process, with this binary's registry, serving every
+/// queue in it, and its options from `config`.
+fn job_worker(config: &Config, pool: PgPool, clock: Clock) -> (Worker, RunOptions) {
+    let registry = jobs::registry();
+    let queues = registry.queues();
+    tracing::info!(
+        concurrency = %config.worker_concurrency,
+        queues = ?queues,
+        "job worker started"
+    );
+    let worker = Worker::new(pool, registry, clock, Random::system(), queues);
+    (worker, RunOptions::new(config.worker_concurrency))
+}
+
+/// The process's stop request: set once by SIGINT or SIGTERM, read by the listener and the job
+/// worker alike.
+#[derive(Clone)]
+struct Stop(watch::Receiver<bool>);
+
+impl Stop {
+    /// Start listening for SIGINT and SIGTERM.
+    fn on_signal() -> Self {
+        let (tx, rx) = watch::channel(false);
+        tokio::spawn(async move {
+            shutdown_signal().await;
+            let _ = tx.send(true);
+        });
+        Self(rx)
+    }
+
+    /// Completes once the stop is requested. A closed channel, which only an ended signal task
+    /// leaves, counts as a stop.
+    fn wait(&self) -> impl Future<Output = ()> + Send + 'static {
+        let mut rx = self.0.clone();
+        async move {
+            let _ = rx.wait_for(|stopped| *stopped).await;
+        }
+    }
 }
 
 /// Build the application state from `config`, the secrets of the providers `stepclimb.toml`

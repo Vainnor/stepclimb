@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The handlers this binary runs, by kind (docs/specs/m1/01-job-queue-and-outbox.md B11).
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -65,6 +65,14 @@ impl Registry {
         self.kind(kind.name) == Some(kind)
     }
 
+    /// Every queue a registered kind runs on, sorted: what a worker of the `all` and `worker`
+    /// roles serves (B13).
+    #[must_use]
+    pub fn queues(&self) -> Vec<&'static str> {
+        let queues: BTreeSet<_> = self.entries.values().map(|(kind, _)| kind.queue).collect();
+        queues.into_iter().collect()
+    }
+
     /// Every registered kind with its lease, for [`crate::queue::claim`].
     pub(crate) fn leases(&self) -> Vec<(&'static str, std::time::Duration)> {
         self.entries
@@ -107,6 +115,8 @@ mod tests {
         assert!(registry.knows(&SEND));
         assert!(!registry.knows(&SEND.with_lease(std::time::Duration::from_secs(9))));
         assert!(registry.knows(&TRANSCODE));
+        assert_eq!(registry.queues(), ["default", "transcode"]);
+        assert!(Registry::new().queues().is_empty());
         assert!(!registry.knows(&Kind::new("email.other", "default")));
     }
 

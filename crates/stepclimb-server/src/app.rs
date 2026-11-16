@@ -60,6 +60,17 @@ pub const HSTS: &str = "max-age=31536000";
 /// neither a shared cache nor the browser's may keep.
 pub const API_CACHE_CONTROL: &str = "no-store";
 
+/// A router of `routes`, each at its path: the one place routes of [`routes`] are mounted.
+fn mount(
+    routes: impl IntoIterator<Item = (&'static str, MethodRouter<AppState>)>,
+) -> Router<AppState> {
+    let mut app = Router::new();
+    for (path, handler) in routes {
+        app = app.route(path, handler);
+    }
+    app
+}
+
 /// The whole application: probes, sign-out, the signed-in user, the API document and its UI,
 /// and the SPA for the rest. An unknown `/api/` path and a known path with the wrong method
 /// answer problem details. Every unsafe request passes the CSRF check first, every `/api/v1`
@@ -68,11 +79,7 @@ pub const API_CACHE_CONTROL: &str = "no-store";
 pub fn router(state: AppState) -> Router {
     let allowlist = OriginAllowlist::new(&state.public_url, &state.allowed_origins);
     let https = state.public_url.is_https();
-    let mut app = Router::new();
-    for (path, handler) in routes() {
-        app = app.route(path, handler);
-    }
-    let app = app
+    let app = mount(routes())
         .route(OPENAPI_JSON, get(openapi_json))
         .merge(Scalar::with_url(DOCS, openapi::document()))
         // Applies to the routes above, so it stays after the last of them.
@@ -89,6 +96,20 @@ pub fn router(state: AppState) -> Router {
         .layer(TraceLayer::new_for_http().make_span_with(request_span))
         .with_state(state)
 }
+
+/// The routes of a `worker` process (docs/specs/m1/01-job-queue-and-outbox.md B13): `/healthz`
+/// and `/readyz`, so a container health check works unchanged, and 404 for every other path.
+pub fn probes_router(state: AppState) -> Router {
+    let probes = routes()
+        .into_iter()
+        .filter(|(path, _)| PROBE_PATHS.contains(path));
+    mount(probes)
+        .layer(TraceLayer::new_for_http().make_span_with(request_span))
+        .with_state(state)
+}
+
+/// The paths of [`routes`] a `worker` process serves.
+const PROBE_PATHS: [&str; 2] = ["/healthz", "/readyz"];
 
 /// The span every request is traced in: its method, path and HTTP version. The query is left
 /// out, since a provider's callback carries its authorization `code` and `state` there and no

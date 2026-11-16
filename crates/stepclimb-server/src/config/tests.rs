@@ -221,6 +221,8 @@ fn every_known_variable_is_accepted() {
             "STEPCLIMB_TOKEN_RATE_LIMIT",
             "STEPCLIMB_FAILED_SIGN_IN_LIMIT",
             "STEPCLIMB_ALLOW_INSECURE_PROVIDERS",
+            "STEPCLIMB_ROLE",
+            "STEPCLIMB_WORKER_CONCURRENCY",
             "STEPCLIMB_CONFIG",
         ]
     );
@@ -417,6 +419,8 @@ fn every_config_field_is_a_classified_setting() {
         token_rate_limit: _,
         failed_sign_in_limit: _,
         allow_insecure_providers: _,
+        role: _,
+        worker_concurrency: _,
         // `[[providers]]` is a record of the file, not a setting (`providers::tests`).
         providers: _,
     } = config;
@@ -432,6 +436,8 @@ fn every_config_field_is_a_classified_setting() {
         (TOKEN_RATE_LIMIT, false),
         (FAILED_SIGN_IN_LIMIT, false),
         (ALLOW_INSECURE_PROVIDERS, false),
+        (ROLE, false),
+        (WORKER_CONCURRENCY, false),
     ];
     for (setting, secret) in fields {
         assert!(
@@ -761,6 +767,8 @@ fn non_secret_values_list_every_non_secret_setting_and_no_secret() {
             ("token_rate_limit", "60".to_owned()),
             ("failed_sign_in_limit", "10".to_owned()),
             ("allow_insecure_providers", "false".to_owned()),
+            ("role", "all".to_owned()),
+            ("worker_concurrency", "4".to_owned()),
         ]
     );
     let printed = format!("{values:?}");
@@ -1326,4 +1334,97 @@ fn the_insecure_providers_switch_is_read_from_the_file() {
             .unwrap()
             .allow_insecure_providers
     );
+}
+
+// Spec m1/01 B13, Q1.
+#[test]
+fn the_role_is_all_unless_set() {
+    let unset = Config::load(&with_required(&[]), None).unwrap();
+    assert_eq!(unset.role, Role::All);
+    for (value, role) in [
+        ("all", Role::All),
+        ("web", Role::Web),
+        ("worker", Role::Worker),
+        ("", Role::All),
+    ] {
+        let config = Config::load(&with_required(&[(ROLE.var, value)]), None).unwrap();
+        assert_eq!(config.role, role, "{value:?}");
+    }
+}
+
+// Spec m1/01 T11.
+#[test]
+fn an_unknown_role_is_refused_naming_the_setting() {
+    for value in ["other", "WEB", "transcoder", " all"] {
+        let error = Config::load(&with_required(&[(ROLE.var, value)]), None).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "STEPCLIMB_ROLE: {value:?} is not a role; for example {}",
+                ROLE.example
+            ),
+            "{value:?}"
+        );
+    }
+    let file = toml("public_url = \"https://lms.example.org\"\nrole = \"other\"\n");
+    let vars = env(&[
+        ("STEPCLIMB_DATABASE_URL", URL),
+        ("STEPCLIMB_ENCRYPTION_KEYS", KEYS),
+    ]);
+    let error = Config::load(&vars, Some(&file)).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .starts_with("`role` (/etc/stepclimb/stepclimb.toml line 2): \"other\" is not a role"),
+        "{error}"
+    );
+}
+
+// Spec m1/01 B14.
+#[test]
+fn the_worker_concurrency_is_4_unless_set_and_1_to_64() {
+    let unset = Config::load(&with_required(&[]), None).unwrap();
+    assert_eq!(unset.worker_concurrency.get(), 4);
+    for (value, count) in [("1", 1), ("64", 64), ("16", 16), ("", 4)] {
+        let config =
+            Config::load(&with_required(&[(WORKER_CONCURRENCY.var, value)]), None).unwrap();
+        assert_eq!(config.worker_concurrency.get(), count, "{value:?}");
+    }
+}
+
+// Spec m1/01 B14, T11.
+#[test]
+fn a_worker_concurrency_outside_1_to_64_is_refused_naming_the_setting() {
+    for value in ["0", "65", "-1", "+4", "4.0", "four", "99999999999"] {
+        let error =
+            Config::load(&with_required(&[(WORKER_CONCURRENCY.var, value)]), None).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "STEPCLIMB_WORKER_CONCURRENCY: {value:?} is not a whole number from 1 to 64; \
+                 for example {}",
+                WORKER_CONCURRENCY.example
+            ),
+            "{value:?}"
+        );
+    }
+    let file = toml("public_url = \"https://lms.example.org\"\nworker_concurrency = \"0\"\n");
+    let vars = env(&[
+        ("STEPCLIMB_DATABASE_URL", URL),
+        ("STEPCLIMB_ENCRYPTION_KEYS", KEYS),
+    ]);
+    let error = Config::load(&vars, Some(&file)).unwrap_err();
+    assert!(
+        error.to_string().starts_with(
+            "`worker_concurrency` (/etc/stepclimb/stepclimb.toml line 2): \"0\" is not a whole number"
+        ),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_role_says_what_it_runs() {
+    assert!(Role::All.serves_app() && Role::All.runs_jobs());
+    assert!(Role::Web.serves_app() && !Role::Web.runs_jobs());
+    assert!(!Role::Worker.serves_app() && Role::Worker.runs_jobs());
 }
