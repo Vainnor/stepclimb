@@ -7,7 +7,8 @@
 //! through the generated client, sign-out, `GET /api/v1/me` and the user's appearance choice, the caller's organization, its
 //! settings and its entitlements, the account tree, the permission catalog, roles and role
 //! assignment routes under `/api/v1/admin`, the user admin routes, users' identities and the
-//! signed-in user's, the organization's branding and its stylesheet (`/theme.css`), the local
+//! signed-in user's, the organization's branding and its stylesheet (`/theme.css`), the web app
+//! manifest (`/manifest.webmanifest`), the local
 //! sign-in switches, enrollment links, the enrollment start route, passkey registration
 //! through a link and passkey sign-in, the start of sign-in with an outside identity provider,
 //! the signed-in user's passkeys, password enrollment, sign-in and change, TOTP enrollment,
@@ -34,8 +35,8 @@ use crate::{
     accounts, admission_settings, admission_webhook, admission_webhook_call, appearance, auth,
     branding, discovery, enrollment,
     error::{FieldError, PROBLEM_JSON, Problem},
-    health, identities, local_sign_in, me, my_passkeys, oauth_authorize, oauth_token, organization,
-    passkey_enrollment, passkey_options, passkey_sign_in, password, provider_admin,
+    health, identities, local_sign_in, manifest, me, my_passkeys, oauth_authorize, oauth_token,
+    organization, passkey_enrollment, passkey_options, passkey_sign_in, password, provider_admin,
     provider_callback, provider_sign_in, role_assignments, roles, service_accounts, totp,
     totp_enrollment, users,
 };
@@ -118,6 +119,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         branding::get_branding,
         branding::update_branding,
         branding::theme_css,
+        manifest::get_web_manifest,
         local_sign_in::get_local_sign_in,
         local_sign_in::update_local_sign_in,
         admission_settings::get_admission_settings,
@@ -146,6 +148,8 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             discovery::SignInKind,
             discovery::LocalMethod,
             discovery::DiscoveryTheme,
+            manifest::WebManifest,
+            manifest::ManifestIcon,
             discovery::DiscoveryOauth,
             oauth_token::TokenResponse,
             oauth_token::OAuthError,

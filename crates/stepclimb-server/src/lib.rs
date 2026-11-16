@@ -16,7 +16,8 @@
 //! `GET /api/v1/me` ([`me`]) and their appearance choice at `PUT /api/v1/me/appearance`
 //! ([`appearance`]), service accounts and their API keys under
 //! `/api/v1/admin/service-accounts` ([`service_accounts`]), the organization's branding at `/api/v1/admin/branding` and its
-//! stylesheet at `/theme.css` ([`branding`]), the OpenAPI document (`/api/openapi.json`) and its Scalar UI
+//! stylesheet at `/theme.css` ([`branding`]), the web app manifest at `/manifest.webmanifest`
+//! ([`manifest`]), the OpenAPI document (`/api/openapi.json`) and its Scalar UI
 //! (`/docs`), and the built web SPA for every other path, its `index.html` linking the
 //! fingerprinted stylesheet and carrying the appearance ([`spa`]). Every `/api/v1` response carries
 //! `Cache-Control: no-store` ([`app`]). The other M0 specs in `docs/specs/m0/` add their
@@ -73,6 +74,7 @@ pub mod healthcheck;
 pub mod identities;
 pub mod local_sign_in;
 pub mod logging;
+pub mod manifest;
 pub mod me;
 pub mod my_passkeys;
 pub mod oauth2_sign_in;

@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The root of the route tree (docs/specs/m0/11-app-shell.md B1, B6): React Aria's RouterProvider
 // sends every Stepclimb UI link through TanStack Router; after a client-side navigation to another
-// path, focus moves to the new view's `h1`, or to the failure the view opened on; the toast region sits once at the root. A link with
+// path, focus moves to the new view's `h1`, or to the failure the view opened on; the toast region and the service worker's update offer sit once at the root. A link with
 // `routerOptions={{ reloadDocument: true }}` leaves the app instead and loads its address as a page.
 import { type ToastQueue, ToastRegion } from "@stepclimb/ui";
 import { Outlet, useRouter } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { RouterProvider } from "react-aria-components";
 import { openDocument } from "../document-navigation";
+import { AppUpdate } from "./app-update";
 
 /**
  * Focuses the page's `h1`, so a screen reader announces the new view. The heading becomes
@@ -51,6 +52,7 @@ export function Root({ toasts }: { toasts: ToastQueue }) {
     >
       <Outlet />
       <ToastRegion queue={toasts} />
+      <AppUpdate toasts={toasts} />
     </RouterProvider>
   );
 }

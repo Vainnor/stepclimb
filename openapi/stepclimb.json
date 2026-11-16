@@ -4124,6 +4124,44 @@
         }
       }
     },
+    "/manifest.webmanifest": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "The web app manifest of the request's organization: its name, its light theme's colors and\nStepclimb's default icons.",
+        "operationId": "getWebManifest",
+        "responses": {
+          "200": {
+            "description": "The organization's web app manifest. `Cache-Control: no-cache`.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`no-cache`"
+              }
+            },
+            "content": {
+              "application/manifest+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebManifest"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      }
+    },
     "/oauth/authorize": {
       "get": {
         "tags": [
@@ -5667,6 +5705,33 @@
           }
         },
         "additionalProperties": false
+      },
+      "ManifestIcon": {
+        "type": "object",
+        "description": "One icon of the manifest.",
+        "required": [
+          "src",
+          "sizes",
+          "type"
+        ],
+        "properties": {
+          "purpose": {
+            "type": "string",
+            "description": "`maskable` for the icon drawn to be cropped to the platform's shape; absent otherwise."
+          },
+          "sizes": {
+            "type": "string",
+            "description": "`<width>x<height>` in px."
+          },
+          "src": {
+            "type": "string",
+            "description": "The icon's path."
+          },
+          "type": {
+            "type": "string",
+            "description": "Always `image/png`."
+          }
+        }
       },
       "Me": {
         "type": "object",
@@ -8055,6 +8120,57 @@
           "active",
           "suspended"
         ]
+      },
+      "WebManifest": {
+        "type": "object",
+        "description": "The organization's web app manifest.",
+        "required": [
+          "name",
+          "short_name",
+          "start_url",
+          "scope",
+          "display",
+          "theme_color",
+          "background_color",
+          "icons"
+        ],
+        "properties": {
+          "background_color": {
+            "type": "string",
+            "description": "The organization's light theme `bg-canvas` color, as `#rrggbb`."
+          },
+          "display": {
+            "type": "string",
+            "description": "Always `standalone`."
+          },
+          "icons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManifestIcon"
+            },
+            "description": "Stepclimb's default icons: 192 and 512 px, and a maskable 512 px."
+          },
+          "name": {
+            "type": "string",
+            "description": "The organization's name."
+          },
+          "scope": {
+            "type": "string",
+            "description": "Always `/`."
+          },
+          "short_name": {
+            "type": "string",
+            "description": "The organization's name cut to 12 characters, trailing spaces removed."
+          },
+          "start_url": {
+            "type": "string",
+            "description": "Always `/`."
+          },
+          "theme_color": {
+            "type": "string",
+            "description": "The organization's light theme `brand` color, as `#rrggbb`."
+          }
+        }
       }
     },
     "responses": {

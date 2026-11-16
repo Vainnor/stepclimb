@@ -111,10 +111,11 @@ const CLIENT: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1
 
 // The table.
 
-/// The operations that need no credential: the probes and the unauthenticated routes specs 04
-/// to 08 declare (B21). The OAuth 2.1 authorization endpoint (`authorizeApp`,
-/// `answerAppAuthorization`) needs no permission (spec 08 Permissions); it answers a missing
-/// session with sign-in or its error page rather than a 401 problem, and
+/// The operations that need no credential: the probes, the unauthenticated routes specs 04
+/// to 08 declare (B21) and the web app manifest (spec m1/15 B1). The OAuth 2.1 authorization
+/// endpoint (`authorizeApp`, `answerAppAuthorization`) needs no permission (spec 08
+/// Permissions); it answers a missing session with sign-in or its error page rather than a 401
+/// problem, and
 /// `tests/oauth_authorize.rs` covers its session, bearer and cross-organization cases. The token
 /// and revocation endpoints (`requestAppToken`, `revokeAppToken`) take no credential at all (the
 /// clients are public); `tests/oauth_token.rs` covers their cases.
@@ -123,6 +124,7 @@ const PUBLIC: &[&str] = &[
     "readyz",
     "signOut",
     "getThemeCss",
+    "getWebManifest",
     "getDiscovery",
     "startEnrollment",
     "enrollPasskey",
