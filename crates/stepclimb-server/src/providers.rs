@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The outbound HTTP the server uses for identity providers (docs/specs/m0/05-oidc.md B2, Q4,
-//! Q5).
+//! The outbound HTTP the server uses for identity providers and the admission webhook
+//! (docs/specs/m0/05-oidc.md B2, Q4, Q5; 07-admission.md B14, B17).
 //!
 //! Every request to a provider goes through a `stepclimb_auth::outbound::OutboundClient` under a
 //! [`UrlPolicy`] built from two facts:
@@ -14,7 +14,10 @@
 //!
 //! [`Providers`] holds one client per policy the instance can be under and picks one by the
 //! organization count ([`Providers::client`]); a client's policy is fixed when it is built, and
-//! its connection pool is kept across requests. It also holds the caches of discovery documents
+//! its connection pool is kept across requests. The admission webhook has its own pair under
+//! the same two policies, with its 3-second timeout and 64 KiB reply limit
+//! ([`Providers::admission_webhook`]), and the limits on how many webhook calls may be in flight
+//! ([`Providers::admission_webhook_limits`]). It also holds the caches of discovery documents
 //! and signing keys, and the client secrets of the providers `stepclimb.toml` declares, which
 //! are never stored ([`Providers::config_secrets`]).
 
@@ -27,23 +30,36 @@ use stepclimb_auth::{
 };
 use stepclimb_core::organizations::Tenancy;
 
+use crate::admission_webhook_limits::{self as limits, WebhookLimits};
+use crate::startup::POOL_MAX_CONNECTIONS;
+
 /// The provider clients and the discovery cache, shared by every clone.
 #[derive(Clone, Debug)]
 pub struct Providers {
     single_org: OutboundClient,
     multi_org: OutboundClient,
+    webhook_single_org: OutboundClient,
+    webhook_multi_org: OutboundClient,
+    webhook_limits: WebhookLimits,
     discovery: DiscoveryCache,
     jwks: JwksCache,
     config_secrets: Arc<ConfigSecrets>,
 }
 
 impl Providers {
-    /// Build both clients under the insecure switch `allow_insecure`. It fails only when the TLS
+    /// Build the clients under the insecure switch `allow_insecure`. It fails only when the TLS
     /// setup or the system's trust store cannot be read.
     pub fn new(allow_insecure: bool) -> Result<Self, BuildError> {
+        let (single, multi) = (policy(allow_insecure, true), policy(allow_insecure, false));
         Ok(Self {
-            single_org: OutboundClient::for_providers(policy(allow_insecure, true))?,
-            multi_org: OutboundClient::for_providers(policy(allow_insecure, false))?,
+            single_org: OutboundClient::for_providers(single)?,
+            multi_org: OutboundClient::for_providers(multi)?,
+            webhook_single_org: OutboundClient::for_admission_webhook(single)?,
+            webhook_multi_org: OutboundClient::for_admission_webhook(multi)?,
+            webhook_limits: WebhookLimits::new(
+                limits::instance_limit(POOL_MAX_CONNECTIONS),
+                limits::PER_ORGANIZATION,
+            ),
             discovery: DiscoveryCache::default(),
             jwks: JwksCache::default(),
             config_secrets: Arc::default(),
@@ -58,6 +74,18 @@ impl Providers {
         self
     }
 
+    /// These clients with other webhook call limits than the pool's, for tests.
+    #[must_use]
+    pub fn with_admission_webhook_limits(mut self, limits: WebhookLimits) -> Self {
+        self.webhook_limits = limits;
+        self
+    }
+
+    /// How many admission webhook calls may be in flight, shared by every clone.
+    pub fn admission_webhook_limits(&self) -> &WebhookLimits {
+        &self.webhook_limits
+    }
+
     /// The client secrets of the providers `stepclimb.toml` declares, by row.
     pub fn config_secrets(&self) -> &ConfigSecrets {
         &self.config_secrets
@@ -66,9 +94,20 @@ impl Providers {
     /// The client for an instance with `tenancy`: private networks allowed only for
     /// [`Tenancy::Single`].
     pub fn client(&self, tenancy: Tenancy) -> &OutboundClient {
-        match tenancy {
-            Tenancy::Single(_) => &self.single_org,
-            Tenancy::Multiple | Tenancy::Empty => &self.multi_org,
+        if allows_private(tenancy) {
+            &self.single_org
+        } else {
+            &self.multi_org
+        }
+    }
+
+    /// The admission webhook's client for an instance with `tenancy`, under the policy
+    /// [`Providers::client`] picks for it.
+    pub fn admission_webhook(&self, tenancy: Tenancy) -> &OutboundClient {
+        if allows_private(tenancy) {
+            &self.webhook_single_org
+        } else {
+            &self.webhook_multi_org
         }
     }
 
@@ -81,6 +120,12 @@ impl Providers {
     pub fn jwks(&self) -> &JwksCache {
         &self.jwks
     }
+}
+
+/// Whether an instance with `tenancy` may reach private network addresses: only with exactly one
+/// organization (Q4).
+fn allows_private(tenancy: Tenancy) -> bool {
+    matches!(tenancy, Tenancy::Single(_))
 }
 
 const fn policy(allow_insecure: bool, allow_private: bool) -> UrlPolicy {
@@ -109,6 +154,13 @@ mod tests {
                 providers.client(Tenancy::Empty).policy(),
                 UrlPolicy::new(insecure, false)
             );
+            for tenancy in [Tenancy::Single(new_id()), Tenancy::Multiple, Tenancy::Empty] {
+                assert_eq!(
+                    providers.admission_webhook(tenancy).policy(),
+                    providers.client(tenancy).policy(),
+                    "{tenancy:?}"
+                );
+            }
         }
     }
 }

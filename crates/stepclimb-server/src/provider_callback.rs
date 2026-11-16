@@ -442,6 +442,8 @@ pub(crate) async fn complete_sign_in(
         scope: request.scope,
         client: request.client,
         now: state.clock.now(),
+        keys: &state.keys,
+        providers: &state.providers,
     };
     let mut tx = state.db.begin().await.map_err(|e| ApiError::internal(&e))?;
     match admission::complete(&mut tx, &verified, &context, request.headers).await {
@@ -454,7 +456,7 @@ pub(crate) async fn complete_sign_in(
             Ok(response)
         }
         // Admission rolled its own writes back; the transaction holds only the refusal marker
-        // a refusal by the rules records (spec 07 I3), which must be kept.
+        // a refusal by the rules or the webhook records (spec 07 I3, I6), which must be kept.
         Err(Completion::Refused(refusal)) => {
             tx.commit().await.map_err(|e| ApiError::internal(&e))?;
             Ok(refusal.redirect())

@@ -12,7 +12,7 @@
 
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{
@@ -41,6 +41,7 @@ use stepclimb_core::{
     roles::{self, NewRole},
     users::{self, NewUser, User},
 };
+use stepclimb_server::providers::Providers;
 use stepclimb_server::{
     AppState,
     admission::{self, Admission, Context, Profile, Step, Verified},
@@ -62,6 +63,14 @@ const PATH: &str = "/api/v1/admin/admission";
 fn now() -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(1_763_000_000)
 }
+
+/// The key ring and outbound clients admission's step 4 is given; no organization in these
+/// tests has an admission webhook, so neither is used.
+static KEY_RING: LazyLock<KeyRing> = LazyLock::new(|| {
+    KeyRing::parse("test:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=").expect("a valid test key")
+});
+static PROVIDERS: LazyLock<Providers> =
+    LazyLock::new(|| Providers::new(false).expect("the outbound clients"));
 
 #[expect(
     clippy::disallowed_methods,
@@ -461,6 +470,8 @@ async fn admit(
         scope: scope(org),
         client: ClientAddress(CLIENT.ip()),
         now: now(),
+        keys: &KEY_RING,
+        providers: &PROVIDERS,
     };
     let mut tx = pool.begin().await.expect("begin");
     let admission = admission::admit(&mut tx, &sign_in, &context).await;
@@ -704,7 +715,13 @@ async fn t21_the_steps_run_in_order_and_stop_at_a_refusal(pool: PgPool) {
     );
     assert_eq!(
         captured.steps(),
-        ["known_identity", "rules", "sync_only", "just_in_time"]
+        [
+            "known_identity",
+            "rules",
+            "sync_only",
+            "webhook",
+            "just_in_time"
+        ]
     );
 
     captured.clear();

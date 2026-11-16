@@ -11,6 +11,7 @@
 //! All data is synthetic. Needs `DATABASE_URL` (`just up`).
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::LazyLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{
@@ -36,6 +37,7 @@ use stepclimb_core::{
     roles::{self, NewRole},
     users::{self, NewUser},
 };
+use stepclimb_server::providers::Providers;
 use stepclimb_server::{
     AppState,
     admission::{self, Admission, Context, Profile, Verified},
@@ -58,6 +60,14 @@ const SETTINGS: &str = "/api/v1/organization/settings";
 fn now() -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(1_763_000_000)
 }
+
+/// The key ring and outbound clients admission's step 4 is given; no organization in these
+/// tests has an admission webhook, so neither is used.
+static KEY_RING: LazyLock<KeyRing> = LazyLock::new(|| {
+    KeyRing::parse("test:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=").expect("a valid test key")
+});
+static PROVIDERS: LazyLock<Providers> =
+    LazyLock::new(|| Providers::new(false).expect("the outbound clients"));
 
 #[expect(
     clippy::disallowed_methods,
@@ -275,6 +285,8 @@ async fn new_person_refused(
         scope: scope(org),
         client: ClientAddress(CLIENT.ip()),
         now: now(),
+        keys: &KEY_RING,
+        providers: &PROVIDERS,
     };
     let mut tx = pool.begin().await.expect("begin");
     let admission = admission::admit(&mut tx, &sign_in, &context)

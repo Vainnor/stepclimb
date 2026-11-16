@@ -303,7 +303,7 @@ async fn a_body_at_the_limit_is_read() {
 }
 
 #[tokio::test]
-async fn a_tls_failure_is_a_transport_error_without_the_url() {
+async fn a_tls_failure_is_a_tls_error_without_the_url_or_the_host() {
     // A plain-HTTP reply to the TLS handshake: rustls refuses it.
     let server = Server::start(Answer::Unasked(
         b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n".to_vec(),
@@ -319,13 +319,16 @@ async fn a_tls_failure_is_a_transport_error_without_the_url() {
         .await
         .expect_err("TLS fails");
 
-    let OutboundError::Transport { reason } = &error else {
-        panic!("{error:?}");
-    };
+    assert!(matches!(error, OutboundError::Tls), "{error:?}");
     let shown = format!("{error} {error:?}");
-    assert!(!reason.is_empty());
-    assert!(!shown.contains("do-not-log-me"), "{shown}");
-    assert!(!shown.contains("/token"), "{shown}");
+    for part in [
+        "do-not-log-me",
+        "/token",
+        "127.0.0.1",
+        &server.port.to_string(),
+    ] {
+        assert!(!shown.contains(part), "{part} in {shown}");
+    }
 }
 
 #[tokio::test]

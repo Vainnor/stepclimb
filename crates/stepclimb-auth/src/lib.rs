@@ -16,7 +16,7 @@
 //! argon2id hashes, and [`totp`], TOTP codes and recovery codes (B19 to B21). For the OAuth 2.1
 //! server for Stepclimb's own apps it has [`oauth_server`], the client registry and the checks of
 //! an authorization request (spec 08 B30, B31). For the admission webhook it has [`webhook`], the
-//! Standard Webhooks signing secret (`docs/specs/m0/07-admission.md` B24). Sessions, CSRF and API-key authentication live in
+//! Standard Webhooks signing secret and signature (`docs/specs/m0/07-admission.md` B13, B24). Sessions, CSRF and API-key authentication live in
 //! the server crate; the OAuth 2.1 token endpoint arrives with spec 08 I8.
 
 pub mod claims;

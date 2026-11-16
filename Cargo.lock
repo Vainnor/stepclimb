@@ -3383,6 +3383,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "clap",
+ "hmac 0.13.0",
  "http-body-util",
  "httpdate",
  "rust-embed",
