@@ -26,7 +26,7 @@ use crate::{
     provider_admin, provider_callback, provider_sign_in,
     providers::Providers,
     rate_limit::RateLimiter,
-    role_assignments, roles, service_accounts, spa, totp, users,
+    role_assignments, roles, service_accounts, spa, totp, totp_enrollment, users,
     web_origin::WebOrigin,
 };
 
@@ -144,6 +144,10 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         ),
         (totp::TOTP_SIGN_IN_PATH, post(totp::sign_in_with_totp)),
         (
+            totp_enrollment::TOTP_ENROLLMENT_PATH,
+            post(totp_enrollment::enroll_totp_at_sign_in),
+        ),
+        (
             provider_sign_in::START_PATH,
             get(provider_sign_in::start_provider_sign_in),
         ),
@@ -245,6 +249,7 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
             "/api/v1/admin/users/{user_id}/enrollment-links",
             post(enrollment::create_enrollment_link),
         ),
+        (totp::USER_TOTP_PATH, delete(totp::remove_user_totp)),
         (
             role_assignments::ROLE_ASSIGNMENTS_PATH,
             get(role_assignments::list_role_assignments)

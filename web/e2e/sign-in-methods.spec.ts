@@ -108,6 +108,20 @@ async function offer(page: Page, signIn: unknown[]) {
 
 const local = { key: "local", kind: "local", label: null, methods: ["passkey", "password"] };
 
+/** A password step's answer while the organization requires TOTP: synthetic, set-up only. */
+const setUpAnswer = {
+  next: "totp_enroll",
+  secret: "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
+  otpauth_uri:
+    "otpauth://totp/Example%20Training:nobody%40example.test?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=Example%20Training&algorithm=SHA1&digits=6&period=30",
+};
+
+/** Ten recovery codes in the server's shape, made up for the screen. */
+const recoveryCodes = Array.from(
+  { length: 10 },
+  (_, i) => `ABCD-EFGH-JKLM-NP${String(i).padStart(2, "0")}`,
+);
+
 const brands = ["default", "vzdc"] as const;
 
 /**
@@ -247,6 +261,47 @@ function methodListAxe(
       await expect(page.getByRole("alert")).toContainText("Your account is suspended.");
       expect(await violations(page)).toEqual([]);
     });
+
+    await test.step("TOTP set-up, a wrong code, and the recovery codes", async () => {
+      await page.unroute("**/auth/local/password");
+      await page.route("**/auth/local/password", (route) => route.fulfill({ json: setUpAnswer }));
+      let sent = 0;
+      await page.route("**/auth/local/totp/enrollment", (route) =>
+        ++sent === 1
+          ? route.fulfill({
+              status: 401,
+              contentType: "application/problem+json",
+              body: JSON.stringify({
+                type: "about:blank",
+                title: "Unauthorized",
+                status: 401,
+                code: "auth.totp_invalid",
+              }),
+            })
+          : route.fulfill({ json: { return_to: "/", recovery_codes: recoveryCodes } }),
+      );
+      await page.getByRole("link", { name: "Start again" }).click();
+      await page.getByRole("textbox", { name: "Email" }).fill("nobody@example.test");
+      await page.getByRole("button", { name: "Continue" }).click();
+      await page.getByLabel("Password").fill("not the password");
+      await page.getByRole("button", { name: "Sign in" }).click();
+      await expect(
+        page.getByRole("heading", { level: 1, name: "Set up a code from an app" }),
+      ).toBeVisible();
+      await expect(page.getByText(setUpAnswer.secret, { exact: true })).toBeVisible();
+      expect(await violations(page)).toEqual([]);
+      await page.getByRole("textbox", { name: /^Code/ }).fill("000000");
+      await page.getByRole("button", { name: "Turn on and sign in" }).click();
+      await expect(page.getByRole("alert")).toContainText("That code did not work.");
+      expect(await violations(page)).toEqual([]);
+      await page.getByRole("textbox", { name: /^Code/ }).fill("123456");
+      await page.getByRole("button", { name: "Turn on and sign in" }).click();
+      await expect(
+        page.getByRole("heading", { level: 1, name: "Save your recovery codes" }),
+      ).toBeFocused();
+      await expect(page.getByRole("listitem")).toHaveCount(10);
+      expect(await violations(page)).toEqual([]);
+    });
     await context.close();
   });
 }
@@ -284,6 +339,23 @@ test.describe("on a phone", () => {
     await expect(code).toHaveAttribute("inputmode", "numeric");
     expect(
       await code.evaluate((el) => Number.parseFloat(getComputedStyle(el).fontSize)),
+    ).toBeGreaterThanOrEqual(16);
+
+    // The set-up step's code field too.
+    await page.unroute("**/auth/local/password");
+    await page.route("**/auth/local/password", (route) => route.fulfill({ json: setUpAnswer }));
+    await page.getByRole("link", { name: "Start again" }).click();
+    await page.getByRole("textbox", { name: "Email" }).fill("nobody@example.test");
+    await page.getByRole("button", { name: "Continue" }).click();
+    await page.getByLabel("Password").fill("not the password");
+    await page.getByRole("button", { name: "Sign in" }).click();
+    const setUpCode = page.getByRole("textbox", { name: /^Code/ });
+    await expect(
+      page.getByRole("heading", { level: 1, name: "Set up a code from an app" }),
+    ).toBeVisible();
+    await expect(setUpCode).toHaveAttribute("inputmode", "numeric");
+    expect(
+      await setUpCode.evaluate((el) => Number.parseFloat(getComputedStyle(el).fontSize)),
     ).toBeGreaterThanOrEqual(16);
   });
 });

@@ -507,7 +507,7 @@ organization, `secret_hash` checked to 32 bytes, `last_used_at timestamptz NULL`
 **`auth_flows`** (Q8): `id uuid PK`, `org_id uuid NOT NULL REFERENCES organizations(id)`,
 `token_hash bytea NOT NULL UNIQUE` (SHA-256 of the flow cookie value, 32 bytes), `kind text NOT
 NULL` (`oidc`, `oauth2`, `passkey_register`, `passkey_sign_in`, `password_totp`,
-`oauth_authorize`), `user_id uuid NULL`, with `(org_id, user_id) REFERENCES users(org_id, id) ON
+`oauth_authorize`, `password_totp_enroll` (`04-local-accounts.md` B15, issue I9)), `user_id uuid NULL`, with `(org_id, user_id) REFERENCES users(org_id, id) ON
 DELETE CASCADE` so a flow's user is in the flow's organization, `payload bytea NOT NULL`
 (AES-256-GCM, B20, sealed for `[org_id, "auth_flows", id, "payload"]`), `return_to text NOT NULL`
 (checked against B19's rule, printable ASCII, at most 2,048 bytes), `expires_at timestamptz NOT

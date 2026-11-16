@@ -129,6 +129,7 @@ const PUBLIC: &[&str] = &[
     "enrollPassword",
     "signInWithPassword",
     "signInWithTotp",
+    "enrollTotpAtSignIn",
     "startProviderSignIn",
     "finishProviderSignIn",
     "authorizeApp",
@@ -277,6 +278,10 @@ const TABLE: &[Entry] = &[
     Entry {
         operation_id: "createEnrollmentLink",
         access: permission(UserManage::KEY, USER_NOT_FOUND, user_with_email_in_path),
+    },
+    Entry {
+        operation_id: "removeUserTotp",
+        access: permission(UserManage::KEY, USER_NOT_FOUND, user_with_totp_in_path),
     },
     Entry {
         operation_id: "listUserIdentities",
@@ -853,6 +858,7 @@ fn unchanged_local_sign_in(_: &Org) -> Pin<Box<dyn Future<Output = Call> + Send 
                 "password": true,
                 "totp": true,
                 "magic_link": false,
+                "totp_required": false,
             })),
             at: At::Org,
         }
@@ -884,6 +890,19 @@ fn user_with_email_in_path(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Sen
     Box::pin(async {
         let email = format!("enroll-{}@example.test", new_id().simple());
         let (_, user) = org.named_user("Pat Example".into(), Some(email)).await;
+        Call {
+            params: vec![("user_id", user)],
+            body: None,
+            at: At::Org,
+        }
+    })
+}
+
+/// A new user of `org` with a password and confirmed TOTP, named in the path.
+fn user_with_totp_in_path(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let (_, user) = org.user().await;
+        give_totp(org, user, true).await;
         Call {
             params: vec![("user_id", user)],
             body: None,
@@ -1526,6 +1545,7 @@ async fn public_request(world: &World, org: &Org, id: &str) -> (Option<Value>, O
         "finishPasskeySignIn" => return passkey_sign_in_request(world, org).await,
         "signInWithPassword" => return password_sign_in_request(org).await,
         "signInWithTotp" => return totp_sign_in_request(org).await,
+        "enrollTotpAtSignIn" => return totp_set_up_request(org).await,
         "startEnrollment" | "enrollPasskey" | "enrollPassword" => {}
         _ => return (None, None),
     }
@@ -1624,6 +1644,42 @@ async fn totp_sign_in_request(org: &Org) -> (Option<Value>, Option<String>) {
     )
     .await
     .expect("start the second step");
+    let cookie = flow.set_cookie.to_str().expect("ASCII");
+    let cookie = cookie.split(';').next().expect("a pair").to_owned();
+    let body = serde_json::json!({ "code": secret.code_at_time(now()) });
+    (Some(body), Some(cookie))
+}
+
+/// A user with a password and a waiting TOTP secret, the set-up flow a password sign-in starts
+/// while TOTP is required, and the current code: the body and flow cookie `enrollTotpAtSignIn`
+/// signs in with.
+async fn totp_set_up_request(org: &Org) -> (Option<Value>, Option<String>) {
+    let (_, user) = org
+        .named_user("Pat Example".into(), Some("set-up@example.test".into()))
+        .await;
+    let secret = give_totp(org, user, false).await;
+    let keys = state_for(&org.pool).keys;
+    let sealed: Vec<u8> =
+        sqlx::query_scalar("SELECT totp_secret FROM local_logins WHERE user_id = $1")
+            .bind(user)
+            .fetch_one(&org.pool)
+            .await
+            .expect("the waiting secret");
+    let pending = stepclimb_server::totp_enrollment::SetUpPending {
+        generation: 1,
+        secret_hash: stepclimb_server::totp_enrollment::sealed_secret_hash(&sealed),
+    };
+    let payload = serde_json::to_vec(&pending).expect("JSON");
+    let start = stepclimb_server::flow::FlowStart {
+        kind: stepclimb_core::auth_flows::Kind::PasswordTotpEnroll,
+        user_id: Some(user),
+        provider_id: None,
+        payload: &payload,
+        return_to: None,
+    };
+    let flow = stepclimb_server::flow::start(&org.pool, &keys, scope(org.id), start, now())
+        .await
+        .expect("start the set-up");
     let cookie = flow.set_cookie.to_str().expect("ASCII");
     let cookie = cookie.split(';').next().expect("a pair").to_owned();
     let body = serde_json::json!({ "code": secret.code_at_time(now()) });

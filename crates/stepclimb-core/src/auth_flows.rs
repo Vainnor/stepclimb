@@ -52,17 +52,21 @@ pub enum Kind {
     /// An OAuth 2.1 authorization request of a signed-in user, waiting for their answer on the
     /// confirmation page (spec 08 B31, Q10).
     OauthAuthorize,
+    /// TOTP set up after a correct password, when the organization requires it and the user
+    /// has none yet (spec 04 B15).
+    PasswordTotpEnroll,
 }
 
 impl Kind {
     /// Every kind, in the order the `auth_flows.kind` check constraint lists them.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Oidc,
         Self::Oauth2,
         Self::PasskeyRegister,
         Self::PasskeySignIn,
         Self::PasswordTotp,
         Self::OauthAuthorize,
+        Self::PasswordTotpEnroll,
     ];
 
     /// The stored spelling.
@@ -75,6 +79,7 @@ impl Kind {
             Self::PasskeySignIn => "passkey_sign_in",
             Self::PasswordTotp => "password_totp",
             Self::OauthAuthorize => "oauth_authorize",
+            Self::PasswordTotpEnroll => "password_totp_enroll",
         }
     }
 }

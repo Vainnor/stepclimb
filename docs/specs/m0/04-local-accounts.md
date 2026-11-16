@@ -419,7 +419,7 @@ creates and hands over.
 
   - Q11 (a) as decided, without its organization setting: TOTP is optional per user. The
     setting that would require it of every password user needs a way to enroll during sign-in,
-    which issue I7 does not list; it is left for a later issue.
+    which issue I7 does not list; it is left for a later issue (I9, below).
   - The step runs in the sign-in transaction after the user's lock, the "password changed"
     check and the rehash: when the organization offers TOTP (B2's rule above) and the user's
     secret is confirmed, the route starts a `password_totp` flow (`08-sessions-and-csrf.md` B17)
@@ -431,6 +431,67 @@ creates and hands over.
     alone; switching TOTP back on asks for the same secret again (B2: credentials of a
     switched-off method stop working and come back unchanged). The admin who switches it off
     must hold every catalog permission (B2's escalation rule).
+
+  Coordinator decisions (2026-11-15), for issue I9 (#192), Q11 (a)'s organization setting:
+
+  - The setting is `totp_required`, a fifth member of the `local_sign_in` settings object
+    (default `false`), read and written with the switches through `/api/v1/admin/local-sign-in`,
+    whose `PUT` now names six members. Changing it is a change of the switches: the same
+    escalation rule (every catalog permission at organization scope), the same
+    `organization.update_settings` audit entry. `local_sign_in::update` refuses it on while the
+    password or TOTP is switched off: 422 `request.invalid` with `local.totp_required_needs_totp`
+    at `/totp_required`, writing nothing. Turning either off while it is on is the same refusal,
+    so an admin turns the requirement off first.
+  - What follows a right password (`totp::next_after_password`): a user with confirmed TOTP gives
+    the code (`{next: "totp"}`) while TOTP is offered or required; a user without it, while TOTP
+    is required, sets it up (`{next: "totp_enroll"}`); otherwise the password signs in. Required
+    means `totp_required` and the password offered (`LocalSignIn::requires_totp`), whatever TOTP's
+    own switch says, so a stored state the route refuses to write (required with TOTP off) asks
+    for a step whose route answers 404 and the password alone never signs in: fail closed.
+  - Set-up during sign-in: the password route, in its sign-in transaction, stores a new
+    unconfirmed secret (as `POST /api/v1/me/totp` does, replacing an unconfirmed one) and starts
+    a `password_totp_enroll` flow (a new `auth_flows.kind`, migration
+    `20261116120000_totp_enroll_flow.sql`) naming the user, the password's generation and the
+    SHA-256 of the sealed secret it stored, which binds the flow to that secret. It
+    answers 200 `{next: "totp_enroll", otpauth_uri, secret}` (`EnrollmentRequired`, a third member
+    of `PasswordSignedIn`) with the flow cookie and `no-store`, without a session or a device
+    cookie. The secret is in this answer because no session exists to fetch it with.
+  - `POST /auth/local/totp/enrollment` with `{code}` takes `RateLimited<SignIn>` first, answers
+    404 `auth.method_disabled` unless TOTP is offered, takes only a `password_totp_enroll` flow (so
+    neither step's flow stands in for the other's), and in a savepoint locks the user and login.
+    A flow whose password generation changed, whose user confirmed TOTP meanwhile, or whose
+    waiting secret is gone or was replaced without being confirmed (by a second password sign-in's
+    set-up or by `POST /api/v1/me/totp` from an earlier session) answers 400 `auth.flow_invalid`:
+    no code for the secret it showed can work any more, so the user starts again rather than
+    retrying (from the security review of #205). The code counts against B18's budgets
+    and is checked against the waiting secret (no recovery code: none exist yet); a right code
+    confirms TOTP with ten new recovery codes (`totp.enable` with the user as actor), completes the
+    sign-in through admission (B5), and answers 200 `{return_to, recovery_codes}` with the session,
+    a device cookie, the flow cookie cleared and `no-store`. The body names no user: the flow can
+    set TOTP only for the user whose password it followed.
+  - A wrong set-up code answers 401 `auth.totp_invalid` and rolls everything back, so the flow
+    stays usable until its 10-minute expiry; the failure stays counted against the budgets. Unlike
+    B20's code step, the person has already proved the password and the code only shows their app
+    holds the secret they were just shown, so a typo must not cost them a new secret to scan. A
+    spent budget (429) and a fault roll back too; an admission refusal (403) commits only the
+    flow's deletion, so TOTP stays unset.
+  - Users who signed in before the requirement was turned on keep their sessions until those end;
+    they set TOTP up at their next password sign-in. The spec asks for no session to end, and
+    ending every password user's sessions at once is a larger change than the setting.
+  - Turning the requirement off removes no TOTP: confirmed TOTP keeps asking for the code.
+  - The requirement is about password sign-in only. Passkey sign-in, provider sign-in and the
+    sign-in an enrollment link completes (B19's decision) are unchanged; the next password
+    sign-in after an enrollment link sets TOTP up.
+  - A user may still turn their own TOTP off with a code (B21) while it is required; their next
+    password sign-in sets it up again.
+  - For administrators (from the security review of #205): with `totp_required` on, whoever
+    knows an account's password first sets up its TOTP, so turn it on only for accounts whose
+    passwords are the users' own. The recovery runbook for an account set up by someone else, or
+    a user who lost both the app and the recovery codes, is the administrator's removal of the
+    user's TOTP (B21's I9 decision, which also ends the user's sessions) and then an enrollment
+    link, which resets the password; the user's next password sign-in sets TOTP up again.
+    Enforcement lags for sessions that existed before the setting was turned on: they last until
+    they end, at most the 30-day session limit (`08-sessions-and-csrf.md` B8).
 - **B16.** Passwords are hashed with argon2id using the parameters of Q8, with a per-hash random
   salt, in the PHC string format. When a stored hash uses older parameters, a successful sign-in
   rehashes it. The number of hashes computed at once is capped (pending Q8) so sign-in bursts
@@ -570,6 +631,22 @@ creates and hands over.
     `auth.totp_invalid`. A `POST` with a body rather than `DELETE`, since the request carries a
     code.
 
+  Coordinator decisions (2026-11-15), for issue I9 (#192), from the security review of I7: an
+  administrator removes another user's TOTP with `DELETE /api/v1/admin/users/{user_id}/totp`, for a
+  user who lost both the app and the recovery codes. It needs `user.manage` at organization scope
+  and the user routes' escalation rule (`03-users-and-identities.md` B6 as the owner decided it:
+  403 `permission.escalation` when the user holds a permission the caller does not hold at
+  organization scope), and, as every admin user-write route, refuses an API key acting on its own
+  owner with 403 `auth.session_required` (`08-sessions-and-csrf.md` B44). It removes the secret,
+  the replay step and every recovery code (`local_totp::disable`) and writes `totp.disable` with
+  the administrator as actor; the answer is 204, with 409 `local.totp_not_enabled` when the user
+  has no confirmed TOTP. The caller's own TOTP is refused with 409 `local.cannot_remove_own_totp`:
+  it goes through B21's route with a code, so a stolen admin session cannot drop its own second
+  factor without one. The route does not check that TOTP is offered, so TOTP can be cleaned up
+  while it is switched off. In the same transaction it ends every session of the user
+  (`sessions::delete_others_of_user` keeping none), so a session that passed the removed second
+  factor, or a thief's, does not outlive it (from the security review of #205).
+
 ### Magic link
 
 - **B22.** When the magic link method is on and the organization can send email (M1), `POST
@@ -597,15 +674,16 @@ answer the admission refusals of `07-admission.md` as 403.
 | Method and path | Request | Response | Errors | Permission |
 | --- | --- | --- | --- | --- |
 | `GET /api/v1/admin/local-sign-in` | none | 200 `{enabled, passkey, password, totp, magic_link}` | `permission.denied` | `perm::ProviderManage`, organization |
-| `PUT /api/v1/admin/local-sign-in` | same shape | 200 | `local.magic_link_needs_email` (on before an email sender exists), `local.last_method` (409, B2), `permission.denied`, `permission.escalation` | `perm::ProviderManage`, organization |
+| `PUT /api/v1/admin/local-sign-in` | same shape, with `totp_required` (B15's I9 decisions) | 200 | `local.magic_link_needs_email` (on before an email sender exists), `local.totp_required_needs_totp` (422), `local.last_method` (409, B2), `permission.denied`, `permission.escalation` | `perm::ProviderManage`, organization |
 | `POST /api/v1/admin/users/{user_id}/enrollment-links` | none | 201 `{url, expires_at}` | `user.not_found`, `local.email_required` (409), `permission.denied`, `permission.escalation` | `perm::UserManage`, organization (see Permissions) |
 | `POST /auth/local/enrollment/start` | `{token}` | 200 `{email, methods: [...], passkey_options?}`; with `passkey_options`, sets the flow cookie | `auth.enrollment_invalid`, `auth.enrollment_expired` | none |
 | `POST /auth/local/enrollment/passkey` | `{token, credential, name?}` | 200 `{return_to}`; sets `__Host-sc_session` | `auth.enrollment_invalid`, `auth.enrollment_expired`, `auth.flow_invalid`, `auth.flow_expired`, `auth.passkey_invalid` (all 400), `auth.suspended` (403), `request.invalid` (422, `name`) | none |
 | `POST /auth/local/enrollment/password` | `{token, password}` | 200 `{return_to}`; sets the session | `auth.enrollment_invalid`, `auth.enrollment_expired`, `local.password_weak` | none |
 | `POST /auth/local/passkey/start` | `{email, return_to?}` | 200 `{options}`; sets the flow cookie | none beyond the common ones (Q9 (a): every address gets 200) | none |
 | `POST /auth/local/passkey/finish` | `{credential}` | 200 `{return_to}`; sets the session | `auth.flow_invalid`, `auth.flow_expired` (400), `auth.passkey_invalid` (401), `auth.suspended`, `local.passkeys_not_allowed` (403, Q16) | none |
-| `POST /auth/local/password` | `{email, password, return_to?}` | 200 `{return_to}` with the session, or 200 `{next: "totp"}` with the flow cookie | `auth.credentials_invalid` | none |
+| `POST /auth/local/password` | `{email, password, return_to?}` | 200 `{return_to}` with the session, or 200 `{next: "totp"}` or `{next: "totp_enroll", otpauth_uri, secret}` with the flow cookie | `auth.credentials_invalid` | none |
 | `POST /auth/local/totp` | `{code}` (a code or a recovery code) | 200 `{return_to}`; sets the session | `auth.flow_invalid`, `auth.flow_expired` (400), `auth.totp_invalid` (401), `auth.suspended` (403) | none |
+| `POST /auth/local/totp/enrollment` | `{code}` | 200 `{return_to, recovery_codes}`; sets the session | `auth.flow_invalid`, `auth.flow_expired` (400), `auth.totp_invalid` (401, the set-up still waits), `auth.suspended` (403) | none |
 | `POST /auth/local/magic-link` | `{email, return_to?}` | 202 | none beyond the common ones | none |
 | `POST /auth/local/magic-link/finish` | `{token}` | 200 `{return_to}`; sets the session | `auth.magic_link_invalid` | none |
 | `GET /api/v1/me/passkeys` | none | 200 `[{id, name, created_at, last_used_at}]` | `auth.session_required` (403) | signed in |
@@ -617,6 +695,7 @@ answer the admission refusals of `07-admission.md` as 403.
 | `POST /api/v1/me/totp` | none | 200 `{otpauth_uri, secret}` | `local.password_required`, `local.totp_enabled` (409), `auth.session_required` (403) | signed in |
 | `POST /api/v1/me/totp/confirm` | `{code}` | 200 `{recovery_codes}` (B19's decision) | `auth.totp_invalid` (401), `local.totp_not_started`, `local.totp_enabled` (409), `auth.session_required` (403) | signed in |
 | `POST /api/v1/me/totp/disable` | `{code}` (a code or a recovery code) | 204 | `auth.totp_invalid` (401), `local.totp_not_enabled` (409), `auth.session_required` (403) | signed in |
+| `DELETE /api/v1/admin/users/{user_id}/totp` | none | 204 | `user.not_found` (404), `local.totp_not_enabled`, `local.cannot_remove_own_totp` (409), `permission.denied`, `permission.escalation`, `auth.session_required` (403) | `perm::UserManage`, organization |
 
 The magic-link routes are built only if Q1 and Q13 put them in M0. Issue I7 added the disabling
 route (B21); recovery codes are answered by the confirmation and used by the sign-in step and the
@@ -694,7 +773,7 @@ Proposed, pending Q3 (none of these is in the plan's data model):
 | Entry | Scope | Built-in roles |
 | --- | --- | --- |
 | `perm::ProviderManage` (`09-permissions-and-roles.md` B2, which lists 04 as a checker): change the local method switches, pending Q2 | organization | Organization admin |
-| `perm::UserManage` (`09-permissions-and-roles.md` B2): create enrollment links | organization (account scope only if `09-permissions-and-roles.md` Q2 widens it) | Organization admin |
+| `perm::UserManage` (`09-permissions-and-roles.md` B2): create enrollment links, remove a user's TOTP | organization (account scope only if `09-permissions-and-roles.md` Q2 widens it) | Organization admin |
 
 `/api/v1/me/...` routes need only a signed-in session: every user manages their own
 credentials. They are not callable with an API key (a key must not add or remove its owner's
@@ -759,6 +838,17 @@ authenticator.
 - **T20.** Playwright with Chromium's virtual authenticator: open an enrollment link, register a
   passkey, sign out, sign in with the passkey.
 - **T21.** Contract: every route above is in `openapi/stepclimb.json`.
+- **T22.** (B15, B21, issue I9) With TOTP required, a right password of a user without TOTP
+  answers `{next: "totp_enroll"}` with no session; a wrong set-up code keeps the set-up waiting;
+  the current code signs in once with ten recovery codes; the set-up's flow and the code step's
+  are not interchangeable; a changed password or TOTP confirmed meanwhile ends the set-up; users
+  signed in before keep their sessions and set TOTP up at their next sign-in; turning the
+  requirement off keeps confirmed TOTP; a stored requirement with TOTP off never signs in with
+  the password alone. The requirement needs every catalog permission and the password and TOTP
+  switched on. An administrator's removal of a user's TOTP is audited, refuses the caller's own,
+  a more privileged user's and a key's owner, and ends every session of the user; a set-up whose
+  secret was replaced answers 400 `auth.flow_invalid`; four-case and cross-organization cases for it and
+  the set-up route come from the permission suite.
 
 `/api/v1/me/...` routes have no permission to withhold, so their four-case test is three cases
 (401 anonymous, 404 for another user's id, 2xx for the owner) plus the API-key 403 of T9.
@@ -938,3 +1028,7 @@ overrule one, which then updates this spec.
 8. **I8. Magic link.** Request and finish routes, token lifetime, the landing-page button rule.
    Covers B22; T16. Depends on: I2, the M1 email spec (`docs/specs/m1.md`), Q13. Scheduled per
    Q1.
+9. **I9. Required TOTP (#192).** Q11 (a)'s organization setting `totp_required`, TOTP set up during
+   a password sign-in while it is required, and an administrator's removal of a user's TOTP.
+   Covers B15's and B21's I9 decisions. Depends on: I7. Stays in M0 (coordinator decision,
+   2026-11-15: Q11 (a), which the owner decided, includes the setting).

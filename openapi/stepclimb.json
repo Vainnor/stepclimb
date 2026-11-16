@@ -1931,6 +1931,54 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/api/v1/admin/users/{user_id}/totp": {
+      "delete": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Remove a user's TOTP and recovery codes.",
+        "operationId": "removeUserTotp",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "The user's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The user's TOTP is off; its secret and recovery codes are deleted, and every session of the user has ended."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/UserTotpForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/UserNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/UserTotpConflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/api/v1/me": {
       "get": {
         "tags": [
@@ -3771,6 +3819,79 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/auth/local/totp/enrollment": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Confirm TOTP set up during sign-in and finish signing in.",
+        "operationId": "enrollTotpAtSignIn",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TotpCode"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "TOTP is on and the user is signed in; the recovery codes are shown once",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`no-store`"
+              },
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The new `__Host-sc_session` cookie, the `__Host-sc_device` cookie, and `__Host-sc_flow` cleared"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrolledSignedIn"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/TotpEnrollmentBadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/TotpEnrollmentUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/TotpSignInForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/TotpNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/auth/sign-out": {
       "post": {
         "tags": [
@@ -5041,6 +5162,27 @@
           "password"
         ]
       },
+      "EnrolledSignedIn": {
+        "type": "object",
+        "description": "TOTP is on and the user is signed in; the recovery codes are shown once.",
+        "required": [
+          "return_to",
+          "recovery_codes"
+        ],
+        "properties": {
+          "recovery_codes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Ten single-use codes that stand in for a TOTP code when the app is lost."
+          },
+          "return_to": {
+            "type": "string",
+            "description": "The path on this site to open next."
+          }
+        }
+      },
       "EnrollmentLink": {
         "type": "object",
         "description": "An enrollment link, returned once: the only copy of its token.",
@@ -5057,6 +5199,29 @@
           "url": {
             "type": "string",
             "description": "The link to hand to the user. It holds a secret: anyone with it can set up a way to\nsign in as the user until it is used, replaced or expires."
+          }
+        }
+      },
+      "EnrollmentRequired": {
+        "type": "object",
+        "description": "A right password whose account must set up TOTP first: no session exists yet. Shown once.",
+        "required": [
+          "next",
+          "otpauth_uri",
+          "secret"
+        ],
+        "properties": {
+          "next": {
+            "$ref": "#/components/schemas/NextStep",
+            "description": "`totp_enroll`: send a code from the app to `POST /auth/local/totp/enrollment` in this\nbrowser within 10 minutes."
+          },
+          "otpauth_uri": {
+            "type": "string",
+            "description": "The URI to show as a QR code for the authenticator app."
+          },
+          "secret": {
+            "type": "string",
+            "description": "The secret in base32, for typing into the app instead."
           }
         }
       },
@@ -5250,7 +5415,8 @@
           "passkey",
           "password",
           "totp",
-          "magic_link"
+          "magic_link",
+          "totp_required"
         ],
         "properties": {
           "magic_link": {
@@ -5264,6 +5430,10 @@
           },
           "totp": {
             "type": "boolean"
+          },
+          "totp_required": {
+            "type": "boolean",
+            "description": "Every password sign-in needs a TOTP code."
           }
         }
       },
@@ -5275,7 +5445,8 @@
           "passkey",
           "password",
           "totp",
-          "magic_link"
+          "magic_link",
+          "totp_required"
         ],
         "properties": {
           "enabled": {
@@ -5297,6 +5468,10 @@
           "totp": {
             "type": "boolean",
             "description": "A TOTP code as the second step after a password."
+          },
+          "totp_required": {
+            "type": "boolean",
+            "description": "Every password sign-in needs a TOTP code: a user without TOTP sets it up at their next\npassword sign-in, before they get a session. Needs `password` and `totp` on. Turning it\noff keeps the TOTP users already set up."
           }
         },
         "additionalProperties": false
@@ -5760,7 +5935,8 @@
         "type": "string",
         "description": "The next step a password sign-in needs.",
         "enum": [
-          "totp"
+          "totp",
+          "totp_enroll"
         ]
       },
       "Oauth2ProviderClaims": {
@@ -6634,9 +6810,12 @@
           },
           {
             "$ref": "#/components/schemas/CodeRequired"
+          },
+          {
+            "$ref": "#/components/schemas/EnrollmentRequired"
           }
         ],
-        "description": "The answer of a right password: the user is signed in, or TOTP's second step is needed."
+        "description": "The answer of a right password: the user is signed in, TOTP's second step is needed, or the\norganization requires TOTP and the user must set it up first."
       },
       "PermissionInfo": {
         "type": "object",
@@ -8006,7 +8185,7 @@
         }
       },
       "LocalSignInInvalid": {
-        "description": "`request.invalid`: the change breaks a rule; `errors` lists each one. `local.magic_link_needs_email` marks `magic_link` switched on while the server cannot send email.",
+        "description": "`request.invalid`: the change breaks a rule; `errors` lists each one. `local.magic_link_needs_email` marks `magic_link` switched on while the server cannot send email. `local.totp_required_needs_totp` marks `totp_required` on while `password` or `totp` is off.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -8563,6 +8742,26 @@
           }
         }
       },
+      "TotpEnrollmentBadRequest": {
+        "description": "`request.malformed`: the body is not `{code}`. `auth.flow_invalid`: no password sign-in is waiting for TOTP set-up in this browser, it was already finished, or the password or TOTP changed since; sign in with the password again. `auth.flow_expired`: the password was checked more than 10 minutes ago; sign in with the password again.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "TotpEnrollmentUnauthorized": {
+        "description": "`auth.totp_invalid`: the code is wrong, or not the current one, for the secret the password step answered. The set-up is still waiting: try the current code again.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "TotpNotFound": {
         "description": "`auth.method_disabled`: TOTP is switched off for this organization, or password sign-in is, which TOTP follows. `org.not_found`: the request's organization cannot be determined.",
         "content": {
@@ -8665,6 +8864,26 @@
       },
       "UserNotFound": {
         "description": "`user.not_found`: no user of the organization has this id. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "UserTotpConflict": {
+        "description": "`local.totp_not_enabled`: the user has no TOTP turned on. `local.cannot_remove_own_totp`: the user is the caller; turn your own TOTP off with a code from your account page.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "UserTotpForbidden": {
+        "description": "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the user holds a permission, at any scope, that the caller does not hold at organization scope. `auth.session_required`: an API key names its own owner. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
           "application/problem+json": {
             "schema": {

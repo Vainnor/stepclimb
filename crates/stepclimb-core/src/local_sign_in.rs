@@ -11,11 +11,14 @@
 //!
 //! TOTP is a second step after a password, never a way in by itself: it is offered only while
 //! the password is, and local sign-in is offered only while the passkey, the password or the
-//! magic link is ([`LocalSignIn::offered`]).
+//! magic link is ([`LocalSignIn::offered`]). The same settings object holds `totp_required`, off
+//! by default: while it is on and the password is offered, a password sign-in needs TOTP, so a
+//! password account without it sets it up before it gets a session
+//! ([`LocalSignIn::requires_totp`], B15, Q11 (a)).
 //!
 //! [`update`] is the only writer of the switches: the generic settings patch cannot name
 //! `local_sign_in`. Under the organization row's lock it refuses the magic link (no email before
-//! M1) and a change that would leave the organization no primary way to sign in (B2: an offered
+//! M1), `totp_required` without both the password and TOTP switched on, and a change that would leave the organization no primary way to sign in (B2: an offered
 //! passkey, password or magic link, or an enabled provider that is not local). It then writes the
 //! switches with an `organization.update_settings` audit entry and the row's `enabled` with an
 //! `identity_provider.update` entry. Every query filters by the scope's organization.
@@ -65,8 +68,9 @@ impl Method {
     }
 }
 
-/// The four method switches, as the `local_sign_in` settings key stores them. A stored object
-/// missing a switch reads as that switch's default.
+/// The four method switches and whether TOTP is required of password accounts, as the
+/// `local_sign_in` settings key stores them. A stored object missing a member reads as that
+/// member's default.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LocalMethods {
@@ -74,9 +78,13 @@ pub struct LocalMethods {
     pub password: bool,
     pub totp: bool,
     pub magic_link: bool,
+    /// Every password sign-in needs TOTP (Q11 (a)). [`update`] refuses it on unless the
+    /// password and TOTP switches are on too.
+    pub totp_required: bool,
 }
 
-/// Q2: passkey, password and TOTP on; the magic link off, since it needs email (M1).
+/// Q2: passkey, password and TOTP on; the magic link off, since it needs email (M1). TOTP is
+/// optional per user until an admin requires it (Q11 (a)).
 impl Default for LocalMethods {
     fn default() -> Self {
         Self {
@@ -84,6 +92,7 @@ impl Default for LocalMethods {
             password: true,
             totp: true,
             magic_link: false,
+            totp_required: false,
         }
     }
 }
@@ -129,6 +138,15 @@ impl LocalSignIn {
             .any(|method| self.offers(method))
     }
 
+    /// Whether a password sign-in needs TOTP: `totp_required` is on and the password is offered.
+    /// It does not look at TOTP's own switch, which [`update`] keeps on while `totp_required`
+    /// is; a stored object that breaks that rule makes password sign-in ask for a TOTP step the
+    /// organization does not offer, so it fails closed.
+    #[must_use]
+    pub fn requires_totp(&self) -> bool {
+        self.methods.totp_required && self.offers(Method::Password)
+    }
+
     /// The methods the organization offers, in [`Method::ALL`]'s order. None when no primary
     /// method is offered (the local row disabled, or only TOTP on), and local sign-in is then not
     /// offered at all (B2, docs/specs/m0/08-sessions-and-csrf.md B38).
@@ -157,6 +175,10 @@ pub enum Error {
     /// The change switches the magic link on, which needs email (M1, spec 04 Q1, Q13).
     #[error("the magic link cannot be switched on before the server can send email")]
     MagicLinkNeedsEmail,
+    /// The change leaves `totp_required` on with the password or TOTP switched off: there would
+    /// be no TOTP step for a password sign-in to require.
+    #[error("TOTP can be required only while the password and TOTP are switched on")]
+    TotpRequiredNeedsTotp,
     /// The change would leave the organization no primary way to sign in: no offered passkey,
     /// password or magic link, and no enabled provider that is not local (B2).
     #[error("the change would leave the organization no way to sign in")]
@@ -250,7 +272,9 @@ fn from_row(settings: &str, enabled: Option<bool>) -> Result<LocalSignIn, Error>
 ///
 /// Locks the organization's row ([`get_for_update`]) and compares `new` with the state read
 /// under the lock: a call that changes nothing writes nothing. Otherwise it refuses, writing
-/// nothing, a `new` with the magic link on ([`Error::MagicLinkNeedsEmail`]) and a `new` that
+/// nothing, a `new` with the magic link on ([`Error::MagicLinkNeedsEmail`]), a `new` with
+/// `totp_required` on and the password or TOTP off ([`Error::TotpRequiredNeedsTotp`]), and a
+/// `new` that
 /// would leave the organization no primary way to sign in ([`Error::LastMethod`]). The switches,
 /// when they change, are merged into the settings with an `organization.update_settings` entry
 /// holding `local_sign_in` before and after; the row's `enabled`, when it changes, is written
@@ -270,6 +294,9 @@ pub async fn update<'c>(
     }
     if new.methods.magic_link {
         return Err(Error::MagicLinkNeedsEmail);
+    }
+    if new.methods.totp_required && !(new.methods.password && new.methods.totp) {
+        return Err(Error::TotpRequiredNeedsTotp);
     }
     refuse_lockout(&mut tx, scope, &new).await?;
     if current.methods != new.methods {
@@ -311,7 +338,7 @@ async fn set_methods(
     actor: Actor,
 ) -> Result<(), Error> {
     let now = epoch_micros(now)?;
-    // Invariant: `LocalMethods` is a struct of four booleans, which serde_json always serializes.
+    // Invariant: `LocalMethods` is a struct of five booleans, which serde_json always serializes.
     let value = serde_json::to_value(after).expect("the switches serialize to JSON");
     sqlx::query!(
         "UPDATE organizations
@@ -402,6 +429,7 @@ mod tests {
             password: false,
             totp: true,
             magic_link: false,
+            totp_required: false,
         };
         let on = LocalSignIn {
             enabled: true,
@@ -429,6 +457,7 @@ mod tests {
                 password: false,
                 totp: true,
                 magic_link: false,
+                totp_required: false,
             },
         };
         assert!(!totp_only.offers(Method::Totp));
@@ -447,10 +476,56 @@ mod tests {
     }
 
     #[test]
+    fn totp_is_required_only_with_the_password_offered() {
+        let required = LocalSignIn {
+            enabled: true,
+            methods: LocalMethods {
+                totp_required: true,
+                ..LocalMethods::default()
+            },
+        };
+        assert!(required.requires_totp());
+        assert!(!LocalSignIn::default_on().requires_totp());
+        let no_password = LocalSignIn {
+            methods: LocalMethods {
+                password: false,
+                ..required.methods
+            },
+            ..required
+        };
+        assert!(!no_password.requires_totp());
+        let disabled = LocalSignIn {
+            enabled: false,
+            ..required
+        };
+        assert!(!disabled.requires_totp());
+        // TOTP's own switch off (a state `update` refuses to write) still requires it.
+        let totp_off = LocalSignIn {
+            methods: LocalMethods {
+                totp: false,
+                ..required.methods
+            },
+            ..required
+        };
+        assert!(totp_off.requires_totp());
+    }
+
+    impl LocalSignIn {
+        fn default_on() -> Self {
+            Self {
+                enabled: true,
+                methods: LocalMethods::default(),
+            }
+        }
+    }
+
+    #[test]
     fn every_method_names_its_switch() {
         let json = serde_json::to_value(LocalMethods::default()).unwrap();
         let object = json.as_object().unwrap();
-        assert_eq!(object.len(), Method::ALL.len());
+        // The switches and `totp_required`.
+        assert_eq!(object.len(), Method::ALL.len() + 1);
+        assert_eq!(object["totp_required"], false);
         for method in Method::ALL {
             assert!(object.contains_key(method.as_str()), "{}", method.as_str());
         }
