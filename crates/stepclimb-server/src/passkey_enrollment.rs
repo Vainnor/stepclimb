@@ -425,7 +425,7 @@ async fn register(
         admission::complete_local(&mut sp, scope, user.id, attempt.now, attempt.headers).await?;
     // An enrollment link is how an admin restores access: every app signed in as the user before
     // it is signed out (spec 08 B46).
-    oauth_refresh_tokens::revoke_all_of_user(&mut *sp, scope, user.id)
+    oauth_refresh_tokens::revoke_all_of_user(&mut sp, scope, user.id)
         .await
         .map_err(|e| Outcome::internal(&e))?;
     sp.commit().await.map_err(|e| Outcome::internal(&e))?;

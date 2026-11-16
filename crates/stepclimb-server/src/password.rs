@@ -228,7 +228,7 @@ pub async fn enroll_password(
     sessions::delete_others_of_user(&mut *tx, scope, user_id, Keep::Session(started.session.id))
         .await
         .map_err(internal)?;
-    oauth_refresh_tokens::revoke_all_of_user(&mut *tx, scope, user_id)
+    oauth_refresh_tokens::revoke_all_of_user(&mut tx, scope, user_id)
         .await
         .map_err(internal)?;
     tx.commit().await.map_err(internal)?;
@@ -522,7 +522,7 @@ async fn store_change(
         .map_err(internal)?;
     // The app sign-ins end too: a changed password must sign out a device that kept a stolen
     // refresh token (spec 08 B46).
-    oauth_refresh_tokens::revoke_all_of_user(&mut *tx, scope, user_id)
+    oauth_refresh_tokens::revoke_all_of_user(&mut tx, scope, user_id)
         .await
         .map_err(internal)?;
     tx.commit().await.map_err(internal)?;
