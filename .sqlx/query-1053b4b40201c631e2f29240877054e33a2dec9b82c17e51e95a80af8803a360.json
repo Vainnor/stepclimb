@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT o.topic, o.version, count(*) AS \"events!\"\n           FROM outbox o\n           WHERE o.dispatched_at IS NULL\n             AND NOT EXISTS (\n                 SELECT 1 FROM unnest($1::text[], $2::integer[]) AS k (topic, version)\n                 WHERE k.topic = o.topic AND k.version = o.version)\n           GROUP BY o.topic, o.version\n           ORDER BY o.topic, o.version",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "topic",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "outbox",
+            "name": "topic"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "version",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "outbox",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "events!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Int4Array"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "1053b4b40201c631e2f29240877054e33a2dec9b82c17e51e95a80af8803a360"
+}

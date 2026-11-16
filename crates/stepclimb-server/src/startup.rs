@@ -102,6 +102,8 @@ pub enum StartupError {
     Registry(#[source] RegistryError),
     #[error("could not write the periodic job schedules: {0}")]
     Schedules(#[source] stepclimb_jobs::queue::Error),
+    #[error("could not count the outbox events of unknown topics: {0}")]
+    UnknownTopics(#[source] stepclimb_jobs::outbox::Error),
     #[error("the HTTP server failed: {0}")]
     Serve(#[source] std::io::Error),
     #[error(transparent)]
@@ -135,9 +137,10 @@ pub async fn connect(database_url: &str) -> Result<PgPool, StartupError> {
 }
 
 /// The job worker's pool (spec m1/01 B14, B17, B21): one connection per job it may run at once,
-/// one for its claims, one for the scheduler's tick and one for the outbox dispatcher, so a busy
-/// worker never waits on the HTTP pool or the HTTP pool on it, and neither the tick nor a
-/// dispatch pass waits on the jobs.
+/// and headroom of one each for the worker's claims, the scheduler's tick and the outbox
+/// dispatcher. The pool is shared, so these are not reserved: a handler that opens a second
+/// connection can still make the others wait. The HTTP pool is separate, so neither waits on
+/// the other.
 pub fn jobs_pool_options(concurrency: std::num::NonZeroU32) -> PgPoolOptions {
     PgPoolOptions::new()
         .max_connections(concurrency.get().saturating_add(3))
@@ -552,6 +555,9 @@ async fn job_worker(config: &Config, clock: Clock) -> Result<JobRunner, StartupE
     schedule::sync(&pool, &registry, clock.now())
         .await
         .map_err(StartupError::Schedules)?;
+    outbox::warn_unknown_topics(&pool, &registry)
+        .await
+        .map_err(StartupError::UnknownTopics)?;
     let queues = registry.queues();
     tracing::info!(
         concurrency = %config.worker_concurrency,

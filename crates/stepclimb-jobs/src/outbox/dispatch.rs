@@ -2,7 +2,7 @@
 //! The outbox dispatcher (docs/specs/m1/01-job-queue-and-outbox.md B21, Q2).
 //!
 //! [`dispatch_in`] is one pass in a transaction: claim up to [`BATCH`] undispatched events of
-//! the topics the registry knows, enqueue one job per subscriber of each event's topic with the
+//! the topic and version pairs the registry knows, enqueue one job per subscriber of each event's topic with the
 //! event's organization, and mark the events dispatched. The claim, the jobs and the mark commit
 //! together, so each event becomes each subscriber's job exactly once; a pass that fails or is
 //! cut off before its commit leaves the events undispatched for the next one. [`run`] is the
@@ -16,7 +16,8 @@ use std::time::{Duration, SystemTime};
 use sqlx::{PgPool, Postgres, Transaction};
 use stepclimb_core::{OrgScope, clock::Clock, db::epoch_micros, id::Uuid};
 
-use super::{Error, EventJob};
+use super::{Error, EventJob, known_pairs};
+use crate::kind::Kind;
 use crate::queue::{NewJob, enqueue};
 use crate::registry::Registry;
 
@@ -35,9 +36,9 @@ pub struct Dispatched {
 /// One pass at `now` in `tx`, claiming up to `limit` events. The caller commits `tx`; until it
 /// does, another dispatcher skips the claimed events instead of waiting for them.
 ///
-/// Only events of topics `registry` knows are claimed: an event of a newer release's topic waits
-/// for a process that knows it and its subscribers. A known topic with no subscriber is marked
-/// dispatched with no job.
+/// Only events of the topic and version pairs `registry` knows are claimed: an event of a newer
+/// release's topic or version waits for a process that knows it and its subscribers. A known
+/// topic with no subscriber is marked dispatched with no job.
 pub async fn dispatch_in(
     tx: &mut Transaction<'_, Postgres>,
     registry: &Registry,
@@ -48,36 +49,80 @@ pub async fn dispatch_in(
     if topics.is_empty() {
         return Ok(Dispatched::default());
     }
-    let names: Vec<String> = topics.iter().map(|(name, _)| (*name).to_owned()).collect();
-    // Instance-wide by design (B26): one dispatcher serves every organization's events. Each
-    // event's jobs are then enqueued with that event's own organization.
-    let events = sqlx::query!(
-        "SELECT id, org_id, topic FROM outbox
-         WHERE dispatched_at IS NULL AND topic = ANY($1::text[])
-         ORDER BY id
-         LIMIT $2
-         FOR UPDATE SKIP LOCKED",
-        &names,
-        i64::from(limit),
-    )
-    .fetch_all(&mut **tx)
-    .await?;
+    let events = claim(tx, registry, limit).await?;
     let mut jobs = 0;
     for event in &events {
         let subscribers = topics
             .iter()
-            .find(|(name, _)| *name == event.topic)
+            .find(|(topic, _)| topic.name == event.topic)
             .map_or(&[][..], |(_, kinds)| *kinds);
-        let scope = event_scope(event.org_id);
-        let payload = EventJob { event_id: event.id };
-        for kind in subscribers {
-            enqueue(tx, NewJob::org(kind, scope, &payload)?, now).await?;
-            jobs += 1;
-        }
+        jobs += enqueue_subscribers(tx, event, subscribers, now).await?;
     }
+    mark_dispatched(tx, &events, now).await?;
+    Ok(Dispatched {
+        events: events.len(),
+        jobs,
+    })
+}
+
+/// An event a pass claimed.
+struct Claimed {
+    id: Uuid,
+    org_id: Uuid,
+    topic: String,
+}
+
+/// Lock up to `limit` undispatched events of the topic and version pairs `registry` knows, in
+/// `id` order, skipping those another pass holds.
+async fn claim(
+    tx: &mut Transaction<'_, Postgres>,
+    registry: &Registry,
+    limit: u32,
+) -> Result<Vec<Claimed>, Error> {
+    let (names, versions) = known_pairs(registry);
+    // Instance-wide by design (B26): one dispatcher serves every organization's events. Each
+    // event's jobs are then enqueued with that event's own organization.
+    let events = sqlx::query_as!(
+        Claimed,
+        "SELECT o.id, o.org_id, o.topic FROM outbox o
+         WHERE o.dispatched_at IS NULL
+           AND (o.topic, o.version) IN (SELECT * FROM unnest($1::text[], $2::integer[]))
+         ORDER BY o.id
+         LIMIT $3
+         FOR UPDATE OF o SKIP LOCKED",
+        &names,
+        &versions,
+        i64::from(limit),
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    Ok(events)
+}
+
+/// Enqueue one job of each of `subscribers` for `event`, with the event's organization and the
+/// payload `{ "event_id": <id> }`. Returns how many it enqueued.
+async fn enqueue_subscribers(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &Claimed,
+    subscribers: &[Kind],
+    now: SystemTime,
+) -> Result<usize, Error> {
+    let scope = event_scope(event.org_id);
+    let payload = EventJob { event_id: event.id };
+    for kind in subscribers {
+        enqueue(tx, NewJob::org(kind, scope, &payload)?, now).await?;
+    }
+    Ok(subscribers.len())
+}
+
+/// Set `dispatched_at` on the claimed `events`, each by its id and organization.
+async fn mark_dispatched(
+    tx: &mut Transaction<'_, Postgres>,
+    events: &[Claimed],
+    now: SystemTime,
+) -> Result<(), Error> {
     let ids: Vec<Uuid> = events.iter().map(|e| e.id).collect();
     let orgs: Vec<Uuid> = events.iter().map(|e| e.org_id).collect();
-    // The rows this pass claimed and holds locked, each by its id and organization.
     sqlx::query!(
         "UPDATE outbox
          SET dispatched_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond',
@@ -89,10 +134,7 @@ pub async fn dispatch_in(
     )
     .execute(&mut **tx)
     .await?;
-    Ok(Dispatched {
-        events: events.len(),
-        jobs,
-    })
+    Ok(())
 }
 
 /// One pass at `now` of up to [`BATCH`] events, in a transaction of its own.

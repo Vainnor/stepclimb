@@ -6,7 +6,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::kind::Retry;
+use crate::kind::{Kind, Retry};
 
 /// A source of random 64-bit values for jitter. Cloning is cheap.
 #[derive(Clone)]
@@ -60,6 +60,28 @@ pub fn backoff(retry: &Retry, attempts: u32, random: &Random) -> Duration {
     // value fits; saturating keeps an unchecked `Retry` in range rather than failing.
     let micros = u64::try_from(half + jitter).unwrap_or(u64::MAX);
     Duration::from_micros(micros)
+}
+
+/// The longest a job of `kind` can stay in the queue from its first claim until it is dead:
+/// every attempt holding its full lease (a handler that runs until its lease lapses) and every
+/// retry waiting its longest delay, `min(base * 2^(n-1), cap)` before the jitter halves it.
+#[must_use]
+pub fn longest_span(kind: &Kind) -> Duration {
+    let Retry {
+        base,
+        cap,
+        max_attempts,
+    } = kind.retry;
+    let leases = kind.lease.saturating_mul(max_attempts);
+    let retries = (1..max_attempts).fold(Duration::ZERO, |total, n| {
+        let doublings = (n - 1).min(64);
+        let full = base
+            .checked_mul(1u32.checked_shl(doublings).unwrap_or(u32::MAX))
+            .unwrap_or(cap)
+            .min(cap);
+        total.saturating_add(full)
+    });
+    leases.saturating_add(retries)
 }
 
 #[cfg(test)]
@@ -137,5 +159,39 @@ mod tests {
         };
         assert_eq!(backoff(&retry, 2, &fixed(0)), secs(60));
         assert_eq!(backoff(&retry, 9, &fixed(0)), secs(300));
+    }
+
+    #[test]
+    fn the_longest_span_adds_every_lease_and_every_longest_delay() {
+        // 8 leases of 5 min, and retries after 5, 10, 20, 40, 80, 160 and 320 s.
+        let kind = Kind::new("a.b", "default");
+        assert_eq!(longest_span(&kind), secs(8 * 300 + 635));
+        let capped = kind.with_retry(Retry {
+            base: secs(60),
+            cap: secs(600),
+            max_attempts: 20,
+        });
+        // 60, 120, 240, 480, then 15 retries at the 600 s cap; 20 leases of 300 s.
+        assert_eq!(longest_span(&capped), secs(900 + 15 * 600 + 20 * 300));
+        let one = kind.with_retry(Retry {
+            max_attempts: 1,
+            ..Retry::DEFAULT
+        });
+        assert_eq!(longest_span(&one), secs(300));
+    }
+
+    #[test]
+    fn the_longest_span_of_the_largest_settings_does_not_overflow() {
+        let kind = Kind::new("a.b", "default")
+            .with_lease(crate::kind::MAX_LEASE)
+            .with_retry(Retry {
+                base: crate::kind::MAX_CAP,
+                cap: crate::kind::MAX_CAP,
+                max_attempts: 1000,
+            });
+        assert_eq!(
+            longest_span(&kind),
+            crate::kind::MAX_LEASE * 1000 + crate::kind::MAX_CAP * 999
+        );
     }
 }

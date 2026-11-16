@@ -4,6 +4,7 @@
 //! a time on a manual clock; the dispatcher loop runs with a shortened poll. Needs
 //! `DATABASE_URL`.
 
+use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -17,11 +18,13 @@ use stepclimb_core::{
 use stepclimb_jobs::{
     Kind, Outcome, Registry, Worker,
     backoff::Random,
-    outbox::{self, Dispatched, Error, Topic, dispatch, dispatch_in},
+    outbox::{self, Dispatched, Error, Topic, UnknownTopic, dispatch, dispatch_in},
     prune, schedule,
 };
-use tokio::sync::oneshot;
+use tokio::sync::{Notify, oneshot};
+use tracing::Level;
 
+const HOUR: Duration = Duration::from_secs(60 * 60);
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Two subscribers.
@@ -30,6 +33,8 @@ const HAPPENED: Topic = Topic::new("test.happened", 1);
 const IGNORED: Topic = Topic::new("test.ignored", 1);
 /// Not registered: a newer release's topic.
 const NEWER: Topic = Topic::new("test.newer", 1);
+/// Not registered: a newer release's version of a registered topic.
+const HAPPENED_V2: Topic = Topic::new("test.happened", 2);
 
 /// Records the event it read.
 const FIRST: Kind = Kind::new("test.first", "default");
@@ -165,6 +170,7 @@ async fn the_stored_payload_is_the_event_envelope(pool: PgPool) {
         .expect("test setup")
         .expect("test setup");
     assert_eq!(event.id, id);
+    assert_eq!(event.version, 1);
     assert_eq!(
         event.payload,
         json!({
@@ -240,22 +246,48 @@ async fn a_pass_enqueues_one_job_per_event_and_subscriber(pool: PgPool) {
     assert_eq!(jobs(&pool).await.len(), 6);
 }
 
-// B21: an event of a topic this binary does not know waits for a release that knows it.
+// B21: an event of a topic or version this binary does not know waits for a release that
+// knows it, and is counted as such.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn an_event_of_an_unknown_topic_stays_undispatched(pool: PgPool) {
+async fn an_event_of_an_unknown_topic_or_version_stays_undispatched(pool: PgPool) {
     let org = insert_org(&pool, "org-a").await;
     let newer = emit(&pool, org, &NEWER).await;
+    let v2 = emit(&pool, org, &HAPPENED_V2).await;
+    emit(&pool, org, &HAPPENED_V2).await;
     let registry = registry(&Seen::default());
     assert_eq!(
         dispatch(&pool, &registry, t0()).await.expect("test setup"),
         Dispatched::default()
     );
-    assert!(
-        !outbox::get(&pool, scope(org), newer)
+    for id in [newer, v2] {
+        let event = outbox::get(&pool, scope(org), id)
+            .await
+            .expect("test setup")
+            .expect("test setup");
+        assert!(!event.dispatched, "{}", event.topic);
+    }
+    assert_eq!(
+        outbox::get(&pool, scope(org), v2)
             .await
             .expect("test setup")
             .expect("test setup")
-            .dispatched
+            .version,
+        2
+    );
+    assert!(
+        jobs(&pool).await.is_empty(),
+        "no v1 subscriber got a v2 event"
+    );
+    let unknown = |topic: &str, version, events| UnknownTopic {
+        topic: topic.to_owned(),
+        version,
+        events,
+    };
+    assert_eq!(
+        outbox::unknown_topics(&pool, &registry)
+            .await
+            .expect("test setup"),
+        [unknown("test.happened", 2, 2), unknown("test.newer", 1, 1)]
     );
 
     let mut newer_registry = registry.clone();
@@ -266,7 +298,30 @@ async fn an_event_of_an_unknown_topic_stays_undispatched(pool: PgPool) {
             .expect("test setup"),
         Dispatched { events: 1, jobs: 0 }
     );
-    assert_eq!(undispatched(&pool).await, 0);
+    assert_eq!(undispatched(&pool).await, 2, "the v2 events still wait");
+    assert_eq!(
+        outbox::unknown_topics(&pool, &newer_registry)
+            .await
+            .expect("test setup"),
+        [unknown("test.happened", 2, 2)]
+    );
+}
+
+// Data: the column refuses a version below 1.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_outbox_refuses_a_version_below_1(pool: PgPool) {
+    let org = insert_org(&pool, "org-a").await;
+    for version in [0, -1] {
+        let refused = sqlx::query(
+            "INSERT INTO outbox (id, org_id, topic, version, payload)
+             VALUES (gen_random_uuid(), $1, 'test.happened', $2, '{}')",
+        )
+        .bind(org)
+        .bind(version)
+        .execute(&pool)
+        .await;
+        assert!(refused.is_err(), "{version}");
+    }
 }
 
 // T16 (B21): while one pass holds its events, a second pass on another connection skips them
@@ -301,8 +356,8 @@ async fn a_second_dispatcher_skips_the_events_a_first_holds(pool: PgPool) {
 async fn two_dispatchers_at_once_enqueue_each_job_once(pool: PgPool) {
     let org = insert_org(&pool, "org-a").await;
     sqlx::query(
-        "INSERT INTO outbox (id, org_id, topic, payload)
-         SELECT gen_random_uuid(), $1, 'test.happened', '{}' FROM generate_series(1, 450)",
+        "INSERT INTO outbox (id, org_id, topic, version, payload)
+         SELECT gen_random_uuid(), $1, 'test.happened', 1, '{}' FROM generate_series(1, 450)",
     )
     .bind(org)
     .execute(&pool)
@@ -371,10 +426,13 @@ async fn a_pass_that_does_not_commit_leaves_its_events_for_the_next(pool: PgPool
     assert_one_job_per_event_and_subscriber(&pool, 2).await;
 }
 
-// B21, B12: each subscriber's job reads its event with the event's organization, also when it
-// runs again after a first claim's lease lapsed.
+/// Reads its event, then on its first attempt waits for the test before it returns done.
+const SLOW_READER: Kind = Kind::new("test.slow_reader", "default");
+
+// B21, B12: a subscriber's job that runs a second time, after its first run's lease lapsed,
+// reads the same event with the event's organization both times.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn each_subscriber_reads_its_event_at_least_once(pool: PgPool) {
+async fn a_subscriber_that_runs_twice_reads_the_same_event_twice(pool: PgPool) {
     let (a, b) = (
         insert_org(&pool, "org-a").await,
         insert_org(&pool, "org-b").await,
@@ -382,7 +440,39 @@ async fn each_subscriber_reads_its_event_at_least_once(pool: PgPool) {
     let id = emit_at(&pool, a, &HAPPENED, json!({ "n": 7 }), t0()).await;
     emit(&pool, b, &IGNORED).await;
     let seen = Seen::default();
-    let registry = registry(&seen);
+    let (started, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let mut registry = Registry::new();
+    registry.register_topic(HAPPENED).expect("test setup");
+    registry.register_topic(IGNORED).expect("test setup");
+    let (reads, first_started, first_release) = (
+        Arc::clone(&seen),
+        Arc::clone(&started),
+        Arc::clone(&release),
+    );
+    registry
+        .subscribe(&HAPPENED, SLOW_READER, move |ctx| {
+            let (reads, started, release) = (
+                Arc::clone(&reads),
+                Arc::clone(&first_started),
+                Arc::clone(&first_release),
+            );
+            async move {
+                let event = match outbox::event(&ctx).await {
+                    Ok(event) => event,
+                    Err(outcome) => return outcome,
+                };
+                reads
+                    .lock()
+                    .expect("test setup")
+                    .push((ctx.job().kind, event));
+                if ctx.job().attempt == 1 {
+                    started.notify_one();
+                    release.notified().await;
+                }
+                Outcome::Done
+            }
+        })
+        .expect("test setup");
     dispatch(&pool, &registry, t0()).await.expect("test setup");
     let clock = ManualClock::new(t0());
     let worker = Worker::new(
@@ -392,23 +482,30 @@ async fn each_subscriber_reads_its_event_at_least_once(pool: PgPool) {
         Random::from_fn(|| 0),
         vec!["default"],
     );
-    // A worker that dies after running a job leaves its lease to lapse; the job runs again.
-    let claimed = stepclimb_jobs::queue::claim(&pool, &["default"], &[], 10, t0())
-        .await
-        .expect("test setup");
-    assert_eq!(claimed.claimed.len(), 2);
-    clock.set(t0() + Duration::from_secs(301));
-    assert_eq!(worker.run_once(10).await.expect("test setup"), 2);
 
-    let seen = seen.lock().expect("test setup").clone();
-    let mut kinds: Vec<&str> = seen.iter().map(|(kind, _)| *kind).collect();
-    kinds.sort_unstable();
-    assert_eq!(kinds, ["test.first", "test.second"]);
-    for (_, event) in seen.iter() {
-        assert_eq!((event.id, event.org_id), (id, a));
-        assert_eq!(event.payload["data"], json!({ "n": 7 }));
-    }
-    assert!(jobs(&pool).await.is_empty(), "both jobs done");
+    let first = tokio::spawn({
+        let worker = worker.clone();
+        async move { worker.run_once(1).await }
+    });
+    started.notified().await;
+    clock.set(t0() + Duration::from_secs(301));
+    assert_eq!(
+        worker.run_once(1).await.expect("test setup"),
+        1,
+        "claimed again"
+    );
+    release.notify_one();
+    assert_eq!(first.await.expect("test setup").expect("test setup"), 1);
+
+    let reads = seen.lock().expect("test setup").clone();
+    assert_eq!(reads.len(), 2, "the handler ran twice");
+    assert_eq!(reads[0], reads[1], "the same event both times");
+    assert_eq!((reads[0].1.id, reads[0].1.org_id), (id, a));
+    assert_eq!(reads[0].1.payload["data"], json!({ "n": 7 }));
+    assert!(
+        jobs(&pool).await.is_empty(),
+        "the second run's done deleted the job"
+    );
 }
 
 // B26: an event is read only with its own organization's scope.
@@ -471,8 +568,8 @@ async fn a_job_whose_event_is_gone_fails(pool: PgPool) {
 async fn the_loop_runs_again_at_once_after_a_full_batch(pool: PgPool) {
     let org = insert_org(&pool, "org-a").await;
     sqlx::query(
-        "INSERT INTO outbox (id, org_id, topic, payload)
-         SELECT gen_random_uuid(), $1, 'test.ignored', '{}' FROM generate_series(1, 250)",
+        "INSERT INTO outbox (id, org_id, topic, version, payload)
+         SELECT gen_random_uuid(), $1, 'test.ignored', 1, '{}' FROM generate_series(1, 250)",
     )
     .bind(org)
     .execute(&pool)
@@ -570,6 +667,109 @@ async fn jobs_prune_deletes_events_30_days_after_dispatch(pool: PgPool) {
     assert!(exists(&pool, waiting).await, "undispatched: never pruned");
 }
 
+/// Run `jobs.prune` once at `at` with `registry`, and return every log line it wrote.
+async fn prune_logged(pool: &PgPool, registry: &Registry, at: SystemTime) -> String {
+    schedule::sync(pool, registry, at)
+        .await
+        .expect("test setup");
+    schedule::tick(pool, registry, at)
+        .await
+        .expect("test setup");
+    let clock = ManualClock::new(at);
+    let worker = Worker::new(
+        pool.clone(),
+        registry.clone(),
+        clock.clock(),
+        Random::from_fn(|| 0),
+        vec!["default"],
+    );
+    let captured = Captured::default();
+    let writer = captured.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(Level::INFO)
+        .with_ansi(false)
+        .with_writer(move || writer.clone())
+        .finish();
+    let guard = tracing::subscriber::set_default(subscriber);
+    worker.run_once(10).await.expect("test setup");
+    drop(guard);
+    let bytes = captured.0.lock().expect("the log buffer").clone();
+    String::from_utf8(bytes).expect("UTF-8 logs")
+}
+
+#[derive(Clone, Default)]
+struct Captured(Arc<Mutex<Vec<u8>>>);
+
+impl Write for Captured {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("test setup").extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+// B23: a backlog of dispatched events larger than one delete batch is pruned in full.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn jobs_prune_clears_an_event_backlog_larger_than_a_batch(pool: PgPool) {
+    let org = insert_org(&pool, "org-a").await;
+    sqlx::query(
+        "INSERT INTO outbox (id, org_id, topic, version, payload, dispatched_at)
+         SELECT gen_random_uuid(), $1, 'test.ignored', 1, '{}',
+                timestamptz 'epoch' + $2::bigint * interval '1 microsecond'
+         FROM generate_series(1, $3)",
+    )
+    .bind(org)
+    .bind(
+        i64::try_from(
+            t0().duration_since(UNIX_EPOCH)
+                .expect("test setup")
+                .as_micros(),
+        )
+        .expect("test setup"),
+    )
+    .bind(i64::from(prune::BATCH) + 1)
+    .execute(&pool)
+    .await
+    .expect("test setup");
+    prune_logged(&pool, &registry(&Seen::default()), t0() + 30 * DAY).await;
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM outbox")
+        .fetch_one(&pool)
+        .await
+        .expect("test setup");
+    assert_eq!(
+        left,
+        0,
+        "{} events, in batches of {}",
+        prune::BATCH + 1,
+        prune::BATCH
+    );
+}
+
+// B21: `jobs.prune` logs at `warn` the undispatched events of each topic and version the
+// registry does not know, with their count, and nothing when there are none.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn jobs_prune_warns_of_events_of_unknown_topics(pool: PgPool) {
+    let org = insert_org(&pool, "org-a").await;
+    let registry = registry(&Seen::default());
+    let quiet = prune_logged(&pool, &registry, t0()).await;
+    assert!(!quiet.contains("does not know"), "{quiet}");
+    emit(&pool, org, &NEWER).await;
+    emit(&pool, org, &NEWER).await;
+    emit(&pool, org, &HAPPENED).await;
+    let log = prune_logged(&pool, &registry, t0() + 2 * HOUR).await;
+    let line = log
+        .lines()
+        .find(|l| l.contains("does not know"))
+        .expect(&log);
+    assert!(line.contains("WARN"), "{line}");
+    assert!(line.contains("topic=\"test.newer\""), "{line}");
+    assert!(line.contains("version=1"), "{line}");
+    assert!(line.contains("events=2"), "{line}");
+    assert_eq!(log.matches("does not know").count(), 1, "{log}");
+}
+
 // B24: emitting code's tests check that the registry knows each topic constant it emits.
 #[test]
 fn the_registry_knows_every_emitted_topic() {
@@ -578,4 +778,5 @@ fn the_registry_knows_every_emitted_topic() {
         assert!(registry.knows_topic(topic), "{}", topic.name);
     }
     assert!(!registry.knows_topic(&NEWER));
+    assert!(!registry.knows_topic(&HAPPENED_V2));
 }

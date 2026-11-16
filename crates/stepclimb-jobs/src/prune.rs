@@ -5,9 +5,10 @@
 //!
 //! An instance job: it walks the organizations through `organizations::ids` and deletes each
 //! one's dead jobs and dispatched events with that organization's scope, then the instance's own
-//! dead jobs (B10, B26), in batches of [`BATCH`]. A failure in one organization is logged and
-//! the others still run; the job retries if any failed. Safe to run twice: a second run finds
-//! nothing old enough left (B12).
+//! dead jobs (B10, B26), in batches of [`BATCH`]. It also logs at `warn` the undispatched events
+//! of topics this release does not know ([`outbox::warn_unknown_topics`]). A failure in one
+//! organization is logged and the others still run; the job retries if any failed. Safe to run
+//! twice: a second run finds nothing old enough left (B12).
 
 use std::time::{Duration, SystemTime};
 
@@ -55,12 +56,10 @@ async fn prune(ctx: JobContext) -> Outcome {
     for org_id in orgs {
         total.add(prune_org(pool, org_id, dead_cutoff, event_cutoff).await);
     }
-    match in_batches(|| queue::prune_dead_instance(pool, dead_cutoff, BATCH)).await {
-        Ok(count) => total.jobs += count,
-        Err(error) => {
-            total.failed += 1;
-            tracing::error!(%error, "could not prune the instance's dead jobs");
-        }
+    total.add(prune_instance(pool, dead_cutoff).await);
+    if let Err(error) = outbox::warn_unknown_topics(pool, ctx.registry()).await {
+        total.failed += 1;
+        tracing::error!(%error, "could not count the events of unknown topics");
     }
     let Pruned {
         jobs,
@@ -92,6 +91,19 @@ impl Pruned {
         self.events += other.events;
         self.failed += other.failed;
     }
+}
+
+/// Delete the instance's own dead jobs that died at or before `dead_cutoff`.
+async fn prune_instance(pool: &sqlx::PgPool, dead_cutoff: SystemTime) -> Pruned {
+    let mut pruned = Pruned::default();
+    match in_batches(|| queue::prune_dead_instance(pool, dead_cutoff, BATCH)).await {
+        Ok(count) => pruned.jobs = count,
+        Err(error) => {
+            pruned.failed += 1;
+            tracing::error!(%error, "could not prune the instance's dead jobs");
+        }
+    }
+    pruned
 }
 
 /// Delete the dead jobs of `org_id` that died at or before `dead_cutoff` and its events

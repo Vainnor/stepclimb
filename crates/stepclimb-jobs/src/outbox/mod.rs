@@ -9,6 +9,12 @@
 //! [`dispatch::run`] is the loop every worker process runs. `jobs.prune` deletes dispatched
 //! events 30 days after dispatch ([`prune_dispatched`]).
 //!
+//! Each event records its topic's schema version, and the dispatcher claims only the topic and
+//! version pairs its registry knows: an event of a newer release's topic or version waits for a
+//! process that knows it. A topic and version therefore stay registered for as long as events
+//! of them can exist, undispatched; [`warn_unknown_topics`] logs the ones that are waiting, at
+//! startup and in every `jobs.prune` run.
+//!
 //! Delivery is at least once and in no guaranteed order (B12, B22): a subscriber's job retries
 //! on its own, and two transactions can commit their events out of order. Subscribers use the
 //! envelope's `timestamp` and are idempotent per event id.
@@ -29,6 +35,7 @@ use stepclimb_core::{
     id::{Uuid, new_id},
 };
 
+use crate::registry::Registry;
 use crate::worker::{JobContext, Outcome};
 
 pub use dispatch::{BATCH, Dispatched, dispatch, dispatch_in};
@@ -46,7 +53,7 @@ pub struct Topic {
     /// Two or more dot-separated words of lowercase ASCII letters and `_`, each starting with a
     /// letter, as the `outbox.topic` check constraint allows.
     pub name: &'static str,
-    /// 1 or more.
+    /// 1 to `i32::MAX`, as the `outbox.version` column holds.
     pub version: u32,
 }
 
@@ -55,7 +62,7 @@ pub struct Topic {
 pub enum TopicError {
     #[error("the event topic `{0}` is not of the form area.event")]
     Name(&'static str),
-    #[error("the event topic `{0}` needs a schema version of 1 or more")]
+    #[error("the event topic `{0}` needs a schema version from 1 to 2^31 - 1")]
     Version(&'static str),
 }
 
@@ -73,7 +80,7 @@ impl Topic {
         if !(first && !rest.is_empty() && rest.iter().all(|w| valid_word(w))) {
             return Err(TopicError::Name(self.name));
         }
-        if self.version == 0 {
+        if self.version == 0 || i32::try_from(self.version).is_err() {
             return Err(TopicError::Version(self.name));
         }
         Ok(())
@@ -124,11 +131,13 @@ pub async fn emit(
     if !data.is_object() {
         return Err(Error::DataNotObject);
     }
+    // `validate` keeps the version within `i32`.
+    let version = i32::try_from(topic.version).map_err(|_| TopicError::Version(topic.name))?;
     let id = new_id();
     // The envelope's `timestamp` is RFC 3339 in UTC with microseconds, as the API writes times.
     sqlx::query!(
-        r#"INSERT INTO outbox (id, org_id, topic, payload, created_at, updated_at)
-           SELECT $1, $2, $3,
+        r#"INSERT INTO outbox (id, org_id, topic, version, payload, created_at, updated_at)
+           SELECT $1, $2, $3, $6,
                   jsonb_build_object(
                       'type', $3::text,
                       'timestamp', to_char(now.t AT TIME ZONE 'UTC',
@@ -142,6 +151,7 @@ pub async fn emit(
         topic.name,
         data.to_string(),
         epoch_micros(now)?,
+        version,
     )
     .execute(&mut **tx)
     .await?;
@@ -155,6 +165,8 @@ pub struct Event {
     pub id: Uuid,
     pub org_id: Uuid,
     pub topic: String,
+    /// The schema version of the topic's `data` this event was written with.
+    pub version: u32,
     /// The envelope: `{ "type", "timestamp", "data" }`.
     pub payload: Value,
     /// Whether the dispatcher has enqueued its subscribers' jobs.
@@ -169,7 +181,7 @@ pub async fn get(
     id: Uuid,
 ) -> Result<Option<Event>, Error> {
     let row = sqlx::query!(
-        r#"SELECT id, org_id, topic, payload::text AS "payload!",
+        r#"SELECT id, org_id, topic, version, payload::text AS "payload!",
                   dispatched_at IS NOT NULL AS "dispatched!"
            FROM outbox WHERE id = $1 AND org_id = $2"#,
         id,
@@ -182,11 +194,83 @@ pub async fn get(
             id: row.id,
             org_id: row.org_id,
             topic: row.topic,
+            // `outbox.version` checks `version >= 1`.
+            version: u32::try_from(row.version).unwrap_or(0),
             payload: serde_json::from_str(&row.payload).map_err(Error::StoredPayload)?,
             dispatched: row.dispatched,
         })
     })
     .transpose()
+}
+
+/// Undispatched events of one topic and version the registry does not know.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnknownTopic {
+    pub topic: String,
+    pub version: i32,
+    pub events: i64,
+}
+
+/// The undispatched events, across every organization, of each topic and version `registry`
+/// does not know, sorted by topic and version. The dispatcher leaves them for a release that
+/// knows them; a count that stays means none does.
+pub async fn unknown_topics(
+    db: impl PgExecutor<'_>,
+    registry: &Registry,
+) -> Result<Vec<UnknownTopic>, Error> {
+    let (names, versions) = known_pairs(registry);
+    // Instance-wide by design (B26): an operator's count of waiting events per topic, across
+    // every organization. It reads no organization's ids or contents. `outbox_undispatched`
+    // covers it.
+    let rows = sqlx::query_as!(
+        UnknownTopic,
+        r#"SELECT o.topic, o.version, count(*) AS "events!"
+           FROM outbox o
+           WHERE o.dispatched_at IS NULL
+             AND NOT EXISTS (
+                 SELECT 1 FROM unnest($1::text[], $2::integer[]) AS k (topic, version)
+                 WHERE k.topic = o.topic AND k.version = o.version)
+           GROUP BY o.topic, o.version
+           ORDER BY o.topic, o.version"#,
+        &names,
+        &versions,
+    )
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
+/// Log at `warn` each topic and version with undispatched events `registry` does not know, with
+/// their count ([`unknown_topics`]). Returns how many such topics and versions it found.
+pub async fn warn_unknown_topics(
+    db: impl PgExecutor<'_>,
+    registry: &Registry,
+) -> Result<usize, Error> {
+    let unknown = unknown_topics(db, registry).await?;
+    for row in &unknown {
+        tracing::warn!(
+            topic = row.topic,
+            version = row.version,
+            events = row.events,
+            "undispatched events of a topic this release does not know wait for one that does"
+        );
+    }
+    Ok(unknown.len())
+}
+
+/// The registry's topics as parallel name and version arrays, for `unnest`.
+pub(crate) fn known_pairs(registry: &Registry) -> (Vec<String>, Vec<i32>) {
+    registry
+        .topics()
+        .iter()
+        // `Topic::validate`, run by `register_topic`, keeps the version within `i32`.
+        .map(|(topic, _)| {
+            (
+                topic.name.to_owned(),
+                i32::try_from(topic.version).unwrap_or(0),
+            )
+        })
+        .unzip()
 }
 
 /// The payload of a subscriber's job (B21).
@@ -280,11 +364,15 @@ mod tests {
     }
 
     #[test]
-    fn a_topic_needs_a_version() {
-        assert_eq!(
-            Topic::new("item.completed", 0).validate(),
-            Err(TopicError::Version("item.completed"))
-        );
+    fn a_topic_needs_a_version_the_column_holds() {
+        for version in [0, 1 << 31, u32::MAX] {
+            assert_eq!(
+                Topic::new("item.completed", version).validate(),
+                Err(TopicError::Version("item.completed")),
+                "{version}"
+            );
+        }
+        assert_eq!(Topic::new("a.b", i32::MAX as u32).validate(), Ok(()));
     }
 
     #[test]

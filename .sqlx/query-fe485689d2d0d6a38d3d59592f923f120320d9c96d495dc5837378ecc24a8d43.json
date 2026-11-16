@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, org_id, topic, payload::text AS \"payload!\",\n                  dispatched_at IS NOT NULL AS \"dispatched!\"\n           FROM outbox WHERE id = $1 AND org_id = $2",
+  "query": "SELECT id, org_id, topic, version, payload::text AS \"payload!\",\n                  dispatched_at IS NOT NULL AS \"dispatched!\"\n           FROM outbox WHERE id = $1 AND org_id = $2",
   "describe": {
     "columns": [
       {
@@ -38,12 +38,23 @@
       },
       {
         "ordinal": 3,
+        "name": "version",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "outbox",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
         "name": "payload!",
         "type_info": "Text",
         "origin": "Expression"
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "dispatched!",
         "type_info": "Bool",
         "origin": "Expression"
@@ -59,9 +70,10 @@
       false,
       false,
       false,
+      false,
       null,
       null
     ]
   },
-  "hash": "540e88260283baa5241cba0da37da7521a1e77933616ffc3c91c6730dea13cc3"
+  "hash": "fe485689d2d0d6a38d3d59592f923f120320d9c96d495dc5837378ecc24a8d43"
 }

@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO outbox (id, org_id, topic, version, payload, created_at, updated_at)\n           SELECT $1, $2, $3, $6,\n                  jsonb_build_object(\n                      'type', $3::text,\n                      'timestamp', to_char(now.t AT TIME ZONE 'UTC',\n                                           'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),\n                      'data', $4::text::jsonb\n                  ),\n                  now.t, now.t\n           FROM (SELECT timestamptz 'epoch' + $5::bigint * interval '1 microsecond' AS t) now",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5b823c20ad0d55eb6040392e80cd4e1c4cc9d5befa03f577c716a556d4c0f936"
+}

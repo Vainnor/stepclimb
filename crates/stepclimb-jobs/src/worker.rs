@@ -71,6 +71,7 @@ pub struct JobContext {
     clock: Clock,
     claim: Claim,
     lease: Duration,
+    registry: Arc<Registry>,
 }
 
 /// Whether [`JobContext::extend_lease`] kept the job.
@@ -104,6 +105,12 @@ impl JobContext {
         &self.clock
     }
 
+    /// The registry the worker runs with: the kinds and event topics this binary knows.
+    #[must_use]
+    pub fn registry(&self) -> &Registry {
+        &self.registry
+    }
+
     /// Hold the job for another lease from now (B5). [`Lease::Lost`] means another worker has
     /// claimed the job since; the handler should stop, since its outcome will change nothing.
     pub async fn extend_lease(&self) -> Result<Lease, Error> {
@@ -120,7 +127,7 @@ pub struct Worker {
 #[derive(Debug)]
 struct Inner {
     pool: PgPool,
-    registry: Registry,
+    registry: Arc<Registry>,
     clock: Clock,
     random: Random,
     queues: Vec<&'static str>,
@@ -138,7 +145,7 @@ impl Worker {
     ) -> Self {
         let inner = Inner {
             pool,
-            registry,
+            registry: Arc::new(registry),
             clock,
             random,
             queues,
@@ -275,6 +282,7 @@ async fn run_handler(inner: &Inner, claimed: &Claimed, kind: &Kind, handler: Han
         clock: inner.clock.clone(),
         claim: claimed.claim(),
         lease: kind.lease,
+        registry: Arc::clone(&inner.registry),
     };
     // The handler runs on a task of its own, so a panic ends that task and comes back here as
     // a `JoinError` instead of ending the worker.
