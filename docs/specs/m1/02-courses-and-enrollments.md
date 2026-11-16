@@ -282,10 +282,10 @@ Org admin holds every entry through `perm::ALL`.
 | Permission | Key | Grantable at | What it allows |
 | --- | --- | --- | --- |
 | `perm::CourseView` | `course.view` | organization, account, course | Read a course and its published, unlocked content |
-| `perm::CourseViewAll` | `course.view_all` | organization, account, course | Read drafts, templates, unpublished modules and items, and locked content (specs 03, 04) |
+| `perm::CourseViewAll` | `course.view_all` | organization, account, course | Read drafts, templates, unpublished modules and items, and locked content (specs 03, 04); `course.content_edit` also sees unpublished modules and items in the answers to its edits (`03` Decisions made building I1) |
 | `perm::CourseCreate` | `course.create` | organization, account | Create courses in an account, and copies into it |
 | `perm::CourseManage` | `course.manage` | organization, account, course | Change a course's details and status |
-| `perm::CourseContentEdit` | `course.content_edit` | organization, account, course | Edit modules, items, files and pages (specs 03, 06, 07); the plan's example `Require<perm::CourseContentEdit>` |
+| `perm::CourseContentEdit` | `course.content_edit` | organization, account, course | Edit modules, items, files and pages (specs 03, 06, 07), seeing unpublished modules and items in the answers to those edits; the plan's example `Require<perm::CourseContentEdit>` |
 | `perm::CourseParticipate` | `course.participate` | course | Take the course as a learner: record progress (spec 05) |
 | `perm::EnrollmentView` | `enrollment.view` | organization, account, course | Read a course's enrollments |
 | `perm::EnrollmentManage` | `enrollment.manage` | organization, account, course | Enroll, conclude and remove users |

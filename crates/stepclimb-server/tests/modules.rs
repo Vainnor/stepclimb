@@ -560,6 +560,8 @@ async fn t4_t5_kinds_and_urls_are_checked(pool: PgPool) {
         "//evil.example",
         "https://user:pw@host/",
         "https://exa\tmple.com/",
+        "https://example.com/\u{202E}gpj.exe",
+        "https://exa\u{200B}mple.com/",
         long.as_str(),
     ] {
         f.send(

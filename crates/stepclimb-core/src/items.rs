@@ -109,8 +109,8 @@ pub struct Item {
     pub updated_at: SystemTime,
 }
 
-/// An item to create. The URL's form (B7) is checked by the caller; this module checks only
-/// that it is present exactly for an external link, has no NUL and fits the column.
+/// An item to create. Its URL must be present exactly for an external link and pass
+/// [`url_is_valid`] (B7).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewItem {
     pub kind: Kind,
@@ -315,7 +315,7 @@ pub async fn update<'c>(
 ) -> Result<Item, Error> {
     let title = patch.title.as_deref().map(valid_title).transpose()?;
     if let Some(url) = &patch.url {
-        check_url_text(url)?;
+        check_url(url)?;
     }
     let now = epoch_micros(now)?;
     let mut tx = db.begin().await?;
@@ -551,23 +551,75 @@ fn check_kind(new: &NewItem) -> Result<(), Error> {
         return Err(Error::RefIdUnavailable);
     }
     match (&new.url, new.kind.has_url()) {
-        (Some(url), true) => check_url_text(url),
+        (Some(url), true) => check_url(url),
         (None, true) => Err(Error::UrlRequired),
         (Some(_), false) => Err(Error::UrlUnavailable),
         (None, false) => Ok(()),
     }
 }
 
-/// What this module checks of a URL: no NUL, and at most [`MAX_URL_CHARS`] characters, which
-/// the column also enforces.
-fn check_url_text(url: &str) -> Result<(), Error> {
-    if url.contains('\0') {
-        return Err(Error::ContainsNul { field: "url" });
+/// [`Error::UrlInvalid`] unless [`url_is_valid`].
+fn check_url(url: &str) -> Result<(), Error> {
+    if url_is_valid(url) {
+        Ok(())
+    } else {
+        Err(Error::UrlInvalid)
     }
-    if url.chars().count() > MAX_URL_CHARS {
-        return Err(Error::UrlInvalid);
-    }
-    Ok(())
+}
+
+/// Whether `url` is an external link B7 accepts: an absolute `https` or `http` URL of at most
+/// [`MAX_URL_CHARS`] characters with a host, no user name or password, and no white space,
+/// control or Unicode format (Cf) character. The URL is stored as sent, so it must parse as
+/// written: the URL parser would drop blanks, tabs and newlines and read `https:host` as
+/// `https://host`, which a browser resolves differently against the page. A format character
+/// such as U+202E (right-to-left override) makes the link show one address and go to another.
+#[must_use]
+pub fn url_is_valid(url: &str) -> bool {
+    let plain = !url
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control() || is_format(c));
+    let length = url.chars().count();
+    let lower = url.get(..8).unwrap_or(url).to_ascii_lowercase();
+    let absolute = lower.starts_with("https://") || lower.starts_with("http://");
+    let parsed = url::Url::parse(url).ok().filter(|parsed| {
+        matches!(parsed.scheme(), "https" | "http")
+            && parsed.host_str().is_some_and(|host| !host.is_empty())
+            && parsed.username().is_empty()
+            && parsed.password().is_none()
+    });
+    plain && absolute && (1..=MAX_URL_CHARS).contains(&length) && parsed.is_some()
+}
+
+/// The Unicode general category Cf (format), Unicode 16.0.0: each range inclusive. Generated
+/// from the Unicode Character Database (`unicodedata`, version 16.0.0); Rust's standard library
+/// has no general-category lookup.
+const FORMAT: &[(char, char)] = &[
+    ('\u{00AD}', '\u{00AD}'),
+    ('\u{0600}', '\u{0605}'),
+    ('\u{061C}', '\u{061C}'),
+    ('\u{06DD}', '\u{06DD}'),
+    ('\u{070F}', '\u{070F}'),
+    ('\u{0890}', '\u{0891}'),
+    ('\u{08E2}', '\u{08E2}'),
+    ('\u{180E}', '\u{180E}'),
+    ('\u{200B}', '\u{200F}'),
+    ('\u{202A}', '\u{202E}'),
+    ('\u{2060}', '\u{2064}'),
+    ('\u{2066}', '\u{206F}'),
+    ('\u{FEFF}', '\u{FEFF}'),
+    ('\u{FFF9}', '\u{FFFB}'),
+    ('\u{110BD}', '\u{110BD}'),
+    ('\u{110CD}', '\u{110CD}'),
+    ('\u{13430}', '\u{1343F}'),
+    ('\u{1BCA0}', '\u{1BCA3}'),
+    ('\u{1D173}', '\u{1D17A}'),
+    ('\u{E0001}', '\u{E0001}'),
+    ('\u{E0020}', '\u{E007F}'),
+];
+
+/// Whether `c` is a Unicode format (Cf) character.
+fn is_format(c: char) -> bool {
+    FORMAT.iter().any(|&(low, high)| (low..=high).contains(&c))
 }
 
 #[cfg(test)]
@@ -643,7 +695,70 @@ mod tests {
         ));
         assert!(matches!(
             check_kind(&link(Some("https://a\0b"))),
-            Err(Error::ContainsNul { field: "url" })
+            Err(Error::UrlInvalid)
         ));
+    }
+
+    /// T5.
+    #[test]
+    fn t5_urls_b7_refuses() {
+        let long = format!("https://example.com/{}", "a".repeat(2049 - 20));
+        assert_eq!(long.chars().count(), 2049);
+        let refused = [
+            "javascript:alert(1)",
+            "//evil.example",
+            "https://user:pw@host/",
+            "https://user@host/",
+            "https://exa\tmple.com/",
+            " https://example.com/",
+            "https://example.com/\n",
+            "https:example.com",
+            "ftp://example.com/",
+            "data:text/html,hi",
+            "/relative",
+            "",
+            long.as_str(),
+            // Unicode format characters: bidi override and isolates, zero width, BOM, soft
+            // hyphen, a tag character.
+            "https://example.com/\u{202E}gpj.exe",
+            "https://example.com/\u{2066}x\u{2069}",
+            "https://exa\u{200B}mple.com/",
+            "https://example.com/\u{FEFF}",
+            "https://exam\u{00AD}ple.com/",
+            "https://example.com/\u{E0041}",
+        ];
+        for bad in refused {
+            assert!(!url_is_valid(bad), "{bad:?}");
+        }
+    }
+
+    /// T5.
+    #[test]
+    fn t5_urls_b7_accepts() {
+        let at_limit = format!("https://example.com/{}", "a".repeat(2048 - 20));
+        for good in [
+            "https://example.com/a?b=1",
+            "http://example.com",
+            "HTTPS://Example.com/Path#frag",
+            "https://[2001:db8::1]:8443/x",
+            "https://example.com/caf\u{E9}",
+            at_limit.as_str(),
+        ] {
+            assert!(url_is_valid(good), "{good:?}");
+        }
+    }
+
+    #[test]
+    fn the_format_table_is_sorted_and_covers_the_named_characters() {
+        assert!(FORMAT.windows(2).all(|w| w[0].1 < w[1].0));
+        assert!(FORMAT.iter().all(|(low, high)| low <= high));
+        for c in [
+            '\u{202E}', '\u{2066}', '\u{2069}', '\u{200B}', '\u{FEFF}', '\u{200D}',
+        ] {
+            assert!(is_format(c), "{c:?}");
+        }
+        for c in ['a', '\u{2065}', '\u{E9}', '\u{2070}'] {
+            assert!(!is_format(c), "{c:?}");
+        }
     }
 }

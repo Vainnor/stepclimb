@@ -16,16 +16,15 @@ use axum::{
 };
 use serde::Deserialize;
 use stepclimb_core::{id::Uuid, items, perm::CourseContentEdit};
-use url::Url;
 use utoipa::ToSchema;
 
 use crate::{
     AppState,
-    error::{ApiError, FieldError},
+    error::ApiError,
     extract::ApiJson,
     modules::{
         ContentEditForbidden, Item, ItemKind, MODULE_NOT_FOUND, Module, ModuleNotFound, begin,
-        code, commit, content_error, recheck,
+        commit, content_error, recheck,
     },
     openapi::problem_responses,
     organization::present,
@@ -42,7 +41,7 @@ problem_responses! {
     ItemOrderConflict => "`course.archived`: the course is archived and takes no content change. `order.stale`: the list is not exactly the current set of ids (one is missing, extra or repeated); reload and try again.",
     ItemWriteConflict => "`course.archived`: the course is archived and takes no content change.",
     ItemMoveConflict => "`course.archived`: the course is archived and takes no content change. `item.limit_reached`: the destination module holds 200 items.",
-    ItemInvalid => "`request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space or control character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none), or `/position` with `item.position_out_of_range` (outside 0 to the module's item count).",
+    ItemInvalid => "`request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space, control or Unicode format character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none), or `/position` with `item.position_out_of_range` (outside 0 to the module's item count).",
 }
 
 /// An item to create, unpublished.
@@ -136,11 +135,8 @@ pub async fn create_item(
     ApiJson(body): ApiJson<NewItem>,
 ) -> Result<Response, ApiError> {
     let (grants, target) = (require.grants(), require.target());
-    if let Some(url) = &body.url {
-        check_url(url)?;
-    }
     let mut tx = begin(&state).await?;
-    recheck(&mut tx, grants, target.course.id, MODULE_NOT_FOUND).await?;
+    recheck(&mut tx, &require, target.course.id, MODULE_NOT_FOUND).await?;
     let new = items::NewItem {
         kind: body.kind.into(),
         title: body.title,
@@ -192,7 +188,7 @@ pub async fn reorder_items(
     let (grants, target) = (require.grants(), require.target());
     let scope = grants.scope();
     let mut tx = begin(&state).await?;
-    recheck(&mut tx, grants, target.course.id, MODULE_NOT_FOUND).await?;
+    recheck(&mut tx, &require, target.course.id, MODULE_NOT_FOUND).await?;
     let ordered = items::reorder(&mut *tx, scope, target.id, &body.item_ids)
         .await
         .map_err(content_error)?;
@@ -234,11 +230,8 @@ pub async fn update_item(
     ApiJson(body): ApiJson<ItemPatch>,
 ) -> Result<Json<Item>, ApiError> {
     let (grants, target) = (require.grants(), require.target());
-    if let Some(url) = &body.url {
-        check_url(url)?;
-    }
     let mut tx = begin(&state).await?;
-    recheck(&mut tx, grants, target.course.id, ITEM_NOT_FOUND).await?;
+    recheck(&mut tx, &require, target.course.id, ITEM_NOT_FOUND).await?;
     let patch = items::ItemPatch {
         title: body.title,
         published: body.published,
@@ -287,7 +280,7 @@ pub async fn move_item(
 ) -> Result<Json<Item>, ApiError> {
     let (grants, target) = (require.grants(), require.target());
     let mut tx = begin(&state).await?;
-    recheck(&mut tx, grants, target.course.id, ITEM_NOT_FOUND).await?;
+    recheck(&mut tx, &require, target.course.id, ITEM_NOT_FOUND).await?;
     let (scope, now) = (grants.scope(), state.clock.now());
     let item = items::move_to(
         &mut *tx,
@@ -328,7 +321,7 @@ pub async fn delete_item(
 ) -> Result<StatusCode, ApiError> {
     let (grants, target) = (require.grants(), require.target());
     let mut tx = begin(&state).await?;
-    recheck(&mut tx, grants, target.course.id, ITEM_NOT_FOUND).await?;
+    recheck(&mut tx, &require, target.course.id, ITEM_NOT_FOUND).await?;
     items::delete(&mut *tx, grants.scope(), target.id)
         .await
         .map_err(content_error)?;
@@ -336,78 +329,11 @@ pub async fn delete_item(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// 422 `item.url_invalid` at `/url` unless `url` is an absolute `https` or `http` URL of at
-/// most 2,048 characters with a host, without a user name, password, white space or control
-/// character (B7). The URL is stored as sent, so it must parse as written: the URL parser would
-/// drop blanks, tabs and newlines and read `https:host` as `https://host`, which a browser
-/// resolves differently against the page.
-fn check_url(url: &str) -> Result<(), ApiError> {
-    if url_is_valid(url) {
-        Ok(())
-    } else {
-        Err(ApiError::invalid(vec![FieldError::at(
-            &["url"],
-            code::ITEM_URL_INVALID,
-        )]))
-    }
-}
-
-fn url_is_valid(url: &str) -> bool {
-    let plain = !url.chars().any(|c| c.is_whitespace() || c.is_control());
-    let length = url.chars().count();
-    let lower = url.get(..8).unwrap_or(url).to_ascii_lowercase();
-    let absolute = lower.starts_with("https://") || lower.starts_with("http://");
-    let parsed = Url::parse(url).ok().filter(|parsed| {
-        matches!(parsed.scheme(), "https" | "http")
-            && parsed.host_str().is_some_and(|host| !host.is_empty())
-            && parsed.username().is_empty()
-            && parsed.password().is_none()
-    });
-    plain && absolute && (1..=items::MAX_URL_CHARS).contains(&length) && parsed.is_some()
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::*;
-
-    #[test]
-    fn t5_urls_b7_refuses() {
-        let long = format!("https://example.com/{}", "a".repeat(2049 - 20));
-        assert_eq!(long.chars().count(), 2049);
-        for bad in [
-            "javascript:alert(1)",
-            "//evil.example",
-            "https://user:pw@host/",
-            "https://user@host/",
-            "https://exa\tmple.com/",
-            " https://example.com/",
-            "https://example.com/\n",
-            "https:example.com",
-            "ftp://example.com/",
-            "data:text/html,hi",
-            "/relative",
-            "",
-            long.as_str(),
-        ] {
-            assert!(!url_is_valid(bad), "{bad:?}");
-        }
-    }
-
-    #[test]
-    fn t5_urls_b7_accepts() {
-        let at_limit = format!("https://example.com/{}", "a".repeat(2048 - 20));
-        for good in [
-            "https://example.com/a?b=1",
-            "http://example.com",
-            "HTTPS://Example.com/Path#frag",
-            "https://[2001:db8::1]:8443/x",
-            at_limit.as_str(),
-        ] {
-            assert!(url_is_valid(good), "{good:?}");
-        }
-    }
 
     #[test]
     fn bodies_refuse_null_and_unknown_members() {

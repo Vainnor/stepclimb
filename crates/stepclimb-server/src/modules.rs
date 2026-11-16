@@ -22,11 +22,11 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use stepclimb_core::{
     courses,
-    grants::{Denied, Grants, Target},
+    grants::{Denied, Target},
     id::Uuid,
     items,
     modules::{self, Error},
-    perm::CourseContentEdit,
+    perm::{CourseContentEdit, Permission},
 };
 use utoipa::ToSchema;
 
@@ -285,7 +285,7 @@ pub async fn create_module(
 ) -> Result<Response, ApiError> {
     let (grants, course_id) = (require.grants(), require.target().id);
     let mut tx = begin(&state).await?;
-    recheck(&mut tx, grants, course_id, COURSE_NOT_FOUND).await?;
+    recheck(&mut tx, &require, course_id, COURSE_NOT_FOUND).await?;
     let module = modules::create(
         &mut *tx,
         grants.scope(),
@@ -336,7 +336,7 @@ pub async fn reorder_modules(
 ) -> Result<Json<ModuleList>, ApiError> {
     let (grants, course_id) = (require.grants(), require.target().id);
     let mut tx = begin(&state).await?;
-    recheck(&mut tx, grants, course_id, COURSE_NOT_FOUND).await?;
+    recheck(&mut tx, &require, course_id, COURSE_NOT_FOUND).await?;
     let scope = grants.scope();
     let ordered = modules::reorder(&mut *tx, scope, course_id, &body.module_ids)
         .await
@@ -389,7 +389,7 @@ pub async fn update_module(
 ) -> Result<Json<Module>, ApiError> {
     let (grants, target) = (require.grants(), require.target());
     let mut tx = begin(&state).await?;
-    recheck(&mut tx, grants, target.course.id, MODULE_NOT_FOUND).await?;
+    recheck(&mut tx, &require, target.course.id, MODULE_NOT_FOUND).await?;
     let patch = modules::ModulePatch {
         title: body.title,
         published: body.published,
@@ -430,7 +430,7 @@ pub async fn delete_module(
 ) -> Result<StatusCode, ApiError> {
     let (grants, target) = (require.grants(), require.target());
     let mut tx = begin(&state).await?;
-    recheck(&mut tx, grants, target.course.id, MODULE_NOT_FOUND).await?;
+    recheck(&mut tx, &require, target.course.id, MODULE_NOT_FOUND).await?;
     modules::delete(&mut *tx, grants.scope(), target.id)
         .await
         .map_err(content_error)?;
@@ -441,16 +441,17 @@ pub async fn delete_module(
 /// The code of a module that does not exist or that the caller cannot see.
 pub(crate) const MODULE_NOT_FOUND: &str = crate::require::code::MODULE_NOT_FOUND;
 
-/// The extractor's `course.content_edit` check again, on the course's path as `courses::lock`
-/// reads it in the transaction: 404 with `not_found` when the course is gone or out of the
-/// caller's reach, 403 when it is visible without the permission. The course row stays locked
-/// until the transaction ends.
-pub(crate) async fn recheck(
+/// `require`'s check of `P` again, on the course's path as `courses::lock` reads it in the
+/// transaction: 404 with `not_found` when the course is gone or out of the caller's reach, 403
+/// when it is visible without `P`. `P` is the permission the route's own `Require` names, so the
+/// two checks cannot differ. The course row stays locked until the transaction ends.
+pub(crate) async fn recheck<P: Permission, T>(
     tx: &mut Transaction<'static, Postgres>,
-    grants: &Grants,
+    require: &Require<P, T>,
     course_id: Uuid,
     not_found: &'static str,
 ) -> Result<(), ApiError> {
+    let grants = require.grants();
     let course = courses::lock(tx, grants.scope(), course_id)
         .await
         .map_err(|error| ApiError::internal(&error))?
@@ -460,7 +461,7 @@ pub(crate) async fn recheck(
         course_id,
     };
     grants
-        .check::<CourseContentEdit>(&target)
+        .check::<P>(&target)
         .map_err(|denied| not_found_as(denied, not_found))
 }
 

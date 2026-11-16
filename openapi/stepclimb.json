@@ -10376,7 +10376,7 @@
         }
       },
       "ItemInvalid": {
-        "description": "`request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space or control character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none), or `/position` with `item.position_out_of_range` (outside 0 to the module's item count).",
+        "description": "`request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space, control or Unicode format character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none), or `/position` with `item.position_out_of_range` (outside 0 to the module's item count).",
         "content": {
           "application/problem+json": {
             "schema": {

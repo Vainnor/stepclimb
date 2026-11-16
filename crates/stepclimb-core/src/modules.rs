@@ -89,8 +89,8 @@ pub enum Error {
     /// An external link without a URL.
     #[error("an external link needs a URL")]
     UrlRequired,
-    /// A URL longer than [`crate::items::MAX_URL_CHARS`] characters (B7).
-    #[error("the URL is too long")]
+    /// A URL `items::url_is_valid` refuses (B7).
+    #[error("the URL is not an absolute http or https link")]
     UrlInvalid,
     /// A URL on a kind that has none (B5, B8).
     #[error("this kind of item has no URL")]

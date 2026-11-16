@@ -318,6 +318,17 @@ async fn an_item_patch_changes_title_publish_and_a_links_url_only(pool: PgPool) 
     let link = items::create(&pool, a.scope(), module, &new, now())
         .await
         .unwrap();
+    for bad in ["javascript:alert(1)", "https://example.com/\u{202E}gpj.exe"] {
+        let patch = ItemPatch {
+            url: Some(bad.into()),
+            ..ItemPatch::default()
+        };
+        let refused = items::update(&pool, a.scope(), link.id, &patch, later()).await;
+        assert!(
+            matches!(refused, Err(Error::UrlInvalid)),
+            "{bad:?}: {refused:?}"
+        );
+    }
     let same = ItemPatch {
         title: Some("Link".into()),
         published: Some(false),
@@ -625,7 +636,7 @@ async fn another_organizations_ids_are_not_found(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn the_tables_refuse_a_kind_without_its_url_or_with_a_reference(pool: PgPool) {
+async fn the_tables_refuse_a_kind_without_its_url_a_non_http_url_or_a_reference(pool: PgPool) {
     let a = Org::new(&pool, "org-a").await;
     let module = a.module(&pool, "Week 1").await;
     let insert = |kind: &'static str, url: Option<&'static str>, ref_id: Option<Uuid>| {
@@ -648,6 +659,17 @@ async fn the_tables_refuse_a_kind_without_its_url_or_with_a_reference(pool: PgPo
         }
     };
     assert!(insert("external_link", None, None).await.is_err());
+    // The backstop under `items::url_is_valid`: only http and https.
+    assert!(
+        insert("external_link", Some("javascript:alert(1)"), None)
+            .await
+            .is_err()
+    );
+    assert!(
+        insert("external_link", Some("HTTPS://x.example/"), None)
+            .await
+            .is_ok()
+    );
     assert!(
         insert("header", Some("https://x.example/"), None)
             .await

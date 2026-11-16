@@ -13,6 +13,9 @@
 -- repository checks it (B6). `published` on both tables and `url` are not in the plan's data
 -- model: they are Q1's switch and B7's link.
 --
+-- `stepclimb_core::items::url_is_valid` checks an external link's URL in full (B7); the
+-- `url` check is a backstop that keeps any writer to absolute http and https URLs.
+--
 -- `quiz` and `activity` are in the kind list so M2 and M3 add no migration to it; no M1 code
 -- creates them.
 CREATE TABLE modules (
@@ -47,6 +50,7 @@ CREATE TABLE module_items (
     FOREIGN KEY (org_id, course_id, module_id) REFERENCES modules (org_id, course_id, id),
     CONSTRAINT module_items_position UNIQUE (module_id, position) DEFERRABLE INITIALLY DEFERRED,
     CHECK ((kind = 'external_link') = (url IS NOT NULL)),
-    CHECK ((kind IN ('external_link', 'header')) = (ref_id IS NULL))
+    CHECK ((kind IN ('external_link', 'header')) = (ref_id IS NULL)),
+    CHECK (url IS NULL OR url ~* '^https?://')
 );
 CREATE INDEX module_items_ref ON module_items (org_id, kind, ref_id) WHERE ref_id IS NOT NULL;

@@ -62,7 +62,9 @@ names that cannot be created. Unlock and completion rules are spec 04.
   renamed, published, unpublished, moved and deleted.
 - **B7.** An external link's `url` is an absolute `https` or `http` URL of at most 2,048
   characters with a host, no user name or password, and no control or white-space character
-  (422 `item.url_invalid` at `/url`); it may be changed. The server never fetches it. The web app
+  (422 `item.url_invalid` at `/url`); it may be changed. A Unicode format character (category
+  Cf, such as U+202E or U+200B) is refused the same way, since it can make a link show one
+  address and go to another. The server never fetches it. The web app
   opens it in a new browsing context with `rel="noopener noreferrer"`.
 - **B8.** A header carries no reference, URL or requirement (spec 04 refuses one on it).
 - **B9.** Deleting an item removes its row and closes the positions gap. It does not delete what
@@ -310,7 +312,9 @@ or Q12.
 - **B7's "absolute" is checked on the string as sent.** The URL must start with `http://` or
   `https://` (any case) and parse to a host. The parser reads `https:host` as
   `https://host/`, but a browser resolves that string against the page, so the stored value
-  would not be the link the parser accepted.
+  would not be the link the parser accepted. The check is `stepclimb_core::items::url_is_valid`,
+  in the repository, so every writer (copy, import, sync) applies it; the `module_items` table
+  also refuses a `url` that does not start with `http://` or `https://`.
 - **Every write locks the course**, not only the structural ones of B12: renames, publish
   switches and URL changes too, so a course archived meanwhile (`02` B5) is seen by every
   write. The route checks `course.content_edit` again on the course's path as its transaction
@@ -323,7 +327,14 @@ or Q12.
 - **Write responses carry every item.** `PUT .../modules/order`, `PATCH /modules/{id}` and
   `PUT .../items/order` return each module with all its items, published or not: the caller
   holds `course.content_edit` and can change every one of them. B13's filtering is for the
-  read routes of I2.
+  read routes of I2. Editing content therefore implies reading unpublished modules and items
+  in those answers, and the catalog descriptions of `course.content_edit` and
+  `course.view_all` (`stepclimb_core::perm`, `02` Permissions) say so. A custom role with
+  `course.content_edit` and no `course.view_all` sees unpublished content only through its
+  edits, never through I2's read routes.
+- **Each route checks its own permission twice.** The handler repeats its `Require`'s check
+  under the course lock with the same permission type (`recheck` takes the route's `Require`),
+  so the two checks cannot name different permissions.
 - **No `items::referencing` yet.** The spec lists it for the content specs' deletion checks;
   nothing calls it until spec 06, which adds it.
 
