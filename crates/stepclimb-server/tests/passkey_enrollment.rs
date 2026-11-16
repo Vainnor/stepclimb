@@ -51,6 +51,7 @@ use tower::ServiceExt;
 use webauthn_authenticator_rs::{WebauthnAuthenticator, softpasskey::SoftPasskey};
 use webauthn_rs::prelude::{CreationChallengeResponse, Url};
 
+mod app_tokens;
 mod common;
 
 /// The client address every test request comes from (TEST-NET-1); audit entries record it.
@@ -936,4 +937,30 @@ impl Write for Captured {
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
+}
+
+/// Spec 08 B46: registering a passkey through an enrollment link signs out every app signed in
+/// as the user; a refused registration signs out nothing.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn registering_through_a_link_signs_out_every_app(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let user = f.user("sam@example.test").await;
+    let app = app_tokens::sign_in(&f.app, &f.pool, scope(f.org), f.org, user, now()).await;
+    let started = f.start(&f.link(user).await).await;
+    let refused = f
+        .enroll(
+            &started,
+            respond_to(started.options(), "https://sub.lms.example.org", |_| {}),
+            None,
+        )
+        .await;
+    assert_ne!(refused.status, StatusCode::OK, "{refused:?}");
+    assert!(
+        app_tokens::signed_in(&f.app, f.org, &app, user).await,
+        "a refused one keeps it"
+    );
+    let started = f.start(&f.link(user).await).await;
+    let answer = f.enroll(&started, respond(started.options()), None).await;
+    assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    assert!(app_tokens::signed_out(&f.app, f.org, &app).await);
 }

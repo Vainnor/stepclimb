@@ -428,12 +428,13 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
     registry, and its family must still exist for its user and client, read with the user's status
     in one indexed query (Q12 (b)): a revoked or reused family stops its access tokens at once (401
     `auth.access_token_invalid`); a suspended user answers 401 `auth.suspended` (B11).
-  - **What an app token may do** (ADR 0032). It acts as its user with all of the user's current
-    grants, like a browser session (the plan names no app scopes), and its changes are audited as the
-    user's. It is a bearer credential, so every route that takes `NoBearer` or `SessionOnly`
-    (B44) refuses it with 403 `auth.session_required`, and the admin user routes refuse an app
-    token whose target is its own user, as they refuse a key on its owner. A router walk over
-    every operation that documents `auth.session_required` checks this (`tests/oauth_token.rs`).
+  - **What an app token may do** (ADR 0032, Proposed). It acts as its user with all of the user's
+    current grants, like a browser session (the plan names no app scopes), and its changes are
+    audited as the user's. It is a bearer credential, so every route that takes `NoBearer` or
+    `SessionOnly` (B44) refuses it with 403 `auth.session_required`, and the admin user routes
+    refuse an app token whose target is its own user, as they refuse a key on its owner. A router
+    walk over every operation that documents `auth.session_required` checks this
+    (`tests/oauth_token.rs`).
   - **The token endpoint's order.** `RateLimited<Token>` first (B41), then the request's
     organization, then the body: not `application/x-www-form-urlencoded`, over 4,096 bytes, or a
     parameter it reads given twice is `invalid_request`; a missing `grant_type` is
@@ -480,6 +481,27 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
     endpoint sends CORS headers: the app calls them from its native HTTP client (RFC 8252), not
     from a page, and the M5 spec decides whether a web origin ever needs them.
   - **Cleanup.** The periodic cleanup (B21) deletes every family whose newest token has expired.
+  - **Ending a user's sessions ends their app sign-ins** (security review of I8, coordinator
+    decision 2026-11-15). Wherever the server ends a user's other sessions, "session" includes
+    every app signed in as the user: a password change (`PUT /api/v1/me/password`), a password
+    set through an enrollment link, and a passkey registered through one delete every refresh
+    token of the user (`oauth_refresh_tokens::revoke_all_of_user`) in the same transaction, so
+    the apps' access tokens stop on their next request. A passkey registered through a link does
+    not end the user's browser sessions (`04-local-accounts.md`); it ends the app sign-ins all
+    the same, since the link is how an admin restores access. Suspension deletes nothing: it
+    refuses the refresh and the access token while it lasts and unsuspending restores them, as
+    it does sessions (B11). An admin's removal of a user's TOTP (#192) calls the same function
+    when it lands.
+  - **Code reuse needs the code's own proof** (security review of I8). A used code revokes its
+    family only when the replay names the code's client and redirect URI and its verifier
+    passes; any other replay is `invalid_grant` and changes nothing, so someone who saw the code
+    but not the verifier cannot sign the app out.
+  - **For the M5 app.** It calls `/oauth/token` and `/oauth/revoke` and sends its bearer
+    requests from the Tauri side's Rust HTTP client, never a webview `fetch`, so no access or
+    refresh token reaches page JavaScript and the endpoints need no CORS. Reuse detection is
+    strict (Q11), so the app serializes its refreshes (one at a time per server) and never
+    retries a refresh whose answer it did not read: a retried request presents a spent token
+    and signs the device out. On `invalid_grant` it signs in again.
 
 ### Server discovery
 

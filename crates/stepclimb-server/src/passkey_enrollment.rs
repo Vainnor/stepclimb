@@ -58,7 +58,7 @@ use stepclimb_core::{
     identity_providers,
     local_sign_in::{Method, PROVIDER_KEY},
     local_tokens::{self, Enrollment},
-    organizations, passkeys, users,
+    oauth_refresh_tokens, organizations, passkeys, users,
 };
 use utoipa::ToSchema;
 
@@ -423,6 +423,11 @@ async fn register(
     link_local_identity(&mut sp, scope, user.id, attempt.now, actor).await?;
     let started =
         admission::complete_local(&mut sp, scope, user.id, attempt.now, attempt.headers).await?;
+    // An enrollment link is how an admin restores access: every app signed in as the user before
+    // it is signed out (spec 08 B46).
+    oauth_refresh_tokens::revoke_all_of_user(&mut *sp, scope, user.id)
+        .await
+        .map_err(|e| Outcome::internal(&e))?;
     sp.commit().await.map_err(|e| Outcome::internal(&e))?;
     Ok(started)
 }

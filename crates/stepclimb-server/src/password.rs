@@ -69,7 +69,7 @@ use stepclimb_core::{
     id::Uuid,
     identities, local_logins,
     local_sign_in::{self as switches, Method},
-    local_tokens, local_totp,
+    local_tokens, local_totp, oauth_refresh_tokens,
     sessions::{self, Keep},
 };
 use utoipa::ToSchema;
@@ -223,9 +223,12 @@ pub async fn enroll_password(
             Outcome::Refused(error) | Outcome::Failed(error) => error,
         })?;
     let started = complete(&mut tx, scope, user_id, now, &headers).await?;
-    // A new password through a link is a reset: no session from before it outlives it. TOTP
-    // stays as it is: the link sets the password, not the second step.
+    // A new password through a link is a reset: no session from before it outlives it, browser
+    // or app (spec 08 B46). TOTP stays as it is: the link sets the password, not the second step.
     sessions::delete_others_of_user(&mut *tx, scope, user_id, Keep::Session(started.session.id))
+        .await
+        .map_err(internal)?;
+    oauth_refresh_tokens::revoke_all_of_user(&mut *tx, scope, user_id)
         .await
         .map_err(internal)?;
     tx.commit().await.map_err(internal)?;
@@ -488,7 +491,7 @@ pub async fn change_my_password(
 }
 
 /// Under the user's lock, unless the password changed since it was verified: store the changed
-/// password and end the user's other sessions.
+/// password and end the user's other sessions and every app sign-in.
 async fn store_change(
     attempt: &Attempt<'_>,
     passed: &Passed,
@@ -515,6 +518,11 @@ async fn store_change(
     .await
     .map_err(internal)?;
     sessions::delete_others_of_user(&mut *tx, scope, user_id, Keep::TokenHash(*keep.as_bytes()))
+        .await
+        .map_err(internal)?;
+    // The app sign-ins end too: a changed password must sign out a device that kept a stolen
+    // refresh token (spec 08 B46).
+    oauth_refresh_tokens::revoke_all_of_user(&mut *tx, scope, user_id)
         .await
         .map_err(internal)?;
     tx.commit().await.map_err(internal)?;

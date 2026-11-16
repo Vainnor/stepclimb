@@ -38,4 +38,4 @@ Decided list (`docs/plan/technical.md` -> Decided, and `docs/plan/ui.md` -> UI d
 | [0029](0029-id-token-checks.md) | ID token checks on plain JSON claims, signatures by openidconnect's keys | Accepted |
 | [0030](0030-release-merge-commits.md) | Release PRs into main use a merge commit | Accepted |
 | [0031](0031-release-image-signing-and-sbom.md) | The release image: one archive pushed by digest, signed keyless, an SPDX SBOM from syft | Proposed |
-| [0032](0032-app-token-signing-key-and-rights.md) | App access tokens: a signing key derived from the encryption key ring, and the user's rights | Accepted |
+| [0032](0032-app-token-signing-key-and-rights.md) | App access tokens: a signing key derived from the encryption key ring, and the user's rights | Proposed |

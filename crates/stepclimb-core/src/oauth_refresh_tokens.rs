@@ -3,7 +3,8 @@
 //! (docs/specs/m0/08-sessions-and-csrf.md B32 to B36, Data, Q11, Q12, Q14).
 //!
 //! A refresh token belongs to a family: a code exchange starts one ([`start_family`]), each
-//! refresh adds the next token to it ([`rotate`]), and a family ends whole ([`revoke_family`]).
+//! refresh adds the next token to it ([`rotate`]), and a family ends whole ([`revoke_family`]),
+//! or every family of a user at once ([`revoke_all_of_user`]).
 //! A token lives [`LIFETIME`] from its issue, and no token outlives [`FAMILY_LIFETIME`] from the
 //! family's start (Q11 (b)). A token is spent once a row rotated from it exists; the rotated row
 //! stays, so presenting the spent token again is recognized as reuse, which ends the family and
@@ -255,6 +256,26 @@ pub async fn revoke_family(
         "DELETE FROM oauth_refresh_tokens WHERE org_id = $1 AND family_id = $2",
         scope.org_id(),
         family_id,
+    )
+    .execute(db)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+/// Delete every refresh token of the user `user_id` in the scope's organization, every family
+/// and client alike, so every app signed in as the user is signed out and its access tokens stop
+/// on their next request. A change that ends the user's other browser sessions calls this in its
+/// transaction (a new password, the use of an enrollment link, spec 08 B46). Returns how many
+/// tokens were deleted.
+pub async fn revoke_all_of_user(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    user_id: Uuid,
+) -> Result<u64, Error> {
+    let result = sqlx::query!(
+        "DELETE FROM oauth_refresh_tokens WHERE org_id = $1 AND user_id = $2",
+        scope.org_id(),
+        user_id,
     )
     .execute(db)
     .await?;

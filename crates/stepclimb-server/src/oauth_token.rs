@@ -14,11 +14,12 @@
 //! 400 (Q13 (a)).
 //!
 //! A code exchange (`grant_type=authorization_code`, B32) runs in one transaction. It locks the
-//! code's row, so a second exchange of the same code waits for the first. A code that was already
-//! used is reuse: the family its first exchange started is revoked and audited. Otherwise the code
-//! must be unexpired by the server's clock, issued to the same `client_id` for the same
-//! `redirect_uri` (both compared exactly), its challenge must be the S256 of `code_verifier`
-//! (compared in constant time), and its user must be active. Then a new refresh family starts
+//! code's row, so a second exchange of the same code waits for the first. The code must have
+//! been issued to the same `client_id` for the same `redirect_uri` (both compared exactly), and
+//! its challenge must be the S256 of `code_verifier` (compared in constant time); a request that
+//! fails these changes nothing. A code that passes them and was already used is reuse: the
+//! family its first exchange started is revoked and audited. Otherwise the code must be
+//! unexpired by the server's clock and its user active. Then a new refresh family starts
 //! with the first refresh token, the code is marked used with that family, and the answer
 //! carries an access token for 15 minutes and the refresh token. A code that fails a check is
 //! left unused, so a request without the verifier cannot spend the app's code.
@@ -315,6 +316,14 @@ impl Grant<'_> {
         else {
             return Ok(Err(INVALID_GRANT));
         };
+        // Only the app that holds the verifier for this code, at its redirect URI, can show the
+        // code was reused; anyone else's attempt is refused without touching the family.
+        let bound = code.client_id == request.client.id
+            && code.redirect_uri == request.redirect_uri
+            && token_request::verifier_matches(request.code_verifier, &code.code_challenge);
+        if !bound {
+            return Ok(Err(INVALID_GRANT));
+        }
         if code.used_at.is_some() {
             if let Some(family_id) = code.family_id {
                 let reuse = Reuse {
@@ -329,12 +338,7 @@ impl Grant<'_> {
             tx.commit().await.map_err(|e| internal(&e))?;
             return Ok(Err(INVALID_GRANT));
         }
-        let passes = self.now < code.expires_at
-            && code.client_id == request.client.id
-            && code.redirect_uri == request.redirect_uri
-            && token_request::verifier_matches(request.code_verifier, &code.code_challenge)
-            && code.user_status == Status::Active;
-        if !passes {
+        if self.now >= code.expires_at || code.user_status != Status::Active {
             return Ok(Err(INVALID_GRANT));
         }
         let refresh_token = Token::generate().map_err(|e| internal(&e))?;

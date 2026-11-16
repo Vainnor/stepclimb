@@ -313,13 +313,16 @@ pub fn warn_about_unknown_plan_keys(unknown: &[UnknownKeys]) {
 }
 
 /// Log a warning for each key in `keys` whose bytes are the published development key, so a
-/// deployment that copied the Compose example's key says so on every start.
+/// deployment that copied the Compose example's key says so on every start. Any key of the ring
+/// verifies the access tokens that name it (spec 08 B46), so the warning says so for a key that
+/// no longer encrypts too.
 pub fn warn_about_development_keys(keys: &KeyRing) {
     for key_id in keys.development_key_ids() {
         tracing::warn!(
             key_id,
             "encryption key {key_id:?} is the published development key; anything encrypted \
-             under it is readable by anyone with the Stepclimb repository"
+             under it is readable by anyone with the Stepclimb repository, and anyone can sign \
+             app access tokens this server accepts with it"
         );
     }
 }
@@ -511,6 +514,10 @@ mod tests {
         assert!(output.contains("WARN"), "{output}");
         assert!(
             output.contains(r#"encryption key "old-dev" is the published development key"#),
+            "{output}"
+        );
+        assert!(
+            output.contains("anyone can sign app access tokens this server accepts with it"),
             "{output}"
         );
         assert!(!output.contains("prod"), "{output}");

@@ -1162,3 +1162,32 @@ async fn a_token_of_another_client_is_refused(pool: PgPool) {
     let exchanged = f.exchange(code.expose_secret(), &[]).await;
     assert!(exchanged.refused("invalid_grant"), "{exchanged:?}");
 }
+
+/// B32, B46: only a reuse that passes the client, redirect URI and
+/// verifier checks revokes the family. A replay of a used code with a wrong verifier or
+/// redirect URI, from someone who saw the code but not the verifier, is `invalid_grant` and
+/// keeps the app signed in; the replay with the verifier revokes the family.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn only_a_reuse_with_the_verifier_revokes_the_family(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let sam = f.user("sam@example.test").await;
+    let code = f.code(sam).await;
+    let tokens = granted(&f.exchange(&code, &[]).await);
+    for change in [
+        (
+            "code_verifier",
+            "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXK",
+        ),
+        ("redirect_uri", "http://127.0.0.1:43211/oauth/callback"),
+    ] {
+        let replay = f.exchange(&code, &[change]).await;
+        assert!(replay.refused("invalid_grant"), "{change:?}: {replay:?}");
+    }
+    assert_eq!(f.me(&tokens.access).await.status, StatusCode::OK, "kept");
+    assert!(f.reuse_entries().await.is_empty());
+    assert_eq!(f.refresh_rows().await, 1);
+
+    assert!(f.exchange(&code, &[]).await.refused("invalid_grant"));
+    assert_eq!(f.refresh_rows().await, 0, "the verified replay revokes");
+    assert_eq!(f.reuse_entries().await.len(), 1);
+}

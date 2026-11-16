@@ -540,3 +540,97 @@ async fn a_code_is_locked_with_its_user_and_marked_used_once(pool: PgPool) {
         .expect("the code stays");
     assert_eq!((after.used_at, after.family_id), (Some(start_time()), None));
 }
+
+/// B34, Q11 (strict): two refreshes of one token in two transactions. A locks the token and
+/// rotates it without committing; B's lock waits for A; once A commits, B holds the lock and
+/// `is_rotated`, a statement after the lock, sees A's new token, so B treats the token as spent.
+/// A rotation of the spent token stores nothing.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_concurrent_refresh_waits_and_then_sees_the_token_spent(pool: PgPool) {
+    let org = insert_org(&pool, "org-a").await;
+    let user = insert_user(&pool, org).await;
+    let first = family(&pool, org, user, 1, start_time()).await;
+
+    let mut a = pool.begin().await.expect("transaction A");
+    let held = refresh::lock(&mut a, scope(org), &[1; 32])
+        .await
+        .expect("lock")
+        .expect("R1");
+    let rotated = refresh::rotate(
+        &mut a,
+        scope(org),
+        &held,
+        &token(user, &[2; 32]),
+        start_time(),
+    )
+    .await
+    .expect("rotate");
+    assert!(matches!(rotated, Rotation::Rotated(_)));
+
+    let b_pool = pool.clone();
+    let mut b = tokio::spawn(async move {
+        let mut b = b_pool.begin().await.expect("transaction B");
+        let locked = refresh::lock(&mut b, scope(org), &[1; 32])
+            .await
+            .expect("lock")
+            .expect("R1");
+        let spent = refresh::is_rotated(&mut b, scope(org), locked.id)
+            .await
+            .expect("read");
+        let again = refresh::rotate(
+            &mut b,
+            scope(org),
+            &locked,
+            &token(user, &[3; 32]),
+            start_time(),
+        )
+        .await
+        .expect("rotate");
+        b.commit().await.expect("commit B");
+        (spent, again)
+    });
+    let waited = tokio::time::timeout(Duration::from_millis(300), &mut b).await;
+    assert!(waited.is_err(), "B's lock waits for A");
+    a.commit().await.expect("commit A");
+    let (spent, again) = b.await.expect("B finishes");
+    assert!(spent, "B sees the token A rotated");
+    assert_eq!(again, Rotation::AlreadyRotated);
+    let rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM oauth_refresh_tokens WHERE family_id = $1")
+            .bind(first)
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+    assert_eq!(rows, 2);
+}
+
+/// Spec 08 B46: a change that ends the user's other sessions deletes every refresh token of the
+/// user, in every family, and no other user's.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn every_family_of_a_user_can_be_revoked_at_once(pool: PgPool) {
+    let a = insert_org(&pool, "org-a").await;
+    let b = insert_org(&pool, "org-b").await;
+    let user = insert_user(&pool, a).await;
+    let other = insert_user(&pool, a).await;
+    let user_b = insert_user(&pool, b).await;
+    family(&pool, a, user, 1, start_time()).await;
+    family(&pool, a, user, 2, start_time()).await;
+    family(&pool, a, other, 3, start_time()).await;
+    family(&pool, b, user_b, 4, start_time()).await;
+    assert_eq!(
+        refresh::revoke_all_of_user(&pool, scope(b), user)
+            .await
+            .expect("revoke elsewhere"),
+        0
+    );
+    assert_eq!(
+        refresh::revoke_all_of_user(&pool, scope(a), user)
+            .await
+            .expect("revoke"),
+        2
+    );
+    assert!(lock(&pool, a, 1).await.is_none());
+    assert!(lock(&pool, a, 2).await.is_none());
+    assert!(lock(&pool, a, 3).await.is_some());
+    assert!(lock(&pool, b, 4).await.is_some());
+}

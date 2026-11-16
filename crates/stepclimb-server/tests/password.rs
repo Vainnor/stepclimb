@@ -48,6 +48,7 @@ use stepclimb_server::{
 };
 use tower::ServiceExt;
 
+mod app_tokens;
 mod common;
 
 const SIGN_IN: &str = "/auth/local/password";
@@ -1358,4 +1359,49 @@ async fn a_password_changed_during_a_change_is_not_overwritten(pool: PgPool) {
         f.sign_in("sam@example.test", OTHER_PASSWORD).await.status,
         StatusCode::OK
     );
+}
+
+/// Spec 08 B46: a password change signs out every app signed in as the
+/// user, as it ends their other browser sessions; a refused change signs out nothing.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn changing_the_password_signs_out_every_app(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let sam = f.user("sam@example.test").await;
+    f.with_password(sam, PASSWORD).await;
+    let session = f
+        .sign_in("sam@example.test", PASSWORD)
+        .await
+        .session()
+        .unwrap();
+    let app = app_tokens::sign_in(&f.app, &f.pool, scope(f.org), f.org, sam, now()).await;
+    let wrong = f
+        .change(&session, OTHER_PASSWORD, "another long passphrase")
+        .await;
+    assert_eq!(wrong.status, StatusCode::UNAUTHORIZED, "{wrong:?}");
+    assert!(
+        app_tokens::signed_in(&f.app, f.org, &app, sam).await,
+        "a refused change keeps it"
+    );
+
+    let changed = f.change(&session, PASSWORD, OTHER_PASSWORD).await;
+    assert_eq!(changed.status, StatusCode::NO_CONTENT, "{changed:?}");
+    assert!(app_tokens::signed_out(&f.app, f.org, &app).await);
+}
+
+/// Spec 08 B46: a password reset through an enrollment link signs out every app signed in as
+/// the user, and no other user's.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_reset_through_a_link_signs_out_every_app(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let sam = f.user("sam@example.test").await;
+    let kim = f.user("kim@example.test").await;
+    let first = app_tokens::sign_in(&f.app, &f.pool, scope(f.org), f.org, sam, now()).await;
+    let second = app_tokens::sign_in(&f.app, &f.pool, scope(f.org), f.org, sam, now()).await;
+    let others = app_tokens::sign_in(&f.app, &f.pool, scope(f.org), f.org, kim, now()).await;
+    let token = f.link(sam).await;
+    let answer = f.enroll(&token, PASSWORD).await;
+    assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    assert!(app_tokens::signed_out(&f.app, f.org, &first).await);
+    assert!(app_tokens::signed_out(&f.app, f.org, &second).await);
+    assert!(app_tokens::signed_in(&f.app, f.org, &others, kim).await);
 }

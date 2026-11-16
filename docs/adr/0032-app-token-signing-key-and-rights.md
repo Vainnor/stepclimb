@@ -1,9 +1,9 @@
 # 0032. App access tokens: a signing key derived from the encryption key ring, and the user's rights
 
-- **Status:** Accepted
+- **Status:** Proposed
 - **Date:** 2026-11-15
-- **Decider:** the coordinator, on the owner's delegation of M0 decisions (2026-11-13); the
-  owner to confirm
+- **Decider:** the owner, not yet. It sets the rights of every app token, so the coordinator
+  leaves it to the owner; spec 08 I8 is built on the recommendation meanwhile.
 - **Related:** `docs/specs/m0/08-sessions-and-csrf.md` B36, B44, B46, Q3, Q12, I8; plan,
   Technical -> Decided (the OAuth 2.1 server "built on `oauth2`/`jsonwebtoken`");
   `crates/stepclimb-auth/src/oauth_server/access_token.rs`,
@@ -51,9 +51,10 @@ take over or lock out its user.
 
 ## Decision
 
-Signing key B: `KeyRing` derives the key at parse time and hands it only to
-`stepclimb_auth::oauth_server::access_token`, which signs with `jsonwebtoken` through its own
-HS256-only `CryptoProvider` over the workspace's `hmac` and `sha2`. Rights A: an app token acts
+Pending the owner. Spec 08 I8 is built as recommended. Signing key B: `KeyRing` derives the key
+at parse time and hands it only to `stepclimb_auth::oauth_server::access_token`, which signs with
+`jsonwebtoken` through its own HS256-only `CryptoProvider` over the workspace's `hmac` and `sha2`.
+Rights A: an app token acts
 with all of its user's current grants and is audited as the user, and every route that refuses an
 API key for being a bearer credential refuses it the same way (spec 08 B46).
 
@@ -61,6 +62,8 @@ API key for being a bearer credential refuses it the same way (spec 08 B46).
 
 - Anyone who holds the encryption key ring can mint access tokens. That holder can already read
   every sealed secret, so the ring's protection (`_FILE`, a `0700` directory) covers both.
+- The published development key lets anyone sign access tokens a server holding it accepts, even
+  as an older key of the ring; the startup warning for it says so.
 - Rotating the encryption key rotates the signing key: tokens signed under the old key stay valid
   for their 15 minutes while the old key stays in the ring, and end as soon as it is removed.
 - The label versions the derivation: a future change of token format takes a new label rather

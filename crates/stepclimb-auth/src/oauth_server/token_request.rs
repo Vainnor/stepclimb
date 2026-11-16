@@ -14,7 +14,8 @@
 //!    `code_verifier`, or `refresh_token` and `client_id`. Otherwise `invalid_request`;
 //! 4. `code_verifier` is RFC 7636's: 43 to 128 characters of `A-Z a-z 0-9 - . _ ~`. Otherwise
 //!    `invalid_request`;
-//! 5. `client_id` names a client of the registry: otherwise `invalid_client` (401).
+//! 5. `client_id` names a client of the registry: otherwise `invalid_client` (status 400, as
+//!    every refusal of these endpoints: the clients send no `Authorization` header).
 //!
 //! Other parameters (`scope`, `client_secret`) are ignored (RFC 6749 section 3.2). Whether the
 //! code or refresh token is good is the server's to decide, against what it stored, and answers
@@ -37,7 +38,7 @@ pub const MAX_BODY_LEN: usize = 4096;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ErrorCode {
     InvalidRequest,
-    /// The `client_id` names no client (401).
+    /// The `client_id` names no client (status 400, like the others).
     InvalidClient,
     /// The code or refresh token is unknown, expired, used, revoked, another client's, bound to
     /// another redirect URI or challenge, or its user is suspended.
