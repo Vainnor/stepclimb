@@ -120,6 +120,25 @@ everything that happened for one person and one assignment. Recurrence and expir
   clears it. A user whose `source` is not `local` keeps an editable manager in M1, since no sync
   writes it before M4. The change writes `user.set_manager` (`m0/09` B22).
 
+  Coordinator decisions (overnight, 2026-11-16), for I2, pending owner review:
+  - `User` gains `manager_id` (uuid or `null`), so `GET /api/v1/users` and the PATCH answer show
+    the manager that was set. Reading it needs `user.view` at organization scope, as every other
+    member of `User`.
+  - The user themself is refused with 409 `user.manager_cycle`: managing yourself is the
+    shortest cycle. A suspended manager is refused with 409 `user.manager_inactive`.
+  - Changing `manager_id` falls under the escalation rule of `email` and `status` (403
+    `permission.escalation`, `../m0/03-users-and-identities.md`): the caller cannot redraw the
+    reporting line of a user who holds a permission the caller lacks. An API key or app token
+    cannot change its own user's manager (403 `auth.session_required`, `m0/08` B44). I2 adds no
+    other refusal about managing yourself: a `user.manage` holder may change their own
+    `manager_id` from a browser session. Q10 asks the owner.
+  - `users::set_manager` locks the organization row `FOR NO KEY UPDATE`, as a suspension does,
+    so two concurrent changes cannot close a cycle between them; the lock also keeps the new
+    manager from being suspended between the check and the write. The PATCH changes the manager
+    before the status, so it never holds the user row while it waits for the organization row.
+  - Being someone's manager grants no permission and no read access (B13, Q9 (b)); no
+    permission check reads `manager_id`.
+
 ### Timeline
 
 - **B16.** The timeline of one row lists, oldest first: assigned (with the due date then), due date
@@ -314,7 +333,7 @@ Tests use a `ManualClock`; reminder tests run the periodic job by hand.
 ## Open questions
 
 Q1 to Q7 were delegated by the owner to the coordinator; each recommendation is taken and stands
-until the owner reviews it. Q8 and Q9 extend the plan's role definitions, so they are the
+until the owner reviews it. Q8, Q9 and Q10 extend the plan's role definitions, so they are the
 owner's and stay open.
 
 - **Q1. What a relative due date counts from and ends at.** The plan's example is "within 14 days
@@ -366,6 +385,23 @@ owner's and stay open.
   (c) no escalation to managers until M4. Recommendation: (b): escalation works in M1 as the plan
   asks, and every read right stays with the roles the owner defines. Until the owner answers, the
   spec builds (b).
+- **Q10. What escalations may carry, and who may draw reporting lines (open, for the owner).**
+  Raised by I2's review. Anyone holding `user.manage` can make themself the manager of a user who
+  holds no permission they lack, and then receive that user's escalations, which name the
+  target, the course and how overdue it is (B13), for courses where the manager may hold no
+  `progress.view`. Two parts:
+  (1) What an escalation may contain when its recipient lacks progress access to the course.
+  Options: (a) the facts B13 lists, whatever the recipient holds; (b) only that something is
+  overdue, without target or course, unless the recipient holds `progress.view` there; (c) skip
+  the escalation (`skipped: no_access`) for such a recipient. Recommendation: (a) until M4's
+  Manager role defines the scope over reports, since B13 already limits it to a message with no
+  link; the owner may prefer (b).
+  (2) Whether a `user.manage` holder may change their own `manager_id` (and so pick who receives
+  their escalations). Options: (a) yes, as I2 builds for a browser session (an API key or app
+  token on its own user is refused, B15); (b) no, 409 or 403 for your own user, as
+  suspending yourself is refused. Recommendation: (a): it grants the caller nothing, and admins
+  set managers for everyone else anyway.
+  Until the owner answers, I2 builds (1) as B13 says and (2) as (a).
 
 ## Issues
 

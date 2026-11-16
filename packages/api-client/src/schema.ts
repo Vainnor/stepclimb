@@ -746,8 +746,8 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Change a user's names, email, locale, time zone or status. A patch naming nothing changes
-         *     nothing.
+         * Change a user's names, email, locale, time zone, status or manager. A patch naming nothing
+         *     changes nothing.
          */
         patch: operations["updateUser"];
         trace?: never;
@@ -2389,6 +2389,11 @@ export interface components {
                 id: string;
                 /** @description `en` in M0. */
                 locale: string;
+                /**
+                 * Format: uuid
+                 * @description The user's manager, another user of the organization; `null` when they have none.
+                 */
+                manager_id: string | null;
                 source: components["schemas"]["UserSource"];
                 status: components["schemas"]["UserStatus"];
                 /** @description An IANA time zone. */
@@ -2876,6 +2881,11 @@ export interface components {
             id: string;
             /** @description `en` in M0. */
             locale: string;
+            /**
+             * Format: uuid
+             * @description The user's manager, another user of the organization; `null` when they have none.
+             */
+            manager_id: string | null;
             source: components["schemas"]["UserSource"];
             status: components["schemas"]["UserStatus"];
             /** @description An IANA time zone. */
@@ -2901,7 +2911,7 @@ export interface components {
         };
         /**
          * @description A change to a user; an omitted member is left as it is. A member sent as `null` is
-         *     malformed, except `email`, where `null` removes the email.
+         *     malformed, except `email` and `manager_id`, where `null` removes the value.
          */
         UserPatch: {
             /** @description Trimmed; 1 to 200 characters. Refused for a user an outside source owns. */
@@ -2917,6 +2927,13 @@ export interface components {
             given_name?: string;
             /** @description `en` in M0. */
             locale?: string;
+            /**
+             * Format: uuid
+             * @description The user's manager: an active user of the organization, not the user themself and not
+             *     anyone whose chain of managers reaches the user; `null` removes it. Allowed whatever the
+             *     user's source. The manager gets no access to anything of the user's.
+             */
+            manager_id?: string | null;
             /**
              * @description `suspended` ends every session of the user on its next request; you cannot suspend
              *     yourself.
@@ -4075,7 +4092,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `user.externally_managed`: an identity provider, the sync API, SCIM or a connector owns the user's names and email; change them there. `user.cannot_suspend_self`: you cannot suspend yourself. `user.email_taken`: another user of the organization has this email, in any letter case. `role_assignment.last_org_admin`: the user is the organization's last active Organization admin. */
+        /** @description `user.externally_managed`: an identity provider, the sync API, SCIM or a connector owns the user's names and email; change them there. `user.cannot_suspend_self`: you cannot suspend yourself. `user.email_taken`: another user of the organization has this email, in any letter case. `role_assignment.last_org_admin`: the user is the organization's last active Organization admin. `user.manager_cycle`: the manager is the user themself, or someone whose chain of managers reaches the user. `user.manager_inactive`: the manager is suspended. */
         UserUpdateConflict: {
             headers: {
                 [name: string]: unknown;
@@ -4084,7 +4101,16 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email` or `status` of a user who holds a permission the caller does not hold at organization scope. `auth.session_required`: an API key changes `email` or `status` of its own owner, or an app token of its own user. `auth.csrf_refused`: the request did not come from this site. */
+        /** @description `user.not_found`: no user of the organization has this id, or, for `manager_id`, the manager's id. `org.not_found`: the request's organization cannot be determined. */
+        UserUpdateNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email`, `status` or `manager_id` of a user who holds a permission the caller does not hold at organization scope. `auth.session_required`: an API key changes `email`, `status` or `manager_id` of its own owner, or an app token of its own user. `auth.csrf_refused`: the request did not come from this site. */
         UserWriteForbidden: {
             headers: {
                 [name: string]: unknown;
@@ -6078,7 +6104,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["UserWriteForbidden"];
-            404: components["responses"]["UserNotFound"];
+            404: components["responses"]["UserUpdateNotFound"];
             409: components["responses"]["UserUpdateConflict"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];

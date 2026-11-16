@@ -326,6 +326,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             role_assignments::AssignmentDeleteNotFound,
             role_assignments::AssignmentDeleteConflict,
             users::UserNotFound,
+            users::UserUpdateNotFound,
             users::UserWriteForbidden,
             users::UserCreateForbidden,
             users::UserCreateConflict,

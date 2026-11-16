@@ -1149,6 +1149,7 @@ mod tests {
             status: Status::Active,
             source,
             external_id: None,
+            manager_id: None,
             created_at: UNIX_EPOCH,
             updated_at: UNIX_EPOCH,
         }

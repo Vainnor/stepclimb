@@ -312,7 +312,7 @@ const TABLE: &[Entry] = &[
     },
     Entry {
         operation_id: "updateUser",
-        access: permission(UserManage::KEY, USER_NOT_FOUND, rename_user_in_path),
+        access: permission(UserManage::KEY, USER_NOT_FOUND, patch_user_in_path),
     },
     Entry {
         operation_id: "createEnrollmentLink",
@@ -957,11 +957,15 @@ fn user_with_totp_in_path(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send
     })
 }
 
-/// [`user_in_path`] with a new display name in the body.
-fn rename_user_in_path(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+/// [`user_in_path`] with a new display name and a new manager, another user of `org`, in the
+/// body.
+fn patch_user_in_path(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
+        let (_, manager) = org.named_user("Robin Manager".into(), None).await;
         Call {
-            body: Some(serde_json::json!({ "display_name": "Renamed user" })),
+            body: Some(
+                serde_json::json!({ "display_name": "Renamed user", "manager_id": manager }),
+            ),
             ..user_in_path(org).await
         }
     })

@@ -1,0 +1,165 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, display_name, given_name, family_name, email, locale, tz, status, source,\n                  external_id, manager_id,\n                  (extract(epoch FROM created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM users\n           WHERE org_id = $1\n             AND lower(email COLLATE \"C\") = lower($2 COLLATE \"C\")\n             AND octet_length(email) = char_length(email)\n             AND verified_email = lower(email COLLATE \"C\")\n             AND source = ANY($3::text[])\n             AND NOT EXISTS (\n                 SELECT 1 FROM identities i\n                 WHERE i.org_id = users.org_id AND i.user_id = users.id AND i.provider_id = $4\n             )\n           FOR NO KEY UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "display_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "given_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "given_name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "family_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "family_name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "email",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "email"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "locale",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "locale"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "tz",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "tz"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "source",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "source"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "external_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "external_id"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "manager_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "manager_id"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "created_at_us!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 12,
+        "name": "updated_at_us!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "TextArray",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "385227d416d10619d3f423a4403e4adf5b9cde8148d102798b905604dda39687"
+}

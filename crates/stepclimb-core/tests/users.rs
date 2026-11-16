@@ -1238,3 +1238,303 @@ async fn find_email_match_never_folds_unicode_case(pool: PgPool) {
         "ASCII case still folds"
     );
 }
+
+// Managers (docs/specs/m1/13-assignments-due-dates-reminders-and-escalation.md B15, T10).
+
+/// The `user.set_manager` entries of `user`: `data` of each, oldest first.
+async fn manager_entries(pool: &PgPool, user: Uuid) -> Vec<serde_json::Value> {
+    sqlx::query_scalar(
+        "SELECT data FROM audit_events
+         WHERE action = 'user.set_manager' AND target_id = $1 ORDER BY id",
+    )
+    .bind(user)
+    .fetch_all(pool)
+    .await
+    .expect("read entries")
+}
+
+async fn assign_manager(
+    pool: &PgPool,
+    org: Uuid,
+    user: Uuid,
+    manager: Option<Uuid>,
+) -> Result<User, Error> {
+    users::set_manager(
+        pool,
+        scope(org),
+        user,
+        manager,
+        later_time(),
+        Actor::Instance,
+    )
+    .await
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn set_manager_sets_and_clears_a_manager_and_audits_each_change(pool: PgPool) {
+    let a = insert_org(&pool, "org-a").await;
+    let user = create(&pool, a, new_user("Sam")).await;
+    let manager = create(&pool, a, new_user("Robin")).await;
+    assert_eq!(user.manager_id, None);
+
+    let set = assign_manager(&pool, a, user.id, Some(manager.id))
+        .await
+        .unwrap();
+    assert_eq!(set.manager_id, Some(manager.id));
+    assert_eq!(set.updated_at, later_time());
+    let read = users::get(&pool, scope(a), user.id).await.unwrap().unwrap();
+    assert_eq!(read.manager_id, Some(manager.id));
+
+    let before = stored(&pool, user.id).await;
+    let same = assign_manager(&pool, a, user.id, Some(manager.id))
+        .await
+        .unwrap();
+    assert_eq!(same.manager_id, Some(manager.id));
+    assert_eq!(
+        stored(&pool, user.id).await,
+        before,
+        "an unchanged manager writes nothing"
+    );
+
+    let cleared = assign_manager(&pool, a, user.id, None).await.unwrap();
+    assert_eq!(cleared.manager_id, None);
+    let none_again = assign_manager(&pool, a, user.id, None).await.unwrap();
+    assert_eq!(none_again.manager_id, None);
+    let m = manager.id.to_string();
+    assert_eq!(
+        manager_entries(&pool, user.id).await,
+        [
+            serde_json::json!({ "before": { "manager_id": null }, "after": { "manager_id": m } }),
+            serde_json::json!({ "before": { "manager_id": m }, "after": { "manager_id": null } }),
+        ]
+    );
+}
+
+/// T10: a manager is an active user of the organization, not the user, and not anyone whose
+/// chain of managers reaches the user; every refusal leaves the row as it was and writes no entry.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn set_manager_refuses_cycles_strangers_and_suspended_managers(pool: PgPool) {
+    let a = insert_org(&pool, "org-a").await;
+    let b = insert_org(&pool, "org-b").await;
+    let first = create(&pool, a, new_user("First")).await.id;
+    let second = create(&pool, a, new_user("Second")).await.id;
+    let third = create(&pool, a, new_user("Third")).await.id;
+    let suspended = create(&pool, a, new_user("Suspended")).await.id;
+    users::set_status(
+        &pool,
+        scope(a),
+        suspended,
+        Status::Suspended,
+        request_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+    let stranger = create(&pool, b, new_user("In B")).await.id;
+    // third reports to second, who reports to first.
+    assign_manager(&pool, a, second, Some(first)).await.unwrap();
+    assign_manager(&pool, a, third, Some(second)).await.unwrap();
+    let before = stored(&pool, first).await;
+
+    let cases = [
+        (first, "cycle"),
+        (second, "cycle"),
+        (third, "cycle"),
+        (suspended, "inactive"),
+        (stranger, "not found"),
+        (new_id(), "not found"),
+    ];
+    for (manager, expected) in cases {
+        let result = assign_manager(&pool, a, first, Some(manager)).await;
+        let refusal = match &result {
+            Err(Error::ManagerCycle) => "cycle",
+            Err(Error::ManagerInactive) => "inactive",
+            Err(Error::ManagerNotFound) => "not found",
+            _ => "other",
+        };
+        assert_eq!(refusal, expected, "{manager}: {result:?}");
+        assert_eq!(stored(&pool, first).await, before, "{manager}");
+    }
+    assert!(manager_entries(&pool, first).await.is_empty());
+
+    // Not a cycle: a sibling, and a report's report moved up to the top.
+    let fourth = create(&pool, a, new_user("Fourth")).await.id;
+    assign_manager(&pool, a, fourth, Some(second))
+        .await
+        .unwrap();
+    assign_manager(&pool, a, third, Some(first)).await.unwrap();
+}
+
+/// Org B's scope cannot set or clear the manager of org A's user, nor name org A's user as the
+/// manager of its own.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn set_manager_with_another_organizations_scope_is_not_found(pool: PgPool) {
+    let a = insert_org(&pool, "org-a").await;
+    let b = insert_org(&pool, "org-b").await;
+    let user_a = create(&pool, a, new_user("Sam")).await.id;
+    let manager_a = create(&pool, a, new_user("Robin")).await.id;
+    let user_b = create(&pool, b, new_user("In B")).await.id;
+    assign_manager(&pool, a, user_a, Some(manager_a))
+        .await
+        .unwrap();
+    let before = stored(&pool, user_a).await;
+
+    let cleared = assign_manager(&pool, b, user_a, None).await;
+    let named = assign_manager(&pool, b, user_b, Some(manager_a)).await;
+
+    assert!(matches!(cleared, Err(Error::NotFound)), "{cleared:?}");
+    assert!(matches!(named, Err(Error::ManagerNotFound)), "{named:?}");
+    assert_eq!(stored(&pool, user_a).await, before);
+    let b_manager: Option<Uuid> = sqlx::query_scalar("SELECT manager_id FROM users WHERE id = $1")
+        .bind(user_b)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(b_manager, None);
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn set_manager_refuses_an_isolation_level_above_read_committed(pool: PgPool) {
+    let a = insert_org(&pool, "org-a").await;
+    let user = create(&pool, a, new_user("Sam")).await.id;
+    let manager = create(&pool, a, new_user("Robin")).await.id;
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+
+    let result = users::set_manager(
+        &mut *tx,
+        scope(a),
+        user,
+        Some(manager),
+        later_time(),
+        Actor::Instance,
+    )
+    .await;
+
+    assert!(
+        matches!(result, Err(Error::IsolationLevel { ref found }) if found == "repeatable read"),
+        "{result:?}"
+    );
+}
+
+/// Two changes that would each close the other's cycle (Sam reports to Robin, Robin to Sam),
+/// both waiting on the organization row this test holds: they take turns, so the second sees the
+/// first and is refused.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn concurrent_changes_cannot_close_a_cycle_between_them(pool: PgPool) {
+    let a = insert_org(&pool, "org-a").await;
+    let sam = create(&pool, a, new_user("Sam")).await.id;
+    let robin = create(&pool, a, new_user("Robin")).await.id;
+    let mut lock = pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE")
+        .bind(a)
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+
+    let spawn = |user: Uuid, manager: Uuid| {
+        let pool = pool.clone();
+        tokio::spawn(async move { assign_manager(&pool, a, user, Some(manager)).await })
+    };
+    let first = spawn(sam, robin);
+    let second = spawn(robin, sam);
+    wait_for_lock_waiters(&pool, 2).await;
+    lock.commit().await.unwrap();
+
+    let mut outcomes = Vec::new();
+    for task in [first, second] {
+        let result = tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .expect("the change finishes once the lock is released")
+            .expect("the task does not panic");
+        outcomes.push(match result {
+            Ok(_) => "set",
+            Err(Error::ManagerCycle) => "cycle",
+            Err(other) => panic!("{other:?}"),
+        });
+    }
+    outcomes.sort_unstable();
+    assert_eq!(outcomes, ["cycle", "set"]);
+}
+
+/// Waits until `n` backends of this database wait on a lock.
+async fn wait_for_lock_waiters(pool: &PgPool, n: i64) {
+    for _ in 0..200 {
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("count waiting backends");
+        if waiting >= n {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("{n} changes never waited on a lock");
+}
+
+/// A suspension of the new manager and the manager change, both waiting on the organization row
+/// this test holds, run in the order they queued: the suspension first refuses the change
+/// (`ManagerInactive`, nothing written); the change first is set, then the suspension commits.
+/// No manager is written after the suspension committed.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_concurrent_suspension_of_the_manager_and_the_change_take_turns(pool: PgPool) {
+    for suspension_first in [true, false] {
+        let a = insert_org(&pool, &format!("org-{suspension_first}")).await;
+        let sam = create(&pool, a, new_user("Sam")).await.id;
+        let robin = create(&pool, a, new_user("Robin")).await.id;
+        let mut lock = pool.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE")
+            .bind(a)
+            .execute(&mut *lock)
+            .await
+            .unwrap();
+        let suspend = || {
+            let pool = pool.clone();
+            tokio::spawn(async move {
+                let s = scope(a);
+                let status = Status::Suspended;
+                users::set_status(&pool, s, robin, status, later_time(), Actor::Instance)
+                    .await
+                    .map(|_| ())
+            })
+        };
+        let change = || {
+            let pool = pool.clone();
+            tokio::spawn(async move { assign_manager(&pool, a, sam, Some(robin)).await })
+        };
+        let (suspension, set) = if suspension_first {
+            let suspension = suspend();
+            wait_for_lock_waiters(&pool, 1).await;
+            (suspension, change())
+        } else {
+            let set = change();
+            wait_for_lock_waiters(&pool, 1).await;
+            (suspend(), set)
+        };
+        wait_for_lock_waiters(&pool, 2).await;
+        lock.commit().await.unwrap();
+
+        let wait = Duration::from_secs(10);
+        let set = tokio::time::timeout(wait, set).await.unwrap().unwrap();
+        let suspension = tokio::time::timeout(wait, suspension)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(suspension.is_ok(), "{suspension:?}");
+        let stored = users::get(&pool, scope(a), sam).await.unwrap().unwrap();
+        if suspension_first {
+            assert!(matches!(set, Err(Error::ManagerInactive)), "{set:?}");
+            assert_eq!(stored.manager_id, None);
+            assert!(manager_entries(&pool, sam).await.is_empty());
+        } else {
+            assert_eq!(set.unwrap().manager_id, Some(robin));
+            assert_eq!(stored.manager_id, Some(robin));
+        }
+    }
+}

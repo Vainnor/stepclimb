@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The user admin routes over the whole router (docs/specs/m0/03-users-and-identities.md B3, B6,
-//! B7, B9, B10, B12; T2 to T5, T7, T9, T10, T19, T20's users part). The four permission cases and
+//! B7, B9, B10, B12; T2 to T5, T7, T9, T10, T19, T20's users part), and the manager member of
+//! `PATCH` (docs/specs/m1/13-assignments-due-dates-reminders-and-escalation.md B15, T10). The four permission cases and
 //! the cross-organization case of each route are also in `tests/permissions.rs`.
 //!
 //! Org A is the organization every request names with the `test-support` header; org B exists
@@ -431,6 +432,7 @@ async fn t3_a_created_user_is_local_and_active_with_the_defaults(pool: PgPool) {
             "status": "active",
             "source": "local",
             "external_id": null,
+            "manager_id": null,
             "created_at": "2025-11-13T02:13:20.000000Z",
             "updated_at": "2025-11-13T02:13:20.000000Z",
         })
@@ -1464,4 +1466,288 @@ async fn a_suspension_waiting_on_the_organization_row_holds_no_user_row(pool: Pg
         .expect("the task does not panic");
     assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
     assert_eq!(answer.body["display_name"], "X");
+}
+
+// Managers (docs/specs/m1/13-assignments-due-dates-reminders-and-escalation.md B15, T10).
+
+impl Fixture {
+    /// The `user.set_manager` audit entries of `user`: `(actor id, ip, data)`.
+    async fn manager_entries(&self, user: Uuid) -> Vec<(Option<Uuid>, Option<String>, Value)> {
+        sqlx::query_as(
+            "SELECT actor_id, host(ip), data FROM audit_events
+             WHERE action = 'user.set_manager' AND target_id = $1 ORDER BY id",
+        )
+        .bind(user)
+        .fetch_all(&self.pool)
+        .await
+        .expect("read entries")
+    }
+}
+
+/// B15: an admin sets a manager, reads it back, and clears it with `null`; each change writes
+/// one audit entry with the caller and their address, and naming the current manager writes
+/// nothing.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t10_an_admin_sets_and_clears_a_manager(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (admin, admin_id) = f.admin().await;
+    let sam = f.stored_user(f.a, new_user("Sam", Source::Local)).await;
+    let robin = f.stored_user(f.a, new_user("Robin", Source::Local)).await;
+    f.clock.advance(Duration::from_secs(60));
+
+    let set = f.patch(&admin, sam, json!({ "manager_id": robin })).await;
+
+    assert_eq!(set.status, StatusCode::OK, "{set:?}");
+    assert_schema("User", &set.body);
+    assert_eq!(set.body["manager_id"], json!(robin));
+    assert_eq!(set.body["updated_at"], "2025-11-13T02:14:20.000000Z");
+    let read = f
+        .send(Method::GET, &format!("{USERS}/{sam}"), &admin, None)
+        .await;
+    assert_eq!(read.body["manager_id"], json!(robin), "{read:?}");
+    let again = f.patch(&admin, sam, json!({ "manager_id": robin })).await;
+    assert_eq!(again.status, StatusCode::OK, "{again:?}");
+
+    let cleared = f.patch(&admin, sam, json!({ "manager_id": null })).await;
+
+    assert_eq!(cleared.status, StatusCode::OK, "{cleared:?}");
+    assert_eq!(cleared.body["manager_id"], Value::Null);
+    let ip = Some("192.0.2.10".to_owned());
+    assert_eq!(
+        f.manager_entries(sam).await,
+        [
+            (
+                Some(admin_id),
+                ip.clone(),
+                json!({ "before": { "manager_id": null }, "after": { "manager_id": robin } }),
+            ),
+            (
+                Some(admin_id),
+                ip,
+                json!({ "before": { "manager_id": robin }, "after": { "manager_id": null } }),
+            ),
+        ]
+    );
+}
+
+/// T10: A manages B, so B managing A answers 409 `user.manager_cycle`, as does managing
+/// yourself; a suspended manager answers 409 `user.manager_inactive`; org B's user, an unknown id
+/// and a malformed one are refused. Nothing changes, the fields of the same patch included, and
+/// no entry is written.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t10_a_cycle_a_suspended_manager_and_org_bs_user_are_refused(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (admin, _) = f.admin().await;
+    let a_user = f.stored_user(f.a, new_user("A", Source::Local)).await;
+    let b_user = f.stored_user(f.a, new_user("B", Source::Local)).await;
+    let suspended = f
+        .stored_user(f.a, new_user("Suspended", Source::Local))
+        .await;
+    users::set_status(
+        &f.pool,
+        scope(f.a),
+        suspended,
+        users::Status::Suspended,
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+    let in_b = f
+        .stored_user(f.b, new_user("Robin In B", Source::Local))
+        .await;
+    let first = f
+        .patch(&admin, b_user, json!({ "manager_id": a_user }))
+        .await;
+    assert_eq!(first.status, StatusCode::OK, "A manages B: {first:?}");
+    let before = f.stored(a_user).await;
+    let entries = f.manager_entries(a_user).await;
+
+    let with = |manager: Value| json!({ "manager_id": manager, "display_name": "Renamed" });
+    f.patch(&admin, a_user, with(json!(b_user)))
+        .await
+        .refused(StatusCode::CONFLICT, "user.manager_cycle");
+    f.patch(&admin, a_user, with(json!(a_user)))
+        .await
+        .refused(StatusCode::CONFLICT, "user.manager_cycle");
+    f.patch(&admin, a_user, with(json!(suspended)))
+        .await
+        .refused(StatusCode::CONFLICT, "user.manager_inactive");
+    f.patch(&admin, a_user, with(json!(in_b)))
+        .await
+        .refused(StatusCode::NOT_FOUND, "user.not_found");
+    f.patch(&admin, a_user, with(json!(new_id())))
+        .await
+        .refused(StatusCode::NOT_FOUND, "user.not_found");
+    f.patch(&admin, a_user, with(json!("not-a-uuid")))
+        .await
+        .refused(StatusCode::BAD_REQUEST, "request.malformed");
+
+    assert_eq!(f.stored(a_user).await, before);
+    assert_eq!(f.manager_entries(a_user).await, entries);
+}
+
+/// T10's cross-organization case from the other side: org A's admin cannot set or clear the
+/// manager of org B's user, and org B's row is unchanged.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t10_org_bs_user_cannot_be_given_or_lose_a_manager(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (admin, _) = f.admin().await;
+    let theirs = f
+        .stored_user(f.b, new_user("Sam In B", Source::Local))
+        .await;
+    let their_manager = f
+        .stored_user(f.b, new_user("Robin In B", Source::Local))
+        .await;
+    users::set_manager(
+        &f.pool,
+        scope(f.b),
+        theirs,
+        Some(their_manager),
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+    let ours = f.stored_user(f.a, new_user("Ours", Source::Local)).await;
+    let before = f.stored(theirs).await;
+
+    for manager in [json!(null), json!(ours), json!(their_manager)] {
+        f.patch(&admin, theirs, json!({ "manager_id": manager }))
+            .await
+            .refused(StatusCode::NOT_FOUND, "user.not_found");
+    }
+
+    assert_eq!(f.stored(theirs).await, before);
+}
+
+/// B15: a user an outside source owns keeps an editable manager in M1.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_user_an_outside_source_owns_can_be_given_a_manager(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (admin, _) = f.admin().await;
+    let robin = f.stored_user(f.a, new_user("Robin", Source::Local)).await;
+    for source in [Source::Idp, Source::Sync, Source::Scim, Source::Connector] {
+        let owned = f.stored_user(f.a, new_user("Owned", source)).await;
+
+        let set = f.patch(&admin, owned, json!({ "manager_id": robin })).await;
+
+        assert_eq!(set.status, StatusCode::OK, "{source:?}: {set:?}");
+        assert_eq!(set.body["manager_id"], json!(robin));
+    }
+}
+
+/// Changing the manager of a user who holds a permission the caller lacks at organization scope
+/// is refused (403 `permission.escalation`) and changes nothing; a plain user's is allowed.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn changing_the_manager_of_a_user_with_more_permissions_is_refused(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (_, admin) = f.admin().await;
+    let (manager, me) = f
+        .holder_with_id(&["user.manage", "user.view"], Scope::Organization)
+        .await;
+    let plain = f.stored_user(f.a, new_user("Plain", Source::Local)).await;
+    let before = f.stored(admin).await;
+
+    for body in [json!({ "manager_id": me }), json!({ "manager_id": null })] {
+        f.patch(&manager, admin, body.clone())
+            .await
+            .refused(StatusCode::FORBIDDEN, "permission.escalation");
+        assert_eq!(f.stored(admin).await, before, "{body}");
+    }
+    assert!(f.manager_entries(admin).await.is_empty());
+
+    let allowed = f.patch(&manager, plain, json!({ "manager_id": me })).await;
+    assert_eq!(allowed.status, StatusCode::OK, "{allowed:?}");
+}
+
+/// Spec 13 B13 and Q9 (open, built as (b)): being made someone's manager grants the manager no
+/// read access. A manager holding no role is refused the users routes before and after, and
+/// their own grants do not change.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn being_made_a_manager_grants_no_read_access(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (admin, _) = f.admin().await;
+    let (robin, robin_id) = f.user().await;
+    let sam = f.stored_user(f.a, new_user("Sam", Source::Local)).await;
+    let reads = [USERS.to_owned(), format!("{USERS}/{sam}")];
+    let grants_before = f.send(Method::GET, "/api/v1/me", &robin, None).await;
+    assert_eq!(grants_before.status, StatusCode::OK, "{grants_before:?}");
+    assert_eq!(grants_before.body["grants"], json!([]), "{grants_before:?}");
+
+    let set = f
+        .patch(&admin, sam, json!({ "manager_id": robin_id }))
+        .await;
+    assert_eq!(set.status, StatusCode::OK, "{set:?}");
+
+    for uri in &reads {
+        f.send(Method::GET, uri, &robin, None)
+            .await
+            .refused(StatusCode::FORBIDDEN, "permission.denied");
+    }
+    f.patch(&robin, sam, json!({ "display_name": "Renamed" }))
+        .await
+        .refused(StatusCode::FORBIDDEN, "permission.denied");
+    let grants_after = f.send(Method::GET, "/api/v1/me", &robin, None).await;
+    assert_eq!(grants_after.body["grants"], grants_before.body["grants"]);
+}
+
+/// A PATCH that reactivates a suspended user and changes their manager takes the organization
+/// row before the user row: while it waits for the organization row, which this test holds, the user row
+/// stays free, so a writer that holds the organization row and then wants the user row (a
+/// suspension, another manager change) cannot deadlock with it.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_manager_change_never_holds_the_user_row_while_waiting_for_the_organization(
+    pool: PgPool,
+) {
+    let f = Fixture::new(pool.clone()).await;
+    let (admin, _) = f.admin().await;
+    let sam = f.stored_user(f.a, new_user("Sam", Source::Local)).await;
+    let robin = f.stored_user(f.a, new_user("Robin", Source::Local)).await;
+    // Suspended, so the PATCH's reactivation writes the row and keeps its lock.
+    users::set_status(
+        &f.pool,
+        scope(f.a),
+        sam,
+        users::Status::Suspended,
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+    let mut lock = pool.begin().await.unwrap();
+    // `FOR NO KEY UPDATE`, the mode `set_manager` and a suspension take: `FOR UPDATE` would also
+    // stop the request's foreign-key checks before the handler runs.
+    sqlx::query("SELECT 1 FROM organizations WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(f.a)
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+
+    let (app, org) = (f.app.clone(), f.a);
+    let uri = format!("{USERS}/{sam}");
+    let body = json!({ "status": "active", "manager_id": robin });
+    let task =
+        tokio::spawn(async move { send(&app, org, Method::PATCH, &uri, &admin, Some(body)).await });
+    wait_for_lock_waiters(&pool, 1).await;
+    sqlx::query("SET LOCAL lock_timeout = '3s'")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    let user_row = sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(sam)
+        .execute(&mut *lock)
+        .await;
+    assert!(
+        user_row.is_ok(),
+        "the PATCH held the user row while it waited: {user_row:?}"
+    );
+    lock.commit().await.unwrap();
+
+    let answer = tokio::time::timeout(Duration::from_secs(10), task)
+        .await
+        .expect("the PATCH finishes once the organization row is free")
+        .expect("the task does not panic");
+    assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    assert_eq!(answer.body["manager_id"], json!(robin));
 }

@@ -712,8 +712,8 @@ async fn t15_t16_a_valid_key_skips_csrf_and_outranks_a_cookie(pool: PgPool) {
     assert_eq!(me.body["user"]["id"], json!(kim));
 }
 
-/// Spec 08 B44, spec 03 B6: an API key, whatever its scopes, cannot change its owner's email
-/// or status, link or remove its owner's identities, remove its owner's TOTP, or create an
+/// Spec 08 B44, spec 03 B6: an API key, whatever its scopes, cannot change its owner's email,
+/// status or manager (spec 13 B15), link or remove its owner's identities, remove its owner's TOTP, or create an
 /// enrollment link for anyone (403 `auth.session_required`); nothing changes. The same key may still change another
 /// user's email.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
@@ -740,6 +740,7 @@ async fn a_key_cannot_take_over_its_owner_through_the_admin_routes(pool: PgPool)
             user(kim),
             Some(json!({ "status": "active" })),
         ),
+        (Method::PATCH, user(kim), Some(json!({ "manager_id": pat }))),
         (
             Method::POST,
             format!("{}/identities", user(kim)),

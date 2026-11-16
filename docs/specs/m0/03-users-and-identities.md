@@ -105,7 +105,8 @@ these rows are in `04` to `07`.
   that 409.
 - **B8.** `manager_id` (reporting lines) is created as a nullable self-reference within the
   organization. M0 never writes it and the API does not expose it; the sync API with managers
-  (M4) and the Manager role define it.
+  (M4) and the Manager role define it. M1 sets it through `PATCH /api/v1/users/{user_id}` and
+  shows it on `User` (`../m1/13-assignments-due-dates-reminders-and-escalation.md` B15).
 - **B9.** Admins create users with `POST /api/v1/users`: source `local`, status `active`,
   optional `identities` to pre-provision (B14). The creation checks the users limit through
   `10-entitlements-framework.md` (B10 there) before inserting. A created user has no local

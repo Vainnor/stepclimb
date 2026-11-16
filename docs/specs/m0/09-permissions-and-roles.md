@@ -284,6 +284,7 @@ also writes to:
   | `organization.update_settings` | `organization` | `admission_rules::update` (`07` issue 3) | `before` and `after`: `admission.rules` |
   | `organization.update_branding` | `organization` | `branding::save` | `before` (`null` when none was saved) and `after`: the inputs and `css_hash`, never the stylesheet (spec 12, coordinator decision 2026-11-14) |
   | `user.set_status` | `user` | `users::set_status` | `before` and `after`: status |
+  | `user.set_manager` | `user` | `users::set_manager` (`../m1/13-assignments-due-dates-reminders-and-escalation.md` I2) | `before` and `after`: manager_id |
   | `identity.link` | `identity` | `identities::link` | `after`: user, provider key, subject (never the attributes) |
   | `identity.unlink` | `identity` | `identities::unlink` | `before`: the same |
   | `identity_provider.update` | `identity_provider` | `local_sign_in::update` (`04` issue 1) | `before` and `after`: enabled |
