@@ -169,11 +169,11 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
   carries to `/sign-in` (11 B15).
 - **B20.** Flow payloads that hold secrets (PKCE verifier, OIDC nonce, WebAuthn ceremony state)
   are encrypted per B3.
-- **B21.** Expired flows are deleted by the request that finds them and by a periodic cleanup;
-  the cleanup's schedule rides on the jobs runner when it exists (M1), and until then on a
-  `tokio` interval in the server. Pending Q8. The server's interval is 10 minutes; a failure in
-  one organization is logged and the pass continues with the next, and the server logs an error
-  if the cleanup task ever stops. The flow cookie's `Max-Age` is twice the flow's lifetime, so a
+- **B21.** Expired flows are deleted by the request that finds them and by a periodic cleanup,
+  the `auth.flows_cleanup` job on the jobs runner (`../m1/01-job-queue-and-outbox.md` B18; a
+  `tokio` interval in the server until M1). Pending Q8. It runs every 10 minutes in a process
+  of the `all` or `worker` role; a failure in one organization is logged and the pass continues
+  with the next, and failing to list the organizations retries the job. The flow cookie's `Max-Age` is twice the flow's lifetime, so a
   user who comes back late still presents it and hears `auth.flow_expired` rather than
   `auth.flow_invalid`; the server alone decides expiry (coordinator decision, 13 Nov 2026).
 

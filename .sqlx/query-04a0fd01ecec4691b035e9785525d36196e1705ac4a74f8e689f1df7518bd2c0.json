@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE job_schedules\n             SET next_run_at = timestamptz 'epoch'\n                     + ($2::bigint + $3::bigint * 1000000) * interval '1 microsecond',\n                 updated_at = timestamptz 'epoch' + $2::bigint * interval '1 microsecond'\n             WHERE name = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "04a0fd01ecec4691b035e9785525d36196e1705ac4a74f8e689f1df7518bd2c0"
+}

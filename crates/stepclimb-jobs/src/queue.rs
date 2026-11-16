@@ -498,6 +498,25 @@ fn is_dedupe_conflict(error: &sqlx::Error) -> bool {
         .is_some_and(|c| c == DEDUPE_INDEX)
 }
 
+/// Delete the dead jobs of `scope`'s organization, or the instance's dead jobs when `scope` is
+/// `None`, that died at or before `cutoff` (B8: `jobs.prune`). Returns how many it deleted.
+pub async fn prune_dead(
+    db: impl PgExecutor<'_>,
+    scope: Option<OrgScope>,
+    cutoff: SystemTime,
+) -> Result<u64, Error> {
+    let done = sqlx::query!(
+        "DELETE FROM jobs
+         WHERE org_id IS NOT DISTINCT FROM $1
+           AND dead_at <= timestamptz 'epoch' + $2::bigint * interval '1 microsecond'",
+        scope.map(OrgScope::org_id),
+        epoch_micros(cutoff)?,
+    )
+    .execute(db)
+    .await?;
+    Ok(done.rows_affected())
+}
+
 /// `error` as `last_error` stores it (B9): NUL, which PostgreSQL `text` cannot hold, becomes
 /// U+FFFD, and the result is cut to at most [`MAX_ERROR_BYTES`] at a character boundary.
 #[must_use]

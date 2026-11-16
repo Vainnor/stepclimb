@@ -147,6 +147,32 @@ async fn job_connections(pool: &PgPool) -> i64 {
     .expect("read pg_stat_activity")
 }
 
+/// Wait until both periodic jobs have been scheduled past their first run and have run: both
+/// schedule rows have moved on from the time startup wrote them, and no job is left.
+async fn periodic_jobs_ran(pool: &PgPool) {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let moved: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM job_schedules WHERE next_run_at > created_at ORDER BY name",
+        )
+        .fetch_all(pool)
+        .await
+        .expect("read schedules");
+        let left: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs")
+            .fetch_one(pool)
+            .await
+            .expect("count jobs");
+        if moved == ["auth.flows_cleanup", "jobs.prune"] && left == 0 {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "schedules moved: {moved:?}, jobs left: {left}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 /// The status code of a plain HTTP/1.1 GET of `path` from `addr`.
 fn status_of(addr: &str, path: &str) -> u16 {
     let mut stream = TcpStream::connect(addr).expect("connect to the server");
@@ -183,6 +209,9 @@ async fn a_worker_process_runs_jobs_and_answers_only_the_probes(pool: PgPool) {
         job_connections(&pool).await > 0,
         "the worker has its own pool"
     );
+    // Spec m1/01 B17, B18: startup wrote the schedules, the first tick enqueued both periodic
+    // jobs, and the worker ran them.
+    periodic_jobs_ran(&pool).await;
     let status = server.terminate();
     assert!(
         status.success(),
@@ -209,6 +238,11 @@ async fn a_web_process_serves_the_application_and_runs_no_worker(pool: PgPool) {
     assert_eq!(status_of(&addr, "/healthz"), 200);
     assert_eq!(status_of(&addr, "/api/v1/me"), 401, "the API is served");
     assert_eq!(job_connections(&pool).await, 0, "no job pool");
+    let schedules: i64 = sqlx::query_scalar("SELECT count(*) FROM job_schedules")
+        .fetch_one(&pool)
+        .await
+        .expect("count schedules");
+    assert_eq!(schedules, 0, "a web process writes no schedules");
     let status = server.terminate();
     assert!(
         status.success(),

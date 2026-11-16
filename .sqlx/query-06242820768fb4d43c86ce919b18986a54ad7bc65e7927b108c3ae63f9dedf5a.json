@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM jobs\n         WHERE org_id IS NOT DISTINCT FROM $1\n           AND dead_at <= timestamptz 'epoch' + $2::bigint * interval '1 microsecond'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "06242820768fb4d43c86ce919b18986a54ad7bc65e7927b108c3ae63f9dedf5a"
+}

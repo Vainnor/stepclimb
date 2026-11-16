@@ -57,7 +57,7 @@ http.workspace = true
 http-body-util.workspace = true
 
 [dev-dependencies]
-# `test-util` for `tokio::time::pause` in the sign-in flow cleanup timer test.
+# `test-util` for tokio's paused time in the admission webhook call tests.
 tokio = { workspace = true, features = ["test-util"] }
 # `default-features = false`, so `--no-default-features` builds the tests without `vatsim` too.
 stepclimb-server = { path = ".", default-features = false, features = ["test-support"] }

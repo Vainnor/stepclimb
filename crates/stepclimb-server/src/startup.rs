@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! `stepclimb serve` (connect, migrate, sync the built-in roles and the `unlimited` plan, give
 //! every organization a plan and its local provider row, re-render saved branding an older
-//! generator version wrote, write the providers of `stepclimb.toml`, start the sign-in flow
-//! cleanup, start the job worker when the role runs one, listen) and `stepclimb migrate`
+//! generator version wrote, write the providers of `stepclimb.toml`, start the job worker and
+//! the scheduler of periodic jobs when the role runs them, listen) and `stepclimb migrate`
 //! (connect, migrate, exit). The branding pass runs in
 //! [`prepare`], before the providers: the two touch different rows, and a re-render is correct
 //! for this release whether or not a bad `[[providers]]` entry then stops it (an older release
@@ -31,14 +31,14 @@ use tokio::net::TcpListener;
 
 use stepclimb_auth::provider_config::ConfigSecrets;
 
-use stepclimb_jobs::{RunOptions, Worker, backoff::Random};
+use stepclimb_jobs::{Registry, RegistryError, RunOptions, Worker, backoff::Random, schedule};
 use tokio::sync::watch;
 
 use crate::{
     AppState, Config,
     app::probes_router,
     config::{STORAGE_URL, StorageConfig},
-    config_providers, flow, jobs,
+    config_providers, jobs,
     password_hasher::PasswordHasher,
     providers::Providers,
     rate_limit::RateLimiter,
@@ -96,6 +96,10 @@ pub enum StartupError {
         addr: std::net::SocketAddr,
         source: std::io::Error,
     },
+    #[error("could not build the job registry: {0}")]
+    Registry(#[source] RegistryError),
+    #[error("could not write the periodic job schedules: {0}")]
+    Schedules(#[source] stepclimb_jobs::queue::Error),
     #[error("the HTTP server failed: {0}")]
     Serve(#[source] std::io::Error),
     #[error(transparent)]
@@ -464,7 +468,6 @@ pub async fn serve(config: Config) -> Result<(), StartupError> {
         None
     };
     let listener = listen(&config).await?;
-    flow::spawn_cleanup(pool.clone(), clock.clone());
     let stop = Stop::on_signal();
     let app: fn(AppState) -> Router = if config.role.serves_app() {
         router
@@ -477,8 +480,8 @@ pub async fn serve(config: Config) -> Result<(), StartupError> {
     };
     let http = serve_on(listener, config, opened, pool, clock, app, stop.wait());
     let jobs = async {
-        if let Some((worker, options)) = worker {
-            worker.run(options, stop.wait()).await;
+        if let Some(jobs) = worker {
+            jobs.run(&stop).await;
         }
         Ok(())
     };
@@ -499,19 +502,61 @@ async fn listen(config: &Config) -> Result<TcpListener, StartupError> {
     Ok(listener)
 }
 
-/// The job worker of an `all` or `worker` process, on its own pool ([`connect_jobs`]), with this
-/// binary's registry, serving every queue in it, and its options from `config`.
-async fn job_worker(config: &Config, clock: Clock) -> Result<(Worker, RunOptions), StartupError> {
+/// What an `all` or `worker` process runs besides HTTP: the job worker and the scheduler of
+/// periodic jobs (spec m1/01 B14, B17), on the job pool ([`connect_jobs`]).
+struct JobRunner {
+    worker: Worker,
+    options: RunOptions,
+    pool: PgPool,
+    registry: Registry,
+    clock: Clock,
+}
+
+impl JobRunner {
+    /// Run the worker and the scheduler until `stop`, then let each finish (B15).
+    async fn run(self, stop: &Stop) {
+        let scheduler = schedule::run(
+            self.pool,
+            self.registry,
+            self.clock,
+            schedule::TICK,
+            stop.wait(),
+        );
+        tokio::join!(self.worker.run(self.options, stop.wait()), scheduler);
+    }
+}
+
+/// The job runner of an `all` or `worker` process, with this binary's registry, serving every
+/// queue in it, its options from `config`, and the schedule rows of its periodic kinds written
+/// (spec m1/01 B17).
+async fn job_worker(config: &Config, clock: Clock) -> Result<JobRunner, StartupError> {
     let pool = connect_jobs(&config.database_url, config.worker_concurrency).await?;
-    let registry = jobs::registry();
+    let registry = jobs::registry().map_err(StartupError::Registry)?;
+    schedule::sync(&pool, &registry, clock.now())
+        .await
+        .map_err(StartupError::Schedules)?;
     let queues = registry.queues();
     tracing::info!(
         concurrency = %config.worker_concurrency,
         queues = ?queues,
+        periodic = ?registry.periodic().iter().map(|(name, _)| *name).collect::<Vec<_>>(),
         "job worker started"
     );
-    let worker = Worker::new(pool, registry, clock, Random::system(), queues);
-    Ok((worker, RunOptions::new(config.worker_concurrency)))
+    let worker = Worker::new(
+        pool.clone(),
+        registry.clone(),
+        clock.clone(),
+        Random::system(),
+        queues,
+    );
+    let options = RunOptions::new(config.worker_concurrency);
+    Ok(JobRunner {
+        worker,
+        options,
+        pool,
+        registry,
+        clock,
+    })
 }
 
 /// The process's stop request: set once by SIGINT or SIGTERM, read by the listener and the job

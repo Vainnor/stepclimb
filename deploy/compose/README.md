@@ -297,6 +297,10 @@ the job worker stops claiming and waits up to 30 s for the jobs it is running; D
 of 10 s would kill the process before then. A job still running at 30 s is left to its lease,
 which runs out so another worker takes it.
 
+Periodic jobs, such as the sign-in flow cleanup every 10 minutes and the hourly pruning of dead
+jobs, run only in `all` and `worker` processes. Keep at least one of those running; a deployment
+of `web` processes alone runs no jobs.
+
 
 ### Sign-in providers
 

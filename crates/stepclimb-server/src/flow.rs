@@ -9,7 +9,8 @@
 //! flow and opens the payload, or answers [`FinishError::Invalid`] or [`FinishError::Expired`].
 //! The response that completes the flow clears the cookie with [`clear_cookie`].
 //!
-//! [`spawn_cleanup`] deletes expired flows on a `tokio` interval until the jobs runner exists.
+//! The periodic job [`CLEANUP`] (`auth.flows_cleanup`) deletes expired flows every
+//! [`CLEANUP_INTERVAL`] on the jobs runner (B21; spec m1/01 B18).
 //! A flow never nests inside another: there is one flow cookie, and the OAuth 2.1 authorization
 //! endpoint (`crate::oauth_authorize`) carries its request through sign-in in the sign-in
 //! flow's `return_to`, and starts its own flow only for its confirmation page, once the browser
@@ -27,10 +28,10 @@ use stepclimb_auth::{
 use stepclimb_core::{
     OrgScope,
     auth_flows::{self, Consumed, Kind, LIFETIME, NewFlow, ReturnTo},
-    clock::Clock,
     id::{Uuid, new_id},
     oauth_codes, oauth_refresh_tokens, organizations,
 };
+use stepclimb_jobs::{JobContext, Kind as JobKind, Outcome, Registry, RegistryError};
 
 use crate::cookie::{self, Presented};
 
@@ -41,8 +42,12 @@ pub const COOKIE_NAME: &str = "__Host-sc_flow";
 /// `SameSite=Lax`, so the cookie comes back on the top-level GET of a provider's redirect.
 const ATTRIBUTES: &str = "Path=/; Secure; HttpOnly; SameSite=Lax";
 
-/// How often [`spawn_cleanup`] deletes expired flows. An expired flow that no request finds
-/// stays at most this long past its expiry.
+/// The periodic job that deletes expired flows, authorization codes and refresh token families
+/// (B21; spec m1/01 B18).
+pub const CLEANUP: JobKind = JobKind::new("auth.flows_cleanup", "default");
+
+/// How often [`CLEANUP`] runs. An expired flow that no request finds stays about this long past
+/// its expiry, plus the scheduler's tick and the worker's poll.
 pub const CLEANUP_INTERVAL: Duration = Duration::from_secs(10 * 60);
 
 /// The table and column the payload is sealed for (`stepclimb_auth::encryption` context rules).
@@ -311,31 +316,23 @@ fn job_scope(org_id: Uuid) -> OrgScope {
     OrgScope::instance(org_id)
 }
 
-/// Run [`delete_expired`] every [`CLEANUP_INTERVAL`] at the clock's time, the first pass at once.
-/// It never returns; a failed pass is logged and the next one runs on schedule.
-pub async fn run_cleanup(db: PgPool, clock: Clock) {
-    let mut interval = tokio::time::interval(CLEANUP_INTERVAL);
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    loop {
-        interval.tick().await;
-        match delete_expired(&db, clock.now()).await {
-            Ok(0) => {}
-            Ok(deleted) => tracing::debug!(deleted, "deleted expired sign-in flows"),
-            Err(error) => tracing::error!(%error, "sign-in flow cleanup pass failed"),
-        }
-    }
+/// Register [`CLEANUP`] in `registry`, every [`CLEANUP_INTERVAL`].
+pub fn register_cleanup(registry: &mut Registry) -> Result<(), RegistryError> {
+    registry.register_periodic(CLEANUP, CLEANUP_INTERVAL, cleanup)
 }
 
-/// Start [`run_cleanup`] for as long as the server runs, and log if it ever stops (a panic in a
-/// pass), since expired flows would then wait for the request that finds them.
-pub fn spawn_cleanup(db: PgPool, clock: Clock) {
-    let cleanup = tokio::spawn(run_cleanup(db, clock));
-    tokio::spawn(async move {
-        match cleanup.await {
-            Ok(()) => tracing::error!("the sign-in flow cleanup stopped"),
-            Err(error) => tracing::error!(%error, "the sign-in flow cleanup stopped"),
+/// The [`CLEANUP`] job: [`delete_expired`] at the job's clock time. A failure in one
+/// organization is logged there and the pass goes on; failing to list the organizations is a
+/// retry. Safe to run twice: a second pass finds nothing expired left (spec m1/01 B12).
+async fn cleanup(ctx: JobContext) -> Outcome {
+    match delete_expired(ctx.pool(), ctx.clock().now()).await {
+        Ok(0) => Outcome::Done,
+        Ok(deleted) => {
+            tracing::debug!(deleted, "deleted expired sign-in flows");
+            Outcome::Done
         }
-    });
+        Err(error) => Outcome::retry(format_args!("could not list organizations: {error}")),
+    }
 }
 
 #[cfg(test)]

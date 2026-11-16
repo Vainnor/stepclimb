@@ -391,6 +391,18 @@ iteration at a time through a test hook rather than on timers.
    advisory lock, startup sync of schedule rows, `jobs.prune` for dead jobs, and moving the
    sign-in flow cleanup from its `tokio` interval onto `auth.flows_cleanup` (updating `m0/08` B21 in
    the same PR). Covers B17, B18; T13, T14, T6 (prune). Depends on: I2.
+   Coordinator decisions (2026-11-17, made while building I3, pending owner review):
+   - A periodic kind is registered with `Registry::register_periodic(kind, interval, handler)`;
+     the interval is whole seconds, at least 10 s. Its schedule row is named after the kind, and
+     its jobs carry no payload.
+   - Only `all` and `worker` processes write the schedule rows at startup and run the scheduler,
+     since only they run jobs; the scheduler ticks once at start, then every 10 s, on the job
+     pool. A due row of a kind the binary does not know is left, `next_run_at` unmoved, for a
+     process that knows it.
+   - The advisory lock key is the constant `0x5354_4550_5343_4844` (ASCII `STEPSCHD`).
+   - `jobs.prune` walks the organizations through the existing instance-wide
+     `organizations::ids` and deletes each one's dead jobs with its scope, then the instance's
+     own; B10's `organizations::list_ids` is that function under its existing name.
 4. **I4. Outbox and dispatch.** Migration `<version>_outbox.sql`, `outbox::emit`, topic
    registration with schema versions, the dispatch loop, subscriber registration, and
    pruning dispatched rows in `jobs.prune`. Covers B19 to B24; T15 to T18. Depends on: I3.

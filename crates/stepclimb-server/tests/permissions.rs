@@ -2826,8 +2826,9 @@ const SCOPED_OTHERWISE: &[(&str, &str)] = &[
 ];
 
 /// Tables that hold no organization's rows. `plans` holds instance-wide plan definitions (spec
-/// 10 Data); an organization's plan is its `org_plans` row, which has `org_id`.
-const INSTANCE_ONLY: &[&str] = &["_sqlx_migrations", "plans"];
+/// 10 Data); an organization's plan is its `org_plans` row, which has `org_id`. `job_schedules`
+/// holds one row per periodic job kind (spec m1/01 Data).
+const INSTANCE_ONLY: &[&str] = &["_sqlx_migrations", "job_schedules", "plans"];
 
 /// Every row of organization `org`, by table: each table with `org_id`, and each table of
 /// [`SCOPED_OTHERWISE`]. A table of the schema in neither, nor in [`INSTANCE_ONLY`], is an error,

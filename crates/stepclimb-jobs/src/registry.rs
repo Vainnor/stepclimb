@@ -7,6 +7,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use std::time::Duration;
+
 use crate::kind::{Kind, KindError};
 use crate::worker::{JobContext, Outcome};
 
@@ -22,12 +24,22 @@ pub enum RegistryError {
     Kind(#[from] KindError),
     #[error("the job kind `{0}` is registered twice")]
     Duplicate(&'static str),
+    #[error(
+        "the periodic job kind `{0}` needs an interval of whole seconds, at least 10 s and below \
+         2^31 s"
+    )]
+    Interval(&'static str),
 }
+
+/// The shortest interval of a periodic kind, as `job_schedules.interval_s` allows (B17).
+pub const MIN_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Every kind this binary knows, with its settings and handler. Built once at startup.
 #[derive(Clone, Default)]
 pub struct Registry {
     entries: HashMap<&'static str, (Kind, Handler)>,
+    /// The interval of each periodic kind, by name (B17).
+    periodic: HashMap<&'static str, Duration>,
 }
 
 impl Registry {
@@ -50,6 +62,36 @@ impl Registry {
         let handler: Handler = Arc::new(move |context| Box::pin(handler(context)));
         self.entries.insert(kind.name, (kind, handler));
         Ok(())
+    }
+
+    /// Register `handler` for `kind`, and run `kind` every `interval` as a periodic job (B17):
+    /// the scheduler enqueues one instance job of it per interval, with no payload.
+    pub fn register_periodic<F, Fut>(
+        &mut self,
+        kind: Kind,
+        interval: Duration,
+        handler: F,
+    ) -> Result<(), RegistryError>
+    where
+        F: Fn(JobContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Outcome> + Send + 'static,
+    {
+        let whole = interval.subsec_nanos() == 0;
+        let fits = i32::try_from(interval.as_secs()).is_ok();
+        if !(whole && fits && interval >= MIN_INTERVAL) {
+            return Err(RegistryError::Interval(kind.name));
+        }
+        self.register(kind, handler)?;
+        self.periodic.insert(kind.name, interval);
+        Ok(())
+    }
+
+    /// Every periodic kind with its interval, sorted by name.
+    #[must_use]
+    pub fn periodic(&self) -> Vec<(&'static str, Duration)> {
+        let mut periodic: Vec<_> = self.periodic.iter().map(|(n, i)| (*n, *i)).collect();
+        periodic.sort_unstable();
+        periodic
     }
 
     /// The registered kind named `name`.
@@ -118,6 +160,39 @@ mod tests {
         assert_eq!(registry.queues(), ["default", "transcode"]);
         assert!(Registry::new().queues().is_empty());
         assert!(!registry.knows(&Kind::new("email.other", "default")));
+    }
+
+    #[test]
+    fn a_periodic_kind_is_registered_with_its_interval() {
+        let mut registry = Registry::new();
+        registry
+            .register_periodic(SEND, Duration::from_secs(3600), done)
+            .unwrap();
+        registry.register(TRANSCODE, done).unwrap();
+        assert!(registry.knows(&SEND));
+        assert_eq!(
+            registry.periodic(),
+            [("email.send", Duration::from_secs(3600))]
+        );
+    }
+
+    #[test]
+    fn a_periodic_interval_must_be_whole_seconds_of_at_least_10() {
+        for interval in [
+            Duration::from_secs(9),
+            Duration::from_millis(10_500),
+            Duration::from_secs(1 << 31),
+        ] {
+            let mut registry = Registry::new();
+            assert_eq!(
+                registry.register_periodic(SEND, interval, done),
+                Err(RegistryError::Interval("email.send")),
+                "{interval:?}"
+            );
+            assert!(!registry.knows(&SEND), "nothing registered");
+        }
+        let mut registry = Registry::new();
+        assert!(registry.register_periodic(SEND, MIN_INTERVAL, done).is_ok());
     }
 
     #[test]
