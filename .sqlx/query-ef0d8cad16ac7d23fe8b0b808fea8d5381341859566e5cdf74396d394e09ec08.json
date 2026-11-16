@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE module_items SET position = position + $5::integer\n         WHERE org_id = $1 AND module_id = $2 AND position >= $3::bigint AND position < $4::bigint",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8",
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ef0d8cad16ac7d23fe8b0b808fea8d5381341859566e5cdf74396d394e09ec08"
+}

@@ -56,6 +56,10 @@ pub mod code {
     pub const ACCOUNT_NOT_FOUND: &str = "account.not_found";
     /// The course does not exist in the organization or is not visible to the caller (404).
     pub const COURSE_NOT_FOUND: &str = "course.not_found";
+    /// The module does not exist in the organization or its course is not visible (404).
+    pub const MODULE_NOT_FOUND: &str = "module.not_found";
+    /// The item does not exist in the organization or its course is not visible (404).
+    pub const ITEM_NOT_FOUND: &str = "item.not_found";
 }
 
 /// The path parameter [`AccountTarget`] and [`AccountParentTarget`] read.
@@ -63,6 +67,12 @@ pub const ACCOUNT_ID_PARAM: &str = "account_id";
 
 /// The path parameter [`CourseTarget`] reads.
 pub const COURSE_ID_PARAM: &str = "course_id";
+
+/// The path parameter [`ModuleTarget`] reads.
+pub const MODULE_ID_PARAM: &str = "module_id";
+
+/// The path parameter [`ItemTarget`] reads.
+pub const ITEM_ID_PARAM: &str = "item_id";
 
 /// A request whose principal holds the permission `R` at the target `T` resolves to (B17), or
 /// whose organization's plan includes the feature `R` (spec 10 B9).
@@ -225,6 +235,91 @@ impl Target for CourseTarget {
         let course = Self { id, account_path };
         grants.check::<P>(&course.target())?;
         Ok(course)
+    }
+}
+
+/// The module named by the path parameter `module_id`, which `P` must be effective over at its
+/// course (M1 spec 03 API): resolved to its course inside the principal's organization, then
+/// [`CourseTarget`]'s check with code `module.not_found`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModuleTarget {
+    pub id: Uuid,
+    pub course: CourseTarget,
+}
+
+impl Target for ModuleTarget {
+    async fn resolve<P: Permission>(
+        parts: &mut Parts,
+        state: &AppState,
+        grants: &Grants,
+    ) -> Result<Self, ApiError> {
+        let id = uuid_param(parts, state, MODULE_ID_PARAM).await?;
+        let course_id = stepclimb_core::modules::course_of(&state.db, grants.scope(), id)
+            .await
+            .map_err(|error| ApiError::internal(&error))?;
+        let course = course_of::<P>(state, grants, course_id, code::MODULE_NOT_FOUND).await?;
+        Ok(Self { id, course })
+    }
+}
+
+/// The item named by the path parameter `item_id`, which `P` must be effective over at its
+/// course (M1 spec 03 API): resolved to its course inside the principal's organization, then
+/// [`CourseTarget`]'s check with code `item.not_found`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ItemTarget {
+    pub id: Uuid,
+    pub course: CourseTarget,
+}
+
+impl Target for ItemTarget {
+    async fn resolve<P: Permission>(
+        parts: &mut Parts,
+        state: &AppState,
+        grants: &Grants,
+    ) -> Result<Self, ApiError> {
+        let id = uuid_param(parts, state, ITEM_ID_PARAM).await?;
+        let course_id = stepclimb_core::items::course_of(&state.db, grants.scope(), id)
+            .await
+            .map_err(|error| ApiError::internal(&error))?;
+        let course = course_of::<P>(state, grants, course_id, code::ITEM_NOT_FOUND).await?;
+        Ok(Self { id, course })
+    }
+}
+
+/// The course `course_id` of a module or item as a [`CourseTarget`] that `P` is effective over:
+/// 404 with `not_found` when there is no such row (`None`), or its course is not visible to
+/// the principal; 403 when it is visible without `P`.
+async fn course_of<P: Permission>(
+    state: &AppState,
+    grants: &Grants,
+    course_id: Option<Uuid>,
+    not_found: &'static str,
+) -> Result<CourseTarget, ApiError> {
+    let hidden = || not_found_as(Denied::CourseNotFound, not_found);
+    let id = course_id.ok_or_else(hidden)?;
+    let account_path = stepclimb_core::courses::path(&state.db, grants.scope(), id)
+        .await
+        .map_err(|error| ApiError::internal(&error))?
+        .ok_or_else(hidden)?;
+    let course = CourseTarget { id, account_path };
+    grants
+        .check::<P>(&course.target())
+        .map_err(|denied| not_found_as(denied, not_found))?;
+    Ok(course)
+}
+
+/// `denied` as an answer, with a course that is not found or not visible answered as 404
+/// `code` instead, for a target reached through its course: `module.not_found`,
+/// `item.not_found`, or `course.not_found` itself.
+pub fn not_found_as(denied: Denied, code: &'static str) -> ApiError {
+    let detail = match code {
+        code::MODULE_NOT_FOUND => "No module with this id exists, or you cannot see it.",
+        code::ITEM_NOT_FOUND => "No item with this id exists, or you cannot see it.",
+        _ => "No course with this id exists, or you cannot see it.",
+    };
+    match denied {
+        Denied::CourseNotFound => ApiError::new(StatusCode::NOT_FOUND, code, detail),
+        other => other.into(),
     }
 }
 
@@ -618,6 +713,11 @@ mod tests {
         let other_org = ApiError::from(Denied::OrganizationNotFound);
         assert_eq!(other_org.status(), StatusCode::NOT_FOUND);
         assert_eq!(other_org.code(), "org.not_found");
+        let module = not_found_as(Denied::CourseNotFound, code::MODULE_NOT_FOUND);
+        assert_eq!(module.status(), StatusCode::NOT_FOUND);
+        assert_eq!(module.code(), "module.not_found");
+        let item_forbidden = not_found_as(Denied::Forbidden, code::ITEM_NOT_FOUND);
+        assert_eq!(item_forbidden.code(), "permission.denied");
         let course = ApiError::from(Denied::CourseNotFound);
         assert_eq!(course.status(), StatusCode::NOT_FOUND);
         assert_eq!(course.code(), "course.not_found");

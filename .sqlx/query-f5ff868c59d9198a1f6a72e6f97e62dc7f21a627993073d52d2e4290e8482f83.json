@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE module_items\n         SET title = $3, published = $4, url = $5,\n             updated_at = timestamptz 'epoch' + $6::bigint * interval '1 microsecond'\n         WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Bool",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f5ff868c59d9198a1f6a72e6f97e62dc7f21a627993073d52d2e4290e8482f83"
+}

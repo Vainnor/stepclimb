@@ -62,7 +62,9 @@ names that cannot be created. Unlock and completion rules are spec 04.
   renamed, published, unpublished, moved and deleted.
 - **B7.** An external link's `url` is an absolute `https` or `http` URL of at most 2,048
   characters with a host, no user name or password, and no control or white-space character
-  (422 `item.url_invalid` at `/url`); it may be changed. The server never fetches it. The web app
+  (422 `item.url_invalid` at `/url`); it may be changed. A Unicode format character (category
+  Cf, such as U+202E or U+200B) is refused the same way, since it can make a link show one
+  address and go to another. The server never fetches it. The web app
   opens it in a new browsing context with `rel="noopener noreferrer"`.
 - **B8.** A header carries no reference, URL or requirement (spec 04 refuses one on it).
 - **B9.** Deleting an item removes its row and closes the positions gap. It does not delete what
@@ -289,6 +291,52 @@ and stands until the owner reviews it.
   module, 200-character titles (the `m0/02` Q6 name limit); (b) no limits. Recommendation: (a). One
   outline response and one copy transaction stay bounded (40,000 items at most).
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
+
+### Decisions made building I1
+
+Coordinator decisions (overnight, 2026-11-16), pending owner review. None depends on `02` Q1
+or Q12.
+
+- **Course copy waits for `02` I3.** `courses::copy` does not exist yet (`02` I3 is not
+  built), so I1 adds no copy code: a copy function nothing calls would be scaffolding. Whichever
+  of `02` I3 and the copy part of this spec lands second adds modules and items to the one copy
+  transaction (`02` B13).
+- **Field codes.** A refused title answers 422 at `/title` with `name.empty`, `name.too_long` or
+  `text.contains_nul`, as courses do. Besides the spec's `item.kind_unavailable` and
+  `item.url_invalid`: `item.url_required` at `/url` (an external link without a URL),
+  `item.url_unavailable` at `/url` (a URL on another kind, on create or patch),
+  `item.ref_id_unavailable` at `/ref_id` (a reference on `header` or `external_link`; no
+  creatable kind takes one in I1) and `item.position_out_of_range` at `/position` (B4, B11).
+  A kind name that is not one of the seven is 400 `request.malformed`: the body does not match
+  the schema.
+- **B7's "absolute" is checked on the string as sent.** The URL must start with `http://` or
+  `https://` (any case) and parse to a host. The parser reads `https:host` as
+  `https://host/`, but a browser resolves that string against the page, so the stored value
+  would not be the link the parser accepted. The check is `stepclimb_core::items::url_is_valid`,
+  in the repository, so every writer (copy, import, sync) applies it; the `module_items` table
+  also refuses a `url` that does not start with `http://` or `https://`.
+- **Every write locks the course**, not only the structural ones of B12: renames, publish
+  switches and URL changes too, so a course archived meanwhile (`02` B5) is seen by every
+  write. The route checks `course.content_edit` again on the course's path as its transaction
+  reads it, as course writes do (`02` I1).
+- **Positions within one module (B11).** A move inside the item's own module takes 0 to the
+  module's item count minus one; to another module, 0 to its count. The item's own place
+  writes nothing.
+- **`updated_at`** changes with a row's title, `published`, URL or module, not with a position
+  shifted by a sibling's create, delete, reorder or move.
+- **Write responses carry every item.** `PUT .../modules/order`, `PATCH /modules/{id}` and
+  `PUT .../items/order` return each module with all its items, published or not: the caller
+  holds `course.content_edit` and can change every one of them. B13's filtering is for the
+  read routes of I2. Editing content therefore implies reading unpublished modules and items
+  in those answers, and the catalog descriptions of `course.content_edit` and
+  `course.view_all` (`stepclimb_core::perm`, `02` Permissions) say so. A custom role with
+  `course.content_edit` and no `course.view_all` sees unpublished content only through its
+  edits, never through I2's read routes.
+- **Each route checks its own permission twice.** The handler repeats its `Require`'s check
+  under the course lock with the same permission type (`recheck` takes the route's `Require`),
+  so the two checks cannot name different permissions.
+- **No `items::referencing` yet.** The spec lists it for the content specs' deletion checks;
+  nothing calls it until spec 06, which adds it.
 
 ## Issues
 

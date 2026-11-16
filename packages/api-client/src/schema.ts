@@ -427,6 +427,43 @@ export interface paths {
         patch: operations["updateCourse"];
         trace?: never;
     };
+    "/api/v1/courses/{course_id}/modules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create an unpublished module, last in the course. */
+        post: operations["createModule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/courses/{course_id}/modules/order": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put the course's modules in a new order. The list must be exactly the course's current
+         *     module ids; the current order changes nothing.
+         */
+        put: operations["reorderModules"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/courses/{course_id}/move": {
         parameters: {
             query?: never;
@@ -455,6 +492,44 @@ export interface paths {
         put?: never;
         /** Change a course's status. Asking for the current status changes nothing. */
         post: operations["setCourseStatus"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/items/{item_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete an item. What it points at stays in the course. */
+        delete: operations["deleteItem"];
+        options?: never;
+        head?: never;
+        /**
+         * Rename, publish or unpublish an item, or change an external link's URL. A patch naming only
+         *     current values changes nothing.
+         */
+        patch: operations["updateItem"];
+        trace?: never;
+    };
+    "/api/v1/items/{item_id}/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Move an item to a position in a module of the same course, its own included. */
+        post: operations["moveItem"];
         delete?: never;
         options?: never;
         head?: never;
@@ -648,6 +723,61 @@ export interface paths {
         put?: never;
         /** Turn TOTP off with a current code or a recovery code. */
         post: operations["disableMyTotp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/modules/{module_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete a module that has no items. */
+        delete: operations["deleteModule"];
+        options?: never;
+        head?: never;
+        /** Rename, publish or unpublish a module. A patch naming only current values changes nothing. */
+        patch: operations["updateModule"];
+        trace?: never;
+    };
+    "/api/v1/modules/{module_id}/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create an unpublished item in the module, at `position` or last. */
+        post: operations["createItem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/modules/{module_id}/items/order": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put the module's items in a new order. The list must be exactly the module's current item
+         *     ids; the current order changes nothing.
+         */
+        put: operations["reorderItems"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1776,6 +1906,71 @@ export interface components {
              */
             updated_at: string;
         };
+        /** @description An item of a module. */
+        Item: {
+            /** Format: uuid */
+            course_id: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            created_at: string;
+            /** Format: uuid */
+            id: string;
+            kind: components["schemas"]["ItemKind"];
+            /** Format: uuid */
+            module_id: string;
+            /**
+             * Format: int32
+             * @description 0-based, dense within the module.
+             */
+            position: number;
+            published: boolean;
+            /**
+             * Format: uuid
+             * @description What the item points at; only for kinds that point at a row.
+             */
+            ref_id?: string;
+            title: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            updated_at: string;
+            /** @description Only for `external_link`. */
+            url?: string;
+        };
+        /**
+         * @description What an item points at.
+         * @enum {string}
+         */
+        ItemKind: "header" | "external_link" | "file" | "page" | "video" | "quiz" | "activity";
+        /** @description Where to move an item. */
+        ItemMove: {
+            /**
+             * Format: uuid
+             * @description A module of the item's course, its own included.
+             */
+            module_id: string;
+            /**
+             * Format: int64
+             * @description 0 to the destination's item count, not counting the moved item.
+             */
+            position: number;
+        };
+        /** @description Every item id of the module, in the new order. */
+        ItemOrder: {
+            item_ids: string[];
+        };
+        /** @description A change to an item; an omitted member is left as it is. The kind and `ref_id` never change. */
+        ItemPatch: {
+            /** @description Whether learners see the item. */
+            published?: boolean;
+            /** @description Trimmed; 1 to 200 characters. */
+            title?: string;
+            /** @description For an external link only. */
+            url?: string;
+        };
         /**
          * @description A local sign-in method.
          * @enum {string}
@@ -1866,6 +2061,46 @@ export interface components {
             /** @description An IANA time zone. */
             tz: string;
         };
+        /** @description A module of a course, with its items in order. */
+        Module: {
+            /** Format: uuid */
+            course_id: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            created_at: string;
+            /** Format: uuid */
+            id: string;
+            items: components["schemas"]["Item"][];
+            /**
+             * Format: int32
+             * @description 0-based, dense within the course.
+             */
+            position: number;
+            published: boolean;
+            title: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            updated_at: string;
+        };
+        /** @description A course's modules, in order. */
+        ModuleList: {
+            modules: components["schemas"]["Module"][];
+        };
+        /** @description Every module id of the course, in the new order. */
+        ModuleOrder: {
+            module_ids: string[];
+        };
+        /** @description A change to a module; an omitted member is left as it is. */
+        ModulePatch: {
+            /** @description Whether learners see the module. */
+            published?: boolean;
+            /** @description Trimmed; 1 to 200 characters. */
+            title?: string;
+        };
         /** @description One of the signed-in user's identities. */
         MyIdentity: {
             /**
@@ -1943,6 +2178,30 @@ export interface components {
             provider_key: string;
             /** @description The provider's id for the person; stored exactly as given, not empty. */
             subject: string;
+        };
+        /** @description An item to create, unpublished. */
+        NewItem: {
+            /** @description `header` and `external_link` can be created; the other kinds arrive with their specs. */
+            kind: components["schemas"]["ItemKind"];
+            /**
+             * Format: int64
+             * @description 0 to the module's item count; last when omitted.
+             */
+            position?: number | null;
+            /**
+             * Format: uuid
+             * @description What the item points at, for a kind that points at a row.
+             */
+            ref_id?: string | null;
+            /** @description Trimmed; 1 to 200 characters. */
+            title: string;
+            /** @description For `external_link` only: an absolute `https` or `http` URL of at most 2,048 characters. */
+            url?: string | null;
+        };
+        /** @description A module to create, unpublished and last. */
+        NewModule: {
+            /** @description Trimmed; 1 to 200 characters. */
+            title: string;
         };
         /** @description The browser's registration response. */
         NewMyPasskey: {
@@ -3172,6 +3431,15 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `permission.denied`: you can see the course but do not hold `course.content_edit` at a scope containing it. `auth.csrf_refused`: the request did not come from this site. */
+        ContentEditForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `course.code_taken`: another course of the organization has this code, ignoring ASCII case. */
         CourseCodeConflict: {
             headers: {
@@ -3442,6 +3710,69 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `course.archived`: the course is archived and takes no content change. `item.limit_reached`: the module holds 200 items. */
+        ItemCreateConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space, control or Unicode format character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none), or `/position` with `item.position_out_of_range` (outside 0 to the module's item count). */
+        ItemInvalid: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.archived`: the course is archived and takes no content change. `item.limit_reached`: the destination module holds 200 items. */
+        ItemMoveConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `item.not_found`: no item with this id exists in the organization, or you cannot see its course. `module.not_found`: the destination module is not in the item's course. `org.not_found`: the request's organization cannot be determined. */
+        ItemMoveNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `item.not_found`: no item with this id exists in the organization, or you cannot see its course. `org.not_found`: the request's organization cannot be determined. */
+        ItemNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.archived`: the course is archived and takes no content change. `order.stale`: the list is not exactly the current set of ids (one is missing, extra or repeated); reload and try again. */
+        ItemOrderConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.archived`: the course is archived and takes no content change. */
+        ItemWriteConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `local.last_method`: the change would leave the organization no way to sign in: no offered passkey, password or magic link (TOTP is only a second step), and no enabled outside provider. */
         LocalSignInConflict: {
             headers: {
@@ -3480,6 +3811,60 @@ export interface components {
         };
         /** @description `request.method_not_allowed`: the path does not take this method; `Allow` lists the methods it takes. */
         MethodNotAllowed: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined. */
+        ModuleCourseNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.archived`: the course is archived and takes no content change. `module.limit_reached`: the course holds 200 modules. */
+        ModuleCreateConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.archived`: the course is archived and takes no content change. `module.not_empty`: the module has items; delete or move them first. */
+        ModuleDeleteConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `module.not_found`: no module with this id exists in the organization, or you cannot see its course. `org.not_found`: the request's organization cannot be determined. */
+        ModuleNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.archived`: the course is archived and takes no content change. `order.stale`: the list is not exactly the current set of ids (one is missing, extra or repeated); reload and try again. */
+        ModuleOrderConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.archived`: the course is archived and takes no content change. */
+        ModuleWriteConflict: {
             headers: {
                 [name: string]: unknown;
             };
@@ -5378,6 +5763,81 @@ export interface operations {
             503: components["responses"]["NoOrganization"];
         };
     };
+    createModule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The course's id. */
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewModule"];
+            };
+        };
+        responses: {
+            /** @description The module is created */
+            201: {
+                headers: {
+                    /** @description The module's path */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Module"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ContentEditForbidden"];
+            404: components["responses"]["ModuleCourseNotFound"];
+            409: components["responses"]["ModuleCreateConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["UnprocessableEntity"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    reorderModules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The course's id. */
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModuleOrder"];
+            };
+        };
+        responses: {
+            /** @description The course's modules in their new order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModuleList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ContentEditForbidden"];
+            404: components["responses"]["ModuleCourseNotFound"];
+            409: components["responses"]["ModuleOrderConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
     moveCourse: {
         parameters: {
             query?: never;
@@ -5445,6 +5905,108 @@ export interface operations {
             409: components["responses"]["CourseStatusConflict"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    deleteItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The item's id. */
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The item is deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ContentEditForbidden"];
+            404: components["responses"]["ItemNotFound"];
+            409: components["responses"]["ItemWriteConflict"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    updateItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The item's id. */
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ItemPatch"];
+            };
+        };
+        responses: {
+            /** @description The item after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Item"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ContentEditForbidden"];
+            404: components["responses"]["ItemNotFound"];
+            409: components["responses"]["ItemWriteConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["ItemInvalid"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    moveItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The item's id. */
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ItemMove"];
+            };
+        };
+        responses: {
+            /** @description The item after the move */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Item"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ContentEditForbidden"];
+            404: components["responses"]["ItemMoveNotFound"];
+            409: components["responses"]["ItemMoveConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["ItemInvalid"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };
@@ -5832,6 +6394,146 @@ export interface operations {
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    deleteModule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The module's id. */
+                module_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The module is deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ContentEditForbidden"];
+            404: components["responses"]["ModuleNotFound"];
+            409: components["responses"]["ModuleDeleteConflict"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    updateModule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The module's id. */
+                module_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModulePatch"];
+            };
+        };
+        responses: {
+            /** @description The module after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Module"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ContentEditForbidden"];
+            404: components["responses"]["ModuleNotFound"];
+            409: components["responses"]["ModuleWriteConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["UnprocessableEntity"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    createItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The module's id. */
+                module_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewItem"];
+            };
+        };
+        responses: {
+            /** @description The item is created */
+            201: {
+                headers: {
+                    /** @description The item's path */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Item"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ContentEditForbidden"];
+            404: components["responses"]["ModuleNotFound"];
+            409: components["responses"]["ItemCreateConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["ItemInvalid"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    reorderItems: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The module's id. */
+                module_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ItemOrder"];
+            };
+        };
+        responses: {
+            /** @description The module with its items in their new order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Module"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ContentEditForbidden"];
+            404: components["responses"]["ModuleNotFound"];
+            409: components["responses"]["ItemOrderConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };

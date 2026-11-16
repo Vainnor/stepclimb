@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE modules m SET position = (u.ord - 1)::integer\n             FROM unnest($3::uuid[]) WITH ORDINALITY AS u(id, ord)\n             WHERE m.org_id = $1 AND m.course_id = $2 AND m.id = u.id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8c33d0c21b2e0c4257a7c242e1a1528c4087c35294e84de6258ccdc342071aa4"
+}

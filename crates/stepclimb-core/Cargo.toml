@@ -26,6 +26,8 @@ sha2.workspace = true
 # The `matches` test of admission rules (spec 07 Q1).
 regex.workspace = true
 regex-syntax.workspace = true
+# The form check of an external link's URL (docs/specs/m1/03-modules-and-items.md B7).
+url.workspace = true
 
 [dev-dependencies]
 stepclimb-core = { path = ".", features = ["test-support"] }

@@ -20,8 +20,8 @@ use crate::{
     csrf::{self, OriginAllowlist},
     discovery, enrollment,
     error::ApiError,
-    health, identities, local_sign_in, manifest, me, my_passkeys, oauth_authorize, oauth_token,
-    openapi, organization, passkey_enrollment, passkey_sign_in, password,
+    health, identities, items, local_sign_in, manifest, me, modules, my_passkeys, oauth_authorize,
+    oauth_token, openapi, organization, passkey_enrollment, passkey_sign_in, password,
     password_hasher::PasswordHasher,
     provider_admin, provider_callback, provider_sign_in,
     providers::Providers,
@@ -276,6 +276,31 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
             "/api/v1/courses/{course_id}/move",
             post(courses::move_course),
         ),
+        (
+            "/api/v1/courses/{course_id}/modules",
+            post(modules::create_module),
+        ),
+        (
+            "/api/v1/courses/{course_id}/modules/order",
+            put(modules::reorder_modules),
+        ),
+        (
+            "/api/v1/modules/{module_id}",
+            patch(modules::update_module).delete(modules::delete_module),
+        ),
+        (
+            "/api/v1/modules/{module_id}/items",
+            post(items::create_item),
+        ),
+        (
+            "/api/v1/modules/{module_id}/items/order",
+            put(items::reorder_items),
+        ),
+        (
+            "/api/v1/items/{item_id}",
+            patch(items::update_item).delete(items::delete_item),
+        ),
+        ("/api/v1/items/{item_id}/move", post(items::move_item)),
         ("/api/v1/admin/permissions", get(roles::list_permissions)),
         (
             roles::ROLES_PATH,

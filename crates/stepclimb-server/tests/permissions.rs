@@ -82,11 +82,11 @@ use stepclimb_core::{
     grants::ScopeId,
     id::{Uuid, new_id},
     identities::{self, NewIdentity},
-    organizations,
+    items, modules, organizations,
     perm::{
-        self, AccountManage, AccountView, AdmissionManage, BrandingManage, CourseCreate,
-        CourseManage, CourseView, OrgManage, Permission, ProviderManage, RoleAssign, RoleManage,
-        RoleView, ScopeType, ServiceAccountManage, UserManage, UserView,
+        self, AccountManage, AccountView, AdmissionManage, BrandingManage, CourseContentEdit,
+        CourseCreate, CourseManage, CourseView, OrgManage, Permission, ProviderManage, RoleAssign,
+        RoleManage, RoleView, ScopeType, ServiceAccountManage, UserManage, UserView,
     },
     role_assignments::{self, NewAssignment, Scope},
     roles::{self, NewRole},
@@ -237,6 +237,54 @@ const TABLE: &[Entry] = &[
             feature_by_target: false,
             setup: move_course_to_ground,
         },
+    },
+    Entry {
+        operation_id: "createModule",
+        access: permission(
+            CourseContentEdit::KEY,
+            COURSE_NOT_FOUND,
+            new_module_in_tower_course,
+        ),
+    },
+    Entry {
+        operation_id: "reorderModules",
+        access: permission(CourseContentEdit::KEY, COURSE_NOT_FOUND, reverse_modules),
+    },
+    Entry {
+        operation_id: "updateModule",
+        access: permission(CourseContentEdit::KEY, MODULE_NOT_FOUND, retitle_module),
+    },
+    Entry {
+        operation_id: "deleteModule",
+        access: permission(CourseContentEdit::KEY, MODULE_NOT_FOUND, empty_module),
+    },
+    Entry {
+        operation_id: "createItem",
+        access: permission(
+            CourseContentEdit::KEY,
+            MODULE_NOT_FOUND,
+            new_header_in_module,
+        ),
+    },
+    Entry {
+        operation_id: "reorderItems",
+        access: permission(CourseContentEdit::KEY, MODULE_NOT_FOUND, reverse_items),
+    },
+    Entry {
+        operation_id: "updateItem",
+        access: permission(CourseContentEdit::KEY, ITEM_NOT_FOUND, retitle_item),
+    },
+    Entry {
+        operation_id: "moveItem",
+        access: permission(
+            CourseContentEdit::KEY,
+            ITEM_NOT_FOUND,
+            move_item_to_second_module,
+        ),
+    },
+    Entry {
+        operation_id: "deleteItem",
+        access: permission(CourseContentEdit::KEY, ITEM_NOT_FOUND, item_in_module),
     },
     Entry {
         operation_id: "listPermissions",
@@ -1184,6 +1232,136 @@ fn move_course_to_ground(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send 
         Call {
             params: vec![("course_id", org.course(org.tower, false).await)],
             body: Some(serde_json::json!({ "account_id": org.ground })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A module that is not the organization's, or whose course the caller cannot see: 404
+/// `module.not_found` (M1 spec 03 API).
+const MODULE_NOT_FOUND: Target = Target::Scoped {
+    not_found: "module.not_found",
+    cross_org: "module.not_found",
+};
+
+/// An item that is not the organization's, or whose course the caller cannot see: 404
+/// `item.not_found` (M1 spec 03 API).
+const ITEM_NOT_FOUND: Target = Target::Scoped {
+    not_found: "item.not_found",
+    cross_org: "item.not_found",
+};
+
+/// A draft course in Tower and a new module's title.
+fn new_module_in_tower_course(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: vec![("course_id", org.course(org.tower, false).await)],
+            body: Some(serde_json::json!({ "title": "Suite module" })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A course in Tower with two modules, put in the reverse order.
+fn reverse_modules(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, false).await;
+        let first = org.module(course).await;
+        let second = org.module(course).await;
+        Call {
+            params: vec![("course_id", course)],
+            body: Some(serde_json::json!({ "module_ids": [second, first] })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A module of a course in Tower with a new title.
+fn retitle_module(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, false).await;
+        Call {
+            params: vec![("module_id", org.module(course).await)],
+            body: Some(serde_json::json!({ "title": "Retitled module", "published": true })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// An empty module of a course in Tower.
+fn empty_module(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, false).await;
+        Call {
+            params: vec![("module_id", org.module(course).await)],
+            body: None,
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A module of a course in Tower and a new header.
+fn new_header_in_module(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, false).await;
+        Call {
+            params: vec![("module_id", org.module(course).await)],
+            body: Some(serde_json::json!({ "kind": "header", "title": "Suite header" })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A module of a course in Tower with two items, put in the reverse order.
+fn reverse_items(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, false).await;
+        let module = org.module(course).await;
+        let first = org.header(module).await;
+        let second = org.header(module).await;
+        Call {
+            params: vec![("module_id", module)],
+            body: Some(serde_json::json!({ "item_ids": [second, first] })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// An item of a course in Tower with a new title.
+fn retitle_item(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, false).await;
+        let module = org.module(course).await;
+        Call {
+            params: vec![("item_id", org.header(module).await)],
+            body: Some(serde_json::json!({ "title": "Retitled item", "published": true })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// An item of a course in Tower moved to the course's second module.
+fn move_item_to_second_module(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, false).await;
+        let from = org.module(course).await;
+        let to = org.module(course).await;
+        Call {
+            params: vec![("item_id", org.header(from).await)],
+            body: Some(serde_json::json!({ "module_id": to, "position": 0 })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// An item of a course in Tower.
+fn item_in_module(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, false).await;
+        let module = org.module(course).await;
+        Call {
+            params: vec![("item_id", org.header(module).await)],
+            body: None,
             at: At::Account(org.tower),
         }
     })
@@ -2954,6 +3132,30 @@ impl Org {
             .expect("publish course");
         }
         id
+    }
+
+    /// A new module, last in `course`: its id.
+    async fn module(&self, course: Uuid) -> Uuid {
+        let title = format!("Module of {}", self.slug);
+        modules::create(&self.pool, scope(self.id), course, &title, now())
+            .await
+            .expect("create module")
+            .id
+    }
+
+    /// A new header, last in `module`: its id.
+    async fn header(&self, module: Uuid) -> Uuid {
+        let new = items::NewItem {
+            kind: items::Kind::Header,
+            title: format!("Header of {}", self.slug),
+            ref_id: None,
+            url: None,
+            position: None,
+        };
+        items::create(&self.pool, scope(self.id), module, &new, now())
+            .await
+            .expect("create item")
+            .id
     }
 
     async fn account(&self, parent: Uuid, name: &str) -> Uuid {

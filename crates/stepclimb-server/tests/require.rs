@@ -25,10 +25,11 @@ use stepclimb_core::{
     OrgScope, Source, accounts,
     audit::Actor,
     clock::ManualClock,
+    courses,
     grants::{Grants, ScopeId},
     id::{Uuid, new_id},
-    organizations,
-    perm::{self, AccountManage, AccountView, OrgManage, RoleAssign, RoleView},
+    items, modules, organizations,
+    perm::{self, AccountManage, AccountView, CourseContentEdit, OrgManage, RoleAssign, RoleView},
     role_assignments::{self, NewAssignment, Scope},
     roles::{self, NewRole, RolePatch},
     users::{self, NewUser},
@@ -37,7 +38,9 @@ use stepclimb_server::{
     AppState,
     error::{ApiError, Problem},
     extract::ApiJson,
-    require::{AccountParentTarget, AccountTarget, AnyScope, Require, Target},
+    require::{
+        AccountParentTarget, AccountTarget, AnyScope, ItemTarget, ModuleTarget, Require, Target,
+    },
     session,
     web_origin::WebOrigin,
 };
@@ -100,6 +103,14 @@ async fn twice(
     manage: Require<AccountManage, AccountTarget>,
 ) -> String {
     format!("{}", std::ptr::eq(view.grants(), manage.grants()))
+}
+
+async fn edit_module(require: Require<CourseContentEdit, ModuleTarget>) -> String {
+    format!("{}", require.target().course.id)
+}
+
+async fn edit_item(require: Require<CourseContentEdit, ItemTarget>) -> String {
+    format!("{}", require.target().course.id)
 }
 
 async fn no_param(_: Require<AccountView, AccountTarget>) -> &'static str {
@@ -188,6 +199,8 @@ impl Fixture {
             .route("/twice/{account_id}", get(twice))
             .route("/roles", get(list_roles))
             .route("/assignments", post(assign_role))
+            .route("/modules/{module_id}", get(edit_module))
+            .route("/items/{item_id}", get(edit_item))
             .route("/no-param", get(no_param));
         self.routes(routes)
     }
@@ -465,6 +478,70 @@ async fn account_target_four_cases(pool: PgPool) {
     f.call(Method::PATCH, &f.account_uri(f.ground), Some(&exact))
         .await
         .assert_ok(&f.ground.to_string());
+}
+
+/// `ModuleTarget` and `ItemTarget` (M1 spec 03 API): the four cases at the course the module or
+/// item belongs to, with their own 404 codes, and an unknown id answered the same as an
+/// invisible one.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn module_and_item_targets_four_cases(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let new = courses::NewCourse {
+        account_id: f.ground,
+        title: "Course".into(),
+        code: "S1".into(),
+    };
+    let course = courses::create(&f.pool, scope(f.org), &new, now(), Actor::Instance)
+        .await
+        .expect("create course")
+        .id;
+    let module = modules::create(&f.pool, scope(f.org), course, "Module", now())
+        .await
+        .expect("create module")
+        .id;
+    let header = items::NewItem {
+        kind: items::Kind::Header,
+        title: "Header".into(),
+        ref_id: None,
+        url: None,
+        position: None,
+    };
+    let item = items::create(&f.pool, scope(f.org), module, &header, now())
+        .await
+        .expect("create item")
+        .id;
+    let others = f
+        .holder(&all_but("course.content_edit"), At::Account(f.tower))
+        .await;
+    let sibling = f.holder(&all(), At::Account(f.enroute)).await;
+    let exact = f
+        .holder(&["course.content_edit"], At::Account(f.tower))
+        .await;
+    for (uri, unknown, code) in [
+        (
+            format!("/modules/{module}"),
+            format!("/modules/{}", new_id()),
+            "module.not_found",
+        ),
+        (
+            format!("/items/{item}"),
+            format!("/items/{}", new_id()),
+            "item.not_found",
+        ),
+    ] {
+        f.call(Method::GET, &uri, Some(&others))
+            .await
+            .assert_refused(StatusCode::FORBIDDEN, "permission.denied");
+        f.call(Method::GET, &uri, Some(&sibling))
+            .await
+            .assert_refused(StatusCode::NOT_FOUND, code);
+        f.call(Method::GET, &unknown, Some(&exact))
+            .await
+            .assert_refused(StatusCode::NOT_FOUND, code);
+        f.call(Method::GET, &uri, Some(&exact))
+            .await
+            .assert_ok(&course.to_string());
+    }
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
