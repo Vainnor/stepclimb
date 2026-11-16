@@ -533,7 +533,8 @@ pub async fn create<'c>(
 /// The new course takes the source's dates and `settings`, and its title unless `copy` names
 /// one; it is a draft whatever the source's status, and a template exactly when
 /// `copy.template` is. Every module and item of the source is copied with a new id, its
-/// position, title and `published` flag, and an item's kind and URL ([`copy_outline`]). Nothing
+/// position, title and `published` flag, and an item's kind and URL, with the unlock and
+/// completion rules, requirements and prerequisites of spec 04 ([`copy_outline`]). Nothing
 /// of the source's learners is copied: no enrollment, progress, attempt or other learner data
 /// (B13).
 ///
@@ -604,8 +605,10 @@ pub async fn copy<'c>(
 
 /// Copy every module and item of the course `from` into the new course `to`, both of the scope's
 /// organization, with new ids and the same positions, titles and `published` flags; each item
-/// keeps its kind and URL and goes into the copy of its module. `created_at` and `updated_at`
-/// are `now_us`. An item of a kind this release does not copy ([`items::Kind::copyable`]) is
+/// keeps its kind and URL and goes into the copy of its module. Each module keeps its unlock and
+/// completion rules and each item its requirement (spec 04 B1, B3), and the prerequisites are
+/// copied between the copies of their modules ([`copy_prerequisites`]). `created_at` and
+/// `updated_at` are `now_us`. An item of a kind this release does not copy ([`items::Kind::copyable`]) is
 /// [`Error::ContentNotCopyable`]: its `ref_id` names content no copy of this release copies. A
 /// stored URL [`items::url_is_valid`] refuses is [`Error::CopiedUrlInvalid`], as every writer of
 /// an item's URL checks it (spec 03, "B7's absolute").
@@ -616,39 +619,88 @@ async fn copy_outline(
     to: Uuid,
     now_us: i64,
 ) -> Result<(), Error> {
-    let modules = sqlx::query!(
-        "SELECT id, position, title, published FROM modules
-         WHERE org_id = $1 AND course_id = $2 ORDER BY position",
+    let sources = sqlx::query_scalar!(
+        "SELECT id FROM modules WHERE org_id = $1 AND course_id = $2 ORDER BY position",
         scope.org_id(),
         from,
     )
     .fetch_all(&mut *conn)
     .await?;
-    let copies: Vec<Uuid> = modules.iter().map(|_| new_id()).collect();
-    let new_ids: HashMap<Uuid, Uuid> = modules
-        .iter()
-        .map(|m| m.id)
-        .zip(copies.iter().copied())
-        .collect();
+    let copies: Vec<Uuid> = sources.iter().map(|_| new_id()).collect();
     sqlx::query!(
-        "INSERT INTO modules (id, org_id, course_id, position, title, published, created_at,
-                              updated_at)
-         SELECT m.id, $1, $2, m.position, m.title, m.published,
-                timestamptz 'epoch' + $7::bigint * interval '1 microsecond',
-                timestamptz 'epoch' + $7::bigint * interval '1 microsecond'
-         FROM UNNEST($3::uuid[], $4::int4[], $5::text[], $6::bool[])
-              AS m (id, position, title, published)",
+        "INSERT INTO modules (id, org_id, course_id, position, title, published, unlock_at,
+                              require_sequential, completion_rule, created_at, updated_at)
+         SELECT map.new_id, $1, $2, m.position, m.title, m.published, m.unlock_at,
+                m.require_sequential, m.completion_rule,
+                timestamptz 'epoch' + $6::bigint * interval '1 microsecond',
+                timestamptz 'epoch' + $6::bigint * interval '1 microsecond'
+         FROM UNNEST($3::uuid[], $4::uuid[]) AS map (old_id, new_id)
+         JOIN modules m ON m.org_id = $1 AND m.course_id = $5 AND m.id = map.old_id",
         scope.org_id(),
         to,
+        &sources,
         &copies,
-        &modules.iter().map(|m| m.position).collect::<Vec<_>>(),
-        &modules.iter().map(|m| m.title.clone()).collect::<Vec<_>>(),
-        &modules.iter().map(|m| m.published).collect::<Vec<_>>(),
+        from,
         now_us,
     )
     .execute(&mut *conn)
     .await?;
+    let new_ids: HashMap<Uuid, Uuid> = sources
+        .iter()
+        .copied()
+        .zip(copies.iter().copied())
+        .collect();
+    copy_prerequisites(conn, scope, from, to, (&sources, &copies), now_us).await?;
     copy_items(conn, scope, from, to, &new_ids, now_us).await
+}
+
+/// [`copy_outline`]'s prerequisites: each row of `from` as a row between the copies of its two
+/// modules in `to`, `map` pairing each source module's id with its copy's. Both modules of a
+/// row are modules of `from` (the table's foreign keys), so every row is copied; a count that
+/// differs is a stored row this function cannot place.
+async fn copy_prerequisites(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    from: Uuid,
+    to: Uuid,
+    (sources, copies): (&[Uuid], &[Uuid]),
+    now_us: i64,
+) -> Result<(), Error> {
+    let source_rows = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "count!" FROM module_prerequisites
+           WHERE org_id = $1 AND course_id = $2"#,
+        scope.org_id(),
+        from,
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    let copied = sqlx::query!(
+        "INSERT INTO module_prerequisites
+             (org_id, course_id, module_id, requires_id, created_at, updated_at)
+         SELECT $1, $2, mm.new_id, mr.new_id,
+                timestamptz 'epoch' + $6::bigint * interval '1 microsecond',
+                timestamptz 'epoch' + $6::bigint * interval '1 microsecond'
+         FROM module_prerequisites p
+         JOIN UNNEST($3::uuid[], $4::uuid[]) AS mm (old_id, new_id) ON mm.old_id = p.module_id
+         JOIN UNNEST($3::uuid[], $4::uuid[]) AS mr (old_id, new_id) ON mr.old_id = p.requires_id
+         WHERE p.org_id = $1 AND p.course_id = $5",
+        scope.org_id(),
+        to,
+        sources,
+        copies,
+        from,
+        now_us,
+    )
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    if i64::try_from(copied).ok() != Some(source_rows) {
+        return Err(Error::Stored {
+            id: from,
+            column: "module_prerequisites",
+        });
+    }
+    Ok(())
 }
 
 /// [`copy_outline`]'s items: each into the copy of its module, `modules` mapping a source
@@ -662,7 +714,9 @@ async fn copy_items(
     now_us: i64,
 ) -> Result<(), Error> {
     let rows = sqlx::query!(
-        "SELECT id, module_id, position, kind, url, title, published FROM module_items
+        "SELECT id, module_id, position, kind, url, title, published,
+                requirement::text AS requirement
+         FROM module_items
          WHERE org_id = $1 AND course_id = $2 ORDER BY module_id, position",
         scope.org_id(),
         from,
@@ -699,13 +753,14 @@ async fn copy_items(
         .collect::<Result<Vec<Uuid>, Error>>()?;
     sqlx::query!(
         "INSERT INTO module_items (id, org_id, course_id, module_id, position, kind, url, title,
-                                   published, created_at, updated_at)
+                                   published, requirement, created_at, updated_at)
          SELECT i.id, $1, $2, i.module_id, i.position, i.kind, i.url, i.title, i.published,
+                i.requirement::jsonb,
                 timestamptz 'epoch' + $10::bigint * interval '1 microsecond',
                 timestamptz 'epoch' + $10::bigint * interval '1 microsecond'
          FROM UNNEST($3::uuid[], $4::uuid[], $5::int4[], $6::text[], $7::text[], $8::text[],
-                     $9::bool[])
-              AS i (id, module_id, position, kind, url, title, published)",
+                     $9::bool[], $11::text[])
+              AS i (id, module_id, position, kind, url, title, published, requirement)",
         scope.org_id(),
         to,
         &rows.iter().map(|_| new_id()).collect::<Vec<_>>(),
@@ -719,6 +774,10 @@ async fn copy_items(
         &rows.iter().map(|r| r.title.clone()).collect::<Vec<_>>(),
         &rows.iter().map(|r| r.published).collect::<Vec<_>>(),
         now_us,
+        &rows
+            .iter()
+            .map(|r| r.requirement.clone())
+            .collect::<Vec<Option<String>>>() as &[Option<String>],
     )
     .execute(&mut *conn)
     .await?;

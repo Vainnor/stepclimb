@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT status FROM courses WHERE org_id = $1 AND id = $2 FOR NO KEY UPDATE",
+  "query": "SELECT status, current_setting('transaction_isolation') AS \"isolation!\"\n           FROM courses WHERE org_id = $1 AND id = $2 FOR NO KEY UPDATE",
   "describe": {
     "columns": [
       {
@@ -13,6 +13,12 @@
             "name": "status"
           }
         }
+      },
+      {
+        "ordinal": 1,
+        "name": "isolation!",
+        "type_info": "Text",
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -22,8 +28,9 @@
       ]
     },
     "nullable": [
-      false
+      false,
+      null
     ]
   },
-  "hash": "3db85926c3041bc8bf387f8bb3aa90d26522295a0457cb66cc0c542042856ff8"
+  "hash": "af9854150fa5e3de2a783af1098b02de1a5fd963c4ee7da5f32a1c10a9a2412d"
 }

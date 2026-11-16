@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, module_id, course_id, kind, title, position, published, ref_id, url,\n                  (extract(epoch FROM created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM module_items WHERE org_id = $1 AND course_id = $2\n           ORDER BY module_id, position",
+  "query": "SELECT id, module_id, position, kind, url, title, published,\n                requirement::text AS requirement\n         FROM module_items\n         WHERE org_id = $1 AND course_id = $2 ORDER BY module_id, position",
   "describe": {
     "columns": [
       {
@@ -27,12 +27,12 @@
       },
       {
         "ordinal": 2,
-        "name": "course_id",
-        "type_info": "Uuid",
+        "name": "position",
+        "type_info": "Int4",
         "origin": {
           "Table": {
             "table": "module_items",
-            "name": "course_id"
+            "name": "position"
           }
         }
       },
@@ -49,23 +49,23 @@
       },
       {
         "ordinal": 4,
+        "name": "url",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "module_items",
+            "name": "url"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
         "name": "title",
         "type_info": "Text",
         "origin": {
           "Table": {
             "table": "module_items",
             "name": "title"
-          }
-        }
-      },
-      {
-        "ordinal": 5,
-        "name": "position",
-        "type_info": "Int4",
-        "origin": {
-          "Table": {
-            "table": "module_items",
-            "name": "position"
           }
         }
       },
@@ -82,36 +82,8 @@
       },
       {
         "ordinal": 7,
-        "name": "ref_id",
-        "type_info": "Uuid",
-        "origin": {
-          "Table": {
-            "table": "module_items",
-            "name": "ref_id"
-          }
-        }
-      },
-      {
-        "ordinal": 8,
-        "name": "url",
+        "name": "requirement",
         "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "module_items",
-            "name": "url"
-          }
-        }
-      },
-      {
-        "ordinal": 9,
-        "name": "created_at_us!",
-        "type_info": "Int8",
-        "origin": "Expression"
-      },
-      {
-        "ordinal": 10,
-        "name": "updated_at_us!",
-        "type_info": "Int8",
         "origin": "Expression"
       }
     ],
@@ -126,14 +98,11 @@
       false,
       false,
       false,
-      false,
-      false,
-      false,
       true,
-      true,
-      null,
+      false,
+      false,
       null
     ]
   },
-  "hash": "3056a3e6ea1fc487c9fb3b20ae6a428878429938573bc333e54668464dff148b"
+  "hash": "48cf0d6aa4c3346ebd6831de8e0705ac6c7be50f86b2b815e600205fbcc960d5"
 }

@@ -20,11 +20,12 @@ use utoipa::ToSchema;
 
 use crate::{
     AppState,
+    courses::nullable,
     error::ApiError,
     extract::ApiJson,
     modules::{
-        ContentEditForbidden, Item, ItemKind, MODULE_NOT_FOUND, Module, ModuleNotFound, begin,
-        commit, content_error, recheck,
+        ContentEditForbidden, Item, ItemKind, MODULE_NOT_FOUND, Module, ModuleNotFound,
+        Requirement, begin, commit, content_error, recheck,
     },
     openapi::problem_responses,
     organization::present,
@@ -41,7 +42,7 @@ problem_responses! {
     ItemOrderConflict => "`course.archived`: the course is archived and takes no content change. `order.stale`: the list is not exactly the current set of ids (one is missing, extra or repeated); reload and try again.",
     ItemWriteConflict => "`course.archived`: the course is archived and takes no content change.",
     ItemMoveConflict => "`course.archived`: the course is archived and takes no content change. `item.limit_reached`: the destination module holds 200 items.",
-    ItemInvalid => "`request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space, control or Unicode format character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none), or `/position` with `item.position_out_of_range` (outside 0 to the module's item count).",
+    ItemInvalid => "`request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space, control or Unicode format character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none), `/position` with `item.position_out_of_range` (outside 0 to the module's item count), or, on a patch, `/requirement` with `requirement.invalid` (an unknown shape or member, `min_percent` outside 1 to 100, or a requirement the item's kind does not take, such as any on a header) or `requirement.unavailable` (`submit`, `score` or `mastery`, reserved for quizzes and activities).",
 }
 
 /// An item to create, unpublished.
@@ -80,6 +81,14 @@ pub struct ItemPatch {
     #[serde(default, deserialize_with = "present")]
     #[schema(value_type = String)]
     pub url: Option<String>,
+    /// What completes the item for a learner; `null` removes it. A header takes none.
+    //
+    // Read as a JSON object and checked by `items::parse_requirement`, so a shape the schema
+    // lacks answers 422 `requirement.invalid` or `requirement.unavailable`; anything but an
+    // object is 400, as for every other object of a body (`extract::ApiJson`).
+    #[serde(default, deserialize_with = "nullable")]
+    #[schema(value_type = Option<Requirement>)]
+    pub requirement: Option<Option<serde_json::Map<String, serde_json::Value>>>,
 }
 
 /// Every item id of the module, in the new order.
@@ -200,8 +209,8 @@ pub async fn reorder_items(
     Ok(Json(Module::from_repo(module, ordered)?))
 }
 
-/// Rename, publish or unpublish an item, or change an external link's URL. A patch naming only
-/// current values changes nothing.
+/// Rename, publish or unpublish an item, change an external link's URL, or set or remove its
+/// requirement. A patch naming only current values changes nothing.
 #[utoipa::path(
     patch,
     path = "/api/v1/items/{item_id}",
@@ -230,6 +239,16 @@ pub async fn update_item(
     ApiJson(body): ApiJson<ItemPatch>,
 ) -> Result<Json<Item>, ApiError> {
     let (grants, target) = (require.grants(), require.target());
+    let requirement = body
+        .requirement
+        .as_ref()
+        .map(|r| {
+            r.as_ref()
+                .map(|object| items::parse_requirement(&serde_json::Value::Object(object.clone())))
+                .transpose()
+        })
+        .transpose()
+        .map_err(content_error)?;
     let mut tx = begin(&state).await?;
     recheck(&mut tx, &require, target.course.id, ITEM_NOT_FOUND).await?;
     let patch = items::ItemPatch {
@@ -237,15 +256,15 @@ pub async fn update_item(
         published: body.published,
         url: body.url,
     };
-    let item = items::update(
-        &mut *tx,
-        grants.scope(),
-        target.id,
-        &patch,
-        state.clock.now(),
-    )
-    .await
-    .map_err(content_error)?;
+    let (scope, now) = (grants.scope(), state.clock.now());
+    let mut item = items::update(&mut *tx, scope, target.id, &patch, now)
+        .await
+        .map_err(content_error)?;
+    if let Some(requirement) = requirement {
+        item = items::set_requirement(&mut *tx, scope, target.id, requirement, now)
+            .await
+            .map_err(content_error)?;
+    }
     commit(tx).await?;
     Ok(Json(Item::from_repo(item)?))
 }

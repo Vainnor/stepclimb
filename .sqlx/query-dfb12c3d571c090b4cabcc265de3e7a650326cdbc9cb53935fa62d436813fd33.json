@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE modules\n         SET unlock_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond',\n             require_sequential = $4, completion_rule = $5,\n             updated_at = timestamptz 'epoch' + $6::bigint * interval '1 microsecond'\n         WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8",
+        "Bool",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "dfb12c3d571c090b4cabcc265de3e7a650326cdbc9cb53935fa62d436813fd33"
+}

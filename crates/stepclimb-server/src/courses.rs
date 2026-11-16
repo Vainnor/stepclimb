@@ -249,6 +249,13 @@ pub struct NewCourse {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ApiTimestamp(SystemTime);
 
+impl ApiTimestamp {
+    /// The instant the timestamp names.
+    pub fn time(self) -> SystemTime {
+        self.0
+    }
+}
+
 impl<'de> Deserialize<'de> for ApiTimestamp {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let text = String::deserialize(deserializer)?;
@@ -260,7 +267,7 @@ impl<'de> Deserialize<'de> for ApiTimestamp {
 
 /// A member that may be `null`: present, it reads as `Some(value)` with `value` `None` for
 /// `null`; omitted, it reads as `None` through `#[serde(default)]`.
-fn nullable<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+pub(crate) fn nullable<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
 where
     D: Deserializer<'de>,
     T: Deserialize<'de>,

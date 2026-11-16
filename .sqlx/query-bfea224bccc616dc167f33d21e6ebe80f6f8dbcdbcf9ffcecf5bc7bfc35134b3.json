@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, module_id, course_id, kind, title, position, published, ref_id, url,\n                  (extract(epoch FROM created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM module_items WHERE org_id = $1 AND id = $2",
+  "query": "SELECT id, module_id, course_id, kind, title, position, published, ref_id, url,\n                  requirement::text AS requirement,\n                  (extract(epoch FROM created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM module_items WHERE org_id = $1 AND course_id = $2\n           ORDER BY module_id, position",
   "describe": {
     "columns": [
       {
@@ -104,12 +104,18 @@
       },
       {
         "ordinal": 9,
+        "name": "requirement",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 10,
         "name": "created_at_us!",
         "type_info": "Int8",
         "origin": "Expression"
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "updated_at_us!",
         "type_info": "Int8",
         "origin": "Expression"
@@ -132,8 +138,9 @@
       true,
       true,
       null,
+      null,
       null
     ]
   },
-  "hash": "a14e1543fc680b1e575ac49720c1eb9ba2b314ce9d89e596729ee38a4343c8fb"
+  "hash": "bfea224bccc616dc167f33d21e6ebe80f6f8dbcdbcf9ffcecf5bc7bfc35134b3"
 }

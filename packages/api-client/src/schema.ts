@@ -530,8 +530,8 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Rename, publish or unpublish an item, or change an external link's URL. A patch naming only
-         *     current values changes nothing.
+         * Rename, publish or unpublish an item, change an external link's URL, or set or remove its
+         *     requirement. A patch naming only current values changes nothing.
          */
         patch: operations["updateItem"];
         trace?: never;
@@ -760,7 +760,10 @@ export interface paths {
         delete: operations["deleteModule"];
         options?: never;
         head?: never;
-        /** Rename, publish or unpublish a module. A patch naming only current values changes nothing. */
+        /**
+         * Rename, publish or unpublish a module, or change its rules: unlock date, prerequisites,
+         *     sequential order and completion rule. A patch naming only current values changes nothing.
+         */
         patch: operations["updateModule"];
         trace?: never;
     };
@@ -1587,6 +1590,11 @@ export interface components {
             /** @description Send the code to `POST /auth/local/totp` in this browser within 10 minutes. */
             next: components["schemas"]["NextStep"];
         };
+        /**
+         * @description Whether all or one of a module's requirements complete it.
+         * @enum {string}
+         */
+        CompletionRule: "all" | "one";
         /** @description One measured pair: `foreground` on `background`. */
         ContrastPair: {
             /** @description A color token, such as `bg-canvas`. */
@@ -1965,6 +1973,7 @@ export interface components {
              * @description What the item points at; only for kinds that point at a row.
              */
             ref_id?: string;
+            requirement: null | components["schemas"]["Requirement"];
             title: string;
             /**
              * Format: date-time
@@ -2000,6 +2009,7 @@ export interface components {
         ItemPatch: {
             /** @description Whether learners see the item. */
             published?: boolean;
+            requirement?: null | components["schemas"]["Requirement"];
             /** @description Trimmed; 1 to 200 characters. */
             title?: string;
             /** @description For an external link only. */
@@ -2097,6 +2107,8 @@ export interface components {
         };
         /** @description A module of a course, with its items in order. */
         Module: {
+            /** @description Whether all or one of the module's requirements complete it. */
+            completion_rule: components["schemas"]["CompletionRule"];
             /** Format: uuid */
             course_id: string;
             /**
@@ -2112,8 +2124,17 @@ export interface components {
              * @description 0-based, dense within the course.
              */
             position: number;
+            /** @description The modules of the course this one waits for, in course order. */
+            prerequisite_ids: string[];
             published: boolean;
+            /** @description Whether the module's items go in order. */
+            require_sequential: boolean;
             title: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC: the module stays locked to learners before this time.
+             */
+            unlock_at: string | null;
             /**
              * Format: date-time
              * @description RFC 3339, UTC.
@@ -2130,10 +2151,23 @@ export interface components {
         };
         /** @description A change to a module; an omitted member is left as it is. */
         ModulePatch: {
+            completion_rule?: components["schemas"]["CompletionRule"];
+            /**
+             * @description The whole new set of modules of the same course this one waits for: not itself, each
+             *     once, at most 20, and closing no cycle.
+             */
+            prerequisite_ids?: string[];
             /** @description Whether learners see the module. */
             published?: boolean;
+            /** @description Whether the module's items go in order. */
+            require_sequential?: boolean;
             /** @description Trimmed; 1 to 200 characters. */
             title?: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339 with an offset, from 1970 up to 2200; `null` clears it.
+             */
+            unlock_at?: string | null;
         };
         /** @description One of the signed-in user's identities. */
         MyIdentity: {
@@ -2935,6 +2969,26 @@ export interface components {
             id: string;
             /** @description The organization's name. */
             name: string;
+        };
+        /**
+         * @description What completes an item for a learner: `view` (open it) and `mark_done` (mark it done) on a
+         *     page, file, external link or video; `watch` (at least `min_percent`, 1 to 100, of a video).
+         *     `submit`, `score` and `mastery` are reserved for quizzes and activities.
+         */
+        Requirement: {
+            /** @enum {string} */
+            kind: "view";
+        } | {
+            /** @enum {string} */
+            kind: "mark_done";
+        } | {
+            /** @enum {string} */
+            kind: "watch";
+            /**
+             * Format: int32
+             * @description 1 to 100.
+             */
+            min_percent: number;
         };
         /** @description The revocation request's form, for the document; the handler reads the body itself. */
         RevokeForm: {
@@ -3771,7 +3825,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space, control or Unicode format character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none), or `/position` with `item.position_out_of_range` (outside 0 to the module's item count). */
+        /** @description `request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space, control or Unicode format character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none), `/position` with `item.position_out_of_range` (outside 0 to the module's item count), or, on a patch, `/requirement` with `requirement.invalid` (an unknown shape or member, `min_percent` outside 1 to 100, or a requirement the item's kind does not take, such as any on a header) or `requirement.unavailable` (`submit`, `score` or `mastery`, reserved for quizzes and activities). */
         ItemInvalid: {
             headers: {
                 [name: string]: unknown;
@@ -3908,6 +3962,33 @@ export interface components {
         };
         /** @description `course.archived`: the course is archived and takes no content change. `order.stale`: the list is not exactly the current set of ids (one is missing, extra or repeated); reload and try again. */
         ModuleOrderConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.archived`: the course is archived and takes no content change. `module.prerequisite_cycle`: the prerequisites would form a cycle in the course's modules. */
+        ModulePatchConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/unlock_at` with `module.date_out_of_range` (before 1970 or from 2200 on), or `/prerequisite_ids` with `module.prerequisite_self` (the module itself), `module.prerequisite_duplicate` (an id named twice) or `module.prerequisites_too_many` (more than 20). */
+        ModulePatchInvalid: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `module.not_found`: no module with this id exists in the organization, or you cannot see its course, or a `prerequisite_ids` entry is not a module of the same course. `org.not_found`: the request's organization cannot be determined. */
+        ModulePatchNotFound: {
             headers: {
                 [name: string]: unknown;
             };
@@ -6545,11 +6626,11 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["ContentEditForbidden"];
-            404: components["responses"]["ModuleNotFound"];
-            409: components["responses"]["ModuleWriteConflict"];
+            404: components["responses"]["ModulePatchNotFound"];
+            409: components["responses"]["ModulePatchConflict"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
-            422: components["responses"]["UnprocessableEntity"];
+            422: components["responses"]["ModulePatchInvalid"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };

@@ -17,8 +17,9 @@ use stepclimb_core::{
     },
     id::Uuid,
     items::{self, Item, Kind, NewItem},
-    modules::{self, Module, ModulePatch},
+    modules::{self, Module, ModulePatch, RulesPatch},
     organizations,
+    rules::{CompletionRule, Requirement},
 };
 
 /// 2025-11-13T02:13:20.123456Z.
@@ -938,6 +939,107 @@ async fn a_copy_copies_the_outline_with_positions_and_published_flags(pool: PgPo
         assert!(
             modules.iter().any(|m| m.id == i.module_id),
             "in the copy's module"
+        );
+    }
+}
+
+/// Spec 04 with B13: a copy keeps each module's unlock and completion rules and each item's
+/// requirement, and its prerequisites name the copies of their modules, never the source's.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_copy_carries_the_rules_with_prerequisites_remapped(pool: PgPool) {
+    let a = Org::new(&pool, "org-a").await;
+    let source = create(&pool, a, a.tower, "S1").await.unwrap().id;
+    let ground = module(&pool, a, source, "Ground", true).await;
+    let local = module(&pool, a, source, "Local", true).await;
+    let tower = module(&pool, a, source, "Tower", false).await;
+    item(&pool, a, ground, Kind::ExternalLink, "SOP", true).await;
+    item(&pool, a, ground, Kind::Header, "Practice", true).await;
+    let link = items::list_for_module(&pool, a.scope(), ground)
+        .await
+        .unwrap()[0]
+        .id;
+    items::set_requirement(
+        &pool,
+        a.scope(),
+        link,
+        Some(Requirement::MarkDone),
+        request_time(),
+    )
+    .await
+    .unwrap();
+    let unlock_at = UNIX_EPOCH + Duration::from_micros(1_900_000_000_123_456);
+    let rules = |prerequisites: &[Uuid]| RulesPatch {
+        unlock_at: Some(Some(unlock_at)),
+        prerequisite_ids: Some(prerequisites.to_vec()),
+        require_sequential: Some(true),
+        completion_rule: Some(CompletionRule::One),
+    };
+    modules::set_rules(&pool, a.scope(), local, &rules(&[ground]), request_time())
+        .await
+        .unwrap();
+    modules::set_rules(
+        &pool,
+        a.scope(),
+        tower,
+        &rules(&[ground, local]),
+        request_time(),
+    )
+    .await
+    .unwrap();
+    let before = outline(&pool, a, source).await;
+
+    let copy = courses::copy(
+        &pool,
+        a.scope(),
+        source,
+        &copy_to(a.enroute, "S1-B"),
+        later_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        outline(&pool, a, source).await,
+        before,
+        "the source is unchanged"
+    );
+    let (modules, items) = outline(&pool, a, copy.id).await;
+    let ids: Vec<Uuid> = modules.iter().map(|m| m.id).collect();
+    let rule_shape = |m: &Module| (m.unlock_at, m.require_sequential, m.completion_rule);
+    assert_eq!(rule_shape(&modules[0]), (None, false, CompletionRule::All));
+    for m in &modules[1..] {
+        assert_eq!(rule_shape(m), (Some(unlock_at), true, CompletionRule::One));
+    }
+    assert!(modules[0].prerequisite_ids.is_empty());
+    assert_eq!(modules[1].prerequisite_ids, [ids[0]]);
+    assert_eq!(modules[2].prerequisite_ids, [ids[0], ids[1]]);
+    let copied_link = items
+        .iter()
+        .find(|i| i.kind == Kind::ExternalLink)
+        .expect("the copied link");
+    assert_eq!(copied_link.requirement, Some(Requirement::MarkDone));
+    assert!(
+        items
+            .iter()
+            .filter(|i| i.kind == Kind::Header)
+            .all(|i| i.requirement.is_none())
+    );
+    let rows: Vec<(Uuid, Uuid, Uuid)> = sqlx::query_as(
+        "SELECT course_id, module_id, requires_id FROM module_prerequisites
+         WHERE org_id = $1 AND course_id = $2 ORDER BY module_id, requires_id",
+    )
+    .bind(a.id)
+    .bind(copy.id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 3);
+    for (course, module, requires) in rows {
+        assert_eq!(course, copy.id);
+        assert!(
+            ids.contains(&module) && ids.contains(&requires),
+            "a copied module"
         );
     }
 }

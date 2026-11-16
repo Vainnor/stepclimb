@@ -27,11 +27,13 @@ use stepclimb_core::{
     items,
     modules::{self, Error},
     perm::{CourseContentEdit, Permission},
+    rules,
 };
 use utoipa::ToSchema;
 
 use crate::{
     AppState,
+    courses::{ApiTimestamp, nullable},
     error::{ApiError, FieldError},
     extract::ApiJson,
     openapi::problem_responses,
@@ -68,6 +70,21 @@ pub mod code {
     pub const ITEM_REF_ID_UNAVAILABLE: &str = "item.ref_id_unavailable";
     /// A position outside the module (a 422 field code at `/position`).
     pub const ITEM_POSITION_OUT_OF_RANGE: &str = "item.position_out_of_range";
+    /// The prerequisites would form a cycle (409).
+    pub const MODULE_PREREQUISITE_CYCLE: &str = "module.prerequisite_cycle";
+    /// A module named as its own prerequisite (a 422 field code at `/prerequisite_ids`).
+    pub const MODULE_PREREQUISITE_SELF: &str = "module.prerequisite_self";
+    /// A prerequisite named twice (a 422 field code at `/prerequisite_ids`).
+    pub const MODULE_PREREQUISITE_DUPLICATE: &str = "module.prerequisite_duplicate";
+    /// More than 20 prerequisites (a 422 field code at `/prerequisite_ids`).
+    pub const MODULE_PREREQUISITES_TOO_MANY: &str = "module.prerequisites_too_many";
+    /// An unlock date before 1970 or from 2200 on (a 422 field code at `/unlock_at`).
+    pub const MODULE_DATE_OUT_OF_RANGE: &str = "module.date_out_of_range";
+    /// A requirement of an unknown shape or on an item kind that does not take it (a 422 field
+    /// code at `/requirement`).
+    pub const REQUIREMENT_INVALID: &str = "requirement.invalid";
+    /// A requirement kind reserved for M2 or M3 (a 422 field code at `/requirement`).
+    pub const REQUIREMENT_UNAVAILABLE: &str = "requirement.unavailable";
 }
 
 problem_responses! {
@@ -77,6 +94,9 @@ problem_responses! {
     ModuleCreateConflict => "`course.archived`: the course is archived and takes no content change. `module.limit_reached`: the course holds 200 modules.",
     ModuleOrderConflict => "`course.archived`: the course is archived and takes no content change. `order.stale`: the list is not exactly the current set of ids (one is missing, extra or repeated); reload and try again.",
     ModuleWriteConflict => "`course.archived`: the course is archived and takes no content change.",
+    ModulePatchNotFound => "`module.not_found`: no module with this id exists in the organization, or you cannot see its course, or a `prerequisite_ids` entry is not a module of the same course. `org.not_found`: the request's organization cannot be determined.",
+    ModulePatchConflict => "`course.archived`: the course is archived and takes no content change. `module.prerequisite_cycle`: the prerequisites would form a cycle in the course's modules.",
+    ModulePatchInvalid => "`request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/unlock_at` with `module.date_out_of_range` (before 1970 or from 2200 on), or `/prerequisite_ids` with `module.prerequisite_self` (the module itself), `module.prerequisite_duplicate` (an id named twice) or `module.prerequisites_too_many` (more than 20).",
     ModuleDeleteConflict => "`course.archived`: the course is archived and takes no content change. `module.not_empty`: the module has items; delete or move them first.",
 }
 
@@ -121,6 +141,60 @@ impl From<ItemKind> for items::Kind {
     }
 }
 
+/// Whether all or one of a module's requirements complete it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CompletionRule {
+    All,
+    One,
+}
+
+impl From<rules::CompletionRule> for CompletionRule {
+    fn from(rule: rules::CompletionRule) -> Self {
+        match rule {
+            rules::CompletionRule::All => Self::All,
+            rules::CompletionRule::One => Self::One,
+        }
+    }
+}
+
+impl From<CompletionRule> for rules::CompletionRule {
+    fn from(rule: CompletionRule) -> Self {
+        match rule {
+            CompletionRule::All => Self::All,
+            CompletionRule::One => Self::One,
+        }
+    }
+}
+
+/// What completes an item for a learner: `view` (open it) and `mark_done` (mark it done) on a
+/// page, file, external link or video; `watch` (at least `min_percent`, 1 to 100, of a video).
+/// `submit`, `score` and `mastery` are reserved for quizzes and activities.
+//
+// Serialized only: a request's requirement is read as JSON and checked by
+// `stepclimb_core::rules::Requirement::parse`, which answers `requirement.invalid` and
+// `requirement.unavailable` rather than a schema mismatch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Requirement {
+    View,
+    MarkDone,
+    Watch {
+        /// 1 to 100.
+        min_percent: u8,
+    },
+}
+
+impl From<rules::Requirement> for Requirement {
+    fn from(requirement: rules::Requirement) -> Self {
+        match requirement {
+            rules::Requirement::View => Self::View,
+            rules::Requirement::MarkDone => Self::MarkDone,
+            rules::Requirement::Watch { min_percent } => Self::Watch { min_percent },
+        }
+    }
+}
+
 /// An item of a module.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, ToSchema)]
 pub struct Item {
@@ -143,6 +217,9 @@ pub struct Item {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(required = false, nullable = false)]
     pub url: Option<String>,
+    /// What completes the item for a learner.
+    #[schema(required = true)]
+    pub requirement: Option<Requirement>,
     /// RFC 3339, UTC.
     #[schema(format = DateTime)]
     pub created_at: String,
@@ -163,6 +240,7 @@ impl Item {
             title: item.title,
             position: item.position,
             published: item.published,
+            requirement: item.requirement.map(Into::into),
             ref_id: item.ref_id,
             url: item.url,
         })
@@ -180,6 +258,16 @@ pub struct Module {
     /// 0-based, dense within the course.
     pub position: i32,
     pub published: bool,
+    /// RFC 3339, UTC: the module stays locked to learners before this time.
+    #[schema(format = DateTime, required = true)]
+    pub unlock_at: Option<String>,
+    /// The modules of the course this one waits for, in course order.
+    #[schema(value_type = Vec<String>)]
+    pub prerequisite_ids: Vec<Uuid>,
+    /// Whether the module's items go in order.
+    pub require_sequential: bool,
+    /// Whether all or one of the module's requirements complete it.
+    pub completion_rule: CompletionRule,
     pub items: Vec<Item>,
     /// RFC 3339, UTC.
     #[schema(format = DateTime)]
@@ -199,6 +287,8 @@ impl Module {
                 .into_iter()
                 .map(Item::from_repo)
                 .collect::<Result<_, _>>()?,
+            unlock_at: module.unlock_at.map(time).transpose()?,
+            completion_rule: module.completion_rule.into(),
             created_at: time(module.created_at)?,
             updated_at: time(module.updated_at)?,
             id: module.id,
@@ -206,6 +296,8 @@ impl Module {
             title: module.title,
             position: module.position,
             published: module.published,
+            prerequisite_ids: module.prerequisite_ids,
+            require_sequential: module.require_sequential,
         })
     }
 }
@@ -240,6 +332,33 @@ pub struct ModulePatch {
     #[serde(default, deserialize_with = "present")]
     #[schema(value_type = bool)]
     pub published: Option<bool>,
+    /// RFC 3339 with an offset, from 1970 up to 2200; `null` clears it.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schema(value_type = Option<String>, format = DateTime)]
+    pub unlock_at: Option<Option<ApiTimestamp>>,
+    /// The whole new set of modules of the same course this one waits for: not itself, each
+    /// once, at most 20, and closing no cycle.
+    #[serde(default, deserialize_with = "present")]
+    #[schema(value_type = Vec<String>)]
+    pub prerequisite_ids: Option<Vec<Uuid>>,
+    /// Whether the module's items go in order.
+    #[serde(default, deserialize_with = "present")]
+    #[schema(value_type = bool)]
+    pub require_sequential: Option<bool>,
+    #[serde(default, deserialize_with = "present")]
+    #[schema(value_type = CompletionRule)]
+    pub completion_rule: Option<CompletionRule>,
+}
+
+impl ModulePatch {
+    fn rules(&self) -> modules::RulesPatch {
+        modules::RulesPatch {
+            unlock_at: self.unlock_at.map(|at| at.map(ApiTimestamp::time)),
+            prerequisite_ids: self.prerequisite_ids.clone(),
+            require_sequential: self.require_sequential,
+            completion_rule: self.completion_rule.map(Into::into),
+        }
+    }
 }
 
 /// Every module id of the course, in the new order.
@@ -359,7 +478,8 @@ pub async fn reorder_modules(
     Ok(Json(ModuleList { modules }))
 }
 
-/// Rename, publish or unpublish a module. A patch naming only current values changes nothing.
+/// Rename, publish or unpublish a module, or change its rules: unlock date, prerequisites,
+/// sequential order and completion rule. A patch naming only current values changes nothing.
 #[utoipa::path(
     patch,
     path = "/api/v1/modules/{module_id}",
@@ -373,11 +493,11 @@ pub async fn reorder_modules(
         (status = 400, response = crate::openapi::BadRequest),
         (status = 401, response = crate::openapi::Unauthenticated),
         (status = 403, response = ContentEditForbidden),
-        (status = 404, response = ModuleNotFound),
-        (status = 409, response = ModuleWriteConflict),
+        (status = 404, response = ModulePatchNotFound),
+        (status = 409, response = ModulePatchConflict),
         (status = 413, response = crate::openapi::PayloadTooLarge),
         (status = 415, response = crate::openapi::UnsupportedMediaType),
-        (status = 422, response = crate::openapi::UnprocessableEntity),
+        (status = 422, response = ModulePatchInvalid),
         (status = 500, response = crate::openapi::InternalError),
         (status = 503, response = crate::openapi::NoOrganization),
     )
@@ -391,11 +511,14 @@ pub async fn update_module(
     let mut tx = begin(&state).await?;
     recheck(&mut tx, &require, target.course.id, MODULE_NOT_FOUND).await?;
     let patch = modules::ModulePatch {
-        title: body.title,
+        title: body.title.clone(),
         published: body.published,
     };
-    let scope = grants.scope();
-    let module = modules::update(&mut *tx, scope, target.id, &patch, state.clock.now())
+    let (scope, now) = (grants.scope(), state.clock.now());
+    modules::update(&mut *tx, scope, target.id, &patch, now)
+        .await
+        .map_err(content_error)?;
+    let module = modules::set_rules(&mut *tx, scope, target.id, &body.rules(), now)
         .await
         .map_err(content_error)?;
     let items = items::list_for_module(&mut *tx, scope, target.id)
@@ -514,9 +637,25 @@ pub(crate) fn content_error(error: Error) -> ApiError {
         Error::UrlUnavailable => invalid("url", code::ITEM_URL_UNAVAILABLE),
         Error::RefIdUnavailable => invalid("ref_id", code::ITEM_REF_ID_UNAVAILABLE),
         Error::PositionOutOfRange => invalid("position", code::ITEM_POSITION_OUT_OF_RANGE),
-        other @ (Error::Stored { .. } | Error::Time(_) | Error::Database(_)) => {
-            ApiError::internal(&other)
+        Error::PrerequisiteNotFound => not_found(MODULE_NOT_FOUND),
+        Error::PrerequisiteCycle => conflict(
+            code::MODULE_PREREQUISITE_CYCLE,
+            "The prerequisites would form a cycle in the course's modules.",
+        ),
+        Error::PrerequisiteSelf => invalid("prerequisite_ids", code::MODULE_PREREQUISITE_SELF),
+        Error::PrerequisiteDuplicate => {
+            invalid("prerequisite_ids", code::MODULE_PREREQUISITE_DUPLICATE)
         }
+        Error::PrerequisitesTooMany => {
+            invalid("prerequisite_ids", code::MODULE_PREREQUISITES_TOO_MANY)
+        }
+        Error::UnlockAtOutOfRange => invalid("unlock_at", code::MODULE_DATE_OUT_OF_RANGE),
+        Error::RequirementInvalid => invalid("requirement", code::REQUIREMENT_INVALID),
+        Error::RequirementUnavailable => invalid("requirement", code::REQUIREMENT_UNAVAILABLE),
+        other @ (Error::Stored { .. }
+        | Error::IsolationLevel { .. }
+        | Error::Time(_)
+        | Error::Database(_)) => ApiError::internal(&other),
     }
 }
 
@@ -585,6 +724,49 @@ mod tests {
                 "request.invalid",
                 Some(("/position", "item.position_out_of_range")),
             ),
+            (Error::PrerequisiteNotFound, 404, "module.not_found", None),
+            (
+                Error::PrerequisiteCycle,
+                409,
+                "module.prerequisite_cycle",
+                None,
+            ),
+            (
+                Error::PrerequisiteSelf,
+                422,
+                "request.invalid",
+                Some(("/prerequisite_ids", "module.prerequisite_self")),
+            ),
+            (
+                Error::PrerequisiteDuplicate,
+                422,
+                "request.invalid",
+                Some(("/prerequisite_ids", "module.prerequisite_duplicate")),
+            ),
+            (
+                Error::PrerequisitesTooMany,
+                422,
+                "request.invalid",
+                Some(("/prerequisite_ids", "module.prerequisites_too_many")),
+            ),
+            (
+                Error::UnlockAtOutOfRange,
+                422,
+                "request.invalid",
+                Some(("/unlock_at", "module.date_out_of_range")),
+            ),
+            (
+                Error::RequirementInvalid,
+                422,
+                "request.invalid",
+                Some(("/requirement", "requirement.invalid")),
+            ),
+            (
+                Error::RequirementUnavailable,
+                422,
+                "request.invalid",
+                Some(("/requirement", "requirement.unavailable")),
+            ),
             (
                 Error::ContainsNul { field: "url" },
                 422,
@@ -610,6 +792,11 @@ mod tests {
             json!({ "title": null }),
             json!({ "published": null }),
             json!({ "position": 1 }),
+            json!({ "prerequisite_ids": null }),
+            json!({ "require_sequential": null }),
+            json!({ "completion_rule": null }),
+            json!({ "completion_rule": "any" }),
+            json!({ "unlock_at": "2026-01-02" }),
         ] {
             assert!(
                 serde_json::from_value::<ModulePatch>(refused.clone()).is_err(),
@@ -617,6 +804,9 @@ mod tests {
             );
         }
         let empty: ModulePatch = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(empty.rules(), modules::RulesPatch::default());
         assert_eq!((empty.title, empty.published), (None, None));
+        let cleared: ModulePatch = serde_json::from_value(json!({ "unlock_at": null })).unwrap();
+        assert_eq!(cleared.rules().unlock_at, Some(None));
     }
 }
