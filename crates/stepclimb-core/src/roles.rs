@@ -87,13 +87,24 @@ static ACCOUNT_ADMIN: BuiltinRole = BuiltinRole {
         perm::UserView::KEY,
         perm::RoleView::KEY,
         perm::RoleAssign::KEY,
+        perm::CourseView::KEY,
+        perm::CourseViewAll::KEY,
+        perm::CourseCreate::KEY,
+        perm::CourseManage::KEY,
+        perm::CourseContentEdit::KEY,
+        perm::EnrollmentView::KEY,
+        perm::EnrollmentManage::KEY,
     ]),
 };
 
 static COURSE_DESIGNER: BuiltinRole = BuiltinRole {
     key: "course_designer",
     name: "Course designer",
-    permissions: RolePermissions::Keys(&[]),
+    permissions: RolePermissions::Keys(&[
+        perm::CourseView::KEY,
+        perm::CourseViewAll::KEY,
+        perm::CourseContentEdit::KEY,
+    ]),
 };
 
 static INSTRUCTOR: BuiltinRole = BuiltinRole {
@@ -101,7 +112,7 @@ static INSTRUCTOR: BuiltinRole = BuiltinRole {
     name: "Instructor",
     permissions: RolePermissions::Extends {
         base: &COURSE_DESIGNER,
-        own: &[],
+        own: &[perm::EnrollmentView::KEY, perm::EnrollmentManage::KEY],
     },
 };
 
@@ -114,7 +125,7 @@ static GRADER: BuiltinRole = BuiltinRole {
 static STUDENT: BuiltinRole = BuiltinRole {
     key: "student",
     name: "Student",
-    permissions: RolePermissions::Keys(&[]),
+    permissions: RolePermissions::Keys(&[perm::CourseView::KEY]),
 };
 
 static MANAGER: BuiltinRole = BuiltinRole {
@@ -126,7 +137,7 @@ static MANAGER: BuiltinRole = BuiltinRole {
 static OBSERVER: BuiltinRole = BuiltinRole {
     key: "observer",
     name: "Observer",
-    permissions: RolePermissions::Keys(&[]),
+    permissions: RolePermissions::Keys(&[perm::CourseView::KEY]),
 };
 
 /// Every built-in role.
@@ -842,21 +853,42 @@ mod tests {
                 "user.view",
                 "role.view",
                 "role.assign",
+                "course.view",
+                "course.view_all",
+                "course.create",
+                "course.manage",
+                "course.content_edit",
+                "enrollment.view",
+                "enrollment.manage",
             ])
         );
     }
 
+    /// The M1 lists of M1 spec 02 -> Permissions.
     #[test]
-    fn roles_without_m0_permissions_hold_none() {
-        for key in [
-            "course_designer",
-            "instructor",
-            "grader",
-            "student",
-            "manager",
-            "observer",
-        ] {
-            assert!(role(key).permissions().is_empty(), "{key}");
+    fn the_course_roles_hold_their_m1_lists() {
+        let cases: [(&str, &[&str]); 6] = [
+            (
+                "course_designer",
+                &["course.view", "course.view_all", "course.content_edit"],
+            ),
+            (
+                "instructor",
+                &[
+                    "course.view",
+                    "course.view_all",
+                    "course.content_edit",
+                    "enrollment.view",
+                    "enrollment.manage",
+                ],
+            ),
+            ("grader", &[]),
+            ("student", &["course.view"]),
+            ("manager", &[]),
+            ("observer", &["course.view"]),
+        ];
+        for (key, expected) in cases {
+            assert_eq!(role(key).permissions(), expected, "{key}");
         }
     }
 
@@ -983,7 +1015,14 @@ mod tests {
                 "account.manage",
                 "user.view",
                 "role.view",
-                "role.assign"
+                "role.assign",
+                "course.view",
+                "course.view_all",
+                "course.create",
+                "course.manage",
+                "course.content_edit",
+                "enrollment.view",
+                "enrollment.manage",
             ]
         );
         assert_eq!(

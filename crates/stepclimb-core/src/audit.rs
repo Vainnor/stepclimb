@@ -76,6 +76,10 @@ pub enum Action {
     /// was revoked (docs/specs/m0/08-sessions-and-csrf.md B32, B34, Q14). The entry names the
     /// family by its first token's id.
     RefreshTokenReuse,
+    CourseCreate,
+    CourseUpdate,
+    CourseSetStatus,
+    CourseMove,
 }
 
 impl Action {
@@ -116,6 +120,10 @@ impl Action {
             Self::AdmissionWebhookRotateSecret => "admission_webhook.rotate_secret",
             Self::AdmissionWebhookDelete => "admission_webhook.delete",
             Self::RefreshTokenReuse => "refresh_token.reuse",
+            Self::CourseCreate => "course.create",
+            Self::CourseUpdate => "course.update",
+            Self::CourseSetStatus => "course.set_status",
+            Self::CourseMove => "course.move",
         }
     }
 
@@ -149,6 +157,9 @@ impl Action {
             | Self::AdmissionWebhookRotateSecret
             | Self::AdmissionWebhookDelete => "admission_webhook",
             Self::RefreshTokenReuse => "refresh_token",
+            Self::CourseCreate | Self::CourseUpdate | Self::CourseSetStatus | Self::CourseMove => {
+                "course"
+            }
         }
     }
 }
@@ -291,7 +302,7 @@ impl TryFrom<Row> for Entry {
 mod tests {
     use super::*;
 
-    const ALL: [Action; 29] = [
+    const ALL: [Action; 33] = [
         Action::RoleCreate,
         Action::RoleUpdate,
         Action::RoleDelete,
@@ -321,6 +332,10 @@ mod tests {
         Action::ServiceAccountCreate,
         Action::ServiceAccountDelete,
         Action::RefreshTokenReuse,
+        Action::CourseCreate,
+        Action::CourseUpdate,
+        Action::CourseSetStatus,
+        Action::CourseMove,
     ];
 
     #[test]

@@ -55,7 +55,10 @@ export interface paths {
         get: operations["getAccount"];
         put?: never;
         post?: never;
-        /** Delete an account that has no child accounts, and the role assignments scoped to it. */
+        /**
+         * Delete an account that has no child accounts, no role assignments scoped to it and no
+         *     courses.
+         */
         delete: operations["deleteAccount"];
         options?: never;
         head?: never;
@@ -377,6 +380,82 @@ export interface paths {
         post?: never;
         /** Remove a user's TOTP and recovery codes. */
         delete: operations["removeUserTotp"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/courses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the courses where you hold `course.view`, drafts and templates only where you also hold
+         *     `course.view_all`, sorted by title, then id.
+         */
+        get: operations["listCourses"];
+        put?: never;
+        /** Create a draft course in `account_id`. */
+        post: operations["createCourse"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/courses/{course_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one course. */
+        get: operations["getCourse"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change a course's title, code, dates or home. A patch naming only current values changes
+         *     nothing.
+         */
+        patch: operations["updateCourse"];
+        trace?: never;
+    };
+    "/api/v1/courses/{course_id}/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Move a course, in any status, to another account of the organization. */
+        post: operations["moveCourse"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/courses/{course_id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Change a course's status. Asking for the current status changes nothing. */
+        post: operations["setCourseStatus"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1400,6 +1479,95 @@ export interface components {
          * @enum {string}
          */
         CornerStyle: "square" | "default" | "round";
+        /** @description A course of the caller's organization. */
+        Course: {
+            /** Format: uuid */
+            account_id: string;
+            code: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC. Shown to learners and staff; it opens and closes nothing.
+             */
+            end_at: string | null;
+            /** Format: uuid */
+            id: string;
+            /**
+             * @description The catalog keys grantable at course scope that you hold at this course, sorted: what
+             *     the app may offer you here. The server checks every request itself.
+             */
+            permissions: string[];
+            settings: components["schemas"]["CourseSettings"];
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC. Shown to learners and staff; it opens and closes nothing.
+             */
+            start_at: string | null;
+            status: components["schemas"]["CourseStatus"];
+            /** @description A template is never published and takes no learners. */
+            template: boolean;
+            title: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            updated_at: string;
+        };
+        /** @description What a learner sees first when opening the course. */
+        CourseHome: {
+            kind: components["schemas"]["HomeKind"];
+        };
+        /** @description The account to move a course to. */
+        CourseMove: {
+            /**
+             * Format: uuid
+             * @description You must hold `course.create` at a scope containing it. The course's own account
+             *     changes nothing.
+             */
+            account_id: string;
+        };
+        /**
+         * @description A change to a course; an omitted member is left as it is. `null` clears `start_at` or
+         *     `end_at` and is malformed for every other member.
+         */
+        CoursePatch: {
+            /** @description Trimmed; 1 to 50 characters; unique in the organization, ignoring ASCII case. */
+            code?: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339 with an offset, from 1970 up to 2200, not before `start_at`; `null` clears it.
+             */
+            end_at?: string | null;
+            settings?: components["schemas"]["CourseSettingsPatch"];
+            /**
+             * Format: date-time
+             * @description RFC 3339 with an offset, from 1970 up to 2200; `null` clears it.
+             */
+            start_at?: string | null;
+            /** @description Trimmed; 1 to 200 characters. */
+            title?: string;
+        };
+        /** @description A course's settings. */
+        CourseSettings: {
+            home: components["schemas"]["CourseHome"];
+        };
+        /** @description A change to a course's settings; an omitted member is left as it is. */
+        CourseSettingsPatch: {
+            home?: components["schemas"]["CourseHome"];
+        };
+        /**
+         * @description A course's status.
+         * @enum {string}
+         */
+        CourseStatus: "draft" | "published" | "archived";
+        /** @description The status to change a course to. */
+        CourseStatusChange: {
+            status: components["schemas"]["CourseStatus"];
+        };
         /** @description A service account just created, with its API key. Its `Debug` output leaves the key out. */
         CreatedServiceAccount: {
             /**
@@ -1579,6 +1747,11 @@ export interface components {
          * @enum {string}
          */
         HealthStatus: "ok" | "unavailable";
+        /**
+         * @description The kind of a course's home: `modules`, the module list.
+         * @enum {string}
+         */
+        HomeKind: "modules";
         /** @description A user's identity as an admin sees it. */
         Identity: {
             /**
@@ -1750,6 +1923,19 @@ export interface components {
              * @description The parent account; you must hold `account.manage` at a scope containing it.
              */
             parent_id: string;
+        };
+        /** @description A course to create, as a draft. */
+        NewCourse: {
+            /**
+             * Format: uuid
+             * @description The account the course belongs to; you must hold `course.create` at a scope containing
+             *     it.
+             */
+            account_id: string;
+            /** @description Trimmed; 1 to 50 characters; unique in the organization, ignoring ASCII case. */
+            code: string;
+            /** @description Trimmed; 1 to 200 characters. */
+            title: string;
         };
         /** @description An identity to link to a user, so they can sign in with it the first time. */
         NewIdentity: {
@@ -2019,6 +2205,49 @@ export interface components {
                  * @description `null` for the root only. Shown even when the parent is not visible to the caller.
                  */
                 parent_id: string | null;
+                /**
+                 * Format: date-time
+                 * @description RFC 3339, UTC.
+                 */
+                updated_at: string;
+            }[];
+            /** @description Pass this as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
+        };
+        /** @description One page of a list. */
+        Page_Course: {
+            /** @description The items, in the list's sort order. */
+            items: {
+                /** Format: uuid */
+                account_id: string;
+                code: string;
+                /**
+                 * Format: date-time
+                 * @description RFC 3339, UTC.
+                 */
+                created_at: string;
+                /**
+                 * Format: date-time
+                 * @description RFC 3339, UTC. Shown to learners and staff; it opens and closes nothing.
+                 */
+                end_at: string | null;
+                /** Format: uuid */
+                id: string;
+                /**
+                 * @description The catalog keys grantable at course scope that you hold at this course, sorted: what
+                 *     the app may offer you here. The server checks every request itself.
+                 */
+                permissions: string[];
+                settings: components["schemas"]["CourseSettings"];
+                /**
+                 * Format: date-time
+                 * @description RFC 3339, UTC. Shown to learners and staff; it opens and closes nothing.
+                 */
+                start_at: string | null;
+                status: components["schemas"]["CourseStatus"];
+                /** @description A template is never published and takes no learners. */
+                template: boolean;
+                title: string;
                 /**
                  * Format: date-time
                  * @description RFC 3339, UTC.
@@ -2919,6 +3148,87 @@ export interface components {
         };
         /** @description `permission.denied`: the caller does not hold `branding.manage` at organization scope. `entitlement.feature_unavailable`: the organization's plan does not include `custom_branding`. `auth.csrf_refused`: the request did not come from this site. */
         BrandingWriteForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.code_taken`: another course of the organization has this code, ignoring ASCII case. */
+        CourseCodeConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: you hold `course.create` nowhere, or you can see the account without holding it there. `auth.csrf_refused`: the request did not come from this site. */
+        CourseCreateForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `account.not_found`: no account with `account_id` exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined. */
+        CourseCreateNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `account.not_found`: no account with `account_id` exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined. */
+        CourseListNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: you can see the course but do not hold `course.manage` at a scope containing it. `auth.csrf_refused`: the request did not come from this site. */
+        CourseManageForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: you can see the course but do not hold `course.manage` at a scope containing it. `permission.escalation`: the destination would give you, over the course, a permission you do not hold over it now. `auth.csrf_refused`: the request did not come from this site. */
+        CourseMoveForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it. `account.not_found`: the destination `account_id` does not exist or you do not hold `course.create` at a scope containing it. `org.not_found`: the request's organization cannot be determined. */
+        CourseMoveNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined. */
+        CourseNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.status_invalid`: the course cannot change from its status to this one; the allowed changes are draft to published, published to archived, archived to published and published to draft. `course.template`: a template cannot be published. */
+        CourseStatusConflict: {
             headers: {
                 [name: string]: unknown;
             };
@@ -4901,6 +5211,214 @@ export interface operations {
             403: components["responses"]["UserTotpForbidden"];
             404: components["responses"]["UserNotFound"];
             409: components["responses"]["UserTotpConflict"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    listCourses: {
+        parameters: {
+            query?: {
+                /** @description Only courses in this account's subtree. */
+                account_id?: string;
+                status?: components["schemas"]["CourseStatus"];
+                template?: boolean;
+                /** @description The `next_cursor` of the previous page; omit it for the first page. */
+                cursor?: string;
+                /** @description How many items to return, 1 to 200; 50 when omitted. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of courses */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_Course"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["PermissionDenied"];
+            404: components["responses"]["CourseListNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    createCourse: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewCourse"];
+            };
+        };
+        responses: {
+            /** @description The course is created */
+            201: {
+                headers: {
+                    /** @description The course's path */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Course"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["CourseCreateForbidden"];
+            404: components["responses"]["CourseCreateNotFound"];
+            409: components["responses"]["CourseCodeConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["UnprocessableEntity"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    getCourse: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The course's id. */
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The course */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Course"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["PermissionDenied"];
+            404: components["responses"]["CourseNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    updateCourse: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The course's id. */
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CoursePatch"];
+            };
+        };
+        responses: {
+            /** @description The course after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Course"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["CourseManageForbidden"];
+            404: components["responses"]["CourseNotFound"];
+            409: components["responses"]["CourseCodeConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["UnprocessableEntity"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    moveCourse: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The course's id. */
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CourseMove"];
+            };
+        };
+        responses: {
+            /** @description The course after the move */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Course"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["CourseMoveForbidden"];
+            404: components["responses"]["CourseMoveNotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    setCourseStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The course's id. */
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CourseStatusChange"];
+            };
+        };
+        responses: {
+            /** @description The course after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Course"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["CourseManageForbidden"];
+            404: components["responses"]["CourseNotFound"];
+            409: components["responses"]["CourseStatusConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };

@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO courses (id, org_id, account_id, code, title, created_at, updated_at)\n         VALUES ($1, $2, $3, $4, $5,\n                 timestamptz 'epoch' + $6::bigint * interval '1 microsecond',\n                 timestamptz 'epoch' + $6::bigint * interval '1 microsecond')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fb797691db82ed0df945e210d357bccec1f42430e5f9638cf6877a79b307f131"
+}

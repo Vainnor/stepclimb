@@ -75,6 +75,7 @@ use stepclimb_core::{
     admission_webhooks::{self, Change, Fresh},
     audit::Actor,
     clock::ManualClock,
+    courses,
     feature::{
         self, AdmissionWebhook, ApiKeys, CustomBranding, CustomRoles, Feature, Limit, OidcProviders,
     },
@@ -83,9 +84,9 @@ use stepclimb_core::{
     identities::{self, NewIdentity},
     organizations,
     perm::{
-        self, AccountManage, AccountView, AdmissionManage, BrandingManage, OrgManage, Permission,
-        ProviderManage, RoleAssign, RoleManage, RoleView, ScopeType, ServiceAccountManage,
-        UserManage, UserView,
+        self, AccountManage, AccountView, AdmissionManage, BrandingManage, CourseCreate,
+        CourseManage, CourseView, OrgManage, Permission, ProviderManage, RoleAssign, RoleManage,
+        RoleView, ScopeType, ServiceAccountManage, UserManage, UserView,
     },
     role_assignments::{self, NewAssignment, Scope},
     roles::{self, NewRole},
@@ -204,6 +205,38 @@ const TABLE: &[Entry] = &[
     Entry {
         operation_id: "deleteAccount",
         access: permission(AccountManage::KEY, ACCOUNT_NOT_FOUND, ground_under_tower),
+    },
+    Entry {
+        operation_id: "listCourses",
+        access: permission(CourseView::KEY, Target::AnyScope, at_org),
+    },
+    Entry {
+        operation_id: "getCourse",
+        access: permission(CourseView::KEY, COURSE_NOT_FOUND, published_course_in_tower),
+    },
+    Entry {
+        operation_id: "createCourse",
+        access: permission(CourseCreate::KEY, ACCOUNT_NOT_FOUND, new_course_in_tower),
+    },
+    Entry {
+        operation_id: "updateCourse",
+        access: permission(CourseManage::KEY, COURSE_NOT_FOUND, retitle_course_in_tower),
+    },
+    Entry {
+        operation_id: "setCourseStatus",
+        access: permission(CourseManage::KEY, COURSE_NOT_FOUND, publish_course_in_tower),
+    },
+    Entry {
+        operation_id: "moveCourse",
+        // The destination needs `course.create` (B9).
+        access: Access::Permission {
+            key: CourseManage::KEY,
+            target: COURSE_NOT_FOUND,
+            extra: &[CourseCreate::KEY],
+            feature: None,
+            feature_by_target: false,
+            setup: move_course_to_ground,
+        },
     },
     Entry {
         operation_id: "listPermissions",
@@ -490,6 +523,13 @@ const EVERY_PERMISSION: &[&str] = &[
     "admission.manage",
     "service_account.manage",
     "branding.manage",
+    "course.view",
+    "course.view_all",
+    "course.create",
+    "course.manage",
+    "course.content_edit",
+    "enrollment.view",
+    "enrollment.manage",
 ];
 
 #[test]
@@ -1075,6 +1115,72 @@ fn move_ground_within_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Se
         Call {
             body: Some(serde_json::json!({ "parent_id": destination })),
             ..ground_under_tower(org).await
+        }
+    })
+}
+
+/// A course that is not the organization's, or that the caller cannot see: 404
+/// `course.not_found` (M1 spec 02 B24).
+const COURSE_NOT_FOUND: Target = Target::Scoped {
+    not_found: "course.not_found",
+    cross_org: "course.not_found",
+};
+
+/// A published course in Tower, named in the path; the caller acts at Tower. Published, so
+/// `course.view` alone reads it (B10).
+fn published_course_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: vec![("course_id", org.course(org.tower, true).await)],
+            body: None,
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A new course in Tower, named in the body; the caller acts at Tower.
+fn new_course_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: Vec::new(),
+            body: Some(serde_json::json!({
+                "account_id": org.tower, "title": "Suite course", "code": "SUITE-NEW",
+            })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A draft course in Tower with a new title in the body.
+fn retitle_course_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: vec![("course_id", org.course(org.tower, false).await)],
+            body: Some(serde_json::json!({ "title": "Retitled course" })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A draft course in Tower, published.
+fn publish_course_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: vec![("course_id", org.course(org.tower, false).await)],
+            body: Some(serde_json::json!({ "status": "published" })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A course in Tower moved to Ground, inside Tower's subtree, so a grant at Tower covers both
+/// ends of the move.
+fn move_course_to_ground(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: vec![("course_id", org.course(org.tower, false).await)],
+            body: Some(serde_json::json!({ "account_id": org.ground })),
+            at: At::Account(org.tower),
         }
     })
 }
@@ -2816,6 +2922,34 @@ impl Org {
         )
         .await
         .expect("create the admission webhook");
+    }
+
+    /// A new course in `account`, its code naming the slug, published when `published`: its id.
+    async fn course(&self, account: Uuid, published: bool) -> Uuid {
+        let hex = new_id().simple().to_string();
+        let new = courses::NewCourse {
+            account_id: account,
+            title: format!("Course of {}", self.slug),
+            code: format!("C{}", &hex[hex.len() - 12..]),
+        };
+        let id = courses::create(&self.pool, scope(self.id), &new, now(), Actor::Instance)
+            .await
+            .expect("create course")
+            .id;
+        if published {
+            let status = courses::Status::Published;
+            courses::set_status(
+                &self.pool,
+                scope(self.id),
+                id,
+                status,
+                now(),
+                Actor::Instance,
+            )
+            .await
+            .expect("publish course");
+        }
+        id
     }
 
     async fn account(&self, parent: Uuid, name: &str) -> Uuid {

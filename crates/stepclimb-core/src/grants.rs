@@ -6,12 +6,13 @@
 //! permission is effective at an assignment's scope only when the catalog lists it and its
 //! [`Permission::GRANTABLE`] includes that scope type (B3); stored keys the catalog does not
 //! know are left out and reported by [`Grants::ignored_keys`] (B9). Course-scope assignments
-//! grant nothing until the M1 courses spec adds course permissions and `CourseTarget`.
+//! grant nothing: how a role is granted at course scope is M1 spec 02 Q1, still open.
 //!
-//! Scopes nest. A grant at the organization contains every account; a grant at account A
-//! contains A and every account whose path runs through A. The checks take the target's path
-//! ([`Target`]), so "does a grant contain the target" is "is the grant's account on the
-//! target's path".
+//! Scopes nest. A grant at the organization contains every account and course; a grant at
+//! account A contains A, every account whose path runs through A, and every course in those
+//! accounts. The checks take the target's path ([`Target`]), so "does a grant contain the
+//! target" is "is the grant's account on the target's path"; a course's path is its account's
+//! (M1 spec 02 B23, B24).
 //!
 //! A [`Grants`] is built for one request and never cached across requests, so a removed
 //! assignment or a changed custom role takes effect on the next request (B16).
@@ -34,6 +35,23 @@ pub enum Target {
     Organization,
     /// An account, by the ids on its path: the root first, the account itself last.
     Account(Vec<Uuid>),
+    /// A course, by its id and the path of the account it belongs to. No grant is held at a
+    /// course itself, so the grants on the account's path decide.
+    Course {
+        account_path: Vec<Uuid>,
+        course_id: Uuid,
+    },
+}
+
+impl Target {
+    /// The account ids whose grants contain the target; empty for the organization.
+    fn path(&self) -> &[Uuid] {
+        match self {
+            Self::Organization => &[],
+            Self::Account(path) => path,
+            Self::Course { account_path, .. } => account_path,
+        }
+    }
 }
 
 /// A scope named by id: what [`Grants::scopes_with`] lists and what [`Grants::require_at`]
@@ -54,6 +72,10 @@ pub enum Denied {
     /// apart from ids that do not exist.
     #[error("the account does not exist")]
     AccountNotFound,
+    /// The course does not exist in the organization, or the principal holds nothing at a
+    /// scope that contains it; answered alike, as for an account.
+    #[error("the course does not exist")]
+    CourseNotFound,
     /// The organization named is not the principal's.
     #[error("the organization does not exist")]
     OrganizationNotFound,
@@ -194,15 +216,16 @@ impl Grants {
     }
 
     /// Whether the principal may learn that the target exists: the organization always is
-    /// visible to its members, and an account when any permission is effective at a scope
-    /// containing it (B17 step 4).
+    /// visible to its members, and an account or a course when any permission is effective at
+    /// a scope containing it (B17 step 4; M1 spec 02 B24).
     #[must_use]
     pub fn is_visible(&self, target: &Target) -> bool {
         match target {
             Target::Organization => true,
-            Target::Account(path) => {
-                !self.organization.is_empty() || self.account_keys_on(path).next().is_some()
-            }
+            Target::Account(path)
+            | Target::Course {
+                account_path: path, ..
+            } => !self.organization.is_empty() || self.account_keys_on(path).next().is_some(),
         }
     }
 
@@ -220,10 +243,8 @@ impl Grants {
         if self.organization.contains(key) {
             return true;
         }
-        match target {
-            Target::Organization => false,
-            Target::Account(path) => self.account_keys_on(path).any(|keys| keys.contains(key)),
-        }
+        self.account_keys_on(target.path())
+            .any(|keys| keys.contains(key))
     }
 
     /// Whether `other` has an effective permission, at any scope, that is not effective for
@@ -246,10 +267,14 @@ impl Grants {
     }
 
     /// B17 steps 4 and 5 for a target that exists: not visible is
-    /// [`Denied::AccountNotFound`], visible without `P` is [`Denied::Forbidden`].
+    /// [`Denied::AccountNotFound`] ([`Denied::CourseNotFound`] for a course), visible without
+    /// `P` is [`Denied::Forbidden`].
     pub fn check<P: Permission>(&self, target: &Target) -> Result<(), Denied> {
         if !self.is_visible(target) {
-            return Err(Denied::AccountNotFound);
+            return Err(match target {
+                Target::Course { .. } => Denied::CourseNotFound,
+                Target::Organization | Target::Account(_) => Denied::AccountNotFound,
+            });
         }
         if !self.holds::<P>(target) {
             return Err(Denied::Forbidden);
@@ -299,7 +324,9 @@ mod tests {
     use super::*;
     use crate::{
         id::new_id,
-        perm::{AccountManage, AccountView, OrgManage, RoleManage, UserView},
+        perm::{
+            AccountManage, AccountView, CourseManage, CourseView, OrgManage, RoleManage, UserView,
+        },
         roles,
     };
 
@@ -488,7 +515,7 @@ mod tests {
     fn a_role_without_effective_permissions_makes_nothing_visible() {
         let tree = Tree::new();
         let g = grants(vec![
-            builtin("student", tree.at(tree.tower)),
+            builtin("grader", tree.at(tree.tower)),
             // Grantable at organization scope only, so nothing at an account.
             assignment(&["organization.manage"], tree.at(tree.tower)),
         ]);
@@ -527,6 +554,35 @@ mod tests {
         assert_eq!(g.scopes_with::<AccountView>(), []);
         // Unknown keys are reported on course rows too.
         assert_eq!(g.ignored_keys().collect::<Vec<_>>(), ["course.retired"]);
+    }
+
+    #[test]
+    fn a_course_is_checked_through_its_accounts_path() {
+        let tree = Tree::new();
+        let in_tower = |course_id| Target::Course {
+            account_path: vec![tree.root, tree.tower],
+            course_id,
+        };
+        let in_enroute = Target::Course {
+            account_path: vec![tree.root, tree.enroute],
+            course_id: new_id(),
+        };
+        let g = grants(vec![assignment(&["course.manage"], tree.at(tree.tower))]);
+        assert_eq!(g.check::<CourseManage>(&in_tower(new_id())), Ok(()));
+        assert_eq!(
+            g.check::<CourseView>(&in_tower(new_id())),
+            Err(Denied::Forbidden)
+        );
+        assert_eq!(
+            g.check::<CourseManage>(&in_enroute),
+            Err(Denied::CourseNotFound)
+        );
+        let org = grants(vec![assignment(&["course.view"], GrantScope::Organization)]);
+        assert_eq!(org.check::<CourseView>(&in_enroute), Ok(()));
+        assert_eq!(
+            org.check::<CourseManage>(&in_enroute),
+            Err(Denied::Forbidden)
+        );
     }
 
     #[test]

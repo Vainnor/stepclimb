@@ -33,6 +33,7 @@ use uuid::Uuid;
 use crate::{
     OrgScope,
     audit::{self, Action, Actor},
+    courses,
     db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
     id::new_id,
     name, role_assignments,
@@ -97,6 +98,9 @@ pub enum Error {
     /// Role assignments are still scoped to the account (B21, spec 09 B15).
     #[error("an account that role assignments are scoped to cannot be deleted")]
     HasAssignments,
+    /// A course, in any status, still belongs to the account (M1 spec 02 B8).
+    #[error("an account that holds courses cannot be deleted")]
+    HasCourses,
     /// The create or move would put an account deeper than [`MAX_DEPTH`].
     #[error("accounts cannot be nested deeper than {MAX_DEPTH} levels below the root")]
     TooDeep,
@@ -584,8 +588,10 @@ async fn rewrite_subtree(
 
 /// Delete the account `id` of the scope's organization (B21) and write its `account.delete`
 /// audit entry by `actor` at `now`, with the account's parent and name. Refuses the root
-/// ([`Error::RootImmutable`]), an account with child accounts ([`Error::HasChildren`]) and an
-/// account that role assignments are scoped to ([`Error::HasAssignments`], spec 09 B15).
+/// ([`Error::RootImmutable`]), an account with child accounts ([`Error::HasChildren`]), an
+/// account that role assignments are scoped to ([`Error::HasAssignments`], spec 09 B15) and an
+/// account that holds any course ([`Error::HasCourses`], M1 spec 02 B8). Courses are created and
+/// moved under the tree lock this function holds, so none can arrive after the check.
 ///
 /// Runs in one transaction (a savepoint when `db` is already one) under the tree lock. It locks
 /// the account row `FOR UPDATE` before looking for assignments: that waits for a
@@ -614,6 +620,9 @@ pub async fn delete<'c>(
         .ok_or(Error::NotFound)?;
     if role_assignments::any_at_account(&mut tx, scope, id).await? {
         return Err(Error::HasAssignments);
+    }
+    if courses::any_in_account(&mut *tx, scope, id).await? {
+        return Err(Error::HasCourses);
     }
     sqlx::query!(
         "DELETE FROM accounts WHERE org_id = $1 AND id = $2",

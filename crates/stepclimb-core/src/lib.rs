@@ -39,6 +39,7 @@ pub mod audit;
 pub mod auth_flows;
 pub mod branding;
 pub mod clock;
+pub mod courses;
 pub mod db;
 pub mod feature;
 pub mod grants;

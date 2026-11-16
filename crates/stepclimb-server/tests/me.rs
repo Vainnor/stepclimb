@@ -404,7 +404,7 @@ async fn t17_an_account_admin_of_tower_gets_one_sorted_grant(pool: PgPool) {
     // Account admin's: organization-only ones take no effect there, so no organization grant.
     assign_builtin(&fixture, sam, "org_admin", Scope::Account(tower)).await;
     // A role with no permissions adds no grant.
-    assign_builtin(&fixture, sam, "student", Scope::Organization).await;
+    assign_builtin(&fixture, sam, "grader", Scope::Organization).await;
 
     let answer = fixture.me_with_cookie(&fixture.sign_in(sam).await).await;
 
@@ -414,7 +414,9 @@ async fn t17_an_account_admin_of_tower_gets_one_sorted_grant(pool: PgPool) {
         json!([{
             "scope": { "type": "account", "id": tower.to_string() },
             "permissions": [
-                "account.manage", "account.view", "role.assign", "role.view", "user.view"
+                "account.manage", "account.view", "course.content_edit", "course.create",
+                "course.manage", "course.view", "course.view_all", "enrollment.manage",
+                "enrollment.view", "role.assign", "role.view", "user.view"
             ],
         }])
     );

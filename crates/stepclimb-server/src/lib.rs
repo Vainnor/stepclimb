@@ -61,6 +61,7 @@ pub mod client_ip;
 pub mod config;
 pub mod config_providers;
 mod cookie;
+pub mod courses;
 pub mod csrf;
 pub mod device;
 pub mod discovery;

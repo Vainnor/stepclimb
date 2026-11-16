@@ -242,7 +242,7 @@
         "tags": [
           "accounts"
         ],
-        "summary": "Delete an account that has no child accounts, and the role assignments scoped to it.",
+        "summary": "Delete an account that has no child accounts, no role assignments scoped to it and no\ncourses.",
         "operationId": "deleteAccount",
         "parameters": [
           {
@@ -1968,6 +1968,424 @@
           },
           "409": {
             "$ref": "#/components/responses/UserTotpConflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/courses": {
+      "get": {
+        "tags": [
+          "courses"
+        ],
+        "summary": "List the courses where you hold `course.view`, drafts and templates only where you also hold\n`course.view_all`, sorted by title, then id.",
+        "operationId": "listCourses",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "query",
+            "description": "Only courses in this account's subtree.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/CourseStatus"
+            }
+          },
+          {
+            "name": "template",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page; omit it for the first page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many items to return, 1 to 200; 50 when omitted.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 200,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of courses",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Course"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/PermissionDenied"
+          },
+          "404": {
+            "$ref": "#/components/responses/CourseListNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "courses"
+        ],
+        "summary": "Create a draft course in `account_id`.",
+        "operationId": "createCourse",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewCourse"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The course is created",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The course's path"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Course"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/CourseCreateForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/CourseCreateNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/CourseCodeConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/courses/{course_id}": {
+      "get": {
+        "tags": [
+          "courses"
+        ],
+        "summary": "Read one course.",
+        "operationId": "getCourse",
+        "parameters": [
+          {
+            "name": "course_id",
+            "in": "path",
+            "description": "The course's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The course",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Course"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/PermissionDenied"
+          },
+          "404": {
+            "$ref": "#/components/responses/CourseNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "courses"
+        ],
+        "summary": "Change a course's title, code, dates or home. A patch naming only current values changes\nnothing.",
+        "operationId": "updateCourse",
+        "parameters": [
+          {
+            "name": "course_id",
+            "in": "path",
+            "description": "The course's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoursePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The course after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Course"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/CourseManageForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/CourseNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/CourseCodeConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/courses/{course_id}/move": {
+      "post": {
+        "tags": [
+          "courses"
+        ],
+        "summary": "Move a course, in any status, to another account of the organization.",
+        "operationId": "moveCourse",
+        "parameters": [
+          {
+            "name": "course_id",
+            "in": "path",
+            "description": "The course's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CourseMove"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The course after the move",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Course"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/CourseMoveForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/CourseMoveNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/courses/{course_id}/status": {
+      "post": {
+        "tags": [
+          "courses"
+        ],
+        "summary": "Change a course's status. Asking for the current status changes nothing.",
+        "operationId": "setCourseStatus",
+        "parameters": [
+          {
+            "name": "course_id",
+            "in": "path",
+            "description": "The course's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CourseStatusChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The course after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Course"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/CourseManageForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/CourseNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/CourseStatusConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
@@ -5208,6 +5626,189 @@
           "round"
         ]
       },
+      "Course": {
+        "type": "object",
+        "description": "A course of the caller's organization.",
+        "required": [
+          "id",
+          "account_id",
+          "title",
+          "code",
+          "status",
+          "template",
+          "start_at",
+          "end_at",
+          "settings",
+          "permissions",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          },
+          "end_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "RFC 3339, UTC. Shown to learners and staff; it opens and closes nothing."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The catalog keys grantable at course scope that you hold at this course, sorted: what\nthe app may offer you here. The server checks every request itself."
+          },
+          "settings": {
+            "$ref": "#/components/schemas/CourseSettings"
+          },
+          "start_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "RFC 3339, UTC. Shown to learners and staff; it opens and closes nothing."
+          },
+          "status": {
+            "$ref": "#/components/schemas/CourseStatus"
+          },
+          "template": {
+            "type": "boolean",
+            "description": "A template is never published and takes no learners."
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          }
+        }
+      },
+      "CourseHome": {
+        "type": "object",
+        "description": "What a learner sees first when opening the course.",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/HomeKind"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CourseMove": {
+        "type": "object",
+        "description": "The account to move a course to.",
+        "required": [
+          "account_id"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "You must hold `course.create` at a scope containing it. The course's own account\nchanges nothing."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CoursePatch": {
+        "type": "object",
+        "description": "A change to a course; an omitted member is left as it is. `null` clears `start_at` or\n`end_at` and is malformed for every other member.",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Trimmed; 1 to 50 characters; unique in the organization, ignoring ASCII case."
+          },
+          "end_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "RFC 3339 with an offset, from 1970 up to 2200, not before `start_at`; `null` clears it."
+          },
+          "settings": {
+            "$ref": "#/components/schemas/CourseSettingsPatch"
+          },
+          "start_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "RFC 3339 with an offset, from 1970 up to 2200; `null` clears it."
+          },
+          "title": {
+            "type": "string",
+            "description": "Trimmed; 1 to 200 characters."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CourseSettings": {
+        "type": "object",
+        "description": "A course's settings.",
+        "required": [
+          "home"
+        ],
+        "properties": {
+          "home": {
+            "$ref": "#/components/schemas/CourseHome"
+          }
+        }
+      },
+      "CourseSettingsPatch": {
+        "type": "object",
+        "description": "A change to a course's settings; an omitted member is left as it is.",
+        "properties": {
+          "home": {
+            "$ref": "#/components/schemas/CourseHome"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CourseStatus": {
+        "type": "string",
+        "description": "A course's status.",
+        "enum": [
+          "draft",
+          "published",
+          "archived"
+        ]
+      },
+      "CourseStatusChange": {
+        "type": "object",
+        "description": "The status to change a course to.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/CourseStatus"
+          }
+        },
+        "additionalProperties": false
+      },
       "CreatedServiceAccount": {
         "type": "object",
         "description": "A service account just created, with its API key. Its `Debug` output leaves the key out.",
@@ -5588,6 +6189,13 @@
           "unavailable"
         ]
       },
+      "HomeKind": {
+        "type": "string",
+        "description": "The kind of a course's home: `modules`, the module list.",
+        "enum": [
+          "modules"
+        ]
+      },
       "Identity": {
         "type": "object",
         "description": "A user's identity as an admin sees it.",
@@ -5959,6 +6567,31 @@
             "type": "string",
             "format": "uuid",
             "description": "The parent account; you must hold `account.manage` at a scope containing it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewCourse": {
+        "type": "object",
+        "description": "A course to create, as a draft.",
+        "required": [
+          "account_id",
+          "title",
+          "code"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The account the course belongs to; you must hold `course.create` at a scope containing\nit."
+          },
+          "code": {
+            "type": "string",
+            "description": "Trimmed; 1 to 50 characters; unique in the organization, ignoring ASCII case."
+          },
+          "title": {
+            "type": "string",
+            "description": "Trimmed; 1 to 200 characters."
           }
         },
         "additionalProperties": false
@@ -6525,6 +7158,104 @@
                   ],
                   "format": "uuid",
                   "description": "`null` for the root only. Shown even when the parent is not visible to the caller."
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "RFC 3339, UTC."
+                }
+              }
+            },
+            "description": "The items, in the list's sort order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass this as `cursor` to get the next page; `null` on the last page."
+          }
+        }
+      },
+      "Page_Course": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A course of the caller's organization.",
+              "required": [
+                "id",
+                "account_id",
+                "title",
+                "code",
+                "status",
+                "template",
+                "start_at",
+                "end_at",
+                "settings",
+                "permissions",
+                "created_at",
+                "updated_at"
+              ],
+              "properties": {
+                "account_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "code": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "RFC 3339, UTC."
+                },
+                "end_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time",
+                  "description": "RFC 3339, UTC. Shown to learners and staff; it opens and closes nothing."
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "permissions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The catalog keys grantable at course scope that you hold at this course, sorted: what\nthe app may offer you here. The server checks every request itself."
+                },
+                "settings": {
+                  "$ref": "#/components/schemas/CourseSettings"
+                },
+                "start_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time",
+                  "description": "RFC 3339, UTC. Shown to learners and staff; it opens and closes nothing."
+                },
+                "status": {
+                  "$ref": "#/components/schemas/CourseStatus"
+                },
+                "template": {
+                  "type": "boolean",
+                  "description": "A template is never published and takes no learners."
+                },
+                "title": {
+                  "type": "string"
                 },
                 "updated_at": {
                   "type": "string",
@@ -8394,6 +9125,96 @@
           }
         }
       },
+      "CourseCodeConflict": {
+        "description": "`course.code_taken`: another course of the organization has this code, ignoring ASCII case.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "CourseCreateForbidden": {
+        "description": "`permission.denied`: you hold `course.create` nowhere, or you can see the account without holding it there. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "CourseCreateNotFound": {
+        "description": "`account.not_found`: no account with `account_id` exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "CourseListNotFound": {
+        "description": "`account.not_found`: no account with `account_id` exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "CourseManageForbidden": {
+        "description": "`permission.denied`: you can see the course but do not hold `course.manage` at a scope containing it. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "CourseMoveForbidden": {
+        "description": "`permission.denied`: you can see the course but do not hold `course.manage` at a scope containing it. `permission.escalation`: the destination would give you, over the course, a permission you do not hold over it now. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "CourseMoveNotFound": {
+        "description": "`course.not_found`: no course with this id exists in the organization, or you cannot see it. `account.not_found`: the destination `account_id` does not exist or you do not hold `course.create` at a scope containing it. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "CourseNotFound": {
+        "description": "`course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "CourseStatusConflict": {
+        "description": "`course.status_invalid`: the course cannot change from its status to this one; the allowed changes are draft to published, published to archived, archived to published and published to draft. `course.template`: a template cannot be published.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "CreateConflict": {
         "description": "`role.key_taken`: a built-in role or another custom role of the organization has the key.",
         "content": {
@@ -9384,6 +10205,10 @@
     {
       "name": "accounts",
       "description": "The account tree inside the organization"
+    },
+    {
+      "name": "courses",
+      "description": "Courses, their status and their account"
     },
     {
       "name": "roles",

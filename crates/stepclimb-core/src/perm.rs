@@ -124,6 +124,20 @@ catalog! {
     ServiceAccountManage => "service_account.manage", [Organization];
     /// Change the organization's branding.
     BrandingManage => "branding.manage", [Organization];
+    /// Read a course and its published, unlocked content.
+    CourseView => "course.view", [Organization, Account, Course];
+    /// Read draft courses, templates, unpublished modules and items, and locked content.
+    CourseViewAll => "course.view_all", [Organization, Account, Course];
+    /// Create courses in an account, and copies into it.
+    CourseCreate => "course.create", [Organization, Account];
+    /// Change a course's details and status, and move it to another account.
+    CourseManage => "course.manage", [Organization, Account, Course];
+    /// Edit a course's modules, items, files and pages.
+    CourseContentEdit => "course.content_edit", [Organization, Account, Course];
+    /// Read a course's enrollments.
+    EnrollmentView => "enrollment.view", [Organization, Account, Course];
+    /// Enroll, conclude and remove users.
+    EnrollmentManage => "enrollment.manage", [Organization, Account, Course];
 }
 
 #[cfg(test)]
@@ -194,8 +208,8 @@ mod tests {
     }
 
     #[test]
-    fn all_is_the_m0_catalog() {
-        use ScopeType::{Account as A, Organization as O};
+    fn all_is_the_catalog() {
+        use ScopeType::{Account as A, Course as C, Organization as O};
         let expected: &[(&str, &[ScopeType])] = &[
             ("organization.manage", &[O]),
             ("account.view", &[O, A]),
@@ -209,6 +223,13 @@ mod tests {
             ("admission.manage", &[O]),
             ("service_account.manage", &[O]),
             ("branding.manage", &[O]),
+            ("course.view", &[O, A, C]),
+            ("course.view_all", &[O, A, C]),
+            ("course.create", &[O, A]),
+            ("course.manage", &[O, A, C]),
+            ("course.content_edit", &[O, A, C]),
+            ("enrollment.view", &[O, A, C]),
+            ("enrollment.manage", &[O, A, C]),
         ];
         let actual: Vec<_> = ALL.iter().map(|p| (p.key, p.grantable)).collect();
         assert_eq!(actual, expected);
