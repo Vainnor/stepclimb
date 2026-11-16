@@ -1251,9 +1251,11 @@ export interface components {
             attributes?: Record<string, never>;
             /**
              * @description The groups the user is in, by key: at most 1,000 strings of 1 to 255 characters with no
-             *     control character, never `null`. They replace the memberships earlier replies gave the
-             *     user, so a group left out is removed; an absent `groups` is no groups. A group the
-             *     organization does not have yet is created, named by its key. Keys are matched exactly.
+             *     control character, no Unicode format character (category Cf) and neither U+2028 nor
+             *     U+2029, never `null`. They replace the memberships earlier replies gave the user, so a
+             *     group left out is removed; an absent `groups` is no groups. A group the organization
+             *     does not have yet is created, named by its key, while it has fewer than 10,000 groups;
+             *     past that, a key naming no group is left out. Keys are matched exactly.
              */
             groups?: string[];
         };

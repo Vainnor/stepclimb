@@ -485,3 +485,37 @@ async fn a_pre_provisioned_users_sign_in_brings_its_groups(pool: PgPool) {
     );
     assert_eq!(f.memberships(sam).await, pairs(&[("staff", "idp")]));
 }
+
+/// B22 (spec 07 I7): a sign-in through one provider replaces only that provider's claim
+/// memberships; another provider's stay, even for the same group.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_providers_sign_in_replaces_only_its_own_claim_memberships(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let partner = provider_in(&f.pool, f.org, "partner").await;
+    let pat = f
+        .admitted(&f.sign_in(&f.sso, "sub-pat", Some(&["home", "staff"])))
+        .await;
+    let identity = NewIdentity {
+        user_id: pat,
+        provider_id: partner.id,
+        subject: "partner-pat".into(),
+        attributes: Map::new(),
+    };
+    identities::link(&f.pool, scope(f.org), &identity, now(), Actor::Instance)
+        .await
+        .expect("link the second identity");
+    f.admitted(&f.sign_in(&partner, "partner-pat", Some(&["staff"])))
+        .await;
+
+    f.admitted(&f.sign_in(&f.sso, "sub-pat", Some(&[]))).await;
+    assert_eq!(f.memberships(pat).await, pairs(&[("staff", "idp")]));
+    let from: String = sqlx::query_scalar(
+        "SELECT p.key FROM group_members m JOIN identity_providers p ON p.id = m.provider_id
+         WHERE m.user_id = $1",
+    )
+    .bind(pat)
+    .fetch_one(&f.pool)
+    .await
+    .expect("one membership");
+    assert_eq!(from, "partner");
+}

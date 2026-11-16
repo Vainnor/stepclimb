@@ -565,7 +565,7 @@ async fn steps(
             claims: sign_in.groups.as_deref(),
             webhook: answered.groups.as_deref(),
         };
-        admission_groups::apply(sp, scope, user.id, &provider.key, given, context.now).await?;
+        admission_groups::apply(sp, scope, user.id, provider, given, context.now).await?;
     }
     Ok(admission)
 }

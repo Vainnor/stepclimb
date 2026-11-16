@@ -752,7 +752,7 @@ fn valid_email(email: &str) -> Result<&str, Error> {
 ///         else: r.append([c, c])
 /// print(u.unidata_version); print(*(f'(0x{a:04X}, 0x{b:04X}),' for a, b in r), sep='\n')"
 /// ```
-const FORMAT_CHARS: [(u32, u32); 21] = [
+pub(crate) const FORMAT_CHARS: [(u32, u32); 21] = [
     (0x00AD, 0x00AD),
     (0x0600, 0x0605),
     (0x061C, 0x061C),
@@ -776,7 +776,7 @@ const FORMAT_CHARS: [(u32, u32); 21] = [
     (0xE0020, 0xE007F),
 ];
 
-fn is_format_char(c: char) -> bool {
+pub(crate) fn is_format_char(c: char) -> bool {
     let c = u32::from(c);
     FORMAT_CHARS
         .iter()

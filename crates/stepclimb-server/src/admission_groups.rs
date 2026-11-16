@@ -2,22 +2,26 @@
 //! The group memberships an admitted sign-in gives its user (docs/specs/m0/07-admission.md B18,
 //! B22, Q8 (a), I7).
 //!
-//! Two sources answer at sign-in, and each replaces only its own memberships
+//! Two givers answer at sign-in, and each replaces only its own memberships
 //! (`stepclimb_core::groups::replace_memberships`):
 //!
-//! - **Claims** (`idp`), when the provider's mapping names a groups claim. The mapped list is the
-//!   user's claim memberships; a claim that is missing or not an array of strings is no groups
-//!   (`stepclimb_auth::claims`). A provider that maps no groups claim says nothing about groups,
-//!   and the user's claim memberships stay as they are. Claim memberships do not record which
-//!   provider gave them, so with two providers that both map groups the last sign-in's list
-//!   wins. A key that is not usable (empty, over 255 characters, a control character) is
-//!   dropped, and keys past the first 1,000 usable ones are dropped; both are logged, without
-//!   the keys.
+//! - **The provider's claim** (source `idp`, recorded with the provider), when the provider's
+//!   mapping names a groups claim. The mapped list is the user's memberships from that
+//!   provider; a claim that is missing or not an array of strings is no groups
+//!   (`stepclimb_auth::claims`). Another provider's memberships are never touched. A provider
+//!   that maps no groups claim says nothing about groups, and its memberships stay as they are.
+//!   A key that is not usable (empty, over 255 characters, a control, format or separator
+//!   character) is dropped, and keys past the first 1,000 usable ones are dropped; both are
+//!   logged, without the keys.
 //! - **The admission webhook** (`admission_webhook`), when it was called and allowed the
 //!   sign-in. Its reply's `groups` (none when absent) are the user's webhook memberships; the
 //!   reply was already refused as malformed if a key is not usable or there are more than
 //!   1,000 (`crate::admission_webhook_call`). A sign-in that does not call the webhook (none
 //!   configured or enabled, a local sign-in) leaves them as they are.
+//!
+//! An organization has at most 10,000 groups (`stepclimb_core::groups::MAX_GROUPS`). Once it is
+//! full, a key from either giver that names no group makes no group and no membership; the
+//! count is logged, never the keys, and the sign-in goes on.
 //!
 //! It runs inside admission's savepoint after the user is admitted, so a refusal or a fault
 //! changes no membership (B3). No line logs a group key: keys can name people's roles.
@@ -28,8 +32,9 @@ use std::time::SystemTime;
 use sqlx::PgConnection;
 use stepclimb_core::{
     OrgScope,
-    groups::{self, GroupSource, MAX_KEYS, Replaced},
+    groups::{self, Giver, MAX_KEYS, Replaced},
     id::Uuid,
+    identity_providers::IdentityProvider,
 };
 
 use crate::error::ApiError;
@@ -43,30 +48,25 @@ pub struct Given<'a> {
     pub webhook: Option<&'a [String]>,
 }
 
-/// Replace `user_id`'s memberships from each source that answered in `given` (module
-/// documentation). `provider` is the provider key, for the log.
+/// Replace `user_id`'s memberships from each giver that answered in `given` (module
+/// documentation). `provider` is the provider the person signed in with.
 pub async fn apply(
     conn: &mut PgConnection,
     scope: OrgScope,
     user_id: Uuid,
-    provider: &str,
+    provider: &IdentityProvider,
     given: Given<'_>,
     now: SystemTime,
 ) -> Result<(), ApiError> {
+    let key = provider.key.as_str();
     if let Some(claimed) = given.claims {
-        let keys = usable_claims(provider, claimed);
-        replace(conn, scope, user_id, GroupSource::Idp, &keys, now).await?;
+        let keys = usable_claims(key, claimed);
+        let giver = Giver::Provider(provider.id);
+        replace(conn, scope, user_id, key, giver, &keys, now).await?;
     }
     if let Some(keys) = given.webhook {
-        replace(
-            conn,
-            scope,
-            user_id,
-            GroupSource::AdmissionWebhook,
-            keys,
-            now,
-        )
-        .await?;
+        let giver = Giver::AdmissionWebhook;
+        replace(conn, scope, user_id, key, giver, keys, now).await?;
     }
     Ok(())
 }
@@ -75,15 +75,27 @@ async fn replace(
     conn: &mut PgConnection,
     scope: OrgScope,
     user_id: Uuid,
-    source: GroupSource,
+    provider: &str,
+    giver: Giver,
     keys: &[String],
     now: SystemTime,
 ) -> Result<(), ApiError> {
-    let Replaced { added, removed } =
-        groups::replace_memberships(&mut *conn, scope, user_id, source, keys, now)
-            .await
-            .map_err(|e| ApiError::internal(&e))?;
-    let source = source.as_str();
+    let Replaced {
+        added,
+        removed,
+        dropped,
+    } = groups::replace_memberships(&mut *conn, scope, user_id, giver, keys, now)
+        .await
+        .map_err(|e| ApiError::internal(&e))?;
+    let source = giver.source().as_str();
+    if dropped > 0 {
+        tracing::warn!(
+            provider,
+            source,
+            dropped,
+            "admission dropped group keys: the organization has its most groups"
+        );
+    }
     tracing::debug!(
         source,
         added,

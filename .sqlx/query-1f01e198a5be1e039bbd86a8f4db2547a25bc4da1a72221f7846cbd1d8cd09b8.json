@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT k AS \"key!\" FROM unnest($2::text[]) AS k\n           WHERE NOT EXISTS (SELECT 1 FROM groups g WHERE g.org_id = $1 AND g.key = k)\n           ORDER BY k",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "key!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "1f01e198a5be1e039bbd86a8f4db2547a25bc4da1a72221f7846cbd1d8cd09b8"
+}

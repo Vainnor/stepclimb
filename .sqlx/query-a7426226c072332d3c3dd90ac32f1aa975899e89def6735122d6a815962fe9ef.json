@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM group_members m\n         USING groups g\n         WHERE m.org_id = $1 AND m.user_id = $2 AND m.source = $3\n           AND m.provider_id IS NOT DISTINCT FROM $4\n           AND g.org_id = m.org_id AND g.id = m.group_id AND g.key <> ALL($5::text[])",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a7426226c072332d3c3dd90ac32f1aa975899e89def6735122d6a815962fe9ef"
+}
