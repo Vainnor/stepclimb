@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The module and item authoring routes over the router
-//! (docs/specs/m1/03-modules-and-items.md B1 to B12; T1 to T7 and T13 for the write routes).
+//! (docs/specs/m1/03-modules-and-items.md B1 to B12; T1 to T7 and T13 for the write routes), and
+//! the rule fields those routes write (docs/specs/m1/04-unlock-and-completion-rules.md B1 to B3;
+//! T9, T10 and T15's cross-organization ids).
 //! The permission suite's generated cases for each route (T12) are in `tests/permissions.rs`;
 //! the positions under concurrent writes (T8) are in `stepclimb-core`'s `tests/modules.rs`.
 //!
@@ -267,12 +269,14 @@ impl Fixture {
         .await
     }
 
-    /// Every module and item row of `org`, as text.
+    /// Every module, item and prerequisite row of `org`, as text.
     async fn rows(&self, org: Uuid) -> Vec<String> {
         sqlx::query_scalar(
             "SELECT to_jsonb(m)::text FROM modules m WHERE org_id = $1
              UNION ALL
              SELECT to_jsonb(i)::text FROM module_items i WHERE org_id = $1
+             UNION ALL
+             SELECT to_jsonb(p)::text FROM module_prerequisites p WHERE org_id = $1
              ORDER BY 1",
         )
         .bind(org)
@@ -897,4 +901,227 @@ async fn until_a_call_waits_on_a_lock(pool: &PgPool) {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!("no session waited on a lock within 5 s");
+}
+
+// Rules (spec 04 B1 to B3).
+
+/// Spec 04 T9 over the router, and the rule fields in the `Module` schema.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn spec04_t9_module_rules_over_the_router(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    let designer = f
+        .holder(t.org, "course_designer", Scope::Account(t.tower))
+        .await;
+    let (ma, mb) = (f.module(t).await, f.module(t).await);
+    let patch = |module: Uuid, body: Value| {
+        let (f, designer) = (&f, designer.clone());
+        async move {
+            f.send(
+                Method::PATCH,
+                &module_path(module),
+                t.org,
+                &designer,
+                Some(body),
+            )
+            .await
+        }
+    };
+    let fresh = patch(mb, json!({})).await;
+    let body = fresh.ok(StatusCode::OK);
+    assert_schema("Module", body);
+    assert_eq!(body["unlock_at"], Value::Null);
+    assert_eq!(body["prerequisite_ids"], json!([]));
+    assert_eq!(body["require_sequential"], false);
+    assert_eq!(body["completion_rule"], "all");
+
+    let set = patch(
+        mb,
+        json!({
+            "unlock_at": "2030-01-02T05:04:05+02:00",
+            "prerequisite_ids": [ma],
+            "require_sequential": true,
+            "completion_rule": "one",
+        }),
+    )
+    .await;
+    let body = set.ok(StatusCode::OK);
+    assert_schema("Module", body);
+    assert_eq!(body["unlock_at"], "2030-01-02T03:04:05.000000Z");
+    assert_eq!(body["prerequisite_ids"], json!([ma]));
+    assert_eq!(
+        (&body["require_sequential"], &body["completion_rule"]),
+        (&json!(true), &json!("one"))
+    );
+
+    patch(ma, json!({ "prerequisite_ids": [mb] }))
+        .await
+        .expect(StatusCode::CONFLICT, "module.prerequisite_cycle");
+    patch(ma, json!({ "prerequisite_ids": [ma] }))
+        .await
+        .invalid_at("/prerequisite_ids", "module.prerequisite_self");
+    patch(ma, json!({ "prerequisite_ids": [mb, mb] }))
+        .await
+        .invalid_at("/prerequisite_ids", "module.prerequisite_duplicate");
+    let many: Vec<Uuid> = (0..21).map(|_| Uuid::now_v7()).collect();
+    patch(ma, json!({ "prerequisite_ids": many }))
+        .await
+        .invalid_at("/prerequisite_ids", "module.prerequisites_too_many");
+    patch(ma, json!({ "unlock_at": "1969-12-31T23:59:59Z" }))
+        .await
+        .invalid_at("/unlock_at", "module.date_out_of_range");
+    patch(ma, json!({ "completion_rule": null }))
+        .await
+        .expect(StatusCode::BAD_REQUEST, "request.malformed");
+    let other = courses::create(
+        &f.pool,
+        scope(t.org),
+        &courses::NewCourse {
+            account_id: t.tower,
+            title: "Other".into(),
+            code: "S2".into(),
+        },
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap()
+    .id;
+    let elsewhere = modules::create(&f.pool, scope(t.org), other, "Elsewhere", now())
+        .await
+        .unwrap()
+        .id;
+    patch(ma, json!({ "prerequisite_ids": [elsewhere] }))
+        .await
+        .expect(StatusCode::NOT_FOUND, "module.not_found");
+    let cleared = patch(mb, json!({ "unlock_at": null, "prerequisite_ids": [] })).await;
+    let body = cleared.ok(StatusCode::OK);
+    assert_eq!(
+        (&body["unlock_at"], &body["prerequisite_ids"]),
+        (&Value::Null, &json!([]))
+    );
+}
+
+/// Spec 04 T10 over the router, and `requirement` in the `Item` schema.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn spec04_t10_item_requirements_over_the_router(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    let admin = f.org_admin(t.org).await;
+    let module = f.module(t).await;
+    let header = f.header(t, module).await;
+    let new = items::NewItem {
+        kind: items::Kind::ExternalLink,
+        title: "Charts".into(),
+        ref_id: None,
+        url: Some("https://example.com/charts".into()),
+        position: None,
+    };
+    let link = items::create(&f.pool, scope(t.org), module, &new, now())
+        .await
+        .unwrap()
+        .id;
+    let patch = |item: Uuid, body: Value| {
+        let (f, admin) = (&f, admin.clone());
+        async move {
+            f.send(Method::PATCH, &item_path(item), t.org, &admin, Some(body))
+                .await
+        }
+    };
+    let plain = patch(link, json!({})).await;
+    let body = plain.ok(StatusCode::OK);
+    assert_schema("Item", body);
+    assert_eq!(body["requirement"], Value::Null);
+    for requirement in [json!({ "kind": "view" }), json!({ "kind": "mark_done" })] {
+        let set = patch(link, json!({ "requirement": requirement })).await;
+        let body = set.ok(StatusCode::OK);
+        assert_schema("Item", body);
+        assert_eq!(body["requirement"], requirement);
+    }
+    let invalid = [
+        (header, json!({ "kind": "view" })),
+        (link, json!({ "kind": "watch", "min_percent": 50 })),
+        (link, json!({ "kind": "watch", "min_percent": 0 })),
+        (link, json!({ "kind": "watch", "min_percent": 101 })),
+        (link, json!({ "kind": "view", "after": 3 })),
+        (link, json!({ "kind": "complete" })),
+    ];
+    for (item, requirement) in invalid {
+        patch(item, json!({ "requirement": requirement }))
+            .await
+            .invalid_at("/requirement", "requirement.invalid");
+    }
+    for kind in ["submit", "score", "mastery"] {
+        patch(link, json!({ "requirement": { "kind": kind } }))
+            .await
+            .invalid_at("/requirement", "requirement.unavailable");
+    }
+    for not_an_object in [json!("view"), json!(["view"]), json!(1)] {
+        patch(link, json!({ "requirement": not_an_object }))
+            .await
+            .expect(StatusCode::BAD_REQUEST, "request.malformed");
+    }
+    let removed = patch(link, json!({ "requirement": null })).await;
+    assert_eq!(removed.ok(StatusCode::OK)["requirement"], Value::Null);
+}
+
+/// Spec 04 T15: org B's ids in a rule write, in the path and as a prerequisite, are not found
+/// and change nothing; an archived course takes no rule write.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn spec04_t15_rule_writes_refuse_another_organizations_ids(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (a, b) = (f.a, tree(&f.pool, "org-b").await);
+    let admin = f.org_admin(a.org).await;
+    let mine = f.module(a).await;
+    let theirs = f.module(b).await;
+    let their_item = f.header(b, theirs).await;
+    let before_a = f.rows(a.org).await;
+    let before_b = f.rows(b.org).await;
+    let calls = [
+        (
+            module_path(mine),
+            json!({ "prerequisite_ids": [theirs] }),
+            "module.not_found",
+        ),
+        (
+            module_path(theirs),
+            json!({ "require_sequential": true }),
+            "module.not_found",
+        ),
+        (
+            item_path(their_item),
+            json!({ "requirement": { "kind": "view" } }),
+            "item.not_found",
+        ),
+    ];
+    for (uri, body, code) in calls {
+        let answer = f.send(Method::PATCH, &uri, a.org, &admin, Some(body)).await;
+        answer.expect(StatusCode::NOT_FOUND, code);
+        let text = answer.body.to_string();
+        assert!(!text.contains(&theirs.to_string()), "{text}");
+    }
+    assert_eq!(f.rows(b.org).await, before_b, "org B is unchanged");
+    assert_eq!(f.rows(a.org).await, before_a, "org A is unchanged");
+
+    for status in [courses::Status::Published, courses::Status::Archived] {
+        courses::set_status(
+            &f.pool,
+            scope(a.org),
+            a.course,
+            status,
+            now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("change status");
+    }
+    f.send(
+        Method::PATCH,
+        &module_path(mine),
+        a.org,
+        &admin,
+        Some(json!({ "completion_rule": "one" })),
+    )
+    .await
+    .expect(StatusCode::CONFLICT, "course.archived");
 }

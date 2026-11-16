@@ -153,6 +153,7 @@ async fn startup_migrations_create_the_schema_on_an_empty_database(pool: PgPool)
             "local_logins",
             "local_tokens",
             "module_items",
+            "module_prerequisites",
             "modules",
             "oauth_authorization_codes",
             "oauth_refresh_tokens",

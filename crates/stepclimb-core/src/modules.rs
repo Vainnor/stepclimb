@@ -11,11 +11,12 @@
 //! the 200-module limit (Q4), deletion only when empty (Q3) and full-set reordering (B10). Every
 //! query filters by `org_id = scope.org_id()`.
 
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use sqlx::{Acquire, PgConnection, PgExecutor, Postgres};
 use uuid::Uuid;
 
+pub use crate::rules::CompletionRule;
 use crate::{
     OrgScope,
     db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
@@ -37,6 +38,13 @@ pub struct Module {
     pub title: String,
     pub position: i32,
     pub published: bool,
+    /// The module stays locked before this time (spec 04 B8).
+    pub unlock_at: Option<SystemTime>,
+    /// The modules it waits for, in course order (spec 04 B2).
+    pub prerequisite_ids: Vec<Uuid>,
+    /// Whether its items go in order (spec 04 B9).
+    pub require_sequential: bool,
+    pub completion_rule: CompletionRule,
     pub created_at: SystemTime,
     pub updated_at: SystemTime,
 }
@@ -46,6 +54,17 @@ pub struct Module {
 pub struct ModulePatch {
     pub title: Option<String>,
     pub published: Option<bool>,
+}
+
+/// A change to a module's rules (spec 04 B1); `None` leaves a member as it is.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RulesPatch {
+    /// `Some(None)` clears the date.
+    pub unlock_at: Option<Option<SystemTime>>,
+    /// The whole new set, which replaces the current one.
+    pub prerequisite_ids: Option<Vec<Uuid>>,
+    pub require_sequential: Option<bool>,
+    pub completion_rule: Option<CompletionRule>,
 }
 
 /// Why a modules or items repository call failed.
@@ -101,6 +120,31 @@ pub enum Error {
     /// A position outside 0 to the item count of the destination (B4, B11).
     #[error("the position is outside the module")]
     PositionOutOfRange,
+    /// A module named as its own prerequisite (spec 04 B2).
+    #[error("a module cannot require itself")]
+    PrerequisiteSelf,
+    /// The same prerequisite named twice.
+    #[error("a prerequisite is named twice")]
+    PrerequisiteDuplicate,
+    /// More than [`crate::rules::MAX_PREREQUISITES`] prerequisites.
+    #[error("a module names too many prerequisites")]
+    PrerequisitesTooMany,
+    /// A prerequisite that is not a module of the same course: answered as a module that does
+    /// not exist.
+    #[error("a prerequisite is not a module of the course")]
+    PrerequisiteNotFound,
+    /// The prerequisites would close a cycle in the course's graph (spec 04 B2, Q2).
+    #[error("the prerequisites would form a cycle")]
+    PrerequisiteCycle,
+    /// An `unlock_at` before 1970 or from 2200 on.
+    #[error("an unlock date must be from 1970 up to 2200")]
+    UnlockAtOutOfRange,
+    /// A requirement of an unknown shape, or on an item kind that does not take it (spec 04 B3).
+    #[error("the requirement is not valid for this item")]
+    RequirementInvalid,
+    /// A requirement kind reserved for M2 or M3 (spec 04 B3).
+    #[error("this requirement kind is not available yet")]
+    RequirementUnavailable,
     /// A stored value this release cannot read: a kind the table's check keeps from happening.
     #[error("the {column} of {id} cannot be read")]
     Stored { id: Uuid, column: &'static str },
@@ -116,6 +160,10 @@ struct Row {
     title: String,
     position: i32,
     published: bool,
+    unlock_at_us: Option<i64>,
+    prerequisite_ids: Vec<Uuid>,
+    require_sequential: bool,
+    completion_rule: String,
     created_at_us: i64,
     updated_at_us: i64,
 }
@@ -125,6 +173,11 @@ impl TryFrom<Row> for Module {
 
     fn try_from(row: Row) -> Result<Self, Error> {
         Ok(Self {
+            completion_rule: CompletionRule::parse(&row.completion_rule).ok_or(Error::Stored {
+                id: row.id,
+                column: "completion_rule",
+            })?,
+            unlock_at: row.unlock_at_us.map(from_epoch_micros).transpose()?,
             created_at: from_epoch_micros(row.created_at_us)?,
             updated_at: from_epoch_micros(row.updated_at_us)?,
             id: row.id,
@@ -132,6 +185,8 @@ impl TryFrom<Row> for Module {
             title: row.title,
             position: row.position,
             published: row.published,
+            prerequisite_ids: row.prerequisite_ids,
+            require_sequential: row.require_sequential,
         })
     }
 }
@@ -166,10 +221,17 @@ pub async fn get(
 ) -> Result<Option<Module>, Error> {
     sqlx::query_as!(
         Row,
-        r#"SELECT id, course_id, title, position, published,
-                  (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
-                  (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!"
-           FROM modules WHERE org_id = $1 AND id = $2"#,
+        r#"SELECT m.id, m.course_id, m.title, m.position, m.published,
+                  (extract(epoch FROM m.unlock_at) * 1000000)::bigint AS unlock_at_us,
+                  ARRAY(SELECT p.requires_id
+                        FROM module_prerequisites p
+                        JOIN modules r ON r.org_id = p.org_id AND r.id = p.requires_id
+                        WHERE p.org_id = m.org_id AND p.module_id = m.id
+                        ORDER BY r.position) AS "prerequisite_ids!",
+                  m.require_sequential, m.completion_rule,
+                  (extract(epoch FROM m.created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM m.updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM modules m WHERE m.org_id = $1 AND m.id = $2"#,
         scope.org_id(),
         id,
     )
@@ -203,11 +265,18 @@ pub async fn list_for_course(
 ) -> Result<Vec<Module>, Error> {
     let rows = sqlx::query_as!(
         Row,
-        r#"SELECT id, course_id, title, position, published,
-                  (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
-                  (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!"
-           FROM modules WHERE org_id = $1 AND course_id = $2
-           ORDER BY position"#,
+        r#"SELECT m.id, m.course_id, m.title, m.position, m.published,
+                  (extract(epoch FROM m.unlock_at) * 1000000)::bigint AS unlock_at_us,
+                  ARRAY(SELECT p.requires_id
+                        FROM module_prerequisites p
+                        JOIN modules r ON r.org_id = p.org_id AND r.id = p.requires_id
+                        WHERE p.org_id = m.org_id AND p.module_id = m.id
+                        ORDER BY r.position) AS "prerequisite_ids!",
+                  m.require_sequential, m.completion_rule,
+                  (extract(epoch FROM m.created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM m.updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM modules m WHERE m.org_id = $1 AND m.course_id = $2
+           ORDER BY m.position"#,
         scope.org_id(),
         course_id,
     )
@@ -384,6 +453,155 @@ pub async fn reorder<'c>(
     let modules = list_for_course(&mut *tx, scope, course_id).await?;
     tx.commit().await?;
     Ok(modules)
+}
+
+/// Apply `patch` to the rules of the module `id` of the scope's organization and set
+/// `updated_at` to `now` (spec 04 B1, B2). A new prerequisite set replaces the old one; it must
+/// name modules of the same course, not the module itself, at most
+/// [`crate::rules::MAX_PREREQUISITES`] of them, each once, and close no cycle in the course's
+/// graph. A patch that changes nothing writes nothing and returns the module as it is.
+///
+/// Runs in one transaction (a savepoint when `db` is already one) under the course lock, so the
+/// cycle check reads every other write's prerequisites and two writes that each close half a
+/// cycle cannot both pass.
+pub async fn set_rules<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
+    scope: OrgScope,
+    id: Uuid,
+    patch: &RulesPatch,
+    now: SystemTime,
+) -> Result<Module, Error> {
+    check_rules(id, patch)?;
+    let now = epoch_micros(now)?;
+    let mut tx = db.begin().await?;
+    let module = locked(&mut tx, scope, id).await?;
+    let unlock_at = patch.unlock_at.unwrap_or(module.unlock_at);
+    let sequential = patch
+        .require_sequential
+        .unwrap_or(module.require_sequential);
+    let rule = patch.completion_rule.unwrap_or(module.completion_rule);
+    let requires = patch
+        .prerequisite_ids
+        .as_ref()
+        .filter(|ids| !same_set(&module.prerequisite_ids, ids));
+    let same = unlock_at == module.unlock_at
+        && sequential == module.require_sequential
+        && rule == module.completion_rule;
+    if same && requires.is_none() {
+        return Ok(module);
+    }
+    if let Some(requires) = requires {
+        replace_prerequisites(&mut tx, scope, &module, requires, now).await?;
+    }
+    sqlx::query!(
+        "UPDATE modules
+         SET unlock_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond',
+             require_sequential = $4, completion_rule = $5,
+             updated_at = timestamptz 'epoch' + $6::bigint * interval '1 microsecond'
+         WHERE org_id = $1 AND id = $2",
+        scope.org_id(),
+        id,
+        unlock_at.map(epoch_micros).transpose()?,
+        sequential,
+        rule.as_str(),
+        now,
+    )
+    .execute(&mut *tx)
+    .await?;
+    let module = get(&mut *tx, scope, id)
+        .await?
+        .ok_or(Error::ModuleNotFound)?;
+    tx.commit().await?;
+    Ok(module)
+}
+
+/// The checks of [`set_rules`] that need no database.
+fn check_rules(id: Uuid, patch: &RulesPatch) -> Result<(), Error> {
+    if let Some(Some(at)) = patch.unlock_at
+        && !(UNIX_EPOCH..dates_end()).contains(&at)
+    {
+        return Err(Error::UnlockAtOutOfRange);
+    }
+    let Some(ids) = &patch.prerequisite_ids else {
+        return Ok(());
+    };
+    if ids.contains(&id) {
+        return Err(Error::PrerequisiteSelf);
+    }
+    if ids.len() > crate::rules::MAX_PREREQUISITES {
+        return Err(Error::PrerequisitesTooMany);
+    }
+    let mut seen = std::collections::HashSet::new();
+    if !ids.iter().all(|id| seen.insert(id)) {
+        return Err(Error::PrerequisiteDuplicate);
+    }
+    Ok(())
+}
+
+/// Replace the prerequisites of `module` with `requires`, after checking that each is a module
+/// of the same course and that the new set closes no cycle. The caller holds the course lock.
+async fn replace_prerequisites(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    module: &Module,
+    requires: &[Uuid],
+    now: i64,
+) -> Result<(), Error> {
+    let found = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "count!" FROM modules
+           WHERE org_id = $1 AND course_id = $2 AND id = ANY($3::uuid[])"#,
+        scope.org_id(),
+        module.course_id,
+        requires,
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    if usize::try_from(found).ok() != Some(requires.len()) {
+        return Err(Error::PrerequisiteNotFound);
+    }
+    let edges: Vec<(Uuid, Uuid)> = sqlx::query!(
+        "SELECT module_id, requires_id FROM module_prerequisites
+         WHERE org_id = $1 AND course_id = $2 AND module_id <> $3",
+        scope.org_id(),
+        module.course_id,
+        module.id,
+    )
+    .fetch_all(&mut *conn)
+    .await?
+    .into_iter()
+    .map(|edge| (edge.module_id, edge.requires_id))
+    .collect();
+    if crate::rules::closes_cycle(&edges, module.id, requires) {
+        return Err(Error::PrerequisiteCycle);
+    }
+    sqlx::query!(
+        "DELETE FROM module_prerequisites WHERE org_id = $1 AND module_id = $2",
+        scope.org_id(),
+        module.id,
+    )
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query!(
+        "INSERT INTO module_prerequisites
+             (org_id, course_id, module_id, requires_id, created_at, updated_at)
+         SELECT $1, $2, $3, r,
+                timestamptz 'epoch' + $5::bigint * interval '1 microsecond',
+                timestamptz 'epoch' + $5::bigint * interval '1 microsecond'
+         FROM unnest($4::uuid[]) AS r",
+        scope.org_id(),
+        module.course_id,
+        module.id,
+        requires,
+        now,
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// The first instant an unlock date cannot be: the course dates' bound.
+fn dates_end() -> SystemTime {
+    UNIX_EPOCH + std::time::Duration::from_secs(crate::courses::DATES_END_SECS)
 }
 
 /// The module `id`, read after locking its course in the transaction `conn` belongs to.

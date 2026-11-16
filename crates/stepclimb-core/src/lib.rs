@@ -67,6 +67,7 @@ pub mod plans;
 pub mod requirement;
 pub mod role_assignments;
 pub mod roles;
+pub mod rules;
 mod scope;
 pub mod service_accounts;
 pub mod sessions;

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, module_id, course_id, kind, title, position, published, ref_id, url,\n                  (extract(epoch FROM created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM module_items WHERE org_id = $1 AND course_id = $2\n           ORDER BY module_id, position",
+  "query": "SELECT m.id, m.course_id, m.title, m.position, m.published,\n                  (extract(epoch FROM m.unlock_at) * 1000000)::bigint AS unlock_at_us,\n                  ARRAY(SELECT p.requires_id\n                        FROM module_prerequisites p\n                        JOIN modules r ON r.org_id = p.org_id AND r.id = p.requires_id\n                        WHERE p.org_id = m.org_id AND p.module_id = m.id\n                        ORDER BY r.position) AS \"prerequisite_ids!\",\n                  m.require_sequential, m.completion_rule,\n                  (extract(epoch FROM m.created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM m.updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM modules m WHERE m.org_id = $1 AND m.id = $2",
   "describe": {
     "columns": [
       {
@@ -9,96 +9,86 @@
         "type_info": "Uuid",
         "origin": {
           "Table": {
-            "table": "module_items",
+            "table": "modules",
             "name": "id"
           }
         }
       },
       {
         "ordinal": 1,
-        "name": "module_id",
-        "type_info": "Uuid",
-        "origin": {
-          "Table": {
-            "table": "module_items",
-            "name": "module_id"
-          }
-        }
-      },
-      {
-        "ordinal": 2,
         "name": "course_id",
         "type_info": "Uuid",
         "origin": {
           "Table": {
-            "table": "module_items",
+            "table": "modules",
             "name": "course_id"
           }
         }
       },
       {
-        "ordinal": 3,
-        "name": "kind",
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "module_items",
-            "name": "kind"
-          }
-        }
-      },
-      {
-        "ordinal": 4,
+        "ordinal": 2,
         "name": "title",
         "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "module_items",
+            "table": "modules",
             "name": "title"
           }
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 3,
         "name": "position",
         "type_info": "Int4",
         "origin": {
           "Table": {
-            "table": "module_items",
+            "table": "modules",
             "name": "position"
           }
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 4,
         "name": "published",
         "type_info": "Bool",
         "origin": {
           "Table": {
-            "table": "module_items",
+            "table": "modules",
             "name": "published"
           }
         }
       },
       {
+        "ordinal": 5,
+        "name": "unlock_at_us",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "prerequisite_ids!",
+        "type_info": "UuidArray",
+        "origin": "Expression"
+      },
+      {
         "ordinal": 7,
-        "name": "ref_id",
-        "type_info": "Uuid",
+        "name": "require_sequential",
+        "type_info": "Bool",
         "origin": {
           "Table": {
-            "table": "module_items",
-            "name": "ref_id"
+            "table": "modules",
+            "name": "require_sequential"
           }
         }
       },
       {
         "ordinal": 8,
-        "name": "url",
+        "name": "completion_rule",
         "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "module_items",
-            "name": "url"
+            "table": "modules",
+            "name": "completion_rule"
           }
         }
       },
@@ -127,13 +117,13 @@
       false,
       false,
       false,
+      null,
+      null,
       false,
       false,
-      true,
-      true,
       null,
       null
     ]
   },
-  "hash": "3056a3e6ea1fc487c9fb3b20ae6a428878429938573bc333e54668464dff148b"
+  "hash": "132c7049fcbf91812a1d1b1bb96f1fa210120cb686d06785cfa2e4458647e833"
 }

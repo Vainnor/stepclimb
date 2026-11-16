@@ -275,6 +275,31 @@ and stands until the owner reviews it.
   but the content. Recommendation: (a), what the plan's layouts draw and nothing more.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
 
+### Decisions made building I1
+
+Coordinator decisions (overnight, 2026-11-17), pending owner review.
+
+- **Copy mapping waits for `courses::copy`.** `02` I3 (#220) is not on `next` yet, so I1 adds
+  no copy code. Whichever lands second copies the rule columns, each item's `requirement`, and
+  `module_prerequisites` with both ids mapped to the copied modules.
+- **Author reads are the write responses.** The `GET` routes are `03` I2. Until then, every
+  route that answers a `Module` or `Item` (`03`'s create, patch, reorder and move) carries the
+  rule fields: `unlock_at`, `prerequisite_ids` (in course order), `require_sequential`,
+  `completion_rule`, and `requirement` (`null` when there is none). `lock` arrives with I3.
+- **Field codes** besides the spec's: 422 `module.prerequisite_self`,
+  `module.prerequisite_duplicate` (an id named twice) and `module.prerequisites_too_many` at
+  `/prerequisite_ids`; 422 `module.date_out_of_range` at `/unlock_at` for a date before 1970
+  or from 2200 on, the course dates' range (`02`). A prerequisite of another course or
+  organization answers 404 `module.not_found`, as B2 says.
+- **Order of the requirement checks.** The shape is checked first, so `submit`, `score` and
+  `mastery` answer `requirement.unavailable` on any item; then the item's kind, so `view` on a
+  header answers `requirement.invalid`. A `requirement` that is not a JSON object (a string,
+  an array) answers 400 `request.malformed`, as any other non-object in a body does. A
+  requirement is set only through `PATCH`, as the API table lists, not on item create.
+- **No-op writes.** A rule patch naming the current values, or a prerequisite list equal to the
+  current set in any order, writes nothing; any rule change sets `updated_at`. Rule changes are
+  not audited (`02` B27: content edits are not).
+
 ## Issues
 
 Order across specs 04 and 05: 04 I1, 04 I2, 05 I1, 04 I3, 05 I2 and on.

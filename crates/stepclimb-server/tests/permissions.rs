@@ -1289,13 +1289,22 @@ fn reverse_modules(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>>
     })
 }
 
-/// A module of a course in Tower with a new title.
+/// A module of a course in Tower with a new title and rules, requiring the course's first
+/// module.
 fn retitle_module(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
         let course = org.course(org.tower, false).await;
+        let first = org.module(course).await;
         Call {
             params: vec![("module_id", org.module(course).await)],
-            body: Some(serde_json::json!({ "title": "Retitled module", "published": true })),
+            body: Some(serde_json::json!({
+                "title": "Retitled module",
+                "published": true,
+                "unlock_at": "2030-01-02T03:04:05Z",
+                "prerequisite_ids": [first],
+                "require_sequential": true,
+                "completion_rule": "one",
+            })),
             at: At::Account(org.tower),
         }
     })
@@ -1340,14 +1349,18 @@ fn reverse_items(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     })
 }
 
-/// An item of a course in Tower with a new title.
+/// An external link of a course in Tower with a new title and a requirement.
 fn retitle_item(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
         let course = org.course(org.tower, false).await;
         let module = org.module(course).await;
         Call {
-            params: vec![("item_id", org.header(module).await)],
-            body: Some(serde_json::json!({ "title": "Retitled item", "published": true })),
+            params: vec![("item_id", org.link(module).await)],
+            body: Some(serde_json::json!({
+                "title": "Retitled item",
+                "published": true,
+                "requirement": { "kind": "view" },
+            })),
             at: At::Account(org.tower),
         }
     })
@@ -3180,6 +3193,21 @@ impl Org {
             title: format!("Header of {}", self.slug),
             ref_id: None,
             url: None,
+            position: None,
+        };
+        items::create(&self.pool, scope(self.id), module, &new, now())
+            .await
+            .expect("create item")
+            .id
+    }
+
+    /// A new external link, last in `module`: its id.
+    async fn link(&self, module: Uuid) -> Uuid {
+        let new = items::NewItem {
+            kind: items::Kind::ExternalLink,
+            title: format!("Link of {}", self.slug),
+            ref_id: None,
+            url: Some("https://example.com/suite".into()),
             position: None,
         };
         items::create(&self.pool, scope(self.id), module, &new, now())

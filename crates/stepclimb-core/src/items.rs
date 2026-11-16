@@ -21,6 +21,7 @@ use crate::{
     db::{epoch_micros, from_epoch_micros},
     id::new_id,
     modules::{Error, lock_course, position, same_set, valid_title},
+    rules::{Requirement, RequirementError},
 };
 
 /// The most items a module holds (Q4).
@@ -117,6 +118,8 @@ pub struct Item {
     pub published: bool,
     pub ref_id: Option<Uuid>,
     pub url: Option<String>,
+    /// What completes the item (spec 04 B3).
+    pub requirement: Option<Requirement>,
     pub created_at: SystemTime,
     pub updated_at: SystemTime,
 }
@@ -153,6 +156,7 @@ struct Row {
     published: bool,
     ref_id: Option<Uuid>,
     url: Option<String>,
+    requirement: Option<String>,
     created_at_us: i64,
     updated_at_us: i64,
 }
@@ -161,11 +165,18 @@ impl TryFrom<Row> for Item {
     type Error = Error;
 
     fn try_from(row: Row) -> Result<Self, Error> {
+        let stored = |column| Error::Stored { id: row.id, column };
+        let requirement = row
+            .requirement
+            .as_deref()
+            .map(|text| {
+                let value = serde_json::from_str(text).map_err(|_| stored("requirement"))?;
+                Requirement::parse(&value).map_err(|_| stored("requirement"))
+            })
+            .transpose()?;
         Ok(Self {
-            kind: Kind::parse(&row.kind).ok_or(Error::Stored {
-                id: row.id,
-                column: "kind",
-            })?,
+            kind: Kind::parse(&row.kind).ok_or(stored("kind"))?,
+            requirement,
             created_at: from_epoch_micros(row.created_at_us)?,
             updated_at: from_epoch_micros(row.updated_at_us)?,
             id: row.id,
@@ -189,6 +200,7 @@ pub async fn get(
     sqlx::query_as!(
         Row,
         r#"SELECT id, module_id, course_id, kind, title, position, published, ref_id, url,
+                  requirement::text AS requirement,
                   (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
                   (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM module_items WHERE org_id = $1 AND id = $2"#,
@@ -226,6 +238,7 @@ pub async fn list_for_module(
     let rows = sqlx::query_as!(
         Row,
         r#"SELECT id, module_id, course_id, kind, title, position, published, ref_id, url,
+                  requirement::text AS requirement,
                   (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
                   (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM module_items WHERE org_id = $1 AND module_id = $2
@@ -248,6 +261,7 @@ pub async fn list_for_course(
     let rows = sqlx::query_as!(
         Row,
         r#"SELECT id, module_id, course_id, kind, title, position, published, ref_id, url,
+                  requirement::text AS requirement,
                   (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
                   (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM module_items WHERE org_id = $1 AND course_id = $2
@@ -358,6 +372,56 @@ pub async fn update<'c>(
     let item = get(&mut *tx, scope, id).await?.ok_or(Error::ItemNotFound)?;
     tx.commit().await?;
     Ok(item)
+}
+
+/// Set the requirement of the item `id` of the scope's organization to `requirement`, or remove
+/// it with `None`, and set `updated_at` to `now` (spec 04 B3). The requirement must apply to
+/// the item's kind ([`Requirement::applies_to`]): otherwise [`Error::RequirementInvalid`]. The
+/// current requirement writes nothing and returns the item as it is.
+///
+/// Runs in one transaction (a savepoint when `db` is already one) under the course lock.
+pub async fn set_requirement<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
+    scope: OrgScope,
+    id: Uuid,
+    requirement: Option<Requirement>,
+    now: SystemTime,
+) -> Result<Item, Error> {
+    let now = epoch_micros(now)?;
+    let mut tx = db.begin().await?;
+    let item = locked(&mut tx, scope, id).await?;
+    if let Some(requirement) = requirement
+        && !requirement.applies_to(item.kind)
+    {
+        return Err(Error::RequirementInvalid);
+    }
+    if requirement == item.requirement {
+        return Ok(item);
+    }
+    let stored = requirement.map(|r| r.to_json().to_string());
+    sqlx::query!(
+        "UPDATE module_items
+         SET requirement = $3::text::jsonb,
+             updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond'
+         WHERE org_id = $1 AND id = $2",
+        scope.org_id(),
+        id,
+        stored,
+        now,
+    )
+    .execute(&mut *tx)
+    .await?;
+    let item = get(&mut *tx, scope, id).await?.ok_or(Error::ItemNotFound)?;
+    tx.commit().await?;
+    Ok(item)
+}
+
+/// The requirement a client sent as JSON (spec 04 B3), or why it is refused.
+pub fn parse_requirement(value: &serde_json::Value) -> Result<Requirement, Error> {
+    Requirement::parse(value).map_err(|error| match error {
+        RequirementError::Invalid => Error::RequirementInvalid,
+        RequirementError::Unavailable => Error::RequirementUnavailable,
+    })
 }
 
 /// Delete the item `id` of the scope's organization and close the gap in its module's
