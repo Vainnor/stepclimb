@@ -57,6 +57,9 @@ webauthn-authenticator-rs.workspace = true
 # The mock identity provider on 127.0.0.1 the provider sign-in tests run against (spec 05 Test
 # cases). A dev-dependency only (bin/check-layering.sh rule 5).
 stepclimb-mock-idp.workspace = true
+# The admission webhook tests' receiver checks the Standard Webhooks signature with its own
+# HMAC-SHA256 (docs/specs/m0/07-admission.md T10, T18); the version stepclimb-auth uses.
+hmac.workspace = true
 
 [lints]
 workspace = true
