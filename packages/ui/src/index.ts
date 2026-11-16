@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Stepclimb UI: the M0 inventory of docs/specs/m0/13-base-ui-components.md (Foundations, Actions,
-// the M0 forms, Overlays, Navigation and the M0 data components), and the theme and strings
-// providers.
+// the M0 forms, Overlays, Navigation and the M0 data components), the M1 components of
+// docs/specs/m1/16-learning-ui-components.md built so far, and the theme and strings providers.
+export {
+  type LearningState,
+  learningStateIcons,
+  learningStates,
+  StatusChip,
+  type StatusChipProps,
+  statusChip,
+} from "./learning/status-chip";
 export { AppShell, type AppShellProps, appShell } from "./patterns/app-shell";
 export { BottomTabs, type BottomTabsProps, bottomTabs } from "./patterns/bottom-tabs";
 export {
@@ -19,6 +27,15 @@ export {
 } from "./patterns/data-table";
 export { EmptyState, type EmptyStateProps, emptyState } from "./patterns/empty-state";
 export { ErrorState, type ErrorStateProps, errorState } from "./patterns/error-state";
+export {
+  acceptsType,
+  checkFiles,
+  FileDrop,
+  type FileDropProps,
+  type FileRejection,
+  type FileUpload,
+  fileDrop,
+} from "./patterns/file-drop";
 export { FormError, type FormErrorProps, formError } from "./patterns/form-error";
 export {
   type Organization,
@@ -40,6 +57,7 @@ export {
 export { Button, type ButtonProps, button } from "./primitives/button";
 export { ButtonGroup, type ButtonGroupProps, buttonGroup } from "./primitives/button-group";
 export { ButtonLink, type ButtonLinkProps, buttonLink } from "./primitives/button-link";
+export { calendar } from "./primitives/calendar";
 export {
   Checkbox,
   CheckboxGroup,
@@ -67,6 +85,13 @@ export {
   type DataListProps,
   dataList,
 } from "./primitives/data-list";
+export { dateInput } from "./primitives/date-input";
+export { DatePicker, type DatePickerProps, datePicker } from "./primitives/date-picker";
+export {
+  DateRangePicker,
+  type DateRangePickerProps,
+  dateRangePicker,
+} from "./primitives/date-range-picker";
 export {
   Dialog,
   DialogBody,
@@ -170,6 +195,7 @@ export {
 export { Text, type TextProps, text } from "./primitives/text";
 export { TextArea, type TextAreaProps, textArea } from "./primitives/text-area";
 export { TextField, type TextFieldProps, textField } from "./primitives/text-field";
+export { TimeField, type TimeFieldProps, timeField } from "./primitives/time-field";
 export {
   createToastQueue,
   TOAST_MIN_TIMEOUT_MS,
@@ -193,6 +219,7 @@ export {
 } from "./primitives/toggle-button";
 export { Toolbar, type ToolbarProps, toolbar } from "./primitives/toolbar";
 export { Tooltip, type TooltipProps, TooltipTrigger, tooltip } from "./primitives/tooltip";
+export { Tree, TreeItem, type TreeItemProps, type TreeProps, tree } from "./primitives/tree";
 export { VisuallyHidden, type VisuallyHiddenProps } from "./primitives/visually-hidden";
 export { type Catalog, type Messages, uiMessages } from "./strings/catalog";
 export {

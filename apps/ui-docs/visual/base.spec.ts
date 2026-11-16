@@ -24,8 +24,10 @@ const INTERACTIVE = [
   "[role=menuitemradio]",
   "[role=option]",
   "[role=radio]",
+  "[role=spinbutton]",
   "[role=switch]",
   "[role=tab]",
+  "[role=textbox]",
   "[role=treeitem]",
   "input:not([type=hidden])",
   "select",
@@ -223,6 +225,34 @@ test.describe("at 1280 px @desktop", () => {
         expect(border).toEqual({ style: "solid", width: "1px" });
       });
     }
+  });
+
+  test("T2: with forced colors, every StatusChip keeps its own icon and label", async ({
+    page,
+  }) => {
+    // docs/specs/m1/16-learning-ui-components.md B3: color is never the only signal.
+    await openStory(page, story("data-statuschip--all-states"), "light");
+    await page.emulateMedia({ forcedColors: "active" });
+    const chips = await page.locator("[data-slot=status-chip]").evaluateAll((els) =>
+      els.map((el) => {
+        const icon = el.querySelector("svg");
+        const box = icon?.getBoundingClientRect();
+        return {
+          drawing: icon?.innerHTML ?? "",
+          label: el.textContent ?? "",
+          // Forced colors paint the icon in the text color, not the canvas color.
+          visible:
+            box !== undefined &&
+            box.width > 0 &&
+            icon !== null &&
+            getComputedStyle(icon).color !== getComputedStyle(el).backgroundColor,
+        };
+      }),
+    );
+    expect(chips).toHaveLength(6);
+    expect(chips.every((c) => c.visible)).toBe(true);
+    expect(new Set(chips.map((c) => c.drawing)).size).toBe(6);
+    expect(new Set(chips.map((c) => c.label)).size).toBe(6);
   });
 
   test("the document does not rubber-band, and controls are not text-selectable", async ({

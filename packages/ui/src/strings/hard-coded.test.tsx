@@ -2,15 +2,18 @@
 // T2 (docs/specs/m0/13-base-ui-components.md B5): every component rendered with a catalog whose
 // messages are all «id», and with the caller's content marked the same way, shows no text and no
 // accessible name of its own that is not a catalog message.
+import { parseZonedDateTime } from "@internationalized/date";
 import { CheckCircleIcon, GearIcon, HouseIcon } from "@phosphor-icons/react";
 import type { ReactElement } from "react";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { StatusChip } from "../learning/status-chip";
 import { AppShell } from "../patterns/app-shell";
 import { BottomTabs } from "../patterns/bottom-tabs";
 import { CommandPalette } from "../patterns/command-palette";
 import { DataTable } from "../patterns/data-table";
 import { EmptyState } from "../patterns/empty-state";
 import { ErrorState } from "../patterns/error-state";
+import { FileDrop } from "../patterns/file-drop";
 import { OrgSwitcher } from "../patterns/org-switcher";
 import { SideNav } from "../patterns/side-nav";
 import { TopBar } from "../patterns/top-bar";
@@ -23,6 +26,8 @@ import { Checkbox, CheckboxGroup } from "../primitives/checkbox";
 import { ComboBox, ComboBoxItem } from "../primitives/combo-box";
 import { CopyButton } from "../primitives/copy-button";
 import { DataList, DataListItem } from "../primitives/data-list";
+import { DatePicker } from "../primitives/date-picker";
+import { DateRangePicker } from "../primitives/date-range-picker";
 import { Dialog } from "../primitives/dialog";
 import { Heading } from "../primitives/heading";
 import { IconButton } from "../primitives/icon-button";
@@ -45,10 +50,12 @@ import { Tab, TabList, TabPanel, Tabs } from "../primitives/tabs";
 import { Text } from "../primitives/text";
 import { TextArea } from "../primitives/text-area";
 import { TextField } from "../primitives/text-field";
+import { TimeField } from "../primitives/time-field";
 import { createToastQueue, ToastRegion } from "../primitives/toast";
 import { ToggleButton, ToggleButtonGroup } from "../primitives/toggle-button";
 import { Toolbar } from "../primitives/toolbar";
 import { Tooltip, TooltipTrigger } from "../primitives/tooltip";
+import { Tree, TreeItem } from "../primitives/tree";
 import { VisuallyHidden } from "../primitives/visually-hidden";
 import { renderWithStrings, unmarkedText } from "../test/strings";
 import { Icon } from "../theme/icon";
@@ -309,6 +316,56 @@ const components: [string, ReactElement][] = [
     </TooltipTrigger>,
   ],
   ["VisuallyHidden", <VisuallyHidden key="v">«caller»</VisuallyHidden>],
+  [
+    "FileDrop (uploading, with an error)",
+    <FileDrop
+      key="fd"
+      onSelect={() => {}}
+      maxFileSize={1}
+      description="«caller»"
+      upload={{ name: "«caller»", fraction: 0.5 }}
+      errorMessage="«caller»"
+    />,
+  ],
+  ["StatusChip", <StatusChip key="sc" state="complete" />],
+  [
+    "Tree (open)",
+    <Tree key="tr" aria-label="«caller»" defaultExpandedKeys={["a"]}>
+      <TreeItem id="a" title="«caller»">
+        <TreeItem id="b" title="«caller»" />
+      </TreeItem>
+    </Tree>,
+  ],
+];
+
+const due = parseZonedDateTime("2026-03-08T09:00[America/New_York]");
+
+/** The date fields: their segments and calendar show values Intl formats, not messages. */
+const dateFields: [string, ReactElement][] = [
+  [
+    "DatePicker (open)",
+    <DatePicker key="dp" label="«caller»" timeZone="UTC" defaultValue={due} defaultOpen />,
+  ],
+  [
+    "DateRangePicker (open)",
+    <DateRangePicker
+      key="dr"
+      label="«caller»"
+      timeZone="UTC"
+      defaultValue={{ start: due, end: due.add({ days: 2 }) }}
+      defaultOpen
+    />,
+  ],
+  [
+    "TimeField",
+    <TimeField
+      key="tf"
+      label="«caller»"
+      timeZone="UTC"
+      defaultValue={due}
+      description="«caller»"
+    />,
+  ],
 ];
 
 describe("no hard-coded strings", () => {
@@ -340,6 +397,33 @@ describe("no hard-coded strings", () => {
     renderWithStrings(ui, { marked: true });
     // The whole body: overlays render outside the container.
     expect(unmarkedText(document.body).filter(notReactAria)).toEqual([]);
+  });
+
+  // The segments (digits, "AM", the zone's short name, "mm" while empty), the calendar's month
+  // heading, weekday initials and day numbers, and each day's full name are the locale's
+  // formatting of the value through Intl, which React Aria does. React Aria also adds, with no
+  // prop to replace them: the calendar's name and a visually hidden heading repeating the visible
+  // month, a hidden "Next" button for touch screen readers after the grid, and descriptions of the
+  // selected value ("Selected Date: …", "Selected Time: …", "Selected Range: …") and of how to
+  // start a range.
+  const intlFormatted = [
+    '[data-slot="date-segment"]',
+    '[data-slot="calendar-heading"]',
+    '[data-slot="calendar-grid"]',
+  ];
+  const reactAriaDates = [
+    /^[A-Z][a-z]+\d{4}$/,
+    /^Next$/,
+    /^Selected(Date|Time|Range)/,
+    /^Clicktostartselectingdaterange$/,
+  ];
+  const notReactAriaDates = (text: string) =>
+    notReactAria(text) && !reactAriaDates.some((pattern) => pattern.test(text));
+  it.each(dateFields)("%s renders only catalog messages outside Intl's values", (_, ui) => {
+    renderWithStrings(ui, { marked: true });
+    const copy = document.body.cloneNode(true) as HTMLElement;
+    for (const el of copy.querySelectorAll(intlFormatted.join(", "))) el.remove();
+    expect(unmarkedText(copy).filter(notReactAriaDates)).toEqual([]);
   });
 
   it("notices a hard-coded string", () => {

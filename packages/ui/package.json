@@ -16,6 +16,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@internationalized/date": "3.12.4",
     "@phosphor-icons/react": "2.1.10",
     "@stepclimb/tokens": "workspace:*",
     "intl-messageformat": "12.1.4",
