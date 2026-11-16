@@ -57,8 +57,10 @@ listed here with a pointer so the inventory is complete in one place.
   (`04`) use them. Coordinator decisions (overnight, 2026-11-16), pending owner review: each field
   takes a required `timeZone` for a value entered into the empty field and leaves a given value
   in its own zone; the calendar opens in a Popover at 768 px and wider and in a bottom sheet under
-  it, as `m0/13` Q10 does for Select; number segments show leading zeros and are at least 24 px
-  square, which axe's WCAG 2.5.8 target-size check requires. React Aria Components 1.22.1 keeps
+  it, as `m0/13` Q10 does for Select; number segments show leading zeros. Every segment but the
+  literals is a target: at least 24 px square with a fine pointer (axe's WCAG 2.5.8 check) and at
+  least 44 px wide and tall under a coarse pointer, the plan's touch floor (`ui.md`), with the
+  field wrapping at 375 px where that does not fit. React Aria Components 1.22.1 keeps
   the old UTC offset when the day segment is stepped with the arrow keys across a daylight-saving
   change (09:00 EST stepped to the next day gives 10:00 EDT); typing the day or picking it in the
   calendar gives 09:00 EDT. T3 is tested through typing and the calendar.
@@ -69,7 +71,10 @@ listed here with a pointer so the inventory is complete in one place.
   image insertion use. Coordinator decisions for FileDrop (overnight, 2026-11-16), pending owner
   review: it checks type (MIME type, `type/*` group or extension) and size before calling
   `onSelect`, lists each refused file with the reason in a live region, and refuses all files
-  when several are dropped on a zone that takes one; the caller reports upload progress
+  when several are dropped on a zone that takes one; these checks save a wasted upload and are
+  not a control, since the server refuses only a file above the instance's `max_file_bytes` or
+  over the storage limit and records its sniffed type without refusing any (`06` B4, B6); a drag
+  that carries no file is refused while it is over the zone; the caller reports upload progress
   (`upload`) and the server's refusal (`errorMessage`); under a coarse pointer the drag prompt is
   visually hidden, leaving the button.
 - **B7.** Tree (React Aria `Tree`) shows the account tree and course file folders, with keyboard

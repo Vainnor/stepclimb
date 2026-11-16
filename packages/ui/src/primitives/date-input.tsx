@@ -10,6 +10,7 @@ import {
   toZoned,
   type ZonedDateTime,
 } from "@internationalized/date";
+import { useMemo } from "react";
 import {
   DateInput as AriaDateInput,
   type DateInputProps,
@@ -23,14 +24,27 @@ const parts = field();
 export const dateInput = tv({
   slots: {
     /** The bordered well around the input(s) and the calendar button. */
-    group: [parts.control(), "flex min-h-(--sc-control-h) items-stretch"],
-    input: "flex min-w-0 flex-1 flex-wrap items-center px-3 py-1.5 tabular-nums",
-    // An editable segment is at least 24 px square (WCAG 2.5.8). The fields force leading zeros,
-    // so every number segment is two digits or more and the segments sit evenly.
+    group: [
+      parts.control(),
+      "flex min-h-(--sc-control-h) items-stretch pointer-coarse:min-h-(--sc-control-touch)",
+    ],
+    // Under a coarse pointer the segments fill the input's height, so each is a touch target.
+    input: [
+      "flex min-w-0 flex-1 flex-wrap items-center px-3 py-1.5 tabular-nums",
+      "pointer-coarse:items-stretch pointer-coarse:py-0",
+    ],
+    // Every segment but the literals is a target, the zone's name included (React Aria makes it a
+    // focusable read-only textbox): at least 24 px square with a fine pointer (WCAG 2.5.8) and
+    // 44 px under a coarse one (the plan's touch floor); the field wraps when that does not fit.
+    // The fields force leading zeros, so every number segment is two digits or more and the
+    // segments sit evenly.
     segment: [
-      "inline-flex min-h-6 min-w-6 items-center justify-center rounded-xs px-px text-fg-strong",
+      "inline-flex items-center justify-center rounded-xs px-px text-fg-strong",
       "outline-none caret-transparent",
-      "data-[type=literal]:min-w-0 data-[type=timeZoneName]:min-w-0",
+      "not-data-[type=literal]:min-h-6",
+      "not-data-[type=literal]:min-w-6",
+      "pointer-coarse:not-data-[type=literal]:min-h-(--sc-control-touch)",
+      "pointer-coarse:not-data-[type=literal]:min-w-(--sc-control-touch)",
       "data-[placeholder]:text-fg-soft data-[type=literal]:text-fg-sub",
       "data-[type=timeZoneName]:ps-1.5 data-[type=timeZoneName]:text-fg-sub",
       "data-[focused]:bg-brand data-[focused]:text-on-brand",
@@ -63,6 +77,11 @@ export function DateInput({
       )}
     </AriaDateInput>
   );
+}
+
+/** `zonedPlaceholder(timeZone)`, made again only when the zone changes. */
+export function useZonedPlaceholder(timeZone: string): ZonedDateTime {
+  return useMemo(() => zonedPlaceholder(timeZone), [timeZone]);
 }
 
 /**

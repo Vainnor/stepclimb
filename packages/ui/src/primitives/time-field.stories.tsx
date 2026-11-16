@@ -18,24 +18,24 @@ const meta = {
     status: { missing: ["States", "Themes", "Accessibility", "Responsive and touch"] },
     docs: {
       description: {
-        component: `A labeled time of day, typed into segments or stepped with the arrow keys, followed by its time zone's short name. The value is a \`ZonedDateTime\`, so the time names an instant on a day; stepping the hour across a daylight-saving change gives the real next hour.
+        component: `A labeled time of day on a day the screen already fixes, typed into segments or stepped with the arrow keys, followed by its time zone's short name. The value is a \`ZonedDateTime\`, so the time names one instant on that day; stepping the hour across a daylight-saving change gives the real next hour.
 
-**Usage.** \`<TimeField label={t("reminders.sendAt")} timeZone={me.tz} value={sendAt} onChange={setSendAt} />\`. \`timeZone\` is the user's own (\`users.tz\`) for a time typed into the empty field.
+**Usage.** For a practical session on 16 November 2026, shown above the field: \`<TimeField label={t("session.startsAt")} timeZone={me.tz} value={startsAt} onChange={setStartsAt} />\`, where \`startsAt\` is that day in the user's zone (\`users.tz\`). \`timeZone\` is the zone a time typed into the empty field gets.
 
-**Do** use it where the day is known or fixed by the screen, and show which day that is.
+**Do** say which day the time is on, next to the field.
 
-**Don't** use it for a date and time together (that is a \`DatePicker\`) or for a duration (a \`NumberField\` with a unit).`,
+**Don't** use it for a time that recurs every day or week, such as the hour reminders go out: a \`ZonedDateTime\` holds one day's UTC offset, so the time would move by an hour after a daylight-saving change. Store a wall-clock time and a zone for those. Don't use it for a date and time together (that is a \`DatePicker\`) or for a duration (a \`NumberField\` with a unit).`,
       },
     },
   },
-  args: { label: "Reminder time", timeZone: "America/Chicago", className: "max-w-48" },
+  args: { label: "Session starts", timeZone: "America/Chicago", className: "max-w-48" },
 } satisfies Meta<typeof TimeField>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const Default: Story = {
-  args: { defaultValue: nine, description: "Reminders go out at this time." },
+  args: { defaultValue: nine, description: "On Monday, 16 November 2026." },
 };
 
 export const Empty: Story = { args: { placeholderValue } };
@@ -60,7 +60,7 @@ export const Disabled: Story = { args: { defaultValue: nine, isDisabled: true } 
 
 export const LongContent: Story = {
   args: {
-    label: "The time of day the escalation email goes to the learner's manager",
+    label: "The time the practical assessment with the examiner starts on Monday",
     defaultValue: parseZonedDateTime("2026-11-16T21:45[Asia/Kathmandu]"),
     timeZone: "Asia/Kathmandu",
   },
@@ -72,13 +72,13 @@ export const Matrix: Story = {
   render: () => (
     <ThemeMatrix>
       <TimeField
-        label="Reminder time"
+        label="Session starts"
         timeZone="America/Chicago"
         defaultValue={nine}
         className="max-w-48"
       />
       <TimeField
-        label="Reminder time"
+        label="Session starts"
         timeZone="America/Chicago"
         placeholderValue={placeholderValue}
         isInvalid

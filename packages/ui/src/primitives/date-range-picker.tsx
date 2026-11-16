@@ -15,7 +15,7 @@ import { tv } from "../lib/tv";
 import { useStepclimbStrings } from "../strings/strings";
 import { Icon } from "../theme/icon";
 import { PickerOverlay, PickerRangeCalendar } from "./calendar";
-import { DateInput, dateInput, zonedPlaceholder } from "./date-input";
+import { DateInput, dateInput, useZonedPlaceholder } from "./date-input";
 import { FieldParts, type FieldPartsProps, field } from "./field";
 
 const parts = field();
@@ -29,7 +29,11 @@ export const dateRangePicker = tv({
     // Each end takes its own width and wraps within itself only when it alone is too wide, so a
     // narrow field puts the end under the start instead of splitting both.
     input: "flex-initial",
-    separator: "px-1 text-fg-sub",
+    // The separator leads the end, so a narrow field that puts the end on its own line starts
+    // that line with it, level with the end's first row of segments.
+    end: "flex min-w-0 flex-initial items-center pointer-coarse:items-start",
+    separator:
+      "inline-flex shrink-0 items-center px-1 text-fg-sub pointer-coarse:min-h-(--sc-control-touch)",
     button: input.button(),
   },
 });
@@ -64,11 +68,12 @@ export function DateRangePicker({
 }: DateRangePickerProps) {
   const { t } = useStepclimbStrings();
   const styles = dateRangePicker();
+  const fallbackPlaceholder = useZonedPlaceholder(timeZone);
   return (
     <AriaDateRangePicker
       data-slot="date-range-picker"
       shouldForceLeadingZeros
-      placeholderValue={placeholderValue ?? zonedPlaceholder(timeZone)}
+      placeholderValue={placeholderValue ?? fallbackPlaceholder}
       {...props}
       className={styles.root({ className })}
     >
@@ -76,14 +81,16 @@ export function DateRangePicker({
         <Group data-slot="date-range-picker-group" className={styles.group()}>
           <div data-slot="date-range-picker-inputs" className={styles.inputs()}>
             <DateInput slot="start" className={styles.input()} />
-            <span
-              aria-hidden
-              data-slot="date-range-picker-separator"
-              className={styles.separator()}
-            >
-              –
-            </span>
-            <DateInput slot="end" className={styles.input()} />
+            <div data-slot="date-range-picker-end" className={styles.end()}>
+              <span
+                aria-hidden
+                data-slot="date-range-picker-separator"
+                className={styles.separator()}
+              >
+                {t("dateRangePicker.separator")}
+              </span>
+              <DateInput slot="end" className={styles.input()} />
+            </div>
           </div>
           <Button
             data-slot="date-range-picker-button"

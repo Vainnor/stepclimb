@@ -3,7 +3,7 @@ import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { renderWithStrings, unmarkedText } from "../test/strings";
-import { acceptsType, checkFiles, FileDrop, sizeValues } from "./file-drop";
+import { acceptsType, checkFiles, dragCarriesFiles, FileDrop, sizeValues } from "./file-drop";
 
 const pdf = (name = "handout.pdf", size = 1000) =>
   new File([new Uint8Array(size)], name, { type: "application/pdf" });
@@ -45,6 +45,17 @@ describe("acceptsType", () => {
   it("refuses a file with no type against a MIME group", () => {
     const unknown = new File(["x"], "data", { type: "" });
     expect(acceptsType(unknown, ["image/*"])).toBe(false);
+  });
+});
+
+describe("dragCarriesFiles", () => {
+  const items = (...kinds: string[]) =>
+    kinds.map((kind) => ({ kind })) as unknown as DataTransferItemList;
+  it("is true when any item is a file, or for Safari's bare Files type", () => {
+    expect(dragCarriesFiles({ items: items("string", "file"), types: [] })).toBe(true);
+    expect(dragCarriesFiles({ items: items(), types: ["Files"] })).toBe(true);
+    expect(dragCarriesFiles({ items: items("string"), types: ["text/plain"] })).toBe(false);
+    expect(dragCarriesFiles(null)).toBe(false);
   });
 });
 
@@ -157,6 +168,40 @@ describe("FileDrop", () => {
       expect(screen.getByRole("alert")).toHaveTextContent("diagram.png is not a type of file"),
     );
     expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a drag that carries no file, such as a link", async () => {
+    const onSelect = vi.fn();
+    const { container } = renderWithStrings(<FileDrop onSelect={onSelect} />);
+    const zone = container.querySelector('[data-slot="file-drop"]');
+    if (!zone) throw new Error("no zone");
+    const dataTransfer = {
+      dropEffect: "none",
+      effectAllowed: "all",
+      types: ["text/uri-list", "text/plain"],
+      files: [],
+      items: [
+        { kind: "string", type: "text/uri-list", getAsString: (f: (s: string) => void) => f("") },
+        { kind: "string", type: "text/plain", getAsString: (f: (s: string) => void) => f("") },
+      ],
+      getData: () => "https://example.test/",
+    };
+    await act(async () => {
+      fireEvent.dragEnter(zone, { dataTransfer, clientX: 1, clientY: 1 });
+      fireEvent.dragOver(zone, { dataTransfer, clientX: 1, clientY: 1 });
+    });
+    expect(zone).not.toHaveAttribute("data-drop-target");
+    await act(async () => {
+      fireEvent.drop(zone, { dataTransfer, clientX: 1, clientY: 1 });
+    });
+    expect(onSelect).not.toHaveBeenCalled();
+    // A file drag over the same zone is a drop target.
+    const files = { ...dataTransfer, types: ["Files"], items: [{ kind: "file", type: "" }] };
+    await act(async () => {
+      fireEvent.dragEnter(zone, { dataTransfer: files, clientX: 1, clientY: 1 });
+      fireEvent.dragOver(zone, { dataTransfer: files, clientX: 1, clientY: 1 });
+    });
+    expect(zone).toHaveAttribute("data-drop-target", "true");
   });
 
   it("refuses several dropped files on a zone that takes one", async () => {

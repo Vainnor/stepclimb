@@ -32,6 +32,7 @@ export const uiMessages: Catalog = {
     "dataList.selectItem": "Select",
     "dataTable.loading": "Loading",
     "datePicker.openCalendar": "Open calendar",
+    "dateRangePicker.separator": "–",
     "dialog.close": "Close",
     "field.invalid": "Check what you entered in this field.",
     "field.valueMissing": "Fill in this field.",

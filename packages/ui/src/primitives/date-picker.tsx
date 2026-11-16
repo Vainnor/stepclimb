@@ -16,7 +16,7 @@ import { tv } from "../lib/tv";
 import { useStepclimbStrings } from "../strings/strings";
 import { Icon } from "../theme/icon";
 import { PickerCalendar, PickerOverlay } from "./calendar";
-import { DateInput, dateInput, zonedPlaceholder } from "./date-input";
+import { DateInput, dateInput, useZonedPlaceholder } from "./date-input";
 import { FieldParts, type FieldPartsProps, field } from "./field";
 
 const parts = field();
@@ -56,11 +56,12 @@ export function DatePicker({
 }: DatePickerProps) {
   const { t } = useStepclimbStrings();
   const styles = datePicker();
+  const fallbackPlaceholder = useZonedPlaceholder(timeZone);
   return (
     <AriaDatePicker
       data-slot="date-picker"
       shouldForceLeadingZeros
-      placeholderValue={placeholderValue ?? zonedPlaceholder(timeZone)}
+      placeholderValue={placeholderValue ?? fallbackPlaceholder}
       {...props}
       className={styles.root({ className })}
     >

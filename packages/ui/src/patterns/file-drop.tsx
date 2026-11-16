@@ -2,9 +2,12 @@
 // FileDrop: a drop zone with a "Choose file" button, for course file uploads and image insertion
 // (docs/specs/m1/16-learning-ui-components.md B6). Built on React Aria's DropZone and FileTrigger:
 // a file can be dropped, chosen with the button or pasted into the zone's hidden drop button from
-// the keyboard. It refuses a file of a type or size the caller does not accept, saying which file
-// and why, before handing the rest to `onSelect`; the server checks every upload again. It shows
-// an upload's progress, which the caller reports.
+// the keyboard. A drag that carries no file is refused while it is over the zone. It refuses a
+// file of a type or size the caller does not accept, saying which file and why, before handing
+// the rest to `onSelect`. Those checks save a person a wasted upload and are not a control: the
+// server (docs/specs/m1/06-files.md B4, B6) refuses only a file above the instance's
+// `max_file_bytes` and one that does not fit the storage limit, and records the type it sniffs
+// without refusing any. It shows an upload's progress, which the caller reports.
 import { UploadSimpleIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { type ReactNode, useRef, useState } from "react";
 import {
@@ -141,6 +144,7 @@ export function FileDrop({
   const { t } = useStepclimbStrings();
   const [problems, setProblems] = useState<Problem[]>([]);
   const nextId = useRef(0);
+  const carriesFiles = useRef(false);
   const show = (texts: string[]) =>
     setProblems(texts.map((text) => ({ id: nextId.current++, text })));
   const multiple = allowsMultiple ? "yes" : "no";
@@ -167,56 +171,77 @@ export function FileDrop({
   }
 
   return (
-    <DropZone
-      data-slot="file-drop"
-      aria-label={t("fileDrop.dropTarget")}
-      {...props}
-      isDisabled={isDisabled}
-      onDrop={async (event) => {
-        const items = event.items.filter(isFileDropItem);
-        receive(await Promise.all(items.map((item) => item.getFile())));
+    // React Aria's drag types say which MIME types a drag carries, not whether any item is a file
+    // (a dragged link and a dragged .txt file both read text/plain); the browser's dataTransfer
+    // does. Read before the DropZone's own handlers, which ask `getDropOperation`.
+    <div
+      data-slot="file-drop-frame"
+      className="contents"
+      onDragEnterCapture={(event) => {
+        carriesFiles.current = dragCarriesFiles(event.dataTransfer);
       }}
-      className={styles.root({ className })}
     >
-      <Icon icon={UploadSimpleIcon} size="lg" className={styles.icon()} />
-      <Text data-slot="file-drop-prompt" slot="label" className={styles.prompt()}>
-        {t("fileDrop.prompt", { multiple })}
-      </Text>
-      <FileTrigger
-        acceptedFileTypes={acceptedFileTypes}
-        allowsMultiple={allowsMultiple}
-        onSelect={(list) => receive(list === null ? [] : [...list])}
+      <DropZone
+        data-slot="file-drop"
+        aria-label={t("fileDrop.dropTarget")}
+        {...props}
+        isDisabled={isDisabled}
+        getDropOperation={() => (carriesFiles.current ? "copy" : "cancel")}
+        onDrop={async (event) => {
+          const items = event.items.filter(isFileDropItem);
+          receive(await Promise.all(items.map((item) => item.getFile())));
+        }}
+        className={styles.root({ className })}
       >
-        <Button data-slot="file-drop-choose" isDisabled={isDisabled}>
-          {t("fileDrop.choose", { multiple })}
-        </Button>
-      </FileTrigger>
-      {description === undefined && maxFileSize === undefined ? null : (
-        <p data-slot="file-drop-limits" className={styles.limits()}>
-          {description}
-          {description !== undefined && maxFileSize !== undefined ? " " : null}
-          {maxFileSize === undefined
-            ? null
-            : t("fileDrop.limit", { size: t("fileDrop.size", sizeValues(maxFileSize)) })}
-        </p>
-      )}
-      {upload === undefined ? null : (
-        <ProgressBar
-          data-slot="file-drop-progress"
-          label={t("fileDrop.uploading", { name: upload.name })}
-          value={upload.fraction * 100}
-          className={styles.progress()}
-        />
-      )}
-      {/* In the page from the first render, so a refusal is announced when it appears. */}
-      <div data-slot="file-drop-errors" role="alert" className={styles.errors()}>
-        {problems.map((problem) => (
-          <FileDropError key={problem.id}>{problem.text}</FileDropError>
-        ))}
-        {errorMessage === undefined ? null : <FileDropError>{errorMessage}</FileDropError>}
-      </div>
-    </DropZone>
+        <Icon icon={UploadSimpleIcon} size="lg" className={styles.icon()} />
+        <Text data-slot="file-drop-prompt" slot="label" className={styles.prompt()}>
+          {t("fileDrop.prompt", { multiple })}
+        </Text>
+        <FileTrigger
+          acceptedFileTypes={acceptedFileTypes}
+          allowsMultiple={allowsMultiple}
+          onSelect={(list) => receive(list === null ? [] : [...list])}
+        >
+          <Button data-slot="file-drop-choose" isDisabled={isDisabled}>
+            {t("fileDrop.choose", { multiple })}
+          </Button>
+        </FileTrigger>
+        {description === undefined && maxFileSize === undefined ? null : (
+          <p data-slot="file-drop-limits" className={styles.limits()}>
+            {description}
+            {description !== undefined && maxFileSize !== undefined ? " " : null}
+            {maxFileSize === undefined
+              ? null
+              : t("fileDrop.limit", { size: t("fileDrop.size", sizeValues(maxFileSize)) })}
+          </p>
+        )}
+        {upload === undefined ? null : (
+          <ProgressBar
+            data-slot="file-drop-progress"
+            label={t("fileDrop.uploading", { name: upload.name })}
+            value={upload.fraction * 100}
+            className={styles.progress()}
+          />
+        )}
+        {/* In the page from the first render, so a refusal is announced when it appears. */}
+        <div data-slot="file-drop-errors" role="alert" className={styles.errors()}>
+          {problems.map((problem) => (
+            <FileDropError key={problem.id}>{problem.text}</FileDropError>
+          ))}
+          {errorMessage === undefined ? null : <FileDropError>{errorMessage}</FileDropError>}
+        </div>
+      </DropZone>
+    </div>
   );
+}
+
+/**
+ * Whether a drag carries at least one file. Safari lists no items while dragging files, only the
+ * `Files` type.
+ */
+export function dragCarriesFiles(data: Pick<DataTransfer, "items" | "types"> | null): boolean {
+  if (data === null) return false;
+  return [...data.items].some((item) => item.kind === "file") || data.types.includes("Files");
 }
 
 function FileDropError({ children }: { children: ReactNode }) {

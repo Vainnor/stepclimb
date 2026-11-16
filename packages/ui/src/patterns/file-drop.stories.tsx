@@ -12,11 +12,11 @@ const meta = {
     status: { missing: ["States", "Themes", "Accessibility", "Responsive and touch"] },
     docs: {
       description: {
-        component: `A zone to drop files on, with a button to choose them, for course file uploads and image insertion. It refuses a file of a type or size you do not accept and says which file and why, then hands the rest to \`onSelect\`. A keyboard user can also paste a file into the zone. While a file uploads it shows the progress you report.
+        component: `A zone to drop files on, with a button to choose them, for course file uploads and image insertion. It refuses a drag that carries no file, and a file of a type or size you do not accept, saying which file and why; it hands the rest to \`onSelect\`. A keyboard user can also paste a file into the zone. While a file uploads it shows the progress you report.
 
 **Usage.** \`<FileDrop onSelect={startUpload} acceptedFileTypes={["application/pdf", "image/*"]} maxFileSize={limits.maxFileBytes} description={t("files.types")} upload={progress} errorMessage={uploadError} />\`.
 
-**Do** pass the server's own size limit, and show the server's refusal in \`errorMessage\`: the server checks every upload again, whatever the zone accepted.
+**Do** pass the server's own size limit, and show the server's refusal in \`errorMessage\`. The zone's type and size checks only save people a wasted upload: the server refuses a file above the instance's size limit or over the organization's storage, and records the type it sniffs without refusing any.
 
 **Don't** start the upload yourself on drop of a refused file, or hide the button: on a phone it is the only way to pick a file.`,
       },

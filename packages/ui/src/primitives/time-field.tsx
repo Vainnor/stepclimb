@@ -9,13 +9,16 @@ import {
   type TimeFieldProps as AriaTimeFieldProps,
 } from "react-aria-components";
 import { tv } from "../lib/tv";
-import { DateInput, zonedPlaceholder } from "./date-input";
+import { DateInput, useZonedPlaceholder } from "./date-input";
 import { FieldParts, type FieldPartsProps, field } from "./field";
 
 const parts = field();
 
 export const timeField = tv({
-  slots: { root: parts.root(), group: [parts.control(), "min-h-(--sc-control-h)"] },
+  slots: {
+    root: parts.root(),
+    group: [parts.control(), "min-h-(--sc-control-h) pointer-coarse:min-h-(--sc-control-touch)"],
+  },
 });
 
 export interface TimeFieldProps
@@ -44,11 +47,12 @@ export function TimeField({
   ...props
 }: TimeFieldProps) {
   const styles = timeField();
+  const fallbackPlaceholder = useZonedPlaceholder(timeZone);
   return (
     <AriaTimeField
       data-slot="time-field"
       shouldForceLeadingZeros
-      placeholderValue={placeholderValue ?? zonedPlaceholder(timeZone)}
+      placeholderValue={placeholderValue ?? fallbackPlaceholder}
       {...props}
       className={styles.root({ className })}
     >

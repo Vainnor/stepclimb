@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { FileIcon, FolderIcon } from "@phosphor-icons/react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 import { ThemeMatrix } from "../storybook/theme-matrix";
 import { Tree, TreeItem } from "./tree";
 
@@ -75,10 +75,16 @@ export const FocusVisible: Story = {
       {accounts}
     </Tree>
   ),
+  // A Tab that runs as the story renders, before the rows are found in the page, leaves focus on
+  // the tree and no row. So the play waits for the first row, tabs, and waits for React Aria to
+  // move focus onto the row, which it does after the tree's own focus event.
   play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const first = await canvas.findByRole("row", { name: /^Example Air Traffic/ });
     await userEvent.tab();
+    await waitFor(() => expect(first).toHaveFocus());
     await userEvent.keyboard("{ArrowDown}");
-    await expect(within(canvasElement).getByRole("row", { name: /^Ground school/ })).toHaveFocus();
+    await waitFor(() => expect(canvas.getByRole("row", { name: /^Ground school/ })).toHaveFocus());
   },
 };
 
