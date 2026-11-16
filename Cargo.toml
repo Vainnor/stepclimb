@@ -138,6 +138,16 @@ jsonwebtoken = { version = "=11.1.0", default-features = false }
 # I3), the version openidconnect 4.1 already brings. No default features: its reqwest adapter is
 # not used, the token request goes through `stepclimb_auth::outbound` (ADR 0025).
 oauth2 = { version = "=5.0.0", default-features = false }
+# Object storage for course files (docs/specs/m1/06-files.md B1, B2; plan, Technical ->
+# Architecture and stack: "Storage: the `object_store` crate"): a local directory (`fs`) and S3 or
+# MinIO (`aws-base`). Not the `aws` feature, which brings aws-lc-rs (cmake) and reqwest's own
+# rustls setup: `ring` signs S3 requests with the ring the workspace already builds, and
+# `stepclimb_server::storage` hands the store a reqwest client with the same rustls, ring and
+# platform-verifier setup as `stepclimb_auth::outbound`, so no HTTP/2 or second TLS stack.
+object_store = { version = "=0.14.2", default-features = false, features = ["fs", "aws-base", "ring"] }
+# object_store's `HttpService` trait is an `async_trait`; the version object_store and sqlx already
+# bring.
+async-trait = "=0.1.92"
 tracing = "=0.1.44"
 # WebAuthn for local passkeys (docs/specs/m0/04-local-accounts.md B8, Q12; plan, Technical ->
 # Architecture and stack: webauthn-rs). 0.6 verifies with RustCrypto (`crypto-glue`) where 0.5
