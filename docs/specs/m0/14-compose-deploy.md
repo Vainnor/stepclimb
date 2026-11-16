@@ -27,7 +27,7 @@ Read on 2026-11-12.
 - **`deploy/compose/compose.yaml`** (project `stepclimb`): `postgres` on
   `postgres:16.16-alpine` pinned by digest, user and database `stepclimb`, password
   `stepclimb-local`, published on `127.0.0.1:55432`, named volume `postgres`, a `pg_isready`
-  healthcheck; `minio` on `cgr.dev/chainguard/minio:latest` pinned by digest (ADR 0019,
+  healthcheck over TCP (`-h 127.0.0.1`; see B5); `minio` on `cgr.dev/chainguard/minio:latest` pinned by digest (ADR 0019,
   Proposed), root user `stepclimb` with the same local password, API and console on
   `127.0.0.1:59000` and `:59001`, named volume `minio`; `stepclimb` in the `stack` profile, built
   from `deploy/Dockerfile` as `stepclimb:local`, `STEPCLIMB_DATABASE_URL` and `STEPCLIMB_BIND` set
@@ -87,6 +87,13 @@ Read on 2026-11-12.
   open decision (Q6).
 - **B5.** Every service restarts unless stopped, and the server starts after Postgres reports
   healthy, as the development file already does.
+
+  Coordinator decision (2026-11-16, overnight, issue #213): Postgres reports healthy through
+  `pg_isready -h 127.0.0.1`, over TCP as the server connects, in both files. On a new data
+  directory the image's entrypoint first runs a temporary server on the Unix socket only; a
+  socket check passed during it, the server started, timed out connecting while that server
+  shut down, and `compose up --wait` failed. The gate's overlay (`ci.yaml`) no longer needs its
+  own copy of the check.
 
 ### Caddy
 
