@@ -613,12 +613,6 @@ Q13's answer replaces I1's B24 behavior (I4).
 Coordinator decisions (overnight, 2026-11-17), pending owner review. None depends on Q1 or Q12:
 a copy makes no enrollment, so no learner and no `course.participate` comes with it.
 
-- **Copies refuse a gain.** As a course move does (I1's decision above), a copy answers 403
-  `permission.escalation` when the destination would give the caller a permission over the
-  course that it does not hold at the source, checked under the tree lock with both paths read
-  there. A caller who can read a course everywhere (`course.view_all`) but manage it nowhere
-  cannot turn it into a course they manage by copying it into an account where they hold
-  `course.manage`; they create a new course there instead.
 - **Source rechecked under the lock.** The copy route checks `course.view_all` again on the
   source's path as its transaction reads it under the tree lock, as move rechecks
   `course.manage`: a source carried out of the caller's reach meanwhile answers 404.
@@ -634,11 +628,14 @@ a copy makes no enrollment, so no learner and no `course.participate` comes with
   `published` flags, and each item's kind and URL, in the copy's transaction. It reads the source
   course row `FOR SHARE`, which every outline write's `FOR NO KEY UPDATE` (spec 03 B12) waits
   for, so the outline cannot change while it is copied.
-- **Content a copy cannot take refuses the copy.** An item whose kind this release cannot create
-  (`file`, `page`, `video`, `quiz`, `activity`) points at content whose spec, which copies that
-  content, is not built; no write of this release makes one. Such an item fails the copy (500,
-  nothing written) rather than being dropped or copied with a `ref_id` into the source course.
-  Each content spec makes its kind copyable when it adds its part to `courses::copy` (B13).
+- **Content a copy cannot take refuses the copy.** `items::Kind::copyable`, an exhaustive match
+  over every kind, says which kinds a copy takes: `header` and `external_link` in this release,
+  every kind this release can create. The others (`file`, `page`, `video`, `quiz`, `activity`)
+  point at content whose spec, which copies that content, is not built; no write of this release
+  makes one. Such an item fails the copy (500, nothing written) rather than being dropped or
+  copied with a `ref_id` into the source course. Each content spec makes its kind copyable when
+  it adds its part to `courses::copy` (B13). A stored URL that `items::url_is_valid` refuses
+  fails the copy the same way, since every writer of an item's URL checks it (spec 03).
 
 ## Issues
 

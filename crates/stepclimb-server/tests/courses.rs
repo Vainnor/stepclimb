@@ -1269,6 +1269,57 @@ async fn a_copy_that_would_widen_the_callers_reach_is_refused(pool: PgPool) {
     .ok(StatusCode::CREATED);
 }
 
+/// Owner decision (2026-11-16): the gain check compares only permissions grantable at course
+/// scope. `course.view_all` across the organization and `course.create` at Enroute copy a Tower
+/// course into Enroute, and the same caller with `course.manage` across the organization moves
+/// one there: `course.create`, which the destination needs anyway, is not a gain.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn course_create_at_the_destination_is_not_a_gain(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    let source = f.course(t.org, t.tower, "S1").await;
+    let (cookie, user) = f.user(t.org).await;
+    let role = |key: &str, permissions: &[&str]| NewRole {
+        key: key.into(),
+        name: key.into(),
+        permissions: permissions.iter().map(|&p| p.to_owned()).collect(),
+    };
+    for (new, at) in [
+        (
+            role("everywhere", &["course.view_all", "course.manage"]),
+            Scope::Organization,
+        ),
+        (
+            role("enroute_creator", &["course.create"]),
+            Scope::Account(t.enroute),
+        ),
+    ] {
+        let id = roles::create_custom(&f.pool, scope(t.org), &new, now(), Actor::Instance)
+            .await
+            .expect("create role")
+            .id;
+        f.assign(t.org, user, id, at).await;
+    }
+
+    let copied = f
+        .copy(
+            t.org,
+            &cookie,
+            source,
+            json!({ "account_id": t.enroute, "code": "S1-B" }),
+        )
+        .await;
+    assert_eq!(
+        copied.ok(StatusCode::CREATED)["account_id"],
+        t.enroute.to_string()
+    );
+    let moved = f.move_to(t.org, &cookie, source, t.enroute).await;
+    assert_eq!(
+        moved.ok(StatusCode::OK)["account_id"],
+        t.enroute.to_string()
+    );
+}
+
 /// B12's body rules: the code is required and unique, title and code are validated, `null` is
 /// malformed for `title` and `template`, and an unknown member is refused. Nothing is written.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]

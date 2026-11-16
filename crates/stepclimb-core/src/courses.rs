@@ -253,6 +253,10 @@ pub enum Error {
     /// one.
     #[error("item {item_id} is a {kind}, which a course copy cannot copy yet")]
     ContentNotCopyable { item_id: Uuid, kind: String },
+    /// The source has an external link whose stored URL [`items::url_is_valid`] refuses, which
+    /// no write of this release stores; the copy does not carry it into a new course.
+    #[error("item {item_id} has a URL that is not an absolute http or https link")]
+    CopiedUrlInvalid { item_id: Uuid },
     /// The tree lock or a path read failed.
     #[error(transparent)]
     Account(#[from] accounts::Error),
@@ -601,8 +605,10 @@ pub async fn copy<'c>(
 /// Copy every module and item of the course `from` into the new course `to`, both of the scope's
 /// organization, with new ids and the same positions, titles and `published` flags; each item
 /// keeps its kind and URL and goes into the copy of its module. `created_at` and `updated_at`
-/// are `now_us`. An item of a kind this release cannot create ([`items::Kind::creatable`]) is
-/// [`Error::ContentNotCopyable`]: its `ref_id` names content no copy of this release copies.
+/// are `now_us`. An item of a kind this release does not copy ([`items::Kind::copyable`]) is
+/// [`Error::ContentNotCopyable`]: its `ref_id` names content no copy of this release copies. A
+/// stored URL [`items::url_is_valid`] refuses is [`Error::CopiedUrlInvalid`], as every writer of
+/// an item's URL checks it (spec 03, "B7's absolute").
 async fn copy_outline(
     conn: &mut PgConnection,
     scope: OrgScope,
@@ -665,12 +671,19 @@ async fn copy_items(
     .await?;
     if let Some(row) = rows
         .iter()
-        .find(|r| !items::Kind::parse(&r.kind).is_some_and(items::Kind::creatable))
+        .find(|r| !items::Kind::parse(&r.kind).is_some_and(items::Kind::copyable))
     {
         return Err(Error::ContentNotCopyable {
             item_id: row.id,
             kind: row.kind.clone(),
         });
+    }
+    if let Some(row) = rows.iter().find(|r| {
+        r.url
+            .as_deref()
+            .is_some_and(|url| !items::url_is_valid(url))
+    }) {
+        return Err(Error::CopiedUrlInvalid { item_id: row.id });
     }
     // Every item's module is a module of `from` (the table's three-column foreign key), read in
     // this transaction under the course row lock that every outline write waits for, so the

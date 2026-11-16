@@ -8,14 +8,16 @@
 //! (B10). Creating needs `course.create` at the account named in the body; changing details,
 //! status or account needs `course.manage` at the course, and a move also `course.create` at
 //! the destination (B9). A destination where the caller lacks `course.create` answers 404, as
-//! an account the caller cannot see does, and a move may not give the caller a permission over
-//! the course it lacks there now (403 `permission.escalation`), as an account move may not.
+//! an account the caller cannot see does, and a move may not give the caller a permission
+//! grantable at course scope over the course that it lacks there now (403
+//! `permission.escalation`), as an account move may not.
 //!
 //! Copying (B12) needs `course.view_all` at the source, since a copy carries everything, and
 //! `course.create` at the destination, with the same 404 for a destination without it. A copy
 //! is refused with 403 `permission.escalation` when the destination would give the caller a
-//! permission over the course that it does not hold at the source: the check a move makes,
-//! applied to the source and the copy's place (coordinator decision, spec 02 I3). The copy is a
+//! permission grantable at course scope over the course that it does not hold at the source:
+//! the check a move makes, applied to the source and the copy's place (coordinator decision,
+//! spec 02 I3; course-scope permissions only, owner decision of 2026-11-16). The copy is a
 //! draft and carries no enrollment (Q1, Q12: no learner and no `course.participate` comes with
 //! it).
 //!
@@ -84,9 +86,9 @@ problem_responses! {
     CourseMoveNotFound => "`course.not_found`: no course with this id exists in the organization, or you cannot see it. `account.not_found`: the destination `account_id` does not exist or you do not hold `course.create` at a scope containing it. `org.not_found`: the request's organization cannot be determined.",
     CourseCreateForbidden => "`permission.denied`: you hold `course.create` nowhere, or you can see the account without holding it there. `auth.csrf_refused`: the request did not come from this site.",
     CourseManageForbidden => "`permission.denied`: you can see the course but do not hold `course.manage` at a scope containing it. `auth.csrf_refused`: the request did not come from this site.",
-    CourseMoveForbidden => "`permission.denied`: you can see the course but do not hold `course.manage` at a scope containing it. `permission.escalation`: the destination would give you, over the course, a permission you do not hold over it now. `auth.csrf_refused`: the request did not come from this site.",
+    CourseMoveForbidden => "`permission.denied`: you can see the course but do not hold `course.manage` at a scope containing it. `permission.escalation`: the destination would give you, over the course, a course permission (one grantable at course scope) you do not hold over it now. `auth.csrf_refused`: the request did not come from this site.",
     CourseCopyNotFound => "`course.not_found`: no course with this id exists in the organization, or you cannot see it. `account.not_found`: the destination `account_id` does not exist or you do not hold `course.create` at a scope containing it. `org.not_found`: the request's organization cannot be determined.",
-    CourseCopyForbidden => "`permission.denied`: you can see the course but do not hold `course.view_all` at a scope containing it. `permission.escalation`: the destination would give you, over the copy, a permission you do not hold over the source. `auth.csrf_refused`: the request did not come from this site.",
+    CourseCopyForbidden => "`permission.denied`: you can see the course but do not hold `course.view_all` at a scope containing it. `permission.escalation`: the destination would give you, over the copy, a course permission (one grantable at course scope) you do not hold over the source. `auth.csrf_refused`: the request did not come from this site.",
     CourseCodeConflict => "`course.code_taken`: another course of the organization has this code, ignoring ASCII case.",
     CourseStatusConflict => "`course.status_invalid`: the course cannot change from its status to this one; the allowed changes are draft to published, published to archived, archived to published and published to draft. `course.template`: a template cannot be published.",
 }
@@ -807,8 +809,11 @@ async fn recheck_manage(
 }
 
 /// 403 `permission.escalation`, with `detail`, when the course at `to` would give the caller a
-/// permission they do not hold over it at `from`, as an account move refuses (m0 spec 02 B23):
-/// every grant on the destination's path contains a course moved or copied there.
+/// permission over it, among those grantable at course scope, that they do not hold over it at
+/// `from`, as an account move refuses (m0 spec 02 B23): every grant on the destination's path
+/// contains a course moved or copied there. Permissions not grantable at course scope, such as
+/// `course.create`, which a move or copy already needs at the destination, are left out (owner
+/// decision, 2026-11-16).
 fn refuse_escalation(
     grants: &Grants,
     from: &Target,
@@ -817,6 +822,7 @@ fn refuse_escalation(
 ) -> Result<(), ApiError> {
     let gained = perm::ALL
         .iter()
+        .filter(|p| p.grantable().contains(&ScopeType::Course))
         .any(|p| grants.holds_key(p.key(), to) && !grants.holds_key(p.key(), from));
     if !gained {
         return Ok(());
@@ -885,6 +891,7 @@ fn course_error(error: courses::Error) -> ApiError {
         E::Template => conflict(code::COURSE_TEMPLATE, "A template cannot be published."),
         other @ (E::Stored { .. }
         | E::ContentNotCopyable { .. }
+        | E::CopiedUrlInvalid { .. }
         | E::Account(_)
         | E::Time(_)
         | E::Database(_)) => ApiError::internal(&other),

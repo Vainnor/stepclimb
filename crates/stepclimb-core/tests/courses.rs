@@ -988,6 +988,47 @@ async fn a_source_with_content_no_copy_can_take_is_refused(pool: PgPool) {
     assert_eq!(modules, 1, "no module was copied");
 }
 
+/// A stored URL `items::url_is_valid` refuses (which the table's check lets through) refuses the
+/// copy, and nothing is written.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_source_with_an_invalid_url_is_refused(pool: PgPool) {
+    let a = Org::new(&pool, "org-a").await;
+    let source = create(&pool, a, a.tower, "S1").await.unwrap().id;
+    let first = module(&pool, a, source, "Ground", true).await;
+    let bad = Uuid::from_u128(7);
+    sqlx::query(
+        "INSERT INTO module_items (id, org_id, course_id, module_id, position, kind, url, title)
+         VALUES ($4, $1, $2, $3, 0, 'external_link', 'https://', 'No host')",
+    )
+    .bind(a.id)
+    .bind(source)
+    .bind(first)
+    .bind(bad)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let before = (rows(&pool, a).await, entries(&pool, a).await.len());
+
+    let refused = courses::copy(
+        &pool,
+        a.scope(),
+        source,
+        &copy_to(a.tower, "S1-B"),
+        later_time(),
+        Actor::Instance,
+    )
+    .await;
+
+    assert!(
+        matches!(refused, Err(Error::CopiedUrlInvalid { item_id }) if item_id == bad),
+        "{refused:?}"
+    );
+    assert_eq!(
+        (rows(&pool, a).await, entries(&pool, a).await.len()),
+        before
+    );
+}
+
 /// The copy reads the outline under the source's course row, which every outline write locks
 /// first (spec 03 B12): a write in progress is waited for and its module is copied.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
