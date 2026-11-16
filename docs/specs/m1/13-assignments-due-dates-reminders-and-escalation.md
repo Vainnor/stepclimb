@@ -128,10 +128,10 @@ everything that happened for one person and one assignment. Recurrence and expir
     shortest cycle. A suspended manager is refused with 409 `user.manager_inactive`.
   - Changing `manager_id` falls under the escalation rule of `email` and `status` (403
     `permission.escalation`, `../m0/03-users-and-identities.md`): the caller cannot redraw the
-    reporting line of a user who holds a permission the caller lacks. I2 refuses nothing about
-    managing yourself beyond that rule: a `user.manage` holder may change their own
-    `manager_id`, and so may an API key or app token of theirs (no `auth.session_required`,
-    since the manager does not change how the user signs in). Q10 asks the owner.
+    reporting line of a user who holds a permission the caller lacks. An API key or app token
+    cannot change its own user's manager (403 `auth.session_required`, `m0/08` B44). I2 adds no
+    other refusal about managing yourself: a `user.manage` holder may change their own
+    `manager_id` from a browser session. Q10 asks the owner.
   - `users::set_manager` locks the organization row `FOR NO KEY UPDATE`, as a suspension does,
     so two concurrent changes cannot close a cycle between them; the lock also keeps the new
     manager from being suspended between the check and the write. The PATCH changes the manager
@@ -397,7 +397,8 @@ owner's and stay open.
   Manager role defines the scope over reports, since B13 already limits it to a message with no
   link; the owner may prefer (b).
   (2) Whether a `user.manage` holder may change their own `manager_id` (and so pick who receives
-  their escalations). Options: (a) yes, as I2 builds; (b) no, 409 or 403 for your own user, as
+  their escalations). Options: (a) yes, as I2 builds for a browser session (an API key or app
+  token on its own user is refused, B15); (b) no, 409 or 403 for your own user, as
   suspending yourself is refused. Recommendation: (a): it grants the caller nothing, and admins
   set managers for everyone else anyway.
   Until the owner answers, I2 builds (1) as B13 says and (2) as (a).
