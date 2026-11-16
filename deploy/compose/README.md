@@ -20,7 +20,6 @@ Not available in M0:
   prints the admin's one-time enrollment link, but the web page that link opens, and the
   passkey and password set-up behind it, come with later M0 work, as do OIDC and OAuth sign-in.
 - **Published images.** No image is pushed to a registry yet; you build it from this checkout.
-- **Object storage.** Nothing reads MinIO before M1's media work.
 - **Point-in-time recovery**, a Helm chart, metrics and a bare-metal binary: later milestones.
 
 ## Requirements
@@ -184,7 +183,12 @@ chmod 644 "$secrets"/minio_*
 docker compose -f deploy/compose/compose.production.yaml --profile minio up -d --build --wait
 ```
 
-Nothing in M0 reads object storage, so there is no reason to run it yet.
+The server stores course files on the `storage` volume (`STEPCLIMB_STORAGE_URL` is
+`file:///var/lib/stepclimb/storage`), so MinIO is optional. To keep files in MinIO instead, set
+`STEPCLIMB_STORAGE_URL=s3://<bucket>`, `STEPCLIMB_STORAGE_S3_ENDPOINT=http://minio:9000`,
+`STEPCLIMB_STORAGE_S3_ALLOW_HTTP=true` and the two access key settings in a Compose override file,
+and make the bucket before the server starts: `serve` writes, reads and deletes a probe object at
+startup and stops when it cannot.
 
 ## Compose variables
 
@@ -272,6 +276,12 @@ default or secrecy is wrong.
 | `STEPCLIMB_ALLOW_INSECURE_PROVIDERS` | `allow_insecure_providers` | `true` or `false` | `false` | no | Lets the server fetch `http` and loopback URLs for identity providers and the admission webhook. For tests and local development only: it lets an organization admin make the server call services on its own host |
 | `STEPCLIMB_ROLE` | `role` | `all`, `web` or `worker` | `all` | no | What `stepclimb serve` runs: `all` the HTTP application and the job worker, `web` the HTTP application only, `worker` the job worker with only `/healthz` and `/readyz` on the bind address. `serve --role` overrides it |
 | `STEPCLIMB_WORKER_CONCURRENCY` | `worker_concurrency` | whole number, 1 to 64 | `4` | no | Jobs one `all` or `worker` process runs at once |
+| `STEPCLIMB_STORAGE_URL` | `storage_url` | URL | none | no | Where course files are stored: `file:///<absolute directory>` (the directory must exist) or `s3://<bucket>[/<prefix>]`. Unset, the server starts, logs a warning, and uploads and file downloads answer 503 `storage.not_configured`. When set, `serve` writes, reads and deletes an object under `<prefix>/.probe/` before it listens and stops if any step fails |
+| `STEPCLIMB_STORAGE_S3_ENDPOINT` | `storage_s3_endpoint` | origin | none | no | The origin of an S3-compatible store, such as `http://minio:9000`; unset for AWS S3. The `STEPCLIMB_STORAGE_S3_*` settings are refused without an `s3://` storage URL |
+| `STEPCLIMB_STORAGE_S3_REGION` | `storage_s3_region` | region name | `us-east-1` | no | The bucket's region |
+| `STEPCLIMB_STORAGE_S3_ACCESS_KEY_ID` | `storage_s3_access_key_id` | string | required for `s3://` | no | The access key the store issued. The server reads no credentials from the environment or an instance profile |
+| `STEPCLIMB_STORAGE_S3_SECRET_ACCESS_KEY`, `STEPCLIMB_STORAGE_S3_SECRET_ACCESS_KEY_FILE` | `storage_s3_secret_access_key`, `storage_s3_secret_access_key_file` | string | required for `s3://` | yes | The secret of that access key |
+| `STEPCLIMB_STORAGE_S3_ALLOW_HTTP` | `storage_s3_allow_http` | `true` or `false` | `false` | no | Lets the endpoint be plain `http`, for a store on the same host or a private network such as the Compose `backend` network |
 
 The three limits have nothing to count until the sign-in and token routes arrive; none exists in
 M0.
@@ -403,7 +413,8 @@ once the server reports healthy.
 | `backups` | The nightly dumps | Copy them off the host |
 | `caddy_data` | Caddy's certificates and keys (`tls` profile) | Keep it: without it, a restart asks the CA for new certificates |
 | `caddy_config` | Caddy's saved configuration (`tls` profile) | No: Caddy rebuilds it from the Caddyfile |
-| `minio` | Object storage (`minio` profile) | Not yet: nothing is stored there before M1 |
+| `storage` | Course files (`STEPCLIMB_STORAGE_URL`) | Yes, with the database: its `files` rows name the objects here. The nightly dumps do not include it |
+| `minio` | Object storage (`minio` profile) | Yes, when the server stores files there |
 
 Compose prefixes each name with the project, `stepclimb-production`. `docker compose down` keeps
 the volumes; `down --volumes` deletes them, the database included.

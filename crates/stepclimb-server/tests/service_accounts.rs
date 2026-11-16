@@ -71,6 +71,7 @@ fn state(pool: PgPool, clock: &ManualClock) -> AppState {
         rate_limits: Default::default(),
         providers: stepclimb_server::providers::Providers::new(false).expect("provider clients"),
         passwords: Default::default(),
+        storage: None,
     }
 }
 

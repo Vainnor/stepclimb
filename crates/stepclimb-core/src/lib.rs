@@ -27,7 +27,8 @@
 //! organizations and user status write with their change; [`tz`], the IANA time zone names
 //! users and organizations are set to; and [`theme`], the server's port of the theme generator,
 //! with the [`branding`] repository that stores an organization's generated stylesheet; and
-//! [`appearance`], the theme and density a user chose. The other
+//! [`appearance`], the theme and density a user chose; and [`files`], the stored files of an
+//! organization, once per SHA-256. The other
 //! repositories arrive with the M0 specs in `docs/specs/m0/`.
 
 pub mod accounts;
@@ -42,6 +43,7 @@ pub mod clock;
 pub mod courses;
 pub mod db;
 pub mod feature;
+pub mod files;
 pub mod grants;
 pub mod groups;
 pub mod id;

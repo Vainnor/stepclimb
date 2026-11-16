@@ -120,6 +120,7 @@ impl Fixture {
             allowed_origins: Vec::new(),
             rate_limits: Default::default(),
             passwords: Default::default(),
+            storage: None,
             providers: stepclimb_server::providers::Providers::new(false)
                 .expect("provider clients"),
         })

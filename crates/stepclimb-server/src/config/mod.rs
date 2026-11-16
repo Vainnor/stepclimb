@@ -20,6 +20,7 @@
 
 mod file;
 pub mod providers;
+mod storage;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -33,6 +34,10 @@ use tracing_subscriber::EnvFilter;
 
 pub use file::ConfigFile;
 pub use providers::ConfigProvider;
+pub use storage::{
+    DEFAULT_REGION, S3Config, STORAGE_S3_ACCESS_KEY_ID, STORAGE_S3_ALLOW_HTTP, STORAGE_S3_ENDPOINT,
+    STORAGE_S3_REGION, STORAGE_S3_SECRET_ACCESS_KEY, STORAGE_URL, StorageConfig,
+};
 
 use crate::client_ip::TrustedProxies;
 use crate::rate_limit::Limits;
@@ -150,6 +155,12 @@ pub const SETTINGS: &[Setting] = &[
     ALLOW_INSECURE_PROVIDERS,
     ROLE,
     WORKER_CONCURRENCY,
+    STORAGE_URL,
+    STORAGE_S3_ENDPOINT,
+    STORAGE_S3_REGION,
+    STORAGE_S3_ACCESS_KEY_ID,
+    STORAGE_S3_SECRET_ACCESS_KEY,
+    STORAGE_S3_ALLOW_HTTP,
 ];
 
 /// The variable naming the configuration file when `--config` is not given.
@@ -263,6 +274,10 @@ pub struct Config {
     /// `[[providers]]`: the identity providers the file declares, checked, each with its
     /// client secret (spec 06 B11). `stepclimb serve` writes them to their organizations.
     pub providers: Vec<ConfigProvider>,
+    /// `storage_url` and the `storage_s3_*` settings: where course files are stored, or
+    /// [`StorageConfig::NotConfigured`] (docs/specs/m1/06-files.md B1, B1a). The secret access
+    /// key is hidden from `Debug`.
+    pub storage: StorageConfig,
 }
 
 impl fmt::Debug for Config {
@@ -283,6 +298,7 @@ impl fmt::Debug for Config {
             .field("role", &self.role)
             .field("worker_concurrency", &self.worker_concurrency)
             .field("providers", &self.providers)
+            .field("storage", &self.storage)
             .finish()
     }
 }
@@ -496,6 +512,7 @@ impl Config {
             Some(file) => file_providers(file, allow_insecure_providers)?,
             None => Vec::new(),
         };
+        let storage = storage::load(&sources)?;
         let defaults = Limits::DEFAULT;
         Ok(Self {
             file: file.map(|f| f.path().to_path_buf()),
@@ -513,6 +530,7 @@ impl Config {
             role,
             worker_concurrency,
             providers,
+            storage,
         })
     }
 
@@ -527,8 +545,9 @@ impl Config {
 }
 
 impl Config {
-    /// Each non-secret setting's key and value, in [`SETTINGS`] order. `stepclimb check-config`
-    /// prints these; the secret settings never appear.
+    /// Each non-secret setting's key and value, in [`SETTINGS`] order, but for the storage
+    /// settings, which [`StorageConfig::report`] lists. `stepclimb check-config` prints these;
+    /// the secret settings never appear.
     pub fn non_secret_values(&self) -> Vec<(&'static str, String)> {
         vec![
             (BIND.key, self.bind.to_string()),
@@ -824,6 +843,27 @@ impl Sources<'_> {
                 ),
             }),
         }
+    }
+
+    /// Where `setting` is set, in any of its forms (the variable, the key, and a secret's
+    /// `_FILE` and `_file`), or `None` when it is not set at all. The value is not read.
+    fn origin_if_set(&self, setting: &Setting) -> Result<Option<Origin>, ConfigError> {
+        let mut forms = vec![(setting.var.to_owned(), setting.key.to_owned())];
+        if setting.secret {
+            forms.push((
+                format!("{}_FILE", setting.var),
+                format!("{}_file", setting.key),
+            ));
+        }
+        for (var, key) in forms {
+            if let Some((_, origin)) = self.var(&var) {
+                return Ok(Some(origin));
+            }
+            if let Some((_, origin)) = self.key(&key)? {
+                return Ok(Some(origin));
+            }
+        }
+        Ok(None)
     }
 
     /// A secret from the variable or its `_FILE`, else from the key or its `_file`; exactly one

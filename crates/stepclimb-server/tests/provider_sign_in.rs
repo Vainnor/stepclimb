@@ -115,6 +115,7 @@ fn state(pool: &PgPool, clock: &ManualClock, limits: Limits, insecure: bool) -> 
         allowed_origins: Vec::new(),
         rate_limits: RateLimiter::new(limits, TrustedProxies::none()),
         passwords: Default::default(),
+        storage: None,
         providers: Providers::new(insecure).expect("provider clients"),
     }
 }

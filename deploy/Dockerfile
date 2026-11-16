@@ -29,6 +29,10 @@ RUN pnpm --filter @stepclimb/tokens build && pnpm --filter web build
 
 FROM --platform=$BUILDPLATFORM rust:1.98-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS server
 WORKDIR /src
+# The local file store's directory (docs/specs/m1/06-files.md: the production Compose example's
+# STEPCLIMB_STORAGE_URL), copied into the runtime image owned by the server's user, so a named
+# volume mounted on it starts with that owner. The runtime image has no shell to make it there.
+RUN install -d -m 0750 /image-root/var/lib/stepclimb/storage
 COPY rust-toolchain.toml ./
 # cargo-auditable records the crates compiled into the binary in a `.dep-v0` section, which the
 # release SBOM reads (docs/adr/0031-release-image-signing-and-sbom.md). It is installed before
@@ -99,6 +103,7 @@ ENTRYPOINT ["/usr/local/bin/stepclimb-mock-idp"]
 
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
 COPY --from=server /stepclimb /usr/local/bin/stepclimb
+COPY --from=server --chown=65532:65532 /image-root/var/lib/stepclimb /var/lib/stepclimb
 USER nonroot
 EXPOSE 8080
 ENV STEPCLIMB_BIND=0.0.0.0:8080

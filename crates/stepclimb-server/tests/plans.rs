@@ -88,7 +88,10 @@ async fn startup_writes_the_unlimited_plan_and_a_restart_rewrites_an_edited_row(
         .map(|k| ((*k).to_owned(), serde_json::Value::Bool(true)))
         .collect();
     assert_eq!(features, serde_json::Value::Object(expected.clone()));
-    assert_eq!(limits, serde_json::json!({ "users": null }));
+    assert_eq!(
+        limits,
+        serde_json::json!({ "users": null, "storage": null })
+    );
 
     let org = insert_org(&pool, "org-a").await;
     clock.advance(Duration::from_secs(60));
@@ -121,7 +124,10 @@ async fn startup_writes_the_unlimited_plan_and_a_restart_rewrites_an_edited_row(
     let (id_after, features_after, limits_after) = unlimited_row(&pool).await;
     assert_eq!(id_after, id, "the plan's id stays fixed");
     assert_eq!(features_after, serde_json::Value::Object(expected));
-    assert_eq!(limits_after, serde_json::json!({ "users": null }));
+    assert_eq!(
+        limits_after,
+        serde_json::json!({ "users": null, "storage": null })
+    );
 }
 
 #[sqlx::test(migrations = false)]

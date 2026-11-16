@@ -101,6 +101,7 @@ impl Fixture {
             // The mock IdP serves plain HTTP on 127.0.0.1.
             providers: Providers::new(true).expect("provider clients"),
             passwords: Default::default(),
+            storage: None,
         };
         let app = router(state).layer(Extension(ConnectInfo(CLIENT)));
         Self { pool, keys, app }

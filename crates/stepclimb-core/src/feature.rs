@@ -90,23 +90,27 @@ catalog! {
 
 /// A limit a plan sets on what an organization can add.
 ///
-/// Each later limit (storage, video storage, transcode minutes, API rate, connectors) is added
-/// by the spec that builds what it counts (B2).
+/// Each later limit (video storage, transcode minutes, API rate, connectors) is added by the
+/// spec that builds what it counts (B2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Limit {
     /// How many users the organization can have.
     Users,
+    /// How many bytes of files the organization can store, each distinct file once
+    /// (docs/specs/m1/06-files.md B22).
+    Storage,
 }
 
 impl Limit {
     /// Every limit, in definition order.
-    pub const ALL: [Self; 1] = [Self::Users];
+    pub const ALL: [Self; 2] = [Self::Users, Self::Storage];
 
     /// The stored and API name, one lowercase snake case word.
     #[must_use]
     pub fn key(self) -> &'static str {
         match self {
             Self::Users => "users",
+            Self::Storage => "storage",
         }
     }
 }
@@ -168,8 +172,8 @@ mod tests {
     }
 
     #[test]
-    fn the_m0_limits_are_users_only() {
+    fn the_limits_are_users_and_storage() {
         let keys: Vec<_> = Limit::ALL.iter().map(|l| l.key()).collect();
-        assert_eq!(keys, ["users"]);
+        assert_eq!(keys, ["users", "storage"]);
     }
 }

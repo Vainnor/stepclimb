@@ -169,6 +169,9 @@ fn check_config(config: &Config) -> ExitCode {
         report.push_str(&format!("{key}: {value}\n"));
     }
     report.push_str(&format!("providers: {}\n", config.providers_or_none()));
+    for (key, value) in config.storage.report() {
+        report.push_str(&format!("{key}: {value}\n"));
+    }
     write_stdout(&report)
 }
 

@@ -49,6 +49,12 @@ clap.workspace = true
 url.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+# Course file storage (docs/specs/m1/06-files.md B1): the store, and the S3 client's transport.
+object_store.workspace = true
+async-trait.workspace = true
+reqwest.workspace = true
+http.workspace = true
+http-body-util.workspace = true
 
 [dev-dependencies]
 # `test-util` for `tokio::time::pause` in the sign-in flow cleanup timer test.

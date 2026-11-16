@@ -84,6 +84,7 @@ fn state(pool: &PgPool, clock: &ManualClock) -> AppState {
         allowed_origins: Vec::new(),
         rate_limits: Default::default(),
         passwords: Default::default(),
+        storage: None,
         providers: stepclimb_server::providers::Providers::new(false).expect("provider clients"),
     }
 }
@@ -981,7 +982,10 @@ async fn t8_an_admin_sees_the_unlimited_plan_with_every_catalog_key(pool: PgPool
         answer.body["features"].as_object().expect("a map").len(),
         feature::ALL.len()
     );
-    assert_eq!(answer.body["limits"], json!({ "users": null }));
+    assert_eq!(
+        answer.body["limits"],
+        json!({ "users": null, "storage": null })
+    );
     assert_schema("Entitlements", &answer.body);
 }
 
@@ -1010,14 +1014,14 @@ async fn t8_a_test_plan_shows_each_catalog_key_as_the_server_reads_it(pool: PgPo
         json!({
             "plan": { "key": key, "source": "grant" },
             "features": features,
-            "limits": { "users": 0 },
+            "limits": { "users": 0, "storage": 0 },
         })
     );
     assert_schema("Entitlements", &answer.body);
 
     f.use_plan(f.org, json!({}), json!({ "users": 25 })).await;
     let answer = f.send(Method::GET, ENTITLEMENTS, Some(&admin), "").await;
-    assert_eq!(answer.body["limits"], json!({ "users": 25 }));
+    assert_eq!(answer.body["limits"], json!({ "users": 25, "storage": 0 }));
     assert!(
         answer.body["features"]
             .as_object()
@@ -1051,7 +1055,10 @@ async fn t8_an_admin_of_org_b_sees_org_bs_plan(pool: PgPool) {
     );
     assert_eq!(seen_by_b.body["features"]["api_keys"], true);
     assert_eq!(seen_by_b.body["features"]["custom_roles"], false);
-    assert_eq!(seen_by_b.body["limits"], json!({ "users": 3 }));
+    assert_eq!(
+        seen_by_b.body["limits"],
+        json!({ "users": 3, "storage": 0 })
+    );
 
     let seen_by_a = entitlements_of(&f, f.org, &admin_a).await;
     assert_eq!(seen_by_a.status, StatusCode::OK, "{seen_by_a:?}");

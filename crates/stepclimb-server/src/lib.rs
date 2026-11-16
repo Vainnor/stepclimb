@@ -40,7 +40,8 @@
 //! unsafe request passes [`csrf`]
 //! first. Sign-in and token routes declare a [`rate_limit`] budget, counted per client address
 //! as [`client_ip`] finds it; a route that changes roles, assignments, accounts or the
-//! organization records that address in the change's audit entry ([`audit`]).
+//! organization records that address in the change's audit entry ([`audit`]). Course files are
+//! stored through [`storage`], which `serve` opens and probes before it listens.
 
 pub mod accounts;
 pub mod admin;
@@ -110,6 +111,7 @@ pub mod service_accounts;
 pub mod session;
 pub mod spa;
 pub mod startup;
+pub mod storage;
 pub mod timestamp;
 pub mod totp;
 pub mod totp_enrollment;

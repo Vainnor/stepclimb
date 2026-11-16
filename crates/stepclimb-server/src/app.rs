@@ -50,6 +50,9 @@ pub struct AppState {
     /// The argon2id hasher every password check and new password goes through, at most four
     /// at once.
     pub passwords: PasswordHasher,
+    /// Where course files are stored; `None` when `storage_url` is not set, and a handler
+    /// taking [`crate::storage::Storage`] then answers 503 `storage.not_configured`.
+    pub storage: Option<crate::storage::Storage>,
 }
 
 /// The `Strict-Transport-Security` value: one year, for this host only. Subdomains of the

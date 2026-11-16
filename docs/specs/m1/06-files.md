@@ -197,14 +197,45 @@ Configuration added (ADR 0022; secrets with `_FILE`; all in `check-config`):
 | `STEPCLIMB_STORAGE_URL` | `storage_url` | none: unset means "not configured" (B1a, Q1) |
 | `STEPCLIMB_STORAGE_S3_ENDPOINT` | `storage_s3_endpoint` | the provider's |
 | `STEPCLIMB_STORAGE_S3_REGION` | `storage_s3_region` | `us-east-1` |
-| `STEPCLIMB_STORAGE_S3_ACCESS_KEY_ID` | `storage_s3_access_key_id` | none (S3 only) |
-| `STEPCLIMB_STORAGE_S3_SECRET_ACCESS_KEY(_FILE)` | `storage_s3_secret_access_key(_file)` | none (S3 only) |
+| `STEPCLIMB_STORAGE_S3_ACCESS_KEY_ID` | `storage_s3_access_key_id` | required with an `s3://` URL |
+| `STEPCLIMB_STORAGE_S3_SECRET_ACCESS_KEY(_FILE)` | `storage_s3_secret_access_key(_file)` | required with an `s3://` URL |
 | `STEPCLIMB_STORAGE_S3_ALLOW_HTTP` | `storage_s3_allow_http` | `false` |
 | `STEPCLIMB_MAX_FILE_BYTES` | `max_file_bytes` | 104857600 (100 MiB) |
 
 The Compose files set `storage_url`: the development stack to MinIO (`s3://stepclimb` with the
 MinIO endpoint, ADR 0019), the production example to `file:///var/lib/stepclimb/storage` on a
 named volume, or MinIO under its profile.
+
+Coordinator decisions (overnight, 2026-11-16, I1), pending owner review:
+
+- The `storage_s3_*` settings are refused, naming the first one set, when `storage_url` is unset
+  or a `file://` URL, so a half-configured store never starts as "not configured". An `s3://` URL
+  needs both access key settings: the server reads no AWS environment variables or instance
+  profile, so what it connects with is always what `check-config` shows.
+- `serve` opens and probes the store before it connects to the database. A `file://` directory
+  must exist; the local store writes with `fsync`, so an object a committed `files` row names
+  survives a crash (B7). The S3 client is the server's own reqwest client with
+  `stepclimb_auth::outbound`'s TLS setup (rustls, ring, the platform verifier), no proxy and no
+  redirects, 5 s to connect and 30 s per read, and object_store's retry capped at 3 retries within
+  15 s, so a store that is down stops startup within seconds.
+- I1 sets the Compose files as above. The MinIO service of `deploy/compose/compose.yaml` makes
+  the bucket `stepclimb` with `mkdir /data/stepclimb` before MinIO starts (a top-level directory
+  of the data directory is a bucket to MinIO, on a new volume and an existing one; the image has
+  no `mc`) and has a health check the server waits for. The gate's own project
+  (`deploy/compose/ci.yaml`) runs the same service in memory on its slot's port, for the storage
+  tests and the e2e server.
+- I1 adds `files::{find_by_hash, insert, count_for_limit}`, which `Limit::Storage` and B7 use,
+  and the `course_files` table. `files::{unreferenced, delete}` and the `course_files` repository
+  come with I2, the first issue that calls them, and so does `max_file_bytes`, which only the
+  upload route reads.
+- The hash and size of a `files` row are the server's (B5): `files::NewFile` takes a
+  `files::Hashed`, which only `files::Sha256Hasher::finish` makes, over the bytes fed to it.
+  I2's upload route feeds the hasher every chunk of the body as it streams it to the temporary
+  key, and builds the `NewFile` from what `finish` returns; it never builds a digest from
+  anything the client sent.
+- A plan row without a `storage` key reads as 0 (`m0/10`'s reading of a missing limit), so a
+  non-`unlimited` plan refuses uploads until its row sets `storage`. Self-hosted instances run
+  `unlimited`, which leaves it `null`.
 
 ## Data
 
@@ -419,6 +450,12 @@ and stands until the owner reviews it.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
 
 ## Issues
+
+Routes of I2 and I3 that read or write stored bytes take `Require<P>` before the `Storage`
+extractor (`stepclimb_server::storage`), so the permission check runs first: an anonymous caller
+gets 401 and a caller without the permission 403, whether or not storage is configured, and only
+an allowed caller learns that storage is missing (503 `storage.not_configured`). axum runs
+extractors in argument order.
 
 1. **I1. Storage and the files table.** `object_store` (pinned after `dependency-researcher`, in its
    own commit), the storage configuration and startup probe, Compose settings, the `files` and

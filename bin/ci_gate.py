@@ -17,10 +17,11 @@ project, runs CMD with its database in DATABASE_URL, and removes the project wha
    machine.
 
 The project, `stepclimb-ci-<id>` with `<id>` from the worktree path, is the development Compose
-file plus deploy/compose/ci.yaml: PostgreSQL on tmpfs, and the server and the mock identity provider
-for `just e2e`, each on a port of the run's slot (slot_env). Every database the run touches (migrations, `#[sqlx::test]` databases, whose names
+file plus deploy/compose/ci.yaml: PostgreSQL and MinIO on tmpfs, and the server and the mock identity
+provider for `just e2e`, each on a port of the run's slot (slot_env). Every database the run touches (migrations, `#[sqlx::test]` databases, whose names
 depend only on the test's path, the e2e server) lives in it, so runs from checkouts with different
-migrations never meet. The run also names the production and ops checks' projects
+migrations never meet. CMD finds the PostgreSQL URL in DATABASE_URL and MinIO's, with the bucket
+`stepclimb` already made, in SC_CI_MINIO_URL (the storage tests, docs/specs/m1/06-files.md). The run also names the production and ops checks' projects
 (`stepclimb-prodcheck-<id>`, `stepclimb-opscheck-<id>` and its `-restore`), gives them its slot's
 ports and proxy subnets (slot_env), and sets SC_IMAGE, the server image
 tag the Compose files use, to `stepclimb:ci-<id>` (bin/check-image.sh adds `-amd64` and `-arm64`
@@ -68,6 +69,7 @@ SLOT_PORTS = (
     "SC_OPS_CHECK_HTTP_PORT",
     "SC_OPS_CHECK_HTTPS_PORT",
     "SC_CI_IDP_PORT",
+    "SC_CI_MINIO_PORT",
 )
 POLL_SECONDS = 2.0
 COMPOSE_FILES = ("deploy/compose/compose.yaml", "deploy/compose/ci.yaml")
@@ -374,6 +376,25 @@ def start_database(toplevel: Path, env: Mapping[str, str]) -> str:
     return f"postgres://{DB_USER_PASSWORD}@{address}/stepclimb"
 
 
+MINIO_URL_VAR = "SC_CI_MINIO_URL"
+
+
+def start_storage(toplevel: Path, env: Mapping[str, str]) -> str:
+    """Start the run's MinIO, whose bucket `stepclimb` deploy/compose/ci.yaml makes, and return its URL."""
+    project = env["SC_CI_PROJECT"]
+    checked(
+        compose_command(toplevel, project, "up", "--detach", "--wait", "minio"),
+        env,
+        f"starting MinIO in {project}",
+    )
+    address = checked(
+        compose_command(toplevel, project, "port", "minio", "9000"),
+        env,
+        "finding the MinIO port",
+    )
+    return f"http://{address}"
+
+
 def run_env(toplevel: Path, base: Mapping[str, str]) -> dict[str, str]:
     ident = run_id(toplevel)
     return {
@@ -467,6 +488,8 @@ def run_stack(toplevel: Path, env: dict[str, str], command: list[str], signals: 
         if signals.received is None:
             env["DATABASE_URL"] = start_database(toplevel, env)
             say(f"database {env['DATABASE_URL']}")
+            env[MINIO_URL_VAR] = start_storage(toplevel, env)
+            say(f"object storage {env[MINIO_URL_VAR]}")
         status = run_child(command, env, signals)
     finally:
         remove_stack(env)

@@ -37,6 +37,13 @@ pub(super) struct FileKeys {
     allow_insecure_providers: Option<Spanned<toml::Value>>,
     role: Option<Spanned<toml::Value>>,
     worker_concurrency: Option<Spanned<toml::Value>>,
+    storage_url: Option<Spanned<toml::Value>>,
+    storage_s3_endpoint: Option<Spanned<toml::Value>>,
+    storage_s3_region: Option<Spanned<toml::Value>>,
+    storage_s3_access_key_id: Option<Spanned<toml::Value>>,
+    storage_s3_secret_access_key: Option<Spanned<toml::Value>>,
+    storage_s3_secret_access_key_file: Option<Spanned<toml::Value>>,
+    storage_s3_allow_http: Option<Spanned<toml::Value>>,
     providers: Option<Spanned<toml::Value>>,
 }
 
@@ -58,6 +65,13 @@ impl FileKeys {
             "allow_insecure_providers" => self.allow_insecure_providers.as_ref(),
             "role" => self.role.as_ref(),
             "worker_concurrency" => self.worker_concurrency.as_ref(),
+            "storage_url" => self.storage_url.as_ref(),
+            "storage_s3_endpoint" => self.storage_s3_endpoint.as_ref(),
+            "storage_s3_region" => self.storage_s3_region.as_ref(),
+            "storage_s3_access_key_id" => self.storage_s3_access_key_id.as_ref(),
+            "storage_s3_secret_access_key" => self.storage_s3_secret_access_key.as_ref(),
+            "storage_s3_secret_access_key_file" => self.storage_s3_secret_access_key_file.as_ref(),
+            "storage_s3_allow_http" => self.storage_s3_allow_http.as_ref(),
             _ => None,
         }
     }

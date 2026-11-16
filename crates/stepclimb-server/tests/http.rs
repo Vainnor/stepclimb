@@ -85,6 +85,7 @@ fn state(db: PgPool) -> AppState {
         allowed_origins: Vec::new(),
         rate_limits: Default::default(),
         passwords: Default::default(),
+        storage: None,
         providers: stepclimb_server::providers::Providers::new(false).expect("provider clients"),
     }
 }
@@ -140,7 +141,9 @@ async fn startup_migrations_create_the_schema_on_an_empty_database(pool: PgPool)
             "admission_webhooks",
             "audit_events",
             "auth_flows",
+            "course_files",
             "courses",
+            "files",
             "group_members",
             "groups",
             "identities",
