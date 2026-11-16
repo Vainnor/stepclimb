@@ -36,8 +36,8 @@ use crate::{
 pub const ITEMS_PATH: &str = "/api/v1/items";
 
 problem_responses! {
-    ItemNotFound => "`item.not_found`: no item with this id exists in the organization, or you cannot see its course. `org.not_found`: the request's organization cannot be determined.",
-    ItemMoveNotFound => "`item.not_found`: no item with this id exists in the organization, or you cannot see its course. `module.not_found`: the destination module is not in the item's course. `org.not_found`: the request's organization cannot be determined.",
+    ItemNotFound => "`item.not_found`: no item with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined.",
+    ItemMoveNotFound => "`item.not_found`: no item with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `module.not_found`: the destination module is not in the item's course. `org.not_found`: the request's organization cannot be determined.",
     ItemCreateConflict => "`course.archived`: the course is archived and takes no content change. `item.limit_reached`: the module holds 200 items.",
     ItemOrderConflict => "`course.archived`: the course is archived and takes no content change. `order.stale`: the list is not exactly the current set of ids (one is missing, extra or repeated); reload and try again.",
     ItemWriteConflict => "`course.archived`: the course is archived and takes no content change.",

@@ -37,7 +37,7 @@ use stepclimb_core::{
     feature::Feature,
     grants::{self, Denied, Grants, RequireError},
     id::Uuid,
-    perm::Permission,
+    perm::{CourseViewAll, Permission},
     requirement::{FeatureKind, PermissionKind, Requirement},
 };
 
@@ -206,9 +206,10 @@ pub fn check_at_parent<P: Permission>(
 }
 
 /// The course named by the path parameter `course_id`, which `P` must be effective over (M1 spec
-/// 02 B24): resolved to its account's path inside the principal's organization, then B17 steps
-/// 3 to 5 with code `course.not_found`. A course is visible to a principal holding any
-/// effective permission at a scope containing it.
+/// 02 B24): resolved to its account's path inside the principal's organization, then
+/// [`check_course`] with code `course.not_found`. A course is visible to a principal holding any
+/// effective permission at a scope containing it, and a draft or a template only to one that
+/// also holds `course.view_all` there (Q13).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CourseTarget {
     pub id: Uuid,
@@ -233,13 +234,7 @@ impl Target for CourseTarget {
         grants: &Grants,
     ) -> Result<Self, ApiError> {
         let id = uuid_param(parts, state, COURSE_ID_PARAM).await?;
-        let account_path = stepclimb_core::courses::path(&state.db, grants.scope(), id)
-            .await
-            .map_err(|error| ApiError::internal(&error))?
-            .ok_or(Denied::CourseNotFound)?;
-        let course = Self { id, account_path };
-        grants.check::<P>(&course.target())?;
-        Ok(course)
+        course_of::<P>(state, grants, Some(id), code::COURSE_NOT_FOUND).await
     }
 }
 
@@ -315,9 +310,9 @@ impl Target for CourseFileTarget {
     }
 }
 
-/// The course `course_id` of a module or item as a [`CourseTarget`] that `P` is effective over:
-/// 404 with `not_found` when there is no such row (`None`), or its course is not visible to
-/// the principal; 403 when it is visible without `P`.
+/// The course `course_id` (of the path, a module, an item or a course file) as a
+/// [`CourseTarget`] that `P` is effective over: 404 with `not_found` when there is no such row
+/// (`None`) or [`check_course`] hides the course; 403 when it is visible without `P`.
 async fn course_of<P: Permission>(
     state: &AppState,
     grants: &Grants,
@@ -326,15 +321,39 @@ async fn course_of<P: Permission>(
 ) -> Result<CourseTarget, ApiError> {
     let hidden = || not_found_as(Denied::CourseNotFound, not_found);
     let id = course_id.ok_or_else(hidden)?;
-    let account_path = stepclimb_core::courses::path(&state.db, grants.scope(), id)
+    let located = stepclimb_core::courses::locate(&state.db, grants.scope(), id)
         .await
         .map_err(|error| ApiError::internal(&error))?
         .ok_or_else(hidden)?;
-    let course = CourseTarget { id, account_path };
-    grants
-        .check::<P>(&course.target())
-        .map_err(|denied| not_found_as(denied, not_found))?;
+    let course = CourseTarget {
+        id,
+        account_path: located.account_path,
+    };
+    check_course::<P>(grants, &course, located.needs_view_all, not_found)?;
     Ok(course)
+}
+
+/// The course check of every route that acts on a course, directly or through a module or an
+/// item (M1 spec 02 B24, Q13): a draft or a template (`needs_view_all`) where the principal does
+/// not hold `course.view_all` answers 404 with `not_found`, before `P` is looked at, so neither
+/// its existence nor its body reaches them; otherwise B17 steps 4 and 5 for `P`, a course
+/// without any effective permission answering the same 404.
+///
+/// The targets run it when they resolve the course, and handlers run it again on the course as
+/// their transaction locks it, so a course made a draft in between is still hidden.
+pub fn check_course<P: Permission>(
+    grants: &Grants,
+    course: &CourseTarget,
+    needs_view_all: bool,
+    not_found: &'static str,
+) -> Result<(), ApiError> {
+    let target = course.target();
+    if needs_view_all && !grants.holds::<CourseViewAll>(&target) {
+        return Err(not_found_as(Denied::CourseNotFound, not_found));
+    }
+    grants
+        .check::<P>(&target)
+        .map_err(|denied| not_found_as(denied, not_found))
 }
 
 /// `denied` as an answer, with a course that is not found or not visible answered as 404

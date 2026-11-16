@@ -496,6 +496,19 @@ async fn module_and_item_targets_four_cases(pool: PgPool) {
         .await
         .expect("create course")
         .id;
+    // Published: the exact holder has no `course.view_all`, and a draft's modules and items
+    // answer 404 to it (M1 spec 02 Q13).
+    let published = courses::Status::Published;
+    courses::set_status(
+        &f.pool,
+        scope(f.org),
+        course,
+        published,
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .expect("publish course");
     let module = modules::create(&f.pool, scope(f.org), course, "Module", now())
         .await
         .expect("create module")

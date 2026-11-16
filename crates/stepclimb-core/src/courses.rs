@@ -372,8 +372,8 @@ pub async fn lock(
 }
 
 /// The ids on the path of the account the course `id` belongs to, the root first, or `None`
-/// when the scope's organization has no such course: what `CourseTarget` checks grants at
-/// (B24).
+/// when the scope's organization has no such course. [`locate`] reads it with B10's draft and
+/// template flag, for `CourseTarget` (B24).
 pub async fn path(
     db: impl PgExecutor<'_>,
     scope: OrgScope,
@@ -392,6 +392,46 @@ pub async fn path(
         accounts::parse_path(&path).ok_or(Error::Stored {
             id,
             column: "account path",
+        })
+    })
+    .transpose()
+}
+
+/// Where a course is and whether B10 hides it: what `CourseTarget` and the targets reached
+/// through a course check (B24, Q13).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Located {
+    /// The ids on the path of the course's account, the root first.
+    pub account_path: Vec<Uuid>,
+    /// A draft or a template ([`Course::needs_view_all`]): visible only to holders of
+    /// `course.view_all` at the course.
+    pub needs_view_all: bool,
+}
+
+/// [`path`] with whether the course is a draft or a template, in one read, or `None` when the
+/// scope's organization has no course `id`.
+pub async fn locate(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    id: Uuid,
+) -> Result<Option<Located>, Error> {
+    let row = sqlx::query!(
+        r#"SELECT a.path::text AS "path!", (c.status = 'draft' OR c.template) AS "hidden!"
+           FROM courses c JOIN accounts a ON a.org_id = c.org_id AND a.id = c.account_id
+           WHERE c.org_id = $1 AND c.id = $2"#,
+        scope.org_id(),
+        id,
+    )
+    .fetch_optional(db)
+    .await?;
+    row.map(|row| {
+        let account_path = accounts::parse_path(&row.path).ok_or(Error::Stored {
+            id,
+            column: "account path",
+        })?;
+        Ok(Located {
+            account_path,
+            needs_view_all: row.hidden,
         })
     })
     .transpose()
