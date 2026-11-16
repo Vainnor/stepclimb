@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO modules (id, org_id, course_id, position, title, created_at, updated_at)\n         VALUES ($1, $2, $3, $4, $5,\n                 timestamptz 'epoch' + $6::bigint * interval '1 microsecond',\n                 timestamptz 'epoch' + $6::bigint * interval '1 microsecond')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Int4",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a683a31b2794eb826d41e7a382e44b0b38eae4a7894be74192e95780b632e3f8"
+}

@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE module_items\n         SET module_id = $3, position = $4,\n             updated_at = CASE WHEN module_id = $3 THEN updated_at\n                               ELSE timestamptz 'epoch' + $5::bigint * interval '1 microsecond' END\n         WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "988882097cd01f6b34f4df2e5e5235a814e1334f6f3eecd3170aecc87b471777"
+}

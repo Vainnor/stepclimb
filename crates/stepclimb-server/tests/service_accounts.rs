@@ -31,7 +31,7 @@ use stepclimb_core::{
     clock::ManualClock,
     courses,
     id::{Uuid, new_id},
-    organizations,
+    items, modules, organizations,
     role_assignments::{self, NewAssignment, Scope},
     roles::{self, NewRole, RolePatch},
     users::{self, NewUser, Status},
@@ -266,6 +266,27 @@ impl Fixture {
             .await
             .expect("create course")
             .id
+    }
+
+    /// A module of a new course in Tower and an item in it.
+    async fn module_and_item(&self) -> (Uuid, Uuid) {
+        let course = self.course().await;
+        let module = modules::create(&self.pool, scope(self.org), course, "Walked", now())
+            .await
+            .expect("create module")
+            .id;
+        let new = items::NewItem {
+            kind: items::Kind::Header,
+            title: "Walked".into(),
+            ref_id: None,
+            url: None,
+            position: None,
+        };
+        let item = items::create(&self.pool, scope(self.org), module, &new, now())
+            .await
+            .expect("create item")
+            .id;
+        (module, item)
     }
 
     /// A signed-in user holding a new custom role with `permissions` plus
@@ -953,8 +974,8 @@ const EMPTY_SCOPE_ALLOWED: &[&str] = &[
 
 /// B27, B44: a key with no scopes, whose owner holds every catalog permission at the
 /// organization, is refused on every `/api/v1` operation of the document but
-/// [`EMPTY_SCOPE_ALLOWED`]: 403, or for a route on an account or a course the 404 B17 answers
-/// for a target the principal cannot see. The walk reads the document, which lists every route the router
+/// [`EMPTY_SCOPE_ALLOWED`]: 403, or for a route on an account, a course, a module or an item
+/// the 404 B17 answers for a target the principal cannot see. The walk reads the document, which lists every route the router
 /// mounts (`tests/csrf.rs` T17), so a new route is walked without being named here.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn an_empty_scope_key_is_refused_on_every_operation_but_the_allowed_ones(pool: PgPool) {
@@ -975,6 +996,12 @@ async fn an_empty_scope_key_is_refused_on_every_operation_but_the_allowed_ones(p
             if uri.contains("{course_id}") {
                 let course = f.course().await;
                 uri = uri.replace("{course_id}", &course.to_string());
+            }
+            if uri.contains("{module_id}") || uri.contains("{item_id}") {
+                let (module, item) = f.module_and_item().await;
+                uri = uri
+                    .replace("{module_id}", &module.to_string())
+                    .replace("{item_id}", &item.to_string());
             }
             if uri.contains("{user_id}") {
                 let target = f.user("Walk target").await;
@@ -997,10 +1024,12 @@ async fn an_empty_scope_key_is_refused_on_every_operation_but_the_allowed_ones(p
             let hidden_account =
                 path.contains("{account_id}") && answer.code() == "account.not_found";
             let hidden_course = path.contains("{course_id}") && answer.code() == "course.not_found";
+            let hidden_module = path.contains("{module_id}") && answer.code() == "module.not_found";
+            let hidden_item = path.contains("{item_id}") && answer.code() == "item.not_found";
             assert!(
                 answer.status == StatusCode::FORBIDDEN
                     || (answer.status == StatusCode::NOT_FOUND
-                        && (hidden_account || hidden_course)),
+                        && (hidden_account || hidden_course || hidden_module || hidden_item)),
                 "{id} answered an empty-scope key: {answer:?}"
             );
         }
