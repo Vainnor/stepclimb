@@ -54,14 +54,29 @@ listed here with a pointer so the inventory is complete in one place.
 - **B5.** DatePicker, DateRangePicker and TimeField (React Aria's date components) take and give
   values with an explicit time zone (`ZonedDateTime`), show the zone's short name beside the
   value, and default to the user's time zone (`users.tz`) (Q2). Due dates (`13`) and unlock dates
-  (`04`) use them.
+  (`04`) use them. Coordinator decisions (overnight, 2026-11-16), pending owner review: each field
+  takes a required `timeZone` for a value entered into the empty field and leaves a given value
+  in its own zone; the calendar opens in a Popover at 768 px and wider and in a bottom sheet under
+  it, as `m0/13` Q10 does for Select; number segments show leading zeros and are at least 24 px
+  square, which axe's WCAG 2.5.8 target-size check requires. React Aria Components 1.22.1 keeps
+  the old UTC offset when the day segment is stepped with the arrow keys across a daylight-saving
+  change (09:00 EST stepped to the next day gives 10:00 EDT); typing the day or picking it in the
+  calendar gives 09:00 EDT. T3 is tested through typing and the calendar.
 - **B6.** TagField (a list of removable tags with text entry), Slider (single value, with a
   number field for exact entry), ColorField (hex entry with a swatch; the branding screen) and
   FileDrop (drop zone plus a "Choose file" button, accepting types and a size limit, reporting
   progress) follow React Aria's patterns. FileDrop is what spec 06's upload screen and spec 07's
-  image insertion use.
+  image insertion use. Coordinator decisions for FileDrop (overnight, 2026-11-16), pending owner
+  review: it checks type (MIME type, `type/*` group or extension) and size before calling
+  `onSelect`, lists each refused file with the reason in a live region, and refuses all files
+  when several are dropped on a zone that takes one; the caller reports upload progress
+  (`upload`) and the server's refusal (`errorMessage`); under a coarse pointer the drag prompt is
+  visually hidden, leaving the button.
 - **B7.** Tree (React Aria `Tree`) shows the account tree and course file folders, with keyboard
   expansion. StatusChip shows one learning state (B3) as a chip with icon and label.
+  Coordinator decision (overnight, 2026-11-16), pending owner review: StatusChip's label can be
+  visually hidden (`labelHidden`) where the row already says the state; it stays in the
+  accessibility tree.
 
 ### Learning
 
