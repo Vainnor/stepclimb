@@ -31,7 +31,6 @@ use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::PgConnection;
-use stepclimb_auth::{oauth2_config::Oauth2Config, oidc_config::OidcConfig};
 use stepclimb_core::{
     OrgScope,
     admission_rules::{self as rules_repo, Problem, RuleSets, RulesInput, Stored, Unreadable},
@@ -398,20 +397,18 @@ impl RulesWrite {
 /// sign anyone in.
 fn mapped_attributes(provider: &IdentityProvider) -> BTreeSet<String> {
     let names = match provider.kind {
-        Kind::Oidc => OidcConfig::from_stored(&provider.config)
+        Kind::Oidc => crate::presets::oidc_config(provider)
             .ok()
             .map(|config| config.settings.claims.attributes.into_keys().collect()),
-        Kind::Oauth2 => Oauth2Config::from_stored(&provider.config)
-            .ok()
-            .map(|config| {
-                config
-                    .settings
-                    .claims
-                    .profile
-                    .attributes
-                    .into_keys()
-                    .collect()
-            }),
+        Kind::Oauth2 => crate::presets::oauth2_config(provider).ok().map(|config| {
+            config
+                .settings
+                .claims
+                .profile
+                .attributes
+                .into_keys()
+                .collect()
+        }),
         Kind::Local => None,
     };
     names.unwrap_or_default()

@@ -5942,9 +5942,6 @@
         "type": "object",
         "description": "A provider to create.",
         "required": [
-          "key",
-          "kind",
-          "label",
           "config"
         ],
         "properties": {
@@ -5962,19 +5959,19 @@
           },
           "key": {
             "type": "string",
-            "description": "1 to 32 lowercase letters, digits and hyphens, starting with a letter or digit; not\n`local`. It is part of the redirect URI and never changes."
+            "description": "1 to 32 lowercase letters, digits and hyphens, starting with a letter or digit; not\n`local`. It is part of the redirect URI and never changes. Required without a preset;\nwith one, the preset's key when omitted (`vatsim` for `vatsim`)."
           },
           "kind": {
             "type": "string",
-            "description": "`oidc` or `oauth2`; anything else answers 422 `provider.kind_unsupported`."
+            "description": "`oidc` or `oauth2`; anything else answers 422 `provider.kind_unsupported`. Required\nwithout a preset; with one, omitted or the preset's kind."
           },
           "label": {
             "type": "string",
-            "description": "1 to 200 characters without control characters."
+            "description": "1 to 200 characters without control characters. Required without a preset; with one,\nthe preset's label when omitted (\"Sign in with VATSIM\" for `vatsim`)."
           },
           "preset": {
             "type": "string",
-            "description": "A preset to take the provider's endpoints and claims from. This server has none, so any\nvalue answers 422 `provider.preset_unknown`."
+            "description": "A preset to take the provider's endpoints, scopes and claims from, such as `vatsim`\n(VATSIM Connect, an `oauth2` provider). The config then needs only `client_id` and\n`client_secret`; any other member it names replaces the preset's whole. A name this\nserver does not have answers 422 `provider.preset_unknown`."
           }
         },
         "additionalProperties": false
@@ -6513,7 +6510,7 @@
                 },
                 "config": {
                   "$ref": "#/components/schemas/ProviderConfig",
-                  "description": "The kind's configuration, without the client secret."
+                  "description": "The kind's configuration, without the client secret. For a preset provider, the\nconfig sign-in uses: the preset's members under the provider's own."
                 },
                 "enabled": {
                   "type": "boolean",
@@ -6533,6 +6530,13 @@
                 "label": {
                   "type": "string",
                   "description": "The text of the provider's sign-in button."
+                },
+                "preset": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The preset the provider takes its other config members from, such as `vatsim`; absent\nfor a provider without one."
                 },
                 "redirect_uri": {
                   "type": "string",
@@ -7154,7 +7158,7 @@
           },
           "config": {
             "$ref": "#/components/schemas/ProviderConfig",
-            "description": "The kind's configuration, without the client secret."
+            "description": "The kind's configuration, without the client secret. For a preset provider, the\nconfig sign-in uses: the preset's members under the provider's own."
           },
           "enabled": {
             "type": "boolean",
@@ -7174,6 +7178,13 @@
           "label": {
             "type": "string",
             "description": "The text of the provider's sign-in button."
+          },
+          "preset": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The preset the provider takes its other config members from, such as `vatsim`; absent\nfor a provider without one."
           },
           "redirect_uri": {
             "type": "string",

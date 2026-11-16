@@ -39,10 +39,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
-use stepclimb_auth::{
-    oidc::{FlowSecrets, authorization_url},
-    oidc_config::OidcConfig,
-};
+use stepclimb_auth::oidc::{FlowSecrets, authorization_url};
 use stepclimb_core::{
     OrgScope,
     auth_flows::Kind as FlowKind,
@@ -267,7 +264,7 @@ async fn authorize_oidc(
     provider: &IdentityProvider,
     key: &str,
 ) -> Result<Option<Authorization>, ApiError> {
-    let config = match OidcConfig::from_stored(&provider.config) {
+    let config = match crate::presets::oidc_config(provider) {
         Ok(config) => config,
         Err(error) => {
             tracing::warn!(provider = key, %error, "the provider's stored config does not read");

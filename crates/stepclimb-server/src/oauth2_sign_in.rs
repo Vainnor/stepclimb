@@ -74,7 +74,7 @@ pub(crate) async fn authorize(
 
 /// The provider's stored config, or `None`, logged, when it does not read.
 fn stored_config(provider: &IdentityProvider, key: &str) -> Option<Oauth2Config> {
-    Oauth2Config::from_stored(&provider.config)
+    crate::presets::oauth2_config(provider)
         .inspect_err(|error| {
             tracing::warn!(provider = key, %error, "the provider's stored config does not read");
         })

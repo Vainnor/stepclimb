@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# VATSIM Connect as a sign-in preset (docs/specs/m0/06-oauth2-and-vatsim-preset.md B18, Q4).
+# The values are the plan's `[[providers]]` example (spec 06 B11). VATSIM documents the
+# endpoints, scopes and the `/api/user` body at https://vatsim.dev/api/connect-api; its
+# development environment is https://auth-dev.vatsim.net (https://vatsim.dev/services/connect/sandbox),
+# which an organization reaches by overriding the three URLs.
+#
+# `pkce` stays on (spec 06 Q3): Connect's documentation does not mention PKCE either way. An
+# organization whose sign-ins fail at the token step can override `pkce = false`, which removes
+# the protection against an injected authorization code.
+
+kind = "oauth2"
+key = "vatsim"
+label = "Sign in with VATSIM"
+
+[config]
+authorize = "https://auth.vatsim.net/oauth/authorize"
+token = "https://auth.vatsim.net/oauth/token"
+userinfo = "https://auth.vatsim.net/api/user"
+scopes = ["full_name", "vatsim_details", "email"]
+pkce = true
+
+[config.claims]
+subject = "/data/cid"
+given_name = "/data/personal/name_first"
+family_name = "/data/personal/name_last"
+email = "/data/personal/email"
+attributes.rating = "/data/vatsim/rating/short"
+attributes.subdivision = "/data/vatsim/subdivision/id"

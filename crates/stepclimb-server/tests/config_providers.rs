@@ -830,3 +830,76 @@ async fn a_file_provider_trusted_for_matching_links_by_email(pool: PgPool) {
         .expect("count users");
     assert_eq!(users, 1);
 }
+
+/// A `preset = "vatsim"` entry as the key `toml`, its three URLs overridden to point at
+/// `mock` (spec 06 Q4 (a)).
+#[cfg(feature = "vatsim")]
+fn preset_entry(mock: &MockIdp) -> String {
+    format!(
+        "[[providers]]\npreset = \"vatsim\"\nkey = \"toml\"\n\
+         authorize = \"{}\"\ntoken = \"{}\"\nuserinfo = \"{}\"\nclient_id = \"{}\"\n\
+         client_secret = \"{}\"\n",
+        mock.url(Endpoint::OAuth2Authorize),
+        mock.url(Endpoint::OAuth2Token),
+        mock.url(Endpoint::OAuth2Userinfo),
+        mock.client_id(),
+        mock.client_secret(),
+    )
+}
+
+/// Spec 06 B18, Data: a preset entry's row stores only what differs from the preset, and a
+/// sign-in reads the preset's members through it; the secret from the file matches the config
+/// sign-in resolves, so it is sent.
+#[cfg(feature = "vatsim")]
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_preset_file_provider_stores_its_own_members_and_signs_in(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    allow_signup(&pool, a).await;
+    let mock = mock().await;
+    let secrets = apply(&pool, &preset_entry(&mock), start())
+        .await
+        .expect("applies");
+    let [(_, key, kind, enabled, config, _)] = rows(&pool).await.try_into().expect("one row");
+    assert_eq!(
+        (key.as_str(), kind.as_str(), enabled),
+        ("toml", "oauth2", true)
+    );
+    assert_eq!(config["preset"], "vatsim");
+    assert_eq!(config["label"], "Sign in with VATSIM");
+    for member in ["claims", "scopes", "pkce", "client_secret"] {
+        assert!(config.get(member).is_none(), "{member}: {config}");
+    }
+
+    let answer = sign_in(&pool, a, secrets).await;
+
+    assert_eq!(answer.location(), "/c/s1", "{answer:?}");
+    assert!(answer.signed_in(), "{answer:?}");
+    let authorize = mock.requests_to(Endpoint::OAuth2Authorize);
+    assert_eq!(
+        authorize[0].query_param("scope"),
+        Some("full_name vatsim_details email")
+    );
+    assert!(
+        authorize[0].query_param("code_challenge").is_some(),
+        "PKCE on"
+    );
+}
+
+/// The anchors of a preset row are those of its resolved config: restarting with the same
+/// entry, while identities link users to the row, is no change.
+#[cfg(feature = "vatsim")]
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_preset_file_row_with_identities_restarts_unchanged(pool: PgPool) {
+    let a = org(&pool, "org-a").await;
+    let mock = mock().await;
+    let file = preset_entry(&mock);
+    apply(&pool, &file, start()).await.expect("applies");
+    link(&pool, a, id_of(&pool, a, "toml").await, "1000001").await;
+    apply(&pool, &file, restart()).await.expect("unchanged");
+    let moved = format!("{file}\n[providers.claims]\nsubject = \"/data/id\"\n");
+    let refused = apply(&pool, &moved, restart()).await;
+    assert!(
+        refused.is_err(),
+        "overriding the preset's subject pointer is an anchor change"
+    );
+}
