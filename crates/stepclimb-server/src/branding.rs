@@ -467,6 +467,10 @@ pub struct Served {
     pub css: String,
     pub css_hash: String,
     pub default_appearance: Theme,
+    /// The brand `css` was generated from: the saved inputs, or the default brand's when the
+    /// stylesheet is the default's (no saved branding, or saved inputs that fail this
+    /// generator).
+    pub brand: Brand,
 }
 
 /// The request organization's [`Served`] stylesheet. `org` is the [`RequestOrg`] extraction,
@@ -483,10 +487,16 @@ pub async fn served(
         Err(error) => return Err(error),
     };
     let saved = saved.map_or_else(|| DEFAULT.clone(), branding::effective);
+    let brand = if saved.fallback.is_some() {
+        Brand::stepclimb_default()
+    } else {
+        saved.brand
+    };
     Ok(Served {
         css: saved.css,
         css_hash: saved.css_hash,
         default_appearance: saved.default_appearance,
+        brand,
     })
 }
 

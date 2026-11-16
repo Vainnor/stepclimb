@@ -185,6 +185,38 @@ and stands until the owner reviews it.
   choice an organization makes, not a paid capability.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
 
+### Points I1 settled
+
+The spec left these open while I1 was built. Each is a coordinator decision (2026-11-16), taken on
+the owner's delegation and standing until the owner reviews it.
+
+- **The default icons** are full-bleed squares of the default brand's light `brand` color
+  (`#007373`), like the Tauri shell's placeholder icon, until a logo exists (`m0/12` Q6). The web
+  build draws them from `web/index.html`'s `theme-color` (`web/build/icons.ts`), and a server
+  test holds that value equal to the default brand's, so no PNG is committed. The
+  `apple-touch-icon` is the 192 px icon.
+- **`theme-color`** in the served `index.html` is the organization's light `brand`, written by
+  the server as it writes the theme link (`spa`), so the page and the manifest agree.
+  `index.html` itself carries the default brand's. Colors are `#rrggbb`, the 8-bit sRGB a display
+  shows.
+- **`short_name`** counts Unicode scalar values and drops trailing whitespace after the cut.
+- **The worker answers no request under `/docs`** either, besides B4's prefixes, and matches
+  every prefix segment by segment (`/apiary` is not `/api`).
+- **The navigation fallback** answers the cached `index.html` only when the network fails, never
+  for a 5xx answer, which the app shows itself.
+- **The worker does not claim open pages**: the first visit's page stays uncontrolled, and the
+  next navigation is the worker's. A change of controller reloads a page only after its "Reload".
+- **"Secure origins" (B6)** are `https`, or `http` on `localhost`, `127.0.0.1` or `[::1]`. This
+  leaves out the Tauri shell (`tauri://localhost`, `http://tauri.localhost`), whose offline
+  reading is M5's.
+- **The update toast** needs an action, which `m0/13` had ruled out for Toast. Toast takes one
+  action now, and a toast with one has no timer, so the action is still there when a keyboard
+  or screen reader user reaches it (`m0/13`, Toast row).
+- **An offline download's cache** is named `stepclimb-offline-<course_id>`, the name I3 stores
+  under; activating a new build deletes only `stepclimb-shell-*` caches.
+- **End-to-end tests** run with service workers blocked, except `web/e2e/pwa.spec.ts`: a worker
+  answers navigations out of `page.route`'s reach.
+
 ## Issues
 
 1. **I1. Manifest and app shell worker.** The manifest route, default icons, `index.html` links,

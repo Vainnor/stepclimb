@@ -230,6 +230,7 @@ async fn the_openapi_document_is_3_1_and_lists_every_route() {
             "/auth/{provider}/callback",
             "/auth/{provider}/start",
             "/healthz",
+            "/manifest.webmanifest",
             "/oauth/authorize",
             "/oauth/revoke",
             "/oauth/token",

@@ -922,6 +922,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/manifest.webmanifest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The web app manifest of the request's organization: its name, its light theme's colors and
+         *     Stepclimb's default icons.
+         */
+        get: operations["getWebManifest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/oauth/authorize": {
         parameters: {
             query?: never;
@@ -1618,6 +1638,17 @@ export interface components {
              *     off keeps the TOTP users already set up.
              */
             totp_required: boolean;
+        };
+        /** @description One icon of the manifest. */
+        ManifestIcon: {
+            /** @description `maskable` for the icon drawn to be cropped to the platform's shape; absent otherwise. */
+            purpose?: string;
+            /** @description `<width>x<height>` in px. */
+            sizes: string;
+            /** @description The icon's path. */
+            src: string;
+            /** @description Always `image/png`. */
+            type: string;
         };
         /** @description What `GET /api/v1/me` answers. */
         Me: {
@@ -2676,6 +2707,25 @@ export interface components {
          * @enum {string}
          */
         UserStatus: "active" | "suspended";
+        /** @description The organization's web app manifest. */
+        WebManifest: {
+            /** @description The organization's light theme `bg-canvas` color, as `#rrggbb`. */
+            background_color: string;
+            /** @description Always `standalone`. */
+            display: string;
+            /** @description Stepclimb's default icons: 192 and 512 px, and a maskable 512 px. */
+            icons: components["schemas"]["ManifestIcon"][];
+            /** @description The organization's name. */
+            name: string;
+            /** @description Always `/`. */
+            scope: string;
+            /** @description The organization's name cut to 12 characters, trailing spaces removed. */
+            short_name: string;
+            /** @description Always `/`. */
+            start_url: string;
+            /** @description The organization's light theme `brand` color, as `#rrggbb`. */
+            theme_color: string;
+        };
     };
     responses: {
         /** @description `account.not_found`: no account with this id exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined. */
@@ -6028,6 +6078,31 @@ export interface operations {
                     "application/json": components["schemas"]["Health"];
                 };
             };
+        };
+    };
+    getWebManifest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The organization's web app manifest. `Cache-Control: no-cache`. */
+            200: {
+                headers: {
+                    /** @description `no-cache` */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/manifest+json": components["schemas"]["WebManifest"];
+                };
+            };
+            404: components["responses"]["OrganizationNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
         };
     };
     authorizeApp: {

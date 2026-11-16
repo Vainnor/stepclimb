@@ -10,6 +10,9 @@ export default defineConfig({
   use: {
     baseURL: process.env.SC_E2E_URL ?? "http://localhost:58080",
     trace: "retain-on-failure",
+    // The app registers a service worker in its production build (spec 15 B6). It would answer
+    // the page's navigations itself, out of reach of `page.route`, so only pwa.spec.ts allows it.
+    serviceWorkers: "block",
   },
   // sign-in.spec.ts changes the organization's branding (spec 11 T14), which every page is drawn
   // with, so it runs once every other file has finished.
@@ -17,13 +20,19 @@ export default defineConfig({
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
-      testIgnore: /sign-in\.spec\.ts$/,
+      testIgnore: [/sign-in\.spec\.ts$/, /installed\.spec\.ts$/],
+    },
+    // Spec 15 T11: the installed-mode layout in WebKit at 375 px.
+    {
+      name: "webkit",
+      use: { ...devices["iPhone 13"], viewport: { width: 375, height: 740 } },
+      testMatch: /installed\.spec\.ts$/,
     },
     {
       name: "sign-in",
       use: { ...devices["Desktop Chrome"] },
       testMatch: /sign-in\.spec\.ts$/,
-      dependencies: ["chromium"],
+      dependencies: ["chromium", "webkit"],
     },
   ],
 });

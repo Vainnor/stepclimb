@@ -15,7 +15,9 @@
 //! `__Host-sc_appearance` cookie's. Without a theme chosen, the page takes the organization's
 //! default appearance (docs/specs/m0/12-tokens-and-theme-generator.md B27). The page is therefore
 //! drawn in its theme before any script runs, without an inline script. It is `private, no-cache`
-//! and varies by cookie.
+//! and varies by cookie. Its `theme-color` meta carries the organization's light theme `brand`
+//! color, as the web app manifest does (docs/specs/m1/15-installable-web-app-and-offline-reading.md
+//! B1, B2).
 
 use axum::{
     body::Body,
@@ -32,6 +34,7 @@ use crate::{
     branding::{self, THEME_CSS_PATH, THEME_CSS_VERSION_PARAM},
     csrf,
     error::ApiError,
+    manifest::light_colors,
     request_org::RequestOrg,
     session::Authenticated,
 };
@@ -72,9 +75,10 @@ pub async fn serve(State(state): State<AppState>, request: Request) -> Response 
             .into_response();
     };
     let template = String::from_utf8_lossy(&index.data);
-    let (theme_hash, default_theme) = theme(&state, &mut parts).await;
+    let (theme_hash, default_theme, theme_color) = theme(&state, &mut parts).await;
     let page = Page {
         theme_hash,
+        theme_color,
         appearance: page_appearance(&state, &mut parts).await,
         default_theme,
     };
@@ -90,20 +94,32 @@ struct Page {
     appearance: Appearance,
     /// The organization's default appearance, for an `appearance` without a theme.
     default_theme: Theme,
+    /// The organization's light theme `brand` color as `#rrggbb`; `None` leaves the template's.
+    theme_color: Option<String>,
 }
 
-/// The request organization's stylesheet hash and default appearance. Without them the link
-/// stays `/theme.css`, which answers the same stylesheet revalidated on every load, or the same
-/// refusal, and a page without a chosen theme follows the operating system.
-async fn theme(state: &AppState, parts: &mut Parts) -> (Option<String>, Theme) {
+/// The request organization's stylesheet hash, default appearance and `theme-color`. Without
+/// them the link stays `/theme.css`, which answers the same stylesheet revalidated on every load,
+/// or the same refusal, a page without a chosen theme follows the operating system, and the
+/// `theme-color` stays the default brand's from the template.
+async fn theme(state: &AppState, parts: &mut Parts) -> (Option<String>, Theme, Option<String>) {
     let org = RequestOrg::from_request_parts(parts, state).await;
     match branding::served(state, org).await {
-        Ok(served) => (Some(served.css_hash), served.default_appearance),
+        Ok(served) => {
+            let color = match light_colors(&served.brand) {
+                Ok(colors) => Some(colors.brand),
+                Err(error) => {
+                    tracing::error!(%error, "index.html: no theme-color");
+                    None
+                }
+            };
+            (Some(served.css_hash), served.default_appearance, color)
+        }
         Err(error) => {
             if error.status().is_server_error() {
                 tracing::error!(code = error.code(), "index.html: no theme hash");
             }
-            (None, Theme::System)
+            (None, Theme::System, None)
         }
     }
 }
@@ -141,11 +157,45 @@ pub(crate) fn is_css_hash(hash: &str) -> bool {
     hash.len() == 64 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// `index.html` with the fingerprinted theme link and the appearance attributes on `<html>`.
-/// A stored hash that is not a SHA-256 leaves the link unfingerprinted, so nothing but hex digits
-/// reaches the attribute; the appearance values are fixed names. Neither needs escaping.
+/// The start of the `theme-color` meta's value in `index.html`, which a `#rrggbb` follows.
+const THEME_COLOR_META: &str = r#"<meta name="theme-color" content=""#;
+
+/// `#rrggbb` in lowercase hex.
+fn is_hex_color(color: &str) -> bool {
+    color.len() == 7
+        && color.starts_with('#')
+        && color[1..]
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// `html` with the `theme-color` meta's `#rrggbb` replaced by `color`; unchanged when `color` is
+/// not a lowercase `#rrggbb` or the template's value is not one.
+fn with_theme_color(html: String, color: &str) -> String {
+    let Some(start) = html
+        .find(THEME_COLOR_META)
+        .map(|i| i + THEME_COLOR_META.len())
+    else {
+        return html;
+    };
+    let current = html.get(start..start + 7).unwrap_or_default();
+    if !is_hex_color(color) || !is_hex_color(current) {
+        return html;
+    }
+    let mut html = html;
+    html.replace_range(start..start + 7, color);
+    html
+}
+
+/// `index.html` with the fingerprinted theme link, the organization's `theme-color` and the
+/// appearance attributes on `<html>`. A stored hash that is not a SHA-256 leaves the link
+/// unfingerprinted, and a color that is not `#rrggbb` leaves the template's, so nothing but hex
+/// digits reaches either attribute; the appearance values are fixed names. None needs escaping.
 fn render_index(template: &str, page: &Page) -> String {
     let mut html = template.to_owned();
+    if let Some(color) = page.theme_color.as_deref() {
+        html = with_theme_color(html, color);
+    }
     if let Some(hash) = page.theme_hash.as_deref().filter(|hash| is_css_hash(hash)) {
         let link = format!("href=\"{THEME_CSS_PATH}\"");
         let fingerprinted = format!("href=\"{THEME_CSS_PATH}?{THEME_CSS_VERSION_PARAM}={hash}\"");
@@ -326,6 +376,55 @@ mod tests {
                 "{theme:?} {default:?}"
             );
         }
+    }
+
+    const META: &str = "<head>\n    <meta name=\"theme-color\" content=\"#007a78\" />\n</head>";
+
+    #[test]
+    fn the_page_carries_the_organizations_theme_color() {
+        let page = Page {
+            theme_color: Some("#500e0e".into()),
+            ..Page::default()
+        };
+        let html = render_index(META, &page);
+        assert!(
+            html.contains(r##"<meta name="theme-color" content="#500e0e" />"##),
+            "{html}"
+        );
+        assert_eq!(render_index(META, &Page::default()), META);
+    }
+
+    #[test]
+    fn a_theme_color_that_is_not_hex_leaves_the_templates() {
+        for color in [
+            "#500E0E",
+            "#500e0",
+            "#500e0e0",
+            "red",
+            "\"><script>",
+            "#50\"e0e",
+            "",
+        ] {
+            let page = Page {
+                theme_color: Some(color.into()),
+                ..Page::default()
+            };
+            assert_eq!(render_index(META, &page), META, "{color:?}");
+        }
+    }
+
+    /// `web/index.html`'s `theme-color` is the default brand's, which a page keeps when the
+    /// organization's cannot be read, and from which the web build draws its default icons.
+    #[test]
+    fn the_templates_theme_color_is_the_default_brands() {
+        let template = include_str!("../../../web/index.html");
+        let start = template
+            .find(THEME_COLOR_META)
+            .expect("web/index.html has a theme-color meta")
+            + THEME_COLOR_META.len();
+        let default = light_colors(&stepclimb_core::theme::Brand::stepclimb_default())
+            .expect("the default brand renders");
+        assert_eq!(&template[start..start + 7], default.brand);
     }
 
     #[test]

@@ -218,6 +218,8 @@ export const webMessages: Catalog = {
     "signIn.totpSetup.title": "Set up a code from an app",
     "signOut.failed": "Sign-out failed",
     "signOut.failedHint": "You are still signed in. Try again in a moment.",
+    "update.available": "A new version is available",
+    "update.reload": "Reload",
     "userMenu.density": "Density",
     "userMenu.label": "{name}, account menu",
     "userMenu.saving": "{setting}: saving {choice}",

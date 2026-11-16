@@ -9,6 +9,8 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
+import { appIcons } from "./build/icons.ts";
+import { serviceWorker } from "./build/service-worker.ts";
 
 const server = process.env.SC_DEV_SERVER ?? "http://127.0.0.1:8080";
 
@@ -17,6 +19,7 @@ export const proxied = [
   "/healthz",
   "/readyz",
   "/theme.css",
+  "/manifest.webmanifest",
   "/.well-known/stepclimb",
   "/auth",
   "/api",
@@ -39,7 +42,7 @@ function defaultTheme(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), defaultTheme()],
+  plugins: [react(), tailwindcss(), defaultTheme(), appIcons(), serviceWorker()],
   server: {
     port: 5173,
     strictPort: true,
@@ -53,7 +56,7 @@ export default defineConfig({
     fsModuleCache: false,
     environment: "jsdom",
     globals: true,
-    include: ["src/**/*.test.{ts,tsx}"],
+    include: ["src/**/*.test.{ts,tsx}", "build/**/*.test.ts"],
     setupFiles: ["./src/test-setup.ts"],
   },
 });
