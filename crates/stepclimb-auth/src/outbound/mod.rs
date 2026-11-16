@@ -15,8 +15,10 @@
 //! - no proxy is used, whatever `HTTP_PROXY` or `HTTPS_PROXY` say, since a proxy would resolve
 //!   the name where the policy cannot see it;
 //! - the whole exchange, from the start of the connection to the last byte of the body, has one
-//!   timeout ([`PROVIDER_TIMEOUT`] for providers);
-//! - a body longer than the client's limit ([`PROVIDER_MAX_BODY`] for providers) is an error,
+//!   timeout ([`PROVIDER_TIMEOUT`] for providers, [`ADMISSION_WEBHOOK_TIMEOUT`] for the
+//!   admission webhook);
+//! - a body longer than the client's limit ([`PROVIDER_MAX_BODY`] for providers,
+//!   [`ADMISSION_WEBHOOK_MAX_BODY`] for the admission webhook) is an error,
 //!   checked against `Content-Length` and again while reading.
 //!
 //! TLS is rustls with ring, verified against the operating system's trust store, HTTP/1.1 only.
@@ -41,6 +43,13 @@ pub const PROVIDER_TIMEOUT: Duration = Duration::from_secs(5);
 /// The largest response body accepted from an identity provider: 1 MiB, far above any discovery
 /// document, key set or token response.
 pub const PROVIDER_MAX_BODY: usize = 1024 * 1024;
+
+/// The timeout of one admission webhook call, from the start of the connection to the end of
+/// the response body (`07-admission.md` B14).
+pub const ADMISSION_WEBHOOK_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// The largest admission webhook reply accepted: 64 KiB (`07-admission.md` B14, Q7).
+pub const ADMISSION_WEBHOOK_MAX_BODY: usize = 64 * 1024;
 
 /// A client for outbound requests under one policy, timeout and body limit. Cloning is cheap;
 /// clones share the connection pool.
@@ -93,6 +102,16 @@ impl OutboundClient {
     /// A client for identity provider requests: [`PROVIDER_TIMEOUT`] and [`PROVIDER_MAX_BODY`].
     pub fn for_providers(policy: UrlPolicy) -> Result<Self, BuildError> {
         Self::new(policy, PROVIDER_TIMEOUT, PROVIDER_MAX_BODY)
+    }
+
+    /// A client for admission webhook calls: [`ADMISSION_WEBHOOK_TIMEOUT`] and
+    /// [`ADMISSION_WEBHOOK_MAX_BODY`].
+    pub fn for_admission_webhook(policy: UrlPolicy) -> Result<Self, BuildError> {
+        Self::new(
+            policy,
+            ADMISSION_WEBHOOK_TIMEOUT,
+            ADMISSION_WEBHOOK_MAX_BODY,
+        )
     }
 
     /// A client with its own timeout and body limit.

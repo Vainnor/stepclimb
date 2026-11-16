@@ -1162,6 +1162,22 @@ export interface components {
             url: string;
         };
         /**
+         * @description The JSON body Stepclimb POSTs to an organization's admission webhook at each sign-in through
+         *     an outside identity provider. It is not a Stepclimb endpoint. The request carries the
+         *     Standard Webhooks headers `webhook-id`, `webhook-timestamp` (Unix seconds) and
+         *     `webhook-signature` (`v1,` and the base64 HMAC-SHA256 of `id.timestamp.body`, keyed with the
+         *     webhook's `whsec_` secret); verify them with a Standard Webhooks library. Answer within 3
+         *     seconds with status 200 and an `AdmissionWebhookReply`.
+         */
+        AdmissionWebhookCall: {
+            /** @description The attributes the provider's claims mapped. */
+            attributes: Record<string, never>;
+            /** @description The key of the identity provider the person signed in with. */
+            provider: string;
+            /** @description The provider's identifier for the person. */
+            subject: string;
+        };
+        /**
          * @description A change to the webhook: send only what you change. An absent member keeps its stored
          *     value; creating the webhook needs `url`, and `enabled` is then `false` unless sent, so the
          *     receiver can be given the secret first. A member sent as `null` is malformed: omit it
@@ -1178,6 +1194,25 @@ export interface components {
              *     the signing secret, never with a token in a query parameter.
              */
             url?: string;
+        };
+        /**
+         * @description The reply an admission webhook gives Stepclimb, with status 200, at most 64 KiB. Any other
+         *     status, a redirect, a body that is not this object, or no answer within 3 seconds refuses
+         *     the sign-in with `auth.admission_unavailable`. Members not listed here are ignored.
+         */
+        AdmissionWebhookReply: {
+            /** @description `true` admits the sign-in; `false` refuses it with `auth.admission_refused`. */
+            allow: boolean;
+            /**
+             * @description Attributes merged over the provider's mapped attributes before they are stored; these
+             *     keys win. An object when present, never `null`.
+             */
+            attributes?: Record<string, never>;
+            /**
+             * @description Group keys for the user: an array of strings when present, never `null`. This release
+             *     checks them and does not apply them yet.
+             */
+            groups?: string[];
         };
         /** @description A new signing secret, shown once. */
         AdmissionWebhookSecret: {

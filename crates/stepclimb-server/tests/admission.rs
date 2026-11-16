@@ -9,12 +9,13 @@
 
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::http::{HeaderMap, StatusCode, header};
 use serde_json::{Map, Value, json};
 use sqlx::PgPool;
+use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{
     OrgScope, Source,
     audit::{self, Actor},
@@ -24,6 +25,7 @@ use stepclimb_core::{
     organizations,
     users::{self, NewUser, Status, User},
 };
+use stepclimb_server::providers::Providers;
 use stepclimb_server::{
     admission::{self, Admission, Completion, Context, Profile, Step, Verified},
     audit::ClientAddress,
@@ -36,6 +38,14 @@ const CLIENT: IpAddr = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10));
 fn now() -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(1_763_000_000)
 }
+
+/// The key ring and outbound clients admission's step 4 is given; no organization in these
+/// tests has an admission webhook, so neither is used.
+static KEY_RING: LazyLock<KeyRing> = LazyLock::new(|| {
+    KeyRing::parse("test:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=").expect("a valid test key")
+});
+static PROVIDERS: LazyLock<Providers> =
+    LazyLock::new(|| Providers::new(false).expect("the outbound clients"));
 
 #[expect(
     clippy::disallowed_methods,
@@ -101,11 +111,13 @@ impl Fixture {
             .expect("the provider exists")
     }
 
-    fn context(&self) -> Context {
+    fn context(&self) -> Context<'static> {
         Context {
             scope: scope(self.org),
             client: ClientAddress(CLIENT),
             now: now(),
+            keys: &KEY_RING,
+            providers: &PROVIDERS,
         }
     }
 

@@ -4674,6 +4674,29 @@
           }
         }
       },
+      "AdmissionWebhookCall": {
+        "type": "object",
+        "description": "The JSON body Stepclimb POSTs to an organization's admission webhook at each sign-in through\nan outside identity provider. It is not a Stepclimb endpoint. The request carries the\nStandard Webhooks headers `webhook-id`, `webhook-timestamp` (Unix seconds) and\n`webhook-signature` (`v1,` and the base64 HMAC-SHA256 of `id.timestamp.body`, keyed with the\nwebhook's `whsec_` secret); verify them with a Standard Webhooks library. Answer within 3\nseconds with status 200 and an `AdmissionWebhookReply`.",
+        "required": [
+          "provider",
+          "subject",
+          "attributes"
+        ],
+        "properties": {
+          "attributes": {
+            "type": "object",
+            "description": "The attributes the provider's claims mapped."
+          },
+          "provider": {
+            "type": "string",
+            "description": "The key of the identity provider the person signed in with."
+          },
+          "subject": {
+            "type": "string",
+            "description": "The provider's identifier for the person."
+          }
+        }
+      },
       "AdmissionWebhookPatch": {
         "type": "object",
         "description": "A change to the webhook: send only what you change. An absent member keeps its stored\nvalue; creating the webhook needs `url`, and `enabled` is then `false` unless sent, so the\nreceiver can be given the secret first. A member sent as `null` is malformed: omit it\ninstead. Without the plan's `admission_webhook` feature, only `{\"enabled\": false}` (or `{}`)\nis accepted.",
@@ -4688,6 +4711,30 @@
           }
         },
         "additionalProperties": false
+      },
+      "AdmissionWebhookReply": {
+        "type": "object",
+        "description": "The reply an admission webhook gives Stepclimb, with status 200, at most 64 KiB. Any other\nstatus, a redirect, a body that is not this object, or no answer within 3 seconds refuses\nthe sign-in with `auth.admission_unavailable`. Members not listed here are ignored.",
+        "required": [
+          "allow"
+        ],
+        "properties": {
+          "allow": {
+            "type": "boolean",
+            "description": "`true` admits the sign-in; `false` refuses it with `auth.admission_refused`."
+          },
+          "attributes": {
+            "type": "object",
+            "description": "Attributes merged over the provider's mapped attributes before they are stored; these\nkeys win. An object when present, never `null`."
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Group keys for the user: an array of strings when present, never `null`. This release\nchecks them and does not apply them yet."
+          }
+        }
       },
       "AdmissionWebhookSecret": {
         "type": "object",

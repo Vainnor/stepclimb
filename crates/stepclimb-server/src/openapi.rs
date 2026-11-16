@@ -30,8 +30,8 @@ use utoipa::{
 };
 
 use crate::{
-    accounts, admission_settings, admission_webhook, appearance, auth, branding, discovery,
-    enrollment,
+    accounts, admission_settings, admission_webhook, admission_webhook_call, appearance, auth,
+    branding, discovery, enrollment,
     error::{FieldError, PROBLEM_JSON, Problem},
     health, identities, local_sign_in, me, my_passkeys, oauth_authorize, organization,
     passkey_enrollment, passkey_options, passkey_sign_in, password, provider_admin,
@@ -159,6 +159,8 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             organization::OrgSettingsPatch,
             organization::LocalMethods,
             organization::AdmissionSwitches,
+            admission_webhook_call::Call,
+            admission_webhook_call::AdmissionWebhookReply,
             accounts::Account,
             accounts::NewAccount,
             accounts::AccountPatch,

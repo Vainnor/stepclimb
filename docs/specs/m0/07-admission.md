@@ -702,5 +702,43 @@ overrule one, which then updates this spec.
    `allow`, merged attributes, no redirects, outbound URL policy. Covers B13 to B17, B19; T10
    to T13, T21 (all steps). Depends on: I4, I5,
    `05-oidc.md` I1 (outbound URL policy, Q4 there), Q3, Q7.
+
+   Coordinator decisions (overnight 2026-11-16), for this issue:
+
+   - Every sign-in through an outside provider that passes steps 1 to 3, known user or new
+     person, calls the organization's webhook when it exists and is enabled (Q3 (a)). A local
+     sign-in never calls it. The call checks no plan feature (Permissions): skipping it after a
+     downgrade would admit people it refused.
+   - The call runs inside the sign-in's transaction, after step 3, so a refusal rolls back
+     every write the steps made. A sign-in holds its database connection for up to the 3 s
+     limit while it waits.
+   - `allow: false` refuses with `auth.admission_refused` and, for a known or email-matched
+     user, records the refusal marker as a rule refusal does (I3), so a local sign-in is
+     refused too until a sign-in the webhook allows clears it. A webhook that cannot decide
+     (B14) refuses with `auth.admission_unavailable` and changes no marker: it decided
+     nothing.
+   - The URL is checked again at every call: the server counts the organizations in the
+     sign-in's transaction and sends through the client of that tenancy (`05-oidc.md` Q4),
+     whose resolver checks every address the host resolves to. A private address saved on a
+     one-organization instance is refused once a second organization exists, and a host name
+     that now resolves to a loopback or private address is refused at connection. The webhook
+     has its own pair of clients under the providers' two policies, since its limits differ (3
+     s, 64 KiB, against the providers' 5 s and 1 MiB).
+   - The signature is Standard Webhooks (Q7 (a)): `webhook-id` is `msg_` and a new UUID v7
+     in simple form, `webhook-timestamp` the request clock's Unix seconds, and
+     `webhook-signature` `v1,` with the HMAC-SHA256 of `id.timestamp.body` in padded base64.
+     A secret that does not open (another key ring, a value sealed for another row, a length
+     other than 32 bytes) fails closed with `auth.admission_unavailable`, without a call; its
+     opened bytes are wiped once the request is signed.
+   - A failure is logged once at warn with the provider key and the reason (the policy's
+     refusal, the status, the shape at fault, or the transport error with the URL removed),
+     never the URL, a header or the body. Nothing is retried.
+   - Reply members other than `allow`, `groups` and `attributes` are ignored. `groups` is
+     checked (an array of strings) and not applied until I7. `attributes` replaces mapped
+     keys of the same name before the identity's attributes are stored (B7); the webhook gets the
+     mapped attributes only. `AdmissionWebhookCall` and `AdmissionWebhookReply` are schema
+     components of the OpenAPI document.
+   - T11's 3.0 s and T12's 2.9 s cases run the call alone under tokio's paused time; the other
+     T11 cases run whole sign-ins against the receiver.
 7. **I7. Groups from claims and the webhook.** Group tables or storage per Q8, applying and
    removing memberships at sign-in. Covers B18, B22; T14. Depends on: I6, Q8.

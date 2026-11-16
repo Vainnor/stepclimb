@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Admission: after a provider has proved who someone is, whether they may sign in to the
-//! organization, and as which user (docs/specs/m0/07-admission.md B1 to B12, B20, B21, Q3, Q4,
-//! Q6).
+//! organization, and as which user (docs/specs/m0/07-admission.md B1 to B17, B19 to B21, Q3,
+//! Q4, Q6, Q7).
 //!
 //! A sign-in through an identity provider ends in [`complete`], with the [`Verified`] its
 //! provider proved: the provider row, the subject, the mapped profile fields and attributes.
@@ -52,8 +52,18 @@
 //!    known here: a refusal marks them.
 //! 3. **Sync-only mode** (B11, B12). A person with no candidate is refused with
 //!    `auth.not_provisioned` when the organization's `admission.sync_only` is on, whether or not
-//!    sign-up is allowed. The admission webhook (B13 to B19) is not built.
-//! 4. **Just-in-time creation** (B20, B21). A person no identity matches is created as an `idp`
+//!    sign-up is allowed.
+//! 4. **Admission webhook** (B13 to B17, B19, Q3 (a)). Every sign-in through an outside
+//!    provider that got this far, known user or new person, is sent to the organization's
+//!    enabled webhook (`crate::admission_webhook_call`), whatever the plan's features. A reply
+//!    of `allow: false` refuses with `auth.admission_refused` and, for a known user, records the
+//!    refusal marker as step 2 does. Any failure (the secret, the URL policy, the 3-second
+//!    limit, the connection, the status, the reply's shape) refuses with
+//!    `auth.admission_unavailable` and records no marker: the webhook decided nothing, and the
+//!    savepoint's rollback leaves any marker as it was. `allow: true` admits, and the reply's
+//!    `attributes` are merged over the mapped ones (its keys win) for the writes below. A local
+//!    sign-in never calls it.
+//! 5. **Just-in-time creation** (B20, B21). A person no identity matches is created as an `idp`
 //!    user, with one identity, when the organization's `admission.signup_allowed` is on, after
 //!    the users limit check (spec 10 B10). Off, they are refused with `auth.signup_closed`; a
 //!    full plan refuses with `entitlement.limit_reached`. The user and identity are inserted in
@@ -65,7 +75,8 @@
 //!    identity matches is a server fault. When the provider is trusted for matching and marked
 //!    the email verified, the new user's email is recorded as verified.
 //!
-//! An admitted known user's identity gets the newly mapped attributes (B7). Their profile
+//! An admitted known user's identity gets the newly mapped attributes, with the webhook's merged
+//! over them (B7, B19). Their profile
 //! (names, display name, email) is updated from the provider only when the user is `idp` and
 //! the identity is their oldest one, the one just-in-time creation made (Q6 (b)): a user an
 //! admin or a sync owns keeps its values. An email it changes loses the record of a verified
@@ -92,6 +103,7 @@ use axum::{
 };
 use serde_json::{Map, Value};
 use sqlx::{Acquire, PgConnection, Postgres, Transaction};
+use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{
     OrgScope, OrgSettings, Source,
     admission_rules::{self, Outcome, RuleId},
@@ -107,10 +119,12 @@ use stepclimb_core::{
 };
 
 use crate::{
+    admission_webhook_call::{self as webhook_call, Call, Decision},
     audit::ClientAddress,
     entitlements::{Entitlements, limit_reached},
     error::ApiError,
     provider_sign_in::SIGN_IN_PAGE,
+    providers::Providers,
     session,
 };
 use stepclimb_auth::provider_config::TRUSTED_FOR_EMAIL_MATCHING;
@@ -126,6 +140,8 @@ pub mod code {
     pub const AUTH_ADMISSION_REFUSED: &str = "auth.admission_refused";
     /// The person has no user in the organization, and it admits only provisioned users (B11).
     pub const AUTH_NOT_PROVISIONED: &str = "auth.not_provisioned";
+    /// The admission webhook could not decide the sign-in (B14).
+    pub const AUTH_ADMISSION_UNAVAILABLE: &str = "auth.admission_unavailable";
 }
 
 /// The profile fields a provider mapped (B1); `None` for one it did not send. Never logged.
@@ -151,15 +167,19 @@ pub struct Verified<'a> {
     pub attributes: Map<String, Value>,
 }
 
-/// Where and when the sign-in happens.
+/// Where and when the sign-in happens, and what step 4 calls the webhook with.
 #[derive(Clone, Copy, Debug)]
-pub struct Context {
+pub struct Context<'a> {
     /// The request's organization (spec 08 B5).
     pub scope: OrgScope,
     /// The request's client address, for the audit entry of a just-in-time identity.
     pub client: ClientAddress,
     /// The request's clock reading.
     pub now: SystemTime,
+    /// The key ring the webhook's signing secret is sealed with.
+    pub keys: &'a KeyRing,
+    /// The outbound clients; step 4 picks the webhook's by the instance's tenancy.
+    pub providers: &'a Providers,
 }
 
 /// The step that refused a sign-in, as the log names it.
@@ -171,6 +191,8 @@ pub enum Step {
     Rules,
     /// Step 3: sync-only mode (B11).
     SyncOnly,
+    /// Step 4: the admission webhook (B13 to B17).
+    Webhook,
     /// Step 5: just-in-time creation (B20, B21).
     JustInTime,
 }
@@ -183,6 +205,7 @@ impl Step {
             Self::KnownIdentity => "known_identity",
             Self::Rules => "rules",
             Self::SyncOnly => "sync_only",
+            Self::Webhook => "webhook",
             Self::JustInTime => "just_in_time",
         }
     }
@@ -196,8 +219,8 @@ pub struct Refusal {
     /// The rule that refused at step 2, and whether it failed or could not be evaluated; boxed
     /// to keep the refusal small on the paths that have none.
     rule: Option<Box<(RuleId, Outcome)>>,
-    /// The known user whose refusal at step 2 [`admit`] records as the refusal marker, after
-    /// it rolled the sign-in's writes back.
+    /// The known user whose refusal at step 2, or by the webhook at step 4, [`admit`] records
+    /// as the refusal marker, after it rolled the sign-in's writes back.
     marks: Option<Uuid>,
 }
 
@@ -218,6 +241,17 @@ impl Refusal {
             step: Step::Rules,
             error: admission_refused(),
             rule: Some(Box::new((rule, outcome))),
+            marks: known,
+        }
+    }
+
+    /// A refusal by the webhook's `allow: false` (B15); `known` is the candidate user, whom
+    /// the refusal marks.
+    fn by_webhook(known: Option<Uuid>) -> Self {
+        Self {
+            step: Step::Webhook,
+            error: admission_refused(),
+            rule: None,
             marks: known,
         }
     }
@@ -377,7 +411,7 @@ fn log_step(step: Step) {
 pub async fn complete(
     tx: &mut Transaction<'_, Postgres>,
     sign_in: &Verified<'_>,
-    context: &Context,
+    context: &Context<'_>,
     request_headers: &HeaderMap,
 ) -> Result<Completed, Completion> {
     let user = match admit(tx, sign_in, context).await {
@@ -392,13 +426,14 @@ pub async fn complete(
 }
 
 /// Run admission for `sign_in` in a savepoint of `tx` (module documentation): the admitted
-/// user, or a refusal with every write rolled back. A refusal by the rules of a known user's
-/// sign-in then records the refusal marker on `tx` itself, which the caller commits. An error
+/// user, or a refusal with every write rolled back. A refusal of a known user's sign-in by the
+/// rules or by the webhook's `allow: false` then records the refusal marker on `tx` itself,
+/// which the caller commits. An error
 /// is a server fault, and the savepoint is rolled back with it.
 pub async fn admit(
     tx: &mut Transaction<'_, Postgres>,
     sign_in: &Verified<'_>,
-    context: &Context,
+    context: &Context<'_>,
 ) -> Result<Admission, ApiError> {
     let stored = in_scope(tx, sign_in.provider, context.scope).await?;
     identities::validate_subject(sign_in.subject).map_err(|e| ApiError::internal(&e))?;
@@ -479,7 +514,7 @@ impl Candidate {
 async fn steps(
     sp: &mut Transaction<'_, Postgres>,
     sign_in: &Verified<'_>,
-    context: &Context,
+    context: &Context<'_>,
 ) -> Result<Admission, ApiError> {
     let scope = context.scope;
     let provider = sign_in.provider;
@@ -492,12 +527,28 @@ async fn steps(
     if let Some(refusal) = rules(sp, provider, &sign_in.attributes, scope, known).await? {
         return Ok(Admission::Refused(refusal));
     }
+    if candidate.is_none()
+        && let Some(refusal) = settings.as_ref().and_then(sync_only)
+    {
+        return Ok(Admission::Refused(refusal));
+    }
+    let attributes = match webhook(sp, sign_in, context, known).await? {
+        Ok(attributes) => attributes,
+        Err(refusal) => return Ok(Admission::Refused(refusal)),
+    };
+    let sign_in = &Verified {
+        provider,
+        subject: sign_in.subject,
+        profile: sign_in.profile.clone(),
+        email_verified: sign_in.email_verified,
+        attributes,
+    };
     match (candidate, settings) {
         (Some(Candidate::Linked { identity_id, user }), _) => {
             admit_known(sp, sign_in, context, identity_id, user).await
         }
         (Some(Candidate::Matched(user)), _) => admit_matched(sp, sign_in, context, user).await,
-        (None, Some(settings)) => new_person(sp, sign_in, context, settings).await,
+        (None, Some(settings)) => just_in_time(sp, sign_in, context, settings).await,
         (None, None) => Err(ApiError::internal(&Fault::LocalWithoutIdentity)),
     }
 }
@@ -576,19 +627,52 @@ fn trusted_for_matching(provider: &IdentityProvider) -> bool {
         && provider.config.get(TRUSTED_FOR_EMAIL_MATCHING) == Some(&Value::Bool(true))
 }
 
-/// Step 3 (B11), then step 5 (B20, B21), for a person with no candidate.
-async fn new_person(
-    sp: &mut Transaction<'_, Postgres>,
-    sign_in: &Verified<'_>,
-    context: &Context,
-    settings: OrgSettings,
-) -> Result<Admission, ApiError> {
+/// Step 3 (B11) for a person with no candidate, under the organization's `settings`: the
+/// refusal in sync-only mode, or `None`.
+fn sync_only(settings: &OrgSettings) -> Option<Refusal> {
     log_step(Step::SyncOnly);
-    if settings.admission.sync_only {
-        let refusal = Refusal::new(Step::SyncOnly, not_provisioned());
-        return Ok(Admission::Refused(refusal));
+    settings
+        .admission
+        .sync_only
+        .then(|| Refusal::new(Step::SyncOnly, not_provisioned()))
+}
+
+/// Step 4 (B13 to B17, B19): the attributes the later writes store, the mapped ones with the
+/// webhook's merged over them, or the webhook's refusal. `known` is the candidate user, whom an
+/// `allow: false` marks. A local sign-in calls no webhook and keeps its attributes.
+async fn webhook(
+    conn: &mut PgConnection,
+    sign_in: &Verified<'_>,
+    context: &Context<'_>,
+    known: Option<Uuid>,
+) -> Result<Result<Map<String, Value>, Refusal>, ApiError> {
+    let provider = sign_in.provider;
+    if provider.kind == Kind::Local {
+        return Ok(Ok(sign_in.attributes.clone()));
     }
-    just_in_time(sp, sign_in, context, settings).await
+    log_step(Step::Webhook);
+    let call = Call {
+        provider: &provider.key,
+        subject: sign_in.subject,
+        attributes: &sign_in.attributes,
+    };
+    let (keys, providers) = (context.keys, context.providers);
+    let decision =
+        webhook_call::decide(conn, context.scope, context.now, keys, providers, &call).await?;
+    Ok(match decision {
+        Decision::Skipped => Ok(sign_in.attributes.clone()),
+        Decision::Allowed(extra) => {
+            let mut merged = sign_in.attributes.clone();
+            merged.extend(extra);
+            Ok(merged)
+        }
+        Decision::Refused => Err(Refusal::by_webhook(known)),
+        Decision::Unavailable(reason) => {
+            let provider = provider.key.as_str();
+            tracing::warn!(provider, %reason, "the admission webhook could not decide the sign-in");
+            Err(Refusal::new(Step::Webhook, admission_unavailable()))
+        }
+    })
 }
 
 /// Step 1 for the user `user_id` of a known identity (B4): the user read under its row lock,
@@ -644,7 +728,7 @@ async fn rules(
 async fn admit_known(
     conn: &mut PgConnection,
     sign_in: &Verified<'_>,
-    context: &Context,
+    context: &Context<'_>,
     identity_id: Uuid,
     user: User,
 ) -> Result<Admission, ApiError> {
@@ -668,7 +752,7 @@ async fn admit_known(
 async fn admit_matched(
     sp: &mut Transaction<'_, Postgres>,
     sign_in: &Verified<'_>,
-    context: &Context,
+    context: &Context<'_>,
     user: User,
 ) -> Result<Admission, ApiError> {
     let identity = NewIdentity {
@@ -706,7 +790,7 @@ async fn admit_matched(
 async fn admit_linked_meanwhile(
     sp: &mut Transaction<'_, Postgres>,
     sign_in: &Verified<'_>,
-    context: &Context,
+    context: &Context<'_>,
 ) -> Result<Admission, ApiError> {
     tracing::info!("admission found the identity created by a concurrent first sign-in");
     let scope = context.scope;
@@ -726,7 +810,7 @@ async fn admit_linked_meanwhile(
 async fn update_profile(
     conn: &mut PgConnection,
     sign_in: &Verified<'_>,
-    context: &Context,
+    context: &Context<'_>,
     user: User,
     identity_id: Uuid,
 ) -> Result<User, ApiError> {
@@ -780,7 +864,7 @@ async fn record_vouched_email(
 async fn just_in_time(
     sp: &mut Transaction<'_, Postgres>,
     sign_in: &Verified<'_>,
-    context: &Context,
+    context: &Context<'_>,
     settings: OrgSettings,
 ) -> Result<Admission, ApiError> {
     log_step(Step::JustInTime);
@@ -826,7 +910,7 @@ async fn just_in_time(
 async fn create(
     conn: &mut PgConnection,
     sign_in: &Verified<'_>,
-    context: &Context,
+    context: &Context<'_>,
     new: &NewUser,
 ) -> Result<User, identities::Error> {
     let scope = context.scope;
@@ -997,6 +1081,14 @@ fn not_provisioned() -> ApiError {
     )
 }
 
+fn admission_unavailable() -> ApiError {
+    ApiError::new(
+        StatusCode::FORBIDDEN,
+        code::AUTH_ADMISSION_UNAVAILABLE,
+        "This organization could not check your sign-in just now. Try again in a few minutes, or contact an administrator of your organization.",
+    )
+}
+
 fn signup_closed() -> ApiError {
     ApiError::new(
         StatusCode::FORBIDDEN,
@@ -1154,6 +1246,7 @@ mod tests {
             (signup_closed(), "auth.signup_closed"),
             (admission_refused(), "auth.admission_refused"),
             (not_provisioned(), "auth.not_provisioned"),
+            (admission_unavailable(), "auth.admission_unavailable"),
         ] {
             let refusal = Refusal::new(Step::KnownIdentity, error);
             assert_eq!(refusal.code(), code);
