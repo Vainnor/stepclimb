@@ -1477,3 +1477,64 @@ async fn wait_for_lock_waiters(pool: &PgPool, n: i64) {
     }
     panic!("{n} changes never waited on a lock");
 }
+
+/// A suspension of the new manager and the manager change, both waiting on the organization row
+/// this test holds, run in the order they queued: the suspension first refuses the change
+/// (`ManagerInactive`, nothing written); the change first is set, then the suspension commits.
+/// No manager is written after the suspension committed.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_concurrent_suspension_of_the_manager_and_the_change_take_turns(pool: PgPool) {
+    for suspension_first in [true, false] {
+        let a = insert_org(&pool, &format!("org-{suspension_first}")).await;
+        let sam = create(&pool, a, new_user("Sam")).await.id;
+        let robin = create(&pool, a, new_user("Robin")).await.id;
+        let mut lock = pool.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE")
+            .bind(a)
+            .execute(&mut *lock)
+            .await
+            .unwrap();
+        let suspend = || {
+            let pool = pool.clone();
+            tokio::spawn(async move {
+                let s = scope(a);
+                let status = Status::Suspended;
+                users::set_status(&pool, s, robin, status, later_time(), Actor::Instance)
+                    .await
+                    .map(|_| ())
+            })
+        };
+        let change = || {
+            let pool = pool.clone();
+            tokio::spawn(async move { assign_manager(&pool, a, sam, Some(robin)).await })
+        };
+        let (suspension, set) = if suspension_first {
+            let suspension = suspend();
+            wait_for_lock_waiters(&pool, 1).await;
+            (suspension, change())
+        } else {
+            let set = change();
+            wait_for_lock_waiters(&pool, 1).await;
+            (suspend(), set)
+        };
+        wait_for_lock_waiters(&pool, 2).await;
+        lock.commit().await.unwrap();
+
+        let wait = Duration::from_secs(10);
+        let set = tokio::time::timeout(wait, set).await.unwrap().unwrap();
+        let suspension = tokio::time::timeout(wait, suspension)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(suspension.is_ok(), "{suspension:?}");
+        let stored = users::get(&pool, scope(a), sam).await.unwrap().unwrap();
+        if suspension_first {
+            assert!(matches!(set, Err(Error::ManagerInactive)), "{set:?}");
+            assert_eq!(stored.manager_id, None);
+            assert!(manager_entries(&pool, sam).await.is_empty());
+        } else {
+            assert_eq!(set.unwrap().manager_id, Some(robin));
+            assert_eq!(stored.manager_id, Some(robin));
+        }
+    }
+}

@@ -1691,3 +1691,63 @@ async fn being_made_a_manager_grants_no_read_access(pool: PgPool) {
     let grants_after = f.send(Method::GET, "/api/v1/me", &robin, None).await;
     assert_eq!(grants_after.body["grants"], grants_before.body["grants"]);
 }
+
+/// A PATCH that reactivates a suspended user and changes their manager takes the organization
+/// row before the user row: while it waits for the organization row, which this test holds, the user row
+/// stays free, so a writer that holds the organization row and then wants the user row (a
+/// suspension, another manager change) cannot deadlock with it.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_manager_change_never_holds_the_user_row_while_waiting_for_the_organization(
+    pool: PgPool,
+) {
+    let f = Fixture::new(pool.clone()).await;
+    let (admin, _) = f.admin().await;
+    let sam = f.stored_user(f.a, new_user("Sam", Source::Local)).await;
+    let robin = f.stored_user(f.a, new_user("Robin", Source::Local)).await;
+    // Suspended, so the PATCH's reactivation writes the row and keeps its lock.
+    users::set_status(
+        &f.pool,
+        scope(f.a),
+        sam,
+        users::Status::Suspended,
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+    let mut lock = pool.begin().await.unwrap();
+    // `FOR NO KEY UPDATE`, the mode `set_manager` and a suspension take: `FOR UPDATE` would also
+    // stop the request's foreign-key checks before the handler runs.
+    sqlx::query("SELECT 1 FROM organizations WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(f.a)
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+
+    let (app, org) = (f.app.clone(), f.a);
+    let uri = format!("{USERS}/{sam}");
+    let body = json!({ "status": "active", "manager_id": robin });
+    let task =
+        tokio::spawn(async move { send(&app, org, Method::PATCH, &uri, &admin, Some(body)).await });
+    wait_for_lock_waiters(&pool, 1).await;
+    sqlx::query("SET LOCAL lock_timeout = '3s'")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    let user_row = sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(sam)
+        .execute(&mut *lock)
+        .await;
+    assert!(
+        user_row.is_ok(),
+        "the PATCH held the user row while it waited: {user_row:?}"
+    );
+    lock.commit().await.unwrap();
+
+    let answer = tokio::time::timeout(Duration::from_secs(10), task)
+        .await
+        .expect("the PATCH finishes once the organization row is free")
+        .expect("the task does not panic");
+    assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    assert_eq!(answer.body["manager_id"], json!(robin));
+}

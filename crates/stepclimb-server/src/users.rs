@@ -33,7 +33,9 @@
 //! Changing the `email`, `status` or `manager_id` of a user with an effective permission, at any
 //! scope, that the caller does not hold at organization scope is refused (403
 //! `permission.escalation`, owner decision of 2026-11-14; extended to `manager_id` by
-//! coordinator decision, spec 13 B15). Such a PATCH takes the organization's account tree lock first, which
+//! coordinator decision, spec 13 B15). An API key or app token changing its own user's `email`
+//! or `status` is refused (403 `auth.session_required`, spec 08 B44); its own user's `manager_id`
+//! is not (spec 13 Q10 asks the owner). Such a PATCH takes the organization's account tree lock first, which
 //! the role assignment routes take before they create or remove an assignment; then locks `FOR
 //! KEY SHARE` the custom roles the user holds, which an edit of a role's permissions
 //! (`roles::update_custom`) waits for; and only then reads the user's grants. Until the PATCH
@@ -41,9 +43,12 @@
 //! roles, which change only when startup syncs them, and assignments written by the repository
 //! without the tree lock (none through the API in M0).
 //!
-//! The status change runs first, then the manager change, then the field changes, so every
-//! `PATCH` locks the organization row before the user row; all run in one transaction, so a
-//! refused status or manager leaves the fields as they were.
+//! The manager change runs first, then the status change, then the field changes. Of the three,
+//! `set_manager` always and `set_status` when it suspends lock the organization row, and each
+//! does so before it locks the user row; running the manager change first means no `PATCH` holds
+//! the user row while it waits for the organization row (as a reactivation followed by a manager
+//! change would). All run in one transaction, so a refused manager or status leaves the fields as
+//! they were.
 
 use std::time::SystemTime;
 
@@ -132,7 +137,7 @@ pub mod code {
 problem_responses! {
     UserNotFound => "`user.not_found`: no user of the organization has this id. `org.not_found`: the request's organization cannot be determined.",
     UserUpdateNotFound => "`user.not_found`: no user of the organization has this id, or, for `manager_id`, the manager's id. `org.not_found`: the request's organization cannot be determined.",
-    UserWriteForbidden => "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email`, `status` or `manager_id` of a user who holds a permission the caller does not hold at organization scope. `auth.session_required`: an API key changes `email`, `status` or `manager_id` of its own owner, or an app token of its own user. `auth.csrf_refused`: the request did not come from this site.",
+    UserWriteForbidden => "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email`, `status` or `manager_id` of a user who holds a permission the caller does not hold at organization scope. `auth.session_required`: an API key changes `email` or `status` of its own owner, or an app token of its own user. `auth.csrf_refused`: the request did not come from this site.",
     UserCreateForbidden => "`permission.denied`: the caller does not hold `user.manage` at organization scope. `entitlement.limit_reached`: the organization's plan allows no more users; `limit` and `max` name the limit and its value. `auth.csrf_refused`: the request did not come from this site.",
     UserCreateConflict => "`user.external_id_taken`: another user of the organization has this external id. `user.email_taken`: another user of the organization has this email, in any letter case. `identity.taken`: one of `identities` is already linked to a user.",
     UserUpdateConflict => "`user.externally_managed`: an identity provider, the sync API, SCIM or a connector owns the user's names and email; change them there. `user.cannot_suspend_self`: you cannot suspend yourself. `user.email_taken`: another user of the organization has this email, in any letter case. `role_assignment.last_org_admin`: the user is the organization's last active Organization admin. `user.manager_cycle`: the manager is the user themself, or someone whose chain of managers reaches the user. `user.manager_inactive`: the manager is suspended.",
@@ -618,23 +623,27 @@ pub async fn update_user(
         .map_err(|error| ApiError::internal(&error))?
         .ok_or_else(user_not_found)?;
     refuse_patch(&body, &user, principal.user_id)?;
-    if guarded {
-        let detail = "This user holds permissions you do not. You cannot change their email, status or manager.";
+    let detail =
+        "This user holds permissions you do not. You cannot change their email, status or manager.";
+    if body.email.is_some() || body.status.is_some() {
         refuse_escalation(&mut tx, principal, require.grants(), user_id, detail).await?;
+    } else if body.manager_id.is_some() {
+        refuse_stronger_target(&mut tx, require.grants(), user_id, detail).await?;
     }
-    // The status first: `set_status` locks the organization row, then the user row, and the
-    // field update after it locks only the user row, so every PATCH takes them in that order.
-    if let Some(status) = body.status {
-        let actor = client.actor(principal);
-        user = repo::set_status(&mut *tx, scope, user_id, status.into(), now, actor)
-            .await
-            .map_err(user_error)?;
-    }
-    // After the status, before the fields: `set_manager` locks the organization row, then the
-    // user row, as `set_status` does.
+    // The manager first: `set_manager` locks the organization row, then the user row. A
+    // reactivation (`set_status` to active) locks only the user row, so run after it the manager
+    // change would wait for the organization row while holding the user row.
     if let Some(manager_id) = body.manager_id {
         let actor = client.actor(principal);
         user = repo::set_manager(&mut *tx, scope, user_id, manager_id, now, actor)
+            .await
+            .map_err(user_error)?;
+    }
+    // Then the status: a suspension locks the organization row (already held when the manager
+    // changed), then the user row; the field update after it locks only the user row.
+    if let Some(status) = body.status {
+        let actor = client.actor(principal);
+        user = repo::set_status(&mut *tx, scope, user_id, status.into(), now, actor)
             .await
             .map_err(user_error)?;
     }
@@ -683,7 +692,7 @@ fn refuse_patch(patch: &UserPatch, user: &repo::User, caller: Uuid) -> Result<()
 /// Before anything is read, a request authenticated by an API key or app access token whose
 /// target is its own user answers 403 `auth.session_required`, whatever the key's scopes: these
 /// writes change how the user signs in, and a bearer credential must not take over or lock out
-/// the user it acts for (spec 08 B44).
+/// the user it acts for (spec 08 B44). [`refuse_stronger_target`] is the same check without it.
 pub(crate) async fn refuse_escalation(
     tx: &mut Transaction<'static, Postgres>,
     principal: Authenticated,
@@ -692,6 +701,18 @@ pub(crate) async fn refuse_escalation(
     detail: &'static str,
 ) -> Result<(), ApiError> {
     refuse_key_on_owner(principal, user_id)?;
+    refuse_stronger_target(tx, caller, user_id, detail).await
+}
+
+/// [`refuse_escalation`] without the bearer-credential refusal: the check of a `PATCH` that
+/// changes only the manager, which does not change how the user signs in (spec 13 B15; whether
+/// a caller may change their own manager is the owner's, spec 13 Q10).
+async fn refuse_stronger_target(
+    tx: &mut Transaction<'static, Postgres>,
+    caller: &Grants,
+    user_id: Uuid,
+    detail: &'static str,
+) -> Result<(), ApiError> {
     let scope = caller.scope();
     roles::key_share_custom_of_user(tx, scope, user_id)
         .await
@@ -711,12 +732,11 @@ pub(crate) async fn refuse_escalation(
 
 /// 403 `auth.session_required` when `principal` is a bearer credential (an API key or an app
 /// access token) and `user_id` is its own user: only a browser session changes its own user's
-/// email, status, manager or sign-in methods (spec 08 B44, extended to app tokens with I8, and to
-/// the manager by coordinator decision, spec 13 B15).
+/// email, status or sign-in methods (spec 08 B44, extended to app tokens with I8).
 fn refuse_key_on_owner(principal: Authenticated, user_id: Uuid) -> Result<(), ApiError> {
     if !matches!(principal.via(), Via::Session) && principal.user_id == user_id {
         return Err(session_required(
-            "An API key or app token cannot change its own user's email, status, manager or sign-in methods. Use a signed-in browser session.",
+            "An API key or app token cannot change its own user's email, status or sign-in methods. Use a signed-in browser session.",
         ));
     }
     Ok(())
