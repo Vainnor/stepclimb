@@ -21,8 +21,9 @@ provider the organization trusts, or a direct MP4 or HLS URL. One VideoPlayer pl
 and reports which seconds the learner actually watched. The server merges those reports into
 watched ranges, caps what one report can add by the time that has passed, computes the watched
 percentage itself, and completes the item through spec 05 when the `watch` requirement's
-threshold is reached, so skipping to the end does not count. Instructors see each learner's
-watched percentage.
+threshold is reached, so skipping to the end does not count. An oEmbed player reports nothing,
+so oEmbed videos are not tracked and take only the `view` and `mark_done` requirements.
+Instructors see each learner's watched percentage.
 
 ## Behavior
 
@@ -65,8 +66,8 @@ watched percentage.
 - **B6.** VideoPlayer (`packages/ui`) plays uploaded and `url` HLS with hls.js where the browser
   lacks native HLS, native HLS in Safari and the iOS web view, MP4 with `<video>`, YouTube through
   the IFrame Player API (`youtube-nocookie.com`), Vimeo through the Vimeo Player API, and oEmbed as
-  a sandboxed iframe (`allow-scripts allow-same-origin allow-presentation`); how an oEmbed video is
-  tracked is the owner's open question Q3, built by I4. Third-party player scripts are loaded only
+  a sandboxed iframe (`allow-scripts allow-same-origin allow-presentation`) that sends no watch
+  report (B12a). Third-party player scripts are loaded only
   when a video of that source is on the page. The player is keyboard-operable, labels its controls
   from `useStepclimbStrings()`, shows captions, chapters and the poster, and respects reduced
   motion.
@@ -95,14 +96,26 @@ watched percentage.
   video item is met by starting playback. When `percent` reaches the item's `watch.min_percent`,
   the request calls `progress::complete_item` (`05` B5) in the same transaction, which emits
   `item.completed` and rolls up.
-- **B12.** The plan's rule stands: watched segments are recorded for linked video, so skipping ahead
-  does not count. YouTube and Vimeo are tracked through their player APIs and direct URLs through
-  `<video>` and hls.js (B6, B7), all reporting through B8. A generic oEmbed iframe exposes no player
-  API, so how oEmbed videos meet that rule is open for the owner (Q3); until the owner answers, no
-  oEmbed source is built (I4 waits on Q3) and this spec decides nothing about it. Changing a video's
-  duration with `force` recomputes `percent` for every learner of the items that use it in a job
-  (`video.recompute_progress`), which completes items whose new percent meets the requirement and
-  never un-completes one (`05` Q1).
+- **B12.** Watched segments are recorded for YouTube, Vimeo and direct URLs, so skipping ahead does
+  not count: YouTube and Vimeo through their player APIs and direct URLs through `<video>` and
+  hls.js (B6, B7), all reporting through B8. oEmbed videos are not tracked (B12a, Q3). Changing a
+  video's duration with `force` recomputes `percent` for every learner of the items that use it in a
+  job (`video.recompute_progress`), which completes items whose new percent meets the requirement
+  and never un-completes one (`05` Q1).
+- **B12a.** A generic oEmbed iframe exposes no player API, so an oEmbed video records no watched
+  segments and takes only the `view` and `mark_done` requirements (Q3):
+  - setting `{ "kind": "watch" }` on a `video` item whose video's source is `oembed` answers 422
+    `request.invalid` (`requirement.invalid` at `/requirement`, `04` B3); a video's source never
+    changes and an item's `ref_id` is not editable (`03` API), so no later change can pair the
+    two;
+  - `POST /api/v1/items/{item_id}/watch` for such an item answers 422 `request.invalid`
+    (`video.watch_unavailable`) and records nothing;
+  - the learner's `view` step is recorded through `05` B2's progress route, which accepts `view`
+    for a `video` item whose source is `oembed`; VideoPlayer sends it when the oEmbed iframe
+    loads, the closest signal an iframe without an API gives. `mark_done` works as for any item;
+  - the item read and the playback session carry no `watch` member for it (B13), and B14's
+    staff list does not list it (404 `item.not_found` from `watch-progress`, as for an item that
+    is not a video).
 
 ### Reading watch data
 
@@ -123,7 +136,7 @@ Common errors as in `../m0/02-organizations-and-accounts.md` -> API; unsafe meth
 | --- | --- | --- | --- | --- |
 | `POST /api/v1/courses/{course_id}/linked-videos` | `{ url, title?, type? }` | 201 `Video`, `Location` | 404 `course.not_found`, 422 `video.url_invalid`, `video.url_unsupported`, `video.oembed_failed` | `perm::CourseContentEdit` (course) |
 | `PUT /api/v1/videos/{video_id}/duration` | `{ duration_s, force? }` | 200 `Video` | 404 `video.not_found`, 409 `video.duration_set`, 422 | `perm::CourseContentEdit` |
-| `POST /api/v1/items/{item_id}/watch` | `{ segments, position_s, idempotency_key }` | 200 `WatchState` | 404 `item.not_found`, 403 `item.locked`, 409 `course.archived`, 409 `video.duration_missing` (only for completing), 422 | `perm::CourseParticipate` (the item's course) |
+| `POST /api/v1/items/{item_id}/watch` | `{ segments, position_s, idempotency_key }` | 200 `WatchState` | 404 `item.not_found`, 403 `item.locked`, 409 `course.archived`, 409 `video.duration_missing` (only for completing), 422 (`video.watch_unavailable` for oEmbed, B12a) | `perm::CourseParticipate` (the item's course) |
 | `GET /api/v1/items/{item_id}/watch-progress` | `?cursor&limit` | 200 `Page<LearnerWatch>` | 404 | `perm::CourseView`, then `progress.view` or `progress.view_observed` (`05` B20) |
 
 Changed: `m0/08`'s `POST /api/v1/items/{item_id}/video-session` serves linked sources (B4) and
@@ -207,7 +220,13 @@ Entitlements: none (linked videos store nothing).
 - **T7** (B8). A locked video item answers 403 `item.locked`; a Course designer (no
   `course.participate`) answers 403 `permission.denied`.
 - **T8** (B12). Forcing a shorter duration completes items whose learners now meet the
-  threshold, in the recompute job. (oEmbed tracking tests come with I4, after Q3.)
+  threshold, in the recompute job.
+- **T8a** (B12a). With an oEmbed video from the local oEmbed test server: a `watch` requirement on
+  its item answers 422 `requirement.invalid` and `view` and `mark_done` are stored; a watch report
+  answers 422 `video.watch_unavailable` and writes no `video_progress` or `watch_reports` row; a
+  learner's `view` through `05` B2's route completes a `view` requirement once; `watch-progress`
+  for the item answers 404. Mutation: allowing `watch` on an oEmbed item turns the first case
+  red. Vitest: the oEmbed player sends one `view` when the iframe loads and no watch report.
 - **T9** (B6, B7). Vitest: the tracker splits segments on seek and drops time at a playback rate
   above 2; Playwright (Chromium) with a local MP4 and HLS stream: playing 10 s sends segments that
   the server records; the YouTube and Vimeo adapters are tested against stub player objects, not
@@ -236,7 +255,8 @@ Entitlements: none (linked videos store nothing).
 ## Open questions
 
 Questions Q1, Q2 and Q4 were delegated by the owner to the coordinator; each recommendation is
-taken and stands until the owner reviews it. Q3 is the owner's and stays open.
+taken and stands until the owner reviews it. Q3 was the owner's; the owner answered it on
+2026-11-16.
 
 - **Q1. Which oEmbed providers are allowed.** The plan says "other providers through oEmbed".
   oEmbed replies carry HTML from the provider. Options: (a) an organization setting listing
@@ -251,7 +271,7 @@ taken and stands until the owner reviews it. Q3 is the owner's and stays open.
   (a): no keys, no third-party call from the server, and a learner never sets the denominator of
   their own percentage.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
-- **Q3. Tracking for oEmbed videos (open, for the owner).** The plan says watched segments are
+- **Q3. Tracking for oEmbed videos.** The plan says watched segments are
   recorded for linked video, and lists oEmbed among the linked sources; a generic oEmbed iframe
   exposes no player API. Every answer but (d) changes what the plan promises for one source, so
   this is the owner's to decide, not the coordinator's. Options: (a) oEmbed videos take `view` and
@@ -260,8 +280,11 @@ taken and stands until the owner reviews it. Q3 is the owner's and stays open.
   oEmbed from M1 and support YouTube, Vimeo and direct URLs; (d) support oEmbed only for providers
   whose player has a script API we add one adapter at a time (as for YouTube and Vimeo).
   Recommendation: (a), since YouTube, Vimeo and direct URLs are tracked as the plan says and (b)
-  would record watching that did not happen. Until the owner answers, the spec keeps the plan's
-  wording (B12), and I4 is blocked.
+  would record watching that did not happen.
+  Owner decision (2026-11-16): (a), oEmbed videos allow `view` or `mark_done` only, and a `watch`
+  requirement is refused for them (B12a).
+  Coordinator decision (2026-11-16), pending owner review: an oEmbed item's `view` is recorded
+  when its iframe loads, through `05` B2's route, since the iframe reports no playback.
 - **Q4. Report idempotency and the cap.** Options: (a) a client key per report, stored 7 days, and
   a cap of twice the elapsed time plus 10 s; (b) no key (merging ranges is already idempotent) and
   the same cap; (c) no cap. Recommendation: (a). Ranges merge idempotently, but the cap does not: a
@@ -284,6 +307,7 @@ taken and stands until the owner reviews it. Q3 is the owner's and stays open.
    commit), the YouTube and Vimeo adapters, the segment tracker and reporting, captions and
    chapters, resume. Covers B6, B7; T9. Depends on: I2, `08-uploaded-video.md` I4.
 4. **I4. oEmbed sources.** The `video.oembed_providers` setting, the oEmbed fetch through the
-   outbound client, the sandboxed oEmbed player, and the tracking or requirement rule the owner
-   chooses in Q3. Covers B1 (`oembed`), B2, B12 (oEmbed); T2 and the Q3 tests. Depends on: I3;
-   **blocked on Q3 (owner)**.
+   outbound client, the sandboxed oEmbed player with its `view` on load, the `watch` requirement
+   refusal for oEmbed items, the watch route's refusal, and `05` B2's `view` for oEmbed video
+   items. Covers B1 (`oembed`), B2, B12a; T2, T8a. Depends on: I3. Q3 is answered (owner,
+   2026-11-16).

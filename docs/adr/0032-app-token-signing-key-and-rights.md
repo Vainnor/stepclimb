@@ -1,9 +1,9 @@
 # 0032. App access tokens: a signing key derived from the encryption key ring, and the user's rights
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-16, by the owner)
 - **Date:** 2026-11-15
-- **Decider:** the owner, not yet. It sets the rights of every app token, so the coordinator
-  leaves it to the owner; spec 08 I8 is built on the recommendation meanwhile.
+- **Decider:** the owner, on 2026-11-16. It sets the rights of every app token, so the
+  coordinator left it to the owner; spec 08 I8 was built on the recommendation meanwhile.
 - **Related:** `docs/specs/m0/08-sessions-and-csrf.md` B36, B44, B46, Q3, Q12, I8; plan,
   Technical -> Decided (the OAuth 2.1 server "built on `oauth2`/`jsonwebtoken`");
   `crates/stepclimb-auth/src/oauth_server/access_token.rs`,
@@ -51,7 +51,8 @@ take over or lock out its user.
 
 ## Decision
 
-Pending the owner. Spec 08 I8 is built as recommended. Signing key B: `KeyRing` derives the key
+Signing key B and rights A, accepted by the owner on 2026-11-16 as recommended; spec 08 I8 built
+them. Signing key B: `KeyRing` derives the key
 at parse time and hands it only to `stepclimb_auth::oauth_server::access_token`, which signs with
 `jsonwebtoken` through its own HS256-only `CryptoProvider` over the workspace's `hmac` and `sha2`.
 Rights A: an app token acts

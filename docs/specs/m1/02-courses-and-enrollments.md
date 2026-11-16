@@ -71,6 +71,10 @@ to `Require`, and makes the evaluator read enrollments. Modules and items are sp
   either end out of the caller's reach. A move to the current account writes nothing. Enrollments,
   content and progress move with the course, since they hang off the course; grants held at the
   old account's subtree stop covering it and grants at the new one start, on the next request.
+  A move that would give the caller a permission over the course it does not hold over it now
+  answers 403 `permission.escalation`; the comparison takes only the permissions grantable at
+  course scope, so `course.create`, which the destination check already requires and which is
+  not grantable at a course, never counts as a gain (owner decision, 2026-11-16).
   It writes `course.move` (`before` and `after`: account). An account moved by `m0/02` B20 carries
   its courses with it, since a course's scope path is read through its account at every
   request.
@@ -95,7 +99,10 @@ to `Require`, and makes the evaluator read enrollments. Modules and items are sp
   "template"? }` creates a new `draft` course in the named account, copying the source's `title`
   (unless given), dates, `settings` and content. It needs `perm::CourseViewAll` at the source (a
   copy carries everything, unpublished and locked content included) and `perm::CourseCreate` at
-  the destination account, checked under the tree lock as in B2. `template: true` makes the copy a
+  the destination account, checked under the tree lock as in B2, and refuses a gain as B9 does: 403
+  `permission.escalation` when the caller would hold, over the copy, a permission grantable at
+  course scope that they do not hold over the source (owner decision, 2026-11-16).
+  `template: true` makes the copy a
   template; copying a template with `template` absent or `false` makes an ordinary course ("create
   from template").
 - **B13.** A copy never copies enrollments, progress, attempts or any learner data, and never the
@@ -112,8 +119,7 @@ to `Require`, and makes the evaluator read enrollments. Modules and items are sp
 - **B15.** An enrollment is one `enrollments` row: a user, a course, a role and a `status`
   (`active` or `concluded`), with its `source` and optional `external_id` (`m0/03` B4). The same
   `(course, user, role)` exists at most once; a user may hold several roles in one course.
-- **B16.** An `active` enrollment grants its role's permissions at the course's scope (pending
-  Q1, the owner's; this is its recommendation); a
+- **B16.** An `active` enrollment grants its role's permissions at the course's scope (Q1); a
   `concluded` enrollment grants nothing and is kept as history (Q8). A permission whose
   `GRANTABLE` list does not include `course` has no effect through an enrollment (`m0/09` B3).
 - **B17.** Creating an enrollment names `user_id` and `role_id` and needs `perm::EnrollmentManage`
@@ -128,16 +134,18 @@ to `Require`, and makes the evaluator read enrollments. Modules and items are sp
   05's `progress.view_observed`) are left out of the escalation check, because no assignment can
   give them to a caller: checking them would stop every admin from enrolling a Student. They
   describe the enrolled person's own relation to the course; spec 05 B19 puts its own check on
-  naming observed learners. This departs from `m0/09` B12 step 5 as the owner accepted it, so it is
-  pending Q12 (the owner's), and I2 does not start before Q12 is answered. A template course takes
+  naming observed learners. This narrows `m0/09` B12 step 5 for enrollments, as the owner decided
+  in Q12; the same exclusion applies to the other checks that compare a caller's permissions with
+  someone else's or with the whole catalog (B24a). A template course takes
   no enrollment whose role holds `course.participate` (409 `course.template`), and an archived
   course takes no new enrollment (409 `course.archived`, B5). Enrollments made through the API have
   source `local`.
-- **B18.** `PATCH /api/v1/enrollments/{enrollment_id}` with `{ "status" }` concludes or
-  reactivates an enrollment, needing what creating it would (B17's permission and escalation
-  check). `DELETE` removes the enrollment with the same checks; from spec 05 it also deletes the
-  user's progress in the course in the same transaction (Q8). An enrollment whose `source` is not
-  `local` is read-only (409 `enrollment.externally_managed`), as `m0/09` B14 rules for assignments.
+- **B18.** `PATCH /api/v1/enrollments/{enrollment_id}` with `{ "status" }` concludes or reactivates
+  an enrollment, needing what creating it would (B17's permission and escalation check). `DELETE`
+  removes the enrollment with the same checks; from spec 05 it also deletes the user's live progress
+  in the course in the same transaction (Q8), after archiving it, and keeps their completions and
+  archives (`05` B15, owner decision of 2026-11-16). An enrollment whose `source` is not `local` is
+  read-only (409 `enrollment.externally_managed`), as `m0/09` B14 rules for assignments.
 - **B19.** Enrollment writes lock the course row (`FOR NO KEY UPDATE`) and the role row (`FOR
   KEY SHARE`, as `m0/09` B12's decision does for assignments), so a role edit or a status change to
   draft cannot interleave with the check.
@@ -149,10 +157,11 @@ to `Require`, and makes the evaluator read enrollments. Modules and items are sp
   `UserView` at account scope (`m0/09` Q2 (B), `m0/03`): an account admin of A finds them through
   `GET /api/v1/users`. The users list query adds the enrollment join.
 - **B22.** `m0/09` B12 step 3 refuses course-scope role assignments "until the M1 courses spec
-  enables it". Whether this spec enables them or keeps them refused, with enrollments as the one
-  course-scope grant, is Q1 (the owner's). Under Q1's recommendation they stay refused and
-  `role_assignment.scope_unavailable` keeps answering; this spec does not edit `m0/09`, and no
-  issue is scheduled to change it until the owner answers.
+  enables it". This spec does not enable them (Q1): an active enrollment is the one course-scope
+  grant, course-scope role assignments stay refused, and `role_assignment.scope_unavailable` keeps
+  answering. Student and Observer are course-scope roles, granted only by an enrollment (Q1): a
+  role assignment of either at organization or account scope answers 422 `request.invalid`
+  (`role_assignment.course_role` at `/role_id`), and I2's migration deletes the existing ones.
 
 ### Evaluating course permissions
 
@@ -164,8 +173,24 @@ to `Require`, and makes the evaluator read enrollments. Modules and items are sp
   as `m0/09` B16 rules for assignments.
 - **B24.** `CourseTarget` resolves the path parameter `course_id` inside the principal's
   organization to its account path, then applies `m0/09` B17 steps 3 to 5 with code
-  `course.not_found`. A course is visible to a principal holding any effective permission at it,
-  so a learner who is refused an edit sees 403, while a user with no grant there sees 404.
+  `course.not_found`. A course is visible to a principal holding any effective permission at it, so
+  a learner who is refused an edit sees 403, while a user with no grant there sees 404. A `draft`
+  course, and any template, is visible only to a principal who also holds `perm::CourseViewAll` at
+  it (Q13): to anyone else every course route, and every later route that resolves through
+  `CourseTarget` or `EnrollmentTarget`, answers 404 with the target's code (`course.not_found`,
+  `enrollment.not_found`) before the route's own permission is checked, so a change made without
+  `course.view_all` neither shows that the draft exists nor returns its body. This is B10's rule
+  applied to every route.
+- **B24a.** A permission grantable only at course scope (`course.participate`, and spec 05's
+  `progress.view_observed`) can never be effective at organization or account scope, so the checks
+  that ask a caller to hold permissions there leave it out (Q12, confirmed by the owner): `m0/09` B8
+  and B9 (the permissions put in or taken out of a custom role), `m0/09` B12 step 5 and B14
+  (assignments), B17 and B18 here (enrollments), `m0/03` B6's `Grants::lacks_any_held_by` (used by
+  `m0/04` B6's enrollment links), and the "every catalog permission at organization scope" rule of
+  `m0/04`'s `PUT /api/v1/admin/local-sign-in` and `m0/06`'s trusted-provider decision. Without this
+  every Organization admin would fail those checks once `course.participate` is in the catalog. The
+  one course-only permission that gives power over other people, `progress.view_observed`, has its
+  own check when the observed learners are named (`05` B19).
 - **B25.** API keys: a key's scopes are intersected with its owner's grants as now (`m0/08` B27);
   enrollment grants are part of the owner's grants.
 - **B26.** `GET /api/v1/me` keeps listing organization and account grants (`m0/09` API); course
@@ -207,8 +232,10 @@ id, display_name }, role_id, status, source, external_id, created_at, updated_at
 use `m0/09`'s format (RFC 3339 UTC, six fractional digits).
 
 `EnrollmentTarget` resolves `enrollment_id` to its course and then behaves as `CourseTarget` with
-code `enrollment.not_found`. Changed M0 routes: `DELETE /api/v1/accounts/{account_id}` adds 409
-`account.has_courses` (B8); `GET /api/v1/users` widens its account-scope filter (B21).
+code `enrollment.not_found`, including B24's 404 for a draft or a template. Changed M0 routes:
+`DELETE /api/v1/accounts/{account_id}` adds 409 `account.has_courses` (B8); `GET /api/v1/users`
+widens its account-scope filter (B21); `POST /api/v1/admin/role-assignments` adds 422
+`request.invalid` (`role_assignment.course_role`) for Student and Observer (B22).
 
 ## Data
 
@@ -344,6 +371,11 @@ each have the tree root, Tower, Enroute.
   no enrollments, and a `course.copy` entry; a caller with `CourseViewAll` at the source but no
   `CourseCreate` at the destination gets 404 for the destination; `template: true` produces a
   template that cannot be published.
+- **T10a** (B9, B12). An Account admin of Enroute holding a custom course role with only
+  `course.view_all` at a Tower course gets 403 `permission.escalation` copying it into Enroute;
+  with a custom course role of `course.view_all` and `course.manage` there, moving it into Enroute
+  answers the same 403. A caller holding the same course-scope permissions at both ends copies
+  (201) and moves (200), although they hold `course.create` only at the destination.
 - **T11** (B15, B17). Enrolling a user as Student twice answers 409 `enrollment.exists`; as
   Student and Instructor gives two rows; as Manager (and, before `05` I3, Observer) answers 422
   `enrollment.role_unavailable`; a user of org B answers 404 `user.not_found`.
@@ -366,10 +398,25 @@ each have the tree root, Tower, Enroute.
   link is a Student enrollment in a Tower course, and not one enrolled only in an Enroute course.
 - **T18** (B22). `POST /api/v1/admin/role-assignments` with a course scope still answers 422
   `role_assignment.scope_unavailable`.
+- **T18a** (B22, Q1). Assigning Student or Observer at the organization or at an account answers
+  422 `role_assignment.course_role` and writes nothing; Instructor at an account still succeeds.
+  The I2 migration, run over a database holding a Student assignment at the organization, one at
+  an account and an Instructor assignment, deletes the two Student rows and keeps the Instructor
+  one. Mutation: removing the role check turns the test red.
 - **T19** (B24, every course and enrollment route). Four cases from the suite: anonymous 401; a
   user holding every catalog permission except the route's at the course 403; a user holding
   every permission at a sibling account 404; a user holding only the route's permission (plus the
   documented second permission for copy) 2xx. A Student gets 403 on `PATCH` of their own course.
+- **T19a** (B24, Q13). A caller holding a custom role with `course.manage` and `enrollment.view` but
+  not `course.view_all` at a course gets 404 `course.not_found` on `GET`, `PATCH`, the status route,
+  the move route and the enrollments list while the course is a draft, and the same on a template;
+  the rows and `audit_events` are unchanged. Once the course is published, the same caller gets 200
+  from `GET` and `PATCH`. An enrollment route on the draft answers 404 `enrollment.not_found`.
+- **T19b** (B24a). An Organization admin with `course.participate` in the catalog can still
+  create a custom role holding `course.participate`, enroll a Student, make an enrollment link for
+  a user who holds a Student enrollment, and `PUT /api/v1/admin/local-sign-in`; a custom role
+  holding `course.participate` and a permission the caller lacks at organization scope is still
+  refused 403 `permission.escalation`.
 - **T20** (every course and enrollment route). Cross-organization: an organization admin of org A
   calling each route with org B's course, enrollment, account, user or role id (in the path or
   body) gets 404 with the route's code, and org B's `courses`, `enrollments` and
@@ -395,24 +442,26 @@ each have the tree root, Tower, Enroute.
 
 ## Open questions
 
-Q1 and Q12 change what owner-accepted `m0/09` B12 says, so they are the owner's and stay open;
-issue I2 is blocked on them. The other questions were delegated by the owner to the coordinator;
-each recommendation is taken and stands until the owner reviews it.
+Q1, Q12 and Q13 were the owner's, since they change what owner-accepted `m0/09` B12 says or what
+a course route answers; the owner answered them on 2026-11-16. The other questions were delegated
+by the owner to the coordinator; each recommendation is taken and stands until the owner reviews
+it.
 
-- **Q1. How a role is granted at course scope (open, for the owner).** The data model has both
-  `enrollments(..., role_id, ...)` and `role_assignments(scope_type 'course')`, and `m0/09` B12
-  refuses course-scope assignments until this spec. Options: (a) an active enrollment is the
-  course-scope grant, and course-scope role assignments stay refused; (b) enrollments for learners
-  only, with staff through course-scope role assignments; (c) an enrollment also writes a matching
-  role assignment. Recommendation: (a). One table answers "who is in this course and as what", as
-  Canvas's enrollments do, M4's enrollment rules (group to course as role R) write the same rows,
-  and the evaluator reads one source per scope type. Until the owner answers, nothing is built on
-  any option (I2 is blocked), and `m0/09` B12's "until the M1 courses spec enables it" stands.
-  Note for the owner (I1 review, 2026-11-16): Student and Observer now list `course.view`, which
-  is grantable at organization and account scope, so an existing Student assignment at the
-  organization or an account (M0 allowed it there, with no effect) now shows every published
-  course in its scope; Observer cannot be assigned (`m0/09` B13). Under (a) Student and Observer would be given at course scope
-  only; whether to refuse them at organization and account scope is part of this question.
+- **Q1. How a role is granted at course scope.** The data model has both `enrollments(..., role_id,
+  ...)` and `role_assignments(scope_type 'course')`, and `m0/09` B12 refuses course-scope
+  assignments until this spec. Options: (a) an active enrollment is the course-scope grant, and
+  course-scope role assignments stay refused; (b) enrollments for learners only, with staff through
+  course-scope role assignments; (c) an enrollment also writes a matching role assignment.
+  Recommendation: (a). One table answers "who is in this course and as what", as Canvas's
+  enrollments do, M4's enrollment rules (group to course as role R) write the same rows, and the
+  evaluator reads one source per scope type.
+  Owner decision (2026-11-16): (a), an active enrollment is the course-scope grant and course-scope
+  role assignments stay refused (B16, B22).
+  Owner decision (2026-11-16), on the follow-up from the I1 review: Student and Observer are
+  course-scope roles, granted only by an enrollment. Assigning either at organization or account
+  scope answers 422 (B22), and a migration in I2 removes the existing assignments of that kind,
+  which M0 allowed and which, once Student listed `course.view`, would show every published
+  course in their scope.
 - **Q2. Course code rules.** The plan names a code and no rule. Options: (a) required, 1 to 50
   characters, unique per organization ignoring ASCII case; (b) optional and not unique; (c)
   required and unique per account. Recommendation: (a). A code is how staff and reports name a
@@ -487,30 +536,36 @@ each recommendation is taken and stands until the owner reviews it.
   deletes learner data; (c) nothing, the account stays. Recommendation: (a). It keeps M0's rule and
   every M0 account delete working, needs one route with B2's locking, and loses no data.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
-- **Q12. The escalation check for course-only permissions (open, for the owner).** `m0/09` B12 step
+- **Q12. The escalation check for course-only permissions.** `m0/09` B12 step
   5 asks the caller to hold every permission of the role, including those not grantable at the
   scope. Applied to enrollments, that refuses everyone, since `course.participate` can only come
   from an enrollment. Options: (a) leave course-only permissions out of the check, with a dedicated
   check where one confers rights over others (`progress.view_observed`, `05` B19); (b) treat the
   caller as holding them when they hold `enrollment.manage`; (c) keep the check and give Student no
   course-only permission. Recommendation: (a); the left-out permissions give the enrolled person a
-  relation to the course, not power over anyone else. Every option changes how `m0/09` B12 step 5
-  reads for enrollments, so it waits for the owner; I2 is blocked until then.
-- **Q13. What a draft or a template answers to a caller without `course.view_all` (open, for
-  the owner).** B10 hides a draft or a template behind 404 on `GET` only. B24 makes a course
-  visible to any effective permission, so on `PATCH`, status and move a caller with some course
-  permission but no `course.view_all` gets 403 rather than 404 (a draft's existence shows), and a
-  caller with `course.manage` but no `course.view_all` gets the draft's body back from a change.
-  No built-in role holds `course.manage` without `course.view_all`; a custom role can. Options:
-  (a) as built in I1: B10's 404 on `GET` and the list only; (b) every course route answers 404
-  `course.not_found` for a draft or a template to a caller without `course.view_all` there;
-  (c) as (a), and a change made without `course.view_all` answers 204 with no body.
-  Recommendation: (b), one rule for every route, so a draft's existence and content reach only
-  those who may read it. I1 builds (a) and leaves the change to the owner.
+  relation to the course, not power over anyone else.
+  Owner decision (2026-11-16): (a), course-only permissions are left out of the escalation check,
+  with a dedicated check for permissions over others (`progress.view_observed`, `05` B19).
+  Owner decision (2026-11-16), confirming B24a: the same exclusion applies to every check that
+  asks a caller to hold permissions at organization or account scope, since each of them would
+  otherwise refuse every Organization admin once `course.participate` is in the catalog.
+- **Q13. What a draft or a template answers to a caller without `course.view_all`.** B10 hides a
+  draft or a template behind 404 on `GET` only. B24 makes a course visible to any effective
+  permission, so on `PATCH`, status and move a caller with some course permission but no
+  `course.view_all` gets 403 rather than 404 (a draft's existence shows), and a caller with
+  `course.manage` but no `course.view_all` gets the draft's body back from a change. No built-in
+  role holds `course.manage` without `course.view_all`; a custom role can. Options: (a) as built in
+  I1: B10's 404 on `GET` and the list only; (b) every course route answers 404 `course.not_found`
+  for a draft or a template to a caller without `course.view_all` there; (c) as (a), and a change
+  made without `course.view_all` answers 204 with no body. Recommendation: (b), one rule for every
+  route, so a draft's existence and content reach only those who may read it.
+  Owner decision (2026-11-16): (b), every course route answers 404 for a draft or a template to a
+  caller without `course.view_all` (B24). I1 built (a); I4 changes it.
 
 ### Decisions made building I1
 
-Coordinator decisions (overnight, 2026-11-16), pending owner review. None depends on Q1 or Q12.
+Coordinator decisions (overnight, 2026-11-16), pending owner review. None depends on Q1 or Q12;
+Q13's answer replaces I1's B24 behavior (I4).
 
 - **Field codes.** A blank title or code answers 422 `name.empty` at `/title` or `/code`; a title
   over 200 characters `name.too_long`; a code over 50 characters `text.too_long`. Codes are
@@ -536,12 +591,21 @@ Coordinator decisions (overnight, 2026-11-16), pending owner review. None depend
 - **`course.participate` waits for I2.** I1 adds seven of the eight catalog entries; Student's
   list in I1 is `course.view` alone. `course.participate` is grantable at course scope only, so
   no assignment makes it effective, and with it in the catalog `m0/09` B12 step 5 and the "holds
-  every permission" rule of the sign-in settings would refuse every Organization admin. How those
-  rules treat a course-only permission is Q12's to settle; I2 adds the entry and Student's key
-  once it is answered.
+  every permission" rule of the sign-in settings would refuse every Organization admin. Q12's
+  answer settles how those rules treat a course-only permission (B24a); I2 adds the entry,
+  Student's key and B24a together.
 - **Course moves refuse a gain.** As an account move does (`m0/02` B23), a course move answers
   403 `permission.escalation` when the destination would give the caller a permission over the
   course it does not hold over it now, checked under the tree lock with the paths read there.
+  Owner decision (2026-11-16): the comparison takes only the permissions grantable at course
+  scope and leaves out `course.create` (B9).
+
+### Decisions for I3
+
+- **Copies refuse a gain** (owner decision, 2026-11-16). The copy route applies B9's check: 403
+  `permission.escalation` when the destination would give the caller a permission over the copy
+  that they do not hold over the source, comparing only the permissions grantable at course scope
+  and leaving out `course.create` (B12).
 
 ## Issues
 
@@ -553,10 +617,17 @@ Coordinator decisions (overnight, 2026-11-16), pending owner review. None depend
    complete).
 2. **I2. Enrollments and course grants.** Migration `<version>_enrollments.sql` with its role
    trigger, enrollment routes, `EnrollmentTarget`, the evaluator's enrollment grants, API key
-   intersection, the users list's account-scope widening. Covers B15 to B23, B25, B26, B27
-   (enrollments); T11 to T18, T19 to T21 for these routes. Depends on: I1. **Blocked on Q1 and Q12
-   (owner).** Every M1 issue that needs a learner's course grant (most of specs 03 to 16) waits
-   with it; I1 and I3 do not.
+   intersection, the users list's account-scope widening, the `course.participate` catalog entry,
+   B24a's exclusion in every escalation check, the 422 for Student and Observer assignments at
+   organization or account scope, and a migration deleting existing assignments of those two
+   roles at those scopes. Covers B15 to B23, B24a, B25, B26, B27 (enrollments); T11 to T18,
+   T18a, T19b, T19 to T21 for these routes. Depends on: I1. Q1, Q12 and B24a are answered by the
+   owner (2026-11-16).
 3. **I3. Copy and templates.** `courses::copy` (course row only; later specs add their parts),
-   the copy route, `template` handling in create, list and status. Covers B12 to B14; T10.
+   the copy route with B12's gain check, `template` handling in create, list and status. Covers
+   B12 to B14; T10, T10a.
    Depends on: I1.
+4. **I4. Drafts and templates answer 404 on every course route (#304).** `CourseTarget` and
+   `EnrollmentTarget` answer 404 with their code for a draft or a template to a principal without
+   `perm::CourseViewAll` at the course, before the route's permission (Q13). Covers B24's draft
+   rule; T19a. Depends on: I1. Maintainer line-by-line review.

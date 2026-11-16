@@ -30,9 +30,11 @@ departs from its spec updates the spec in the same PR.
 ## M1 Learning (full specs)
 
 The owner approved a 17-spec split of M1. Open questions carry coordinator decisions pending the
-owner's review, except those marked "open, for the owner", which change an owner-accepted spec or
-narrow, move or extend what the plan says, and wait for the owner. The full list is in each spec's
-Open questions.
+owner's review, except those that change an owner-accepted spec or narrow, move or extend what the
+plan says, which were the owner's. The owner answered all of those on 2026-11-16: `02` Q1, Q12 and
+Q13, `07` Q3, `09` Q3, `11` Q5, `12` Q8, `13` Q8, Q9 and Q10, `14` Q5 and Q6, `16` Q1 and `17` Q5.
+Each spec records its answer as "Owner decision (2026-11-16)" and states the decided behavior. The
+full list is in each spec's Open questions.
 
 | # | Spec | Review |
 | --- | --- | --- |

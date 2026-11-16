@@ -181,7 +181,12 @@ Only rows that differ from the default are stored in `notification_preferences`.
 
 | Permission | Key | Grantable at | Built-in roles (M1) |
 | --- | --- | --- | --- |
-| `perm::AnnouncementPost` | `announcement.post` | organization, account, course | Organization admin (through `perm::ALL`); Account admin and Instructor pending Q5 (the owner's) |
+| `perm::AnnouncementPost` | `announcement.post` | organization, account, course | Organization admin (through `perm::ALL`), Account admin, Instructor (Q5) |
+
+An Account admin holds it through an assignment at an account, so it covers the account's own
+announcements and those of every course in its subtree; an Instructor holds it through an
+enrollment, so it covers that course's announcements only. Course designer, Student, Observer and
+Grader do not hold it.
 
 Entitlements: none.
 
@@ -210,6 +215,11 @@ Entitlements: none.
   count, opens the list, follows the link and the count drops. Screenshots of the bell, list and
   preferences in the default and vZDC themes, light and dark, at 1280 and 375 px; axe finds no
   violation.
+- **T10a** (Permissions, Q5). The built-in lists hold `announcement.post` for Account admin and
+  Instructor and for no other built-in role but Organization admin. An Account admin of Tower
+  posts to Tower and to a course in Tower (201) and gets 404 for Enroute; an Instructor posts to
+  their course (201), gets 403 on another course in which they hold only a Student enrollment,
+  and 404 on Tower's account announcements; a Course designer gets 403 on their course.
 - **T11a** (B4, `GET /api/v1/announcements/{announcement_id}`). The read route decides in the
   handler, so the permission suite has one entry per way in: `course.view` at the announcement's
   course (course announcements), `announcement.post` at its scope, and being a recipient
@@ -235,8 +245,8 @@ Entitlements: none.
 ## Open questions
 
 Q1 to Q4 were delegated by the owner to the coordinator; each recommendation is taken and stands
-until the owner reviews it. Q5 extends the plan's role definitions, so it is the owner's and stays
-open.
+until the owner reviews it. Q5 extended the plan's role definitions, so it was the owner's; the
+owner answered it on 2026-11-16.
 
 - **Q1. Drafts and scheduling.** Options: (a) posting publishes at once, edits never re-notify;
   (b) drafts and a scheduled publish time; (c) (a) plus drafts. Recommendation: (a), the plan's
@@ -257,24 +267,24 @@ open.
   settings if asked.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
 
-- **Q5. Which built-in roles post announcements (open, for the owner).** The plan's role table
+- **Q5. Which built-in roles post announcements.** The plan's role table
   does not mention announcements: Instructor has "designer permissions plus grading, overrides,
   accommodations and enrollments", Account admin "courses, users, roles and reports within an
   account subtree". Giving either `announcement.post` extends those definitions. Options: (a)
   Account admin (account and its courses) and Instructor (their courses) as well as Organization
   admin; (b) Organization admin only, others through custom roles; (c) (a) plus Course designer.
   Recommendation: (a): an announcement is how instructors reach their learners, and an account
-  admin runs the account's courses. Until the owner answers, only Organization admin holds it
-  (through `perm::ALL`) and organizations grant it through custom roles; I1 adds it to no other
-  built-in list.
+  admin runs the account's courses.
+  Owner decision (2026-11-16): (a), Account admin and Instructor get `announcement.post`, as well
+  as Organization admin.
 
 ## Issues
 
 1. **I1. Announcements.** Migration, `announcement.post` in the catalog and roles, the course and
    account routes, the read route's rules, the body subset on spec 07's model and renderer, the
    event, audit entries, account deletion check, and one permission-suite entry per way into the
-   read route. The built-in grants follow Q5 (owner). Covers B1 to B5; T1, T7 to T9, T11, T11a and
-   T12 for
+   read route. Account admin and Instructor get `announcement.post` in their built-in lists (Q5).
+   Covers B1 to B5; T1, T7 to T9, T10a, T11, T11a and T12 for
    these routes. Depends on: `07-pages-and-the-editor.md` I2, `01-job-queue-and-outbox.md` I4,
    `02-courses-and-enrollments.md` I2.
 2. **I2. Notifications and preferences.** Migration, `notify`, the fan-out subscriber, the list,

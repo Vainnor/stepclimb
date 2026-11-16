@@ -101,10 +101,9 @@ everything that happened for one person and one assignment. Recurrence and expir
   ago when the job finds them (the server was down) are recorded as `missed` and not sent, so a
   restart does not flood people with stale reminders.
 - **B13.** An escalation names the assignee, the target, the due date and how long it is overdue,
-  in the message itself. Whether the manager may also open the assignee's timeline is Q9 (the
-  owner's): until answered, the manager gets the message only, with no read access to anything of
-  the assignee's, and the message links to nothing behind a login. The Manager role's scope over
-  reports is M4.
+  in the message itself. The escalation is the message only (Q9): the manager gets no read access
+  to anything of the assignee's, and the message links to nothing behind a login. The Manager
+  role's scope over reports is M4.
 - **B14.** Notification and email kinds added: `due_reminder` (not required; defaults in-app on,
   email on) and `escalation` (not required; defaults in-app on, email on), with templates (`12` B8)
   whose variables are `assignee_name`, `target_title`, `course_title`, `due_at` (in the recipient's
@@ -129,9 +128,13 @@ everything that happened for one person and one assignment. Recurrence and expir
   - Changing `manager_id` falls under the escalation rule of `email` and `status` (403
     `permission.escalation`, `../m0/03-users-and-identities.md`): the caller cannot redraw the
     reporting line of a user who holds a permission the caller lacks. An API key or app token
-    cannot change its own user's manager (403 `auth.session_required`, `m0/08` B44). I2 adds no
-    other refusal about managing yourself: a `user.manage` holder may change their own
-    `manager_id` from a browser session. Q10 asks the owner.
+    cannot change its own user's manager (403 `auth.session_required`, `m0/08` B44).
+  - A `user.manage` holder cannot change their own `manager_id` (Q10), so nobody picks who
+    receives their own escalations: a `PATCH /api/v1/users/{user_id}` on the caller's own user
+    that names `manager_id`, setting it, clearing it with `null` or naming the current value,
+    answers 403 `user.manager_self` with any credential and writes nothing, members other than
+    `manager_id` included. An API key or app token still gets `auth.session_required` first.
+    Another user's manager is set as above. Built in I6, after I2 merged.
   - `users::set_manager` locks the organization row `FOR NO KEY UPDATE`, as a suspension does,
     so two concurrent changes cannot close a cycle between them; the lock also keeps the new
     manager from being suspended between the check and the write. The PATCH changes the manager
@@ -146,8 +149,7 @@ everything that happened for one person and one assignment. Recurrence and expir
   from `email_messages` (`12` B12) when one was queued, completion (on time or late) and removal
   from a group. It is built from `assignment_users`, `assignment_events` and `reminders_sent`.
 - **B17.** Readers: the assignee (their own), and holders of `perm::AssignmentManage` or
-  `perm::ProgressView` at the course; the assignee's manager only if the owner answers Q9 with its
-  option (a).
+  `perm::ProgressView` at the course. The assignee's manager is not a reader (Q9).
 
 ### Learners and the dashboard
 
@@ -173,11 +175,12 @@ Common errors as in `../m0/02-organizations-and-accounts.md` -> API; unsafe meth
 | `PATCH /api/v1/assignments/{assignment_id}` | `{ due?, reminders? }` | 200 `Assignment` | 404, 422 | `perm::AssignmentManage` |
 | `POST /api/v1/assignments/{assignment_id}/end` | | 200 `Assignment` | 404 | `perm::AssignmentManage` |
 | `GET /api/v1/assignments/{assignment_id}/users` | `?status&cursor&limit` | 200 `Page<AssignmentUser>` | 404 | `perm::AssignmentManage` or `perm::ProgressView` (its course) |
-| `GET /api/v1/assignments/{assignment_id}/users/{user_id}/timeline` | | 200 `TimelineEntry[]` | 404 `assignment_user.not_found` | B17: the assignee, or `AssignmentManage`/`ProgressView` at its course (the manager pending Q9) |
+| `GET /api/v1/assignments/{assignment_id}/users/{user_id}/timeline` | | 200 `TimelineEntry[]` | 404 `assignment_user.not_found` | B17: the assignee, or `AssignmentManage`/`ProgressView` at its course |
 | `GET /api/v1/me/assignments` | `?cursor&limit` | 200 `Page<MyAssignment>` | | authenticated |
 
-Changed: `PATCH /api/v1/users/{user_id}` takes `manager_id` (B15, 409 `user.manager_cycle`, 404
-`user.not_found` for the manager); `GET /api/v1/me/dashboard` gains `deadlines` (B19); the outline
+Changed: `PATCH /api/v1/users/{user_id}` takes `manager_id` (B15, 409 `user.manager_cycle`, 409
+`user.manager_inactive`, 403 `user.manager_self` on the caller's own user, 404 `user.not_found`
+for the manager); `GET /api/v1/me/dashboard` gains `deadlines` (B19); the outline
 gains due information (B20); `OrgSettings` gains `assignments.default_reminders`. Schemas:
 `Assignment { id, course_id, target: { type, id, title }, assignee: { type, id, name }, due:
 DueRule | null, reminders: ReminderStep[], ended_at, counts: { not_started, in_progress,
@@ -271,7 +274,12 @@ Deleting an item or module that an assignment targets is refused (409 `item.assi
 
 | Permission | Key | Grantable at | Built-in roles (M1) |
 | --- | --- | --- | --- |
-| `perm::AssignmentManage` | `assignment.manage` | organization, account, course | Organization admin (through `perm::ALL`); Account admin and Instructor pending Q8 (the owner's) |
+| `perm::AssignmentManage` | `assignment.manage` | organization, account, course | Organization admin (through `perm::ALL`), Account admin, Instructor (Q8) |
+
+An Account admin holds it through an assignment at an account, so it covers every course in its
+subtree; an Instructor holds it through an enrollment, so it covers that course only. Course
+designer, Student, Observer and Grader do not hold it. Assigning someone not yet enrolled also
+needs `enrollment.manage` (B3), which both roles hold.
 
 Entitlements: none.
 
@@ -304,14 +312,24 @@ Tests use a `ManualClock`; reminder tests run the periodic job by hand.
   reminders and keeps their timeline. (Runs once groups exist, `m0/07` I7.)
 - **T10** (B15). Setting a manager forms no cycle (A manages B, B manages A answers 409
   `user.manager_cycle`); a manager from org B answers 404; the change writes one audit entry.
+- **T10a** (B15, Q10). A session caller holding `user.manage` at the organization who sets,
+  clears or repeats their own `manager_id` gets 403 `user.manager_self`, and their row and
+  `audit_events` are unchanged; a patch of their own user naming `manager_id` and `display_name`
+  changes neither. The same caller sets another user's manager (200). An API key of the caller
+  gets 403 `auth.session_required`. Mutation: removing the self check turns this test red.
 - **T11** (B16, B17). The timeline lists assigned, reminders with email status, escalation and
-  late completion in order; the assignee reads it; the escalated manager gets 403 (until Q9).
+  late completion in order; the assignee reads it; the escalated manager gets 403 (Q9).
 - **T11a** (B17, the timeline and `GET /assignments/{id}/users`). These decide in the handler, so
   the permission suite has one entry per granting permission (`assignment.manage`,
   `progress.view`) plus the assignee's own entry for the timeline, each with its own cases.
   Explicit tests: another Student of the course gets 403 `permission.denied` on both routes; a
   caller holding only `course.view` gets 403 `permission.denied`; the assignee gets 403 on
   another assignee's timeline.
+- **T11b** (Permissions, Q8). The built-in lists hold `assignment.manage` for Account admin and
+  Instructor and for no other built-in role but Organization admin. An Account admin of Tower
+  assigns a Tower course to an unenrolled user (201) and gets 404 for an Enroute course; an
+  Instructor assigns their course (201) and gets 403 on a course where they hold only a Student
+  enrollment; a Course designer gets 403 on their course.
 - **T12** (B18, B19). `GET /me/assignments` orders overdue first; the dashboard puts the overdue
   course first and lists deadlines.
 - **T13** (every route). Four cases: anonymous 401; every permission but the route's at the course
@@ -333,8 +351,8 @@ Tests use a `ManualClock`; reminder tests run the periodic job by hand.
 ## Open questions
 
 Q1 to Q7 were delegated by the owner to the coordinator; each recommendation is taken and stands
-until the owner reviews it. Q8, Q9 and Q10 extend the plan's role definitions, so they are the
-owner's and stay open.
+until the owner reviews it. Q8, Q9 and Q10 extended the plan's role definitions, so they were the
+owner's; the owner answered them on 2026-11-16.
 
 - **Q1. What a relative due date counts from and ends at.** The plan's example is "within 14 days
   of joining". Options: (a) from the moment the assignment reaches the person (creation, or joining
@@ -370,22 +388,24 @@ owner's and stay open.
   escalation work in M1.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
 
-- **Q8. Which built-in roles manage assignments (open, for the owner).** The plan's role table
+- **Q8. Which built-in roles manage assignments.** The plan's role table
   does not name assignments; giving `assignment.manage` to Account admin and Instructor extends
   their definitions. Options: (a) Account admin and Instructor as well as Organization admin; (b)
   Organization admin only, others through custom roles; (c) (a) plus Manager in M4.
   Recommendation: (a): assigning training is what account admins and instructors in the plan's
-  vZDC mapping do. Until the owner answers, only Organization admin holds it, and I1 adds it to no
-  other built-in list.
-- **Q9. What an escalated manager may read (open, for the owner).** The plan escalates overdue
+  vZDC mapping do.
+  Owner decision (2026-11-16): (a), Account admin and Instructor get `assignment.manage`, as well
+  as Organization admin.
+- **Q9. What an escalated manager may read.** The plan escalates overdue
   work to "their manager", and the Manager role ("see and remind their own reports, receive
   escalations") arrives in M4. Reading through `users.manager_id` before then gives Manager-like
   scope without the role. Options: (a) the manager reads the timeline of rows escalated to them;
   (b) the escalation message carries the facts and grants no read access until M4's Manager role;
   (c) no escalation to managers until M4. Recommendation: (b): escalation works in M1 as the plan
-  asks, and every read right stays with the roles the owner defines. Until the owner answers, the
-  spec builds (b).
-- **Q10. What escalations may carry, and who may draw reporting lines (open, for the owner).**
+  asks, and every read right stays with the roles the owner defines.
+  Owner decision (2026-11-16): (b), the escalation is the message only, with no read access until
+  M4's Manager role (B13, B17).
+- **Q10. What escalations may carry, and who may draw reporting lines.**
   Raised by I2's review. Anyone holding `user.manage` can make themself the manager of a user who
   holds no permission they lack, and then receive that user's escalations, which name the
   target, the course and how overdue it is (B13), for courses where the manager may hold no
@@ -401,18 +421,28 @@ owner's and stay open.
   token on its own user is refused, B15); (b) no, 409 or 403 for your own user, as
   suspending yourself is refused. Recommendation: (a): it grants the caller nothing, and admins
   set managers for everyone else anyway.
-  Until the owner answers, I2 builds (1) as B13 says and (2) as (a).
+  Owner decision (2026-11-16) on (2): (b), a `user.manage` holder cannot change their own
+  `manager_id` (B15), built in I6.
+  Coordinator decision (2026-11-16), pending owner review, on (1): the owner's answer names only
+  (2), so (1) stays (a): the escalation carries the facts B13 lists, as a message with no link
+  and no read access (Q9). With (2) answered, a `user.manage` holder can still name themself the
+  manager of another user who holds no permission they lack; that write is audited
+  (`user.set_manager`).
+  Coordinator decision (2026-11-16), pending owner review: the refusal is 403 with the code
+  `user.manager_self`, and it applies to any `manager_id` member on the caller's own user, the
+  current value included, so the rule has no exception to test.
 
 ## Issues
 
 1. **I1. Assignments to users with due dates.** Migration, `assignment.manage` in the catalog and
-   roles (built-in grants per Q8, the owner's), the assignment routes for user assignees, enrollment
+   roles (Account admin and Instructor, Q8), the assignment routes for user assignees, enrollment
    on assignment, due rules with time zones, status, the completion subscriber, the lock on deleting
-   targeted items and modules. Covers B1 to B5, B7 to B9; T1 to T3, T8 (due changes), T13 and T14.
+   targeted items and modules. Covers B1 to B5, B7 to B9; T1 to T3, T8 (due changes), T11b, T13 and
+   T14.
    Depends on: `05-progress-and-events.md` I1, `01-job-queue-and-outbox.md` I4,
    `02-courses-and-enrollments.md` I2.
 2. **I2. Managers.** `manager_id` on the user `PATCH` with the cycle check and audit entry. Covers
-   B15; T10. Depends on: none beyond M0.
+   B15; T10. Depends on: none beyond M0. Merged; the self refusal is I6.
 3. **I3. Reminders and escalation.** Reminder rules and the organization default, step scheduling,
    the `assignments.reminders` job, `due_reminder` and `escalation` notification and email kinds
    with templates. Covers B10 to B14; T4 to T8. Depends on: I1, I2, `12-email.md` I3,
@@ -422,3 +452,6 @@ owner's and stay open.
    Covers B16 to B20; T11, T12. Depends on: I3, `10-learner-dashboard-and-next-up.md` I1.
 5. **I5. Group assignees.** Group targets, `assignments.sync_groups`, removal. Covers B2 (groups),
    B6; T9. Depends on: I1, `../m0/07-admission.md` I7.
+6. **I6. Refuse a user changing their own `manager_id` (#305).** B15's self refusal with 403
+   `user.manager_self`, in the OpenAPI document and the client. Covers B15 (Q10); T10a. Depends
+   on: I2.

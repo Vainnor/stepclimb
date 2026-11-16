@@ -71,9 +71,18 @@ author typed ever reaches a learner's browser unchecked. Readers see pages throu
   origin starting with one `/` (`m0/08` B19's rules); anything else is refused. Links to other
   origins render with `rel="noopener noreferrer"` and `target="_blank"`.
 - **B10.** An image names a course file of the same course (`course_file_id`, 404
-  `file.not_found` otherwise; type PNG, JPEG, GIF or WebP, 422 otherwise), with required `alt`
-  text (an empty `alt` is allowed only with `decorative: true`). Authors upload images through
-  spec 06's upload route into the folder `/_page-images` by default.
+  `file.not_found` otherwise), with required `alt` text (an empty `alt` is allowed only with
+  `decorative: true`). Authors upload images through spec 06's upload route into the folder
+  `/_page-images` by default.
+- **B10a.** The server refuses an image node whose course file is not an image (Q5): the file's
+  stored `mime`, the type spec 06 B6 sniffed from its bytes, must be `image/png`, `image/jpeg`,
+  `image/gif` or `image/webp`. Any other type, `application/octet-stream` (no signature matched)
+  and SVG included, answers 422 `request.invalid` with `page.image_type` at the image node's
+  `/attrs/course_file_id`, and the save writes nothing. The file's name and the client's
+  `Content-Type` play no part, since spec 06 ignores both. The check runs on every save and every
+  restore (B3, B5), so an old version that names a non-image file cannot be restored as current.
+  Uploading is unchanged: spec 06 still stores any file, and only inserting it as an image is
+  refused. The editor shows the refusal at the image block.
 - **B11.** The transcript block is the plan's "phraseology block", kept generic (Q2): a list of
   lines, each with a `speaker` label (1 to 40 characters) and text. An organization names labels
   per block (for vZDC, "Controller" and "Pilot"); nothing in the core knows a label.
@@ -81,8 +90,9 @@ author typed ever reaches a learner's browser unchecked. Readers see pages throu
   match the provider's id format (YouTube 11 characters of `[A-Za-z0-9_-]`, Vimeo digits). Authors
   paste a URL; the editor extracts the id; the server never stores a URL for an embed. An embed is
   not tracked: video with watch tracking is a `video` item (spec 09).
-- **B13.** Ungraded "check your understanding" questions need `stepclimb-assess`, which is M2;
-  the schema has no question node in M1, pending Q3 (the owner's).
+- **B13.** Ungraded "check your understanding" questions need `stepclimb-assess` and move to M2
+  (Q3): the M1 schema has no question node, so a body containing one answers 422
+  `page.body_invalid` like any unknown node (B7). M2 adds the node.
 
 ### Rendering
 
@@ -145,11 +155,11 @@ Common errors as in `../m0/02-organizations-and-accounts.md` -> API; unsafe meth
 | `POST /api/v1/courses/{course_id}/pages` | `{ title, slug?, body? }` | 201 `PageSummary`, `Location` | 404 `course.not_found`, 409 `page.slug_taken`, 422 `request.invalid` | `perm::CourseContentEdit` (course) |
 | `GET /api/v1/pages/{page_id}` | `?format=html\|json` | 200 `PageView` | 404 `page.not_found`, 403 `item.locked` | `perm::CourseView` (the page's course), then B18 |
 | `PATCH /api/v1/pages/{page_id}` | `{ title?, slug? }` | 200 `PageSummary` | 404 `page.not_found`, 409 `page.slug_taken`, 422 | `perm::CourseContentEdit` |
-| `PUT /api/v1/pages/{page_id}/body` | `{ body, base_version_id }` | 200 `PageSummary` | 404, 409 `page.version_conflict`, 422 `page.body_invalid`, 404 `file.not_found` | `perm::CourseContentEdit` |
+| `PUT /api/v1/pages/{page_id}/body` | `{ body, base_version_id }` | 200 `PageSummary` | 404, 409 `page.version_conflict`, 422 `request.invalid` (`page.body_invalid`, `page.image_type`), 404 `file.not_found` | `perm::CourseContentEdit` |
 | `DELETE /api/v1/pages/{page_id}` | | 204 | 404, 409 `page.in_use` | `perm::CourseContentEdit` |
 | `GET /api/v1/pages/{page_id}/versions` | `?cursor&limit` | 200 `Page<PageVersionSummary>` | 404 | `perm::CourseViewAll` |
 | `GET /api/v1/pages/{page_id}/versions/{version_id}` | `?format=html\|json` | 200 `PageVersion` | 404 `page_version.not_found` | `perm::CourseViewAll` |
-| `POST /api/v1/pages/{page_id}/versions/{version_id}/restore` | `{ base_version_id }` | 200 `PageSummary` | 404, 409 `page.version_conflict` | `perm::CourseContentEdit` |
+| `POST /api/v1/pages/{page_id}/versions/{version_id}/restore` | `{ base_version_id }` | 200 `PageSummary` | 404, 409 `page.version_conflict`, 422 `request.invalid` (`page.image_type`) | `perm::CourseContentEdit` |
 
 Schemas: `PageSummary { id, course_id, title, slug, current_version: { id, number, author_id,
 created_at }, created_at, updated_at }`; `PageView { id, course_id, title, slug, version, html? ,
@@ -253,9 +263,16 @@ writes `perm::CourseContentEdit`. Entitlements: none.
   checks that `ammonia` changes nothing in the renderer's output, so the renderer emits only
   allowlisted markup; mutating the renderer to emit an attribute outside the allowlist turns it
   red.
-- **T7** (B10, B15). An image of another course answers 404 `file.not_found`; a PDF as image 422;
-  an image without `alt` and not decorative 422. A rendered image's URL serves the file; two
+- **T7** (B10, B10a, B15). An image of another course answers 404 `file.not_found`; an image
+  without `alt` and not decorative 422. A rendered image's URL serves the file; two
   requests get two different URLs; the cache row contains no `/files/` token.
+- **T7a** (B10a). Course files uploaded through spec 06's route with fixture bytes: a PNG, a JPEG, a
+  GIF and a WebP each save as an image (200). A PDF, an SVG, a plain-text file, a file whose bytes
+  match no signature (`application/octet-stream`) and a PDF named `photo.png` uploaded with
+  `Content-Type: image/png` each answer 422 `request.invalid` with `page.image_type` at the image
+  node's `/attrs/course_file_id`, and no version is written. Restoring a version that names the PDF
+  (inserted by the test in SQL) answers the same 422. Mutation: removing the type check turns this
+  test red.
 - **T8** (B12, B16). A YouTube id with 12 characters is refused; a valid one renders the
   `youtube-nocookie.com` iframe with the sandbox attribute and nothing from the author but the id.
 - **T9** (B18). A Student reads a page through an unlocked item (200, HTML); through a locked one
@@ -289,8 +306,8 @@ writes `perm::CourseContentEdit`. Entitlements: none.
 ## Open questions
 
 Q1, Q2 and Q4 were delegated by the owner to the coordinator; each recommendation is taken and
-stands until the owner reviews it. Q3 narrows the plan's M1 page blocks, so it is the owner's and
-stays open.
+stands until the owner reviews it. Q3 narrowed the plan's M1 page blocks, and Q5 was put to the
+owner after a review; the owner answered both on 2026-11-16.
 
 - **Q1. When a version is made, and two authors at once.** Options: (a) every explicit save is a
   version, with a conflict check on the base version and unsaved work kept in the browser; (b)
@@ -304,23 +321,32 @@ stays open.
   terminology; (b) a block with fixed "Controller" and "Pilot" lines in the core; (c) move it to
   the ATC pack. Recommendation: (a).
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
-- **Q3. "Check your understanding" questions in M1 (open, for the owner).** They need question types
+- **Q3. "Check your understanding" questions in M1.** They need question types
   from `stepclimb-assess` (M2). Options: (a) leave them to M2, which adds the node; (b) a simple
   multiple-choice node in M1 graded in the browser; (c) a placeholder node. Recommendation: (a); (b)
   would build a second question model that M2 replaces. The plan lists these questions among M1 page
-  blocks, so moving them to M2 is the owner's call; until the owner answers, B13 stands as written
-  (no question node in M1) and nothing is built for them.
+  blocks, so moving them to M2 is the owner's call.
+  Owner decision (2026-11-16): (a), check-your-understanding questions move to M2, which adds the
+  node (B13).
 - **Q4. How VersionDiff compares.** Options: (a) top-level blocks compared as JSON, changed blocks
   marked; (b) a text diff inside blocks; (c) no diff in M1. Recommendation: (a), no dependency, and
   enough to see what changed between saves.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
+- **Q5. Whether inserting an image refuses a file that is not an image.** Spec 06 sniffs a
+  file's type and never refuses one, so without a check a page image could be any file the
+  uploader picked. Options: (a) the server refuses a non-image file when it is inserted as an
+  image, and only there; (b) no check, and a non-image file shows as a broken image.
+  Recommendation: (a).
+  Owner decision (2026-11-16): (a), inserting an image refuses non-image types on the server
+  (B10a).
 
 ## Issues
 
 1. **I1. Page storage, versions and the document model.** Migration, `page_doc` typed model and
    validation, page CRUD, saves with the conflict check, versions list, read and restore,
-   `PageTarget`, `page_version_files` (in I1's migration). Covers B1 to B11 (validation), B12; T1 to
-   T5, T10, T11, T14 and T15 for these routes. Depends on: `03-modules-and-items.md` I1,
+   `PageTarget`, `page_version_files` (in I1's migration), the image type check on save and
+   restore. Covers B1 to B11 (validation), B10a, B12, B13; T1 to T5, T7a, T10, T11, T14 and T15 for
+   these routes. Depends on: `03-modules-and-items.md` I1,
    `06-files.md` I2.
 2. **I2. Rendering and reading.** The renderer, `ammonia` (pinned after `dependency-researcher`, in
    its own commit), the `page_renders` cache migration with image placeholders, signed image URLs,
