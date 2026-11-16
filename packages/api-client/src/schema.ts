@@ -1250,8 +1250,10 @@ export interface components {
              */
             attributes?: Record<string, never>;
             /**
-             * @description Group keys for the user: an array of strings when present, never `null`. This release
-             *     checks them and does not apply them yet.
+             * @description The groups the user is in, by key: at most 1,000 strings of 1 to 255 characters with no
+             *     control character, never `null`. They replace the memberships earlier replies gave the
+             *     user, so a group left out is removed; an absent `groups` is no groups. A group the
+             *     organization does not have yet is created, named by its key. Keys are matched exactly.
              */
             groups?: string[];
         };

@@ -465,6 +465,7 @@ async fn admit(
         profile: Profile::default(),
         email_verified: false,
         attributes: object(attrs),
+        groups: None,
     };
     let context = Context {
         scope: scope(org),

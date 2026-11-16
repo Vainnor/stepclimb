@@ -170,7 +170,8 @@ validates the ID token with the `openidconnect` crate, maps claims into an ident
   (`stepclimb_auth::claims`, the mapping both kinds share). A text profile field holding an
   empty string or NUL is absent, and an attribute whose value holds NUL in any string or key is
   absent: PostgreSQL `text` and `jsonb` cannot store NUL. `groups` is kept only as an array of
-  strings. A subject, the ID token's `sub` included, is usable only when non-empty, without NUL
+  strings; since `07-admission.md` I7, a mapped `groups` claim that is missing or anything else
+  is an empty list, so admission removes the provider's memberships. A subject, the ID token's `sub` included, is usable only when non-empty, without NUL
   and at most 255 characters (`claims::usable_subject`, the `identities` table's limit).
 - **B14.** The callback passes the mapped sign-in to admission (`07-admission.md` B1). On
   admission it creates the session (`08-sessions-and-csrf.md` B7), deletes the flow in the same
@@ -184,8 +185,8 @@ validates the ID token with the `openidconnect` crate, maps claims into an ident
   B1), which admits and creates the session in one transaction, and the callback answers 303 to
   the flow's `return_to` with `__Host-sc_session`, or admission's refusal redirect. The flow was
   already deleted when the callback took it (I3's decision), so it is not in that transaction.
-  `return_to` is sanitized again when the flow row is read (`08` B19). `groups` is mapped but
-  not passed: admission's input has no place for it until `07-admission.md` steps 2 to 4. The
+  `return_to` is sanitized again when the flow row is read (`08` B19). `groups` is mapped and
+  passed as admission's group keys (`07-admission.md` I7). The
   `email_verified` rule, applying `06-oauth2-and-vatsim-preset.md` B10's fail-closed decision
   to OIDC: B11's merge decides which value counts, so userinfo's `email` and `email_verified`
   win over the ID token's, and the email reaches admission only when (1) the merged

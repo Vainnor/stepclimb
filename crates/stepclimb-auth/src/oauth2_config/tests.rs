@@ -314,7 +314,8 @@ fn a_validated_config_maps_a_userinfo_body() {
         Some("student@example.test")
     );
     assert_eq!(mapped.profile.email_verified, Some(true));
-    assert_eq!(mapped.profile.groups, None);
+    // The config maps `/data/groups` and the body has none: no groups (`07-admission.md` I7).
+    assert_eq!(mapped.profile.groups, Some(Vec::new()));
     assert_eq!(
         Value::Object(mapped.profile.attributes),
         json!({ "rating": "S1", "subdivision": "USA" })

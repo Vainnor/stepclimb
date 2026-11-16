@@ -175,6 +175,7 @@ impl Fixture {
             profile,
             email_verified: false,
             attributes: attributes(attrs),
+            groups: None,
         }
     }
 
@@ -536,6 +537,7 @@ async fn a_local_sign_in_never_creates_a_user(pool: PgPool) {
         profile: Profile::default(),
         email_verified: false,
         attributes: Map::new(),
+        groups: None,
     };
     let mut tx = f.pool.begin().await.expect("begin");
     let answer = admission::admit(&mut tx, &sign_in, &f.context()).await;
@@ -635,6 +637,7 @@ async fn step_1_waits_for_a_suspension_and_refuses(pool: PgPool) {
             profile: Profile::default(),
             email_verified: false,
             attributes: Map::new(),
+            groups: None,
         };
         let mut tx = pool.begin().await.expect("begin");
         let answer = admission::admit(&mut tx, &sign_in, &context).await;
@@ -713,6 +716,7 @@ async fn two_first_sign_ins_at_once_make_one_user(pool: PgPool) {
             profile: Profile::default(),
             email_verified: false,
             attributes: Map::new(),
+            groups: None,
         };
         let mut tx = pool.begin().await.expect("begin");
         let answer = admission::admit(&mut tx, &sign_in, &context).await;
@@ -801,6 +805,7 @@ async fn q6_other_users_keep_their_profile(pool: PgPool) {
         profile: changed,
         email_verified: false,
         attributes: Map::new(),
+        groups: None,
     };
     let user = f.admitted(&sign_in).await;
     assert_eq!(user, idp, "a second provider does not own the profile");

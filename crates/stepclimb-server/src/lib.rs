@@ -44,6 +44,7 @@
 pub mod accounts;
 pub mod admin;
 pub mod admission;
+pub mod admission_groups;
 pub mod admission_settings;
 pub mod admission_webhook;
 pub mod admission_webhook_call;

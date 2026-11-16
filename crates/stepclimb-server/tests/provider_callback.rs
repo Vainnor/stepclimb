@@ -1192,3 +1192,48 @@ async fn a_server_fault_after_the_flow_is_taken_still_clears_its_cookie(pool: Pg
     assert_eq!(answer.set_cookies(), [CLEARED], "{answer:?}");
     assert_eq!(fixture.token_requests(), 0, "nothing reached the provider");
 }
+
+/// `07-admission.md` T14, B22: a provider whose mapping names a groups claim gives the user its
+/// groups through the whole callback, and the next sign-in's claim replaces them; a claim the
+/// provider stops sending is no groups.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn claimed_groups_reach_the_user_through_the_callback(pool: PgPool) {
+    let fixture = Fixture::new(pool).await;
+    let claims = json!({ "claims": { "groups": "/groups" } });
+    fixture
+        .provider_with(fixture.org, "mock", "oidc", claims)
+        .await;
+    let memberships = || async {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT g.key, m.source FROM group_members m
+             JOIN groups g ON g.org_id = m.org_id AND g.id = m.group_id
+             WHERE m.org_id = $1 ORDER BY g.key",
+        )
+        .bind(fixture.org)
+        .fetch_all(&fixture.pool)
+        .await
+        .expect("read memberships");
+        rows
+    };
+    let idp = |keys: &[&str]| -> Vec<(String, String)> {
+        keys.iter()
+            .map(|&key| (key.to_owned(), "idp".to_owned()))
+            .collect()
+    };
+
+    fixture
+        .mock
+        .set_id_token_claim("groups", Some(json!(["home", "staff"])));
+    fixture.sign_in().await.assert_signed_in("/");
+    assert_eq!(memberships().await, idp(&["home", "staff"]));
+
+    fixture
+        .mock
+        .set_id_token_claim("groups", Some(json!(["home"])));
+    fixture.sign_in().await.assert_signed_in("/");
+    assert_eq!(memberships().await, idp(&["home"]));
+
+    fixture.mock.set_id_token_claim("groups", None);
+    fixture.sign_in().await.assert_signed_in("/");
+    assert!(memberships().await.is_empty());
+}

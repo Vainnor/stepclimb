@@ -42,6 +42,7 @@ pub mod clock;
 pub mod db;
 pub mod feature;
 pub mod grants;
+pub mod groups;
 pub mod id;
 pub mod identities;
 pub mod identity_providers;

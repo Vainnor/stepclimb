@@ -140,6 +140,8 @@ async fn startup_migrations_create_the_schema_on_an_empty_database(pool: PgPool)
             "admission_webhooks",
             "audit_events",
             "auth_flows",
+            "group_members",
+            "groups",
             "identities",
             "identity_providers",
             "local_logins",

@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO groups (id, org_id, key, name, source, created_at, updated_at)\n         SELECT new.id, $1, new.key, new.key, $4,\n                timestamptz 'epoch' + $5::bigint * interval '1 microsecond',\n                timestamptz 'epoch' + $5::bigint * interval '1 microsecond'\n         FROM unnest($2::uuid[], $3::text[]) AS new (id, key)\n         ON CONFLICT (org_id, key) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray",
+        "TextArray",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4a103e7c311965e381aa92d185d392602349275250a66fa5f3648cf6490c03a9"
+}

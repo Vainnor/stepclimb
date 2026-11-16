@@ -132,7 +132,7 @@ server every sign-in test and the Playwright stack use instead of a real provide
   `auth.subject_missing`. A profile field holding an empty string or NUL is absent, like one of
   the wrong type, an attribute whose value holds NUL anywhere is absent, and `groups` is kept
   only as an array of strings (`07-admission.md` B1's group keys); anything else leaves it
-  absent. Values are kept
+  absent, or, since `07-admission.md` I7, an empty list when the mapping names `groups`. Values are kept
   as sent, without trimming or case folding. The OIDC mapping reads through the same module
   (`ClaimsMapping::profile`).
 - **B7.** `GET /auth/{key}/callback` checks the flow and `state` as `05-oidc.md` B7 says, and
@@ -167,8 +167,8 @@ server every sign-in test and the Playwright stack use instead of a real provide
   is accepted and the response's `Content-Type` is not checked; the body must parse as a JSON
   object. B10: completion calls `admission::complete`, which admits and creates the session in
   one transaction. The flow is deleted earlier, when the route takes it, so it is used even
-  when admission refuses or the provider fails. `groups` is not passed: admission's `Verified`
-  has no place for it yet (`07-admission.md` steps 2 to 4).
+  when admission refuses or the provider fails. `groups` is passed as admission's group keys
+  (`07-admission.md` I7).
 
   Coordinator decision (2026-11-15), fail closed: when the config maps `email_verified` and the
   userinfo value there is not exactly `true` (absent, `false`, `"true"`, a number), the email is
