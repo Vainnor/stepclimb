@@ -204,6 +204,9 @@ the owner's delegation and standing until the owner reviews it.
   every prefix segment by segment (`/apiary` is not `/api`).
 - **The navigation fallback** answers the cached `index.html` only when the network fails, never
   for a 5xx answer, which the app shows itself.
+- **The shell is fetched without cookies** (`credentials: "omit"`), so the cached `index.html` is
+  the anonymous page and carries no user's theme or density. A shell file that answers with a
+  redirect, or with anything but a same-origin answer, fails the install.
 - **The worker does not claim open pages**: the first visit's page stays uncontrolled, and the
   next navigation is the worker's. A change of controller reloads a page only after its "Reload".
 - **"Secure origins" (B6)** are `https`, or `http` on `localhost`, `127.0.0.1` or `[::1]`. This
@@ -212,6 +215,11 @@ the owner's delegation and standing until the owner reviews it.
 - **The update toast** needs an action, which `m0/13` had ruled out for Toast. Toast takes one
   action now, and a toast with one has no timer, so the action is still there when a keyboard
   or screen reader user reaches it (`m0/13`, Toast row).
+- **Old tabs after "Reload"**: one tab's "Reload" activates the new worker for every tab and
+  deletes the old shell. The build has one script chunk and no dynamic `import()`, so an old tab
+  loads no script later; only a font subset its CSS asks for late can miss, and the browser then
+  draws the fallback font. A build that adds lazy chunks must keep the previous shell until no
+  client runs it.
 - **An offline download's cache** is named `stepclimb-offline-<course_id>`, the name I3 stores
   under; activating a new build deletes only `stepclimb-shell-*` caches.
 - **End-to-end tests** run with service workers blocked, except `web/e2e/pwa.spec.ts`: a worker

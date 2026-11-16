@@ -17,8 +17,10 @@ export interface Shell {
 
 /**
  * Caches the build's shell. Each file is fetched past the HTTP cache, so the shell is this
- * build's; a failed file fails the install and removes what it stored, and the worker of the
- * build before stays.
+ * build's, and without cookies, so the cached `index.html` is the anonymous page the server
+ * writes, carrying no user's appearance. A file that fails, or that answers with a redirect or
+ * anything but a same-origin answer, fails the install: what it stored is removed, and the worker
+ * of the build before stays.
  */
 export async function install(shell: Shell): Promise<void> {
   const name = shellCache(shell.build);
@@ -27,8 +29,14 @@ export async function install(shell: Shell): Promise<void> {
     await Promise.all(
       shell.precache.map(async (path) => {
         const url = new URL(path, shell.origin).href;
-        const response = await shell.fetch(new Request(url, { cache: "reload" }));
+        const request = new Request(url, { cache: "reload", credentials: "omit" });
+        const response = await shell.fetch(request);
         if (!response.ok) throw new Error(`precaching ${path}: ${response.status}`);
+        if (response.redirected || response.type !== "basic") {
+          throw new Error(
+            `precaching ${path}: a ${response.type} answer, redirected: ${response.redirected}`,
+          );
+        }
         await cache.put(url, response);
       }),
     );

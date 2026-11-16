@@ -46,11 +46,27 @@ interface Network {
   requests: Request[];
   offline: boolean;
   status: number;
+  /** What a browser would report for the answers: `basic` for a same-origin one. */
+  type: ResponseType;
+  redirected: boolean;
+}
+
+/** `response` as a browser's fetch reports it; Node's constructed responses are `default`. */
+function asFetched(response: Response, network: Network): Response {
+  Object.defineProperty(response, "type", { value: network.type });
+  Object.defineProperty(response, "redirected", { value: network.redirected });
+  return response;
 }
 
 function world(build = "b1", precache = ["/index.html", "/assets/index-abc.js"]) {
   const caches = new MemoryCaches();
-  const network: Network = { requests: [], offline: false, status: 200 };
+  const network: Network = {
+    requests: [],
+    offline: false,
+    status: 200,
+    type: "basic",
+    redirected: false,
+  };
   const shell: Shell = {
     build,
     precache,
@@ -60,7 +76,7 @@ function world(build = "b1", precache = ["/index.html", "/assets/index-abc.js"])
       network.requests.push(request);
       if (network.offline) throw new TypeError("Failed to fetch");
       const path = new URL(request.url).pathname;
-      return new Response(`network ${path}`, { status: network.status });
+      return asFetched(new Response(`network ${path}`, { status: network.status }), network);
     },
   };
   return { caches, network, shell, precached: new Set(precache) };
@@ -80,6 +96,21 @@ describe("the worker's steps (spec 15 B3, B4)", () => {
     expect(await caches.keys()).toEqual(["stepclimb-shell-b1"]);
     expect(caches.urls().sort()).toEqual([`${origin}/assets/index-abc.js`, `${origin}/index.html`]);
     expect(network.requests.map((r) => r.cache)).toEqual(["reload", "reload"]);
+    // No cookie: the cached page carries no user's theme or density.
+    expect(network.requests.map((r) => r.credentials)).toEqual(["omit", "omit"]);
+  });
+
+  it("fails an install with a redirected or not same-origin answer and keeps nothing", async () => {
+    for (const answer of [
+      { type: "basic", redirected: true },
+      { type: "cors", redirected: false },
+      { type: "opaqueredirect", redirected: false },
+    ] as const) {
+      const { caches, network, shell } = world();
+      Object.assign(network, answer);
+      await expect(install(shell), JSON.stringify(answer)).rejects.toThrow(/precaching/);
+      expect(await caches.keys()).toEqual([]);
+    }
   });
 
   it("fails an install with a missing file and keeps nothing of it", async () => {
