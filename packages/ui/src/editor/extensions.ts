@@ -42,6 +42,9 @@ export type Translate = (id: string, values?: MessageValues) => string;
 /** Control characters the server refuses in text: every one but tab and newline. */
 const TEXT_CONTROL = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g;
 
+/** A course file id: what an image copied from a page carries. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** Control characters the server refuses in an attribute: every one. */
 const ATTR_CONTROL = /\p{Cc}/gu;
 
@@ -211,7 +214,12 @@ const image = (t: Translate) =>
         },
       };
     },
-    parseHTML: () => [{ tag: "figure[data-course-file-id]" }],
+    parseHTML: () => [
+      {
+        tag: "figure[data-course-file-id]",
+        getAttrs: (el: HTMLElement) => (UUID.test(el.getAttribute("data-course-file-id") ?? "") ? null : false),
+      },
+    ],
     renderHTML: ({ node }) => [
       "figure",
       {

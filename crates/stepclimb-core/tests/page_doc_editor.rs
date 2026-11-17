@@ -2,7 +2,8 @@
 //! The page editor's side of the page document model (docs/specs/m1/07-pages-and-the-editor.md
 //! B7 to B9, B21). The JSON files in `fixtures/page_doc/` are shared with the editor's Vitest
 //! tests in `packages/ui/src/editor/`: the editor loads `editor-document.json` and gives it back
-//! unchanged, writes `editor-inserted.json` from every block its slash menu inserts, and checks
+//! unchanged, writes `editor-inserted.json` from every block its slash menu inserts and `editor-pasted.json`
+//! from a paste of hostile HTML, and checks
 //! `link-targets.json` with its own link check. Here the server parses the same files, so a
 //! change on either side that the other does not follow fails a test.
 
@@ -34,6 +35,11 @@ fn the_editors_full_document_is_stored_as_written() {
 #[test]
 fn every_block_the_editor_inserts_is_stored_as_written() {
     assert_canonical("editor-inserted.json");
+}
+
+#[test]
+fn what_survives_a_hostile_paste_is_stored_as_written() {
+    assert_canonical("editor-pasted.json");
 }
 
 #[test]
