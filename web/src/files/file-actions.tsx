@@ -37,13 +37,10 @@ import { filesProblem, isGone, problemSentence, type Subject } from "./problems"
 type FileAction = "rename" | "move" | "delete";
 
 /** The actions menu of a file's row and the dialog the chosen action opens. */
-export function FileActions({ file, onClosed }: { file: CourseFile; onClosed: () => void }) {
+export function FileActions({ file }: { file: CourseFile }) {
   const { t } = useStepclimbStrings();
   const [open, setOpen] = useState<FileAction>();
-  const close = () => {
-    setOpen(undefined);
-    onClosed();
-  };
+  const close = () => setOpen(undefined);
   return (
     <>
       <MenuTrigger>
@@ -66,12 +63,10 @@ export function FolderActions({
   courseId,
   path,
   name,
-  onClosed,
 }: {
   courseId: string;
   path: string;
   name: string;
-  onClosed: () => void;
 }) {
   const { t } = useStepclimbStrings();
   const [open, setOpen] = useState(false);
@@ -84,15 +79,7 @@ export function FolderActions({
         </Menu>
       </MenuTrigger>
       {open ? (
-        <RenameFolder
-          courseId={courseId}
-          path={path}
-          name={name}
-          onClose={() => {
-            setOpen(false);
-            onClosed();
-          }}
-        />
+        <RenameFolder courseId={courseId} path={path} name={name} onClose={() => setOpen(false)} />
       ) : null}
     </>
   );

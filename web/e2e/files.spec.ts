@@ -148,3 +148,110 @@ for (const theme of themes) {
     });
   }
 }
+
+/**
+ * The text of the row holding focus once the list has settled for half a second, or `body` when
+ * focus fell to the page. Focus that lands and is then lost does not pass.
+ */
+async function focusedRow(page: Page): Promise<string> {
+  await page.waitForTimeout(500);
+  return page.evaluate(() => {
+    const active = document.activeElement;
+    if (active === null || active === document.body) return "body";
+    return active.closest('[role="row"]')?.textContent ?? active.tagName;
+  });
+}
+
+/** A folder entry as the routes here answer it: a folder, or a file. */
+interface Entry {
+  kind: string;
+  path?: string;
+  name?: string;
+  file?: { id: string; name: string };
+}
+
+/** A folder whose entries change as the routes answer, as the server's would. */
+async function serveChangingFolder(page: Page) {
+  let items: Entry[] = [
+    { kind: "folder", path: "/charts", name: "charts" },
+    { kind: "folder", path: "/handouts", name: "handouts" },
+    file("Airport diagram.png", 380_000, "image/png"),
+    file("Briefing.pdf", 2_400_000, "application/pdf"),
+    file("Checklist.txt", 812, "text/plain"),
+  ];
+  const named = (name: string) =>
+    items.find((entry) => entry.kind === "file" && entry.file?.name === name);
+  await page.route("**/api/v1/me", (route) => route.fulfill({ json: meWith("light") }));
+  await page.route(`**/api/v1/courses/${courseId}`, (route) => route.fulfill({ json: course }));
+  await page.route(`**/api/v1/courses/${courseId}/files?*`, (route) => {
+    const folder = new URL(route.request().url()).searchParams.get("folder");
+    return route.fulfill({ json: { items: folder === "/" ? items : [], next_cursor: null } });
+  });
+  await page.route("**/api/v1/course-files/*", (route) => {
+    const id = new URL(route.request().url()).pathname.split("/").at(-1);
+    const entry = items.find((e) => e.kind === "file" && e.file?.id === id);
+    items = items.filter((e) => e !== entry);
+    if (route.request().method() === "DELETE") return route.fulfill({ status: 204 });
+    return route.fulfill({ json: { ...entry?.file, folder: "/handouts" } });
+  });
+  await page.route(`**/api/v1/courses/${courseId}/folders/rename`, (route) => {
+    items = items.map((e) =>
+      e.kind === "folder" && e.path === "/charts" ? { ...e, path: "/maps", name: "maps" } : e,
+    );
+    // Sub-folders first, each by name, as the listing orders them.
+    const nameOf = (e: Entry) => (e.kind === "folder" ? (e.name ?? "") : "");
+    items.sort(
+      (a, b) =>
+        Number(a.kind === "file") - Number(b.kind === "file") || nameOf(a).localeCompare(nameOf(b)),
+    );
+    return route.fulfill({ json: { moved: 2 } });
+  });
+  return { named };
+}
+
+/** Opens a row's actions menu from the keyboard and picks `action`. */
+async function rowAction(page: Page, name: string, action: string) {
+  await page.getByRole("button", { name: `Actions for ${name}` }).focus();
+  await page.keyboard.press("Enter");
+  await page.getByRole("menuitem", { name: action }).click();
+}
+
+for (const viewport of widths) {
+  test(`focus stays in the list after each row dialog closes at ${viewport.width} px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    const { named } = await serveChangingFolder(page);
+    await page.goto(`/c/${courseId}/files`);
+    const list = page.getByRole("grid", { name: "Files in Top folder" });
+    await expect(list.getByRole("row")).toHaveCount(6);
+
+    // Cancel: back on the row's actions button.
+    await rowAction(page, "Briefing.pdf", "Rename");
+    await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
+    await expect(page.getByRole("button", { name: "Actions for Briefing.pdf" })).toBeFocused();
+
+    // Delete: the row now in its place.
+    await rowAction(page, "Briefing.pdf", "Delete");
+    await page.getByRole("alertdialog").getByRole("button", { name: "Delete file" }).click();
+    await expect(list.getByRole("row")).toHaveCount(5);
+    expect(await focusedRow(page)).toContain("Checklist.txt");
+
+    // Move out: the row now in its place.
+    await rowAction(page, "Airport diagram.png", "Move");
+    const move = page.getByRole("dialog", { name: "Move Airport diagram.png" });
+    await move.getByRole("textbox", { name: "Folder" }).fill("/handouts");
+    await move.getByRole("button", { name: "Move file" }).click();
+    await expect(list.getByRole("row")).toHaveCount(4);
+    expect(named("Airport diagram.png")).toBeUndefined();
+    expect(await focusedRow(page)).toContain("Checklist.txt");
+
+    // Folder rename: the row now in its place.
+    await rowAction(page, "charts", "Rename");
+    const rename = page.getByRole("dialog", { name: "Rename folder charts" });
+    await rename.getByRole("textbox", { name: "Name" }).fill("maps");
+    await rename.getByRole("button", { name: "Save name" }).click();
+    await expect(list.getByRole("link", { name: "maps" })).toBeVisible();
+    expect(await focusedRow(page)).toContain("handouts");
+  });
+}

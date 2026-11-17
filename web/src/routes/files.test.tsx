@@ -107,6 +107,9 @@ async function openAction(name: string, action: string) {
   return user;
 }
 
+/** Half a second for focus that lands and is then lost to show it. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 500));
+
 beforeEach(() => stubMatchMedia(true));
 afterEach(() => vi.unstubAllGlobals());
 
@@ -626,6 +629,8 @@ describe("changing files", () => {
     const [, folderRow] = within(await list()).getAllByRole("row");
     // The row now in its place, or a control in it; never the page's body.
     await waitFor(() => expect(folderRow?.contains(document.activeElement)).toBe(true));
+    await settle();
+    expect(folderRow?.contains(document.activeElement)).toBe(true);
   });
 
   it("moves focus to the table once the last file leaves it", async () => {
@@ -642,9 +647,10 @@ describe("changing files", () => {
     const confirm = await screen.findByRole("alertdialog", { name: "Delete Handbook.pdf?" });
     await user.click(within(confirm).getByRole("button", { name: "Delete file" }));
     await screen.findByText(/has no files yet/);
-    await waitFor(() =>
-      expect(screen.getByRole("grid", { name: "Files in Top folder" })).toHaveFocus(),
-    );
+    const grid = screen.getByRole("grid", { name: "Files in Top folder" });
+    await waitFor(() => expect(grid).toHaveFocus());
+    await settle();
+    expect(grid).toHaveFocus();
   });
 
   it("puts the code of an unexplained delete refusal in the toast's sentence", async () => {
