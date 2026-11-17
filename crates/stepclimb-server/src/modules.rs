@@ -213,11 +213,13 @@ pub struct Item {
     /// 0-based, dense within the module.
     pub position: i32,
     pub published: bool,
-    /// What the item points at; only for kinds that point at a row.
+    /// What the item points at; only for kinds that point at a row. A read by a caller without
+    /// `course.view_all` leaves it out while the item's module has an unlock date,
+    /// prerequisites or sequential order.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<String>, format = "uuid", required = false, nullable = false)]
     pub ref_id: Option<Uuid>,
-    /// Only for `external_link`.
+    /// Only for `external_link`, and left out as `ref_id` is.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(required = false, nullable = false)]
     pub url: Option<String>,

@@ -539,7 +539,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * The course's modules in order, each with its items in order. A caller without
+         *     `course.view_all` gets only published modules and published items.
+         */
+        get: operations["listModules"];
         put?: never;
         /** Create an unpublished module, last in the course. */
         post: operations["createModule"];
@@ -734,7 +738,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * One item. An unpublished item, or an item of an unpublished module, answers 404 to a caller
+         *     without `course.view_all`.
+         */
+        get: operations["getItem"];
         put?: never;
         post?: never;
         /**
@@ -990,7 +998,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * One module with its items in order. An unpublished module answers 404 to a caller without
+         *     `course.view_all`, who also gets only its published items.
+         */
+        get: operations["getModule"];
         put?: never;
         post?: never;
         /** Delete a module that has no items. */
@@ -2539,7 +2551,9 @@ export interface components {
             published: boolean;
             /**
              * Format: uuid
-             * @description What the item points at; only for kinds that point at a row.
+             * @description What the item points at; only for kinds that point at a row. A read by a caller without
+             *     `course.view_all` leaves it out while the item's module has an unlock date,
+             *     prerequisites or sequential order.
              */
             ref_id?: string;
             requirement: null | components["schemas"]["Requirement"];
@@ -2549,7 +2563,7 @@ export interface components {
              * @description RFC 3339, UTC.
              */
             updated_at: string;
-            /** @description Only for `external_link`. */
+            /** @description Only for `external_link`, and left out as `ref_id` is. */
             url?: string;
         };
         /** @description The `data` of `item.completed` (B11): ids and facts, never a name, an email or a title. */
@@ -5368,6 +5382,15 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `item.not_found`: no item with this id exists in the organization, or you cannot see it: its course is out of your reach, a draft course or a template, or the item or its module is unpublished, and you do not hold `course.view_all` at the course. `org.not_found`: the request's organization cannot be determined. */
+        ItemReadNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `course.archived`: the course is archived and takes no content change. */
         ItemWriteConflict: {
             headers: {
@@ -5514,6 +5537,15 @@ export interface components {
         };
         /** @description `module.not_found`: no module with this id exists in the organization, or you cannot see its course, or a `prerequisite_ids` entry is not a module of the same course. `org.not_found`: the request's organization cannot be determined. */
         ModulePatchNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `module.not_found`: no module with this id exists in the organization, or you cannot see it: its course is out of your reach, a draft course or a template, or the module is unpublished, and you do not hold `course.view_all` at the course. `org.not_found`: the request's organization cannot be determined. */
+        ModuleReadNotFound: {
             headers: {
                 [name: string]: unknown;
             };
@@ -8110,6 +8142,35 @@ export interface operations {
             503: components["responses"]["NoOrganization"];
         };
     };
+    listModules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The course's id. */
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The course's outline */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModuleList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["PermissionDenied"];
+            404: components["responses"]["ModuleCourseNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
     createModule: {
         parameters: {
             query?: never;
@@ -8534,6 +8595,35 @@ export interface operations {
             409: components["responses"]["EnrollmentWriteConflict"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    getItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The item's id. */
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The item */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Item"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["PermissionDenied"];
+            404: components["responses"]["ItemReadNotFound"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };
@@ -9060,6 +9150,35 @@ export interface operations {
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    getModule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The module's id. */
+                module_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The module */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Module"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["PermissionDenied"];
+            404: components["responses"]["ModuleReadNotFound"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };

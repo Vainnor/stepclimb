@@ -343,6 +343,31 @@ or Q12.
 - **No `items::referencing` yet.** The spec lists it for the content specs' deletion checks;
   nothing calls it until spec 06, which adds it.
 
+### Decisions made building I2
+
+Coordinator decisions (overnight, 2026-11-17), pending owner review.
+
+- **Links are withheld from learners until spec 04 I3, failing closed.** Spec 04's unlock
+  rules can already be written, but the lock state that withholds a locked item's `ref_id` and
+  `url` (`04` B12) needs the learner's progress (`05` I1) and arrives with `04` I3. Until then,
+  a read by a caller without `course.view_all` leaves out `ref_id` and `url` on every item of a
+  module that has any unlock rule: an unlock date (future or past), a prerequisite, or
+  sequential order. Items have no unlock rule of their own. Titles, kinds and requirements stay,
+  as `04` B12 shows them. The check is one function, `outline::withholds_content` in the
+  server, which `04` I3 replaces with the evaluator's lock state; until then a learner does not
+  see the link of a module whose date has passed or whose prerequisites are met. Today only
+  external links carry content in a read (no creatable kind has a `ref_id`).
+- **Learners see only published prerequisites.** For a caller without `course.view_all`, a
+  module's `prerequisite_ids` leave out unpublished modules, which `04` B6 counts as met, so no
+  read names a module the learner cannot see.
+- **One snapshot per read.** Each read route runs in a `REPEATABLE READ, READ ONLY`
+  transaction and checks `course.view` again, with `02` B24's draft rule, on the course as that
+  snapshot holds it, so the visibility check and the outline agree. Reads take no course lock.
+- **An archived course's outline reads as a published one's** (T2's "reads still answer
+  200").
+- **Operation ids** are `listModules`, `getModule` and `getItem`; the 403 is the shared
+  `permission.denied`.
+
 ## Issues
 
 1. **I1. Modules and items tables and authoring routes.** Migration, repositories,

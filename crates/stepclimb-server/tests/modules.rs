@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The module and item authoring routes over the router
-//! (docs/specs/m1/03-modules-and-items.md B1 to B12; T1 to T7 and T13 for the write routes), and
+//! The module and item routes over the router: authoring
+//! (docs/specs/m1/03-modules-and-items.md B1 to B12; T1 to T7 and T13 for the write routes),
+//! reading (B13 to B15; T9 and T13 for the read routes, and the references and URLs a read
+//! withholds from a learner until spec 04 I3), and
 //! the rule fields those routes write (docs/specs/m1/04-unlock-and-completion-rules.md B1 to B3;
 //! T9, T10 and T15's cross-organization ids).
 //! The permission suite's generated cases for each route (T12) are in `tests/permissions.rs`;
@@ -26,7 +28,7 @@ use stepclimb_core::{
     OrgScope, Source, accounts,
     audit::Actor,
     clock::ManualClock,
-    courses,
+    courses, enrollments,
     id::Uuid,
     items, modules, organizations,
     role_assignments::{self, NewAssignment, Scope},
@@ -170,6 +172,52 @@ impl Fixture {
 
     /// A signed-in user holding the built-in role `key` at `at`.
     async fn holder(&self, org: Uuid, key: &str, at: Scope) -> String {
+        let (user, cookie) = self.user(org).await;
+        let assignment = NewAssignment {
+            user_id: user,
+            role_id: self.builtin_role(key).await,
+            scope: at,
+            source: Source::Local,
+            external_id: None,
+        };
+        role_assignments::create(&self.pool, scope(org), &assignment, now(), Actor::Instance)
+            .await
+            .expect("create assignment");
+        cookie
+    }
+
+    /// A signed-in user enrolled in `t`'s course with the built-in role Student.
+    async fn student(&self, t: Tree) -> String {
+        let (user, cookie) = self.user(t.org).await;
+        let new = enrollments::NewEnrollment {
+            user_id: user,
+            role_id: self.builtin_role("student").await,
+            source: Source::Local,
+            external_id: None,
+        };
+        enrollments::create(
+            &self.pool,
+            scope(t.org),
+            t.course,
+            &new,
+            now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("enroll");
+        cookie
+    }
+
+    async fn builtin_role(&self, key: &str) -> Uuid {
+        sqlx::query_scalar("SELECT id FROM roles WHERE org_id IS NULL AND key = $1")
+            .bind(key)
+            .fetch_one(&self.pool)
+            .await
+            .expect("a built-in role")
+    }
+
+    /// A signed-in user of `org` with no role: their id and session cookie.
+    async fn user(&self, org: Uuid) -> (Uuid, String) {
         let new_user = NewUser {
             display_name: "Pat Example".into(),
             given_name: String::new(),
@@ -184,26 +232,72 @@ impl Fixture {
             .await
             .expect("create user")
             .id;
-        let role = sqlx::query_scalar("SELECT id FROM roles WHERE org_id IS NULL AND key = $1")
-            .bind(key)
-            .fetch_one(&self.pool)
-            .await
-            .expect("a built-in role");
-        let assignment = NewAssignment {
-            user_id: user,
-            role_id: role,
-            scope: at,
-            source: Source::Local,
-            external_id: None,
-        };
-        role_assignments::create(&self.pool, scope(org), &assignment, now(), Actor::Instance)
-            .await
-            .expect("create assignment");
         let started = session::start(&self.pool, scope(org), user, &HeaderMap::new(), now())
             .await
             .expect("start a session");
         let cookie = started.set_cookie.to_str().expect("ASCII");
-        cookie.split(';').next().expect("a pair").to_owned()
+        (user, cookie.split(';').next().expect("a pair").to_owned())
+    }
+
+    async fn set_course_status(&self, t: Tree, to: courses::Status) {
+        courses::set_status(
+            &self.pool,
+            scope(t.org),
+            t.course,
+            to,
+            now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("set the course status");
+    }
+
+    async fn publish_module(&self, t: Tree, module: Uuid) {
+        let patch = modules::ModulePatch {
+            published: Some(true),
+            ..Default::default()
+        };
+        modules::update(&self.pool, scope(t.org), module, &patch, now())
+            .await
+            .expect("publish the module");
+    }
+
+    async fn publish_item(&self, t: Tree, item: Uuid) {
+        let patch = items::ItemPatch {
+            published: Some(true),
+            ..Default::default()
+        };
+        items::update(&self.pool, scope(t.org), item, &patch, now())
+            .await
+            .expect("publish the item");
+    }
+
+    /// A published module of `t`'s course.
+    async fn published_module(&self, t: Tree) -> Uuid {
+        let module = self.module(t).await;
+        self.publish_module(t, module).await;
+        module
+    }
+
+    /// A published external link to `url`, last in `module`.
+    async fn published_link(&self, t: Tree, module: Uuid, url: &str) -> Uuid {
+        let new = items::NewItem {
+            kind: items::Kind::ExternalLink,
+            title: "Link".into(),
+            ref_id: None,
+            url: Some(url.into()),
+            position: None,
+        };
+        let item = items::create(&self.pool, scope(t.org), module, &new, now())
+            .await
+            .expect("create item")
+            .id;
+        self.publish_item(t, item).await;
+        item
+    }
+
+    async fn get(&self, uri: &str, org: Uuid, cookie: &str) -> Answer {
+        self.send(Method::GET, uri, org, cookie, None).await
     }
 
     async fn org_admin(&self, org: Uuid) -> String {
@@ -1124,4 +1218,246 @@ async fn spec04_t15_rule_writes_refuse_another_organizations_ids(pool: PgPool) {
     )
     .await
     .expect(StatusCode::CONFLICT, "course.archived");
+}
+
+/// The ids of a list of modules or items in a response.
+fn ids(list: &Value) -> Vec<Uuid> {
+    list.as_array()
+        .expect("a list")
+        .iter()
+        .map(|v| v["id"].as_str().expect("an id").parse().expect("a UUID"))
+        .collect()
+}
+
+/// T9 (B13, B14): an enrolled Student sees only published modules, their published items and
+/// published prerequisites; an unpublished module or item, or an item of an unpublished module,
+/// answers 404 to the Student and 200 to a Course designer.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t9_a_student_reads_only_published_content(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    f.set_course_status(t, courses::Status::Published).await;
+    let open = f.published_module(t).await;
+    let hidden = f.module(t).await;
+    let later = f.published_module(t).await;
+    let shown = f.published_link(t, open, "https://example.com/a").await;
+    let unpublished = f.header(t, open).await;
+    let inner = f.published_link(t, hidden, "https://example.com/b").await;
+    let rules = modules::RulesPatch {
+        prerequisite_ids: Some(vec![open, hidden]),
+        ..Default::default()
+    };
+    modules::set_rules(&f.pool, scope(t.org), later, &rules, now())
+        .await
+        .unwrap();
+    let student = f.student(t).await;
+    let designer = f
+        .holder(t.org, "course_designer", Scope::Account(t.tower))
+        .await;
+
+    let list = f.get(&course_modules(t.course), t.org, &student).await;
+    let body = list.ok(StatusCode::OK);
+    assert_schema("ModuleList", body);
+    assert_eq!(ids(&body["modules"]), [open, later]);
+    assert_eq!(ids(&body["modules"][0]["items"]), [shown]);
+    assert_eq!(body["modules"][1]["prerequisite_ids"], json!([open]));
+    let list = f.get(&course_modules(t.course), t.org, &designer).await;
+    let body = list.ok(StatusCode::OK);
+    assert_eq!(ids(&body["modules"]), [open, hidden, later]);
+    assert_eq!(ids(&body["modules"][0]["items"]), [shown, unpublished]);
+    assert_eq!(
+        body["modules"][2]["prerequisite_ids"],
+        json!([open, hidden])
+    );
+
+    let module = f.get(&module_path(open), t.org, &student).await;
+    let body = module.ok(StatusCode::OK);
+    assert_schema("Module", body);
+    assert_eq!(ids(&body["items"]), [shown]);
+    let module = f.get(&module_path(later), t.org, &student).await;
+    assert_eq!(module.ok(StatusCode::OK)["prerequisite_ids"], json!([open]));
+    f.get(&module_path(hidden), t.org, &student)
+        .await
+        .expect(StatusCode::NOT_FOUND, "module.not_found");
+    f.get(&module_path(hidden), t.org, &designer)
+        .await
+        .ok(StatusCode::OK);
+
+    let item = f.get(&item_path(shown), t.org, &student).await;
+    let body = item.ok(StatusCode::OK);
+    assert_schema("Item", body);
+    assert_eq!(body["url"], "https://example.com/a");
+    assert_eq!(
+        (body["module_id"].as_str(), body["course_id"].as_str()),
+        (
+            Some(open.to_string().as_str()),
+            Some(t.course.to_string().as_str())
+        )
+    );
+    for hidden_item in [unpublished, inner] {
+        f.get(&item_path(hidden_item), t.org, &student)
+            .await
+            .expect(StatusCode::NOT_FOUND, "item.not_found");
+        f.get(&item_path(hidden_item), t.org, &designer)
+            .await
+            .ok(StatusCode::OK);
+    }
+}
+
+/// B13, B14 and spec 02 B24: a draft course's outline, modules and items answer 404 to a
+/// Student enrolled in it and 200 to a Course designer; an archived course's answer 200 to both
+/// (T2: reads still answer in an archived course).
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_course_status_decides_whether_a_student_reads_the_outline(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    let module = f.published_module(t).await;
+    let item = f.published_link(t, module, "https://example.com/a").await;
+    let student = f.student(t).await;
+    let designer = f
+        .holder(t.org, "course_designer", Scope::Account(t.tower))
+        .await;
+    let reads = [
+        (course_modules(t.course), "course.not_found"),
+        (module_path(module), "module.not_found"),
+        (item_path(item), "item.not_found"),
+    ];
+    for (uri, code) in &reads {
+        let answer = f.get(uri, t.org, &student).await;
+        answer.expect(StatusCode::NOT_FOUND, code);
+        assert!(
+            !answer.body.to_string().contains("example.com"),
+            "{answer:?}"
+        );
+        f.get(uri, t.org, &designer).await.ok(StatusCode::OK);
+    }
+    f.set_course_status(t, courses::Status::Published).await;
+    f.set_course_status(t, courses::Status::Archived).await;
+    for (uri, _) in &reads {
+        f.get(uri, t.org, &student).await.ok(StatusCode::OK);
+        f.get(uri, t.org, &designer).await.ok(StatusCode::OK);
+    }
+}
+
+/// The stand-in for spec 04 I3: while a module has an unlock date (future or past),
+/// prerequisites or sequential order, every read withholds its items' URLs from a Student (the
+/// raw body does not hold them); a module without rules shows them; a Course designer sees them
+/// all.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn reads_withhold_links_of_a_module_with_unlock_rules_from_a_student(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    f.set_course_status(t, courses::Status::Published).await;
+    let (ruled, plain) = (f.published_module(t).await, f.published_module(t).await);
+    let gated_url = "https://gated.example/secret";
+    let gated = f.published_link(t, ruled, gated_url).await;
+    let open = f.published_link(t, plain, "https://open.example/a").await;
+    let student = f.student(t).await;
+    let designer = f
+        .holder(t.org, "course_designer", Scope::Account(t.tower))
+        .await;
+    let day = Duration::from_secs(86_400);
+    let rules = [
+        modules::RulesPatch {
+            unlock_at: Some(Some(now() + day)),
+            ..Default::default()
+        },
+        modules::RulesPatch {
+            unlock_at: Some(Some(now() - day)),
+            ..Default::default()
+        },
+        modules::RulesPatch {
+            prerequisite_ids: Some(vec![plain]),
+            ..Default::default()
+        },
+        modules::RulesPatch {
+            require_sequential: Some(true),
+            ..Default::default()
+        },
+    ];
+    let cleared = modules::RulesPatch {
+        unlock_at: Some(None),
+        prerequisite_ids: Some(Vec::new()),
+        require_sequential: Some(false),
+        completion_rule: None,
+    };
+    for rule in rules {
+        modules::set_rules(&f.pool, scope(t.org), ruled, &cleared, now())
+            .await
+            .unwrap();
+        modules::set_rules(&f.pool, scope(t.org), ruled, &rule, now())
+            .await
+            .unwrap();
+        let list = f.get(&course_modules(t.course), t.org, &student).await;
+        let body = list.ok(StatusCode::OK);
+        assert!(!body.to_string().contains(gated_url), "{rule:?}: {body}");
+        assert_eq!(ids(&body["modules"][0]["items"]), [gated], "{rule:?}");
+        assert!(
+            body["modules"][0]["items"][0].get("url").is_none(),
+            "{rule:?}"
+        );
+        assert_eq!(
+            body["modules"][1]["items"][0]["url"],
+            "https://open.example/a"
+        );
+        let module = f.get(&module_path(ruled), t.org, &student).await;
+        let body = module.ok(StatusCode::OK);
+        assert!(!body.to_string().contains(gated_url), "{rule:?}: {body}");
+        assert_eq!(ids(&body["items"]), [gated], "{rule:?}");
+        let item = f.get(&item_path(gated), t.org, &student).await;
+        let body = item.ok(StatusCode::OK);
+        assert_schema("Item", body);
+        assert!(!body.to_string().contains(gated_url), "{rule:?}: {body}");
+        assert_eq!(body["title"], "Link");
+        let item = f.get(&item_path(open), t.org, &student).await;
+        assert_eq!(item.ok(StatusCode::OK)["url"], "https://open.example/a");
+
+        for uri in [
+            course_modules(t.course),
+            module_path(ruled),
+            item_path(gated),
+        ] {
+            let answer = f.get(&uri, t.org, &designer).await;
+            assert!(
+                answer.ok(StatusCode::OK).to_string().contains(gated_url),
+                "{rule:?}: {uri}"
+            );
+        }
+    }
+    modules::set_rules(&f.pool, scope(t.org), ruled, &cleared, now())
+        .await
+        .unwrap();
+    let item = f.get(&item_path(gated), t.org, &student).await;
+    assert_eq!(
+        item.ok(StatusCode::OK)["url"],
+        gated_url,
+        "no rule, no withholding"
+    );
+}
+
+/// T13 for the read routes: org A's admin naming org B's published course, module and item gets
+/// 404, and nothing of org B's in the body.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t13_every_read_route_refuses_another_organizations_ids(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (a, b) = (f.a, tree(&f.pool, "org-b").await);
+    let admin = f.org_admin(a.org).await;
+    f.set_course_status(b, courses::Status::Published).await;
+    let module = f.published_module(b).await;
+    let item = f.published_link(b, module, "https://theirs.example/").await;
+    let before = f.rows(b.org).await;
+    let calls = [
+        (course_modules(b.course), "course.not_found"),
+        (module_path(module), "module.not_found"),
+        (item_path(item), "item.not_found"),
+    ];
+    let theirs = [b.course, module, item].map(|id| id.to_string());
+    for (uri, code) in calls {
+        let answer = f.get(&uri, a.org, &admin).await;
+        answer.expect(StatusCode::NOT_FOUND, code);
+        let text = answer.body.to_string();
+        assert!(!theirs.iter().any(|id| text.contains(id)), "{text}");
+        assert!(!text.contains("theirs.example"), "{text}");
+    }
+    assert_eq!(f.rows(b.org).await, before, "org B is unchanged");
 }

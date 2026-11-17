@@ -287,7 +287,8 @@ Coordinator decisions (overnight, 2026-11-17), pending owner review.
 - **Author reads are the write responses.** The `GET` routes are `03` I2. Until then, every
   route that answers a `Module` or `Item` (`03`'s create, patch, reorder and move) carries the
   rule fields: `unlock_at`, `prerequisite_ids` (in course order), `require_sequential`,
-  `completion_rule`, and `requirement` (`null` when there is none). `lock` arrives with I3.
+  `completion_rule`, and `requirement` (`null` when there is none). `03` I2's reads carry them too.
+  `lock` arrives with I3.
 - **Field codes** besides the spec's: 422 `module.prerequisite_self`,
   `module.prerequisite_duplicate` (an id named twice) and `module.prerequisites_too_many` at
   `/prerequisite_ids`; 422 `module.date_out_of_range` at `/unlock_at` for a date before 1970

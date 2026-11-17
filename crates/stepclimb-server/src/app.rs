@@ -22,7 +22,8 @@ use crate::{
     discovery, enrollment,
     error::ApiError,
     health, identities, items, local_sign_in, manifest, me, modules, my_passkeys, oauth_authorize,
-    oauth_token, openapi, organization, pages, passkey_enrollment, passkey_sign_in, password,
+    oauth_token, openapi, organization, outline, pages, passkey_enrollment, passkey_sign_in,
+    password,
     password_hasher::PasswordHasher,
     progress, provider_admin, provider_callback, provider_sign_in,
     providers::Providers,
@@ -283,7 +284,7 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         ),
         (
             "/api/v1/courses/{course_id}/modules",
-            post(modules::create_module),
+            get(outline::list_modules).post(modules::create_module),
         ),
         (
             "/api/v1/courses/{course_id}/modules/order",
@@ -291,7 +292,9 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         ),
         (
             "/api/v1/modules/{module_id}",
-            patch(modules::update_module).delete(modules::delete_module),
+            get(outline::get_module)
+                .patch(modules::update_module)
+                .delete(modules::delete_module),
         ),
         (
             "/api/v1/modules/{module_id}/items",
@@ -303,7 +306,9 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         ),
         (
             "/api/v1/items/{item_id}",
-            patch(items::update_item).delete(items::delete_item),
+            get(outline::get_item)
+                .patch(items::update_item)
+                .delete(items::delete_item),
         ),
         ("/api/v1/items/{item_id}/move", post(items::move_item)),
         (
