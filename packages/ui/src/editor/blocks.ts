@@ -152,7 +152,12 @@ export function blockContext(editor: Editor): BlockContext | undefined {
   const { selection, doc } = editor.state;
   const $from = selection.$from;
   if (selection instanceof NodeSelection && $from.depth === 0) {
-    return { index: $from.index(0), top: selection.node, node: selection.node, pos: selection.from };
+    return {
+      index: $from.index(0),
+      top: selection.node,
+      node: selection.node,
+      pos: selection.from,
+    };
   }
   if ($from.depth === 0) return undefined;
   const top = doc.child($from.index(0));

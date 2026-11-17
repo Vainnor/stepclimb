@@ -48,7 +48,8 @@ export function usePageEditor(
     if (!element) return;
     const created: Editor = new Editor({
       element,
-      extensions: pageExtensions({ t: (id, values) => current.current.t(id, values) }),
+      // Forwards the node views' own lookups, which pass literal ids (extensions.ts).
+      extensions: pageExtensions({ t: (id, values) => current.current.t(id, values) }), // strings-check-ignore
       content: current.current.initial,
       injectCSS: false,
       editable: !current.current.isDisabled,
@@ -68,7 +69,9 @@ export function usePageEditor(
   }, [mount]);
 
   useEffect(() => {
-    editor?.setOptions({ editorProps: { ...editor.options.editorProps, attributes: options.attributes } });
+    editor?.setOptions({
+      editorProps: { ...editor.options.editorProps, attributes: options.attributes },
+    });
   }, [editor, options.attributes]);
 
   useEffect(() => {

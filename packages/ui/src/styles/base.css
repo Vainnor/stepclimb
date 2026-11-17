@@ -218,7 +218,6 @@
   .ProseMirror {
     position: relative;
     word-wrap: break-word;
-    white-space: pre-wrap;
     white-space: break-spaces;
     font-variant-ligatures: none;
   }
@@ -264,7 +263,12 @@
     position: relative;
     min-inline-size: 4em;
   }
-  :is([data-slot="editor-callout"], [data-slot="editor-image"], [data-slot="editor-video"], [data-slot="editor-transcript"]) {
+  :is(
+    [data-slot="editor-callout"],
+    [data-slot="editor-image"],
+    [data-slot="editor-video"],
+    [data-slot="editor-transcript"]
+  ) {
     display: flex;
     flex-direction: column;
     gap: 0.5em;
@@ -289,7 +293,12 @@
   [data-slot="editor-transcript-line-content"] > * + * {
     margin-block-start: 1em;
   }
-  :is([data-slot="editor-callout-label"], [data-slot="editor-image-label"], [data-slot="editor-video-label"], [data-slot="editor-transcript-line-label"]) {
+  :is(
+    [data-slot="editor-callout-label"],
+    [data-slot="editor-image-label"],
+    [data-slot="editor-video-label"],
+    [data-slot="editor-transcript-line-label"]
+  ) {
     font-family: var(--sc-font-ui);
     font-size: var(--sc-text-sm);
     font-weight: var(--sc-weight-heading);

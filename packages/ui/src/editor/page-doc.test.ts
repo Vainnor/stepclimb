@@ -82,7 +82,12 @@ describe("toPageDoc", () => {
               marks: [
                 {
                   type: "link",
-                  attrs: { href: "https://example.com/", target: "_blank", rel: "noopener", class: null },
+                  attrs: {
+                    href: "https://example.com/",
+                    target: "_blank",
+                    rel: "noopener",
+                    class: null,
+                  },
                 },
               ],
             },
@@ -103,7 +108,13 @@ describe("toPageDoc", () => {
             },
           ],
         },
-        { type: "codeBlock", content: [{ type: "text", text: "a" }, { type: "text", text: "b" }] },
+        {
+          type: "codeBlock",
+          content: [
+            { type: "text", text: "a" },
+            { type: "text", text: "b" },
+          ],
+        },
         { type: "image", attrs: { course_file_id: "x", alt: "y" } },
       ],
     };

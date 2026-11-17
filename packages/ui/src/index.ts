@@ -18,6 +18,25 @@ export {
 } from "./authoring/module-board";
 export { moduleBoardRow } from "./authoring/module-board-rows";
 export {
+  Editor,
+  type EditorProblem,
+  type EditorProps,
+  editor,
+} from "./editor/editor";
+export type { UploadedImage } from "./editor/insert-panel";
+export { linkTarget } from "./editor/link-target";
+export {
+  blockIndexOf,
+  codeLanguages,
+  emptyPageDoc,
+  imageTypes,
+  type PageDoc,
+  type PageMark,
+  type PageNode,
+  toPageDoc,
+} from "./editor/page-doc";
+export { sameDoc } from "./editor/use-page-editor";
+export {
   Announcement,
   type AnnouncementProps,
   announcement,
@@ -69,25 +88,6 @@ export {
   type StatusChipProps,
   statusChip,
 } from "./learning/status-chip";
-export {
-  Editor,
-  type EditorProblem,
-  type EditorProps,
-  editor,
-} from "./editor/editor";
-export type { UploadedImage } from "./editor/insert-panel";
-export { linkTarget } from "./editor/link-target";
-export {
-  blockIndexOf,
-  codeLanguages,
-  emptyPageDoc,
-  imageTypes,
-  type PageDoc,
-  type PageMark,
-  type PageNode,
-  toPageDoc,
-} from "./editor/page-doc";
-export { sameDoc } from "./editor/use-page-editor";
 export { type ServerHtml, serverHtml } from "./lib/server-html";
 export { AppShell, type AppShellProps, appShell } from "./patterns/app-shell";
 export { BottomTabs, type BottomTabsProps, bottomTabs } from "./patterns/bottom-tabs";

@@ -30,7 +30,7 @@ function storedForm(href: string): string | null {
   if (href.startsWith("/")) return isSafePath(href) ? href : null;
   const valid =
     href.slice(0, 7).toLowerCase() === "mailto:" ? mailtoIsValid(href) : urlIsValid(href);
-  return valid ? parse(href)?.href ?? null : null;
+  return valid ? (parse(href)?.href ?? null) : null;
 }
 
 function parse(href: string): URL | null {
@@ -57,12 +57,10 @@ function isSafePath(path: string): boolean {
 
 function hasDotSegment(path: string): boolean {
   const end = path.search(/[?#]/);
-  return (end === -1 ? path : path.slice(0, end))
-    .split(/[/\\]/)
-    .some((segment) => {
-      const decoded = segment.toLowerCase().replaceAll("%2e", ".");
-      return decoded === "." || decoded === "..";
-    });
+  return (end === -1 ? path : path.slice(0, end)).split(/[/\\]/).some((segment) => {
+    const decoded = segment.toLowerCase().replaceAll("%2e", ".");
+    return decoded === "." || decoded === "..";
+  });
 }
 
 /** An absolute `http` or `https` URL with a host and no user name or password. */

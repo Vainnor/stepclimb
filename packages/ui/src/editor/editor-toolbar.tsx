@@ -24,7 +24,7 @@ import { tv } from "../lib/tv";
 import { Button } from "../primitives/button";
 import { IconButton } from "../primitives/icon-button";
 import { Menu, MenuItem, MenuTrigger } from "../primitives/menu";
-import { PopoverDialog, PopoverTrigger, Popover } from "../primitives/popover";
+import { Popover, PopoverDialog, PopoverTrigger } from "../primitives/popover";
 import { Select, SelectItem } from "../primitives/select";
 import { Separator } from "../primitives/separator";
 import { TextField } from "../primitives/text-field";
@@ -154,7 +154,7 @@ export function EditorToolbar({
           {t("editor.insert")}
         </Button>
         <Menu
-          aria-label={t("editor.insertMenu")}
+          autoFocus="first"
           disabledKeys={disabledBlocks}
           onAction={(key) => onInsert(key as BlockKind)}
         >
@@ -206,7 +206,11 @@ function LinkButton({ editor }: { editor: Editor }) {
     if (stored === null) return;
     const chain = editor.chain().focus().extendMarkRange("link");
     if (editor.state.selection.empty && !active) {
-      chain.insertContent({ type: "text", text: stored, marks: [{ type: "link", attrs: { href: stored } }] });
+      chain.insertContent({
+        type: "text",
+        text: stored,
+        marks: [{ type: "link", attrs: { href: stored } }],
+      });
     } else {
       chain.setMark("link", { href: stored });
     }
@@ -233,6 +237,7 @@ function LinkButton({ editor }: { editor: Editor }) {
         <PopoverDialog aria-label={t("editor.link.title")}>
           <form data-slot="editor-link-form" className={styles.linkForm()} onSubmit={apply}>
             <TextField
+              validationBehavior="aria"
               label={t("editor.link.address")}
               description={t("editor.link.description")}
               type="url"

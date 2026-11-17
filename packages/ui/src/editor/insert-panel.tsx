@@ -41,7 +41,9 @@ export interface ImagePanelProps extends PanelProps {
 
 /** Why an upload failed, as the message to show. */
 function uploadProblem(error: unknown, t: (id: string) => string): string {
-  return error instanceof Error && error.message !== "" ? error.message : t("editor.image.uploadFailed");
+  return error instanceof Error && error.message !== ""
+    ? error.message
+    : t("editor.image.uploadFailed");
 }
 
 export function ImagePanel({ onUpload, onInsert, onCancel }: ImagePanelProps) {
@@ -80,7 +82,12 @@ export function ImagePanel({ onUpload, onInsert, onCancel }: ImagePanelProps) {
   };
 
   return (
-    <form data-slot="insert-panel" className={styles.root()} onSubmit={submit} aria-labelledby={headingId}>
+    <form
+      data-slot="insert-panel"
+      className={styles.root()}
+      onSubmit={submit}
+      aria-labelledby={headingId}
+    >
       <Heading level={3} size="base" id={headingId}>
         {t("editor.image.title")}
       </Heading>
@@ -94,6 +101,7 @@ export function ImagePanel({ onUpload, onInsert, onCancel }: ImagePanelProps) {
           errorMessage={problem ?? (tried && !file ? t("editor.image.fileMissing") : undefined)}
         />
         <TextField
+          validationBehavior="aria"
           label={t("editor.image.alt")}
           description={t("editor.image.altDescription")}
           value={alt}
@@ -146,6 +154,7 @@ export function VideoPanel({ onInsert, onCancel }: PanelProps) {
       </Heading>
       <div className={styles.fields()}>
         <TextField
+          validationBehavior="aria"
           label={t("editor.video.address")}
           description={t("editor.video.addressDescription")}
           type="url"
@@ -158,6 +167,7 @@ export function VideoPanel({ onInsert, onCancel }: PanelProps) {
           errorMessage={t("editor.video.addressInvalid")}
         />
         <TextField
+          validationBehavior="aria"
           label={t("editor.label", { field: "title" })}
           description={t("editor.video.titleDescription")}
           isRequired

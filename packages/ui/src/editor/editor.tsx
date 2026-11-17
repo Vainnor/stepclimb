@@ -8,10 +8,10 @@
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { tv } from "../lib/tv";
+import { FormError } from "../patterns/form-error";
 import { Button } from "../primitives/button";
 import { prose } from "../primitives/prose";
 import { useStepclimbStrings } from "../strings/strings";
-import { FormError } from "../patterns/form-error";
 import { BlockToolbar } from "./block-toolbar";
 import {
   type BlockKind,
@@ -21,9 +21,9 @@ import {
   revealBlock,
 } from "./blocks";
 import { EditorToolbar } from "./editor-toolbar";
-import { problemKey, problemPlugin } from "./problem-mark";
 import { ImagePanel, type UploadedImage, VideoPanel } from "./insert-panel";
 import { emptyPageDoc, type PageDoc } from "./page-doc";
+import { problemKey, problemPlugin } from "./problem-mark";
 import { sameDoc, usePageEditor } from "./use-page-editor";
 
 export const editor = tv({
@@ -76,10 +76,7 @@ function isSlash(editor: TiptapEditor, text: string): boolean {
   const { selection } = editor.state;
   const parent = selection.$from.parent;
   return (
-    text === "/" &&
-    selection.empty &&
-    parent.type.name === "paragraph" &&
-    parent.content.size === 0
+    text === "/" && selection.empty && parent.type.name === "paragraph" && parent.content.size === 0
   );
 }
 
@@ -176,10 +173,18 @@ export function Editor({
             disabledBlocks={onUploadImage ? [] : ["image"]}
           />
           {context ? (
-            <BlockToolbar editor={instance} context={context} count={instance.state.doc.childCount} />
+            <BlockToolbar
+              editor={instance}
+              context={context}
+              count={instance.state.doc.childCount}
+            />
           ) : null}
           {panel === "image" && onUploadImage ? (
-            <ImagePanel onUpload={onUploadImage} onInsert={insertWithDetails} onCancel={cancelPanel} />
+            <ImagePanel
+              onUpload={onUploadImage}
+              onInsert={insertWithDetails}
+              onCancel={cancelPanel}
+            />
           ) : null}
           {panel === "videoEmbed" ? (
             <VideoPanel onInsert={insertWithDetails} onCancel={cancelPanel} />

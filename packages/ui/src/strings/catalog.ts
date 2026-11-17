@@ -42,8 +42,10 @@ export const uiMessages: Catalog = {
     "dialog.close": "Close",
     "dueBadge.due": "{days, plural, =0 {Due today} =1 {Due tomorrow} other {Due in # days}}",
     "dueBadge.overdue": "{days, plural, =0 {Overdue} one {# day overdue} other {# days overdue}}",
-    "editor.block": "{kind, select, paragraph {Paragraph} heading2 {Heading 2} heading3 {Heading 3} heading4 {Heading 4} bulletList {Bulleted list} orderedList {Numbered list} blockquote {Quote} codeBlock {Code block} callout {Callout} table {Table} transcript {Transcript} horizontalRule {Divider} image {Image} videoEmbed {Video} other {Block}}",
-    "editor.blockToolbar": "{kind, select, paragraph {Paragraph} heading2 {Heading 2} heading3 {Heading 3} heading4 {Heading 4} bulletList {Bulleted list} orderedList {Numbered list} blockquote {Quote} codeBlock {Code block} callout {Callout} table {Table} transcript {Transcript} horizontalRule {Divider} image {Image} videoEmbed {Video} other {Block}} settings",
+    "editor.block":
+      "{kind, select, paragraph {Paragraph} heading2 {Heading 2} heading3 {Heading 3} heading4 {Heading 4} bulletList {Bulleted list} orderedList {Numbered list} blockquote {Quote} codeBlock {Code block} callout {Callout} table {Table} transcript {Transcript} horizontalRule {Divider} image {Image} videoEmbed {Video} other {Block}}",
+    "editor.blockToolbar":
+      "{kind, select, paragraph {Paragraph} heading2 {Heading 2} heading3 {Heading 3} heading4 {Heading 4} bulletList {Bulleted list} orderedList {Numbered list} blockquote {Quote} codeBlock {Code block} callout {Callout} table {Table} transcript {Transcript} horizontalRule {Divider} image {Image} videoEmbed {Video} other {Block}} settings",
     "editor.callout.kind": "Kind",
     "editor.cancel": "Cancel",
     "editor.code.language": "Language",
@@ -58,24 +60,28 @@ export const uiMessages: Catalog = {
     "editor.image.file": "Image file",
     "editor.image.fileMissing": "Choose an image to upload.",
     "editor.image.label": "Image: {alt}",
-    "editor.image.notAnImage": "This file is not a PNG, JPEG, GIF or WebP image. Choose another file.",
+    "editor.image.notAnImage":
+      "This file is not a PNG, JPEG, GIF or WebP image. Choose another file.",
     "editor.image.title": "Insert an image",
     "editor.image.types": "PNG, JPEG, GIF or WebP",
     "editor.image.uploadFailed": "The image could not be uploaded. Try again.",
     "editor.insert": "Insert",
-    "editor.insertBlock": "{kind, select, image {Insert image} videoEmbed {Insert video} other {Insert}}",
-    "editor.insertMenu": "Blocks",
+    "editor.insertBlock":
+      "{kind, select, image {Insert image} videoEmbed {Insert video} other {Insert}}",
     "editor.label": "{field, select, title {Title} speaker {Speaker} other {Label}}",
-    "editor.labelMissing": "{field, select, title {Give the video a title.} speaker {Name the speaker.} other {Fill in this field.}}",
+    "editor.labelMissing":
+      "{field, select, title {Give the video a title.} speaker {Name the speaker.} other {Fill in this field.}}",
     "editor.link.address": "Address",
     "editor.link.apply": "Apply",
     "editor.link.description": "A web or email address, or a path on this site such as /c/…",
-    "editor.link.invalid": "Enter an address starting with https://, http://, mailto: or a single /.",
+    "editor.link.invalid":
+      "Enter an address starting with https://, http://, mailto: or a single /.",
     "editor.link.remove": "Remove link",
     "editor.link.title": "Link",
     "editor.list.indent": "Indent",
     "editor.list.outdent": "Outdent",
-    "editor.mark": "{mark, select, bold {Bold} italic {Italic} underline {Underline} strike {Strikethrough} code {Inline code} subscript {Subscript} superscript {Superscript} link {Link} other {Format}}",
+    "editor.mark":
+      "{mark, select, bold {Bold} italic {Italic} underline {Underline} strike {Strikethrough} code {Inline code} subscript {Subscript} superscript {Superscript} link {Link} other {Format}}",
     "editor.moveDown": "Move block down",
     "editor.moveUp": "Move block up",
     "editor.problem.show": "Show the block",
@@ -92,7 +98,8 @@ export const uiMessages: Catalog = {
     "editor.video.address": "Video address",
     "editor.video.addressDescription": "A YouTube or Vimeo link.",
     "editor.video.addressInvalid": "Enter a YouTube or Vimeo video address.",
-    "editor.video.label": "{provider, select, youtube {YouTube video} vimeo {Vimeo video} other {Video}}: {title}",
+    "editor.video.label":
+      "{provider, select, youtube {YouTube video} vimeo {Vimeo video} other {Video}}: {title}",
     "editor.video.title": "Insert a video",
     "editor.video.titleDescription": "Names the video for screen readers.",
     "field.invalid": "Check what you entered in this field.",

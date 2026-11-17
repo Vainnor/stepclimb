@@ -28,7 +28,7 @@ import { codeLanguages, MAX_EMBED_TITLE_CHARS, MAX_SPEAKER_CHARS } from "./page-
 
 export const blockToolbar = tv({
   slots: {
-    root: "flex flex-wrap items-end gap-x-3 gap-y-2 border-t border-line-soft px-3 py-2",
+    root: "m-0 flex min-w-0 flex-wrap items-end gap-x-3 gap-y-2 border-0 border-t border-line-soft px-3 py-2",
     name: "me-auto self-center font-ui text-sm font-medium text-fg-strong",
     settings: "flex min-w-0 flex-wrap items-end gap-2",
     field: "w-56 max-w-full",
@@ -56,9 +56,8 @@ export function BlockToolbar({ editor, context, count }: BlockToolbarProps) {
   const { t } = useStepclimbStrings();
   const editable = editor.isEditable;
   return (
-    <div
+    <fieldset
       data-slot="block-toolbar"
-      role="group"
       aria-label={t("editor.blockToolbar", { kind: blockName(context) })}
       className={styles.root()}
     >
@@ -91,7 +90,7 @@ export function BlockToolbar({ editor, context, count }: BlockToolbarProps) {
           onPress={() => deleteBlock(editor, context.index)}
         />
       </div>
-    </div>
+    </fieldset>
   );
 }
 
@@ -101,21 +100,31 @@ function Settings({ editor, context }: { editor: Editor; context: BlockContext }
   const set = (attrs: Record<string, unknown>) => setAttrsAt(editor, pos, attrs);
   switch (node.type.name) {
     case "codeBlock":
-      return <LanguageField value={node.attrs.language} onChange={(language) => set({ language })} />;
+      return (
+        <LanguageField value={node.attrs.language} onChange={(language) => set({ language })} />
+      );
     case "callout":
       return <KindField value={node.attrs.kind} onChange={(kind) => set({ kind })} />;
     case "image":
+      return <ImageFields alt={node.attrs.alt} decorative={node.attrs.decorative} onChange={set} />;
+    case "videoEmbed":
       return (
-        <ImageFields
-          alt={node.attrs.alt}
-          decorative={node.attrs.decorative}
-          onChange={set}
+        <LabelField
+          id="title"
+          value={node.attrs.title}
+          max={MAX_EMBED_TITLE_CHARS}
+          onChange={(title) => set({ title })}
         />
       );
-    case "videoEmbed":
-      return <LabelField id="title" value={node.attrs.title} max={MAX_EMBED_TITLE_CHARS} onChange={(title) => set({ title })} />;
     case "transcriptLine":
-      return <LabelField id="speaker" value={node.attrs.speaker} max={MAX_SPEAKER_CHARS} onChange={(speaker) => set({ speaker })} />;
+      return (
+        <LabelField
+          id="speaker"
+          value={node.attrs.speaker}
+          max={MAX_SPEAKER_CHARS}
+          onChange={(speaker) => set({ speaker })}
+        />
+      );
     case "tableCell":
     case "tableHeader":
       return <TableActions editor={editor} />;
@@ -126,7 +135,13 @@ function Settings({ editor, context }: { editor: Editor; context: BlockContext }
   }
 }
 
-function LanguageField({ value, onChange }: { value: string | null; onChange: (v: string | null) => void }) {
+function LanguageField({
+  value,
+  onChange,
+}: {
+  value: string | null;
+  onChange: (v: string | null) => void;
+}) {
   const { t } = useStepclimbStrings();
   return (
     <Select
@@ -175,6 +190,7 @@ function ImageFields({ alt, decorative, onChange }: ImageFieldsProps) {
   return (
     <>
       <TextField
+        validationBehavior="aria"
         label={t("editor.image.alt")}
         value={alt}
         isDisabled={decorative}
@@ -204,6 +220,7 @@ function LabelField({ id, value, max, onChange }: LabelFieldProps) {
   const blank = value.trim() === "";
   return (
     <TextField
+      validationBehavior="aria"
       label={t("editor.label", { field: id })}
       value={value}
       isRequired

@@ -47,7 +47,17 @@ describe("paste", () => {
   it("keeps only the model's nodes, marks and attributes", async () => {
     const doc = withEditor((editor) => editor.view.pasteHTML(HOSTILE));
     const text = JSON.stringify(doc);
-    for (const gone of ["alert", "steal", "evil", "onclick", "onerror", "perl", "_blank", "align", "style"]) {
+    for (const gone of [
+      "alert",
+      "steal",
+      "evil",
+      "onclick",
+      "onerror",
+      "perl",
+      "_blank",
+      "align",
+      "style",
+    ]) {
       expect(text).not.toContain(gone);
     }
     expect(text).not.toMatch(/\\u00(0|1|7f|9)/i);
@@ -55,7 +65,10 @@ describe("paste", () => {
     expect(types).not.toContain('"type":"image"');
     expect(types).not.toContain('"type":"videoEmbed"');
     // An `<h1>` and an `<h5>` are no heading level a body takes: they paste as paragraphs.
-    expect(doc.content[0]).toEqual({ type: "paragraph", content: [{ type: "text", text: "Title" }] });
+    expect(doc.content[0]).toEqual({
+      type: "paragraph",
+      content: [{ type: "text", text: "Title" }],
+    });
     expect(text).toContain('"marks":[{"type":"link","attrs":{"href":"https://example.com/"}}]');
     expect(text).toContain('"text":"nulhere"');
     await expect(`${JSON.stringify(doc, null, 2)}\n`).toMatchFileSnapshot(PASTED);

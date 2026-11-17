@@ -39,8 +39,8 @@ const NESTED = "nested";
 /** Looks up a message: the editor's `t` from `useStepclimbStrings()`. */
 export type Translate = (id: string, values?: MessageValues) => string;
 
-/** Control characters the server refuses in text: every one but tab and newline. */
-const TEXT_CONTROL = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g;
+/** A control character (Unicode category Cc). */
+const CONTROL = /\p{Cc}/u;
 
 /** A course file id: what an image copied from a page carries. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -50,7 +50,7 @@ const ATTR_CONTROL = /\p{Cc}/gu;
 
 /** `text` without the control characters a page's text may not hold. */
 export function plainText(text: string): string {
-  return text.replace(TEXT_CONTROL, "");
+  return [...text].filter((c) => c === "\t" || c === "\n" || !CONTROL.test(c)).join("");
 }
 
 const NestedParagraph = Paragraph.extend({ group: `block ${NESTED}` });
@@ -115,7 +115,10 @@ export const PageLink = Mark.create({
   keepOnSplit: false,
   addAttributes() {
     return {
-      href: { default: null, parseHTML: (el: HTMLElement) => linkTarget(el.getAttribute("href") ?? "") },
+      href: {
+        default: null,
+        parseHTML: (el: HTMLElement) => linkTarget(el.getAttribute("href") ?? ""),
+      },
     };
   },
   parseHTML() {
@@ -192,7 +195,12 @@ const callout = (t: Translate) =>
     parseHTML: () => [{ tag: "div[data-callout]" }],
     renderHTML: ({ node }) => ["div", { "data-callout": "", "data-kind": node.attrs.kind }, 0],
     addNodeView: () =>
-      labelledView("div", "editor-callout", (node) => t("callout.kind", { kind: node.attrs.kind }), true),
+      labelledView(
+        "div",
+        "editor-callout",
+        (node) => t("callout.kind", { kind: node.attrs.kind }),
+        true,
+      ),
   });
 
 const image = (t: Translate) =>
@@ -203,10 +211,14 @@ const image = (t: Translate) =>
     draggable: true,
     addAttributes() {
       return {
-        course_file_id: { default: "", parseHTML: (el: HTMLElement) => el.getAttribute("data-course-file-id") ?? "" },
+        course_file_id: {
+          default: "",
+          parseHTML: (el: HTMLElement) => el.getAttribute("data-course-file-id") ?? "",
+        },
         alt: {
           default: "",
-          parseHTML: (el: HTMLElement) => (el.getAttribute("data-alt") ?? "").replace(ATTR_CONTROL, ""),
+          parseHTML: (el: HTMLElement) =>
+            (el.getAttribute("data-alt") ?? "").replace(ATTR_CONTROL, ""),
         },
         decorative: {
           default: false,
@@ -217,7 +229,8 @@ const image = (t: Translate) =>
     parseHTML: () => [
       {
         tag: "figure[data-course-file-id]",
-        getAttrs: (el: HTMLElement) => (UUID.test(el.getAttribute("data-course-file-id") ?? "") ? null : false),
+        getAttrs: (el: HTMLElement) =>
+          UUID.test(el.getAttribute("data-course-file-id") ?? "") ? null : false,
       },
     ],
     renderHTML: ({ node }) => [
@@ -248,11 +261,15 @@ const videoEmbed = (t: Translate) =>
     draggable: true,
     addAttributes() {
       return {
-        provider: { default: "youtube", parseHTML: (el: HTMLElement) => el.getAttribute("data-provider") },
+        provider: {
+          default: "youtube",
+          parseHTML: (el: HTMLElement) => el.getAttribute("data-provider"),
+        },
         video_id: { default: "", parseHTML: (el: HTMLElement) => el.getAttribute("data-video-id") },
         title: {
           default: "",
-          parseHTML: (el: HTMLElement) => (el.getAttribute("data-title") ?? "").replace(ATTR_CONTROL, ""),
+          parseHTML: (el: HTMLElement) =>
+            (el.getAttribute("data-title") ?? "").replace(ATTR_CONTROL, ""),
         },
       };
     },
@@ -303,7 +320,8 @@ const transcriptLine = Node.create({
       speaker: {
         default: "",
         keepOnSplit: true,
-        parseHTML: (el: HTMLElement) => (el.getAttribute("data-speaker") ?? "").replace(ATTR_CONTROL, ""),
+        parseHTML: (el: HTMLElement) =>
+          (el.getAttribute("data-speaker") ?? "").replace(ATTR_CONTROL, ""),
       },
     };
   },
