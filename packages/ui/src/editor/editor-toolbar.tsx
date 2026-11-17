@@ -5,6 +5,7 @@
 import {
   ArrowClockwiseIcon,
   ArrowCounterClockwiseIcon,
+  CaretDownIcon,
   CodeIcon,
   LinkIcon,
   ListBulletsIcon,
@@ -25,7 +26,6 @@ import { Button } from "../primitives/button";
 import { IconButton } from "../primitives/icon-button";
 import { Menu, MenuItem, MenuTrigger } from "../primitives/menu";
 import { Popover, PopoverDialog, PopoverTrigger } from "../primitives/popover";
-import { Select, SelectItem } from "../primitives/select";
 import { Separator } from "../primitives/separator";
 import { TextField } from "../primitives/text-field";
 import { ToggleButton } from "../primitives/toggle-button";
@@ -38,7 +38,8 @@ import { linkTarget } from "./link-target";
 export const editorToolbar = tv({
   slots: {
     root: "gap-1 px-2 py-1.5",
-    style: "w-40",
+    style: "w-36 justify-between",
+    styleValue: "min-w-0 truncate",
     linkForm: "flex w-72 max-w-full flex-col gap-3",
     linkActions: "flex flex-wrap justify-end gap-2",
   },
@@ -97,20 +98,33 @@ export function EditorToolbar({
   const nested = editor.state.selection.$from.depth > 1;
   return (
     <Toolbar data-slot="editor-toolbar" aria-label={t("editor.toolbar")} className={styles.root()}>
-      <Select
-        aria-label={t("editor.style")}
-        value={style}
-        isDisabled={style === null || !editor.isEditable}
-        disabledKeys={nested ? ["heading2", "heading3", "heading4"] : []}
-        onChange={(key) => setStyle(editor, key as TextStyle)}
-        className={styles.style()}
-      >
-        {STYLES.map((id) => (
-          <SelectItem key={id} id={id}>
-            {t("editor.block", { kind: id })}
-          </SelectItem>
-        ))}
-      </Select>
+      <MenuTrigger>
+        <Button
+          intent="ghost"
+          size="sm"
+          aria-label={t("editor.styleCurrent", { kind: style ?? "other" })}
+          isDisabled={style === null || !editor.isEditable}
+          className={styles.style()}
+        >
+          <span className={styles.styleValue()}>
+            {t("editor.block", { kind: style ?? "other" })}
+          </span>
+          <Icon icon={CaretDownIcon} size="sm" />
+        </Button>
+        <Menu
+          autoFocus="first"
+          selectionMode="single"
+          selectedKeys={style === null ? [] : [style]}
+          disabledKeys={nested ? ["heading2", "heading3", "heading4"] : []}
+          onAction={(key) => setStyle(editor, key as TextStyle)}
+        >
+          {STYLES.map((id) => (
+            <MenuItem key={id} id={id}>
+              {t("editor.block", { kind: id })}
+            </MenuItem>
+          ))}
+        </Menu>
+      </MenuTrigger>
       <Separator orientation="vertical" />
       {MARKS.map(([name, icon]) => (
         <ToggleButton

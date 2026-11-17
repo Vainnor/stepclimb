@@ -6,7 +6,7 @@
 // form the server stores (`toPageDoc`), and shows a refusal the server answered with at the
 // top-level block its JSON Pointer names. It saves nothing itself: the screen around it does.
 import type { Editor as TiptapEditor } from "@tiptap/core";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { tv } from "../lib/tv";
 import { FormError } from "../patterns/form-error";
 import { Button } from "../primitives/button";
@@ -30,6 +30,8 @@ export const editor = tv({
   slots: {
     root: "flex min-w-0 flex-col rounded-md border border-line bg-raised",
     chrome: "sticky top-0 z-10 rounded-t-md border-b border-line bg-raised",
+    actions:
+      "flex flex-wrap items-center justify-end gap-x-3 gap-y-2 border-b border-line-soft px-3 py-2",
     problem: "flex flex-wrap items-center gap-3 border-b border-line-soft px-3 py-2",
     content: "min-h-64 px-4 py-6 sm:px-8",
     surface: "mx-auto min-h-48 outline-none",
@@ -65,6 +67,11 @@ export interface EditorProps {
    * offered.
    */
   onUploadImage?: (file: File, onProgress: (fraction: number) => void) => Promise<UploadedImage>;
+  /**
+   * The screen's own controls, such as Save and the save state, drawn at the top of the editor's
+   * sticky bar, so they stay in view while the author scrolls or types on a phone.
+   */
+  actions?: ReactNode;
   /** Layout only. */
   className?: string;
 }
@@ -88,6 +95,7 @@ export function Editor({
   isDisabled = false,
   problem,
   onUploadImage,
+  actions,
   className,
 }: EditorProps) {
   const { t } = useStepclimbStrings();
@@ -165,6 +173,11 @@ export function Editor({
     <div data-slot="editor" className={styles.root({ className })}>
       {instance ? (
         <div data-slot="editor-chrome" className={styles.chrome()}>
+          {actions === undefined ? null : (
+            <div data-slot="editor-actions" className={styles.actions()}>
+              {actions}
+            </div>
+          )}
           <EditorToolbar
             editor={instance}
             isInsertOpen={menuOpen}

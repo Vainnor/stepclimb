@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The route tree (docs/specs/m0/11-app-shell.md B2, B7, B16): a signed-out layout for the sign-in
 // steps and the enrollment page, and a signed-in layout for everything else that exists: home, the
-// account page, a course's files area and its video panel. Any other path, the M1 deep link included,
+// account page, a course's files area, its video panel and the page editor
+// (docs/specs/m1/07-pages-and-the-editor.md B21). Any other path, the M1 deep link included,
 // renders the not-found view. A route that fails to load renders its error inside its layout (B28).
 import {
   createRootRouteWithContext,
@@ -23,6 +24,7 @@ import { EnrollView } from "./routes/enroll";
 import { FilesView } from "./routes/files";
 import { HomeView } from "./routes/home";
 import { NotFoundView } from "./routes/not-found";
+import { PageEditView } from "./routes/page-edit";
 import { SignInView } from "./routes/sign-in";
 import { SignInPasskeyView } from "./routes/sign-in-passkey";
 import { SignInPasswordView } from "./routes/sign-in-password";
@@ -153,6 +155,13 @@ const courseVideosRoute = createRoute({
   component: VideosView,
 });
 
+const pageEditRoute = createRoute({
+  getParentRoute: () => signedInRoute,
+  path: "c/$course/pages/$page/edit",
+  staticData: { view: { title: (t) => t("pageEdit.title") } },
+  component: PageEditView,
+});
+
 export const routeTree = rootRoute.addChildren([
   signedOutRoute.addChildren([
     signInRoute,
@@ -162,7 +171,13 @@ export const routeTree = rootRoute.addChildren([
     signInTotpSetupRoute,
     enrollRoute,
   ]),
-  signedInRoute.addChildren([homeRoute, accountRoute, courseFilesRoute, courseVideosRoute]),
+  signedInRoute.addChildren([
+    homeRoute,
+    accountRoute,
+    courseFilesRoute,
+    courseVideosRoute,
+    pageEditRoute,
+  ]),
 ]);
 
 /** The layout a route sits in: a route under one draws its error inside it. */
