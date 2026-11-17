@@ -359,7 +359,8 @@ pub async fn create<'c>(
 /// Change the status of the enrollment `id` of the scope's organization to `to`, set
 /// `updated_at` to `now`, and write the `enrollment.update` audit entry by `actor` with the
 /// status before and after (B18, B27). The current status writes nothing and returns the
-/// enrollment as it is.
+/// enrollment as it is. Reactivating in a template is [`Error::Template`] when the role holds
+/// `course.participate`, as [`create`] refuses it (Q5); the role is read `FOR KEY SHARE`.
 ///
 /// Locks the enrollment's course row `FOR NO KEY UPDATE` first (B19). Runs in one transaction
 /// (a savepoint when `db` is already one).
@@ -373,9 +374,17 @@ pub async fn set_status<'c>(
 ) -> Result<Enrollment, Error> {
     let now = epoch_micros(now)?;
     let mut tx = db.begin().await?;
-    let current = lock(&mut tx, scope, id).await?;
+    let (current, course) = lock(&mut tx, scope, id).await?;
     if current.status == to {
         return Ok(current);
+    }
+    if to == Status::Active && course.template {
+        let role = roles::get_for_key_share(&mut tx, scope, current.role_id)
+            .await?
+            .ok_or(Error::RoleNotFound)?;
+        if role.permissions.iter().any(|k| k == CourseParticipate::KEY) {
+            return Err(Error::Template);
+        }
     }
     sqlx::query!(
         "UPDATE enrollments
@@ -421,7 +430,7 @@ pub async fn delete<'c>(
 ) -> Result<(), Error> {
     let now = epoch_micros(now)?;
     let mut tx = db.begin().await?;
-    let current = lock(&mut tx, scope, id).await?;
+    let (current, _) = lock(&mut tx, scope, id).await?;
     sqlx::query!(
         "DELETE FROM enrollments WHERE org_id = $1 AND id = $2",
         scope.org_id(),
@@ -444,23 +453,28 @@ pub async fn delete<'c>(
     Ok(())
 }
 
-/// The enrollment `id` after locking its course row `FOR NO KEY UPDATE` (B19), or
-/// [`Error::NotFound`]. An enrollment never changes course, so the course read first is still
+/// The enrollment `id` and what [`lock_course`] read of its course, after locking the course
+/// row `FOR NO KEY UPDATE` (B19), or [`Error::NotFound`]. An enrollment never changes course, so the course read first is still
 /// its course once locked.
-async fn lock(conn: &mut PgConnection, scope: OrgScope, id: Uuid) -> Result<Enrollment, Error> {
+async fn lock(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    id: Uuid,
+) -> Result<(Enrollment, LockedCourse), Error> {
     let course_id = course_of(&mut *conn, scope, id)
         .await?
         .ok_or(Error::NotFound)?;
-    lock_course(conn, scope, course_id)
+    let course = lock_course(conn, scope, course_id)
         .await
         .map_err(|error| match error {
             Error::CourseNotFound => Error::NotFound,
             other => other,
         })?;
-    get(&mut *conn, scope, id).await?.ok_or(Error::NotFound)
+    let enrollment = get(&mut *conn, scope, id).await?.ok_or(Error::NotFound)?;
+    Ok((enrollment, course))
 }
 
-/// What [`create`] and [`delete`] read of a course while holding its row.
+/// What the writes read of a course while holding its row.
 struct LockedCourse {
     status: String,
     template: bool,

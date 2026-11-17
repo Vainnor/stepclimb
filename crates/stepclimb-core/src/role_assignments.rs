@@ -52,6 +52,10 @@ const ROLE_IN_ORG_TRIGGER: &str = "role_assignments_role_in_org";
 /// The unique constraint on `(user_id, role_id, scope_type, scope_id)`.
 const UNIQUE_CONSTRAINT: &str = "role_assignments_user_id_role_id_scope_type_scope_id_key";
 
+/// The built-in course-scope roles: only an enrollment grants them, so [`create`] refuses them at
+/// the organization or an account (M1 spec 02 B22, Q1).
+pub const COURSE_ROLES: [&str; 2] = ["student", "observer"];
+
 /// Where an assignment takes effect.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Scope {
@@ -172,6 +176,10 @@ pub enum Error {
     /// enrollment (M1 spec 02 Q1).
     #[error("role assignments at this scope are not available")]
     ScopeUnavailable,
+    /// The role is a built-in course-scope role ([`COURSE_ROLES`]), which only an enrollment
+    /// grants (M1 spec 02 B22).
+    #[error("this role is granted only by an enrollment in a course")]
+    CourseRole,
     /// The user already holds the role at that scope.
     #[error("the user already holds this role at this scope")]
     Exists,
@@ -317,9 +325,10 @@ pub async fn list(
 /// Create an assignment in the scope's organization, with `created_at` and `updated_at` set to
 /// `now` (B11), and its `role_assignment.grant` audit entry by `actor`.
 ///
-/// Refuses a course scope ([`Error::ScopeUnavailable`]) and an account scope naming no account
-/// of the organization ([`Error::AccountNotFound`]); the table refuses a user or role outside
-/// the organization and a repeat of the same user, role and scope. Runs in one transaction (a
+/// Refuses a course scope ([`Error::ScopeUnavailable`]), a built-in course-scope role
+/// ([`COURSE_ROLES`], [`Error::CourseRole`]) and an account scope naming no account of the
+/// organization ([`Error::AccountNotFound`]); the table refuses a user or role outside the
+/// organization and a repeat of the same user, role and scope. Runs in one transaction (a
 /// savepoint when `db` is already one).
 pub async fn create<'c>(
     db: impl Acquire<'c, Database = Postgres>,
@@ -339,6 +348,9 @@ pub async fn create<'c>(
         Scope::Organization => {}
         Scope::Account(id) => lock_account(&mut tx, scope, id).await?,
         Scope::Course(_) => return Err(Error::ScopeUnavailable),
+    }
+    if is_course_role(&mut tx, assignment.role_id).await? {
+        return Err(Error::CourseRole);
     }
     let (scope_type, scope_id) = assignment.scope.as_parts(scope.org_id());
     let row = sqlx::query_as!(
@@ -369,6 +381,21 @@ pub async fn create<'c>(
     audit::record(&mut tx, scope, actor, grant, created.id, &data, now).await?;
     tx.commit().await?;
     Ok(created)
+}
+
+/// Whether the role `role_id` is a built-in course-scope role ([`COURSE_ROLES`]). Any other
+/// role is left to the table's checks, which refuse another organization's custom role with
+/// [`Error::RoleNotFound`].
+async fn is_course_role(conn: &mut PgConnection, role_id: Uuid) -> Result<bool, Error> {
+    // Built-in roles belong to no organization (`org_id` null), so this read of one takes no
+    // `OrgScope`; a custom role, of any organization, is never a course role.
+    let key = sqlx::query_scalar!(
+        "SELECT key FROM roles WHERE id = $1 AND org_id IS NULL",
+        role_id,
+    )
+    .fetch_optional(conn)
+    .await?;
+    Ok(key.is_some_and(|key| COURSE_ROLES.contains(&key.as_str())))
 }
 
 /// What an audit entry records of an assignment: who holds which role where, and its source.

@@ -194,14 +194,16 @@ async fn a_built_in_role_grants_its_code_list_whatever_its_row_says(pool: PgPool
     assign(
         &pool,
         &a,
-        builtin_id(&pool, "student").await,
+        builtin_id(&pool, "course_designer").await,
         Scope::Organization,
     )
     .await;
-    sqlx::query("UPDATE roles SET permissions = '{organization.manage}' WHERE key = 'student'")
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE roles SET permissions = '{organization.manage}' WHERE key = 'course_designer'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let grants = load(&pool, &a).await;
     assert!(!grants.holds_anywhere::<OrgManage>());
 }

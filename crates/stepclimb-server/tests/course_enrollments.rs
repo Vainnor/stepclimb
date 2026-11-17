@@ -234,6 +234,12 @@ impl Fixture {
     /// A signed-in user holding `role` at `at`.
     async fn holder(&self, org: Uuid, role: Uuid, at: Scope) -> (String, Uuid) {
         let (cookie, user) = self.user(org, "Holder").await;
+        self.assign(org, user, role, at).await;
+        (cookie, user)
+    }
+
+    /// `role` assigned to `user` at `at` through the repository.
+    async fn assign(&self, org: Uuid, user: Uuid, role: Uuid, at: Scope) {
         let assignment = NewAssignment {
             user_id: user,
             role_id: role,
@@ -244,7 +250,6 @@ impl Fixture {
         role_assignments::create(&self.pool, scope(org), &assignment, now(), Actor::Instance)
             .await
             .expect("create assignment");
-        (cookie, user)
     }
 
     async fn org_admin(&self, org: Uuid) -> String {
@@ -273,6 +278,66 @@ impl Fixture {
                 .await
                 .expect("change status");
         }
+        id
+    }
+
+    /// A new user active in a new published Tower course with a role of no permissions, so a
+    /// `user.view` holder at Tower covers them: their id.
+    async fn in_tower(&self, t: Tree) -> Uuid {
+        let (_, user) = self.user(t.org, "In Tower").await;
+        let course = self
+            .course(t.org, t.tower, &[courses::Status::Published])
+            .await;
+        let role = self.custom_role(t.org, &[]).await;
+        self.enroll(t.org, course, user, role).await;
+        user
+    }
+
+    /// A template copied from a new draft in `account`: its id.
+    async fn template(&self, org: Uuid, account: Uuid) -> Uuid {
+        let source = self.course(org, account, &[]).await;
+        let copy = courses::CourseCopy {
+            account_id: account,
+            title: None,
+            code: format!("T{}", &new_id().simple().to_string()[20..]),
+            template: true,
+        };
+        courses::copy(
+            &self.pool,
+            scope(org),
+            source,
+            &copy,
+            now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("copy as a template")
+        .id
+    }
+
+    /// An enrollment written by SQL, as the sync API (M4) or an older row could: its id.
+    async fn insert_enrollment(
+        &self,
+        org: Uuid,
+        course: Uuid,
+        user: Uuid,
+        role: Uuid,
+        status: &str,
+    ) -> Uuid {
+        let id = new_id();
+        sqlx::query(
+            "INSERT INTO enrollments (id, org_id, course_id, user_id, role_id, status)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(id)
+        .bind(org)
+        .bind(course)
+        .bind(user)
+        .bind(role)
+        .bind(status)
+        .execute(&self.pool)
+        .await
+        .expect("insert enrollment");
         id
     }
 
@@ -503,7 +568,7 @@ async fn t12a_course_only_permissions_are_left_out_of_the_escalation_check(pool:
     let t = f.a;
     let tower_admin = f.account_admin(t.org, t.tower).await;
     let course = f.course(t.org, t.tower, &[Published]).await;
-    let (_, pat) = f.user(t.org, "Pat").await;
+    let pat = f.in_tower(t).await;
 
     f.post_enrollment(t.org, &tower_admin, course, pat, f.builtin("student").await)
         .await
@@ -528,6 +593,9 @@ async fn t12_an_instructor_enrolls_within_their_own_permissions(pool: PgPool) {
     let instructor = f.builtin("instructor").await;
     let (cookie, kim) = f.user(t.org, "Kim").await;
     f.enroll(t.org, course, kim, instructor).await;
+    // Enrolling someone needs `user.view` covering them (owner decision of 2026-11-17).
+    let viewer = f.custom_role(t.org, &["user.view"]).await;
+    f.assign(t.org, kim, viewer, Scope::Organization).await;
     let (_, pat) = f.user(t.org, "Pat").await;
 
     let managing = f
@@ -539,11 +607,12 @@ async fn t12_an_instructor_enrolls_within_their_own_permissions(pool: PgPool) {
     f.post_enrollment(t.org, &cookie, course, pat, instructor)
         .await
         .ok(StatusCode::CREATED);
-    // The grant is the course's own: another course in Tower is not visible to Kim.
+    // The grant is the course's own: in another course of Tower, which Kim sees through the
+    // organization's `user.view`, Kim does not hold `enrollment.manage`.
     let other = f.course(t.org, t.tower, &[Published]).await;
     f.post_enrollment(t.org, &cookie, other, pat, instructor)
         .await
-        .expect(StatusCode::NOT_FOUND, "course.not_found");
+        .expect(StatusCode::FORBIDDEN, "permission.denied");
 }
 
 // Grants (B16, B23, B24).
@@ -811,6 +880,26 @@ async fn a_template_takes_no_learner(pool: PgPool) {
     )
     .await
     .ok(StatusCode::CREATED);
+    // Nor does reactivating a learner enrollment that got into one: 409, and it stays concluded.
+    let student = f.builtin("student").await;
+    let (_, kim) = f.user(t.org, "Kim").await;
+    let concluded = f
+        .insert_enrollment(t.org, template, kim, student, "concluded")
+        .await;
+    f.set_enrollment(t.org, &admin, concluded, "active")
+        .await
+        .expect(StatusCode::CONFLICT, "course.template");
+    let roster = f
+        .send(Method::GET, &enrollments_uri(template), t.org, &admin, None)
+        .await;
+    let statuses: Vec<_> = roster.body["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter(|e| e["id"] == json!(concluded))
+        .map(|e| e["status"].clone())
+        .collect();
+    assert_eq!(statuses, [json!("concluded")]);
 }
 
 // Users (B21).
@@ -827,8 +916,12 @@ async fn t17_an_enrollment_puts_a_user_in_the_courses_account(pool: PgPool) {
     let in_enroute = f.course(t.org, t.enroute, &[Published]).await;
     let (_, sam) = f.user(t.org, "Sam").await;
     let (_, lee) = f.user(t.org, "Lee").await;
+    let (_, kim) = f.user(t.org, "Kim").await;
     f.enroll(t.org, in_tower, sam, student).await;
     f.enroll(t.org, in_enroute, lee, student).await;
+    // Only an active enrollment puts a user in the account (owner decision of 2026-11-17).
+    f.insert_enrollment(t.org, in_tower, kim, student, "concluded")
+        .await;
 
     let listed = f
         .send(Method::GET, "/api/v1/users", t.org, &tower_admin, None)
@@ -836,6 +929,48 @@ async fn t17_an_enrollment_puts_a_user_in_the_courses_account(pool: PgPool) {
     let ids = listed.ids("");
     assert!(ids.contains(&sam), "{listed:?}");
     assert!(!ids.contains(&lee), "{listed:?}");
+    assert!(!ids.contains(&kim), "{listed:?}");
+}
+
+/// B17 (owner decision of 2026-11-17): enrolling needs `user.view` covering the user, the users
+/// list's reach. An account admin of Tower enrolls a user active in a Tower course, and gets 404
+/// `user.not_found` for a user in no account, one only in Enroute, one whose only Tower
+/// enrollment is concluded, and one that does not exist; `enrollment.manage` without `user.view`
+/// gets the same 404 for a user in Tower. Nothing is written.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn enrolling_needs_user_view_covering_the_user(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    let tower_admin = f.account_admin(t.org, t.tower).await;
+    let course = f.course(t.org, t.tower, &[Published]).await;
+    let student = f.builtin("student").await;
+    let in_tower = f.in_tower(t).await;
+    let (_, nowhere) = f.user(t.org, "Nowhere").await;
+    let elsewhere_course = f.course(t.org, t.enroute, &[Published]).await;
+    let (_, elsewhere) = f.user(t.org, "Elsewhere").await;
+    f.enroll(t.org, elsewhere_course, elsewhere, student).await;
+    let other_course = f.course(t.org, t.tower, &[Published]).await;
+    let (_, concluded) = f.user(t.org, "Concluded").await;
+    f.insert_enrollment(t.org, other_course, concluded, student, "concluded")
+        .await;
+    let manage_only = f
+        .custom_role(t.org, &["enrollment.manage", "course.view"])
+        .await;
+    let (manager, _) = f.holder(t.org, manage_only, Scope::Account(t.tower)).await;
+    let before = f.rows(t.org).await;
+
+    for user in [nowhere, elsewhere, concluded, new_id()] {
+        f.post_enrollment(t.org, &tower_admin, course, user, student)
+            .await
+            .expect(StatusCode::NOT_FOUND, "user.not_found");
+    }
+    f.post_enrollment(t.org, &manager, course, in_tower, student)
+        .await
+        .expect(StatusCode::NOT_FOUND, "user.not_found");
+    assert_eq!(f.rows(t.org).await, before);
+    f.post_enrollment(t.org, &tower_admin, course, in_tower, student)
+        .await
+        .ok(StatusCode::CREATED);
 }
 
 // B24a across the M0 checks (T19b).
@@ -968,6 +1103,136 @@ async fn t19a_a_draft_hides_its_enrollments_without_view_all(pool: PgPool) {
     assert_eq!(roster.ids(""), [id]);
 }
 
+/// T19a for the enrollment routes on a template, which is never published: a caller without
+/// `course.view_all` gets the same 404s as on a draft, and the rows are unchanged.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t19a_a_template_hides_its_enrollments_without_view_all(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    let template = f.template(t.org, t.tower).await;
+    let (_, pat) = f.user(t.org, "Pat").await;
+    let designer = f.builtin("course_designer").await;
+    let id = f.enroll(t.org, template, pat, designer).await;
+    let role = f
+        .custom_role(
+            t.org,
+            &["enrollment.view", "enrollment.manage", "course.view"],
+        )
+        .await;
+    let (cookie, _) = f.holder(t.org, role, Scope::Account(t.tower)).await;
+    let before = f.rows(t.org).await;
+
+    f.send(
+        Method::GET,
+        &enrollments_uri(template),
+        t.org,
+        &cookie,
+        None,
+    )
+    .await
+    .expect(StatusCode::NOT_FOUND, "course.not_found");
+    f.post_enrollment(t.org, &cookie, template, pat, f.builtin("instructor").await)
+        .await
+        .expect(StatusCode::NOT_FOUND, "course.not_found");
+    f.set_enrollment(t.org, &cookie, id, "concluded")
+        .await
+        .expect(StatusCode::NOT_FOUND, "enrollment.not_found");
+    f.send(Method::DELETE, &enrollment_uri(id), t.org, &cookie, None)
+        .await
+        .expect(StatusCode::NOT_FOUND, "enrollment.not_found");
+    assert_eq!(f.rows(t.org).await, before);
+}
+
+/// B24, Q13: a course made a draft after the extractor's check and before the write's
+/// transaction locks it is hidden by the write's own check: 404, and nothing changes.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_course_made_a_draft_during_a_write_hides_it(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    let course = f.course(t.org, t.tower, &[Published]).await;
+    let (_, pat) = f.user(t.org, "Pat").await;
+    let id = f
+        .enroll(t.org, course, pat, f.builtin("student").await)
+        .await;
+    let role = f
+        .custom_role(t.org, &["enrollment.manage", "course.view"])
+        .await;
+    let (cookie, _) = f.holder(t.org, role, Scope::Account(t.tower)).await;
+    let mut drafting = f.pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM courses WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(course)
+        .execute(&mut *drafting)
+        .await
+        .unwrap();
+    let concluding = tokio::spawn({
+        let app = f.app.clone();
+        let request = Request::patch(enrollment_uri(id))
+            .header(TEST_ORG_HEADER, t.org.to_string())
+            .header(header::COOKIE, cookie)
+            .header("sec-fetch-site", "same-origin")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(json!({ "status": "concluded" }).to_string()))
+            .unwrap();
+        async move { answer(&app, request).await }
+    });
+    until_a_call_waits_on_a_lock(&f.pool).await;
+    sqlx::query("UPDATE courses SET status = 'draft' WHERE id = $1")
+        .bind(course)
+        .execute(&mut *drafting)
+        .await
+        .unwrap();
+    drafting.commit().await.unwrap();
+
+    concluding
+        .await
+        .expect("the change ran")
+        .expect(StatusCode::NOT_FOUND, "enrollment.not_found");
+    let status: String = sqlx::query_scalar("SELECT status FROM enrollments WHERE id = $1")
+        .bind(id)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "active");
+}
+
+/// `m0/03` B6 with enrollments (B24a): a `user.manage` holder without course permissions at
+/// organization scope cannot change the email of a user enrolled as Instructor, whose
+/// enrollment gives permissions the holder lacks; a user enrolled only with `course.participate`
+/// is no escalation.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_enrolled_instructors_email_needs_their_course_permissions(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    let course = f.course(t.org, t.tower, &[Published]).await;
+    let manager_role = f.custom_role(t.org, &["user.manage", "user.view"]).await;
+    let (manager, _) = f.holder(t.org, manager_role, Scope::Organization).await;
+    let (_, kim) = f.user(t.org, "Kim").await;
+    f.enroll(t.org, course, kim, f.builtin("instructor").await)
+        .await;
+    let (_, pat) = f.user(t.org, "Pat").await;
+    let participant = f.custom_role(t.org, &["course.participate"]).await;
+    f.enroll(t.org, course, pat, participant).await;
+    let email = |user: Uuid, address: &str| {
+        let (f, manager) = (&f, manager.clone());
+        let body = json!({ "email": address });
+        async move {
+            f.send(
+                Method::PATCH,
+                &format!("/api/v1/users/{user}"),
+                t.org,
+                &manager,
+                Some(body),
+            )
+            .await
+        }
+    };
+
+    email(kim, "kim@example.test")
+        .await
+        .expect(StatusCode::FORBIDDEN, "permission.escalation");
+    email(pat, "pat@example.test").await.ok(StatusCode::OK);
+}
+
 // Organizations (T20).
 
 /// T20: org A's admin naming org B's course, enrollment, user or role gets the route's 404, and
@@ -983,6 +1248,7 @@ async fn t20_the_enrollment_routes_refuse_another_organizations_ids(pool: PgPool
     let b_enrollment = f.enroll(b.org, b_course, b_user, student).await;
     let a_course = f.course(a.org, a.tower, &[Published]).await;
     let (_, pat) = f.user(a.org, "Pat").await;
+    let b_role = f.custom_role(b.org, &["course.view"]).await;
     let before = f.rows(b.org).await;
 
     f.send(Method::GET, &enrollments_uri(b_course), a.org, &admin, None)
@@ -994,6 +1260,9 @@ async fn t20_the_enrollment_routes_refuse_another_organizations_ids(pool: PgPool
     f.post_enrollment(a.org, &admin, a_course, b_user, student)
         .await
         .expect(StatusCode::NOT_FOUND, "user.not_found");
+    f.post_enrollment(a.org, &admin, a_course, pat, b_role)
+        .await
+        .expect(StatusCode::NOT_FOUND, "role.not_found");
     f.set_enrollment(a.org, &admin, b_enrollment, "concluded")
         .await
         .expect(StatusCode::NOT_FOUND, "enrollment.not_found");
@@ -1037,7 +1306,7 @@ async fn t16_a_role_strengthened_during_an_enrollment_is_checked_as_strengthened
     let t = f.a;
     let tower_admin = f.account_admin(t.org, t.tower).await;
     let course = f.course(t.org, t.tower, &[Published]).await;
-    let (_, pat) = f.user(t.org, "Pat").await;
+    let pat = f.in_tower(t).await;
     let role = f.custom_role(t.org, &["course.view"]).await;
     let mut changing = f.pool.begin().await.unwrap();
     roles::lock_custom(&mut changing, scope(t.org), role)

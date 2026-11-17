@@ -4086,7 +4086,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `user.not_found`: no user of the organization has this id. `role.not_found`: no built-in role and no custom role of the organization has this id. `org.not_found`: the request's organization cannot be determined. */
+        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `user.not_found`: no user of the organization has this id, or your `user.view` does not cover them (held at the organization, or at an account where they hold a role or an active enrollment). `role.not_found`: no built-in role and no custom role of the organization has this id. `org.not_found`: the request's organization cannot be determined. */
         EnrollmentCreateNotFound: {
             headers: {
                 [name: string]: unknown;

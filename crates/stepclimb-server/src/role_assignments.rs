@@ -10,10 +10,11 @@
 //!
 //! `POST` checks in B12's order: the user (404 `user.not_found`), the role (404
 //! `role.not_found`; 409 `role.unknown_builtin` for a built-in role this release does not
-//! define), Manager (422, B13), the scope (404, or 422 for a course), Student and Observer at
-//! the organization or an account (422 `role_assignment.course_role`: they are course-scope
-//! roles, granted only by an enrollment, M1 spec 02 B22), the caller's `role.assign` there (404 when the scope is hidden from the caller, else 403), the
-//! escalation rule (403), and a repeat (409). Both writes take the account tree lock before
+//! define), Manager (422, B13), the scope (404, or 422 for a course), the caller's
+//! `role.assign` there (404 when the scope is hidden from the caller, else 403), the escalation
+//! rule (403), then the repository's refusals: Student and Observer at the organization or an
+//! account (422 `role_assignment.course_role`: course-scope roles, granted only by an
+//! enrollment, M1 spec 02 B22) and a repeat (409). Both writes take the account tree lock before
 //! they read the scope's path, so an account move or delete cannot carry the scope out of the
 //! caller's reach between the check and the write. The role is read `FOR KEY SHARE` in the
 //! transaction that inserts, so a concurrent change of the role waits until the insert commits.
@@ -64,10 +65,6 @@ pub const ROLE_ASSIGNMENTS_PATH: &str = "/api/v1/admin/role-assignments";
 
 /// The built-in role whose scope (reporting lines) does not exist yet (B13).
 const NOT_ASSIGNABLE_YET: [&str; 1] = ["manager"];
-
-/// Built-in course-scope roles, granted only by an enrollment and never assigned at the
-/// organization or an account (M1 spec 02 B22, Q1).
-const COURSE_ROLES: [&str; 2] = ["student", "observer"];
 
 /// The codes this module produces.
 pub mod code {
@@ -335,12 +332,6 @@ pub async fn create_role_assignment(
     if let Scope::Course(_) = at {
         return Err(scope_unavailable(&["scope", "type"]));
     }
-    if is_course_role(&role) {
-        return Err(ApiError::invalid(vec![FieldError::at(
-            &["role_id"],
-            code::ROLE_ASSIGNMENT_COURSE_ROLE,
-        )]));
-    }
     let target = permission_at::<RoleAssign>(&mut tx, grants, at).await?;
     refuse_escalation(grants, &role.permissions, &target)?;
     let new = NewAssignment {
@@ -542,12 +533,6 @@ fn assignment_not_found() -> ApiError {
     )
 }
 
-/// Whether `role` is a built-in course-scope role, which an enrollment grants and an assignment
-/// at the organization or an account may not (M1 spec 02 B22).
-fn is_course_role(role: &roles::Role) -> bool {
-    role.builtin && COURSE_ROLES.contains(&role.key.as_str())
-}
-
 /// 422 `request.invalid` with `role_assignment.scope_unavailable` at `path`.
 fn scope_unavailable(path: &[&str]) -> ApiError {
     ApiError::invalid(vec![FieldError::at(
@@ -565,6 +550,10 @@ fn assignment_error(error: repo::Error) -> ApiError {
         E::RoleNotFound => role_not_found(),
         E::AccountNotFound => Denied::AccountNotFound.into(),
         E::ScopeUnavailable => scope_unavailable(&["scope", "type"]),
+        E::CourseRole => ApiError::invalid(vec![FieldError::at(
+            &["role_id"],
+            code::ROLE_ASSIGNMENT_COURSE_ROLE,
+        )]),
         E::Exists => ApiError::new(
             StatusCode::CONFLICT,
             code::ROLE_ASSIGNMENT_EXISTS,
@@ -692,6 +681,7 @@ mod tests {
             (repo::Error::RoleNotFound, 404, "role.not_found"),
             (repo::Error::AccountNotFound, 404, "account.not_found"),
             (repo::Error::ScopeUnavailable, 422, "request.invalid"),
+            (repo::Error::CourseRole, 422, "request.invalid"),
             (repo::Error::Exists, 409, "role_assignment.exists"),
             (
                 repo::Error::LastOrgAdmin,

@@ -387,6 +387,7 @@ pub async fn list_users(
         source: filter.source.map(Into::into),
         q: filter.q,
         within: user_view_accounts(require.grants()),
+        id: None,
     };
     let scope = require.principal().scope();
     let rows = repo::list(&state.db, scope, &filter, page.after(), page.fetch_limit())
@@ -408,7 +409,7 @@ pub async fn list_users(
 
 /// The accounts whose subtrees a `user.view` holder sees the users of: `None` when it is held at
 /// the organization, which contains every user (spec 09 Q2 (B); M1 spec 02 B21).
-fn user_view_accounts(grants: &Grants) -> Option<Vec<Uuid>> {
+pub(crate) fn user_view_accounts(grants: &Grants) -> Option<Vec<Uuid>> {
     let mut accounts = Vec::new();
     for scope in grants.scopes_with::<UserView>() {
         match scope {

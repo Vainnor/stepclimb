@@ -264,6 +264,37 @@ async fn create_refuses_what_is_outside_the_scope_and_inserts_nothing(pool: PgPo
     assert_eq!(table(&pool).await, before);
 }
 
+/// M1 spec 02 B22: Student and Observer are granted only by an enrollment, so the repository
+/// refuses them at the organization and at an account, whoever calls it, and writes nothing;
+/// Instructor at an account is assignable.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn create_refuses_the_course_scope_roles_above_courses(pool: PgPool) {
+    let a = facility(&pool, "org-a").await;
+    let before = table(&pool).await;
+    for key in ["student", "observer"] {
+        let role = builtin_id(&pool, key).await;
+        for at in [Scope::Organization, Scope::Account(a.tower)] {
+            let result = role_assignments::create(
+                &pool,
+                scope(a.org),
+                &new(a.user, role, at),
+                request_time(),
+                Actor::Instance,
+            )
+            .await;
+            assert_eq!(kind(&result), "CourseRole", "{key} at {at:?}");
+        }
+    }
+    assert_eq!(table(&pool).await, before);
+    let instructor = builtin_id(&pool, "instructor").await;
+    assign(
+        &pool,
+        a.org,
+        new(a.user, instructor, Scope::Account(a.tower)),
+    )
+    .await;
+}
+
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn a_builtin_role_can_be_assigned_in_every_organization(pool: PgPool) {
     let a = facility(&pool, "org-a").await;

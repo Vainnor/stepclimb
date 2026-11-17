@@ -338,4 +338,57 @@ async fn the_enrollments_migration_removes_course_role_assignments_above_courses
             "custom student at org",
         ]
     );
+
+    // Each removal wrote one instance entry, as `role_assignments::delete` would.
+    let entries: Vec<(
+        stepclimb_core::id::Uuid,
+        String,
+        Option<stepclimb_core::id::Uuid>,
+        String,
+        String,
+        serde_json::Value,
+    )> = sqlx::query_as(
+        "SELECT target_id, actor_type, actor_id, action, target_type, data
+             FROM audit_events ORDER BY target_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("read entries");
+    let removed = |name: &str| ids.iter().find(|(n, _)| *n == name).expect("a row").1;
+    let mut expected = vec![
+        (removed("student at org"), student, "organization", org),
+        (removed("student at account"), student, "account", account),
+        (removed("observer at account"), observer, "account", account),
+    ];
+    expected.sort_by_key(|(id, ..)| *id);
+    let expected: Vec<_> = expected
+        .into_iter()
+        .map(|(id, role, scope_type, scope_id)| {
+            (
+                id,
+                "instance".to_owned(),
+                None,
+                "role_assignment.remove".to_owned(),
+                "role_assignment".to_owned(),
+                serde_json::json!({ "before": {
+                    "user_id": user, "role_id": role, "scope_type": scope_type,
+                    "scope_id": scope_id, "source": "local",
+                } }),
+            )
+        })
+        .collect();
+    assert_eq!(entries, expected);
+    let versions: Vec<i32> =
+        sqlx::query_scalar("SELECT DISTINCT get_byte(uuid_send(id), 6) >> 4 FROM audit_events")
+            .fetch_all(&pool)
+            .await
+            .expect("read ids");
+    assert_eq!(versions, [7], "entry ids are UUID v7");
+    let temporary: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'removed_course_role_assignments')",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read catalog");
+    assert!(!temporary, "the work table is dropped");
 }

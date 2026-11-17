@@ -342,7 +342,7 @@ take an organization target in M0, so a `user.view` grant at account scope
 (`09-permissions-and-roles.md` Q2) does not reach them. M1 widens the list
 (`../m1/02-courses-and-enrollments.md` B21): `GET /api/v1/users` takes `user.view` at any scope,
 and held at accounts only it lists the users "in" those accounts' subtrees, who hold a role
-assignment at an account there or an enrollment, in any status, in a course there. The other
+assignment at an account there or an active enrollment in a course there. The other
 users routes keep their organization target.
 
 ## Data

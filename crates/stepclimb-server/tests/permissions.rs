@@ -309,11 +309,16 @@ const TABLE: &[Entry] = &[
     },
     Entry {
         operation_id: "createEnrollment",
-        access: permission(
-            EnrollmentManage::KEY,
-            COURSE_NOT_FOUND,
-            participant_for_tower_course,
-        ),
+        // The user enrolled must be covered by the caller's `user.view` (M1 spec 02 B17, owner
+        // decision of 2026-11-17).
+        access: Access::Permission {
+            key: EnrollmentManage::KEY,
+            target: COURSE_NOT_FOUND,
+            extra: &[UserView::KEY],
+            feature: None,
+            feature_by_target: false,
+            setup: participant_for_tower_course,
+        },
     },
     Entry {
         operation_id: "updateEnrollment",
@@ -1330,12 +1335,19 @@ fn course_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>>
     })
 }
 
-/// A new user enrolled in a published course in Tower with a custom role holding only
-/// `course.participate`, which is left out of the escalation check (M1 spec 02 B24a), so
-/// `enrollment.manage` alone enrolls them.
+/// A user active in a Tower course, so `user.view` at Tower covers them, enrolled in another
+/// published Tower course with a custom role holding only `course.participate`, which is left
+/// out of the escalation check (M1 spec 02 B24a): `enrollment.manage` and `user.view` enroll
+/// them.
 fn participant_for_tower_course(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
-        let (_, user) = org.user().await;
+        let first = org.course(org.tower, true).await;
+        let enrollment = org.enrollment(first).await;
+        let user: Uuid = sqlx::query_scalar("SELECT user_id FROM enrollments WHERE id = $1")
+            .bind(enrollment)
+            .fetch_one(&org.pool)
+            .await
+            .expect("the enrolled user");
         Call {
             params: vec![("course_id", org.course(org.tower, true).await)],
             body: Some(serde_json::json!({

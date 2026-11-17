@@ -9,7 +9,9 @@
 //! caller may hold at the organization, an account containing the course, or through an
 //! enrollment of their own in it.
 //!
-//! `POST` checks in B17's order: the user (404 `user.not_found`), the role (404
+//! `POST` checks in B17's order: the user, who must exist and be covered by the caller's
+//! `user.view` as the users list reaches them (404 `user.not_found` otherwise, owner decision of
+//! 2026-11-17), the role (404
 //! `role.not_found`), Manager and Observer (422 `enrollment.role_unavailable`: Observer waits for
 //! spec 05 I3's named learners, Manager for M4), a built-in role this release does not define
 //! (409 `role.unknown_builtin`), the escalation rule (403 `permission.escalation`), then the
@@ -63,6 +65,7 @@ use crate::{
     role_assignments::{code::USER_NOT_FOUND, refuse_unknown_builtin},
     roles::{code::PERMISSION_ESCALATION, role_not_found},
     timestamp,
+    users::user_view_accounts,
 };
 
 /// The path of the enrollments of one course, under `/api/v1/courses/{course_id}`.
@@ -88,7 +91,7 @@ pub mod code {
 
 problem_responses! {
     EnrollmentListNotFound => "`course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined.",
-    EnrollmentCreateNotFound => "`course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `user.not_found`: no user of the organization has this id. `role.not_found`: no built-in role and no custom role of the organization has this id. `org.not_found`: the request's organization cannot be determined.",
+    EnrollmentCreateNotFound => "`course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `user.not_found`: no user of the organization has this id, or your `user.view` does not cover them (held at the organization, or at an account where they hold a role or an active enrollment). `role.not_found`: no built-in role and no custom role of the organization has this id. `org.not_found`: the request's organization cannot be determined.",
     EnrollmentCreateForbidden => "`permission.denied`: you can see the course but do not hold `enrollment.manage` at a scope containing it. `permission.escalation`: the role has a catalog permission grantable at organization or account scope that you do not hold at the course. `auth.csrf_refused`: the request did not come from this site.",
     EnrollmentCreateConflict => "`enrollment.exists`: the user already holds the role in the course. `role.unknown_builtin`: the role is a built-in role of another Stepclimb release. `course.archived`: an archived course takes no new enrollment. `course.template`: a template takes no enrollment whose role holds `course.participate`.",
     EnrollmentNotFound => "`enrollment.not_found`: no enrollment with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined.",
@@ -315,10 +318,7 @@ pub async fn create_enrollment(
 ) -> Result<Response, ApiError> {
     let (grants, course_id) = (require.grants(), require.target().id);
     let scope = grants.scope();
-    users::get(&state.db, scope, body.user_id)
-        .await
-        .map_err(|error| ApiError::internal(&error))?
-        .ok_or_else(user_not_found)?;
+    refuse_unreachable_user(&state, grants, body.user_id).await?;
     let mut tx = begin(&state).await?;
     let target = recheck_manage(&mut tx, grants, course_id, COURSE_NOT_FOUND).await?;
     // Locked until the commit, so the permissions the escalation check reads are the ones the
@@ -428,6 +428,29 @@ pub async fn delete_enrollment(
         .map_err(enrollment_error)?;
     commit(tx).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// 404 `user.not_found` unless the user exists and the caller's `user.view` covers them: held at
+/// the organization, or at an account whose subtree holds one of the user's account-scope role
+/// assignments or active enrollments, the reach of the users list (B17, B21, owner decision of
+/// 2026-11-17). A user the caller cannot see answers as one that does not exist, so enrolling
+/// does not reveal who is in the organization.
+async fn refuse_unreachable_user(
+    state: &AppState,
+    grants: &Grants,
+    user_id: Uuid,
+) -> Result<(), ApiError> {
+    let covered = match user_view_accounts(grants) {
+        Some(accounts) if accounts.is_empty() => false,
+        within => users::covers(&state.db, grants.scope(), user_id, within)
+            .await
+            .map_err(|error| ApiError::internal(&error))?,
+    };
+    if covered {
+        Ok(())
+    } else {
+        Err(user_not_found())
+    }
 }
 
 /// B18's checks for changing or removing the enrollment `target`, in the write's transaction:

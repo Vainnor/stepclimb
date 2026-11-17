@@ -526,8 +526,8 @@ async fn the_list_filters_and_pages_by_display_name(pool: PgPool) {
     ));
 }
 
-/// B21: a user enrolled in a course of an account is "in" that account for an account-scope
-/// `user.view`; one enrolled elsewhere is not.
+/// B21: a user actively enrolled in a course of an account is "in" that account for an
+/// account-scope `user.view`; one enrolled elsewhere, or only concluded there, is not.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn an_enrollment_puts_a_user_in_the_courses_account(pool: PgPool) {
     let a = Org::new(&pool, "org-a").await;
@@ -541,6 +541,18 @@ async fn an_enrollment_puts_a_user_in_the_courses_account(pool: PgPool) {
     );
     enroll(&pool, a, in_tower, sam, student).await.unwrap();
     enroll(&pool, a, in_enroute, lee, student).await.unwrap();
+    // A concluded enrollment puts no one in the account (owner decision of 2026-11-17).
+    let kim_there = enroll(&pool, a, in_tower, kim, student).await.unwrap().id;
+    enrollments::set_status(
+        &pool,
+        a.scope(),
+        kim_there,
+        Status::Concluded,
+        later_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
     let list = |within: Option<Vec<Uuid>>| {
         let pool = pool.clone();
         async move {
@@ -564,4 +576,102 @@ async fn an_enrollment_puts_a_user_in_the_courses_account(pool: PgPool) {
     );
     assert!(list(Some(vec![])).await.is_empty());
     assert_eq!(list(None).await, [kim, lee, sam]);
+    let covers = |user, within: Option<Vec<Uuid>>| {
+        let pool = pool.clone();
+        async move { users::covers(&pool, a.scope(), user, within).await.unwrap() }
+    };
+    assert!(covers(sam, Some(vec![a.tower])).await);
+    assert!(!covers(lee, Some(vec![a.tower])).await);
+    assert!(!covers(kim, Some(vec![a.tower])).await);
+    assert!(covers(kim, None).await);
+    assert!(!covers(new_id(), None).await);
+}
+
+/// Q5: reactivating a concluded learner enrollment in a template is refused as creating one
+/// is, and changes nothing; concluding one, or reactivating a non-learner role, is allowed.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn reactivating_a_learner_in_a_template_is_refused(pool: PgPool) {
+    let a = Org::new(&pool, "org-a").await;
+    let source = a.course(&pool, a.tower, CourseStatus::Draft).await;
+    let copy = courses::CourseCopy {
+        account_id: a.tower,
+        title: None,
+        code: "TPL".into(),
+        template: true,
+    };
+    let template = courses::copy(
+        &pool,
+        a.scope(),
+        source,
+        &copy,
+        request_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap()
+    .id;
+    let pat = a.user(&pool, "Pat").await;
+    let student = builtin(&pool, "student").await;
+    let id = new_id();
+    sqlx::query(
+        "INSERT INTO enrollments (id, org_id, course_id, user_id, role_id, status)
+         VALUES ($1, $2, $3, $4, $5, 'concluded')",
+    )
+    .bind(id)
+    .bind(a.id)
+    .bind(template)
+    .bind(pat)
+    .bind(student)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let set = |id, to| {
+        let pool = pool.clone();
+        async move {
+            enrollments::set_status(&pool, a.scope(), id, to, later_time(), Actor::Instance).await
+        }
+    };
+    assert!(matches!(
+        set(id, Status::Active).await,
+        Err(Error::Template)
+    ));
+    let stored = enrollments::get(&pool, a.scope(), id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.status, Status::Concluded);
+    let designer = builtin(&pool, "course_designer").await;
+    let staff = enroll(&pool, a, template, pat, designer).await.unwrap().id;
+    set(staff, Status::Concluded).await.unwrap();
+    set(staff, Status::Active).await.unwrap();
+}
+
+/// `m0/03` B6's serialization with enrollments: `roles::key_share_custom_of_user` locks the
+/// custom roles of the user's enrollments too, so a change of such a role waits for the
+/// caller's transaction.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_users_escalation_lock_covers_enrollment_roles(pool: PgPool) {
+    let a = Org::new(&pool, "org-a").await;
+    let course = a.course(&pool, a.tower, CourseStatus::Draft).await;
+    let pat = a.user(&pool, "Pat").await;
+    let role = a.custom_role(&pool, &[CourseView::KEY]).await;
+    enroll(&pool, a, course, pat, role).await.unwrap();
+
+    let mut checking = pool.begin().await.unwrap();
+    roles::key_share_custom_of_user(&mut checking, a.scope(), pat)
+        .await
+        .unwrap();
+    let mut changing = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL lock_timeout = '200ms'")
+        .execute(&mut *changing)
+        .await
+        .unwrap();
+    let locked = roles::lock_custom(&mut changing, a.scope(), role).await;
+    assert!(locked.is_err(), "the role change waits: {locked:?}");
+    drop(changing);
+    checking.commit().await.unwrap();
+    let mut changing = pool.begin().await.unwrap();
+    roles::lock_custom(&mut changing, a.scope(), role)
+        .await
+        .expect("free once the check commits");
 }

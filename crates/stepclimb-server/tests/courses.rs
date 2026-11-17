@@ -1437,12 +1437,13 @@ async fn t19a_a_draft_or_template_is_not_found_without_view_all_on_every_route(p
     let viewer = f
         .custom_holder(t.org, &["course.view"], &[Scope::Account(t.tower)])
         .await;
-    let student = f.holder(t.org, "student", Scope::Account(t.tower)).await;
     // `course.view_all` without `course.manage`: sees the draft, so the route's 403.
     let designer = f
         .holder(t.org, "course_designer", Scope::Account(t.tower))
         .await;
     let draft = f.course(t.org, t.tower, "D1").await;
+    // A Student enrolled in the draft; a template takes no learner (B17).
+    let student = f.enrolled(t.org, "student", &[draft]).await;
     let template = f.course(t.org, t.tower, "T1").await;
     make_template(&f, template).await;
     let before = f.rows(t.org).await;
@@ -1558,8 +1559,9 @@ async fn a_draft_courses_modules_and_items_are_not_found_without_view_all(pool: 
     let viewer = f
         .custom_holder(t.org, &["course.view"], &[Scope::Account(t.tower)])
         .await;
-    let student = f.holder(t.org, "student", Scope::Account(t.tower)).await;
     let draft = outline(&f, "D1").await;
+    // A Student enrolled in the draft; a template takes no learner (B17).
+    let student = f.enrolled(t.org, "student", &[draft.0]).await;
     let template = outline(&f, "T1").await;
     make_template(&f, template.0).await;
     let before = f.rows(t.org).await;
