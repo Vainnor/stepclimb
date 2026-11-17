@@ -91,7 +91,8 @@ class Scratch(unittest.TestCase):
     everyone else's pushes come from)."""
 
     def setUp(self) -> None:
-        self.tmp = Path(tempfile.mkdtemp(prefix="release-"))
+        # Resolved, because git reports worktree paths through symlinks such as macOS's /tmp.
+        self.tmp = Path(tempfile.mkdtemp(prefix="release-")).resolve()
         self.addCleanup(shutil.rmtree, self.tmp)
         config = self.tmp / "gitconfig"
         config.write_text("[user]\n\tname = Test\n\temail = test@example.invalid\n"
