@@ -5,10 +5,9 @@
 // name, the type the server read from its bytes and when it last changed, which keeps the table to
 // three columns that fit a 375 px screen. The type is a short label (B20a); the full MIME type is
 // in the label's tooltip text and read to screen readers after it. The actions column is there
-// only for a person who may change the course's content. Rows are keyed by the course file's id
-// (a folder's by its path), so when a row leaves the list after its dialog closes (deleted, moved
-// out, a folder renamed), React Aria moves focus to the row now in its place, or to the table
-// when the folder is empty, never to the page's body.
+// only for a person who may change the course's content. When a row leaves the list after its
+// dialog closed (deleted, moved out, a folder renamed), focus goes to the row now in its place,
+// or to the table when the folder is empty, never to the page's body (`useFocusAfterRemoval`).
 import { FileIcon, FolderIcon, FolderOpenIcon } from "@phosphor-icons/react";
 import {
   DataTable,
@@ -22,7 +21,7 @@ import {
   useStepclimbStrings,
   VisuallyHidden,
 } from "@stepclimb/ui";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { CourseFile, FolderEntry } from "./course-files";
 import { FileActions, FolderActions } from "./file-actions";
 import { fileTypeLabel } from "./file-type";
@@ -103,7 +102,10 @@ function FileDetails({ file }: { file: CourseFile }) {
   );
 }
 
-function useColumns({ courseId, canEdit, folderHref }: FileTableProps) {
+function useColumns(
+  { courseId, canEdit, folderHref }: FileTableProps,
+  onClosed: (rowId: string) => void,
+) {
   const { t } = useStepclimbStrings();
   const file = (row: EntryRow): CourseFile | undefined =>
     row.kind === "file" ? row.file : undefined;
@@ -132,19 +134,52 @@ function useColumns({ courseId, canEdit, folderHref }: FileTableProps) {
       align: "end",
       render: (row) =>
         row.kind === "folder" ? (
-          <FolderActions courseId={courseId} path={row.path} name={row.name} />
+          <FolderActions
+            courseId={courseId}
+            path={row.path}
+            name={row.name}
+            onClosed={() => onClosed(row.id)}
+          />
         ) : (
-          <FileActions file={row.file} />
+          <FileActions file={row.file} onClosed={() => onClosed(row.id)} />
         ),
     });
   }
   return columns;
 }
 
+/**
+ * Focus for a row that leaves the list after its dialog closed. React Aria returns focus to the
+ * row's actions button one animation frame after the dialog unmounts, and moves it on to a
+ * neighbor when a focused row leaves the table. When the refetch that removes the row lands
+ * before that frame, the button is gone and focus is on the page's body; then this puts it on the
+ * row now at that place, the last row, or the table when the folder is empty. Focus anywhere
+ * else is left where it is.
+ */
+function useFocusAfterRemoval(rows: readonly EntryRow[]) {
+  const box = useRef<HTMLDivElement>(null);
+  const closed = useRef<{ id: string; index: number }>(undefined);
+  useEffect(() => {
+    const row = closed.current;
+    if (row === undefined || rows.some((r) => r.id === row.id)) return;
+    closed.current = undefined;
+    if (document.activeElement !== null && document.activeElement !== document.body) return;
+    const grid = box.current?.querySelector<HTMLElement>('[role="grid"]');
+    const listed = [...(grid?.querySelectorAll<HTMLElement>('tbody > [role="row"]') ?? [])];
+    const target = rows.length === 0 ? grid : listed[Math.min(row.index, listed.length - 1)];
+    target?.focus();
+  }, [rows]);
+  const onClosed = (id: string) => {
+    closed.current = { id, index: rows.findIndex((r) => r.id === id) };
+  };
+  return { box, onClosed };
+}
+
 export function FileTable(props: FileTableProps) {
   const { t } = useStepclimbStrings();
   const rows = useMemo(() => props.entries.map(rowOf), [props.entries]);
-  const columns = useColumns(props);
+  const focus = useFocusAfterRemoval(rows);
+  const columns = useColumns(props, focus.onClosed);
   const empty =
     props.folder === TOP_FOLDER
       ? props.canEdit
@@ -152,17 +187,19 @@ export function FileTable(props: FileTableProps) {
         : t("files.empty.course")
       : t("files.empty.folder");
   return (
-    <DataTable
-      aria-label={props.label}
-      columns={columns}
-      rows={rows}
-      isLoading={props.isLoading}
-      emptyState={
-        <EmptyState icon={props.folder === TOP_FOLDER ? FileIcon : FolderOpenIcon}>
-          {empty}
-        </EmptyState>
-      }
-      pagination={props.pagination}
-    />
+    <div ref={focus.box} className="contents">
+      <DataTable
+        aria-label={props.label}
+        columns={columns}
+        rows={rows}
+        isLoading={props.isLoading}
+        emptyState={
+          <EmptyState icon={props.folder === TOP_FOLDER ? FileIcon : FolderOpenIcon}>
+            {empty}
+          </EmptyState>
+        }
+        pagination={props.pagination}
+      />
+    </div>
   );
 }
