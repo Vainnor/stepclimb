@@ -304,7 +304,13 @@ describe("ModuleBoard", () => {
     // The reload brings another author's order, with the item now last.
     const [phraseology, readbacks, practice] = radio.items;
     if (!phraseology || !readbacks || !practice) throw new Error("fixture");
-    (document.activeElement as HTMLElement | null)?.blur();
+    // The menu hands focus back to its trigger in an animation frame, and React Aria moves it to
+    // the row when the order goes back. Let it settle on the row before focus leaves the board,
+    // so only the board can bring it back after the reload, which is what this test is about.
+    const place = () => document.activeElement?.closest("[data-key]")?.getAttribute("data-key");
+    await waitFor(() => expect(place()).toBe("item:i1"));
+    act(() => (document.activeElement as HTMLElement).blur());
+    expect(document.activeElement).toBe(document.body);
     act(() => caller.set([{ ...radio, items: [readbacks, practice, phraseology] }, ground]));
     await waitFor(() =>
       expect(document.activeElement).toBe(screen.getByRole("button", { name: "Move Phraseology" })),
@@ -316,7 +322,11 @@ describe("ModuleBoard", () => {
     const { user, caller } = setup();
     await choose(user, "Move Phraseology", "Move down");
     await screen.findByText("Moved Phraseology to position 2 of 3 in Radio basics.");
-    (document.activeElement as HTMLElement | null)?.blur();
+    const move = screen.getByRole("button", { name: "Move Phraseology" });
+    // As in the stale test: the menu's focus hand-back lands first, then focus leaves the board.
+    await waitFor(() => expect(document.activeElement).toBe(move));
+    act(() => move.blur());
+    expect(document.activeElement).toBe(document.body);
     // Another author renames a module; the page refetches.
     act(() => caller.set([radio, { ...ground, title: "Ground" }]));
     await screen.findByRole("row", { name: /^2 Ground\b/ });
