@@ -148,7 +148,7 @@ The Nix dev shell (`flake.nix`) provides every tool below.
   lockfile-only PR (`CONTRIBUTING.md` -> Monthly dependency update). A framework or major-version bump goes through
   `dependency-researcher` first. Before bumping `react-aria-components`, read its release notes for
   the `UNSTABLE_` toast parts Stepclimb UI builds Toast on (ADR 0024). There is no Dependabot (owner, 13 Nov 2026).
-- The remote is the private GitHub repository `Vainnor/stepclimb`; `next` is the default branch.
+- The remote is the public GitHub repository `Vainnor/stepclimb`; `next` is the default branch.
   A GitHub ruleset on `main` and `next` enforces PR-only, squash-only, and no force push or
   deletion (ADR 0018). It requires no status checks: there is no hosted CI (ADR 0021). `.claude/hooks/git-guard` refuses the
   same pushes locally.
@@ -206,9 +206,9 @@ installed by hand: Rust via rustup, `just`, `cargo-nextest`, `cargo-deny`, `sqlx
 Compose (with buildx), and on Linux WebKitGTK 4.1 for the Tauri app and QEMU's user-mode
 emulators (`qemu-aarch64`) for `just image-check`.
 
-There is no hosted CI and no GitHub Actions (ADR 0021): Actions minutes on a private repository
-run out too fast. `just ci` on the committed HEAD, on the machine the change was made on, is the
-merge gate, and every "done" names that machine's OS. `bin/ci-stamp.sh` records the pass and the
+There is no hosted CI and no GitHub Actions (ADR 0021, decided while the repository was private,
+when Actions minutes ran out too fast). `just ci` on the committed HEAD, on the machine the change
+was made on, is the merge gate, and every "done" names that machine's OS. `bin/ci-stamp.sh` records the pass and the
 `pr-gate` hook refuses `gh pr create` without it.
 
 Run the gate as plain `just ci` (`nix develop -c just ci`), from as many worktrees as you like:

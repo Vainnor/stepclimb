@@ -19,6 +19,7 @@
 ## Certification
 
 - [ ] I certify this contribution under the [Developer Certificate of Origin](https://developercertificate.org/) (`CONTRIBUTING.md`)
+- [ ] I signed the [Individual CLA](https://github.com/Vainnor/stepclimb/blob/next/docs/cla/individual.md) through CLA Assistant, or my employer signed the [Entity CLA](https://github.com/Vainnor/stepclimb/blob/next/docs/cla/entity.md) (`CONTRIBUTING.md`; not needed for the maintainer's own pull requests)
 
 ## Gates
 

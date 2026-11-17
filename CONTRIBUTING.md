@@ -36,6 +36,27 @@ the project's licenses (AGPL-3.0-or-later; Apache-2.0 for `packages/api-client`)
 template has a box for it. No `Signed-off-by` line is needed: `Closes #N` stays the only commit
 trailer.
 
+## Contributor License Agreement
+
+Every outside contribution also needs a signed Contributor License Agreement (CLA) before it is
+merged (ADR 0033). You keep the copyright in your work and give the maintainer a license to it,
+including the right to license it under other terms, commercial ones included. Whatever else it
+is licensed under, your contribution stays available under the license Stepclimb uses for it on
+the day you submit it (AGPL-3.0-or-later; Apache-2.0 for `packages/api-client`).
+
+- **Individuals** sign the [Individual CLA](docs/cla/individual.md) once, through CLA Assistant:
+  it comments on your first pull request with a link to sign. If you are under 18, a parent or
+  guardian signs a copy instead and emails it to **contact@vainnor.com**.
+- **Companies.** If your employer owns what you write, your employer signs the
+  [Entity CLA](docs/cla/entity.md), lists the GitHub accounts it covers and emails the signed copy
+  to **contact@vainnor.com**. The maintainer adds it to
+  [`docs/cla/entities.md`](docs/cla/entities.md). CLA Assistant cannot see an entity signature,
+  so each covered account also signs the Individual CLA through CLA Assistant; section 3(c) of
+  that agreement allows this once the employer has signed.
+- **Work you did not write.** If part of a change is someone else's work, mark it in the pull
+  request, name its source and license, and do not certify it as your own. The maintainer decides
+  whether it can be accepted.
+
 ## Dependencies
 
 Every version is pinned exactly and is at least 14 days old when it is added
