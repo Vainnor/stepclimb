@@ -26,6 +26,20 @@ export function dueDays(
   return { overdue, days: overdue ? today.compare(dueDay) : dueDay.compare(today) };
 }
 
+/** Whether `due` has passed, and the badge's words for it ("3 days overdue"). */
+export function useDueLabel(
+  due: Date,
+  now: Date,
+  timeZone: string,
+): { overdue: boolean; label: string } {
+  const { t } = useStepclimbStrings();
+  const { overdue, days } = dueDays(due, now, timeZone);
+  return {
+    overdue,
+    label: overdue ? t("dueBadge.overdue", { days }) : t("dueBadge.due", { days }),
+  };
+}
+
 export const dueBadge = tv({
   slots: {
     root: [
@@ -52,10 +66,8 @@ export interface DueBadgeProps {
 }
 
 export function DueBadge({ due, now, timeZone, className }: DueBadgeProps) {
-  const { t } = useStepclimbStrings();
-  const { overdue, days } = dueDays(due, now, timeZone);
+  const { overdue, label } = useDueLabel(due, now, timeZone);
   const styles = dueBadge({ overdue });
-  const label = overdue ? t("dueBadge.overdue", { days }) : t("dueBadge.due", { days });
   return (
     <span
       data-slot="due-badge"

@@ -267,7 +267,7 @@ test.describe("at 1280 px @desktop", () => {
         const box = icon?.getBoundingClientRect();
         return {
           drawing: icon?.innerHTML ?? "",
-          name: el.textContent ?? "",
+          name: el.getAttribute("aria-label") ?? "",
           visible:
             box !== undefined &&
             box.width > 0 &&
@@ -298,6 +298,7 @@ test.describe("at 1280 px @desktop", () => {
             scale: style.scale,
             transition: ms(style.transitionDuration),
             animation: style.animationName,
+            ease: style.animationTimingFunction,
             duration: ms(style.animationDuration),
             delay: ms(style.animationDelay),
           };
@@ -321,15 +322,34 @@ test.describe("at 1280 px @desktop", () => {
     await expect
       .poll(() => page.evaluate(() => (window as { railRuns?: string[] }).railRuns))
       .toEqual(["scale"]);
-    // The last completion completes the course: the three segments fill in turn over 320 ms.
+    // The last completion completes the course: every segment fills in turn within 320 ms, on the
+    // exponential ease-out token.
     await next.click();
     await next.click();
     await next.click();
     // Mid-animation, so the scale is left out here and read once the fill has run.
     expect((await motion()).map(({ scale: _, ...m }) => m)).toEqual([
-      { transition: 320, animation: "sc-rail-fill", duration: 106.67, delay: 0 },
-      { transition: 320, animation: "sc-rail-fill", duration: 106.67, delay: 106.67 },
-      { transition: 320, animation: "sc-rail-fill", duration: 106.67, delay: 213.33 },
+      {
+        transition: 320,
+        animation: "sc-rail-fill",
+        ease: "cubic-bezier(0.16, 1, 0.3, 1)",
+        duration: 106.67,
+        delay: 0,
+      },
+      {
+        transition: 320,
+        animation: "sc-rail-fill",
+        ease: "cubic-bezier(0.16, 1, 0.3, 1)",
+        duration: 106.67,
+        delay: 106.67,
+      },
+      {
+        transition: 320,
+        animation: "sc-rail-fill",
+        ease: "cubic-bezier(0.16, 1, 0.3, 1)",
+        duration: 106.67,
+        delay: 213.33,
+      },
     ]);
     await expect.poll(async () => (await motion()).map((m) => m.scale)).toEqual(["1", "1", "1"]);
   });

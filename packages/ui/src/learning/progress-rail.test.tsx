@@ -57,14 +57,19 @@ describe("ProgressRail", () => {
 
   it("names each node with its title and learning state (T2)", () => {
     renderWithStrings(rail());
-    expect(links().map((l) => l.textContent)).toEqual([
+    expect(links().map((l) => l.getAttribute("aria-label"))).toEqual([
       "Radio basics, Complete",
       "Phraseology, In progress",
       "Readback drill, Available",
-      "Clearance delivery, Overdue3 days overdue",
+      "Clearance delivery, 3 days overdue",
       "Review, Needs review",
       "Checkout, Locked",
     ]);
+    // The visible title starts the name (WCAG 2.5.3).
+    for (const link of links()) {
+      const title = link.querySelector('[data-slot="progress-rail-title"]')?.textContent ?? "";
+      expect(link.getAttribute("aria-label")?.startsWith(`${title}, `)).toBe(true);
+    }
   });
 
   it("draws each state with its own icon and token (T2)", () => {
@@ -94,14 +99,38 @@ describe("ProgressRail", () => {
       "border-state-overdue",
     );
     expect(overdue.querySelector('[data-slot="due-badge"]')).toHaveTextContent("3 days overdue");
+    // The due label is part of the name, so the name holds all the text the link draws.
+    expect(overdue).toHaveAccessibleName("Clearance delivery, 3 days overdue");
+    expect(overdue).not.toHaveAttribute("aria-describedby");
+  });
+
+  it("keeps the overdue ring on a current overdue node and rings it in the brand outside", () => {
+    renderWithStrings(rail({ currentId: "d" }));
+    const node = screen
+      .getByRole("link", { current: "page" })
+      .querySelector('[data-slot="progress-rail-node"]');
+    expect(node).toHaveClass("border-state-overdue", "outline-2", "outline-brand");
+    expect(node).not.toHaveClass("border-brand");
+  });
+
+  it("rings a current node in every other state in the brand", () => {
+    for (const id of ["a", "b", "e", "f"]) {
+      const { unmount } = renderWithStrings(rail({ currentId: id }));
+      const node = screen
+        .getByRole("link", { current: "page" })
+        .querySelector('[data-slot="progress-rail-node"]');
+      expect(node).toHaveClass("border-2", "border-brand");
+      unmount();
+    }
   });
 
   it("keeps a locked node focusable and announces what unlocks it (T4)", async () => {
     renderWithStrings(rail());
     const locked = screen.getByRole("link", { name: /Checkout/ });
     expect(locked).toHaveAttribute("href", "/c/1/m/1/i/f");
+    // Two reasons, joined as the locale lists units.
     expect(locked).toHaveAccessibleDescription(
-      "Unlocks after Clearance delivery. Opens on Mar 20, 2026, 11:00 AM EDT.",
+      "Unlocks after Clearance delivery, Opens on Mar 20, 2026, 11:00 AM EDT",
     );
     // Only a locked node has a description.
     expect(screen.getByRole("link", { name: /Radio basics/ })).not.toHaveAttribute(
@@ -112,7 +141,7 @@ describe("ProgressRail", () => {
     await userEvent.keyboard("{End}");
     expect(locked).toHaveFocus();
     expect(await screen.findByRole("tooltip")).toHaveTextContent(
-      "Unlocks after Clearance delivery.Opens on Mar 20, 2026, 11:00 AM EDT.",
+      "Unlocks after Clearance deliveryOpens on Mar 20, 2026, 11:00 AM EDT",
     );
   });
 
@@ -138,10 +167,10 @@ describe("ProgressRail", () => {
       }),
     );
     expect(screen.getByRole("link", { name: /Tower/ })).toHaveAccessibleDescription(
-      "Unlocks after Ground and Delivery.",
+      "Unlocks after Ground and Delivery",
     );
     expect(screen.getByRole("link", { name: /Approach/ })).toHaveAccessibleDescription(
-      "Unlocks when its module unlocks.",
+      "Unlocks when its module unlocks",
     );
   });
 
@@ -213,12 +242,19 @@ describe("ProgressRail", () => {
       "4",
       "5",
     ]);
-    // The fill's animation runs when the list carries data-celebrate.
+    // The fill's animation runs when the list carries data-celebrate, on the expo ease-out token.
     expect(steps[0]?.querySelector('[data-slot="progress-rail-fill"]')?.className).toContain(
-      "group-data-[celebrate]/rail:animate-[sc-rail-fill",
+      "group-data-[celebrate]/rail:animate-[sc-rail-fill_calc(var(--sc-motion-slow)/var(--rail-segments))_var(--sc-ease-out-expo)_both]",
     );
     rerender(rail({ items: complete, courseComplete: true }));
     expect(list()).not.toHaveAttribute("data-celebrate");
+  });
+
+  it("fills every segment once the course is complete, even after items not complete", () => {
+    const { container } = renderWithStrings(rail({ courseComplete: true }));
+    const fills = [...container.querySelectorAll('[data-slot="progress-rail-fill"]')];
+    expect(fills).toHaveLength(items.length - 1);
+    for (const fill of fills) expect(fill).toHaveClass("scale-y-100");
   });
 
   it("shows the empty state for a module without items", () => {

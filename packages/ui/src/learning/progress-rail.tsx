@@ -6,19 +6,19 @@
 // says why it is locked) and carries what unlocks it as its description, shown on hover and focus.
 //
 // It holds the one celebratory motion in the product: a segment fills over the slow motion token
-// (320 ms) when its item completes while the rail is shown, and when the course completes the
-// whole rail fills once, segment after segment, in the same time. Both are CSS, so base.css's
-// reduced-motion rule makes them instant.
+// (320 ms) when its item completes while the rail is shown, and when the course completes every
+// segment fills, one after another, within the same time. Both are CSS on the motion tokens, so
+// base.css's reduced-motion rule makes them instant.
 import { CircleIcon } from "@phosphor-icons/react";
 import { type CSSProperties, type KeyboardEvent, type ReactNode, useId, useState } from "react";
+import { Link as AriaLink } from "react-aria-components";
 import { tv } from "../lib/tv";
-import { Link } from "../primitives/link";
 import { Tooltip, TooltipTrigger } from "../primitives/tooltip";
 import { VisuallyHidden } from "../primitives/visually-hidden";
 import { useStepclimbStrings } from "../strings/strings";
 import { Icon } from "../theme/icon";
-import { DueBadge } from "./due-badge";
-import { type LockReason, useLockReasonText } from "./lock-reason";
+import { DueBadge, useDueLabel } from "./due-badge";
+import { type LockReason, useLockReasonList, useLockReasonText } from "./lock-reason";
 import { type LearningState, learningStateIcons } from "./status-chip";
 
 interface ProgressRailItemBase {
@@ -42,8 +42,8 @@ export const progressRail = tv({
     root: "group/rail flex flex-col font-ui text-sm text-fg-default",
     step: "relative",
     link: [
-      "flex min-h-(--sc-control-h) gap-3 rounded-sm ps-2 pe-3 text-fg-default no-underline outline-none",
-      "pointer-coarse:min-h-(--sc-control-touch)",
+      "flex min-h-(--sc-control-h) cursor-pointer gap-3 rounded-sm ps-2 pe-3 text-fg-default outline-none",
+      "pointer-coarse:min-h-(--sc-control-touch) transition-colors duration-fast ease-out-expo",
       "data-[hovered]:bg-sunken data-[pressed]:bg-sunken",
       "data-[focus-visible]:ring-2 data-[focus-visible]:ring-inset data-[focus-visible]:ring-ring",
     ],
@@ -58,8 +58,8 @@ export const progressRail = tv({
       // Over the segment's own border, which takes its whole width.
       "absolute inset-y-0 -start-0.5 w-0.5 origin-top border-s-2 border-brand",
       "transition-[scale] duration-slow ease-out-expo",
-      // The course-completion fill: each segment in turn, all of them over the slow token.
-      "group-data-[celebrate]/rail:animate-[sc-rail-fill_calc(var(--sc-motion-slow)/var(--rail-segments))_linear_both]",
+      // The course-completion fill: each segment in turn, all of them within the slow token.
+      "group-data-[celebrate]/rail:animate-[sc-rail-fill_calc(var(--sc-motion-slow)/var(--rail-segments))_var(--sc-ease-out-expo)_both]",
       "group-data-[celebrate]/rail:[animation-delay:calc(var(--sc-motion-slow)*var(--rail-step)/var(--rail-segments))]",
     ],
     content: "flex min-w-0 flex-1 flex-col items-start gap-1 py-2",
@@ -80,11 +80,17 @@ export const progressRail = tv({
     filled: { true: { fill: "scale-y-100" }, false: { fill: "scale-y-0" } },
   },
   compoundVariants: [
-    // The current item is ringed in the brand color unless the overdue ring already marks it.
+    // The current item is ringed in the brand color. An overdue item keeps its overdue ring, and
+    // the brand ring goes around it.
     {
       current: true,
       state: ["locked", "available", "progress", "complete", "review"],
       class: { node: "border-2 border-brand" },
+    },
+    {
+      current: true,
+      state: "overdue",
+      class: { node: "outline-2 outline-offset-1 outline-brand" },
     },
     { current: true, state: "available", class: { nodeIcon: "size-2.5 text-brand" } },
   ],
@@ -96,8 +102,8 @@ export interface ProgressRailProps {
   /** The item being shown, marked as the current page. */
   currentId?: string;
   /**
-   * Whether the course is complete for the learner. When it turns true while the rail is shown,
-   * the whole rail fills once; a rail first drawn complete does not.
+   * Whether the course is complete for the learner: every segment is then filled. When it turns
+   * true while the rail is shown, the whole rail fills once; a rail first drawn complete does not.
    */
   courseComplete?: boolean;
   /** The user's IANA time zone (`users.tz`), for due labels and opening dates. */
@@ -148,6 +154,7 @@ export function ProgressRail({
           index={index}
           last={index === items.length - 1}
           current={item.id === currentId}
+          courseComplete={courseComplete}
           timeZone={timeZone}
           now={now}
         />
@@ -196,47 +203,27 @@ interface RailStepProps {
   index: number;
   last: boolean;
   current: boolean;
+  courseComplete: boolean;
   timeZone: string;
   now: Date;
 }
 
-function RailStep({ item, index, last, current, timeZone, now }: RailStepProps) {
-  const { t } = useStepclimbStrings();
+function RailStep({ item, index, last, current, courseComplete, timeZone, now }: RailStepProps) {
   const reasonText = useLockReasonText(timeZone);
+  const reasonList = useLockReasonList();
   const reasonsId = useId();
-  const styles = progressRail({ state: item.state, current, filled: item.state === "complete" });
+  const styles = progressRail();
   const reasons = item.state === "locked" ? item.lockReasons.map(reasonText) : [];
   const link = (
-    <Link
-      data-slot="progress-rail-link"
-      data-state={item.state}
-      href={item.href}
-      aria-current={current ? "page" : undefined}
-      aria-describedby={reasons.length > 0 ? reasonsId : undefined}
-      className={styles.link()}
-    >
-      <span data-slot="progress-rail-track" className={styles.track()}>
-        <span data-slot="progress-rail-node" className={styles.node()}>
-          <NodeIcon state={item.state} current={current} className={styles.nodeIcon()} />
-        </span>
-        {last ? null : (
-          <span data-slot="progress-rail-segment" aria-hidden="true" className={styles.segment()}>
-            <span data-slot="progress-rail-fill" className={styles.fill()} />
-          </span>
-        )}
-      </span>
-      <span data-slot="progress-rail-content" className={styles.content()}>
-        <span data-slot="progress-rail-title" className={styles.title()}>
-          {item.title}
-          <VisuallyHidden data-slot="progress-rail-state">
-            {`, ${t("statusChip.state", { state: item.state })}`}
-          </VisuallyHidden>
-        </span>
-        {item.state === "overdue" ? (
-          <DueBadge due={item.due} now={now} timeZone={timeZone} />
-        ) : null}
-      </span>
-    </Link>
+    <RailLink
+      item={item}
+      last={last}
+      current={current}
+      filled={courseComplete || item.state === "complete"}
+      describedBy={reasons.length > 0 ? reasonsId : undefined}
+      timeZone={timeZone}
+      now={now}
+    />
   );
   return (
     <li
@@ -260,12 +247,77 @@ function RailStep({ item, index, last, current, timeZone, now }: RailStepProps) 
             </Tooltip>
           </TooltipTrigger>
           <VisuallyHidden id={reasonsId} data-slot="progress-rail-reasons">
-            {reasons.join(" ")}
+            {reasonList(reasons)}
           </VisuallyHidden>
         </>
       )}
     </li>
   );
+}
+
+interface RailLinkProps {
+  item: ProgressRailItem;
+  last: boolean;
+  current: boolean;
+  filled: boolean;
+  describedBy: string | undefined;
+  timeZone: string;
+  now: Date;
+}
+
+/** The node, the segment after it and the title, as one link named by the title and state. */
+function RailLink({ item, last, current, filled, describedBy, timeZone, now }: RailLinkProps) {
+  const styles = progressRail({ state: item.state, current, filled });
+  const name = useRailItemName(item, timeZone, now);
+  return (
+    <AriaLink
+      data-slot="progress-rail-link"
+      data-state={item.state}
+      href={item.href}
+      aria-label={name}
+      aria-current={current ? "page" : undefined}
+      aria-describedby={describedBy}
+      className={styles.link()}
+    >
+      <span data-slot="progress-rail-track" className={styles.track()}>
+        <span data-slot="progress-rail-node" className={styles.node()}>
+          <NodeIcon state={item.state} current={current} className={styles.nodeIcon()} />
+        </span>
+        {last ? null : (
+          <span data-slot="progress-rail-segment" aria-hidden="true" className={styles.segment()}>
+            <span data-slot="progress-rail-fill" className={styles.fill()} />
+          </span>
+        )}
+      </span>
+      <span data-slot="progress-rail-content" className={styles.content()}>
+        <span data-slot="progress-rail-title" className={styles.title()}>
+          {item.title}
+        </span>
+        {item.state === "overdue" ? (
+          <>
+            {/* Separates the title's text from the badge's where text is read in one run (axe's
+                label-in-name check); a flex container draws no white space between items. */}{" "}
+            <DueBadge due={item.due} now={now} timeZone={timeZone} />
+          </>
+        ) : null}
+      </span>
+    </AriaLink>
+  );
+}
+
+/**
+ * The link's name: the title, then the state. An overdue item's state is its due label, which the
+ * link shows, so the name holds all the text the link draws (WCAG 2.5.3).
+ */
+function useRailItemName(item: ProgressRailItem, timeZone: string, now: Date): string {
+  const { t } = useStepclimbStrings();
+  // Called for every item, so the hooks run in the same order; only an overdue item uses it.
+  const due = useDueLabel(item.state === "overdue" ? item.due : now, now, timeZone);
+  if (item.state === "overdue") {
+    return t("progressRail.overdueItem", { title: item.title, due: due.label });
+  }
+  const state = t("statusChip.state", { state: item.state });
+  return t("progressRail.item", { title: item.title, state });
 }
 
 /** The state's icon (spec 16 B3); the current item, while available, is a dot in its ring. */

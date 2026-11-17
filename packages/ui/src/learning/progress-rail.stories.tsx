@@ -40,7 +40,7 @@ const meta = {
       description: {
         component: `A module's items drawn as a route: a line with one node per item, where the segment after a complete item fills with the brand color. Each node shows the item's learning state with its icon (complete, in progress, available, overdue with its due label, locked, needs review), and the current item is ringed. It is an ordered list of links: Up and Down move between them, Home and End jump to the ends. A locked item stays a focusable link and says what unlocks it, on hover and focus and to screen readers.
 
-When an item completes while the rail is shown, its segment fills over 320 ms; when the course completes, the whole rail fills once. That is the only celebratory motion in Stepclimb, and it is instant with reduced motion.
+When an item completes while the rail is shown, its segment fills over 320 ms; when the course completes, every segment fills, one after another, within the same 320 ms. That is the only celebratory motion in Stepclimb, and it is instant with reduced motion.
 
 **Usage.** \`<ProgressRail aria-label={module.title} items={railItems} currentId={item.id} courseComplete={course.complete} timeZone={me.tz} now={clock.now()} />\`. Resolve the lock reasons' module and item ids to the titles the learner sees. Beside the item view on wide screens; in a bottom \`Sheet\` behind a button under 768 px.
 
@@ -91,22 +91,112 @@ export const AllStates: Story = {
   },
 };
 
-/** The current item in each state it can be in: ringed, with a dot while available. */
+const currentItems: ProgressRailItem[] = [
+  { id: "available", title: "Available", href: "#1", state: "available" },
+  { id: "progress", title: "In progress", href: "#2", state: "progress" },
+  { id: "complete", title: "Complete", href: "#3", state: "complete" },
+  { id: "review", title: "Needs review", href: "#4", state: "review" },
+  {
+    id: "overdue",
+    title: "Overdue",
+    href: "#5",
+    state: "overdue",
+    due: new Date("2026-03-09T14:00:00Z"),
+  },
+  {
+    id: "locked",
+    title: "Locked",
+    href: "#6",
+    state: "locked",
+    lockReasons: [{ kind: "module_locked" }],
+  },
+];
+
+/**
+ * The current item in each state it can be in: ringed in the brand color, with a dot while
+ * available. An overdue item keeps its overdue ring and gets the brand ring around it.
+ */
 export const Current: Story = {
   render: (args) => (
     <div className="flex flex-wrap gap-6">
-      {(["available", "progress", "complete"] as const).map((state) => (
+      {currentItems.map((item) => (
         <ProgressRail
           {...args}
-          key={state}
-          aria-label={state}
+          key={item.id}
+          aria-label={item.title}
           className="w-56"
-          currentId="x"
-          items={[{ id: "x", title: "Readback drill", href: "#x", state }]}
+          currentId={item.id}
+          items={[item]}
         />
       ))}
     </div>
   ),
+};
+
+const readback = (canvasElement: HTMLElement) =>
+  within(canvasElement).findByRole("link", { name: /^Readback drill/ });
+
+/**
+ * Hovers `link` until React Aria marks it hovered: a hover sent as the story first renders can
+ * arrive before React Aria listens, and is then lost. It waits for the fonts and then for
+ * the page to settle first: after a layout change, Chromium sends a pointer event for wherever
+ * its own cursor rests, which ends React Aria's hover. A screen without hover (a phone) shows the
+ * row as it is.
+ */
+async function hover(link: HTMLElement) {
+  if (window.matchMedia("(hover: none)").matches) return;
+  await document.fonts.ready;
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  await waitFor(async () => {
+    await userEvent.unhover(link);
+    await userEvent.hover(link);
+    await expect(link).toHaveAttribute("data-hovered");
+  });
+}
+
+/** The pointer over an unlocked item. */
+export const Hover: Story = {
+  args: { className: "max-w-sm", currentId: undefined },
+  play: async ({ canvasElement }) => {
+    await hover(await readback(canvasElement));
+  },
+};
+
+/** A press held on an unlocked item. */
+export const Pressed: Story = {
+  args: { className: "max-w-sm", currentId: undefined },
+  play: async ({ canvasElement }) => {
+    const link = await readback(canvasElement);
+    await userEvent.pointer({ keys: "[MouseLeft>]", target: link });
+    await waitFor(() => expect(link).toHaveAttribute("data-pressed"));
+    // A scripted press focuses the link as a keyboard would, and the browser then draws its
+    // focus ring; a real mouse press draws none.
+    link.blur();
+    await expect(link).toHaveAttribute("data-pressed");
+  },
+};
+
+/** Keyboard focus on an unlocked item: the ring sits inside the row. */
+export const FocusVisible: Story = {
+  args: { className: "max-w-sm", currentId: undefined },
+  play: async ({ canvasElement }) => {
+    const link = await readback(canvasElement);
+    await userEvent.tab();
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}");
+    await waitFor(() => expect(link).toHaveAttribute("data-focus-visible"));
+  },
+};
+
+/** Keyboard focus and the pointer on the same item. */
+export const HoverAndFocusVisible: Story = {
+  args: { className: "max-w-sm", currentId: undefined },
+  play: async ({ canvasElement }) => {
+    const link = await readback(canvasElement);
+    await userEvent.tab();
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}");
+    await hover(link);
+    await waitFor(() => expect(link).toHaveAttribute("data-focus-visible"));
+  },
 };
 
 /** Keyboard focus on a locked item shows what unlocks it. */

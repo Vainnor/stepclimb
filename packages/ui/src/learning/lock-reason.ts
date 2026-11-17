@@ -19,7 +19,7 @@ export type LockReason =
   | { kind: "sequential"; itemTitle: string };
 
 /**
- * Formats a lock reason as one sentence. `unlock_at` reads in `timeZone` (the user's, `users.tz`)
+ * Formats a lock reason as a phrase ("Unlocks after Ground control"). `unlock_at` reads in `timeZone` (the user's, `users.tz`)
  * with the zone's short name, so a learner abroad sees when that is for them.
  */
 export function useLockReasonText(timeZone: string): (reason: LockReason) => string {
@@ -57,4 +57,17 @@ export function useLockReasonText(timeZone: string): (reason: LockReason) => str
     },
     [t, dates, lists],
   );
+}
+
+/**
+ * Joins several reasons into one description, as the locale lists units ("Unlocks after Ground
+ * control, Opens on Mar 3, 2026, 10:00 AM EST" in English).
+ */
+export function useLockReasonList(): (texts: readonly string[]) => string {
+  const { locale } = useLocale();
+  const units = useMemo(
+    () => new Intl.ListFormat(locale, { style: "long", type: "unit" }),
+    [locale],
+  );
+  return useCallback((texts) => units.format(texts), [units]);
 }
