@@ -425,7 +425,8 @@ pub fn parse_requirement(value: &serde_json::Value) -> Result<Requirement, Error
 }
 
 /// Delete the item `id` of the scope's organization and close the gap in its module's
-/// positions (B9). What the item points at stays.
+/// positions (B9). What the item points at stays. An item any learner has progress on is
+/// [`Error::ItemHasProgress`] (spec 05 B16).
 ///
 /// Runs in one transaction (a savepoint when `db` is already one) under the course lock.
 pub async fn delete<'c>(
@@ -435,6 +436,19 @@ pub async fn delete<'c>(
 ) -> Result<(), Error> {
     let mut tx = db.begin().await?;
     let item = locked(&mut tx, scope, id).await?;
+    // Under the course lock, which every progress write waits for (spec 05 B16): no learner can
+    // start the item between this check and the delete.
+    let has_progress = sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM item_progress WHERE org_id = $1 AND item_id = $2)
+               AS "exists!""#,
+        scope.org_id(),
+        id,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if has_progress {
+        return Err(Error::ItemHasProgress);
+    }
     sqlx::query!(
         "DELETE FROM module_items WHERE org_id = $1 AND id = $2",
         scope.org_id(),

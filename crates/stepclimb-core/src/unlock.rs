@@ -432,7 +432,13 @@ pub async fn require_unlocked(
         .await?
         .ok_or(RequireError::NotFound)?;
     let rules = load_course_rules(&mut *conn, scope, course_id).await?;
-    let evaluation = evaluate(&rules, completed, now);
+    check_item(&evaluate(&rules, completed, now), item_id)
+}
+
+/// [`require_unlocked`]'s answer for the item `item_id` from an `evaluation` of its course the
+/// caller already holds: [`RequireError::NotFound`] when the item is not a published item of a
+/// published module, [`RequireError::Locked`] with its reasons when it is locked.
+pub fn check_item(evaluation: &Evaluation, item_id: Uuid) -> Result<(), RequireError> {
     match evaluation.item(item_id).map(|item| &item.state) {
         None => Err(RequireError::NotFound),
         Some(State::Available) => Ok(()),

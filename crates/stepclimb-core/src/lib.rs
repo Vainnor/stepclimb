@@ -30,7 +30,8 @@
 //! [`appearance`], the theme and density a user chose; and [`files`], the stored files of an
 //! organization, once per SHA-256, with [`course_files`], which places them in a course's folders,
 //! and [`sniff`], which reads an upload's type from its first bytes; and [`unlock`], which decides
-//! for a learner which modules and items are locked and which are complete; and [`pages`], a
+//! for a learner which modules and items are locked and which are complete, with [`progress`],
+//! which records each learner's steps and completions and rolls them up; and [`pages`], a
 //! course's pages and their immutable versions, whose bodies [`page_doc`] parses and checks;
 //! and [`videos`], an organization's videos, the courses they are attached to and their tus
 //! uploads. The other repositories arrive with the M0 specs in `docs/specs/m0/`.
@@ -72,6 +73,7 @@ pub mod pages;
 pub mod passkeys;
 pub mod perm;
 pub mod plans;
+pub mod progress;
 pub mod requirement;
 pub mod role_assignments;
 pub mod roles;

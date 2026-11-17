@@ -16,7 +16,8 @@
 //! 2.1 authorization, token and revocation endpoints for Stepclimb's own apps (`/oauth/authorize`,
 //! `/oauth/token`, `/oauth/revoke`), service
 //! accounts and their API keys, course file uploads and the files area, a course's pages and
-//! their versions, video uploads (tus) and the videos of a course, and the shared error
+//! their versions, video uploads (tus) and the videos of a course, a learner's progress steps
+//! and the progress event bodies, and the shared error
 //! schemas and responses below. The other M0 specs add their endpoints under `/api/v1`.
 //!
 //! Every `/api/v1` operation lists its errors in `#[utoipa::path]` (spec 02 B6). The errors
@@ -38,7 +39,7 @@ use crate::{
     error::{CurrentVersion, FieldError, PROBLEM_JSON, Problem},
     health, identities, items, local_sign_in, manifest, me, modules, my_passkeys, oauth_authorize,
     oauth_token, organization, page_doc_schema, pages, passkey_enrollment, passkey_options,
-    passkey_sign_in, password, provider_admin, provider_callback, provider_sign_in,
+    passkey_sign_in, password, progress, provider_admin, provider_callback, provider_sign_in,
     role_assignments, roles, service_accounts, totp, totp_enrollment, unlock, upload, users,
     video_uploads, videos,
 };
@@ -109,6 +110,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         items::update_item,
         items::move_item,
         items::delete_item,
+        progress::record_item_progress,
         courses::copy_course,
         course_enrollments::list_enrollments,
         course_enrollments::create_enrollment,
@@ -244,6 +246,21 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             items::ItemPatch,
             items::ItemOrder,
             items::ItemMove,
+            progress::ProgressStep,
+            progress::ProgressAction,
+            progress::ItemProgress,
+            progress::ProgressState,
+            progress::CourseProgress,
+            progress::ItemCompletedEvent,
+            progress::ItemCompletedType,
+            progress::ItemCompletedData,
+            progress::RequirementKind,
+            progress::ModuleCompletedEvent,
+            progress::ModuleCompletedType,
+            progress::ModuleCompletedData,
+            progress::CourseCompletedEvent,
+            progress::CourseCompletedType,
+            progress::CourseCompletedData,
             courses::CourseCopy,
             course_enrollments::Enrollment,
             course_enrollments::EnrolledUser,
@@ -440,6 +457,11 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             items::ItemWriteConflict,
             items::ItemMoveConflict,
             items::ItemInvalid,
+            items::ItemDeleteConflict,
+            progress::ProgressNotFound,
+            progress::ProgressForbidden,
+            progress::ProgressConflict,
+            progress::ProgressInvalid,
             course_files::CourseFileNotFound,
             course_files::FilesCourseNotFound,
             course_files::FolderRenameNotFound,
@@ -597,6 +619,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         (name = "courses", description = "Courses, their status and their account"),
         (name = "modules", description = "A course's modules and their items"),
         (name = "enrollments", description = "Who is in a course, and with which role"),
+        (name = "progress", description = "Learners' steps and completions in a course"),
         (name = "files", description = "A course's files and folders"),
         (name = "pages", description = "A course's pages and their versions"),
         (name = "roles", description = "The permission catalog, roles and role assignments"),

@@ -24,7 +24,7 @@ use crate::{
     health, identities, items, local_sign_in, manifest, me, modules, my_passkeys, oauth_authorize,
     oauth_token, openapi, organization, pages, passkey_enrollment, passkey_sign_in, password,
     password_hasher::PasswordHasher,
-    provider_admin, provider_callback, provider_sign_in,
+    progress, provider_admin, provider_callback, provider_sign_in,
     providers::Providers,
     rate_limit::RateLimiter,
     role_assignments, roles, service_accounts, spa, totp, totp_enrollment, upload, users,
@@ -306,6 +306,10 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
             patch(items::update_item).delete(items::delete_item),
         ),
         ("/api/v1/items/{item_id}/move", post(items::move_item)),
+        (
+            "/api/v1/items/{item_id}/progress",
+            post(progress::record_item_progress),
+        ),
         (
             "/api/v1/courses/{course_id}/copy",
             post(courses::copy_course),

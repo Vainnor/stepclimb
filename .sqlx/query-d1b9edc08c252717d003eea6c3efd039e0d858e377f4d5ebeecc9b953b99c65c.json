@@ -1,0 +1,54 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT r.key, r.builtin, r.permissions\n         FROM roles r\n         WHERE (r.org_id IS NULL OR r.org_id = $1)\n           AND r.id IN (SELECT e.role_id FROM enrollments e\n                        WHERE e.org_id = $1 AND e.course_id = $2 AND e.user_id = $3\n                          AND e.status = 'active')\n         ORDER BY r.id\n         FOR KEY SHARE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "roles",
+            "name": "key"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "builtin",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "roles",
+            "name": "builtin"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "permissions",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "roles",
+            "name": "permissions"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d1b9edc08c252717d003eea6c3efd039e0d858e377f4d5ebeecc9b953b99c65c"
+}

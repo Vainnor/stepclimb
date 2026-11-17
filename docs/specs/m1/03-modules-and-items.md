@@ -351,7 +351,9 @@ or Q12.
    refusals. Covers B1 to B12; T1 to T8, T12 and T13 for the write routes. Depends on:
    `02-courses-and-enrollments.md` I1.
 2. **I2. Learner reads.** `GET` outline, module and item, with published filtering and the draft
-   course rule. Covers B13 to B15; T9, T12 and T13 for the read routes. Depends on: I1;
+   course rule, and the caller's own module and item progress from
+   `stepclimb_core::progress::for_learner_in_course` (`05` B13, with `05` T10's outline case).
+   Covers B13 to B15; T9, T12 and T13 for the read routes. Depends on: I1;
    `02-courses-and-enrollments.md` I2 (enrollment grants, so a Student can be tested).
 3. **I3. Deep links and the return link.** The web route with the id consistency check, the
    sign-in round trip, the `embedding.return_origins` setting and the "Back to" link. Covers B16

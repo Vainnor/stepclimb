@@ -528,6 +528,39 @@ pub(crate) async fn has_learners(
     }))
 }
 
+/// Whether the user `user_id` holds an `active` enrollment in the course `course_id` of the
+/// scope's organization whose role holds `course.participate`: a learner (spec 05 B1). For
+/// `progress`, in its transaction after it read the course row `FOR SHARE`, which every
+/// enrollment write's `FOR NO KEY UPDATE` waits for. The custom roles read are locked
+/// `FOR KEY SHARE`, as in [`has_learners`].
+pub(crate) async fn is_learner(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    course_id: Uuid,
+    user_id: Uuid,
+) -> Result<bool, sqlx::Error> {
+    let roles = sqlx::query!(
+        "SELECT r.key, r.builtin, r.permissions
+         FROM roles r
+         WHERE (r.org_id IS NULL OR r.org_id = $1)
+           AND r.id IN (SELECT e.role_id FROM enrollments e
+                        WHERE e.org_id = $1 AND e.course_id = $2 AND e.user_id = $3
+                          AND e.status = 'active')
+         ORDER BY r.id
+         FOR KEY SHARE",
+        scope.org_id(),
+        course_id,
+        user_id,
+    )
+    .fetch_all(conn)
+    .await?;
+    Ok(roles.into_iter().any(|role| {
+        roles::effective_permissions(&role.key, role.builtin, role.permissions)
+            .iter()
+            .any(|key| key == CourseParticipate::KEY)
+    }))
+}
+
 /// What an audit entry records of an enrollment: who holds which role in which course, its
 /// status and its source.
 fn audit_data(enrollment: &Enrollment) -> Value {

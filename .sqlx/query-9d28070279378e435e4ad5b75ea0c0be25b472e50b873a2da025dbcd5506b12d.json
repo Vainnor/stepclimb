@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT (extract(epoch FROM completed_at) * 1000000)::bigint AS completed_at_us\n           FROM course_progress\n           WHERE org_id = $1 AND user_id = $2 AND course_id = $3\n           FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "completed_at_us",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "9d28070279378e435e4ad5b75ea0c0be25b472e50b873a2da025dbcd5506b12d"
+}

@@ -83,6 +83,9 @@ pub enum Error {
     /// The course is archived and takes no content write (spec 02 B5).
     #[error("the course is archived")]
     CourseArchived,
+    /// The item has learner progress and cannot be deleted; unpublish it instead (spec 05 B16).
+    #[error("the item has learner progress")]
+    ItemHasProgress,
     /// The course holds [`MAX_PER_COURSE`] modules.
     #[error("the course holds the most modules it may")]
     ModuleLimitReached,

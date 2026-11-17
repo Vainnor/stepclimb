@@ -396,6 +396,41 @@ and stands until the owner reviews it.
   course who oversees whom; (b) can come with M4's Manager scope, which is per person.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
 
+### Decisions made building I1
+
+Coordinator decisions (overnight, 2026-11-17), pending owner review.
+
+- **Events leave the repository as values.** `stepclimb-jobs` depends on `stepclimb-core`, so
+  `stepclimb_core::progress` cannot call `stepclimb_jobs::outbox::emit`. `record_step` and
+  `complete_item` stay the one place where completion is decided (B5) and return a `#[must_use]`
+  `Recorded` with the events of what became complete; the caller passes them to
+  `stepclimb_server::progress::emit` in the same transaction before it commits. Spec 09, M2 and
+  M3 call the two in that order. The three topics are registered in the job registry
+  (`progress::register_topics`), so the dispatcher claims their events; no subscriber exists yet.
+- **Locks and the order of checks.** A progress write reads the course row `FOR SHARE` first.
+  Content writes, status changes and enrollment writes lock it `FOR NO KEY UPDATE`, so during a
+  step the course cannot be archived, its rules and items cannot change, B16's delete waits, and
+  the learner's enrollment cannot end; steps of different learners do not wait for each other.
+  Under that lock the repository checks, in order: archived (409 `course.archived`), a learner
+  (an active enrollment whose role holds `course.participate`, checked again in the transaction:
+  403 `permission.denied`), the item published and unlocked (404 `item.not_found`, 403
+  `item.locked`), then the step (422 `progress.action_invalid`). A completing step takes the
+  learner's `course_progress` lock (B6) before it reads the completed items for the lock check.
+- **Which steps the route takes.** `view` is taken by page, file and external link items only;
+  a video's view comes from spec 09, and a header, quiz or activity takes none (422). An action
+  outside `view` and `mark_done` does not match the body's schema and answers 400
+  `request.malformed`, as every other unknown enum value in a body does.
+- **B13 in I1 covers the course read only.** The outline, module and item reads are
+  `03-modules-and-items.md` I2, not built yet. I1 adds `progress` to `GET
+  /api/v1/courses/{course_id}` (present for a learner, null before their first completion,
+  absent for anyone else and on every other course answer), and
+  `progress::for_learner_in_course` returns the course, module and item rows that 03 I2's reads
+  then add. T10's outline case moves to 03 I2; I1 tests the course read.
+- **T14's concluded Student answers 404.** A concluded enrollment grants nothing (`02` B16), so
+  the course is not visible to that user and `Require` answers 404 `item.not_found` before the
+  permission is looked at (`m0/09` B17 step 4), not 403. A user holding every permission through
+  an account assignment answers 403, as T14 says.
+
 ## Issues
 
 1. **I1. Progress tables, recording and roll-up.** Migration, `record_step`, `complete_item` with

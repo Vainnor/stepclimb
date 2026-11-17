@@ -46,7 +46,11 @@ use stepclimb_core::{
     courses::{self, DateField},
     grants::{Denied, Grants, ScopeId, Target},
     id::Uuid,
-    perm::{self, CourseCreate, CourseManage, CourseView, CourseViewAll, Permission, ScopeType},
+    perm::{
+        self, CourseCreate, CourseManage, CourseParticipate, CourseView, CourseViewAll, Permission,
+        ScopeType,
+    },
+    progress,
 };
 use utoipa::{IntoParams, ToSchema};
 
@@ -191,6 +195,12 @@ pub struct Course {
     /// The catalog keys grantable at course scope that you hold at this course, sorted: what
     /// the app may offer you here. The server checks every request itself.
     pub permissions: Vec<String>,
+    /// Your progress in the course, on `GET /api/v1/courses/{course_id}` when you are a learner
+    /// of it (you hold `course.participate` there): null until you complete an item. Absent
+    /// for anyone else, and from every other operation's answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<crate::progress::CourseProgress>, required = false)]
+    pub progress: Option<Option<crate::progress::CourseProgress>>,
     /// RFC 3339, UTC.
     #[schema(format = DateTime)]
     pub created_at: String,
@@ -209,6 +219,7 @@ impl Course {
         };
         Ok(Self {
             permissions: course_permissions(grants, &target),
+            progress: None,
             start_at: date(course.start_at)?,
             end_at: date(course.end_at)?,
             created_at: time(course.created_at)?,
@@ -508,7 +519,36 @@ pub async fn get_course(
         account_path: course.account_path.clone(),
     };
     check_course::<CourseView>(grants, &target, course.needs_view_all(), COURSE_NOT_FOUND)?;
-    Ok(Json(Course::from_repo(course, grants)?))
+    let learner = grants.holds::<CourseParticipate>(&target.target());
+    let mut answer = Course::from_repo(course, grants)?;
+    if learner {
+        let scope = grants.scope();
+        answer.progress =
+            Some(own_progress(&state, scope, require.principal().user_id, target.id).await?);
+    }
+    Ok(Json(answer))
+}
+
+/// The caller's stored progress in the course `course_id` (spec 05 B13), or `None` before their
+/// first completion.
+async fn own_progress(
+    state: &AppState,
+    scope: OrgScope,
+    user_id: Uuid,
+    course_id: Uuid,
+) -> Result<Option<crate::progress::CourseProgress>, ApiError> {
+    let mut conn = state
+        .db
+        .acquire()
+        .await
+        .map_err(|error| ApiError::internal(&error))?;
+    let stored = progress::for_learner_in_course(&mut conn, scope, user_id, course_id)
+        .await
+        .map_err(crate::progress::progress_error)?;
+    stored
+        .course
+        .map(crate::progress::CourseProgress::from_core)
+        .transpose()
 }
 
 /// Create a draft course in `account_id`.

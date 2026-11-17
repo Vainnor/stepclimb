@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO course_progress (org_id, user_id, course_id, required_count, completed_count)\n         VALUES ($1, $2, $3, 0, 0)\n         ON CONFLICT (user_id, course_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ec844dc4f285883553270a787582c26d545236cef145cf20e944588999391a21"
+}

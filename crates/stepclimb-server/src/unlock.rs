@@ -85,7 +85,7 @@ impl LockReason {
 }
 
 /// 403 `item.locked` with `reasons`.
-fn item_locked(reasons: &[unlock::LockReason]) -> ApiError {
+pub(crate) fn item_locked(reasons: &[unlock::LockReason]) -> ApiError {
     let reasons = match reasons.iter().map(LockReason::from_core).collect() {
         Ok(reasons) => reasons,
         Err(error) => return error,
@@ -98,13 +98,19 @@ fn item_locked(reasons: &[unlock::LockReason]) -> ApiError {
     .with_reasons(reasons)
 }
 
+/// 404 `item.not_found`: the item is not published in a published module, which a learner
+/// cannot tell from one that does not exist.
+pub(crate) fn not_found() -> ApiError {
+    not_found_as(
+        stepclimb_core::grants::Denied::CourseNotFound,
+        ITEM_NOT_FOUND,
+    )
+}
+
 impl From<unlock::RequireError> for ApiError {
     fn from(error: unlock::RequireError) -> Self {
         match error {
-            unlock::RequireError::NotFound => not_found_as(
-                stepclimb_core::grants::Denied::CourseNotFound,
-                ITEM_NOT_FOUND,
-            ),
+            unlock::RequireError::NotFound => not_found(),
             unlock::RequireError::Locked(reasons) => item_locked(&reasons),
             unlock::RequireError::Repository(error) => content_error(error),
         }

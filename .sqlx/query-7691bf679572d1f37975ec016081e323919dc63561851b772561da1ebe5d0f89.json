@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT completed_at IS NOT NULL AS \"complete!\" FROM module_progress\n               WHERE org_id = $1 AND user_id = $2 AND module_id = $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "complete!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "7691bf679572d1f37975ec016081e323919dc63561851b772561da1ebe5d0f89"
+}
