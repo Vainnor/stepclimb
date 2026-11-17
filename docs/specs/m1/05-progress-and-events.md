@@ -346,8 +346,10 @@ Database tests use `#[sqlx::test]` and a `ManualClock`; route tests use the perm
   `permission.escalation`; `observed_user_ids` on a Student enrollment answers 422.
 - **T17** (B18, B20). The Observer lists progress and sees exactly the two named Students; the
   detail of a third Student answers 404 `progress.not_found`; posting progress answers 403; after
-  the Observer enrollment is concluded, the list answers 403 `permission.denied`. Mutation:
-  dropping the observed-learner filter turns the test red.
+  the Observer enrollment is concluded, the list answers 404 `course.not_found` (a concluded
+  enrollment grants nothing, so the course is not visible), and 403 `permission.denied` once
+  another enrollment gives the same user `course.view` alone. Mutation: dropping the
+  observed-learner filter turns the test red.
 - **T18** (B20). Deleting a named Student's enrollment removes them from the Observer's list.
 
 ## Out of scope
@@ -440,6 +442,55 @@ Coordinator decisions (overnight, 2026-11-17), pending owner review.
 - **Two steps of one learner on one item.** The second `mark_done` waits on the learner's
   `course_progress` row, then finds the item completed and returns it with no event; a test runs
   the two on two connections.
+
+### Decisions made building I3
+
+Coordinator decision (overnight, 2026-11-17), each pending owner review.
+
+- **Who is a learner in the staff reads.** A user holding an enrollment in the course, active
+  or concluded, whose role has `course.participate`. `enrollment_status` is `active` when any
+  such enrollment is and `concluded` otherwise, and `?status` filters on it. The detail route
+  answers 404 `progress.not_found` for anyone else (no enrollment, a staff-only enrollment, a
+  user of another organization) and for a learner an Observer does not observe.
+- **The order of B20's checks.** The extractor checks `course.view` at the course (404
+  `course.not_found` when the course is not visible, or is a draft or a template and the caller
+  lacks `course.view_all`). The handler then reads every learner with `progress.view`, the
+  observed learners with `progress.view_observed`, and answers 403 `permission.denied`
+  otherwise, before it looks at the user in the path. A concluded Observer enrollment grants
+  nothing, so its course answers 404 rather than 403 (T17 now says so).
+- **Which links an Observer reads.** The learners named by the caller's active enrollments in
+  the course whose role holds `progress.view_observed` at the time of the read. A link on a
+  concluded enrollment, or on one whose custom role lost the permission, names no one.
+- **Unpublished content stays out of the reads.** A caller without `course.view_all` at the
+  course (an Observer, a custom `progress.view` role) gets module rows of published modules and
+  item rows of published items in published modules only; `course.view_all` reads every row.
+  The course counts already cover published content only (B6).
+- **The observed list's rules.** On a role holding `progress.view_observed` the list is
+  required on create and holds 1 to 100 distinct learners; on any other role it is refused, on
+  create and on `PATCH`. Every refusal is 422 `request.invalid` with
+  `enrollment.observed_invalid`: at `/observed_user_ids` for the list as a whole (absent, empty,
+  over 100, or present on a role without the permission), at `/observed_user_ids/<i>` for a
+  repeat or a user who is not a learner of the course. On create, absence or presence is
+  checked beside Manager's 422, before the escalation rule; the learners themselves are checked
+  in the repository under the course lock.
+- **B19 on `PATCH`, and reactivation.** `PATCH /api/v1/enrollments/{enrollment_id}` takes
+  `status` and `observed_user_ids`, both optional (`null` is 400), and writes one
+  `enrollment.update` entry with the changed members. Naming learners needs `progress.view` at
+  the course, and so does reactivating an enrollment that observes learners, since that
+  restores sight of their progress (403 `permission.escalation`). Concluding does not.
+- **The table is tied to the enrollment's course.** `enrollment_observees` references
+  `enrollments (org_id, course_id, id)`, a unique constraint the migration adds, so a link's
+  course and organization are always its enrollment's.
+- **Audit data.** `enrollment.create` and `enrollment.delete` record `observed_user_ids` for an
+  Observer. `enrollment.delete` records `removed`, the rows deleted per table:
+  `{ enrollment_observees, item_progress, module_progress, course_progress }`.
+- **B15 as built.** Spec 09's `video_progress` and `watch_reports` and spec 14's archive do not
+  exist yet; their issues add them to `enrollments::delete` as B15 says.
+- **The permission suite's per-grant entries.** The two staff routes have two entries each
+  (T14a). An entry may name permissions its 403 case also leaves out (`progress.view` for the
+  `progress.view_observed` entries), and a course-scope holder can be enrolled as an Observer of
+  the setup's learner. The 404 for `progress.view_observed` is an explicit test, since the
+  permission cannot be held at a sibling account.
 
 ## Issues
 

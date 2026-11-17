@@ -385,7 +385,8 @@ async fn a_builtin_role_reads_its_permissions_from_code(pool: PgPool) {
             "course.manage",
             "course.content_edit",
             "enrollment.view",
-            "enrollment.manage"
+            "enrollment.manage",
+            "progress.view"
         ])
     );
 }

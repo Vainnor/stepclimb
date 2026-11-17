@@ -279,6 +279,7 @@ impl Fixture {
             role_id: self.custom_role(&[]).await,
             source: Source::Local,
             external_id: None,
+            observed_user_ids: Vec::new(),
         };
         let course = self.course().await;
         enrollments::create(

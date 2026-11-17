@@ -16,8 +16,8 @@
 //! 2.1 authorization, token and revocation endpoints for Stepclimb's own apps (`/oauth/authorize`,
 //! `/oauth/token`, `/oauth/revoke`), service
 //! accounts and their API keys, course file uploads and the files area, a course's pages and
-//! their versions, video uploads (tus) and the videos of a course, a learner's progress steps
-//! and the progress event bodies, and the shared error
+//! their versions, video uploads (tus) and the videos of a course, a learner's progress steps,
+//! the staff progress reads and the progress event bodies, and the shared error
 //! schemas and responses below. The other M0 specs add their endpoints under `/api/v1`.
 //!
 //! Every `/api/v1` operation lists its errors in `#[utoipa::path]` (spec 02 B6). The errors
@@ -111,6 +111,8 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         items::move_item,
         items::delete_item,
         progress::record_item_progress,
+        progress::list_course_progress,
+        progress::get_learner_progress,
         courses::copy_course,
         course_enrollments::list_enrollments,
         course_enrollments::create_enrollment,
@@ -251,6 +253,10 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             progress::ItemProgress,
             progress::ProgressState,
             progress::CourseProgress,
+            progress::ModuleProgress,
+            progress::ProgressUser,
+            progress::LearnerProgress,
+            progress::LearnerProgressDetail,
             progress::ItemCompletedEvent,
             progress::ItemCompletedType,
             progress::ItemCompletedData,
@@ -461,6 +467,9 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             progress::ProgressNotFound,
             progress::ProgressForbidden,
             progress::ProgressConflict,
+            progress::LearnerProgressForbidden,
+            progress::LearnerProgressListNotFound,
+            progress::LearnerProgressNotFound,
             progress::ProgressInvalid,
             course_files::CourseFileNotFound,
             course_files::FilesCourseNotFound,

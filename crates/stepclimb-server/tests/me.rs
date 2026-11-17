@@ -417,7 +417,7 @@ async fn t17_an_account_admin_of_tower_gets_one_sorted_grant(pool: PgPool) {
             "permissions": [
                 "account.manage", "account.view", "course.content_edit", "course.create",
                 "course.manage", "course.view", "course.view_all", "enrollment.manage",
-                "enrollment.view", "role.assign", "role.view", "user.view"
+                "enrollment.view", "progress.view", "role.assign", "role.view", "user.view"
             ],
         }])
     );

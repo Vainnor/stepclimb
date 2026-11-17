@@ -1,0 +1,66 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT e.user_id, r.key, r.builtin, r.permissions\n         FROM enrollments e\n         JOIN roles r ON r.id = e.role_id AND (r.org_id IS NULL OR r.org_id = e.org_id)\n         WHERE e.org_id = $1 AND e.course_id = $2 AND e.user_id = ANY($3)\n         ORDER BY r.id\n         FOR KEY SHARE OF r",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "enrollments",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "roles",
+            "name": "key"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "builtin",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "roles",
+            "name": "builtin"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "permissions",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "roles",
+            "name": "permissions"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "88af7ca0e143f49abadb4d1a77c5208e81bd309d3b167f97b45da59e8ee9e30c"
+}

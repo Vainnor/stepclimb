@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Learner progress (docs/specs/m1/05-progress-and-events.md B1 to B7, B10 to B13, B16).
+//! Learner progress (docs/specs/m1/05-progress-and-events.md B1 to B7, B10 to B16).
 //!
 //! One `item_progress` row per learner and item: `started` at the learner's first step, then
 //! `completed` once the item's requirement is met. Completion is final (Q1): nothing here moves
@@ -25,9 +25,16 @@
 //! (B1, B12), and the item is published, in a published module, and unlocked for them (spec 04
 //! B13). Steps of different learners never wait for each other.
 //!
+//! Staff read every learner's progress in a course through [`list_for_course`] and
+//! [`learner_in_course`] (B14); who may read whom (B20) is the routes' to decide, and they pass
+//! the users an Observer may see as [`LearnerFilter::only`]. A learner is a user holding an
+//! enrollment in the course, active or concluded, whose role has `course.participate`.
+//! [`delete_for_enrollment`] removes a former learner's live progress in a course (B15), for
+//! `enrollments::delete`.
+//!
 //! Every query filters by `org_id = scope.org_id()`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::SystemTime;
 
 use sqlx::{PgConnection, PgExecutor, Postgres, Transaction};
@@ -39,6 +46,8 @@ use crate::{
     enrollments,
     items::{self, Kind},
     modules,
+    perm::{CourseParticipate, Permission},
+    roles,
     rules::{Requirement, RequirementKind},
     unlock::{self, CourseRules, Evaluation, LockReason, ModuleRules},
 };
@@ -207,6 +216,9 @@ pub enum Error {
     /// The course row could not be read.
     #[error(transparent)]
     Course(#[from] courses::Error),
+    /// A list cursor whose display name holds NUL, which no stored name can.
+    #[error("the cursor is not one this list wrote")]
+    InvalidCursor,
     #[error(transparent)]
     Time(#[from] TimeOutOfRange),
     #[error(transparent)]
@@ -744,6 +756,275 @@ pub async fn for_learner_in_course(
         course,
         modules,
         items,
+    })
+}
+
+/// Which of a course's modules and items a staff read shows (B14): a caller without
+/// `course.view_all` at the course sees the progress of published content only, so a read
+/// never names an unpublished module or item to them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shown {
+    /// Published modules, and published items in published modules.
+    Published,
+    /// Every module and item, published or not.
+    All,
+}
+
+/// One learner of a course with their stored roll-ups (B14).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Learner {
+    pub user_id: Uuid,
+    pub display_name: String,
+    /// `Active` when any of their learner enrollments in the course is, otherwise `Concluded`.
+    pub enrollment_status: enrollments::Status,
+    /// `None` until the learner first completes an item of the course.
+    pub course: Option<CourseProgress>,
+    /// One per shown module the learner completed an item of, in course order.
+    pub modules: Vec<ModuleProgress>,
+}
+
+/// One learner of a course with their item rows as well (B14).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LearnerDetail {
+    pub learner: Learner,
+    /// One per shown item the learner took a step on, in course and module order.
+    pub items: Vec<ItemProgress>,
+}
+
+/// The filters of [`list_for_course`]; `None` filters nothing.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LearnerFilter {
+    /// Over [`Learner::enrollment_status`].
+    pub status: Option<enrollments::Status>,
+    /// Only these users: an Observer's observed learners (B20).
+    pub only: Option<Vec<Uuid>>,
+}
+
+/// The sort key of a learner in [`list_for_course`]: the display name, then the user's id.
+pub type LearnerKey = (String, Uuid);
+
+/// The rows [`delete_for_enrollment`] removed, per table.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RemovedProgress {
+    pub item_progress: u64,
+    pub module_progress: u64,
+    pub course_progress: u64,
+}
+
+/// The learners of the course `course_id` of the scope's organization matching `filter`, with
+/// their course and `shown` module progress, sorted by display name then user id, starting
+/// after `after` (the sort key of the previous page's last learner) and at most `limit` of them
+/// (B14). `after` comes from a client's cursor and only bounds a query already filtered by the
+/// scope; a NUL in its name is [`Error::InvalidCursor`].
+pub async fn list_for_course(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    course_id: Uuid,
+    filter: &LearnerFilter,
+    shown: Shown,
+    after: Option<&LearnerKey>,
+    limit: i64,
+) -> Result<Vec<Learner>, Error> {
+    if after.is_some_and(|(name, _)| name.contains('\0')) {
+        return Err(Error::InvalidCursor);
+    }
+    let learner_roles = roles::ids_holding(&mut *conn, scope, CourseParticipate::KEY).await?;
+    let rows = sqlx::query!(
+        r#"SELECT u.id AS "user_id!", u.display_name AS "display_name!",
+                  bool_or(e.status = 'active') AS "active!"
+           FROM enrollments e JOIN users u ON u.org_id = e.org_id AND u.id = e.user_id
+           WHERE e.org_id = $1 AND e.course_id = $2 AND e.role_id = ANY($3)
+             AND ($4::uuid[] IS NULL OR e.user_id = ANY($4))
+           GROUP BY u.id, u.display_name
+           HAVING ($5::text IS NULL
+                   OR CASE WHEN bool_or(e.status = 'active') THEN 'active' ELSE 'concluded' END = $5)
+              AND ($6::text IS NULL OR (u.display_name, u.id) > ($6, $7::uuid))
+           ORDER BY u.display_name, u.id
+           LIMIT $8"#,
+        scope.org_id(),
+        course_id,
+        &learner_roles,
+        filter.only.as_deref(),
+        filter.status.map(enrollments::Status::as_str),
+        after.map(|(name, _)| name.as_str()),
+        after.map(|(_, id)| *id),
+        limit,
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    let users: Vec<Uuid> = rows.iter().map(|row| row.user_id).collect();
+    let mut courses = course_rows(&mut *conn, scope, course_id, &users).await?;
+    let mut modules = module_rows(&mut *conn, scope, course_id, &users, shown).await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| Learner {
+            course: courses.remove(&row.user_id),
+            modules: modules.remove(&row.user_id).unwrap_or_default(),
+            user_id: row.user_id,
+            display_name: row.display_name,
+            enrollment_status: if row.active {
+                enrollments::Status::Active
+            } else {
+                enrollments::Status::Concluded
+            },
+        })
+        .collect())
+}
+
+/// The learner `user_id` of the course `course_id` of the scope's organization with their
+/// course, `shown` module and `shown` item progress, or `None` when they are not a learner of
+/// it (B14).
+pub async fn learner_in_course(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    course_id: Uuid,
+    user_id: Uuid,
+    shown: Shown,
+) -> Result<Option<LearnerDetail>, Error> {
+    let filter = LearnerFilter {
+        status: None,
+        only: Some(vec![user_id]),
+    };
+    let found = list_for_course(conn, scope, course_id, &filter, shown, None, 1).await?;
+    let Some(learner) = found.into_iter().next() else {
+        return Ok(None);
+    };
+    let items = sqlx::query_as!(
+        ItemRow,
+        r#"SELECT p.item_id, p.state,
+                  (extract(epoch FROM p.started_at) * 1000000)::bigint AS "started_at_us!",
+                  (extract(epoch FROM p.completed_at) * 1000000)::bigint AS completed_at_us,
+                  (extract(epoch FROM p.updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM item_progress p
+           JOIN module_items i ON i.org_id = p.org_id AND i.id = p.item_id
+           JOIN modules m ON m.org_id = i.org_id AND m.id = i.module_id
+           WHERE p.org_id = $1 AND p.user_id = $2 AND p.course_id = $3
+             AND ($4 OR (i.published AND m.published))
+           ORDER BY m.position, i.position"#,
+        scope.org_id(),
+        user_id,
+        course_id,
+        shown == Shown::All,
+    )
+    .fetch_all(&mut *conn)
+    .await?
+    .into_iter()
+    .map(ItemProgress::try_from)
+    .collect::<Result<_, _>>()?;
+    Ok(Some(LearnerDetail { learner, items }))
+}
+
+/// The `course_progress` rows of `users` in the course, by user.
+async fn course_rows(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    course_id: Uuid,
+    users: &[Uuid],
+) -> Result<HashMap<Uuid, CourseProgress>, Error> {
+    let rows = sqlx::query!(
+        r#"SELECT user_id, required_count, completed_count,
+                  (extract(epoch FROM completed_at) * 1000000)::bigint AS completed_at_us
+           FROM course_progress
+           WHERE org_id = $1 AND course_id = $2 AND user_id = ANY($3)"#,
+        scope.org_id(),
+        course_id,
+        users,
+    )
+    .fetch_all(conn)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let progress = CourseProgress {
+                required_count: row.required_count,
+                completed_count: row.completed_count,
+                completed_at: row.completed_at_us.map(from_epoch_micros).transpose()?,
+            };
+            Ok((row.user_id, progress))
+        })
+        .collect()
+}
+
+/// The `module_progress` rows of `users` in the course for `shown` modules, by user, each in
+/// course order.
+async fn module_rows(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    course_id: Uuid,
+    users: &[Uuid],
+    shown: Shown,
+) -> Result<HashMap<Uuid, Vec<ModuleProgress>>, Error> {
+    let rows = sqlx::query!(
+        r#"SELECT p.user_id, p.module_id, p.required_count, p.completed_count,
+                  (extract(epoch FROM p.completed_at) * 1000000)::bigint AS completed_at_us
+           FROM module_progress p
+           JOIN modules m ON m.org_id = p.org_id AND m.id = p.module_id
+           WHERE p.org_id = $1 AND p.course_id = $2 AND p.user_id = ANY($3)
+             AND ($4 OR m.published)
+           ORDER BY m.position"#,
+        scope.org_id(),
+        course_id,
+        users,
+        shown == Shown::All,
+    )
+    .fetch_all(conn)
+    .await?;
+    let mut by_user: HashMap<Uuid, Vec<ModuleProgress>> = HashMap::new();
+    for row in rows {
+        by_user
+            .entry(row.user_id)
+            .or_default()
+            .push(ModuleProgress {
+                module_id: row.module_id,
+                required_count: row.required_count,
+                completed_count: row.completed_count,
+                completed_at: row.completed_at_us.map(from_epoch_micros).transpose()?,
+            });
+    }
+    Ok(by_user)
+}
+
+/// Delete the live progress of the user `user_id` in the course `course_id` of the scope's
+/// organization: their `item_progress`, `module_progress` and `course_progress` rows there
+/// (B15). For `enrollments::delete`, in its transaction, once it found the user keeps no
+/// learner enrollment in the course, under its `FOR NO KEY UPDATE` lock on the course row,
+/// which every progress write's `FOR SHARE` read waits for.
+pub(crate) async fn delete_for_enrollment(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    course_id: Uuid,
+    user_id: Uuid,
+) -> Result<RemovedProgress, sqlx::Error> {
+    let item_progress = sqlx::query!(
+        "DELETE FROM item_progress WHERE org_id = $1 AND course_id = $2 AND user_id = $3",
+        scope.org_id(),
+        course_id,
+        user_id,
+    )
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    let module_progress = sqlx::query!(
+        "DELETE FROM module_progress WHERE org_id = $1 AND course_id = $2 AND user_id = $3",
+        scope.org_id(),
+        course_id,
+        user_id,
+    )
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    let course_progress = sqlx::query!(
+        "DELETE FROM course_progress WHERE org_id = $1 AND course_id = $2 AND user_id = $3",
+        scope.org_id(),
+        course_id,
+        user_id,
+    )
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    Ok(RemovedProgress {
+        item_progress,
+        module_progress,
+        course_progress,
     })
 }
 

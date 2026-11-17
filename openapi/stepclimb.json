@@ -3325,6 +3325,148 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/api/v1/courses/{course_id}/progress": {
+      "get": {
+        "tags": [
+          "progress"
+        ],
+        "summary": "List the learners of a course with their course and module progress, sorted by display\nname, then user id. With `progress.view` you read every learner; with only\n`progress.view_observed`, the learners your active Observer enrollments in the course name.",
+        "operationId": "listCourseProgress",
+        "parameters": [
+          {
+            "name": "course_id",
+            "in": "path",
+            "description": "The course's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only learners whose enrollment status is this.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/EnrollmentStatus"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page; omit it for the first page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many items to return, 1 to 200; 50 when omitted.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 200,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of learners",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_LearnerProgress"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/LearnerProgressForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/LearnerProgressListNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      }
+    },
+    "/api/v1/courses/{course_id}/progress/{user_id}": {
+      "get": {
+        "tags": [
+          "progress"
+        ],
+        "summary": "Read one learner's progress in a course: the course, each module and each item they took a\nstep on. With only `progress.view_observed`, only a learner you observe.",
+        "operationId": "getLearnerProgress",
+        "parameters": [
+          {
+            "name": "course_id",
+            "in": "path",
+            "description": "The course's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "The learner's user id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The learner's progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearnerProgressDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/LearnerProgressForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/LearnerProgressNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      }
+    },
     "/api/v1/courses/{course_id}/status": {
       "post": {
         "tags": [
@@ -3583,7 +3725,7 @@
         "tags": [
           "enrollments"
         ],
-        "summary": "Remove an enrollment.",
+        "summary": "Remove an enrollment. When the user keeps no other enrollment in the course whose role holds\n`course.participate`, this also deletes their progress in the course and the Observer links\nthat name them; an Observer enrollment's own links always go with it.",
         "operationId": "deleteEnrollment",
         "parameters": [
           {
@@ -3629,7 +3771,7 @@
         "tags": [
           "enrollments"
         ],
-        "summary": "Conclude or reactivate an enrollment. Its current status changes nothing.",
+        "summary": "Conclude or reactivate an enrollment, or replace the learners an Observer enrollment\nobserves. A change naming only current values changes nothing.",
         "operationId": "updateEnrollment",
         "parameters": [
           {
@@ -8939,6 +9081,13 @@
             "type": "string",
             "format": "uuid"
           },
+          "observed_user_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The learners this enrollment observes, sorted by id: present when its role holds\n`progress.view_observed` (an Observer), absent otherwise."
+          },
           "role_id": {
             "type": "string",
             "format": "uuid"
@@ -8980,13 +9129,18 @@
       },
       "EnrollmentPatch": {
         "type": "object",
-        "description": "The status to give an enrollment.",
-        "required": [
-          "status"
-        ],
+        "description": "A change to an enrollment; an absent member keeps its value.",
         "properties": {
+          "observed_user_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The whole new list of learners the enrollment observes, for a role holding\n`progress.view_observed`: 1 to 100 distinct learners of the course. Needs `progress.view`\nat the course."
+          },
           "status": {
-            "$ref": "#/components/schemas/EnrollmentStatus"
+            "$ref": "#/components/schemas/EnrollmentStatus",
+            "description": "Reactivating an enrollment that observes learners needs `progress.view` at the course."
           }
         },
         "additionalProperties": false
@@ -9551,6 +9705,83 @@
           }
         }
       },
+      "LearnerProgress": {
+        "type": "object",
+        "description": "One learner of a course and their progress. `modules` lists the modules the learner\ncompleted an item of, in course order; without `course.view_all` at the course, published\nmodules only.",
+        "required": [
+          "user",
+          "enrollment_status",
+          "course",
+          "modules"
+        ],
+        "properties": {
+          "course": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CourseProgress",
+                "description": "Null until the learner first completes an item of the course."
+              }
+            ]
+          },
+          "enrollment_status": {
+            "$ref": "#/components/schemas/EnrollmentStatus",
+            "description": "`active` when any of the learner's enrollments in the course that make them a learner\nis, otherwise `concluded`."
+          },
+          "modules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModuleProgress"
+            }
+          },
+          "user": {
+            "$ref": "#/components/schemas/ProgressUser"
+          }
+        }
+      },
+      "LearnerProgressDetail": {
+        "type": "object",
+        "description": "One learner of a course with their progress on each item they took a step on, in course\norder; without `course.view_all` at the course, published items in published modules only.",
+        "required": [
+          "user",
+          "enrollment_status",
+          "course",
+          "modules",
+          "items"
+        ],
+        "properties": {
+          "course": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CourseProgress"
+              }
+            ]
+          },
+          "enrollment_status": {
+            "$ref": "#/components/schemas/EnrollmentStatus"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ItemProgress"
+            }
+          },
+          "modules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModuleProgress"
+            }
+          },
+          "user": {
+            "$ref": "#/components/schemas/ProgressUser"
+          }
+        }
+      },
       "LocalMethod": {
         "type": "string",
         "description": "A local sign-in method.",
@@ -10058,6 +10289,38 @@
         },
         "additionalProperties": false
       },
+      "ModuleProgress": {
+        "type": "object",
+        "description": "A learner's roll-up for one module: its published items with a requirement, and how many of\nthem the learner completed.",
+        "required": [
+          "module_id",
+          "required_count",
+          "completed_count",
+          "completed_at"
+        ],
+        "properties": {
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "RFC 3339, UTC: when the learner completed the module; null until then. Never cleared."
+          },
+          "completed_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "module_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "required_count": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
       "MyIdentity": {
         "type": "object",
         "description": "One of the signed-in user's identities.",
@@ -10207,10 +10470,17 @@
           "role_id"
         ],
         "properties": {
+          "observed_user_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The learners the enrollment observes: required, 1 to 100 distinct learners of the course\n(users holding an enrollment there whose role has `course.participate`), when the role\nholds `progress.view_observed`, and refused otherwise. Naming them needs `progress.view`\nat the course."
+          },
           "role_id": {
             "type": "string",
             "format": "uuid",
-            "description": "A built-in role other than `manager` and `observer`, or a custom role of the\norganization."
+            "description": "A built-in role other than `manager`, or a custom role of the organization."
           },
           "user_id": {
             "type": "string",
@@ -12033,6 +12303,13 @@
                   "type": "string",
                   "format": "uuid"
                 },
+                "observed_user_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The learners this enrollment observes, sorted by id: present when its role holds\n`progress.view_observed` (an Observer), absent otherwise."
+                },
                 "role_id": {
                   "type": "string",
                   "format": "uuid"
@@ -12121,6 +12398,63 @@
                 }
               ],
               "description": "One entry of a folder: a folder directly inside it, or a file in it."
+            },
+            "description": "The items, in the list's sort order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass this as `cursor` to get the next page; `null` on the last page."
+          }
+        }
+      },
+      "Page_LearnerProgress": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One learner of a course and their progress. `modules` lists the modules the learner\ncompleted an item of, in course order; without `course.view_all` at the course, published\nmodules only.",
+              "required": [
+                "user",
+                "enrollment_status",
+                "course",
+                "modules"
+              ],
+              "properties": {
+                "course": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CourseProgress",
+                      "description": "Null until the learner first completes an item of the course."
+                    }
+                  ]
+                },
+                "enrollment_status": {
+                  "$ref": "#/components/schemas/EnrollmentStatus",
+                  "description": "`active` when any of the learner's enrollments in the course that make them a learner\nis, otherwise `concluded`."
+                },
+                "modules": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ModuleProgress"
+                  }
+                },
+                "user": {
+                  "$ref": "#/components/schemas/ProgressUser"
+                }
+              }
             },
             "description": "The items, in the list's sort order."
           },
@@ -13045,6 +13379,23 @@
           }
         },
         "additionalProperties": false
+      },
+      "ProgressUser": {
+        "type": "object",
+        "description": "A learner as a progress list names them.",
+        "required": [
+          "id",
+          "display_name"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
       },
       "Provider": {
         "type": "object",
@@ -14760,7 +15111,7 @@
         }
       },
       "EnrollmentCreateForbidden": {
-        "description": "`permission.denied`: you can see the course but do not hold `enrollment.manage` at a scope containing it. `permission.escalation`: the role has a catalog permission grantable at organization or account scope that you do not hold at the course. `auth.csrf_refused`: the request did not come from this site.",
+        "description": "`permission.denied`: you can see the course but do not hold `enrollment.manage` at a scope containing it. `permission.escalation`: the role has a catalog permission grantable at organization or account scope that you do not hold at the course, or the body names observed learners and you do not hold `progress.view` at the course. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -14860,7 +15211,7 @@
         }
       },
       "EnrollmentWriteForbidden": {
-        "description": "`permission.denied`: you can see the enrollment's course but do not hold `enrollment.manage` at a scope containing it. `permission.escalation`: the enrollment's role has a catalog permission grantable at organization or account scope that you do not hold at the course. `auth.csrf_refused`: the request did not come from this site.",
+        "description": "`permission.denied`: you can see the enrollment's course but do not hold `enrollment.manage` at a scope containing it. `permission.escalation`: the enrollment's role has a catalog permission grantable at organization or account scope that you do not hold at the course, or the change names observed learners or reactivates an enrollment that observes learners and you do not hold `progress.view` at the course. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -15031,6 +15382,36 @@
       },
       "ItemWriteConflict": {
         "description": "`course.archived`: the course is archived and takes no content change.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "LearnerProgressForbidden": {
+        "description": "`permission.denied`: you do not hold `progress.view` at the course, nor `progress.view_observed` through an active enrollment in it.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "LearnerProgressListNotFound": {
+        "description": "`course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "LearnerProgressNotFound": {
+        "description": "`course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `progress.not_found`: the user is not a learner of the course (no enrollment there, active or concluded, whose role holds `course.participate`), or you read only the learners you observe and do not observe them. `org.not_found`: the request's organization cannot be determined.",
         "content": {
           "application/problem+json": {
             "schema": {

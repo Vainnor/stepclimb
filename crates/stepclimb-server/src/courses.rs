@@ -1017,6 +1017,7 @@ mod tests {
                 "course.view_all",
                 "enrollment.manage",
                 "enrollment.view",
+                "progress.view",
             ],
             "no organization or account permission, and no course.participate without an enrollment"
         );

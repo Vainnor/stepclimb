@@ -1329,6 +1329,7 @@ async fn an_enrolled_student_cannot_author_pages(pool: PgPool) {
             role_id: role,
             source: Source::Local,
             external_id: None,
+            observed_user_ids: Vec::new(),
         };
         enrollments::create(
             &f.pool,

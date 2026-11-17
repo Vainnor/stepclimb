@@ -163,6 +163,12 @@ catalog! {
     /// Take the course as a learner. Grantable at course scope only, so only an enrollment
     /// gives it (M1 spec 02 Permissions).
     CourseParticipate => "course.participate", [Course];
+    /// Read every learner's progress in a course (M1 spec 05 B14, B20).
+    ProgressView => "progress.view", [Organization, Account, Course];
+    /// Read the progress of the learners an Observer enrollment names in its course, and no
+    /// one else's. Grantable at course scope only, so only an enrollment gives it (M1 spec 05
+    /// B17 to B20).
+    ProgressViewObserved => "progress.view_observed", [Course];
 }
 
 #[cfg(test)]
@@ -256,6 +262,8 @@ mod tests {
             ("enrollment.view", &[O, A, C]),
             ("enrollment.manage", &[O, A, C]),
             ("course.participate", &[C]),
+            ("progress.view", &[O, A, C]),
+            ("progress.view_observed", &[C]),
         ];
         let actual: Vec<_> = ALL.iter().map(|p| (p.key, p.grantable)).collect();
         assert_eq!(actual, expected);
@@ -268,7 +276,10 @@ mod tests {
             .filter(|p| p.course_only())
             .map(|p| p.key)
             .collect();
-        assert_eq!(course_only, ["course.participate"]);
+        assert_eq!(
+            course_only,
+            ["course.participate", "progress.view_observed"]
+        );
         assert!(!find("course.view").unwrap().course_only());
         assert!(!find("organization.manage").unwrap().course_only());
     }

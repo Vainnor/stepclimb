@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT o.user_id AS \"user_id!\"\n           FROM enrollment_observees o\n           JOIN enrollments e ON e.org_id = o.org_id AND e.id = o.enrollment_id\n           WHERE o.org_id = $1 AND o.course_id = $2 AND e.user_id = $3 AND e.status = 'active'\n             AND e.role_id = ANY($4)\n           ORDER BY 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id!",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "enrollment_observees",
+            "name": "user_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "dce8a3cb0057964166bb28c109ade6d95999870b3600b7f6814f6853171af4ec"
+}

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Learner progress over the API and its events (docs/specs/m1/05-progress-and-events.md B1 to
-//! B3, B10 to B13, API).
+//! B3, B10 to B14, B18, B20, API).
 //!
 //! `POST /api/v1/items/{item_id}/progress` records a learner's step through
 //! `stepclimb_core::progress::record_step`. It takes `Require<perm::CourseParticipate,
@@ -8,6 +8,14 @@
 //! draft or a template answers 404 `item.not_found`), and the handler runs it again on the course
 //! row its transaction holds `FOR SHARE` (`modules::recheck_shared`), before the repository checks the lock (`item.locked`,
 //! spec 04 B13).
+//!
+//! `GET /api/v1/courses/{course_id}/progress` and `.../progress/{user_id}` are the staff reads
+//! (B14). They take `Require<perm::CourseView, CourseTarget>` and then decide in the handler
+//! (B20): `progress.view` at the course reads every learner, `progress.view_observed` (only an
+//! active enrollment gives it) only the learners the caller's active Observer enrollments name,
+//! and anyone else gets 403 `permission.denied`. The list filters to the observed learners; the
+//! detail answers 404 `progress.not_found` for anyone else. Without `course.view_all` at the
+//! course the answer leaves out unpublished modules and items.
 //!
 //! The events of what became complete are written to the outbox by [`emit`], in the transaction
 //! that completed it (B10). `stepclimb_core::progress` returns them, since that crate cannot
@@ -20,25 +28,28 @@ use std::time::SystemTime;
 
 use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
-use sqlx::{Postgres, Transaction};
+use sqlx::{PgConnection, Postgres, Transaction, pool::PoolConnection};
 use stepclimb_core::{
-    OrgScope,
+    OrgScope, enrollments,
+    grants::Denied,
     id::Uuid,
-    perm::CourseParticipate,
+    perm::{CourseParticipate, CourseView, CourseViewAll, ProgressView, ProgressViewObserved},
     progress::{self, Error, Event},
     rules,
 };
 use stepclimb_jobs::{Registry, RegistryError, outbox::Topic};
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 
 use crate::{
     AppState,
+    course_enrollments::EnrollmentStatus,
     error::{ApiError, FieldError},
-    extract::ApiJson,
+    extract::{ApiJson, ApiPath, ApiQuery},
     modules::{ItemKind, begin, code::COURSE_ARCHIVED, commit, content_error, recheck_shared},
     openapi::problem_responses,
+    pagination::{Page, PageParams},
     require::{
-        ItemTarget, Require,
+        CourseTarget, ItemTarget, Require,
         code::{ITEM_NOT_FOUND, PERMISSION_DENIED},
     },
     timestamp, unlock,
@@ -48,6 +59,8 @@ use crate::{
 pub mod code {
     /// The item does not take the step (a 422 field code at `/action`).
     pub const PROGRESS_ACTION_INVALID: &str = "progress.action_invalid";
+    /// The user is not a learner of the course, or the caller does not observe them (404).
+    pub const PROGRESS_NOT_FOUND: &str = "progress.not_found";
 }
 
 /// `item.completed`, schema version 1 (B11).
@@ -213,6 +226,274 @@ pub async fn record_item_progress(
     Ok(Json(ItemProgress::from_core(recorded.progress)?))
 }
 
+/// A learner as a progress list names them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, ToSchema)]
+pub struct ProgressUser {
+    #[schema(value_type = String, format = "uuid")]
+    pub id: Uuid,
+    pub display_name: String,
+}
+
+/// A learner's roll-up for one module: its published items with a requirement, and how many of
+/// them the learner completed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, ToSchema)]
+pub struct ModuleProgress {
+    #[schema(value_type = String, format = "uuid")]
+    pub module_id: Uuid,
+    pub required_count: i32,
+    pub completed_count: i32,
+    /// RFC 3339, UTC: when the learner completed the module; null until then. Never cleared.
+    #[schema(format = DateTime, required = true)]
+    pub completed_at: Option<String>,
+}
+
+impl ModuleProgress {
+    fn from_core(progress: progress::ModuleProgress) -> Result<Self, ApiError> {
+        Ok(Self {
+            module_id: progress.module_id,
+            required_count: progress.required_count,
+            completed_count: progress.completed_count,
+            completed_at: progress.completed_at.map(time).transpose()?,
+        })
+    }
+}
+
+/// One learner of a course and their progress. `modules` lists the modules the learner
+/// completed an item of, in course order; without `course.view_all` at the course, published
+/// modules only.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, ToSchema)]
+pub struct LearnerProgress {
+    pub user: ProgressUser,
+    /// `active` when any of the learner's enrollments in the course that make them a learner
+    /// is, otherwise `concluded`.
+    pub enrollment_status: EnrollmentStatus,
+    /// Null until the learner first completes an item of the course.
+    #[schema(required = true)]
+    pub course: Option<CourseProgress>,
+    pub modules: Vec<ModuleProgress>,
+}
+
+impl LearnerProgress {
+    fn from_core(learner: progress::Learner) -> Result<Self, ApiError> {
+        Ok(Self {
+            user: ProgressUser {
+                id: learner.user_id,
+                display_name: learner.display_name,
+            },
+            enrollment_status: learner.enrollment_status.into(),
+            course: learner.course.map(CourseProgress::from_core).transpose()?,
+            modules: learner
+                .modules
+                .into_iter()
+                .map(ModuleProgress::from_core)
+                .collect::<Result<_, _>>()?,
+        })
+    }
+}
+
+/// One learner of a course with their progress on each item they took a step on, in course
+/// order; without `course.view_all` at the course, published items in published modules only.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, ToSchema)]
+pub struct LearnerProgressDetail {
+    pub user: ProgressUser,
+    pub enrollment_status: EnrollmentStatus,
+    #[schema(required = true)]
+    pub course: Option<CourseProgress>,
+    pub modules: Vec<ModuleProgress>,
+    pub items: Vec<ItemProgress>,
+}
+
+/// The filter of a course's progress list.
+#[derive(Clone, Copy, Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct LearnerProgressParams {
+    /// Only learners whose enrollment status is this.
+    #[param(value_type = Option<EnrollmentStatus>)]
+    pub status: Option<EnrollmentStatus>,
+}
+
+/// The path of one learner's progress in a course.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct LearnerPath {
+    pub course_id: Uuid,
+    pub user_id: Uuid,
+}
+
+problem_responses! {
+    LearnerProgressForbidden => "`permission.denied`: you do not hold `progress.view` at the course, nor `progress.view_observed` through an active enrollment in it.",
+    LearnerProgressListNotFound => "`course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined.",
+    LearnerProgressNotFound => "`course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `progress.not_found`: the user is not a learner of the course (no enrollment there, active or concluded, whose role holds `course.participate`), or you read only the learners you observe and do not observe them. `org.not_found`: the request's organization cannot be determined.",
+}
+
+/// Whose progress the caller reads in the course, and which content (B20).
+struct Reach {
+    /// `None`: every learner. `Some`: only these, the learners the caller observes.
+    only: Option<Vec<Uuid>>,
+    shown: progress::Shown,
+}
+
+/// B20: `progress.view` at the course reads every learner; otherwise `progress.view_observed`,
+/// which only an active enrollment gives, reads the learners the caller's active Observer
+/// enrollments in the course name; anyone else gets 403 `permission.denied`. Content the caller
+/// cannot read without `course.view_all` stays out of the answer.
+async fn reach(
+    conn: &mut PgConnection,
+    require: &Require<CourseView, CourseTarget>,
+) -> Result<Reach, ApiError> {
+    let (grants, course) = (require.grants(), require.target());
+    let target = course.target();
+    let shown = if grants.holds::<CourseViewAll>(&target) {
+        progress::Shown::All
+    } else {
+        progress::Shown::Published
+    };
+    if grants.holds::<ProgressView>(&target) {
+        return Ok(Reach { only: None, shown });
+    }
+    if grants.holds::<ProgressViewObserved>(&target) {
+        let observer = require.principal().user_id;
+        let only = enrollments::observed_by(conn, grants.scope(), course.id, observer)
+            .await
+            .map_err(|error| ApiError::internal(&error))?;
+        return Ok(Reach {
+            only: Some(only),
+            shown,
+        });
+    }
+    Err(Denied::Forbidden.into())
+}
+
+/// List the learners of a course with their course and module progress, sorted by display
+/// name, then user id. With `progress.view` you read every learner; with only
+/// `progress.view_observed`, the learners your active Observer enrollments in the course name.
+#[utoipa::path(
+    get,
+    path = "/api/v1/courses/{course_id}/progress",
+    operation_id = "listCourseProgress",
+    tag = "progress",
+    params(
+        ("course_id" = String, Path, format = "uuid", description = "The course's id."),
+        LearnerProgressParams,
+        PageParams,
+    ),
+    responses(
+        (status = 200, description = "One page of learners", body = Page<LearnerProgress>),
+        (status = 400, response = crate::openapi::BadRequest),
+        (status = 401, response = crate::openapi::Unauthenticated),
+        (status = 403, response = LearnerProgressForbidden),
+        (status = 404, response = LearnerProgressListNotFound),
+        (status = 500, response = crate::openapi::InternalError),
+        (status = 503, response = crate::openapi::NoOrganization),
+    )
+)]
+pub async fn list_course_progress(
+    require: Require<CourseView, CourseTarget>,
+    State(state): State<AppState>,
+    ApiQuery(filter): ApiQuery<LearnerProgressParams>,
+    ApiQuery(params): ApiQuery<PageParams>,
+) -> Result<Json<Page<LearnerProgress>>, ApiError> {
+    let page = params.parse::<progress::LearnerKey>()?;
+    let mut conn = acquire(&state).await?;
+    let reach = reach(&mut conn, &require).await?;
+    let filter = progress::LearnerFilter {
+        status: filter.status.map(Into::into),
+        only: reach.only,
+    };
+    let (scope, course_id) = (require.grants().scope(), require.target().id);
+    let (after, limit) = (page.after(), page.fetch_limit());
+    let rows = progress::list_for_course(
+        &mut conn,
+        scope,
+        course_id,
+        &filter,
+        reach.shown,
+        after,
+        limit,
+    )
+    .await
+    .map_err(|error| match error {
+        Error::InvalidCursor => ApiError::invalid_cursor(),
+        other => ApiError::internal(&other),
+    })?;
+    let rows = rows
+        .into_iter()
+        .map(LearnerProgress::from_core)
+        .collect::<Result<Vec<_>, _>>()?;
+    page.page(rows, |l| (l.user.display_name.clone(), l.user.id))
+        .map(Json)
+}
+
+/// Read one learner's progress in a course: the course, each module and each item they took a
+/// step on. With only `progress.view_observed`, only a learner you observe.
+#[utoipa::path(
+    get,
+    path = "/api/v1/courses/{course_id}/progress/{user_id}",
+    operation_id = "getLearnerProgress",
+    tag = "progress",
+    params(
+        ("course_id" = String, Path, format = "uuid", description = "The course's id."),
+        ("user_id" = String, Path, format = "uuid", description = "The learner's user id."),
+    ),
+    responses(
+        (status = 200, description = "The learner's progress", body = LearnerProgressDetail),
+        (status = 400, response = crate::openapi::BadRequest),
+        (status = 401, response = crate::openapi::Unauthenticated),
+        (status = 403, response = LearnerProgressForbidden),
+        (status = 404, response = LearnerProgressNotFound),
+        (status = 500, response = crate::openapi::InternalError),
+        (status = 503, response = crate::openapi::NoOrganization),
+    )
+)]
+pub async fn get_learner_progress(
+    require: Require<CourseView, CourseTarget>,
+    State(state): State<AppState>,
+    ApiPath(path): ApiPath<LearnerPath>,
+) -> Result<Json<LearnerProgressDetail>, ApiError> {
+    let mut conn = acquire(&state).await?;
+    let reach = reach(&mut conn, &require).await?;
+    if reach
+        .only
+        .as_ref()
+        .is_some_and(|only| !only.contains(&path.user_id))
+    {
+        return Err(progress_not_found());
+    }
+    let (scope, course_id) = (require.grants().scope(), require.target().id);
+    let detail =
+        progress::learner_in_course(&mut conn, scope, course_id, path.user_id, reach.shown)
+            .await
+            .map_err(|error| ApiError::internal(&error))?
+            .ok_or_else(progress_not_found)?;
+    let learner = LearnerProgress::from_core(detail.learner)?;
+    Ok(Json(LearnerProgressDetail {
+        user: learner.user,
+        enrollment_status: learner.enrollment_status,
+        course: learner.course,
+        modules: learner.modules,
+        items: detail
+            .items
+            .into_iter()
+            .map(ItemProgress::from_core)
+            .collect::<Result<_, _>>()?,
+    }))
+}
+
+fn progress_not_found() -> ApiError {
+    ApiError::new(
+        StatusCode::NOT_FOUND,
+        code::PROGRESS_NOT_FOUND,
+        "This user is not a learner of the course, or you cannot read their progress.",
+    )
+}
+
+async fn acquire(state: &AppState) -> Result<PoolConnection<Postgres>, ApiError> {
+    state
+        .db
+        .acquire()
+        .await
+        .map_err(|error| ApiError::internal(&error))
+}
+
 /// The answer for a progress repository error.
 pub(crate) fn progress_error(error: Error) -> ApiError {
     match error {
@@ -235,6 +516,7 @@ pub(crate) fn progress_error(error: Error) -> ApiError {
         Error::Content(error) => content_error(error),
         Error::Course(error) => ApiError::internal(&error),
         other @ (Error::CompletionMismatch
+        | Error::InvalidCursor
         | Error::Stored { .. }
         | Error::Time(_)
         | Error::Database(_)) => ApiError::internal(&other),

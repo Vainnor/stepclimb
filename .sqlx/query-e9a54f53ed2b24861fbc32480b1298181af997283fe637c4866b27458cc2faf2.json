@@ -1,0 +1,54 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT u.id AS \"user_id!\", u.display_name AS \"display_name!\",\n                  bool_or(e.status = 'active') AS \"active!\"\n           FROM enrollments e JOIN users u ON u.org_id = e.org_id AND u.id = e.user_id\n           WHERE e.org_id = $1 AND e.course_id = $2 AND e.role_id = ANY($3)\n             AND ($4::uuid[] IS NULL OR e.user_id = ANY($4))\n           GROUP BY u.id, u.display_name\n           HAVING ($5::text IS NULL\n                   OR CASE WHEN bool_or(e.status = 'active') THEN 'active' ELSE 'concluded' END = $5)\n              AND ($6::text IS NULL OR (u.display_name, u.id) > ($6, $7::uuid))\n           ORDER BY u.display_name, u.id\n           LIMIT $8",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id!",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "display_name!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "active!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "UuidArray",
+        "UuidArray",
+        "Text",
+        "Text",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "e9a54f53ed2b24861fbc32480b1298181af997283fe637c4866b27458cc2faf2"
+}

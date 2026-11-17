@@ -76,7 +76,7 @@ use stepclimb_core::{
     admission_webhooks::{self, Change, Fresh},
     audit::Actor,
     clock::ManualClock,
-    course_files, courses, enrollments,
+    course_files, courses,
     feature::{
         self, AdmissionWebhook, ApiKeys, CustomBranding, CustomRoles, Feature, Limit, OidcProviders,
     },
@@ -90,8 +90,8 @@ use stepclimb_core::{
     perm::{
         self, AccountManage, AccountView, AdmissionManage, BrandingManage, CourseContentEdit,
         CourseCreate, CourseManage, CourseParticipate, CourseView, CourseViewAll, EnrollmentManage,
-        EnrollmentView, OrgManage, Permission, ProviderManage, RoleAssign, RoleManage, RoleView,
-        ScopeType, ServiceAccountManage, UserManage, UserView,
+        EnrollmentView, OrgManage, Permission, ProgressView, ProgressViewObserved, ProviderManage,
+        RoleAssign, RoleManage, RoleView, ScopeType, ServiceAccountManage, UserManage, UserView,
     },
     role_assignments::{self, NewAssignment, Scope},
     roles::{self, NewRole},
@@ -243,6 +243,7 @@ const TABLE: &[Entry] = &[
             extra: &[CourseCreate::KEY],
             feature: None,
             feature_by_target: false,
+            denied_also: &[],
             setup: move_course_to_ground,
         },
     },
@@ -300,6 +301,59 @@ const TABLE: &[Entry] = &[
         // an enrollment and there is no sibling-account case; tests/progress.rs has that one.
         access: permission(CourseParticipate::KEY, ITEM_NOT_FOUND, view_published_link),
     },
+    // The staff progress reads take `Require<CourseView>` and decide in the handler (M1 spec 05
+    // B20): one entry per granting permission (T14a). `progress.view_observed` is grantable at
+    // course scope only, so its entries hold it through an enrollment that observes the
+    // learner, have no sibling-account case (tests/progress.rs has the 404), and their 403
+    // also leaves out `progress.view`, which grants the route too.
+    Entry {
+        operation_id: "listCourseProgress",
+        access: Access::Permission {
+            key: ProgressView::KEY,
+            target: COURSE_NOT_FOUND,
+            extra: &[CourseView::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[],
+            setup: learner_of_tower_course,
+        },
+    },
+    Entry {
+        operation_id: "listCourseProgress",
+        access: Access::Permission {
+            key: ProgressViewObserved::KEY,
+            target: COURSE_NOT_FOUND,
+            extra: &[CourseView::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[ProgressView::KEY],
+            setup: observed_learner_of_tower_course,
+        },
+    },
+    Entry {
+        operation_id: "getLearnerProgress",
+        access: Access::Permission {
+            key: ProgressView::KEY,
+            target: COURSE_NOT_FOUND,
+            extra: &[CourseView::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[],
+            setup: learner_of_tower_course,
+        },
+    },
+    Entry {
+        operation_id: "getLearnerProgress",
+        access: Access::Permission {
+            key: ProgressViewObserved::KEY,
+            target: COURSE_NOT_FOUND,
+            extra: &[CourseView::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[ProgressView::KEY],
+            setup: observed_learner_of_tower_course,
+        },
+    },
     Entry {
         operation_id: "copyCourse",
         // The source needs `course.view_all` and the destination `course.create` (B12).
@@ -309,6 +363,7 @@ const TABLE: &[Entry] = &[
             extra: &[CourseCreate::KEY],
             feature: None,
             feature_by_target: false,
+            denied_also: &[],
             setup: copy_course_to_ground,
         },
     },
@@ -326,6 +381,7 @@ const TABLE: &[Entry] = &[
             extra: &[UserView::KEY],
             feature: None,
             feature_by_target: false,
+            denied_also: &[],
             setup: participant_for_tower_course,
         },
     },
@@ -747,6 +803,8 @@ const EVERY_PERMISSION: &[&str] = &[
     "enrollment.view",
     "enrollment.manage",
     "course.participate",
+    "progress.view",
+    "progress.view_observed",
 ];
 
 #[test]
@@ -775,6 +833,7 @@ const fn with_every_permission(access: Access) -> Access {
             extra: EVERY_PERMISSION,
             feature,
             feature_by_target,
+            denied_also: &[],
             setup,
         },
         Access::AuthOnly(_) | Access::Own { .. } | Access::Mine(_) => {
@@ -1650,6 +1709,39 @@ fn view_published_link(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + 
     })
 }
 
+/// A published course in Tower with one learner, a user enrolled with a custom role holding
+/// only `course.participate`: the course and the learner as path parameters, for both staff
+/// progress routes (the list takes no `user_id`, and ignores it). Held at Tower.
+fn learner_of_tower_course(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        let enrollment = org.enrollment(course).await;
+        let learner: Uuid = sqlx::query_scalar("SELECT user_id FROM enrollments WHERE id = $1")
+            .bind(enrollment)
+            .fetch_one(&org.pool)
+            .await
+            .expect("the learner");
+        Call {
+            params: vec![("course_id", course), ("user_id", learner)],
+            body: None,
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// [`learner_of_tower_course`], held through an enrollment in the course that observes the
+/// learner.
+fn observed_learner_of_tower_course(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let call = learner_of_tower_course(org).await;
+        let (course, learner) = (call.params[0].1, call.params[1].1);
+        Call {
+            at: At::Observing { course, learner },
+            ..call
+        }
+    })
+}
+
 /// A published course in Tower copied to Ground, inside Tower's subtree, so a grant at Tower
 /// covers the source and the destination. Published, so the 403 case (every permission but
 /// `course.view_all`) sees the course: a draft would answer 404 to it (M1 spec 02 Q13).
@@ -2032,6 +2124,9 @@ enum Access {
         /// target decides which feature applies (a provider's kind, spec 06 I5): its "feature
         /// off, unknown ids" case then answers the target's 404.
         feature_by_target: bool,
+        /// Permissions the 403 case leaves out besides `P`: the other permissions the handler
+        /// grants the route on, when it decides between several (M1 spec 05 B20, T14a).
+        denied_also: &'static [&'static str],
         setup: Setup,
     },
 }
@@ -2104,6 +2199,13 @@ enum At {
     /// A course, where a role is held through an active enrollment (M1 spec 02 Q1): the only
     /// way to hold a course-only permission such as `course.participate`.
     Course(Uuid),
+    /// [`At::Course`], the enrollment also naming `learner` as observed (M1 spec 05 B17), by
+    /// SQL whatever the role holds, so a holder without `progress.view_observed` keeps a link
+    /// that must grant nothing.
+    Observing {
+        course: Uuid,
+        learner: Uuid,
+    },
 }
 
 // The walker (B21, T16).
@@ -2180,8 +2282,50 @@ fn walk(doc: &Value, table: &[&str], public: &[&str]) -> Vec<String> {
     problems
 }
 
+/// Each operation of [`TABLE`] once, in table order.
 fn table_ids() -> Vec<&'static str> {
-    TABLE.iter().map(|entry| entry.operation_id).collect()
+    let mut ids: Vec<&'static str> = Vec::new();
+    for entry in TABLE {
+        if !ids.contains(&entry.operation_id) {
+            ids.push(entry.operation_id);
+        }
+    }
+    ids
+}
+
+/// The operations whose handler grants them on more than one permission, each with one entry
+/// per granting permission (M1 spec 05 B20, T14a).
+const PER_GRANT: &[&str] = &["listCourseProgress", "getLearnerProgress"];
+
+/// An operation has several entries only when it is in [`PER_GRANT`], and then each is a
+/// permission entry naming a different permission.
+#[test]
+fn only_per_grant_operations_have_several_entries_each_with_its_own_permission() {
+    for id in table_ids() {
+        let entries: Vec<&Entry> = TABLE.iter().filter(|e| e.operation_id == id).collect();
+        if entries.len() == 1 {
+            assert!(
+                !PER_GRANT.contains(&id),
+                "{id} has one entry but is in PER_GRANT"
+            );
+            continue;
+        }
+        assert!(
+            PER_GRANT.contains(&id),
+            "{id} is listed {} times",
+            entries.len()
+        );
+        let mut keys: Vec<&str> = entries
+            .iter()
+            .map(|e| match e.access {
+                Access::Permission { key, .. } => key,
+                _ => panic!("{id}: a per-grant entry names a permission"),
+            })
+            .collect();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), entries.len(), "{id} repeats a permission");
+    }
 }
 
 #[test]
@@ -3020,6 +3164,7 @@ async fn run(world: &World, app: &Router, op: &Operation, access: &Access) -> Re
             extra,
             feature,
             feature_by_target,
+            denied_also,
             setup,
         } => {
             let Some(info) = perm::ALL.iter().find(|p| p.key() == *key) else {
@@ -3052,7 +3197,8 @@ async fn run(world: &World, app: &Router, op: &Operation, access: &Access) -> Re
                     report.record(op, "feature off, unknown ids", result);
                 }
             }
-            report.record(op, "403", denied(world, app, op, key, *setup).await);
+            let without = with_extra(key, denied_also);
+            report.record(op, "403", denied(world, app, op, &without, *setup).await);
             if let Target::Scoped { not_found, .. } = target
                 && info.grantable().contains(&ScopeType::Account)
                 && let Some(result) = hidden(world, app, op, not_found, *setup).await
@@ -3088,16 +3234,21 @@ async fn anonymous(
     answer.expect(StatusCode::UNAUTHORIZED, "auth.unauthenticated")
 }
 
+/// A holder of every catalog permission but `without` (the route's, and any other it is
+/// granted on) gets 403 `permission.denied`.
 async fn denied(
     world: &World,
     app: &Router,
     op: &Operation,
-    key: &str,
+    without: &[&str],
     setup: Setup,
 ) -> Result<(), String> {
     let org = world.org().await;
     let call = setup(&org).await;
-    let others: Vec<&str> = all_keys().into_iter().filter(|k| *k != key).collect();
+    let others: Vec<&str> = all_keys()
+        .into_iter()
+        .filter(|k| !without.contains(k))
+        .collect();
     let cookie = org.holder(&others, call.at).await;
     let answer = call_op(app, op, &call, org.id, Some(&cookie)).await?;
     answer.expect(StatusCode::FORBIDDEN, "permission.denied")
@@ -4017,6 +4168,21 @@ impl Org {
             At::Org => Scope::Organization,
             At::Account(id) => Scope::Account(id),
             At::Course(course) => return self.enroll(user, role, course).await,
+            At::Observing { course, learner } => {
+                let enrollment = self.enroll(user, role, course).await;
+                sqlx::query(
+                    "INSERT INTO enrollment_observees (org_id, enrollment_id, course_id, user_id)
+                     VALUES ($1, $2, $3, $4)",
+                )
+                .bind(self.id)
+                .bind(enrollment)
+                .bind(course)
+                .bind(learner)
+                .execute(&self.pool)
+                .await
+                .expect("observe the learner");
+                return enrollment;
+            }
         };
         let assignment = NewAssignment {
             user_id: user,
@@ -4132,25 +4298,24 @@ impl Org {
         last.expect("two identities")
     }
 
-    /// `user` enrolled in `course` with `role`: the enrollment's id.
+    /// `user` enrolled in `course` with `role`, active: the enrollment's id. Inserted by SQL,
+    /// since the repository asks a role holding `progress.view_observed` for the learners it
+    /// observes (M1 spec 05 B17), and the suite's "every permission" holders name none.
     async fn enroll(&self, user: Uuid, role: Uuid, course: Uuid) -> Uuid {
-        let new = enrollments::NewEnrollment {
-            user_id: user,
-            role_id: role,
-            source: Source::Local,
-            external_id: None,
-        };
-        enrollments::create(
-            &self.pool,
-            scope(self.id),
-            course,
-            &new,
-            now(),
-            Actor::Instance,
+        let id = new_id();
+        sqlx::query(
+            "INSERT INTO enrollments (id, org_id, course_id, user_id, role_id)
+             VALUES ($1, $2, $3, $4, $5)",
         )
+        .bind(id)
+        .bind(self.id)
+        .bind(course)
+        .bind(user)
+        .bind(role)
+        .execute(&self.pool)
         .await
-        .expect("create enrollment")
-        .id
+        .expect("create enrollment");
+        id
     }
 
     /// A new custom role holding only `course.participate`.
@@ -4484,6 +4649,7 @@ const fn permission(key: &'static str, target: Target, setup: Setup) -> Access {
         extra: &[],
         feature: None,
         feature_by_target: false,
+        denied_also: &[],
         setup,
     }
 }
@@ -4504,6 +4670,7 @@ const fn gated(feature: &'static str, access: Access) -> Access {
             extra,
             feature: Some(feature),
             feature_by_target: false,
+            denied_also: &[],
             setup,
         },
         Access::AuthOnly(_) | Access::Own { .. } | Access::Mine(_) => {
@@ -4531,6 +4698,7 @@ const fn gated_by_target(feature: &'static str, access: Access) -> Access {
             extra,
             feature,
             feature_by_target: true,
+            denied_also: &[],
             setup,
         },
         Access::AuthOnly(_) | Access::Own { .. } | Access::Mine(_) => {

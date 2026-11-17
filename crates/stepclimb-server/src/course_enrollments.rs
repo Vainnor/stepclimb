@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Enrollments: `/api/v1/courses/{course_id}/enrollments` and `/api/v1/enrollments/{id}`
-//! (docs/specs/m1/02-courses-and-enrollments.md B15 to B20, B24a, B27 and API).
+//! (docs/specs/m1/02-courses-and-enrollments.md B15 to B20, B24a, B27 and API;
+//! docs/specs/m1/05-progress-and-events.md B15, B17 to B19).
 //!
 //! An enrollment puts a user in a course with a role. An active one grants the role's
 //! permissions that are grantable at course scope, at that course only (B16): it is the
@@ -12,20 +13,28 @@
 //! `POST` checks in B17's order: the user, who must exist and be covered by the caller's
 //! `user.view` as the users list reaches them (404 `user.not_found` otherwise, owner decision of
 //! 2026-11-17), the role (404
-//! `role.not_found`), Manager and Observer (422 `enrollment.role_unavailable`: Observer waits for
-//! spec 05 I3's named learners, Manager for M4), a built-in role this release does not define
-//! (409 `role.unknown_builtin`), the escalation rule (403 `permission.escalation`), then the
-//! course's own rules in `stepclimb_core::enrollments::create`: an archived course (409
-//! `course.archived`), a template and a role holding `course.participate` (409
-//! `course.template`), and a repeat (409 `enrollment.exists`).
+//! `role.not_found`), Manager (422 `enrollment.role_unavailable`, until M4), the observed
+//! learners present exactly when the role holds `progress.view_observed` (422
+//! `enrollment.observed_invalid` at `/observed_user_ids`, spec 05 B17), a built-in role this
+//! release does not define (409 `role.unknown_builtin`), the escalation rule (403
+//! `permission.escalation`), naming observed learners without `progress.view` at the course
+//! (403 `permission.escalation`, spec 05 B19), then the course's own rules in
+//! `stepclimb_core::enrollments::create`: an archived course (409 `course.archived`), a
+//! template and a role holding `course.participate` (409 `course.template`), the observed
+//! learners each a learner of the course (422 `enrollment.observed_invalid` at the entry), and
+//! a repeat (409 `enrollment.exists`).
 //!
 //! The escalation rule (B17, Q12, B24a): the caller must hold at the course every catalog
 //! permission of the role that is grantable at organization or account scope, so `enrollment.
 //! manage` alone does not let anyone hand out `course.manage` or `organization.manage` through a
 //! custom role. A permission grantable only at course scope (`course.participate`) is left out:
 //! no assignment can give it to the caller, and it describes the enrolled person's own relation
-//! to the course. `PATCH` and `DELETE` run the same check on the enrollment's role (B18), then
-//! refuse an enrollment an outside source owns (409 `enrollment.externally_managed`).
+//! to the course; `progress.view_observed`, the one course-only permission over other people,
+//! is guarded instead by spec 05 B19's check on naming observed learners. `PATCH` and `DELETE`
+//! run the same check on the enrollment's role (B18), then refuse an enrollment an outside
+//! source owns (409 `enrollment.externally_managed`). A `PATCH` that names observed learners,
+//! or reactivates an enrollment that observes learners, also needs `progress.view` at the
+//! course (403 `permission.escalation`).
 //!
 //! Every write checks `enrollment.manage` again on the course's path as `courses::lock` reads it
 //! in the write's transaction, which also locks the course row (B19), and reads the role
@@ -45,7 +54,7 @@ use stepclimb_core::{
     enrollments::{self as repo, ListFilter, NewEnrollment},
     grants::{Denied, Grants, Target},
     id::Uuid,
-    perm::{EnrollmentManage, EnrollmentView},
+    perm::{EnrollmentManage, EnrollmentView, Permission, ProgressView, ProgressViewObserved},
     roles, users,
 };
 use utoipa::{IntoParams, ToSchema};
@@ -56,6 +65,7 @@ use crate::{
     error::{ApiError, FieldError},
     extract::{ApiJson, ApiQuery},
     openapi::problem_responses,
+    organization::present,
     pagination::{Page, PageParams},
     require::{
         CourseTarget, EnrollmentTarget, Require, check_course,
@@ -74,9 +84,8 @@ pub const ENROLLMENTS_SEGMENT: &str = "enrollments";
 /// The path an enrollment is at: `{ENROLLMENT_PATH}/{enrollment_id}`.
 pub const ENROLLMENT_PATH: &str = "/api/v1/enrollments";
 
-/// Built-in roles that cannot be enrolled yet (B17, Q9): Observer until spec 05 I3 adds the
-/// learners it observes, Manager until M4.
-const NOT_ENROLLABLE: [&str; 2] = ["manager", "observer"];
+/// Built-in roles that cannot be enrolled yet (B17, Q9): Manager, until M4.
+const NOT_ENROLLABLE: [&str; 1] = ["manager"];
 
 /// The codes this module produces besides `course.*` (`crate::courses::code`), the role and
 /// user codes, and `enrollment.not_found` (`require::code`).
@@ -85,17 +94,21 @@ pub mod code {
     pub const ENROLLMENT_EXISTS: &str = "enrollment.exists";
     /// An outside source owns the enrollment (409).
     pub const ENROLLMENT_EXTERNALLY_MANAGED: &str = "enrollment.externally_managed";
-    /// In a 422's `errors`: the role cannot be enrolled (Manager, Observer).
+    /// In a 422's `errors`: the role cannot be enrolled (Manager).
     pub const ENROLLMENT_ROLE_UNAVAILABLE: &str = "enrollment.role_unavailable";
+    /// In a 422's `errors`: the observed learners are missing for a role holding
+    /// `progress.view_observed`, present for one without it, not 1 to 100 entries, or (at an
+    /// entry) a repeat or a user who is not a learner of the course.
+    pub const ENROLLMENT_OBSERVED_INVALID: &str = "enrollment.observed_invalid";
 }
 
 problem_responses! {
     EnrollmentListNotFound => "`course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined.",
     EnrollmentCreateNotFound => "`course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `user.not_found`: no user of the organization has this id, or your `user.view` does not cover them (held at the organization, or at an account where they hold a role or an active enrollment). `role.not_found`: no built-in role and no custom role of the organization has this id. `org.not_found`: the request's organization cannot be determined.",
-    EnrollmentCreateForbidden => "`permission.denied`: you can see the course but do not hold `enrollment.manage` at a scope containing it. `permission.escalation`: the role has a catalog permission grantable at organization or account scope that you do not hold at the course. `auth.csrf_refused`: the request did not come from this site.",
+    EnrollmentCreateForbidden => "`permission.denied`: you can see the course but do not hold `enrollment.manage` at a scope containing it. `permission.escalation`: the role has a catalog permission grantable at organization or account scope that you do not hold at the course, or the body names observed learners and you do not hold `progress.view` at the course. `auth.csrf_refused`: the request did not come from this site.",
     EnrollmentCreateConflict => "`enrollment.exists`: the user already holds the role in the course. `role.unknown_builtin`: the role is a built-in role of another Stepclimb release. `course.archived`: an archived course takes no new enrollment. `course.template`: a template takes no enrollment whose role holds `course.participate`.",
     EnrollmentNotFound => "`enrollment.not_found`: no enrollment with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined.",
-    EnrollmentWriteForbidden => "`permission.denied`: you can see the enrollment's course but do not hold `enrollment.manage` at a scope containing it. `permission.escalation`: the enrollment's role has a catalog permission grantable at organization or account scope that you do not hold at the course. `auth.csrf_refused`: the request did not come from this site.",
+    EnrollmentWriteForbidden => "`permission.denied`: you can see the enrollment's course but do not hold `enrollment.manage` at a scope containing it. `permission.escalation`: the enrollment's role has a catalog permission grantable at organization or account scope that you do not hold at the course, or the change names observed learners or reactivates an enrollment that observes learners and you do not hold `progress.view` at the course. `auth.csrf_refused`: the request did not come from this site.",
     EnrollmentWriteConflict => "`enrollment.externally_managed`: an identity provider, the sync API, SCIM or a connector owns the enrollment. `role.unknown_builtin`: the enrollment's role is a built-in role of another Stepclimb release.",
 }
 
@@ -173,6 +186,11 @@ pub struct Enrollment {
     /// The owning system's id for the enrollment; `null` for a `local` one.
     #[schema(required = true)]
     pub external_id: Option<String>,
+    /// The learners this enrollment observes, sorted by id: present when its role holds
+    /// `progress.view_observed` (an Observer), absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Vec<String>, required = false)]
+    pub observed_user_ids: Option<Vec<Uuid>>,
     /// RFC 3339, UTC.
     #[schema(format = DateTime)]
     pub created_at: String,
@@ -197,27 +215,43 @@ impl Enrollment {
             status: enrollment.status.into(),
             source: enrollment.source.into(),
             external_id: enrollment.external_id,
+            observed_user_ids: enrollment.observed_user_ids,
         })
     }
 }
 
 /// An enrollment to create, `active`.
-#[derive(Clone, Copy, Debug, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NewEnrollmentBody {
     #[schema(value_type = String, format = "uuid")]
     pub user_id: Uuid,
-    /// A built-in role other than `manager` and `observer`, or a custom role of the
-    /// organization.
+    /// A built-in role other than `manager`, or a custom role of the organization.
     #[schema(value_type = String, format = "uuid")]
     pub role_id: Uuid,
+    /// The learners the enrollment observes: required, 1 to 100 distinct learners of the course
+    /// (users holding an enrollment there whose role has `course.participate`), when the role
+    /// holds `progress.view_observed`, and refused otherwise. Naming them needs `progress.view`
+    /// at the course.
+    #[serde(default, deserialize_with = "present")]
+    #[schema(value_type = Vec<String>)]
+    pub observed_user_ids: Option<Vec<Uuid>>,
 }
 
-/// The status to give an enrollment.
-#[derive(Clone, Copy, Debug, Deserialize, ToSchema)]
+/// A change to an enrollment; an absent member keeps its value.
+#[derive(Clone, Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EnrollmentPatch {
-    pub status: EnrollmentStatus,
+    /// Reactivating an enrollment that observes learners needs `progress.view` at the course.
+    #[serde(default, deserialize_with = "present")]
+    #[schema(value_type = EnrollmentStatus)]
+    pub status: Option<EnrollmentStatus>,
+    /// The whole new list of learners the enrollment observes, for a role holding
+    /// `progress.view_observed`: 1 to 100 distinct learners of the course. Needs `progress.view`
+    /// at the course.
+    #[serde(default, deserialize_with = "present")]
+    #[schema(value_type = Vec<String>)]
+    pub observed_user_ids: Option<Vec<Uuid>>,
 }
 
 /// The filters of a course's enrollments; each narrows the list.
@@ -333,13 +367,27 @@ pub async fn create_enrollment(
             code::ENROLLMENT_ROLE_UNAVAILABLE,
         )]));
     }
+    let observes = role
+        .permissions
+        .iter()
+        .any(|k| k == ProgressViewObserved::KEY);
+    if observes != body.observed_user_ids.is_some() {
+        return Err(ApiError::invalid(vec![FieldError::at(
+            &["observed_user_ids"],
+            code::ENROLLMENT_OBSERVED_INVALID,
+        )]));
+    }
     refuse_unknown_builtin(&role)?;
     refuse_escalation(grants, &role.permissions, &target)?;
+    if observes {
+        refuse_observing_without_progress_view(grants, &target)?;
+    }
     let new = NewEnrollment {
         user_id: body.user_id,
         role_id: body.role_id,
         source: Source::Local,
         external_id: None,
+        observed_user_ids: body.observed_user_ids.unwrap_or_default(),
     };
     let actor = client.actor(require.principal());
     let created = repo::create(&mut *tx, scope, course_id, &new, state.clock.now(), actor)
@@ -355,7 +403,8 @@ pub async fn create_enrollment(
         .into_response())
 }
 
-/// Conclude or reactivate an enrollment. Its current status changes nothing.
+/// Conclude or reactivate an enrollment, or replace the learners an Observer enrollment
+/// observes. A change naming only current values changes nothing.
 #[utoipa::path(
     patch,
     path = "/api/v1/enrollments/{enrollment_id}",
@@ -385,17 +434,25 @@ pub async fn update_enrollment(
 ) -> Result<Json<Enrollment>, ApiError> {
     let grants = require.grants();
     let mut tx = begin(&state).await?;
-    let enrollment = writable(&mut tx, grants, require.target()).await?;
-    let (status, now) = (body.status.into(), state.clock.now());
-    let actor = client.actor(require.principal());
-    let updated = repo::set_status(&mut *tx, grants.scope(), enrollment.id, status, now, actor)
+    let (enrollment, course) = writable(&mut tx, grants, require.target()).await?;
+    let change = repo::Change {
+        status: body.status.map(Into::into),
+        observed_user_ids: body.observed_user_ids,
+    };
+    if widens_observation(&enrollment, &change) {
+        refuse_observing_without_progress_view(grants, &course)?;
+    }
+    let (now, actor) = (state.clock.now(), client.actor(require.principal()));
+    let updated = repo::update(&mut *tx, grants.scope(), enrollment.id, &change, now, actor)
         .await
         .map_err(enrollment_error)?;
     commit(tx).await?;
     Ok(Json(Enrollment::from_repo(updated)?))
 }
 
-/// Remove an enrollment.
+/// Remove an enrollment. When the user keeps no other enrollment in the course whose role holds
+/// `course.participate`, this also deletes their progress in the course and the Observer links
+/// that name them; an Observer enrollment's own links always go with it.
 #[utoipa::path(
     delete,
     path = "/api/v1/enrollments/{enrollment_id}",
@@ -421,7 +478,7 @@ pub async fn delete_enrollment(
 ) -> Result<StatusCode, ApiError> {
     let grants = require.grants();
     let mut tx = begin(&state).await?;
-    let enrollment = writable(&mut tx, grants, require.target()).await?;
+    let (enrollment, _) = writable(&mut tx, grants, require.target()).await?;
     let (now, actor) = (state.clock.now(), client.actor(require.principal()));
     repo::delete(&mut *tx, grants.scope(), enrollment.id, now, actor)
         .await
@@ -458,11 +515,12 @@ async fn refuse_unreachable_user(
 /// `enrollment.not_found` when the course left the caller's reach), the enrollment itself (404),
 /// its role read `FOR KEY SHARE` (409 `role.unknown_builtin` for another release's built-in
 /// role), the escalation rule (403) and its source (409 `enrollment.externally_managed`).
+/// Returns the enrollment and its course as the evaluator's target.
 async fn writable(
     tx: &mut Transaction<'static, Postgres>,
     grants: &Grants,
     target: &EnrollmentTarget,
-) -> Result<repo::Enrollment, ApiError> {
+) -> Result<(repo::Enrollment, Target), ApiError> {
     let scope = grants.scope();
     let course = recheck_manage(tx, grants, target.course.id, ENROLLMENT_NOT_FOUND).await?;
     let hidden = || not_found_as(Denied::CourseNotFound, ENROLLMENT_NOT_FOUND);
@@ -483,7 +541,37 @@ async fn writable(
             "An outside system owns this enrollment. Change it there.",
         ));
     }
-    Ok(enrollment)
+    Ok((enrollment, course))
+}
+
+/// Whether `change` names observed learners, or reactivates `enrollment` while it observes
+/// learners: either gives its holder sight of those learners' progress (spec 05 B19, B20).
+fn widens_observation(enrollment: &repo::Enrollment, change: &repo::Change) -> bool {
+    let observes = enrollment
+        .observed_user_ids
+        .as_ref()
+        .is_some_and(|users| !users.is_empty());
+    let reactivates =
+        change.status == Some(repo::Status::Active) && enrollment.status != repo::Status::Active;
+    change.observed_user_ids.is_some() || (reactivates && observes)
+}
+
+/// 403 `permission.escalation` unless the caller holds `progress.view` at the course (spec 05
+/// B19): whoever points an Observer at learners, or restores an Observer's sight of them, must
+/// already be able to read those learners' progress. `progress.view_observed` is course-only, so
+/// the escalation rule leaves it out (B24a) and this check guards it.
+fn refuse_observing_without_progress_view(
+    grants: &Grants,
+    course: &Target,
+) -> Result<(), ApiError> {
+    if grants.holds::<ProgressView>(course) {
+        return Ok(());
+    }
+    Err(ApiError::new(
+        StatusCode::FORBIDDEN,
+        PERMISSION_ESCALATION,
+        "Naming the learners an Observer sees needs `progress.view` at this course.",
+    ))
 }
 
 /// The extractor's `enrollment.manage` check again ([`check_course`]), on the course as
@@ -560,6 +648,12 @@ fn user_not_found() -> ApiError {
 /// The answer for an enrollments repository error.
 fn enrollment_error(error: repo::Error) -> ApiError {
     use crate::courses::code::{COURSE_ARCHIVED, COURSE_TEMPLATE};
+    let observed = |path: &[&str]| {
+        ApiError::invalid(vec![FieldError::at(
+            path,
+            code::ENROLLMENT_OBSERVED_INVALID,
+        )])
+    };
     use repo::Error as E;
     let conflict = |code, detail| ApiError::new(StatusCode::CONFLICT, code, detail);
     match error {
@@ -579,6 +673,10 @@ fn enrollment_error(error: repo::Error) -> ApiError {
             COURSE_TEMPLATE,
             "A template takes no learner. Copy it to an ordinary course first.",
         ),
+        E::ObservedUnavailable | E::ObservedInvalid { index: None } => {
+            observed(&["observed_user_ids"])
+        }
+        E::ObservedInvalid { index: Some(i) } => observed(&["observed_user_ids", &i.to_string()]),
         other @ (E::ContainsNul { .. }
         | E::UnknownStoredValue { .. }
         | E::Role(_)

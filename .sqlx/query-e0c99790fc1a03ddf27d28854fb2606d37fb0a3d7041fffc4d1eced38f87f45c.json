@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT e.id, e.course_id, e.user_id, u.display_name, e.role_id, e.status, e.source,\n                  e.external_id,\n                  (extract(epoch FROM e.created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM e.updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM enrollments e JOIN users u ON u.org_id = e.org_id AND u.id = e.user_id\n           WHERE e.org_id = $1 AND e.id = $2",
+  "query": "SELECT e.id, e.course_id, e.user_id, u.display_name, e.role_id, e.status, e.source,\n                  e.external_id, r.key AS role_key, r.builtin AS role_builtin,\n                  r.permissions AS role_permissions,\n                  ARRAY(SELECT o.user_id FROM enrollment_observees o\n                        WHERE o.org_id = e.org_id AND o.enrollment_id = e.id\n                        ORDER BY o.user_id) AS \"observed!\",\n                  (extract(epoch FROM e.created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM e.updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM enrollments e JOIN users u ON u.org_id = e.org_id AND u.id = e.user_id\n           JOIN roles r ON r.id = e.role_id AND (r.org_id IS NULL OR r.org_id = e.org_id)\n           WHERE e.org_id = $1 AND e.id = $2",
   "describe": {
     "columns": [
       {
@@ -93,12 +93,51 @@
       },
       {
         "ordinal": 8,
+        "name": "role_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "roles",
+            "name": "key"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "role_builtin",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "roles",
+            "name": "builtin"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "role_permissions",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "roles",
+            "name": "permissions"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "observed!",
+        "type_info": "UuidArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 12,
         "name": "created_at_us!",
         "type_info": "Int8",
         "origin": "Expression"
       },
       {
-        "ordinal": 9,
+        "ordinal": 13,
         "name": "updated_at_us!",
         "type_info": "Int8",
         "origin": "Expression"
@@ -119,9 +158,13 @@
       false,
       false,
       true,
+      false,
+      false,
+      false,
+      null,
       null,
       null
     ]
   },
-  "hash": "93ea6afe074a65f0b9a7fdec0376da19b625d8fc7b10eef82edc4e1b5609d535"
+  "hash": "e0c99790fc1a03ddf27d28854fb2606d37fb0a3d7041fffc4d1eced38f87f45c"
 }
