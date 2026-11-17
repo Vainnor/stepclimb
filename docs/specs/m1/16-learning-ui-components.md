@@ -238,6 +238,50 @@ listed here with a pointer so the inventory is complete in one place.
   editing (`04`).
 - **B20.** Files (`/c/:course/files`): the folder Tree and file list (`06` B12) with FileDrop
   upload, rename, move and delete, for holders of `course.view_all`.
+- **B20a.** Coordinator decisions for B20 (overnight, 2026-11-17), pending owner review:
+  - The route takes the course's id, as `03` B16's routes do, and the folder on screen is the
+    `folder` search parameter (`/c/<id>/files?folder=/handouts`), so each folder has an address.
+    The files area is a course's page, not a destination of its own, so the shell's navigation
+    gets no entry; the course pages of I11 link to it, and until they exist it is reached by its
+    address.
+  - The page reads the course (`02` B10) for its title, code, status and `permissions`. Upload
+    and the row actions show only when `permissions` holds `course.content_edit` and the course
+    is not archived; an archived course says its files cannot be changed. A 403 on the listing
+    says in words that the files area is for staff and that learners reach files through items
+    (`06` Q5), with no "Try again"; a 404 `course.not_found` says the course could not be found.
+    A `folder` the server refuses as a path (422 `request.invalid`) says the path is not valid
+    and links to the top folder, since trying again cannot help.
+  - The Tree is mounted at 768 px and wider, beside the list, and loads a folder's sub-folders
+    when the folder is opened; a folder whose sub-folders fail to load leaves a line under the
+    Tree with "Try again". Under 768 px there is no Tree and no request for it; the breadcrumbs,
+    shown at every width, and the folder rows of the list lead between folders.
+  - The list has three columns, so it fits 375 px: the name, with the file's type and its last
+    change on a line under it; the size; and an actions menu (Rename, Move and Delete for a
+    file, Rename for a folder). Rename and move take one field in a dialog, as the account
+    page's passkey rename does; delete asks first. Move takes a typed folder path, and moving a
+    file into a folder that does not exist makes it, since a folder exists while it holds a file
+    (`06` Q4). A folder rename changes the folder's own name and keeps it in its parent. Rows are
+    keyed by id, so focus that leaves with a row (deleted, moved out, a renamed folder) goes to
+    the row in its place, or to the table when it empties; Cancel returns it to the row's
+    actions button.
+  - Coordinator decision (2026-11-17): the type is a short label, not the raw MIME type: PDF,
+    Image, Video, Audio, Word document, Excel spreadsheet, PowerPoint presentation, the three
+    OpenDocument kinds, Plain text, and "Audio or video" for a generic Ogg file, the types
+    `06` B6's sniffer gives. Any other file reads as its name's extension ("ZIP file"), or
+    "File" without one. The full MIME type is the label's tooltip text and is read to screen
+    readers after it.
+  - Coordinator decision (2026-11-17): moving by a typed path stays for M1. A ComboBox of the
+    course's known folders, still taking a new path, replaces it before 1.0.
+  - Several files can be chosen at once. They upload one after another into the folder on
+    screen; the first refusal stops the rest and is shown in the drop zone with the number of
+    files not sent. The zone stays enabled while a batch runs, so focus stays on "Choose files";
+    a selection made meanwhile is not sent, and a status line under the zone, a polite live
+    region, says so, as it says which file is uploading and how each one ended. Leaving the
+    folder aborts the batch. The page sets no size limit of its own, since the API does not publish
+    `max_file_bytes`; the server's 413 is shown in words. The upload goes out through
+    `XMLHttpRequest`, the only browser API that reports a request body's progress, as the API
+    client's per-request `fetch`, so the request is still built from the OpenAPI document.
+  - Opening or downloading a file waits for `06` I3's signed URLs, which are not built yet.
 - **B21.** Assignments (`/c/:course/assignments`): the list (`13`), a creation sheet with target,
   assignees, due rule, reminders and recurrence (`14`), and each assignment's people with their
   status and timeline (`13` B16).
