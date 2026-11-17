@@ -239,8 +239,13 @@ impl Fixture {
 
     /// One pass of a `transcode` worker with `transcoder`: how many jobs it ran.
     async fn work(&self, transcoder: Transcoder) -> usize {
-        let registry =
-            jobs::registry(Some(self.storage.clone()), Some(transcoder)).expect("a fixture step");
+        self.work_with(Some(self.storage.clone()), Some(transcoder))
+            .await
+    }
+
+    /// One pass of a `transcode` worker of a process with `storage` and `transcoder`.
+    async fn work_with(&self, storage: Option<Storage>, transcoder: Option<Transcoder>) -> usize {
+        let registry = jobs::registry(storage, transcoder).expect("a fixture step");
         let worker = Worker::new(
             self.pool.clone(),
             registry,
@@ -506,9 +511,10 @@ async fn outputs_past_the_video_storage_limit_fail_the_video_and_are_deleted(poo
         objects.iter().all(|k| k.contains("/upload/")),
         "{objects:?}"
     );
-    assert!(
-        f.usage().await.is_empty(),
-        "nothing recorded for a failed transcode"
+    assert_eq!(
+        f.usage().await,
+        [("2026-03-01".to_owned(), 1)],
+        "the plan's limit is not the server's failure: the charge stays"
     );
 }
 
@@ -530,6 +536,11 @@ async fn t7_a_retry_after_a_failure_writes_the_next_run_and_deletes_the_old_one(
         )
     );
     assert_eq!(f.uploads().await, 1, "the original is kept for a retry");
+    assert_eq!(
+        f.usage().await,
+        [("2026-03-01".to_owned(), 1)],
+        "B13: charged when the render started, kept when the input fails it"
+    );
     // What a player of run 1 would be reading had it been ready.
     let old = format!("{}/v1/master.m3u8", f.prefix(video));
     f.storage
@@ -549,6 +560,11 @@ async fn t7_a_retry_after_a_failure_writes_the_next_run_and_deletes_the_old_one(
     let objects = f.objects().await;
     assert!(objects.iter().all(|k| k.contains("/v2/")), "{objects:?}");
     assert!(!objects.is_empty());
+    assert_eq!(
+        f.usage().await,
+        [("2026-03-01".to_owned(), 2)],
+        "each run is charged"
+    );
 }
 
 /// B2: only a video that failed as `video.transcode_failed`, with its upload stored, can be
@@ -603,6 +619,11 @@ async fn a_host_failure_is_retried_and_fails_the_video_on_the_last_attempt(pool:
             .unwrap();
     assert_eq!(attempts, 1);
     assert!(error.unwrap().contains("could not start"));
+    assert_eq!(
+        f.usage().await,
+        [("2026-03-01".to_owned(), 0)],
+        "B13: a failure on the server's side refunds the charge"
+    );
     sqlx::query("UPDATE jobs SET attempts = $1, run_at = timestamptz 'epoch'")
         .bind(i32::try_from(TRANSCODE.retry.max_attempts).unwrap() - 1)
         .execute(&f.pool)
@@ -617,6 +638,124 @@ async fn a_host_failure_is_retried_and_fails_the_video_on_the_last_attempt(pool:
             Some("video.transcode_failed".to_owned())
         )
     );
+    // The last attempt ran in April: its charge went to April and was refunded there.
+    assert_eq!(
+        f.usage().await,
+        [("2026-03-01".to_owned(), 0), ("2026-04-01".to_owned(), 0)]
+    );
+}
+
+/// Put the only `video.transcode` job on its last attempt, due now.
+async fn last_attempt(f: &Fixture) {
+    sqlx::query("UPDATE jobs SET attempts = $1, run_at = timestamptz 'epoch'")
+        .bind(i32::try_from(TRANSCODE.retry.max_attempts).expect("a fixture step") - 1)
+        .execute(&f.pool)
+        .await
+        .expect("a fixture step");
+}
+
+/// Review finding 3: a process without storage or without ffmpeg that claims the job retries it
+/// and, on the last attempt, fails the video instead of leaving it processing.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_process_that_cannot_transcode_fails_the_video_on_the_last_attempt(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let bytes = clip(&f.work.0, "mp4", Some((320, 240)), false, 1);
+    let no_storage = f.processing(&bytes).await;
+    assert_eq!(f.work_with(None, Some(f.transcoder(60, None))).await, 1);
+    assert_eq!(f.status(no_storage).await.0, "processing", "retried first");
+    last_attempt(&f).await;
+    f.work_with(None, Some(f.transcoder(60, None))).await;
+    let failed = (
+        "failed".to_owned(),
+        Some("video.transcode_failed".to_owned()),
+    );
+    assert_eq!(f.status(no_storage).await, failed);
+
+    let no_ffmpeg = f.processing(&bytes).await;
+    last_attempt(&f).await;
+    f.work_with(Some(f.storage.clone()), None).await;
+    assert_eq!(f.status(no_ffmpeg).await, failed);
+    assert!(f.usage().await.is_empty(), "nothing was charged");
+}
+
+/// Review finding 3: a job whose lease lapsed on its last attempt is dead without its handler
+/// running; `videos.cleanup` fails its video. A processing video with no job, untouched for
+/// 24 hours, is failed too; one touched since is kept.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn cleanup_fails_processing_videos_no_live_job_will_finish(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let bytes = b"bytes whose transcode never ends";
+    let lapsed = f.processing(bytes).await;
+    sqlx::query(
+        "UPDATE jobs SET attempts = max_attempts, run_at = timestamptz 'epoch',
+                         locked_until = timestamptz 'epoch'",
+    )
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(f.work(f.transcoder(60, None)).await, 0, "dead at the claim");
+    let dead: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs WHERE dead_at IS NOT NULL")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(dead, 1);
+    let orphan = f.processing(bytes).await;
+    let recent = f.processing(bytes).await;
+    sqlx::query("DELETE FROM jobs WHERE dead_at IS NULL")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE videos SET updated_at = timestamptz 'epoch' WHERE id = $1")
+        .bind(orphan)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let report = stepclimb_server::videos_cleanup::run(&f.pool, &f.storage, f.now())
+        .await
+        .unwrap();
+    assert_eq!((report.stranded, report.failed), (2, 0));
+    let failed = (
+        "failed".to_owned(),
+        Some("video.transcode_failed".to_owned()),
+    );
+    assert_eq!(f.status(lapsed).await, failed);
+    assert_eq!(f.status(orphan).await, failed);
+    assert_eq!(f.status(recent).await.0, "processing");
+}
+
+/// Owner decision (2026-11-17): a video can be retried 3 times.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_video_is_retried_at_most_three_times(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let video = f.processing(b"a video whose transcode fails").await;
+    let s = scope(f.org);
+    for expected in [
+        Retried::Processing,
+        Retried::Processing,
+        Retried::Processing,
+        Retried::LimitReached,
+    ] {
+        sqlx::query(
+            "UPDATE videos SET status = 'failed', error_code = 'video.transcode_failed'
+             WHERE id = $1",
+        )
+        .bind(video)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+        let mut tx = f.pool.begin().await.unwrap();
+        let retried = transcodes::retry(&mut tx, s, (video, &[f.course]), f.now())
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(retried, expected);
+    }
+    let retries: i32 = sqlx::query_scalar("SELECT transcode_retries FROM videos WHERE id = $1")
+        .bind(video)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(retries, 3);
 }
 
 /// The note of D13 for I2: ending a failed video deletes everything under its prefix, transcode

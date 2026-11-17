@@ -211,6 +211,7 @@ and `compose.production.yaml` disagree on a name or a default.
 | `SC_SECRETS_DIR` | `./secrets` | The directory holding the secret files: an absolute path, or one relative to `deploy/compose/` |
 | `SC_HTTP_ADDRESS` | `127.0.0.1` | The host address the server is published on |
 | `SC_HTTP_PORT` | `8080` | The host port the server is published on |
+| `SC_SERVER_MEMORY` | `6g` | The server container's memory limit (`mem_limit`), ffmpeg's transcodes included |
 | `SC_PROXY_ADDRESS` | `0.0.0.0` | The host address Caddy is published on |
 | `SC_PROXY_HTTP_PORT` | `80` | Caddy's HTTP port on the host |
 | `SC_PROXY_HTTPS_PORT` | `443` | Caddy's HTTPS port on the host |

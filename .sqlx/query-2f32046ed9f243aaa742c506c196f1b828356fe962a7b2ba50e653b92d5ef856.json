@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE transcode_usage\n         SET minutes = GREATEST(minutes - $2, 0)\n         WHERE org_id = $1\n           AND month = date_trunc('month', (timestamptz 'epoch' + $3::bigint\n                                            * interval '1 microsecond') AT TIME ZONE 'UTC')::date",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2f32046ed9f243aaa742c506c196f1b828356fe962a7b2ba50e653b92d5ef856"
+}

@@ -21,6 +21,14 @@ pub const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 /// The most memory ffprobe may hold: 1 GiB.
 pub const PROBE_MEMORY_BYTES: u64 = 1024 * 1024 * 1024;
 
+/// The largest width or height a source may have: 8192 pixels; past it ffprobe's answer is
+/// refused as `video.probe_failed` (B9).
+pub const MAX_SIDE: u32 = 8192;
+
+/// The most one side may exceed the other: 16 times. A thinner frame is refused as
+/// `video.probe_failed`, so a thumbnail's height stays between 10 and 2,560 pixels.
+pub const MAX_ASPECT: u32 = 16;
+
 /// The container an upload's first bytes claim (`stepclimb_core::sniff::video`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Container {
@@ -157,7 +165,8 @@ pub fn parse(json: &[u8]) -> Result<Probed, ProbeError> {
     let (Some(width), Some(height)) = (video.width, video.height) else {
         return Err(ProbeError::Unreadable);
     };
-    if width == 0 || height == 0 {
+    let (long, short) = (width.max(height), width.min(height));
+    if short == 0 || long > MAX_SIDE || long / short > MAX_ASPECT {
         return Err(ProbeError::Unreadable);
     }
     Ok(Probed::Video(Source {
@@ -262,6 +271,19 @@ mod tests {
     }
 
     #[test]
+    fn the_largest_and_thinnest_accepted_frames_pass() {
+        for (w, h) in [(8192, 4320), (8192, 512), (512, 8192), (2, 2)] {
+            let json = format!(
+                r#"{{"streams":[{{"codec_type":"video","width":{w},"height":{h}}}],"format":{{"duration":"3"}}}}"#
+            );
+            assert!(
+                matches!(parse(json.as_bytes()), Ok(Probed::Video(_))),
+                "{w}x{h}"
+            );
+        }
+    }
+
+    #[test]
     fn an_answer_without_a_duration_or_size_is_unreadable() {
         for json in [
             &br#"not json"#[..],
@@ -271,6 +293,9 @@ mod tests {
             br#"{"streams":[{"codec_type":"video","width":1,"height":1}],"format":{"duration":"inf"}}"#,
             br#"{"streams":[{"codec_type":"video"}],"format":{"duration":"3"}}"#,
             br#"{"streams":[{"codec_type":"video","width":0,"height":720}],"format":{"duration":"3"}}"#,
+            br#"{"streams":[{"codec_type":"video","width":8193,"height":720}],"format":{"duration":"3"}}"#,
+            br#"{"streams":[{"codec_type":"video","width":1280,"height":65535}],"format":{"duration":"3"}}"#,
+            br#"{"streams":[{"codec_type":"video","width":3400,"height":200}],"format":{"duration":"3"}}"#,
         ] {
             assert!(
                 matches!(parse(json), Err(ProbeError::Unreadable)),

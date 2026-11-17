@@ -287,7 +287,14 @@ async fn an_all_process_serves_the_application_and_runs_the_worker(pool: PgPool)
 // worker, with no scheduler, and answers only the probes.
 #[sqlx::test(migrations = false)]
 async fn a_transcoder_process_runs_only_transcodes_and_answers_only_the_probes(pool: PgPool) {
-    let mut server = serve(&pool, &["--role", "transcoder"], &[]);
+    let store = std::env::temp_dir().join(format!("stepclimb-roles-{}", std::process::id()));
+    std::fs::create_dir_all(&store).expect("a store directory");
+    let url = format!("file://{}", store.display());
+    let mut server = serve(
+        &pool,
+        &["--role", "transcoder"],
+        &[("STEPCLIMB_STORAGE_URL", &url)],
+    );
     server.wait_for("ffmpeg and ffprobe passed the startup check");
     let started = server.wait_for("job worker started");
     assert_eq!(started["fields"]["concurrency"], "1", "{started}");
@@ -313,10 +320,16 @@ async fn a_transcoder_process_runs_only_transcodes_and_answers_only_the_probes(p
 // T13 (B8): a transcoder whose ffmpeg does not run stops at startup naming `ffmpeg_path`.
 #[sqlx::test(migrations = false)]
 async fn a_transcoder_without_ffmpeg_stops_naming_ffmpeg_path(pool: PgPool) {
+    let store = std::env::temp_dir().join(format!("stepclimb-roles-ff-{}", std::process::id()));
+    std::fs::create_dir_all(&store).expect("a store directory");
+    let url = format!("file://{}", store.display());
     let mut server = serve(
         &pool,
         &["--role", "transcoder"],
-        &[("STEPCLIMB_FFMPEG_PATH", "/nonexistent/ffmpeg")],
+        &[
+            ("STEPCLIMB_FFMPEG_PATH", "/nonexistent/ffmpeg"),
+            ("STEPCLIMB_STORAGE_URL", &url),
+        ],
     );
     let deadline = Instant::now() + PATIENCE;
     let status = loop {

@@ -6,14 +6,19 @@
 //! 1. [`start`] locks the video, checks it is still `processing` with its whole original stored,
 //!    and moves `output_run` on: the run `n` whose outputs go under `v<n>/`, so a retry never
 //!    writes where a player may be reading.
-//! 2. [`fail`] or [`finish`] end it, each only while the video is `processing` and `output_run`
+//! 2. The job checks the video's minutes against `transcode_minutes`
+//!    (`org_plans::check_room`) and [`record_minutes`] charges them, in one transaction under the
+//!    plan row's lock, before ffmpeg starts (B13, owner decision 2026-11-17). [`refund`] takes
+//!    them back when the run fails on the server's side.
+//! 3. [`fail`] or [`finish`] end it, each only while the video is `processing` and `output_run`
 //!    is still `n`: a run another worker started since (a lost lease) has moved it on, and the
-//!    older run's ending changes nothing.
-//! 3. [`record_minutes`] adds the run's minutes to its organization's month in `finish`'s
-//!    transaction.
+//!    older run's ending changes nothing. [`fail_any_run`] ends it whatever the run, for a job
+//!    that stopped before it knew its run.
 //!
 //! [`retry`] moves a video that failed as `video.transcode_failed`, with its original still
-//! stored, back to `processing` for a new job. Every query filters by `org_id = scope.org_id()`.
+//! stored, back to `processing` for a new job, at most [`MAX_RETRIES`] times.
+//! [`fail_stranded`] fails the `processing` videos no live job will finish. Every query filters
+//! by `org_id = scope.org_id()`.
 
 use std::time::SystemTime;
 
@@ -38,6 +43,12 @@ pub const TOO_LONG: &str = "video.too_long";
 
 /// The error code of a video whose transcode minutes or outputs do not fit the plan (B9, B12).
 pub const LIMIT_REACHED: &str = "entitlement.limit_reached";
+
+/// The error code of a retry past [`MAX_RETRIES`] (409).
+pub const RETRY_LIMIT_REACHED: &str = "video.retry_limit_reached";
+
+/// How many times an author may retry one video's transcode (owner decision, 2026-11-17).
+pub const MAX_RETRIES: i32 = 3;
 
 /// What [`start`] found.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,6 +126,31 @@ pub async fn fail(
     Ok(changed == 1)
 }
 
+/// Fail the video `video_id` with `error_code`, stamped `now`, if it is `processing`, at any run:
+/// for a job that stopped before [`start`] told it its run. Whether it was changed.
+pub async fn fail_any_run(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    video_id: Uuid,
+    error_code: &str,
+    now: SystemTime,
+) -> Result<bool, Error> {
+    let changed = sqlx::query!(
+        "UPDATE videos
+         SET status = 'failed', error_code = $3,
+             updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond'
+         WHERE org_id = $1 AND id = $2 AND status = 'processing'",
+        scope.org_id(),
+        video_id,
+        error_code,
+        epoch_micros(now)?,
+    )
+    .execute(conn)
+    .await?
+    .rows_affected();
+    Ok(changed == 1)
+}
+
 /// What a successful run stored.
 #[derive(Clone, Copy, Debug)]
 pub struct Ready<'a> {
@@ -130,7 +166,8 @@ pub struct Ready<'a> {
 
 /// B12: set the video `video_id` `ready` with what run `run` stored, stamped `now`, if it is
 /// still `processing` at that run. Whether it was changed. The caller marks the upload's parts
-/// for deletion, records the minutes and re-checks `video_storage` in the same transaction.
+/// for deletion and re-checks `video_storage` in the same transaction; the minutes were charged
+/// when the run started ([`record_minutes`]).
 pub async fn finish(
     conn: &mut PgConnection,
     scope: OrgScope,
@@ -171,7 +208,8 @@ pub fn minutes(duration_s: f64) -> u64 {
 }
 
 /// B13: add `minutes` to the scope's organization's `transcode_usage` row of the calendar month
-/// (UTC) holding `now`, creating it at the first transcode of the month.
+/// (UTC) holding `now`, creating it at the first transcode of the month. The job calls it after
+/// the limit check, in the same transaction, before ffmpeg starts.
 pub async fn record_minutes(
     conn: &mut PgConnection,
     scope: OrgScope,
@@ -196,6 +234,33 @@ pub async fn record_minutes(
         scope.org_id(),
         minutes,
         epoch_micros(now)?,
+    )
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+/// B13: take `minutes` back from the scope's organization's `transcode_usage` row of the month
+/// holding `charged_at`, the time [`record_minutes`] charged them, never below 0.
+pub async fn refund(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    minutes: u64,
+    charged_at: SystemTime,
+) -> Result<(), Error> {
+    let minutes = i32::try_from(minutes).map_err(|_| Error::Stored {
+        id: scope.org_id(),
+        column: "transcode_usage minutes",
+    })?;
+    sqlx::query!(
+        "UPDATE transcode_usage
+         SET minutes = GREATEST(minutes - $2, 0)
+         WHERE org_id = $1
+           AND month = date_trunc('month', (timestamptz 'epoch' + $3::bigint
+                                            * interval '1 microsecond') AT TIME ZONE 'UTC')::date",
+        scope.org_id(),
+        minutes,
+        epoch_micros(charged_at)?,
     )
     .execute(conn)
     .await?;
@@ -231,13 +296,16 @@ pub enum Retried {
     /// The video did not fail as `video.transcode_failed`, or its original is no longer stored
     /// whole.
     StatusInvalid,
+    /// The video has been retried [`MAX_RETRIES`] times.
+    LimitReached,
     /// No such video attached to any of the courses.
     NotFound,
 }
 
 /// B2's retry: under the video's lock, move the video `video_id`, attached to one of `courses`,
 /// from `failed` with [`TRANSCODE_FAILED`] back to `processing`, stamped `now`, when its upload
-/// is complete and not being deleted.
+/// is complete and not being deleted and it has been retried fewer than [`MAX_RETRIES`] times;
+/// count the retry.
 pub async fn retry(
     conn: &mut PgConnection,
     scope: OrgScope,
@@ -245,7 +313,7 @@ pub async fn retry(
     now: SystemTime,
 ) -> Result<Retried, Error> {
     let row = sqlx::query!(
-        "SELECT status, error_code FROM videos v
+        "SELECT status, error_code, transcode_retries FROM videos v
          WHERE org_id = $1 AND id = $2
            AND EXISTS (SELECT 1 FROM course_videos cv
                        WHERE cv.org_id = $1 AND cv.video_id = $2 AND cv.course_id = ANY($3))
@@ -265,9 +333,13 @@ pub async fn retry(
     if !(failed && stored) {
         return Ok(Retried::StatusInvalid);
     }
+    if row.transcode_retries >= MAX_RETRIES {
+        return Ok(Retried::LimitReached);
+    }
     sqlx::query!(
         "UPDATE videos
          SET status = 'processing', error_code = NULL,
+             transcode_retries = transcode_retries + 1,
              updated_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond'
          WHERE org_id = $1 AND id = $2",
         scope.org_id(),
@@ -277,6 +349,41 @@ pub async fn retry(
     .execute(conn)
     .await?;
     Ok(Retried::Processing)
+}
+
+/// Fail with [`TRANSCODE_FAILED`], stamped `now`, every `processing` video of the scope's
+/// organization that no live `video.transcode` job will finish: one whose job is dead (it used
+/// its attempts, or its lease lapsed on the last one), or one with no job at all that has not
+/// changed since `stale_before`. The ids failed. `videos.cleanup` runs it, so no video stays
+/// `processing` for good. The `jobs` table is the queue's (`stepclimb-jobs`); this reads only
+/// the scope's organization's rows of one kind.
+pub async fn fail_stranded(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    stale_before: SystemTime,
+    now: SystemTime,
+) -> Result<Vec<Uuid>, Error> {
+    let failed = sqlx::query_scalar!(
+        r#"UPDATE videos v
+           SET status = 'failed', error_code = $2,
+               updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond'
+           WHERE v.org_id = $1 AND v.status = 'processing'
+             AND NOT EXISTS (SELECT 1 FROM jobs j
+                             WHERE j.org_id = $1 AND j.kind = 'video.transcode'
+                               AND j.payload->>'video_id' = v.id::text AND j.dead_at IS NULL)
+             AND (EXISTS (SELECT 1 FROM jobs j
+                          WHERE j.org_id = $1 AND j.kind = 'video.transcode'
+                            AND j.payload->>'video_id' = v.id::text)
+                  OR v.updated_at <= timestamptz 'epoch' + $3::bigint * interval '1 microsecond')
+           RETURNING v.id"#,
+        scope.org_id(),
+        TRANSCODE_FAILED,
+        epoch_micros(stale_before)?,
+        epoch_micros(now)?,
+    )
+    .fetch_all(conn)
+    .await?;
+    Ok(failed)
 }
 
 #[cfg(test)]

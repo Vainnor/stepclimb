@@ -908,6 +908,7 @@ async fn t3_cleanup_deletes_uploads_untouched_for_a_day(pool: PgPool) {
                 stale_marked: 1,
                 not_a_video_marked: 0,
                 finished: 1,
+                stranded: 0,
                 failed: 0,
             },
             "{backend:?}"
@@ -1512,4 +1513,101 @@ async fn an_enrolled_student_is_refused_every_upload_and_video_route(pool: PgPoo
     denied(answer(&f.app, request).await);
     assert_eq!(f.count("videos", t.org).await, 1);
     assert!(f.objects(t.org).await.is_empty());
+}
+
+/// The `video.transcode` jobs waiting for `video`.
+async fn transcode_jobs(f: &Fixture, video: Uuid) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM jobs
+         WHERE kind = 'video.transcode' AND payload->>'video_id' = $1::text AND dead_at IS NULL",
+    )
+    .bind(video)
+    .fetch_one(&f.pool)
+    .await
+    .expect("count the jobs")
+}
+
+/// A complete upload in org A's course whose video failed as `video.transcode_failed`, with no
+/// job left: its video's id.
+async fn failed_transcode(f: &Fixture) -> Uuid {
+    let path = f.started(f.a.course, MIB).await;
+    f.patch(&path, 0, &mp4(to_usize(MIB)))
+        .await
+        .ok(StatusCode::NO_CONTENT);
+    let video = f.video_of(&path).await;
+    sqlx::query("DELETE FROM jobs WHERE kind = 'video.transcode'")
+        .execute(&f.pool)
+        .await
+        .expect("drop the upload's job");
+    sqlx::query(
+        "UPDATE videos SET status = 'failed', error_code = 'video.transcode_failed' WHERE id = $1",
+    )
+    .bind(video)
+    .execute(&f.pool)
+    .await
+    .expect("fail the video");
+    video
+}
+
+/// B2 (owner decision, 2026-11-17): a retry answers 202 with the processing video and enqueues
+/// its transcode; a video that did not fail as `video.transcode_failed` answers 409
+/// `video.status_invalid`, an archived course 409 `course.archived`, and a fourth retry 409
+/// `video.retry_limit_reached`. A refused retry enqueues nothing.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_retry_enqueues_the_transcode_and_is_refused_past_its_limits(pool: PgPool) {
+    let f = Fixture::new(pool, Backend::Local).await;
+    let video = failed_transcode(&f).await;
+    let retry = format!("/api/v1/videos/{video}/retry");
+    let answered = f.send(Method::POST, &retry, None).await;
+    let body = answered.ok(StatusCode::ACCEPTED);
+    assert_eq!(body["status"], "processing");
+    assert_eq!(body["error_code"], Value::Null);
+    assert_schema("Video", body);
+    assert_eq!(
+        transcode_jobs(&f, video).await,
+        1,
+        "the transcode is enqueued"
+    );
+
+    f.send(Method::POST, &retry, None)
+        .await
+        .expect(StatusCode::CONFLICT, "video.status_invalid");
+    assert_eq!(
+        transcode_jobs(&f, video).await,
+        1,
+        "nothing more is enqueued"
+    );
+
+    let fail = || async {
+        sqlx::query("DELETE FROM jobs WHERE kind = 'video.transcode'")
+            .execute(&f.pool)
+            .await
+            .expect("drop the job");
+        sqlx::query(
+            "UPDATE videos SET status = 'failed', error_code = 'video.transcode_failed'
+             WHERE id = $1",
+        )
+        .bind(video)
+        .execute(&f.pool)
+        .await
+        .expect("fail the video");
+    };
+    for _ in 0..2 {
+        fail().await;
+        f.send(Method::POST, &retry, None)
+            .await
+            .ok(StatusCode::ACCEPTED);
+    }
+    fail().await;
+    f.send(Method::POST, &retry, None)
+        .await
+        .expect(StatusCode::CONFLICT, "video.retry_limit_reached");
+    assert_eq!(transcode_jobs(&f, video).await, 0);
+
+    let other = failed_transcode(&f).await;
+    set_status(&f, f.a.course, "archived").await;
+    f.send(Method::POST, &format!("/api/v1/videos/{other}/retry"), None)
+        .await
+        .expect(StatusCode::CONFLICT, "course.archived");
+    assert_eq!(transcode_jobs(&f, other).await, 0);
 }

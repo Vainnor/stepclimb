@@ -6671,7 +6671,7 @@
         "tags": [
           "videos"
         ],
-        "summary": "Transcode again a video whose transcode failed (`video.transcode_failed`), from its upload,\nwhich the server keeps until a transcode succeeds. The video is `processing` again when this\nanswers; read it to follow the new transcode.",
+        "summary": "Transcode again a video whose transcode failed (`video.transcode_failed`), from its upload,\nwhich the server keeps until a transcode succeeds. A video can be retried 3 times; each\nretry charges its transcode minutes again. The video is `processing` again when this\nanswers; read it to follow the new transcode.",
         "operationId": "retryVideo",
         "parameters": [
           {
@@ -16954,7 +16954,7 @@
         }
       },
       "VideoRetryConflict": {
-        "description": "`video.status_invalid`: the video did not fail as `video.transcode_failed`, or its upload is no longer stored; upload it again as a new video. `course.archived`: every course through which you may edit the video is archived.",
+        "description": "`video.status_invalid`: the video did not fail as `video.transcode_failed`, or its upload is no longer stored; upload it again as a new video. `video.retry_limit_reached`: the video has been retried 3 times already, each charging transcode minutes; upload it again as a new video. `course.archived`: every course through which you may edit the video is archived.",
         "content": {
           "application/problem+json": {
             "schema": {

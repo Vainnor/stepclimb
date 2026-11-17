@@ -340,3 +340,53 @@ async fn an_ffmpeg_run_past_its_output_cap_or_deadline_is_killed() {
     let error = run::run(invocation, late).await.unwrap_err();
     assert!(matches!(error, RunError::TimedOut), "{error:?}");
 }
+
+/// Rewrite the Matroska `Duration` element (ID `0x4489`, an 8-byte float in milliseconds) of
+/// `bytes` to `ms`.
+fn patch_mkv_duration(bytes: &mut [u8], ms: f64) {
+    let at = bytes
+        .windows(3)
+        .position(|w| w == [0x44, 0x89, 0x88])
+        .expect("an 8-byte Duration element");
+    bytes[at + 3..at + 11].copy_from_slice(&ms.to_be_bytes());
+}
+
+/// B9, B10: a file whose container declares 1 s but holds 10 s is probed as 1 s, and every
+/// output stops at 1 s, so it is billed and bounded by what was probed.
+#[tokio::test]
+async fn a_file_that_declares_a_shorter_duration_is_cut_at_it() {
+    let dir = work();
+    let path = clip(dir.path(), "long.mkv", (320, 240), 10, false);
+    let mut bytes = std::fs::read(&path).expect("read the clip");
+    patch_mkv_duration(&mut bytes, 1000.0);
+    let input = dir.path().join("short.mkv");
+    std::fs::write(&input, &bytes).expect("write the patched clip");
+    let plan = transcode(Container::Matroska, &input, dir.path()).await;
+    assert!(
+        (plan.source.duration_s - 1.0).abs() < 0.01,
+        "{}",
+        plan.source.duration_s
+    );
+    let played = hls_plays(&dir.path().join("out/240p/index.m3u8"));
+    assert!(
+        played < 1.5,
+        "the rendition stops at the probed 1 s: {played}"
+    );
+    let mp4 = Command::new(ffprobe())
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(dir.path().join("out/video.mp4"))
+        .output()
+        .expect("ffprobe runs");
+    let mp4: f64 = String::from_utf8_lossy(&mp4.stdout)
+        .trim()
+        .parse()
+        .expect("a duration");
+    assert!(mp4 < 1.5, "the MP4 stops at the probed 1 s: {mp4}");
+}

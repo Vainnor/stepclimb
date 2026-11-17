@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE videos v\n           SET status = 'failed', error_code = $2,\n               updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond'\n           WHERE v.org_id = $1 AND v.status = 'processing'\n             AND NOT EXISTS (SELECT 1 FROM jobs j\n                             WHERE j.org_id = $1 AND j.kind = 'video.transcode'\n                               AND j.payload->>'video_id' = v.id::text AND j.dead_at IS NULL)\n             AND (EXISTS (SELECT 1 FROM jobs j\n                          WHERE j.org_id = $1 AND j.kind = 'video.transcode'\n                            AND j.payload->>'video_id' = v.id::text)\n                  OR v.updated_at <= timestamptz 'epoch' + $3::bigint * interval '1 microsecond')\n           RETURNING v.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "videos",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "561afc31ef790a0cbd91c7c374aa1abb934e7b1dc99aa9db226c55eb830b5d18"
+}

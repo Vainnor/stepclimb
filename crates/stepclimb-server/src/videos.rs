@@ -56,7 +56,7 @@ problem_responses! {
     VideosViewForbidden => "`permission.denied`: you can see the course, or a course the video is attached to, but do not hold `course.view_all` at a scope containing it.",
     VideoEditForbidden => "`permission.denied`: you can see a course the video is attached to but do not hold `course.content_edit` at a scope containing any of them. `auth.csrf_refused`: the request did not come from this site.",
     VideoRenameConflict => "`course.archived`: every course through which you may edit the video is archived.",
-    VideoRetryConflict => "`video.status_invalid`: the video did not fail as `video.transcode_failed`, or its upload is no longer stored; upload it again as a new video. `course.archived`: every course through which you may edit the video is archived.",
+    VideoRetryConflict => "`video.status_invalid`: the video did not fail as `video.transcode_failed`, or its upload is no longer stored; upload it again as a new video. `video.retry_limit_reached`: the video has been retried 3 times already, each charging transcode minutes; upload it again as a new video. `course.archived`: every course through which you may edit the video is archived.",
     VideoInvalid => "`request.invalid`: `errors` names `/title` with `name.empty` (empty after trimming), `name.too_long` (over 200 characters) or `text.contains_nul`.",
 }
 
@@ -298,7 +298,8 @@ pub async fn update_video(
 }
 
 /// Transcode again a video whose transcode failed (`video.transcode_failed`), from its upload,
-/// which the server keeps until a transcode succeeds. The video is `processing` again when this
+/// which the server keeps until a transcode succeeds. A video can be retried 3 times; each
+/// retry charges its transcode minutes again. The video is `processing` again when this
 /// answers; read it to follow the new transcode.
 #[utoipa::path(
     post,
@@ -346,6 +347,13 @@ pub async fn retry_video(
                 StatusCode::CONFLICT,
                 code::STATUS_INVALID,
                 "Only a video whose transcode failed, with its upload still stored, can be retried.",
+            ));
+        }
+        Retried::LimitReached => {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                transcodes::RETRY_LIMIT_REACHED,
+                "This video has been retried 3 times; upload it again as a new video.",
             ));
         }
     }

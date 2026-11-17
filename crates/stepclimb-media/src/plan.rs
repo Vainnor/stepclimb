@@ -66,6 +66,11 @@ pub const SPRITE_ROWS: u32 = 10;
 /// 4K source and below what a forged frame size would ask for.
 pub const MAX_ALLOC_BYTES: u64 = 256 * 1024 * 1024;
 
+/// The largest picture a decoder may allocate (`-max_pixels`): 8192 x 4320, an 8K frame
+/// (owner decision on D19, 2026-11-17). A forged frame size past it fails the run before the
+/// decoder allocates for it.
+pub const MAX_PIXELS: u64 = 8192 * 4320;
+
 /// The most resident memory one ffmpeg run may hold: 4 GiB.
 pub const MAX_MEMORY_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
@@ -148,7 +153,10 @@ impl Plan {
     pub fn new(container: Container, source: Source) -> Self {
         let mp4_height = even_down(source.height).min(MP4_MAX_HEIGHT);
         let (w, h) = (u64::from(source.width), u64::from(source.height));
-        let scaled = (u64::from(THUMB_WIDTH) * h + w / 2) / w;
+        let scaled = u64::from(THUMB_WIDTH)
+            .saturating_mul(h)
+            .saturating_add(w / 2)
+            / w.max(1);
         // At most 160 x height / width + 1 for any source ffprobe reported.
         let thumb_height = u32::try_from(scaled + scaled % 2)
             .unwrap_or(u32::MAX)
@@ -194,8 +202,8 @@ fn strings(list: &[&str]) -> Vec<OsString> {
     list.iter().map(OsString::from).collect()
 }
 
-/// The options of every run up to and including the input: quiet, no prompt, `-max_alloc`, the
-/// input options, `seek_s` when given, then the input.
+/// The options of every run up to and including the input: quiet, no prompt, `-max_alloc`,
+/// `-max_pixels`, the input options, `seek_s` when given, then the input.
 fn head(plan: &Plan, input: &Path, seek_s: Option<f64>) -> Vec<OsString> {
     let mut args = strings(&[
         "-nostdin",
@@ -207,6 +215,7 @@ fn head(plan: &Plan, input: &Path, seek_s: Option<f64>) -> Vec<OsString> {
     ]);
     args.extend(strings(&["-max_alloc", &MAX_ALLOC_BYTES.to_string()]));
     args.extend(input_options(plan.container));
+    args.extend(strings(&["-max_pixels", &MAX_PIXELS.to_string()]));
     if let Some(at) = seek_s {
         args.extend(strings(&["-ss", &format!("{at:.3}")]));
     }
@@ -214,6 +223,13 @@ fn head(plan: &Plan, input: &Path, seek_s: Option<f64>) -> Vec<OsString> {
     args.push(file_url(input));
     args.extend(strings(&["-map_metadata", "-1", "-map_chapters", "-1"]));
     args
+}
+
+/// `-t` at the probed duration: an output stops there, so a file whose container declares a
+/// shorter duration than it holds is transcoded, billed and bounded by what ffprobe reported
+/// (B9, B10).
+fn until_duration(args: &mut Vec<OsString>, plan: &Plan) {
+    args.extend(strings(&["-t", &format!("{:.3}", plan.source.duration_s)]));
 }
 
 fn threads(args: &mut Vec<OsString>, threads: u32) {
@@ -289,6 +305,7 @@ pub fn hls_args(plan: &Plan, input: &Path, thread_count: u32) -> Vec<OsString> {
         audio(&mut args);
     }
     threads(&mut args, thread_count);
+    until_duration(&mut args, plan);
     let segment = SEGMENT_SECONDS.to_string();
     args.extend(strings(&[
         "-f",
@@ -334,6 +351,7 @@ pub fn mp4_args(plan: &Plan, input: &Path, thread_count: u32) -> Vec<OsString> {
         audio(&mut args);
     }
     threads(&mut args, thread_count);
+    until_duration(&mut args, plan);
     args.extend(strings(&["-movflags", "+faststart", "-f", "mp4", MP4]));
     args
 }
@@ -370,6 +388,7 @@ pub fn sprite_args(plan: &Plan, input: &Path, thread_count: u32) -> Vec<OsString
     );
     args.extend(strings(&["-map", "0:v:0", "-vf", &filter, "-q:v", "5"]));
     threads(&mut args, thread_count);
+    until_duration(&mut args, plan);
     args.extend(strings(&[
         "-f",
         "image2",
@@ -389,25 +408,25 @@ fn timestamp(seconds: f64) -> String {
 }
 
 /// The WebVTT index of the sprites: one cue per thumbnail, naming its sprite and region
-/// (`sprite_000.jpg#xywh=x,y,w,h`), the last cue ending at the duration.
+/// (`sprite_000.jpg#xywh=x,y,w,h`), the last cue ending at the duration. Region offsets are
+/// computed in `u64` and saturate, so no frame size ffprobe reported can overflow them.
 #[must_use]
 pub fn sprite_index(plan: &Plan) -> String {
     let mut vtt = String::from("WEBVTT\n");
     let per_sprite = SPRITE_COLUMNS * SPRITE_ROWS;
     let every = f64::from(THUMB_EVERY_SECONDS);
+    let (w, h) = (u64::from(plan.thumb_width), u64::from(plan.thumb_height));
     for i in 0..plan.thumbs {
         let start = f64::from(i) * every;
         let end = (start + every).min(plan.source.duration_s);
         let (sprite, at) = (i / per_sprite, i % per_sprite);
-        let x = at % SPRITE_COLUMNS * plan.thumb_width;
-        let y = at / SPRITE_COLUMNS * plan.thumb_height;
+        let x = u64::from(at % SPRITE_COLUMNS).saturating_mul(w);
+        let y = u64::from(at / SPRITE_COLUMNS).saturating_mul(h);
         vtt.push_str(&format!(
-            "\n{} --> {}\n{}#xywh={x},{y},{},{}\n",
+            "\n{} --> {}\n{}#xywh={x},{y},{w},{h}\n",
             timestamp(start),
             timestamp(end),
             sprite_name(sprite),
-            plan.thumb_width,
-            plan.thumb_height
         ));
     }
     vtt
@@ -578,6 +597,11 @@ mod tests {
             assert_eq!(args[at("-i") + 1], "file:/work/stepclimb-transcode-1/input");
             assert_eq!(args.iter().filter(|a| *a == "-i").count(), 1, "one input");
             assert_eq!(args[at("-max_alloc") + 1], "268435456");
+            assert_eq!(args[at("-max_pixels") + 1], "35389440");
+            assert!(
+                at("-max_pixels") < at("-i"),
+                "a decoder option of the input"
+            );
             assert_eq!(args[at("-map_metadata") + 1], "-1");
             assert!(args.iter().all(|a| !a.contains("://")), "{args:?}");
         }
@@ -601,6 +625,15 @@ mod tests {
         );
         assert_eq!(after("-b:v:1"), "2800000");
         assert_eq!(after("-hls_time"), "6");
+        assert_eq!(
+            after("-t"),
+            "3.000",
+            "the outputs stop at the probed duration"
+        );
+        assert!(
+            args.iter().position(|a| a == "-t") > args.iter().position(|a| a == "-i"),
+            "an output option"
+        );
         assert!(
             !args.contains(&"-threads".to_owned()),
             "0 leaves it to ffmpeg"

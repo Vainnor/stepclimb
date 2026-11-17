@@ -30,6 +30,10 @@ pub enum Error {
     /// The stored parts do not cover the upload's length from 0 with no gap.
     #[error("the stored parts do not make up the upload")]
     Incomplete,
+    /// The output directory holds an entry that is neither a directory nor a regular file
+    /// (a symbolic link, a pipe); nothing of it is uploaded.
+    #[error("the output {0} is not a regular file")]
+    NotAFile(String),
 }
 
 /// The parts of the video `video_id`'s upload: `(offset, location)` in offset order.
@@ -97,13 +101,17 @@ pub async fn head(path: &FsPath, n: usize) -> Result<Vec<u8>, Error> {
     Ok(head)
 }
 
-/// Every file under `dir`, as `(relative path with '/', absolute path, size)`, sorted.
-fn walk(dir: &FsPath) -> std::io::Result<Vec<(String, PathBuf, u64)>> {
+/// Every regular file under `dir`, as `(relative path with '/', absolute path, size)`, sorted.
+/// Entries are read without following links, and anything that is neither a directory nor a
+/// regular file is [`Error::NotAFile`], so a link ffmpeg was made to write cannot upload a file
+/// from outside the work directory.
+fn walk(dir: &FsPath) -> Result<Vec<(String, PathBuf, u64)>, Error> {
     let mut found = Vec::new();
     let mut pending = vec![dir.to_path_buf()];
     while let Some(at) = pending.pop() {
         for entry in std::fs::read_dir(&at)? {
             let entry = entry?;
+            // `DirEntry::metadata` does not follow a symbolic link.
             let meta = entry.metadata()?;
             let path = entry.path();
             if meta.is_dir() {
@@ -117,6 +125,9 @@ fn walk(dir: &FsPath) -> std::io::Result<Vec<(String, PathBuf, u64)>> {
                 .map(|c| c.as_os_str().to_string_lossy().into_owned())
                 .collect::<Vec<_>>()
                 .join("/");
+            if !meta.is_file() {
+                return Err(Error::NotAFile(relative));
+            }
             found.push((relative, path, meta.len()));
         }
     }
@@ -183,4 +194,37 @@ async fn read_chunk(file: std::fs::File) -> Result<(std::fs::File, Vec<u8>), Err
     })
     .await??;
     Ok(read)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn the_output_walk_refuses_a_link_and_lists_regular_files() {
+        let base = std::env::temp_dir().join(format!("stepclimb-walk-{}", Uuid::now_v7().simple()));
+        std::fs::create_dir_all(base.join("360p")).unwrap();
+        std::fs::write(base.join("360p/index.m3u8"), b"#EXTM3U").unwrap();
+        std::fs::write(base.join("poster.jpg"), b"jpg").unwrap();
+        let listed: Vec<_> = walk(&base)
+            .unwrap()
+            .into_iter()
+            .map(|(r, _, n)| (r, n))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                ("360p/index.m3u8".to_owned(), 7),
+                ("poster.jpg".to_owned(), 3)
+            ]
+        );
+        std::os::unix::fs::symlink("/etc/hostname", base.join("360p/segment_00000.ts")).unwrap();
+        let refused = walk(&base);
+        std::fs::remove_dir_all(&base).unwrap();
+        assert!(
+            matches!(refused, Err(Error::NotAFile(ref name)) if name == "360p/segment_00000.ts"),
+            "{refused:?}"
+        );
+    }
 }

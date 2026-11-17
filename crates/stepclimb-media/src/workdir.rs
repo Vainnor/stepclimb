@@ -34,6 +34,28 @@ impl WorkDir {
     }
 }
 
+/// Remove every work directory in `base` last modified before `cutoff`: one a process killed
+/// mid-transcode left behind. A process that transcodes calls it at startup with a cutoff past
+/// the longest a transcode may run, so no running transcode's directory is removed. Other
+/// entries are left alone. The number removed.
+pub fn sweep(base: &Path, cutoff: std::time::SystemTime) -> std::io::Result<usize> {
+    let mut removed = 0;
+    for entry in std::fs::read_dir(base)? {
+        let entry = entry?;
+        let named = entry.file_name().to_string_lossy().starts_with(PREFIX);
+        let meta = entry.metadata()?;
+        if !(named && meta.is_dir()) || meta.modified()? >= cutoff {
+            continue;
+        }
+        match std::fs::remove_dir_all(entry.path()) {
+            Ok(()) => removed += 1,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(removed)
+}
+
 impl Drop for WorkDir {
     fn drop(&mut self) {
         if let Err(error) = std::fs::remove_dir_all(&self.path)
@@ -68,6 +90,25 @@ mod tests {
         std::fs::write(path.join("out/segment.ts"), b"x").unwrap();
         drop(dir);
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn the_sweep_removes_only_old_work_directories() {
+        let base = WorkDir::create(&std::env::temp_dir()).unwrap();
+        let old = WorkDir::create(base.path()).unwrap();
+        let old_path = old.path().to_path_buf();
+        std::fs::write(old_path.join("input"), b"x").unwrap();
+        std::mem::forget(old);
+        let other = base.path().join("keep-me");
+        std::fs::create_dir(&other).unwrap();
+        let hour = std::time::Duration::from_secs(3600);
+        let past = std::time::SystemTime::now() - hour;
+        assert_eq!(sweep(base.path(), past).unwrap(), 0, "too recent");
+        assert!(old_path.exists());
+        let future = std::time::SystemTime::now() + hour;
+        assert_eq!(sweep(base.path(), future).unwrap(), 1);
+        assert!(!old_path.exists());
+        assert!(other.exists(), "not a work directory");
     }
 
     #[test]

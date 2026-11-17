@@ -479,9 +479,15 @@ pub async fn serve(config: Config) -> Result<(), StartupError> {
         (config.max_file_bytes, config.max_video_bytes),
     )
     .await?;
-    let transcoder = transcode_startup::prepare(config.role, &config.transcode).await?;
-    let pool = connect(&config.database_url).await?;
     let clock = Clock::system();
+    let transcoder = transcode_startup::prepare(
+        config.role,
+        &config.transcode,
+        storage.is_some(),
+        clock.now(),
+    )
+    .await?;
+    let pool = connect(&config.database_url).await?;
     prepare(&pool, &clock).await?;
     let config_secrets = config_providers::apply(
         &pool,
