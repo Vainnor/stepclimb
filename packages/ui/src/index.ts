@@ -2,7 +2,8 @@
 // Stepclimb UI: the M0 inventory of docs/specs/m0/13-base-ui-components.md (Foundations, Actions,
 // the M0 forms, Overlays, Navigation and the M0 data components), the M1 components of
 // docs/specs/m1/16-learning-ui-components.md built so far, VideoUploader (08-uploaded-video.md
-// B22), and the theme and strings providers.
+// B22), the page editor of docs/specs/m1/07-pages-and-the-editor.md, and the theme and strings
+// providers.
 
 export type {
   BoardItem,
@@ -68,6 +69,25 @@ export {
   type StatusChipProps,
   statusChip,
 } from "./learning/status-chip";
+export {
+  Editor,
+  type EditorProblem,
+  type EditorProps,
+  editor,
+} from "./editor/editor";
+export type { UploadedImage } from "./editor/insert-panel";
+export { linkTarget } from "./editor/link-target";
+export {
+  blockIndexOf,
+  codeLanguages,
+  emptyPageDoc,
+  imageTypes,
+  type PageDoc,
+  type PageMark,
+  type PageNode,
+  toPageDoc,
+} from "./editor/page-doc";
+export { sameDoc } from "./editor/use-page-editor";
 export { type ServerHtml, serverHtml } from "./lib/server-html";
 export { AppShell, type AppShellProps, appShell } from "./patterns/app-shell";
 export { BottomTabs, type BottomTabsProps, bottomTabs } from "./patterns/bottom-tabs";

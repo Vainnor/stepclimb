@@ -1,0 +1,194 @@
+{
+  "type": "doc",
+  "content": [
+    {
+      "type": "heading",
+      "attrs": { "level": 2 },
+      "content": [{ "type": "text", "text": "Taxi clearances" }]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "Plain, " },
+        { "type": "text", "text": "bold", "marks": [{ "type": "bold" }] },
+        { "type": "text", "text": ", " },
+        { "type": "text", "text": "italic", "marks": [{ "type": "italic" }] },
+        { "type": "text", "text": ", " },
+        { "type": "text", "text": "underlined", "marks": [{ "type": "underline" }] },
+        { "type": "text", "text": ", " },
+        { "type": "text", "text": "struck", "marks": [{ "type": "strike" }] },
+        { "type": "text", "text": ", " },
+        { "type": "text", "text": "code", "marks": [{ "type": "code" }] },
+        { "type": "text", "text": ", H" },
+        { "type": "text", "text": "2", "marks": [{ "type": "subscript" }] },
+        { "type": "text", "text": "O, x" },
+        { "type": "text", "text": "2", "marks": [{ "type": "superscript" }] },
+        { "type": "hardBreak" },
+        {
+          "type": "text",
+          "text": "both",
+          "marks": [{ "type": "bold" }, { "type": "italic" }]
+        },
+        { "type": "text", "text": " and " },
+        {
+          "type": "text",
+          "text": "a link",
+          "marks": [{ "type": "link", "attrs": { "href": "https://example.com/" } }]
+        },
+        { "type": "text", "text": " and " },
+        {
+          "type": "text",
+          "text": "a path",
+          "marks": [{ "type": "link", "attrs": { "href": "/c/x" } }]
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "attrs": { "level": 3 },
+      "content": [{ "type": "text", "text": "Three" }]
+    },
+    {
+      "type": "heading",
+      "attrs": { "level": 4 },
+      "content": [{ "type": "text", "text": "Four" }]
+    },
+    {
+      "type": "bulletList",
+      "content": [
+        {
+          "type": "listItem",
+          "content": [
+            { "type": "paragraph", "content": [{ "type": "text", "text": "One" }] },
+            {
+              "type": "orderedList",
+              "attrs": { "start": 1 },
+              "content": [
+                {
+                  "type": "listItem",
+                  "content": [
+                    { "type": "paragraph", "content": [{ "type": "text", "text": "Nested" }] }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        { "type": "listItem", "content": [{ "type": "paragraph" }] }
+      ]
+    },
+    {
+      "type": "orderedList",
+      "attrs": { "start": 3 },
+      "content": [
+        {
+          "type": "listItem",
+          "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Third" }] }]
+        }
+      ]
+    },
+    {
+      "type": "blockquote",
+      "content": [
+        { "type": "paragraph", "content": [{ "type": "text", "text": "Quoted" }] },
+        { "type": "codeBlock", "attrs": { "language": null } }
+      ]
+    },
+    { "type": "horizontalRule" },
+    {
+      "type": "codeBlock",
+      "attrs": { "language": "rust" },
+      "content": [{ "type": "text", "text": "fn main() {\n\tprintln!(\"hi\");\n}" }]
+    },
+    {
+      "type": "table",
+      "content": [
+        {
+          "type": "tableRow",
+          "content": [
+            {
+              "type": "tableHeader",
+              "attrs": { "colspan": 2, "rowspan": 1, "colwidth": null },
+              "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Head" }] }]
+            }
+          ]
+        },
+        {
+          "type": "tableRow",
+          "content": [
+            {
+              "type": "tableCell",
+              "attrs": { "colspan": 1, "rowspan": 1, "colwidth": null },
+              "content": [{ "type": "paragraph" }]
+            },
+            {
+              "type": "tableCell",
+              "attrs": { "colspan": 1, "rowspan": 1, "colwidth": null },
+              "content": [
+                {
+                  "type": "bulletList",
+                  "content": [
+                    {
+                      "type": "listItem",
+                      "content": [
+                        { "type": "paragraph", "content": [{ "type": "text", "text": "In a cell" }] }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "image",
+      "attrs": {
+        "course_file_id": "01900000-0000-7000-8000-0000000000f1",
+        "alt": "The taxiway diagram",
+        "decorative": false
+      }
+    },
+    {
+      "type": "image",
+      "attrs": {
+        "course_file_id": "01900000-0000-7000-8000-0000000000f2",
+        "alt": "",
+        "decorative": true
+      }
+    },
+    {
+      "type": "callout",
+      "attrs": { "kind": "warning" },
+      "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Careful" }] }]
+    },
+    {
+      "type": "videoEmbed",
+      "attrs": { "provider": "youtube", "video_id": "dQw4w9WgXcQ", "title": "A taxi briefing" }
+    },
+    {
+      "type": "videoEmbed",
+      "attrs": { "provider": "vimeo", "video_id": "76979871", "title": "A second briefing" }
+    },
+    {
+      "type": "transcript",
+      "content": [
+        {
+          "type": "transcriptLine",
+          "attrs": { "speaker": "Ground" },
+          "content": [{ "type": "text", "text": "Taxi via Alpha." }]
+        },
+        {
+          "type": "transcriptLine",
+          "attrs": { "speaker": "Aircraft" },
+          "content": [
+            { "type": "text", "text": "Via " },
+            { "type": "text", "text": "Alpha", "marks": [{ "type": "bold" }] }
+          ]
+        }
+      ]
+    },
+    { "type": "paragraph" }
+  ]
+}
