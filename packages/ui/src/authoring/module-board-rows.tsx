@@ -3,19 +3,15 @@
 // publish state and unlock rules, or an item's kind, title, requirement and publish state, each
 // with a drag handle and a Move menu, and for an item an Edit button. What a row draws is said
 // again in one visually hidden description, so the drawn copy is hidden from screen readers.
-import {
-  DotsSixVerticalIcon,
-  DotsThreeIcon,
-  PencilSimpleIcon,
-} from "@phosphor-icons/react";
+import { DotsSixVerticalIcon, DotsThreeIcon, PencilSimpleIcon } from "@phosphor-icons/react";
 import { useMemo } from "react";
 import { Button as AriaButton, GridListItem, Text } from "react-aria-components";
-import { tv } from "../lib/tv";
-import { useUnitList } from "../lib/unit-list";
 import { itemKindIcons } from "../learning/item-row";
 import { useLockReasonText } from "../learning/lock-reason";
 import { RequirementLabel, useRequirementText } from "../learning/requirement-label";
 import { statusPill } from "../learning/status-pill";
+import { tv } from "../lib/tv";
+import { useUnitList } from "../lib/unit-list";
 import { Heading, type HeadingLevel } from "../primitives/heading";
 import { IconButton } from "../primitives/icon-button";
 import { Menu, MenuItem, MenuTrigger, SubmenuTrigger } from "../primitives/menu";
@@ -147,13 +143,7 @@ function ModuleMain({
   );
 }
 
-function ItemMain({
-  row,
-  styles,
-}: {
-  row: Extract<BoardRow, { type: "item" }>;
-  styles: Styles;
-}) {
+function ItemMain({ row, styles }: { row: Extract<BoardRow, { type: "item" }>; styles: Styles }) {
   const { item } = row;
   return (
     <span data-slot="module-board-row-main" className={styles.main()}>
@@ -187,11 +177,7 @@ function RowMeta({
   return (
     <>
       {requirement === null ? null : <RequirementLabel requirement={requirement} />}
-      <span
-        data-slot="module-board-published"
-        data-published={published}
-        className={styles.pill()}
-      >
+      <span data-slot="module-board-published" data-published={published} className={styles.pill()}>
         {t("moduleBoard.published", { published: published ? "yes" : "no" })}
       </span>
       {rules.length === 0 ? null : (
@@ -218,7 +204,8 @@ function useModuleRules(
   return useMemo(() => {
     if (module === null) return [];
     const rules: string[] = [];
-    if (module.unlockAt !== null) rules.push(reasonText({ kind: "unlock_at", at: module.unlockAt }));
+    if (module.unlockAt !== null)
+      rules.push(reasonText({ kind: "unlock_at", at: module.unlockAt }));
     // In course order, as the API lists them; an id the board does not hold names nothing.
     const titles = modules.filter((m) => module.prerequisiteIds.includes(m.id)).map((m) => m.title);
     const [first, ...rest] = titles;

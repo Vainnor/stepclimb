@@ -9,38 +9,45 @@ import { ModuleBoard, type ModuleBoardProps, type MoveOutcome } from "./module-b
 
 const NY = "America/New_York";
 
-const modules: BoardModule[] = [
-  {
-    id: "m1",
-    title: "Radio basics",
-    published: true,
-    unlockAt: null,
-    prerequisiteIds: [],
-    requireSequential: false,
-    items: [
-      { id: "i1", kind: "page", title: "Phraseology", published: true, requirement: { kind: "view" } },
-      { id: "i2", kind: "video", title: "Readbacks", published: false, requirement: null },
-      { id: "i3", kind: "header", title: "Practice", published: true, requirement: null },
-    ],
-  },
-  {
-    id: "m2",
-    title: "Ground control",
-    published: false,
-    unlockAt: new Date("2026-03-03T15:00:00Z"),
-    prerequisiteIds: ["m1"],
-    requireSequential: true,
-    items: [
-      {
-        id: "i4",
-        kind: "file",
-        title: "Taxi diagram",
-        published: true,
-        requirement: { kind: "mark_done" },
-      },
-    ],
-  },
-];
+const radio: BoardModule = {
+  id: "m1",
+  title: "Radio basics",
+  published: true,
+  unlockAt: null,
+  prerequisiteIds: [],
+  requireSequential: false,
+  items: [
+    {
+      id: "i1",
+      kind: "page",
+      title: "Phraseology",
+      published: true,
+      requirement: { kind: "view" },
+    },
+    { id: "i2", kind: "video", title: "Readbacks", published: false, requirement: null },
+    { id: "i3", kind: "header", title: "Practice", published: true, requirement: null },
+  ],
+};
+
+const ground: BoardModule = {
+  id: "m2",
+  title: "Ground control",
+  published: false,
+  unlockAt: new Date("2026-03-03T15:00:00Z"),
+  prerequisiteIds: ["m1"],
+  requireSequential: true,
+  items: [
+    {
+      id: "i4",
+      kind: "file",
+      title: "Taxi diagram",
+      published: true,
+      requirement: { kind: "mark_done" },
+    },
+  ],
+};
+
+const modules: BoardModule[] = [radio, ground];
 
 function setup(overrides: Partial<ModuleBoardProps> = {}) {
   const moved = async (): Promise<MoveOutcome> => ({ status: "moved" });
@@ -102,8 +109,8 @@ describe("ModuleBoard", () => {
   });
 
   it("names every button after its row, so none repeats", () => {
-    const twin = { ...modules[1], items: [{ ...modules[1]!.items[0]!, title: "Phraseology" }] };
-    setup({ modules: [modules[0]!, twin as BoardModule], itemEditor: () => null });
+    const twin = { ...ground, items: ground.items.map((i) => ({ ...i, title: "Phraseology" })) };
+    setup({ modules: [radio, twin], itemEditor: () => null });
     const names = screen.getAllByRole("button").map((b) => b.getAttribute("aria-label"));
     expect(new Set(names).size).toBe(names.length);
     expect(names).toContain("Move Phraseology, item 1 of module 1");
@@ -193,8 +200,13 @@ describe("ModuleBoard", () => {
   it("offers no Move up at the top of a module or Move down at the bottom", async () => {
     const { user } = setup();
     await user.click(screen.getByRole("button", { name: "Move Phraseology" }));
-    expect(screen.getByRole("menuitem", { name: "Move up" })).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByRole("menuitem", { name: "Move down" })).not.toHaveAttribute("aria-disabled");
+    expect(screen.getByRole("menuitem", { name: "Move up" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(screen.getByRole("menuitem", { name: "Move down" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
   });
 
   it("moves an item to the end of another module through the move route", async () => {
@@ -221,7 +233,10 @@ describe("ModuleBoard", () => {
     const order = () => screen.getAllByRole("row").map((r) => r.getAttribute("aria-label"));
     expect(order().slice(1, 3)).toEqual(["Readbacks", "Phraseology"]);
     await user.click(screen.getByRole("button", { name: "Move Readbacks" }));
-    expect(screen.getByRole("menuitem", { name: "Move down" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("menuitem", { name: "Move down" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     await user.keyboard("{Escape}");
     await act(async () => finish({ status: "moved" }));
     expect(onReorderItems).toHaveBeenCalledTimes(1);
@@ -235,11 +250,9 @@ describe("ModuleBoard", () => {
     expect(props.onReload).toHaveBeenCalledTimes(1);
     expect(await screen.findByRole("alert")).toHaveTextContent("The latest order is shown");
     // The reload brings another author's order, with the item now last.
-    const [first, ...rest] = modules;
-    const reloaded = [
-      { ...first!, items: [first!.items[1]!, first!.items[2]!, first!.items[0]!] },
-      ...rest,
-    ];
+    const [phraseology, ...others] = radio.items;
+    const reloaded = [{ ...radio, items: [...others, ...radio.items.slice(0, 1)] }, ground];
+    expect(phraseology?.title).toBe("Phraseology");
     (document.activeElement as HTMLElement | null)?.blur();
     view.rerender(<ModuleBoard {...props} modules={reloaded} />);
     await waitFor(() =>
@@ -252,7 +265,10 @@ describe("ModuleBoard", () => {
   it("puts the order back and shows the server's refusal", async () => {
     const { user } = setup({
       onReorderModules: vi.fn(
-        async (): Promise<MoveOutcome> => ({ status: "failed", message: "This course is archived." }),
+        async (): Promise<MoveOutcome> => ({
+          status: "failed",
+          message: "This course is archived.",
+        }),
       ),
     });
     await choose(user, "Move 1 Radio basics", "Move down");
@@ -270,7 +286,10 @@ describe("ModuleBoard", () => {
     const { props, user } = setup({ isDisabled: true });
     expect(screen.getByRole("button", { name: "Drag Phraseology" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Move Phraseology" }));
-    expect(screen.getByRole("menuitem", { name: "Move down" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("menuitem", { name: "Move down" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     expect(props.onReorderItems).not.toHaveBeenCalled();
   });
 

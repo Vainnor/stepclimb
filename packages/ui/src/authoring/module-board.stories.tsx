@@ -180,9 +180,7 @@ export const KeyboardDrag: Story = {
     await waitFor(() => expect(handle).toHaveFocus());
     await userEvent.keyboard("{Enter}");
     await userEvent.keyboard("{ArrowDown}");
-    await waitFor(() =>
-      expect(canvasElement.querySelector("[data-drop-target]")).not.toBeNull(),
-    );
+    await waitFor(() => expect(canvasElement.querySelector("[data-drop-target]")).not.toBeNull());
   },
 };
 

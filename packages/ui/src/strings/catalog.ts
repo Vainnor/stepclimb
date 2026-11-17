@@ -74,7 +74,8 @@ export const uiMessages: Catalog = {
     "moduleBoard.moveDown": "Move down",
     "moduleBoard.moveToModule": "Move to module",
     "moduleBoard.moveUp": "Move up",
-    "moduleBoard.movedItem": "Moved {title} to position {position, number} of {count, number} in {module}.",
+    "moduleBoard.movedItem":
+      "Moved {title} to position {position, number} of {count, number} in {module}.",
     "moduleBoard.movedModule": "Moved {title} to position {position, number} of {count, number}.",
     "moduleBoard.noItems": "No items yet",
     "moduleBoard.published": "{published, select, yes {Published} other {Unpublished}}",

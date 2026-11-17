@@ -226,7 +226,11 @@ function useBoardMoves(props: ModuleBoardProps) {
   return { shown, pending, report, restoreKey, dragging, run, menuMove };
 }
 
-function movedText(t: ReturnType<typeof useStepclimbStrings>["t"], after: BoardModule[], key: string) {
+function movedText(
+  t: ReturnType<typeof useStepclimbStrings>["t"],
+  after: BoardModule[],
+  key: string,
+) {
   const place = placeAfter(after, key);
   const row = boardRows(after).find((r) => r.key === key);
   if (place === null || row === undefined) return "";
@@ -246,9 +250,7 @@ function BoardReport({ report, className }: { report: Report; className: string 
         {report.kind === "saving" ? t("moduleBoard.saving") : null}
         {report.kind === "moved" ? report.text : null}
       </p>
-      {report.kind === "error" ? (
-        <FormError>{report.text}</FormError>
-      ) : null}
+      {report.kind === "error" ? <FormError>{report.text}</FormError> : null}
     </>
   );
 }

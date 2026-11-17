@@ -328,9 +328,9 @@ test.describe("at 1280 px @desktop", () => {
     // docs/specs/m1/16-learning-ui-components.md B13, T5: React Aria's drag and drop in a browser.
     await openStory(page, story("authoring-moduleboard--default"), "light");
     const order = () =>
-      page.locator("[data-slot=module-board] [role=row][aria-label]").evaluateAll((rows) =>
-        rows.map((r) => r.getAttribute("aria-label")),
-      );
+      page
+        .locator("[data-slot=module-board] [role=row][aria-label]")
+        .evaluateAll((rows) => rows.map((r) => r.getAttribute("aria-label")));
     const before = await order();
     // Over the top edge of "Taxi diagram": the place before it, the first of Ground control.
     await page
@@ -343,7 +343,9 @@ test.describe("at 1280 px @desktop", () => {
     );
     const after = await order();
     expect(after).toEqual(
-      before.filter((n) => n !== "Readbacks").flatMap((n) => (n === "Taxi diagram" ? ["Readbacks", n] : [n])),
+      before
+        .filter((n) => n !== "Readbacks")
+        .flatMap((n) => (n === "Taxi diagram" ? ["Readbacks", n] : [n])),
     );
   });
 
