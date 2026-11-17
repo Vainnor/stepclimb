@@ -24,7 +24,7 @@ use stepclimb_core::{
     OrgScope, Source, accounts,
     audit::Actor,
     clock::ManualClock,
-    courses,
+    courses, enrollments,
     id::{Uuid, new_id},
     modules, organizations,
     role_assignments::{self, NewAssignment, Scope},
@@ -776,14 +776,15 @@ async fn t7a_an_image_must_be_an_image_file_of_the_course(pool: PgPool) {
     // A version naming the PDF, written past the route, cannot be restored as current.
     let planted = new_id();
     sqlx::query(
-        "INSERT INTO page_versions (id, org_id, page_id, number, body, author_id)
-         VALUES ($1, $2, $3, 99, $4::jsonb, $5)",
+        "INSERT INTO page_versions (id, org_id, course_id, page_id, number, body, author_id)
+         VALUES ($1, $2, $6, $3, 99, $4::jsonb, $5)",
     )
     .bind(planted)
     .bind(f.a.org)
     .bind(page)
     .bind(image(pdf).to_string())
     .bind(f.admin_id)
+    .bind(course)
     .execute(&f.pool)
     .await
     .expect("plant a version");
@@ -829,6 +830,28 @@ async fn a_course_file_a_version_uses_is_in_use(pool: PgPool) {
             .await
             .expect("read the list");
     assert_eq!(named, [file]);
+    // The database refuses a version naming another course's file, whatever the code does.
+    let other = f.course(f.a.org, f.a.tower).await;
+    let elsewhere = f.upload(other, "b.png", "image/png", PNG).await;
+    let refused = sqlx::query(
+        "INSERT INTO page_version_files (org_id, course_id, version_id, course_file_id)
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(f.a.org)
+    .bind(f.a.course)
+    .bind(v2)
+    .bind(elsewhere)
+    .execute(&f.pool)
+    .await
+    .expect_err("another course's file");
+    assert_eq!(
+        refused
+            .as_database_error()
+            .and_then(|e| e.code())
+            .as_deref(),
+        Some("23503"),
+        "{refused}"
+    );
     let uri = format!("/api/v1/course-files/{file}");
     f.send(Method::DELETE, &uri, None)
         .await
@@ -1142,4 +1165,221 @@ async fn t15_another_organizations_ids_are_not_found(pool: PgPool) {
     .expect(StatusCode::NOT_FOUND, "course.not_found");
     assert_eq!(f.versions(b_page).await, 1);
     assert_eq!(f.versions(page).await, 1);
+}
+
+/// Review case: the 1 MiB limit is on the stored form. 9,900 table cells without attributes,
+/// under 1 MiB as submitted, are over it once every cell's attributes are written out, so the
+/// save is refused rather than stored as a version that could not be saved again.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_size_limit_is_on_the_stored_form(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (page, v1) = f.page("Cells").await;
+    let cell = json!({ "type": "tableCell", "content": [{ "type": "paragraph" }] });
+    let row = json!({ "type": "tableRow", "content": vec![cell; 9_900] });
+    let table = json!({ "type": "table", "content": [row] });
+    let text =
+        |t: String| json!({ "type": "paragraph", "content": [{ "type": "text", "text": t }] });
+    let bare = json!({ "type": "doc", "content": [table.clone(), text("x".into())] });
+    let pad = 1_048_576 - bare.to_string().len() - 16;
+    let body = json!({ "type": "doc", "content": [table, text("x".repeat(pad + 1))] });
+    assert!(body.to_string().len() < 1_048_576);
+    f.save(page, &body, v1)
+        .await
+        .invalid_at("/body", "page.body_invalid");
+    assert_eq!(f.versions(page).await, 1);
+}
+
+/// Review case: absolute link targets are stored as the URL parser writes them, and a
+/// same-origin path that could close an attribute is refused. I2's renderer still escapes
+/// every attribute it writes.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn link_targets_are_stored_normalized(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (page, v1) = f.page("Links").await;
+    let link = |href: &str| {
+        json!({ "type": "doc", "content": [{ "type": "paragraph", "content": [
+            { "type": "text", "text": "a", "marks": [{ "type": "link", "attrs": { "href": href } }] },
+        ] }] })
+    };
+    f.save(page, &link("/\"><svg/onload=alert(1)>"), v1)
+        .await
+        .invalid_at(
+            "/body/content/0/content/0/marks/0/attrs/href",
+            "page.body_invalid",
+        );
+    let saved = f
+        .save(
+            page,
+            &link("https://a.example/\"onmouseover=alert(1)//"),
+            v1,
+        )
+        .await;
+    let v2 = saved.uuid("/current_version/id");
+    let read = f
+        .send(
+            Method::GET,
+            &format!("/api/v1/pages/{page}/versions/{v2}"),
+            None,
+        )
+        .await;
+    let href =
+        &read.ok(StatusCode::OK)["body"]["content"][0]["content"][0]["marks"][0]["attrs"]["href"];
+    assert_eq!(href, "https://a.example/%22onmouseover=alert(1)//");
+}
+
+/// Review case: a body nested deeper than the JSON parser takes (200 bullet lists) answers a
+/// client error, and the server keeps answering.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_deeply_nested_body_is_refused_without_a_crash(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (page, v1) = f.page("Deep").await;
+    let mut list = String::from(
+        r#"{"type":"bulletList","content":[{"type":"listItem","content":[{"type":"paragraph"}]}]}"#,
+    );
+    for _ in 0..199 {
+        list = format!(
+            r#"{{"type":"bulletList","content":[{{"type":"listItem","content":[{{"type":"paragraph"}},{list}]}}]}}"#
+        );
+    }
+    let raw = format!(r#"{{"body":{{"type":"doc","content":[{list}]}},"base_version_id":"{v1}"}}"#);
+    let request = Request::builder()
+        .method(Method::PUT)
+        .uri(format!("/api/v1/pages/{page}/body"))
+        .header(TEST_ORG_HEADER, f.a.org.to_string())
+        .header("sec-fetch-site", "same-origin")
+        .header(header::COOKIE, &f.admin)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(raw))
+        .expect("a request");
+    let deep = answer(&f.app, request).await;
+    assert!(
+        matches!(
+            deep.status,
+            StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY
+        ),
+        "{deep:?}"
+    );
+    assert_eq!(f.versions(page).await, 1);
+    f.save(page, &paragraph("Still here"), v1)
+        .await
+        .ok(StatusCode::OK);
+}
+
+/// T2 (B3) at the same moment: two saves from one base, sent together, give one new version
+/// and one conflict. A transaction holding `page_versions` in `EXCLUSIVE` mode (reads pass,
+/// writes wait) stops both saves at their first write until it ends, so both have read the
+/// page before either writes: only the page and course locks keep the second from reading the
+/// base the first is replacing.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn two_simultaneous_saves_from_one_base_give_one_version(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (page, v1) = f.page("Race").await;
+    let mut blocker = f.pool.begin().await.expect("a transaction");
+    sqlx::query("LOCK TABLE page_versions IN EXCLUSIVE MODE")
+        .execute(&mut *blocker)
+        .await
+        .expect("lock the versions");
+    let (first, second) = (paragraph("First"), paragraph("Second"));
+    let release = async {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        blocker.commit().await.expect("release the lock");
+    };
+    let (a, b, ()) = tokio::join!(f.save(page, &first, v1), f.save(page, &second, v1), release);
+    let mut statuses = [a.status, b.status];
+    statuses.sort();
+    assert_eq!(
+        statuses,
+        [StatusCode::OK, StatusCode::CONFLICT],
+        "{a:?} {b:?}"
+    );
+    let conflict = if a.status == StatusCode::CONFLICT {
+        &a
+    } else {
+        &b
+    };
+    conflict.expect(StatusCode::CONFLICT, "page.version_conflict");
+    assert_eq!(f.versions(page).await, 2);
+}
+
+/// Spec 02 B24 with #318's enrollments: an enrolled Student (`course.view` and
+/// `course.participate` at the course) gets 403 on every authoring route of a published
+/// course's page, and 404 when the course is a draft.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_enrolled_student_cannot_author_pages(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let draft = f.a.course;
+    let published = f.course(f.a.org, f.a.tower).await;
+    f.set_status(f.a.org, published, courses::Status::Published)
+        .await;
+    let (student, user) = f.user(f.a.org).await;
+    let role = sqlx::query_scalar("SELECT id FROM roles WHERE org_id IS NULL AND key = 'student'")
+        .fetch_one(&f.pool)
+        .await
+        .expect("the student role");
+    for course in [draft, published] {
+        let new = enrollments::NewEnrollment {
+            user_id: user,
+            role_id: role,
+            source: Source::Local,
+            external_id: None,
+        };
+        enrollments::create(
+            &f.pool,
+            scope(f.a.org),
+            course,
+            &new,
+            f.now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("enroll the student");
+    }
+    for (course, status, code) in [
+        (published, StatusCode::FORBIDDEN, "permission.denied"),
+        (draft, StatusCode::NOT_FOUND, "page.not_found"),
+    ] {
+        let created = f.create(course, json!({ "title": "Read me" })).await;
+        let (page, v1) = (created.uuid("/id"), created.uuid("/current_version/id"));
+        let uri = format!("/api/v1/pages/{page}");
+        let calls = [
+            (Method::PATCH, uri.clone(), Some(json!({ "title": "Mine" }))),
+            (
+                Method::PUT,
+                format!("{uri}/body"),
+                Some(json!({ "body": paragraph("x"), "base_version_id": v1 })),
+            ),
+            (Method::DELETE, uri.clone(), None),
+            (Method::GET, format!("{uri}/versions"), None),
+            (Method::GET, format!("{uri}/versions/{v1}"), None),
+            (
+                Method::POST,
+                format!("{uri}/versions/{v1}/restore"),
+                Some(json!({ "base_version_id": v1 })),
+            ),
+        ];
+        for (method, path, body) in calls {
+            f.send_as(f.a.org, &student, method.clone(), &path, body)
+                .await
+                .expect(status, code);
+        }
+        let course_code = if course == draft {
+            "course.not_found"
+        } else {
+            code
+        };
+        let list = format!("/api/v1/courses/{course}/pages");
+        f.send_as(f.a.org, &student, Method::GET, &list, None)
+            .await
+            .expect(status, course_code);
+        f.send_as(
+            f.a.org,
+            &student,
+            Method::POST,
+            &list,
+            Some(json!({ "title": "Mine" })),
+        )
+        .await
+        .expect(status, course_code);
+        assert_eq!(f.versions(page).await, 1);
+    }
 }

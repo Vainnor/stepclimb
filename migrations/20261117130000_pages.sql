@@ -9,8 +9,12 @@
 -- always one of the page's own; `current_version_id` is NOT NULL for the same reason (B1).
 --
 -- A version is immutable while its page exists (B2): `page_versions_immutable` refuses an
--- `UPDATE` of its body, number, page or author. Deleting the page deletes its versions.
+-- `UPDATE` of its body, number, page, course or author. Deleting the page deletes its versions.
 -- `number` is 1, 2, ... per page; the repository takes the next one under the page's row lock.
+--
+-- `page_versions.course_id` and `page_version_files.course_id` repeat the page's course. The
+-- three-column foreign keys keep them equal to it, so the database itself refuses a version
+-- that names another course's file (B10).
 --
 -- `page_version_files` lists the course files a version's body names as images, written on
 -- save from the parsed body. Its `NO ACTION` foreign key to `course_files` refuses deleting a
@@ -26,6 +30,7 @@ CREATE TABLE pages (
     created_at          timestamptz NOT NULL DEFAULT now(),
     updated_at          timestamptz NOT NULL DEFAULT now(),
     UNIQUE (org_id, id),
+    UNIQUE (org_id, course_id, id),
     UNIQUE (course_id, slug),
     FOREIGN KEY (org_id, course_id) REFERENCES courses (org_id, id)
 );
@@ -34,6 +39,7 @@ CREATE INDEX pages_by_course ON pages (org_id, course_id, slug);
 CREATE TABLE page_versions (
     id          uuid        PRIMARY KEY,
     org_id      uuid        NOT NULL,
+    course_id   uuid        NOT NULL,
     page_id     uuid        NOT NULL,
     number      integer     NOT NULL CHECK (number >= 1),
     body        jsonb       NOT NULL CHECK (jsonb_typeof(body) = 'object'),
@@ -41,9 +47,11 @@ CREATE TABLE page_versions (
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now(),
     UNIQUE (org_id, id),
+    UNIQUE (org_id, course_id, id),
     UNIQUE (page_id, id),
     UNIQUE (page_id, number),
-    FOREIGN KEY (org_id, page_id) REFERENCES pages (org_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (org_id, course_id, page_id) REFERENCES pages (org_id, course_id, id)
+        ON DELETE CASCADE,
     FOREIGN KEY (org_id, author_id) REFERENCES users (org_id, id)
 );
 
@@ -57,6 +65,7 @@ BEGIN
     IF NEW.body IS DISTINCT FROM OLD.body
        OR NEW.number IS DISTINCT FROM OLD.number
        OR NEW.page_id IS DISTINCT FROM OLD.page_id
+       OR NEW.course_id IS DISTINCT FROM OLD.course_id
        OR NEW.author_id IS DISTINCT FROM OLD.author_id THEN
         RAISE EXCEPTION 'a page version cannot be changed'
             USING ERRCODE = 'restrict_violation',
@@ -71,14 +80,19 @@ CREATE TRIGGER page_versions_immutable
     BEFORE UPDATE ON page_versions
     FOR EACH ROW EXECUTE FUNCTION page_versions_immutable();
 
+ALTER TABLE course_files ADD CONSTRAINT course_files_org_id_course_id_id_key
+    UNIQUE (org_id, course_id, id);
+
 CREATE TABLE page_version_files (
     org_id          uuid        NOT NULL,
+    course_id       uuid        NOT NULL,
     version_id      uuid        NOT NULL,
     course_file_id  uuid        NOT NULL,
     created_at      timestamptz NOT NULL DEFAULT now(),
     updated_at      timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (version_id, course_file_id),
-    FOREIGN KEY (org_id, version_id) REFERENCES page_versions (org_id, id) ON DELETE CASCADE,
-    FOREIGN KEY (org_id, course_file_id) REFERENCES course_files (org_id, id)
+    PRIMARY KEY (course_id, version_id, course_file_id),
+    FOREIGN KEY (org_id, course_id, version_id) REFERENCES page_versions (org_id, course_id, id)
+        ON DELETE CASCADE,
+    FOREIGN KEY (org_id, course_id, course_file_id) REFERENCES course_files (org_id, course_id, id)
 );
-CREATE INDEX page_version_files_by_file ON page_version_files (course_file_id);
+CREATE INDEX page_version_files_by_file ON page_version_files (org_id, course_id, course_file_id);

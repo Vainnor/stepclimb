@@ -22,7 +22,7 @@ fn everything() -> Value {
             marked(json!({ "type": "code" })),
             marked(json!({ "type": "subscript" })),
             marked(json!({ "type": "superscript" })),
-            marked(json!({ "type": "link", "attrs": { "href": "https://example.com" } })),
+            marked(json!({ "type": "link", "attrs": { "href": "https://example.com/" } })),
             { "type": "text", "text": "two", "marks": [{ "type": "bold" }, { "type": "italic" }] },
         ] },
         { "type": "heading", "attrs": { "level": 2 }, "content": [text("Two")] },
@@ -190,14 +190,58 @@ fn the_specs_refusals_name_the_first_offense() {
 }
 
 #[test]
-fn a_body_over_one_mebibyte_is_refused_at_its_root() {
+fn a_body_whose_stored_form_is_over_one_mebibyte_is_refused_at_its_root() {
     let with = |n: usize| doc(json!([para(json!([text(&"x".repeat(n))]))]));
     let overhead = serde_json::to_vec(&with(1)).unwrap().len() - 1;
     let largest = with(MAX_BODY_BYTES - overhead);
     assert_eq!(serde_json::to_vec(&largest).unwrap().len(), MAX_BODY_BYTES);
-    assert!(PageDoc::parse(&largest).is_ok());
+    let parsed = PageDoc::parse_new(&largest).expect("1 MiB stored is the limit");
+    assert_eq!(parsed.stored_size(), MAX_BODY_BYTES);
     let over = with(MAX_BODY_BYTES - overhead + 1);
-    assert_eq!(refused_at(&over), "");
+    assert_eq!(PageDoc::parse_new(&over).unwrap_err().pointer(), "");
+    // A stored body is not measured again.
+    assert!(PageDoc::parse(&over).is_ok());
+}
+
+/// The review's case: 9,900 table cells without attributes and a paragraph of padding, under
+/// 1 MiB as submitted, grow past it once every cell's attributes are written out.
+fn cells_that_grow_past_the_limit() -> Value {
+    let cell = json!({ "type": "tableCell", "content": [{ "type": "paragraph" }] });
+    let row = json!({ "type": "tableRow", "content": vec![cell; 9_900] });
+    let table = json!({ "type": "table", "content": [row] });
+    let bare = doc(json!([table.clone(), para(json!([text("x")]))]));
+    let pad = MAX_BODY_BYTES - serde_json::to_vec(&bare).unwrap().len() - 16;
+    doc(json!([table, para(json!([text(&"x".repeat(pad + 1))]))]))
+}
+
+#[test]
+fn the_limit_is_on_the_stored_form_not_the_submitted_one() {
+    let body = cells_that_grow_past_the_limit();
+    let submitted = serde_json::to_vec(&body).unwrap().len();
+    assert!(submitted < MAX_BODY_BYTES, "{submitted}");
+    let parsed = PageDoc::parse(&body).expect("the structure is allowed");
+    assert!(
+        parsed.stored_size() > MAX_BODY_BYTES,
+        "{}",
+        parsed.stored_size()
+    );
+    assert_eq!(PageDoc::parse_new(&body).unwrap_err().pointer(), "");
+}
+
+#[test]
+fn deep_nesting_parses_without_overflowing() {
+    // 200 nested bullet lists, built in code: deeper than serde_json lets a request carry.
+    let mut list = json!({ "type": "bulletList", "content": [
+        { "type": "listItem", "content": [para(json!([text("bottom")]))] },
+    ] });
+    for _ in 0..199 {
+        list = json!({ "type": "bulletList", "content": [
+            { "type": "listItem", "content": [para(json!([text("level")])), list] },
+        ] });
+    }
+    let body = doc(json!([list]));
+    let parsed = PageDoc::parse(&body).expect("nesting depth is not a rule of its own");
+    assert_eq!(parsed.to_value(), body);
 }
 
 #[test]
@@ -492,8 +536,13 @@ fn links_take_only_the_allowed_targets() {
         "mailto:a@example.com\nbcc:b@example.com",
         "relative/path",
         "",
+        "/\"><svg/onload=alert(1)>",
+        "/a'b",
+        "/a<b",
+        "/a>b",
+        "/a`b",
     ] {
-        assert!(!href_is_valid(refused), "{refused:?}");
+        assert_eq!(link_target(refused), None, "{refused:?}");
         let body = doc(json!([para(
             json!([{ "type": "text", "text": "a", "marks": [
             { "type": "link", "attrs": { "href": refused } },
@@ -501,16 +550,33 @@ fn links_take_only_the_allowed_targets() {
         )]));
         assert_eq!(refused_at(&body), "/content/0/content/0/marks/0/attrs/href");
     }
-    for allowed in [
-        "https://example.com",
-        "http://example.com/a?b=c#d",
-        "HTTPS://EXAMPLE.COM",
-        "mailto:a@example.com",
-        "MAILTO:a@example.com",
-        "/c/x",
-        "/",
+    for (given, stored) in [
+        ("https://example.com", "https://example.com/"),
+        ("http://example.com/a?b=c#d", "http://example.com/a?b=c#d"),
+        ("HTTPS://EXAMPLE.COM", "https://example.com/"),
+        (
+            "https://a.example/\"onmouseover=alert(1)//",
+            "https://a.example/%22onmouseover=alert(1)//",
+        ),
+        ("https://a.example/<b>", "https://a.example/%3Cb%3E"),
+        ("mailto:a@example.com", "mailto:a@example.com"),
+        ("MAILTO:a@example.com", "mailto:a@example.com"),
+        ("/c/x", "/c/x"),
+        ("/", "/"),
     ] {
-        assert!(href_is_valid(allowed), "{allowed:?}");
+        assert_eq!(link_target(given).as_deref(), Some(stored), "{given:?}");
+        let body = doc(json!([para(
+            json!([{ "type": "text", "text": "a", "marks": [
+            { "type": "link", "attrs": { "href": given } },
+        ] }])
+        )]));
+        let saved = PageDoc::parse(&body).expect("an allowed link").to_value();
+        assert_eq!(
+            saved["content"][0]["content"][0]["marks"][0]["attrs"]["href"],
+            stored
+        );
+        // The stored form parses back to itself.
+        assert_eq!(PageDoc::parse(&saved).expect("stored").to_value(), saved);
     }
     let missing = doc(json!([para(
         json!([{ "type": "text", "text": "a", "marks": [{ "type": "link" }] }])

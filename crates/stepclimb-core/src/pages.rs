@@ -14,7 +14,10 @@
 //! version that names it. A version's images are checked against the course's files (B10, B10a)
 //! and listed in `page_version_files`. Every query filters by `org_id = scope.org_id()`.
 
-use std::time::SystemTime;
+use std::{
+    collections::{HashMap, HashSet},
+    time::SystemTime,
+};
 
 use serde_json::Value;
 use sqlx::{Acquire as _, PgConnection, PgExecutor};
@@ -302,35 +305,48 @@ async fn check_images(
     )
     .fetch_all(conn)
     .await?;
+    let mimes: HashMap<Uuid, String> = found.into_iter().map(|row| (row.id, row.mime)).collect();
     let mut distinct = Vec::new();
+    let mut seen = HashSet::new();
     for (id, path) in images {
-        let file = found
-            .iter()
-            .find(|row| row.id == id)
-            .ok_or(Error::FileNotFound)?;
-        if !IMAGE_TYPES.contains(&file.mime.as_str()) {
+        let mime = mimes.get(&id).ok_or(Error::FileNotFound)?;
+        if !IMAGE_TYPES.contains(&mime.as_str()) {
             return Err(Error::ImageType { path });
         }
-        if !distinct.contains(&id) {
+        if seen.insert(id) {
             distinct.push(id);
         }
     }
     Ok(distinct)
 }
 
-/// Insert the version `id`, number `number` of the page `page_id`, with `body`, by
-/// `author_id` at `now`, and list its images.
+/// Where a new version goes: its page and the page's course, its id and its number.
+#[derive(Clone, Copy)]
+struct VersionSlot {
+    course_id: Uuid,
+    page_id: Uuid,
+    id: Uuid,
+    number: i32,
+}
+
+/// Insert the version `slot` with `body`, by `author_id` at `now`, and list its images.
 async fn insert_version(
     conn: &mut PgConnection,
     scope: OrgScope,
-    (page_id, id, number): (Uuid, Uuid, i32),
+    slot: VersionSlot,
     body: &PageDoc,
     (images, author_id, now): (&[Uuid], Uuid, SystemTime),
 ) -> Result<(), Error> {
+    let VersionSlot {
+        course_id,
+        page_id,
+        id,
+        number,
+    } = slot;
     sqlx::query!(
-        r#"INSERT INTO page_versions (id, org_id, page_id, number, body, author_id, created_at,
-                                      updated_at)
-           VALUES ($1, $2, $3, $4, $5::text::jsonb, $6,
+        r#"INSERT INTO page_versions (id, org_id, course_id, page_id, number, body, author_id,
+                                      created_at, updated_at)
+           VALUES ($1, $2, $8, $3, $4, $5::text::jsonb, $6,
                    timestamptz 'epoch' + $7::bigint * interval '1 microsecond',
                    timestamptz 'epoch' + $7::bigint * interval '1 microsecond')"#,
         id,
@@ -340,13 +356,14 @@ async fn insert_version(
         body.to_value().to_string(),
         author_id,
         epoch_micros(now)?,
+        course_id,
     )
     .execute(&mut *conn)
     .await?;
     sqlx::query!(
-        r#"INSERT INTO page_version_files (org_id, version_id, course_file_id, created_at,
-                                           updated_at)
-           SELECT $1, $2, file_id,
+        r#"INSERT INTO page_version_files (org_id, course_id, version_id, course_file_id,
+                                           created_at, updated_at)
+           SELECT $1, $5, $2, file_id,
                   timestamptz 'epoch' + $4::bigint * interval '1 microsecond',
                   timestamptz 'epoch' + $4::bigint * interval '1 microsecond'
            FROM unnest($3::uuid[]) AS file_id"#,
@@ -354,6 +371,7 @@ async fn insert_version(
         id,
         images,
         epoch_micros(now)?,
+        course_id,
     )
     .execute(conn)
     .await?;
@@ -410,7 +428,13 @@ async fn insert_page(
     .execute(&mut *conn)
     .await?;
     let author = (images.as_slice(), author_id, now);
-    insert_version(conn, scope, (id, version_id, 1), &new.body, author).await?;
+    let slot = VersionSlot {
+        course_id,
+        page_id: id,
+        id: version_id,
+        number: 1,
+    };
+    insert_version(conn, scope, slot, &new.body, author).await?;
     get(conn, scope, id).await?.ok_or(Error::NotFound)
 }
 
@@ -575,7 +599,13 @@ async fn save_in(
         .await?;
         let author = (images.as_slice(), save.author_id, now);
         let version = new_id();
-        insert_version(conn, scope, (id, version, number), save.body, author).await?;
+        let slot = VersionSlot {
+            course_id,
+            page_id: id,
+            id: version,
+            number,
+        };
+        insert_version(conn, scope, slot, save.body, author).await?;
         sqlx::query!(
             r#"UPDATE pages
                SET current_version_id = $3,
@@ -593,8 +623,10 @@ async fn save_in(
 }
 
 /// Save the version `version_id`'s body as the page `id`'s new current version (B5), with
-/// [`save`]'s conflict check and image checks. The stored body is parsed again, so one the
-/// schema no longer allows is refused as [`Error::Body`].
+/// [`save`]'s conflict check and image checks, under [`save`]'s course and page locks. A
+/// version never changes, so it is read before them. The stored body is parsed again (its
+/// structure, not its size, which was checked when it was saved), so one the schema no longer
+/// allows is refused as [`Error::Body`].
 pub async fn restore(
     conn: &mut PgConnection,
     scope: OrgScope,
@@ -603,7 +635,6 @@ pub async fn restore(
     (base_version_id, author_id): (Uuid, Uuid),
     now: SystemTime,
 ) -> Result<Page, Error> {
-    lock_page(conn, scope, id).await?;
     let version = version(&mut *conn, scope, id, version_id)
         .await?
         .ok_or(Error::VersionNotFound)?;

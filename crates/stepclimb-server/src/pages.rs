@@ -216,9 +216,10 @@ pub struct VersionPath {
     pub version_id: Uuid,
 }
 
-/// `value` as a page body, or the 422 naming its first offense under `/body`.
+/// `value` as a page body to save, or the 422 naming its first offense under `/body` (`/body`
+/// itself when its stored form is over 1 MiB).
 fn body(value: &Value) -> Result<PageDoc, ApiError> {
-    PageDoc::parse(value).map_err(|invalid| body_invalid(&invalid))
+    PageDoc::parse_new(value).map_err(|invalid| body_invalid(&invalid))
 }
 
 fn body_invalid(invalid: &Invalid) -> ApiError {

@@ -9,9 +9,9 @@ use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use super::{
-    Block, CODE_LANGUAGES, CalloutKind, Cell, Image, Inline, Invalid, ListItem, MAX_BODY_BYTES,
-    MAX_CELL_SPAN, MAX_EMBED_TITLE_CHARS, MAX_NODES, MAX_SPEAKER_CHARS, Mark, PageDoc,
-    TranscriptLine, VideoEmbed, VideoProvider, href_is_valid,
+    Block, CODE_LANGUAGES, CalloutKind, Cell, Image, Inline, Invalid, ListItem, MAX_CELL_SPAN,
+    MAX_EMBED_TITLE_CHARS, MAX_NODES, MAX_SPEAKER_CHARS, Mark, PageDoc, TranscriptLine, VideoEmbed,
+    VideoProvider, link_target,
 };
 
 /// A path from the body's root.
@@ -160,11 +160,6 @@ struct Parser {
 
 /// A whole body (B7).
 pub(super) fn document(value: &Value) -> Result<PageDoc, Invalid> {
-    // Serializing a `Value` cannot fail: its keys are strings.
-    let size = serde_json::to_vec(value).map_or(usize::MAX, |bytes| bytes.len());
-    if size > MAX_BODY_BYTES {
-        return refuse(Vec::new(), "the body is larger than 1 MiB");
-    }
     let mut parser = Parser { nodes: 0 };
     let root = parser.node(value, Vec::new())?;
     if root.kind != "doc" {
@@ -437,9 +432,13 @@ impl Parser {
     }
 }
 
-/// An integer already checked to fit, narrowed. The ranges checked are within the target type.
-fn narrow<T: TryFrom<u64> + Default>(value: u64) -> T {
-    T::try_from(value).unwrap_or_default()
+/// An integer [`Node::integer`] has checked against a range inside `T`, narrowed.
+fn narrow<T: TryFrom<u64>>(value: u64) -> T {
+    // Invariant: every caller passes a range within `T` (2..=4 and 1..=20 for `u8`, 0..=u32::MAX
+    // for `u32`), so the conversion cannot fail.
+    T::try_from(value)
+        .ok()
+        .expect("Node::integer's range fits the target type")
 }
 
 fn image(node: &Node<'_>) -> Result<Block, Invalid> {
@@ -544,7 +543,10 @@ fn link(attrs: Option<&Map<String, Value>>, path: &Path) -> Result<Mark, Invalid
         return refuse(at(&attrs_path, key), "an attribute a link does not take");
     }
     match attrs.and_then(|a| a.get("href")) {
-        Some(Value::String(href)) if href_is_valid(href) => Ok(Mark::Link { href: href.clone() }),
+        Some(Value::String(href)) => link_target(href).map_or_else(
+            || refuse(at(&attrs_path, "href"), "not an allowed link target"),
+            |href| Ok(Mark::Link { href }),
+        ),
         _ => refuse(at(&attrs_path, "href"), "not an allowed link target"),
     }
 }

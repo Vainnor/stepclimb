@@ -231,7 +231,7 @@ pub enum Mark {
     Underline,
     Strike,
     Code,
-    /// `href` passes [`href_is_valid`] (B9).
+    /// The form [`link_target`] stores (B9).
     Link {
         href: String,
     },
@@ -300,10 +300,33 @@ impl PageDoc {
         }
     }
 
-    /// `value` as a page body, or the first rule it breaks (B7, B8). A body over
-    /// [`MAX_BODY_BYTES`] serialized is refused at its root before anything else is read.
+    /// `value` as a page body, or the first rule of its structure it breaks (B7, B8): for a
+    /// body read back from the database, whose size was checked when it was saved. A body to
+    /// save goes through [`Self::parse_new`].
     pub fn parse(value: &Value) -> Result<Self, Invalid> {
         parse::document(value)
+    }
+
+    /// [`Self::parse`] for a body about to be saved, which also refuses, at its root, a body
+    /// whose stored form ([`Self::to_value`], every attribute written out) is over
+    /// [`MAX_BODY_BYTES`] serialized. The limit is on what is stored, so a saved body always
+    /// restores and saves again. The submitted JSON is bounded by the request body limit before
+    /// it gets here.
+    pub fn parse_new(value: &Value) -> Result<Self, Invalid> {
+        let doc = Self::parse(value)?;
+        if doc.stored_size() > MAX_BODY_BYTES {
+            return Err(Invalid {
+                path: Vec::new(),
+                reason: "the stored body is larger than 1 MiB",
+            });
+        }
+        Ok(doc)
+    }
+
+    /// The size in bytes of the stored form's compact JSON.
+    #[must_use]
+    pub fn stored_size(&self) -> usize {
+        self.to_value().to_string().len()
     }
 
     /// The body as Tiptap JSON, every attribute written out.
@@ -336,20 +359,35 @@ impl PageDoc {
     }
 }
 
-/// Whether `href` is a link target B9 allows: an absolute `https` or `http` URL as an external
-/// link item takes (`items::url_is_valid`), a `mailto:` URL, or a path on the same origin that
-/// starts with one `/` (spec m0/08 B19's rule: not `//` or `/\`, printable ASCII, no `.` or `..`
-/// segment, at most 2,048 bytes).
+/// The characters a same-origin link path may not hold: they could end an HTML attribute or
+/// start markup in a renderer that forgot to escape one.
+const PATH_REFUSED: &[char] = &['"', '\'', '<', '>', '`', '\\'];
+
+/// `href` as the link target B9 allows, in the form to store, or `None`. An absolute `https` or
+/// `http` URL as an external link item takes it (`items::url_is_valid`), or a `mailto:` URL, is
+/// stored as the `url` crate serializes it (`Url::as_str`: scheme and host lowercased, `"` and
+/// other characters outside a URL percent-encoded). A path on the same origin that starts with
+/// one `/` keeps spec m0/08 B19's rule (not `//` or `/\`, printable ASCII, no `.` or `..`
+/// segment, at most 2,048 bytes) and holds none of `"`, `'`, `<`, `>`, a backtick or `\`; it is
+/// stored as given.
 #[must_use]
-pub fn href_is_valid(href: &str) -> bool {
+pub fn link_target(href: &str) -> Option<String> {
     if href.starts_with('/') {
-        return auth_flows::is_safe_path(href);
+        let safe = auth_flows::is_safe_path(href) && !href.contains(PATH_REFUSED);
+        return safe.then(|| href.to_owned());
     }
     let scheme = href.get(..7).map(str::to_ascii_lowercase);
-    if scheme.as_deref() == Some("mailto:") {
-        return mailto_is_valid(href);
+    let valid = if scheme.as_deref() == Some("mailto:") {
+        mailto_is_valid(href)
+    } else {
+        items::url_is_valid(href)
+    };
+    if !valid {
+        return None;
     }
-    items::url_is_valid(href)
+    url::Url::parse(href)
+        .ok()
+        .map(|url| url.as_str().to_owned())
 }
 
 /// A `mailto:` URL with an address part: at most [`items::MAX_URL_CHARS`] characters, no white
@@ -395,57 +433,56 @@ fn block(block: &Block) -> Value {
         ),
         Block::Blockquote(content) => node("blockquote", None, blocks(content)),
         Block::HorizontalRule => node("horizontalRule", None, Vec::new()),
-        Block::CodeBlock { language, text } => {
-            let content = if text.is_empty() {
-                Vec::new()
-            } else {
-                vec![json!({ "type": "text", "text": text })]
-            };
-            node("codeBlock", Some(json!({ "language": language })), content)
-        }
+        Block::CodeBlock { language, text } => code_block(language.as_deref(), text),
         Block::Table(rows) => node(
             "table",
             None,
             rows.iter().map(|cells| row(cells.as_slice())).collect(),
-        ),
-        Block::Image(image) => node(
-            "image",
-            Some(json!({
-                "course_file_id": image.course_file_id.to_string(),
-                "alt": image.alt,
-                "decorative": image.decorative,
-            })),
-            Vec::new(),
         ),
         Block::Callout { kind, content } => node(
             "callout",
             Some(json!({ "kind": kind.as_str() })),
             blocks(content),
         ),
-        Block::VideoEmbed(embed) => node(
-            "videoEmbed",
-            Some(json!({
-                "provider": embed.provider.as_str(),
-                "video_id": embed.video_id,
-                "title": embed.title,
-            })),
-            Vec::new(),
-        ),
-        Block::Transcript(lines) => node(
-            "transcript",
-            None,
-            lines
-                .iter()
-                .map(|line| {
-                    node(
-                        "transcriptLine",
-                        Some(json!({ "speaker": line.speaker })),
-                        inlines(&line.content),
-                    )
-                })
-                .collect(),
-        ),
+        Block::Image(image) => image_node(image),
+        Block::VideoEmbed(embed) => embed_node(embed),
+        Block::Transcript(lines) => node("transcript", None, lines.iter().map(line).collect()),
     }
+}
+
+fn code_block(language: Option<&str>, text: &str) -> Value {
+    let content = if text.is_empty() {
+        Vec::new()
+    } else {
+        vec![json!({ "type": "text", "text": text })]
+    };
+    node("codeBlock", Some(json!({ "language": language })), content)
+}
+
+fn image_node(image: &Image) -> Value {
+    let attrs = json!({
+        "course_file_id": image.course_file_id.to_string(),
+        "alt": image.alt,
+        "decorative": image.decorative,
+    });
+    node("image", Some(attrs), Vec::new())
+}
+
+fn embed_node(embed: &VideoEmbed) -> Value {
+    let attrs = json!({
+        "provider": embed.provider.as_str(),
+        "video_id": embed.video_id,
+        "title": embed.title,
+    });
+    node("videoEmbed", Some(attrs), Vec::new())
+}
+
+fn line(line: &TranscriptLine) -> Value {
+    node(
+        "transcriptLine",
+        Some(json!({ "speaker": line.speaker })),
+        inlines(&line.content),
+    )
 }
 
 fn list_items(items: &[ListItem]) -> Vec<Value> {

@@ -184,6 +184,7 @@ CREATE TABLE pages (
     created_at          timestamptz NOT NULL DEFAULT now(),
     updated_at          timestamptz NOT NULL DEFAULT now(),
     UNIQUE (org_id, id),
+    UNIQUE (org_id, course_id, id),
     UNIQUE (course_id, slug),
     FOREIGN KEY (org_id, course_id) REFERENCES courses (org_id, id)
 );
@@ -191,6 +192,7 @@ CREATE TABLE pages (
 CREATE TABLE page_versions (
     id          uuid        PRIMARY KEY,
     org_id      uuid        NOT NULL,
+    course_id   uuid        NOT NULL,
     page_id     uuid        NOT NULL,
     number      integer     NOT NULL CHECK (number >= 1),        -- not in the data model: B2
     body        jsonb       NOT NULL CHECK (jsonb_typeof(body) = 'object'),
@@ -198,9 +200,11 @@ CREATE TABLE page_versions (
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now(),
     UNIQUE (org_id, id),
+    UNIQUE (org_id, course_id, id),
     UNIQUE (page_id, id),
     UNIQUE (page_id, number),
-    FOREIGN KEY (org_id, page_id) REFERENCES pages (org_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (org_id, course_id, page_id) REFERENCES pages (org_id, course_id, id)
+        ON DELETE CASCADE,
     FOREIGN KEY (org_id, author_id) REFERENCES users (org_id, id)
 );
 
@@ -215,15 +219,17 @@ Migration `migrations/<version>_page_render_cache.sql` (I2), version fixed the s
 -- in <version>_pages.sql (I1): the course files a version's body names (not in the data model)
 CREATE TABLE page_version_files (
     org_id          uuid        NOT NULL,
+    course_id       uuid        NOT NULL,
     version_id      uuid        NOT NULL,
     course_file_id  uuid        NOT NULL,
     created_at      timestamptz NOT NULL DEFAULT now(),
     updated_at      timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (version_id, course_file_id),
-    FOREIGN KEY (org_id, version_id) REFERENCES page_versions (org_id, id) ON DELETE CASCADE,
-    FOREIGN KEY (org_id, course_file_id) REFERENCES course_files (org_id, id)
+    PRIMARY KEY (course_id, version_id, course_file_id),
+    FOREIGN KEY (org_id, course_id, version_id) REFERENCES page_versions (org_id, course_id, id)
+        ON DELETE CASCADE,
+    FOREIGN KEY (org_id, course_id, course_file_id) REFERENCES course_files (org_id, course_id, id)
 );
-CREATE INDEX page_version_files_by_file ON page_version_files (course_file_id);
+CREATE INDEX page_version_files_by_file ON page_version_files (org_id, course_id, course_file_id);
 
 -- <version>_page_render_cache.sql (I2): B15's rendered HTML per version (not in the data model)
 CREATE TABLE page_renders (
@@ -236,8 +242,8 @@ CREATE TABLE page_renders (
 );
 ```
 
-A trigger refuses `UPDATE` of `page_versions.body`, `number`, `page_id` and `author_id`, so
-versions stay immutable (B2). `page_version_files` is written on save from the parsed body, so
+A trigger refuses `UPDATE` of `page_versions.body`, `number`, `page_id`, `course_id` and
+`author_id`, so versions stay immutable (B2). `page_version_files` is written on save from the parsed body, so
 `06` B11's `file.in_use` covers images used by any version (its foreign key's `NO ACTION` refuses
 deleting such a course file) and B20's copy maps them without reparsing. A `page_renders` row is
 written on the first read of a version and replaced when `renderer_version` in code is higher;
@@ -248,8 +254,8 @@ Coordinator decisions (overnight, 2026-11-17, I1), pending owner review:
 
 - The page's current version is enforced by the schema: `current_version_id` is NOT NULL and its
   deferred foreign key names `(id, current_version_id)`, so the current version is always one of
-  the page's own. `page_version_files` reaches its version by `(org_id, version_id)`, keeping the
-  row in the version's organization. The trigger is `page_versions_immutable`.
+  the page's own (the course columns are in the decisions after the review, below). The trigger
+  is `page_versions_immutable`.
 - Node and mark names are Tiptap's (`paragraph`, `heading`, `bulletList`, `orderedList`,
   `listItem`, `blockquote`, `horizontalRule`, `hardBreak`, `codeBlock`, `table`, `tableRow`,
   `tableHeader`, `tableCell`, `image`, `text`; marks `bold`, `italic`, `underline`, `strike`,
@@ -274,8 +280,7 @@ Coordinator decisions (overnight, 2026-11-17, I1), pending owner review:
   not blank. A Vimeo id is 1 to 20 digits. A speaker label, a video title and an image's `alt`
   hold no control character at all; an `alt` of only white space counts as empty.
 - The stored body is the parsed document written back with every attribute spelled out, so B3's
-  "equal body" compares canonical forms. B7's 1 MiB is the compact JSON serialization of the
-  submitted body.
+  "equal body" compares canonical forms.
 - Slugs: B1's derivation takes the title's compatibility decomposition, keeps ASCII letters and
   digits (lowercased), drops other non-ASCII characters and joins the runs with single hyphens,
   cut to 100. A title that derives no slug (only non-ASCII letters, say) answers 422
@@ -294,6 +299,33 @@ Coordinator decisions (overnight, 2026-11-17, I1), pending owner review:
   until then `DELETE` refuses a page that a `page` item references.
 - `course_files::referenced` also reads `page_version_files`, so deleting a course file any
   version names answers 409 `file.in_use` (`06` B11) rather than the foreign key's error.
+
+Coordinator decisions (overnight, 2026-11-17, after the review of #320), pending owner review:
+
+- Coordinator decision (overnight, 2026-11-17): B7's 1 MiB applies to the stored form, the
+  compact JSON of the document with every attribute written out, measured when a body is saved
+  or created. A body that is under 1 MiB as submitted but over it once stored (9,900 cells
+  without attributes, say) answers 422 `page.body_invalid` at `/body`, so every stored version
+  can be restored and saved again. Bodies read back from the database (a restore) get the
+  structural parse only, not the size check. The submitted JSON is bounded by the request body
+  limit, and serde_json refuses nesting deeper than 128 levels (400 `request.malformed`).
+- Coordinator decision (overnight, 2026-11-17): link targets are stored normalized. An absolute
+  `https`, `http` or `mailto` URL is stored as the `url` crate serializes it (`Url::as_str`:
+  scheme and host lowercased, `"`, `<`, `>` and the other characters outside a URL
+  percent-encoded), so `https://a.example/"onmouseover=alert(1)//` is stored as
+  `https://a.example/%22onmouseover=alert(1)//`. A same-origin path holding `"`, `'`, `<`, `>`,
+  a backtick or `\` is refused (`/"><svg/onload=alert(1)>`). I2's renderer must still escape
+  every attribute it writes, and its T4 and T6 golden files must include both of these cases.
+- Coordinator decision (overnight, 2026-11-17): `page_versions` and `page_version_files` carry
+  `course_id`, held equal to the page's course by three-column foreign keys
+  (`(org_id, course_id, page_id)` to `pages`, `(org_id, course_id, version_id)` to
+  `page_versions`, `(org_id, course_id, course_file_id)` to `course_files`, which gains
+  `UNIQUE (org_id, course_id, id)`). The database itself refuses a version naming another
+  course's file. `page_version_files`'s key is `(course_id, version_id, course_file_id)`.
+- Coordinator decision (overnight, 2026-11-17): the server stays strict about attributes. For
+  I3: the editor strips Tiptap Link's default `target`, `rel` and `class` attributes, and
+  `orderedList`'s `type` where the Tiptap version writes it, before it saves; the server refuses
+  them as unknown attributes.
 
 ## Permissions
 
