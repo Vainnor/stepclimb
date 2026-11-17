@@ -15,8 +15,9 @@
 //! `tests/body_shapes.rs` fails on any `Deserialize` type of this crate that uses them. Nor
 //! does it reach a value parsed later from a `serde_json::Value` the body carried: the
 //! settings `PATCH` (`organization.rs`, `parse_patch`) takes a map and reads it into
-//! `OrgSettingsPatch` with `serde_json::from_value`, whose fields are all scalars, and the
-//! passkey routes read their free-form `credential` the same way.
+//! `OrgSettingsPatch` with `serde_json::from_value`, whose fields are all scalars, the
+//! passkey routes read their free-form `credential` the same way, and the page routes hand
+//! their `body` to `stepclimb_core::page_doc`, which reads no struct with serde.
 
 use std::fmt;
 

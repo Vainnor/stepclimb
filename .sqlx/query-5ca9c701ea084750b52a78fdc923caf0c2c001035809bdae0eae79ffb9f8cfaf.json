@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE pages\n           SET title = COALESCE($3, title),\n               slug = COALESCE($4, slug),\n               updated_at = CASE\n                   WHEN (COALESCE($3, title), COALESCE($4, slug)) IS DISTINCT FROM (title, slug)\n                   THEN timestamptz 'epoch' + $5::bigint * interval '1 microsecond'\n                   ELSE updated_at END\n           WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5ca9c701ea084750b52a78fdc923caf0c2c001035809bdae0eae79ffb9f8cfaf"
+}

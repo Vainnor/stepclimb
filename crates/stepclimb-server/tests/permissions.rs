@@ -85,6 +85,8 @@ use stepclimb_core::{
     id::{Uuid, new_id},
     identities::{self, NewIdentity},
     items, modules, organizations,
+    page_doc::PageDoc,
+    pages,
     perm::{
         self, AccountManage, AccountView, AdmissionManage, BrandingManage, CourseContentEdit,
         CourseCreate, CourseManage, CourseParticipate, CourseView, CourseViewAll, EnrollmentManage,
@@ -367,6 +369,38 @@ const TABLE: &[Entry] = &[
             COURSE_NOT_FOUND,
             rename_tower_folder,
         ),
+    },
+    Entry {
+        operation_id: "listPages",
+        access: permission(CourseViewAll::KEY, COURSE_NOT_FOUND, pages_of_tower_course),
+    },
+    Entry {
+        operation_id: "createPage",
+        access: permission(CourseContentEdit::KEY, COURSE_NOT_FOUND, new_page_in_tower),
+    },
+    Entry {
+        operation_id: "updatePage",
+        access: permission(CourseContentEdit::KEY, PAGE_NOT_FOUND, retitle_page),
+    },
+    Entry {
+        operation_id: "savePageBody",
+        access: permission(CourseContentEdit::KEY, PAGE_NOT_FOUND, save_page_body),
+    },
+    Entry {
+        operation_id: "deletePage",
+        access: permission(CourseContentEdit::KEY, PAGE_NOT_FOUND, page_in_tower),
+    },
+    Entry {
+        operation_id: "listPageVersions",
+        access: permission(CourseViewAll::KEY, PAGE_NOT_FOUND, page_in_tower),
+    },
+    Entry {
+        operation_id: "getPageVersion",
+        access: permission(CourseViewAll::KEY, PAGE_NOT_FOUND, page_version_in_tower),
+    },
+    Entry {
+        operation_id: "restorePageVersion",
+        access: permission(CourseContentEdit::KEY, PAGE_NOT_FOUND, restore_page_version),
     },
     Entry {
         operation_id: "listPermissions",
@@ -1623,6 +1657,105 @@ fn rename_tower_folder(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + 
     })
 }
 
+/// A page that is not the organization's, or whose course the caller cannot see: 404
+/// `page.not_found` (M1 spec 07 API).
+const PAGE_NOT_FOUND: Target = Target::Scoped {
+    not_found: "page.not_found",
+    cross_org: "page.not_found",
+};
+
+/// A published course in Tower with a page, listed. Published for the reason
+/// [`files_of_tower_course`] gives.
+fn pages_of_tower_course(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        org.page(course).await;
+        Call {
+            params: vec![("course_id", course)],
+            body: None,
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A new page of a published course in Tower.
+fn new_page_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: vec![("course_id", org.course(org.tower, true).await)],
+            body: Some(serde_json::json!({ "title": "Suite page" })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A page of a published course in Tower.
+fn page_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        Call {
+            params: vec![("page_id", org.page(course).await.0)],
+            body: None,
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A page of a published course in Tower, retitled and given a new slug.
+fn retitle_page(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        Call {
+            params: vec![("page_id", org.page(course).await.0)],
+            body: Some(serde_json::json!({ "title": "Retitled", "slug": "retitled" })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A new body for a page of a published course in Tower, from its current version.
+fn save_page_body(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        let (page, version) = org.page(course).await;
+        let body = serde_json::json!({ "type": "doc", "content": [
+            { "type": "paragraph", "content": [{ "type": "text", "text": "Saved" }] },
+        ] });
+        Call {
+            params: vec![("page_id", page)],
+            body: Some(serde_json::json!({ "body": body, "base_version_id": version })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// Version 1 of a page of a published course in Tower.
+fn page_version_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        let (page, version) = org.page(course).await;
+        Call {
+            params: vec![("page_id", page), ("version_id", version)],
+            body: None,
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// Version 1 of a page of a published course in Tower restored over version 2.
+fn restore_page_version(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        let (page, first) = org.page(course).await;
+        let second = org.save_page(page, first).await;
+        Call {
+            params: vec![("page_id", page), ("version_id", first)],
+            body: Some(serde_json::json!({ "base_version_id": second })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
 /// A role that is not the organization's: 404 `role.not_found`. Roles are organization-wide,
 /// so a role route's scope is the organization and it has no wrong-account 404 case.
 const ROLE_NOT_FOUND: Target = Target::Scoped {
@@ -2369,7 +2502,7 @@ const MAX_MEMBERS: usize = 6;
 /// itself or an object nested in it, in an object or an array. Every order of the values
 /// answers 400 `request.malformed`, so the struct's field order, which serde would otherwise
 /// accept, does too. A field the document gives as a free-form object (a WebAuthn credential)
-/// is any JSON to `ApiJson`, so is left as it is. Every operation that takes a body is sent.
+/// or as a page body is any JSON to `ApiJson`, so is left as it is. Every operation that takes a body is sent.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn every_body_sent_as_an_array_is_malformed(pool: PgPool) {
     let world = World::new(pool).await;
@@ -2573,9 +2706,16 @@ fn resolve<'a>(doc: &'a Value, schema: &'a Value) -> &'a Value {
     }
 }
 
-/// An object the document says nothing more about: `ApiJson` takes any JSON there.
+/// An object the document says nothing more about, or a page body: `ApiJson` takes any JSON
+/// there. A page body is a `serde_json::Value` that `stepclimb_core::page_doc` parses after
+/// `ApiJson`, and answers 422 `page.body_invalid` for anything outside its schema (M1 spec 07
+/// B7); `tests/pages.rs` covers its shapes.
 fn free_form(schema: &Value) -> bool {
-    schema["type"] == "object" && schema.get("properties").is_none() && schema.get("$ref").is_none()
+    let page_body = schema["$ref"] == "#/components/schemas/PageDoc";
+    page_body
+        || (schema["type"] == "object"
+            && schema.get("properties").is_none()
+            && schema.get("$ref").is_none())
 }
 
 /// Every order of `values`, at most [`MAX_MEMBERS`] of them.
@@ -3435,6 +3575,41 @@ impl Org {
         course_files::create(&mut conn, scope(self.id), course, file, place, now())
             .await
             .expect("create course file")
+            .id
+    }
+
+    /// A new page of `course`, by a new user: its id and its version 1's.
+    async fn page(&self, course: Uuid) -> (Uuid, Uuid) {
+        let (_, author) = self.user().await;
+        let new = pages::NewPage {
+            title: format!("Page of {}", self.slug),
+            slug: Some(pages::Slug::parse(&format!("p-{}", new_id().simple())).expect("a slug")),
+            body: PageDoc::empty(),
+        };
+        let mut conn = self.pool.acquire().await.expect("a connection");
+        let page = pages::create(&mut conn, scope(self.id), course, &new, author, now())
+            .await
+            .expect("create page");
+        (page.id, page.current.id)
+    }
+
+    /// A new version of `page` saved over `base`: its id.
+    async fn save_page(&self, page: Uuid, base: Uuid) -> Uuid {
+        let (_, author) = self.user().await;
+        let body = PageDoc::parse_new(&serde_json::json!({ "type": "doc", "content": [
+            { "type": "paragraph", "content": [{ "type": "text", "text": "Second" }] },
+        ] }))
+        .expect("a body");
+        let save = pages::Save {
+            body: &body,
+            base_version_id: base,
+            author_id: author,
+        };
+        let mut conn = self.pool.acquire().await.expect("a connection");
+        pages::save(&mut conn, scope(self.id), page, save, now())
+            .await
+            .expect("save page")
+            .current
             .id
     }
 

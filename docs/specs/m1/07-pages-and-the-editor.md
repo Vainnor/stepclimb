@@ -171,8 +171,7 @@ bodies.
 
 ## Data
 
-Migration `migrations/<version>_pages.sql` (I1). The version is a placeholder, fixed when the
-issue is implemented so it sorts after every migration on `next` and every open branch.
+Migration `migrations/20261117130000_pages.sql` (I1).
 
 ```sql
 CREATE TABLE pages (
@@ -181,10 +180,11 @@ CREATE TABLE pages (
     course_id           uuid        NOT NULL,
     slug                text        NOT NULL CHECK (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND char_length(slug) <= 100),
     title               text        NOT NULL CHECK (btrim(title) <> '' AND char_length(title) <= 200),
-    current_version_id  uuid,       -- set in the creating transaction; deferred FK below
+    current_version_id  uuid        NOT NULL,  -- written in the creating transaction; deferred FK below
     created_at          timestamptz NOT NULL DEFAULT now(),
     updated_at          timestamptz NOT NULL DEFAULT now(),
     UNIQUE (org_id, id),
+    UNIQUE (org_id, course_id, id),
     UNIQUE (course_id, slug),
     FOREIGN KEY (org_id, course_id) REFERENCES courses (org_id, id)
 );
@@ -192,19 +192,25 @@ CREATE TABLE pages (
 CREATE TABLE page_versions (
     id          uuid        PRIMARY KEY,
     org_id      uuid        NOT NULL,
+    course_id   uuid        NOT NULL,
     page_id     uuid        NOT NULL,
     number      integer     NOT NULL CHECK (number >= 1),        -- not in the data model: B2
     body        jsonb       NOT NULL CHECK (jsonb_typeof(body) = 'object'),
     author_id   uuid        NOT NULL,
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (org_id, id),
+    UNIQUE (org_id, course_id, id),
+    UNIQUE (page_id, id),
     UNIQUE (page_id, number),
-    FOREIGN KEY (org_id, page_id) REFERENCES pages (org_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (org_id, course_id, page_id) REFERENCES pages (org_id, course_id, id)
+        ON DELETE CASCADE,
     FOREIGN KEY (org_id, author_id) REFERENCES users (org_id, id)
 );
 
 ALTER TABLE pages ADD CONSTRAINT pages_current_version
-    FOREIGN KEY (current_version_id) REFERENCES page_versions (id) DEFERRABLE INITIALLY DEFERRED;
+    FOREIGN KEY (id, current_version_id) REFERENCES page_versions (page_id, id)
+    DEFERRABLE INITIALLY DEFERRED;
 ```
 
 Migration `migrations/<version>_page_render_cache.sql` (I2), version fixed the same way:
@@ -213,14 +219,17 @@ Migration `migrations/<version>_page_render_cache.sql` (I2), version fixed the s
 -- in <version>_pages.sql (I1): the course files a version's body names (not in the data model)
 CREATE TABLE page_version_files (
     org_id          uuid        NOT NULL,
-    version_id      uuid        NOT NULL REFERENCES page_versions (id) ON DELETE CASCADE,
+    course_id       uuid        NOT NULL,
+    version_id      uuid        NOT NULL,
     course_file_id  uuid        NOT NULL,
     created_at      timestamptz NOT NULL DEFAULT now(),
     updated_at      timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (version_id, course_file_id),
-    FOREIGN KEY (org_id, course_file_id) REFERENCES course_files (org_id, id)
+    PRIMARY KEY (course_id, version_id, course_file_id),
+    FOREIGN KEY (org_id, course_id, version_id) REFERENCES page_versions (org_id, course_id, id)
+        ON DELETE CASCADE,
+    FOREIGN KEY (org_id, course_id, course_file_id) REFERENCES course_files (org_id, course_id, id)
 );
-CREATE INDEX page_version_files_by_file ON page_version_files (course_file_id);
+CREATE INDEX page_version_files_by_file ON page_version_files (org_id, course_id, course_file_id);
 
 -- <version>_page_render_cache.sql (I2): B15's rendered HTML per version (not in the data model)
 CREATE TABLE page_renders (
@@ -233,13 +242,96 @@ CREATE TABLE page_renders (
 );
 ```
 
-A trigger refuses `UPDATE` of `page_versions.body`, `number`, `page_id` and `author_id`, so
-versions stay immutable (B2). `page_version_files` is written on save from the parsed body, so
+A trigger refuses `UPDATE` of `page_versions.body`, `number`, `page_id`, `course_id` and
+`author_id`, so versions stay immutable (B2). `page_version_files` is written on save from the parsed body, so
 `06` B11's `file.in_use` covers images used by any version (its foreign key's `NO ACTION` refuses
 deleting such a course file) and B20's copy maps them without reparsing. A `page_renders` row is
 written on the first read of a version and replaced when `renderer_version` in code is higher;
 its `html` holds `data-sc-image="<course_file_id>"` placeholders that the read fills with signed
 URLs (B15).
+
+Coordinator decisions (overnight, 2026-11-17, I1), pending owner review:
+
+- The page's current version is enforced by the schema: `current_version_id` is NOT NULL and its
+  deferred foreign key names `(id, current_version_id)`, so the current version is always one of
+  the page's own (the course columns are in the decisions after the review, below). The trigger
+  is `page_versions_immutable`.
+- Node and mark names are Tiptap's (`paragraph`, `heading`, `bulletList`, `orderedList`,
+  `listItem`, `blockquote`, `horizontalRule`, `hardBreak`, `codeBlock`, `table`, `tableRow`,
+  `tableHeader`, `tableCell`, `image`, `text`; marks `bold`, `italic`, `underline`, `strike`,
+  `code`, `link`, `subscript`, `superscript`). The nodes Tiptap does not ship are `callout`
+  (`kind`), `videoEmbed` (`provider`, `video_id`, `title`), `transcript` and `transcriptLine`
+  (`speaker`); `image` takes `course_file_id`, `alt` and `decorative` (`false` when omitted).
+  The other attributes are `heading.level`, `orderedList.start` (0 or more, 1 when omitted),
+  `codeBlock.language` and the cells' `colspan`, `rowspan` and `colwidth`; `link` takes `href`
+  only, since B9's `rel` and `target` are the renderer's. `stepclimb_core::page_doc` holds the
+  list, and the OpenAPI component `PageDoc` describes it.
+- Where blocks go: the document takes every block; a blockquote, a callout, a list item and a
+  table cell take paragraphs, bullet and ordered lists and code blocks only, and a list item
+  starts with a paragraph. Images, embeds, tables, callouts and transcripts are top-level only.
+  A node that holds blocks, rows, cells or lines (document, lists, list items, blockquote,
+  callout, table, rows, cells, transcript) holds at least one.
+- The code block languages are `bash`, `c`, `cpp`, `csharp`, `css`, `go`, `html`, `java`,
+  `javascript`, `json`, `kotlin`, `markdown`, `php`, `python`, `ruby`, `rust`, `sql`, `swift`,
+  `typescript`, `xml` and `yaml`, or `null`. A code block's text nodes are stored joined as one.
+- Column widths are not kept in M1: `colwidth` must be `null` (what Tiptap writes for a column
+  nobody resized), so I3 turns table resizing off.
+- A video embed's `title`, its iframe's accessible name (B16), is required: 1 to 200 characters,
+  not blank. A Vimeo id is 1 to 20 digits. A speaker label, a video title and an image's `alt`
+  hold no control character at all; an `alt` of only white space counts as empty.
+- The stored body is the parsed document written back with every attribute spelled out, so B3's
+  "equal body" compares canonical forms.
+- Slugs: B1's derivation takes the title's compatibility decomposition, keeps ASCII letters and
+  digits (lowercased), drops other non-ASCII characters and joins the runs with single hyphens,
+  cut to 100. A title that derives no slug (only non-ASCII letters, say) answers 422
+  `page.slug_invalid` at `/slug`, which also names a given slug that breaks B1's pattern. A
+  derived slug that is taken answers 409 `page.slug_taken` like a given one; the server adds no
+  suffix.
+- `GET /api/v1/courses/{course_id}/pages` lists by slug, compared as bytes.
+- `page.version_conflict` names the current version in a `current_version` member of the
+  problem (`{ id, number, author_id }`), added to the shared `Problem` schema beside `limit`
+  and `max`.
+- A restore's `page.image_type` and `page.body_invalid` name the member under `/body`, the
+  restored version's body, as a save's do.
+- `GET /api/v1/pages/{page_id}/versions/{version_id}` answers the body JSON in I1; I2 adds
+  `?format=html` with the renderer.
+- B6's home page refusal comes with I2, which adds the `{ "kind": "page" }` home option (B19);
+  until then `DELETE` refuses a page that a `page` item references.
+- `course_files::referenced` also reads `page_version_files`, so deleting a course file any
+  version names answers 409 `file.in_use` (`06` B11) rather than the foreign key's error.
+
+Coordinator decisions (overnight, 2026-11-17, after the review of #320), pending owner review:
+
+- Coordinator decision (overnight, 2026-11-17): B7's 1 MiB applies to the stored form, the
+  compact JSON of the document with every attribute written out, measured when a body is saved
+  or created. A body that is under 1 MiB as submitted but over it once stored (9,900 cells
+  without attributes, say) answers 422 `page.body_invalid` at `/body`, so every stored version
+  can be restored and saved again. Bodies read back from the database (a restore) get the
+  structural parse only, not the size check. The submitted JSON is bounded by the request body
+  limit, and serde_json refuses nesting deeper than 128 levels (400 `request.malformed`).
+- Coordinator decision (overnight, 2026-11-17): link targets are stored normalized. An absolute
+  `https`, `http` or `mailto` URL is stored as the `url` crate serializes it (`Url::as_str`:
+  scheme and host lowercased, and in a path, query or fragment some characters
+  percent-encoded), so `https://a.example/"onmouseover=alert(1)//` is stored as
+  `https://a.example/%22onmouseover=alert(1)//`. That encoding does not cover every character
+  that matters in HTML: a `mailto:` address is an opaque path where only control characters are
+  encoded, a host may hold `"`, `'` and a backtick (and `%22` in a host is decoded to `"`), and
+  `'` is never encoded in a path or fragment. So every target, absolute or a same-origin path, is
+  checked once more in the form it would be stored in: one holding `"`, `'`, `<`, `>`, a
+  backtick, `\` or a control character is refused (`/"><svg/onload=alert(1)>`,
+  `mailto:a@example.com"><svg/onload=alert(1)>`, `https://a"onmouseover=alert(1).example/`,
+  `https://a.example/it's`). I2's renderer must still escape every attribute it writes, and its
+  T4 and T6 golden files must include these cases.
+- Coordinator decision (overnight, 2026-11-17): `page_versions` and `page_version_files` carry
+  `course_id`, held equal to the page's course by three-column foreign keys
+  (`(org_id, course_id, page_id)` to `pages`, `(org_id, course_id, version_id)` to
+  `page_versions`, `(org_id, course_id, course_file_id)` to `course_files`, which gains
+  `UNIQUE (org_id, course_id, id)`). The database itself refuses a version naming another
+  course's file. `page_version_files`'s key is `(course_id, version_id, course_file_id)`.
+- Coordinator decision (overnight, 2026-11-17): the server stays strict about attributes. For
+  I3: the editor strips Tiptap Link's default `target`, `rel` and `class` attributes, and
+  `orderedList`'s `type` where the Tiptap version writes it, before it saves; the server refuses
+  them as unknown attributes.
 
 ## Permissions
 

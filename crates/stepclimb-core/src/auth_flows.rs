@@ -117,7 +117,7 @@ impl ReturnTo {
     }
 }
 
-fn is_safe_path(path: &str) -> bool {
+pub(crate) fn is_safe_path(path: &str) -> bool {
     let bytes = path.as_bytes();
     bytes.len() <= MAX_RETURN_TO_LEN
         && bytes.first() == Some(&b'/')

@@ -4,8 +4,9 @@
 //! Every error a handler or extractor returns is an [`ApiError`], which answers
 //! `application/problem+json` with the members `type`, `title`, `status`, `detail` and a stable
 //! `code` (`area.reason`, spec 02 Q4), plus `errors` on a 422, `limit` and `max` on
-//! `entitlement.limit_reached` (spec 10 B10), and `reasons` on `item.locked`
-//! (docs/specs/m1/04-unlock-and-completion-rules.md B13). `type` is `about:blank` and
+//! `entitlement.limit_reached` (spec 10 B10), `reasons` on `item.locked`
+//! (docs/specs/m1/04-unlock-and-completion-rules.md B13), and `current_version` on
+//! `page.version_conflict` (docs/specs/m1/07-pages-and-the-editor.md B3). `type` is `about:blank` and
 //! `title` is the HTTP status phrase until the docs site can host a page per code (Q4).
 //!
 //! `detail` is always a fixed sentence written here or by the handler, never the text of an
@@ -72,6 +73,17 @@ impl FieldError {
     }
 }
 
+/// The version that made a page save conflict: the page's current one (M1 spec 07 B3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CurrentVersion {
+    #[schema(value_type = String, format = "uuid")]
+    pub id: stepclimb_core::id::Uuid,
+    pub number: i32,
+    /// The user who saved it.
+    #[schema(value_type = String, format = "uuid")]
+    pub author_id: stepclimb_core::id::Uuid,
+}
+
 /// The body of every error response (RFC 9457).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Problem {
@@ -107,6 +119,9 @@ pub struct Problem {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub reasons: Vec<LockReason>,
+    /// On `page.version_conflict`, the page's current version, which the save was not based on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_version: Option<CurrentVersion>,
 }
 
 /// Reads past a problem's `reasons` and keeps none (see [`Problem::reasons`]).
@@ -135,6 +150,8 @@ enum Extension {
     Limit { limit: &'static str, max: u64 },
     /// `reasons`, on `item.locked`.
     Reasons(Vec<LockReason>),
+    /// `current_version`, on `page.version_conflict`.
+    CurrentVersion(CurrentVersion),
 }
 
 impl ApiError {
@@ -151,7 +168,8 @@ impl ApiError {
     }
 
     /// This error with the `limit` and `max` members: the key of the limit the request would
-    /// pass and the plan's value for it. Shares one slot with [`Self::with_reasons`]: the later
+    /// pass and the plan's value for it. Shares one slot with [`Self::with_reasons`] and
+    /// [`Self::with_current_version`]: the later
     /// call replaces the earlier one.
     pub fn with_limit(self, limit: &'static str, max: u64) -> Self {
         Self {
@@ -171,6 +189,15 @@ impl ApiError {
     pub fn with_reasons(self, reasons: Vec<LockReason>) -> Self {
         Self {
             extension: Some(Box::new(Extension::Reasons(reasons))),
+            ..self
+        }
+    }
+
+    /// This error with `current_version`, the page version a save conflicted with, for
+    /// `page.version_conflict`. Shares one slot with [`Self::with_limit`].
+    pub fn with_current_version(self, current: CurrentVersion) -> Self {
+        Self {
+            extension: Some(Box::new(Extension::CurrentVersion(current))),
             ..self
         }
     }
@@ -241,11 +268,13 @@ impl ApiError {
 
     /// The body this error answers with.
     pub fn problem(&self) -> Problem {
-        let (limit, reasons) = match self.extension.as_deref() {
-            None => (None, Vec::new()),
-            Some(Extension::Limit { limit, max }) => (Some((*limit, *max)), Vec::new()),
-            Some(Extension::Reasons(reasons)) => (None, reasons.clone()),
-        };
+        let (mut limit, mut reasons, mut current_version) = (None, Vec::new(), None);
+        match self.extension.as_deref() {
+            None => {}
+            Some(Extension::Limit { limit: key, max }) => limit = Some((*key, *max)),
+            Some(Extension::Reasons(found)) => reasons.clone_from(found),
+            Some(Extension::CurrentVersion(current)) => current_version = Some(current.clone()),
+        }
         Problem {
             problem_type: PROBLEM_TYPE.to_owned(),
             // Only unregistered status codes have no phrase, and the server never builds one.
@@ -257,6 +286,7 @@ impl ApiError {
             limit: limit.map(|(limit, _)| limit.to_owned()),
             max: limit.map(|(_, max)| max),
             reasons,
+            current_version,
         }
     }
 

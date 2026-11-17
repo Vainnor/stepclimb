@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO pages (id, org_id, course_id, slug, title, current_version_id, created_at,\n                              updated_at)\n           VALUES ($1, $2, $3, $4, $5, $6,\n                   timestamptz 'epoch' + $7::bigint * interval '1 microsecond',\n                   timestamptz 'epoch' + $7::bigint * interval '1 microsecond')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9edd2fdb148becc20e9dd83cfbc58412da54a34f619ed939bc74d07fca326fcd"
+}
