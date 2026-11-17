@@ -30,20 +30,28 @@ Most of this is already decided or built:
 
 What the plan does not settle:
 
-1. **Push.** APNs on iOS, and FCM on Android once that is scheduled (plan: after 1.0), deliver to
-   an app only when the sender holds the app owner's credentials. Evidence points at this:
-   Nextcloud's push documentation says pushes "need to be signed with a generated push key or
-   certificate from the same developer account" [1], and Sygnal's APNs settings take the vendor's
-   key, team id and the app's bundle id as topic [2]. Apple's own page did not load when checked
-   on 2026-11-17, so this is inferred, not verified. A self-hosted server cannot hold the
-   maintainer's key, so it cannot push to the official app directly.
+1. **Push.** APNs on iOS delivers to an app only for a sender holding the app owner's credentials.
+   The signing key is one you "request from your developer account", the token's `iss` is "the
+   10-character Team ID", and "APNs relates a team ID and associated bundle IDs to a connection"
+   [1]. The `apns-topic` header is required and "in general, the topic is your app's bundle ID"
+   [2]. A self-hosted server cannot hold the maintainer's key, so it cannot push to the official
+   app directly. FCM on Android (plan: after 1.0) works the same way by inference: Nextcloud's
+   documentation says pushes "need to be signed with a generated push key or certificate from the
+   same developer account" for both [3].
 2. **Version skew.** Self-hosted servers update on their own schedule, so the app will meet
    servers older and newer than itself. The discovery document has no version today.
-3. **Selling from the app.** Apple's guidelines restrict in-app links and buttons to buy outside
-   in-app purchase on most storefronts. Section 3.1.3(b) lets an app give access to things bought
-   elsewhere only if they are also sold in the app [3]. Section 3.1.3(c) has an exception for
-   services sold directly to organizations for their members. Whether managed-hosting plans fit
-   it is inferred, not verified: the guideline text came back as a summary when checked.
+3. **Selling from the app.** The App Store Review Guidelines (last updated October 16, 2026) [5]
+   restrict buttons and links to buy outside in-app purchase on most storefronts; the United
+   States storefront needs no entitlement for them (3.1.1(a)). Section 3.1.3(b) lets an app give
+   access to things bought elsewhere only if they are also sold in the app. Two sections could
+   cover Stepclimb instead:
+   - 3.1.3(c), "Enterprise Services", applies only if the app "is only sold directly by you to
+     organizations or groups for their employees or students"; "consumer, single user, or family
+     sales must use in-app purchase". A club or a VATSIM facility has members, not employees or
+     students, so this may not fit.
+   - 3.1.3(f), "Free Stand-alone Apps", covers a free companion to a paid web-based tool, provided
+     there is "no purchasing inside the app, or calls to action for purchase outside of the app".
+   Which section Apple applies is not settled; see Consequences.
 
 ## Options
 
@@ -55,9 +63,11 @@ What the plan does not settle:
     sends it a wake-up for a device token.
   - The payload carries no learning content: a generic title, a count, and at most an opaque id.
   - The app wakes, then fetches the notification from the user's own server with its own token.
-  - This is the pattern Nextcloud runs for its official apps. It goes further and encrypts the
-    content with a device key, so "Google and Apple don't even know the Nextcloud server sending
-    the notification" [1]. Matrix's Sygnal is the same shape [2].
+  - Nextcloud runs this pattern for its official apps [3]. Because the notification comes from the
+    proxy, Apple and Google never learn which Nextcloud server sent it. Separately, the server
+    encrypts the content to the device's public key, so the proxy cannot read it. Matrix's Sygnal
+    gateway is the same shape: it holds the vendor's APNs key, team id and the app's bundle id as
+    topic [4].
 - **Version in discovery.** `/.well-known/stepclimb` gains the server's version, the API versions
   it serves and the minimum app version it supports. The app gains its own minimum server
   version, so either side can say "update" instead of failing in an unclear way.
@@ -71,7 +81,7 @@ Costs:
   server, rate limits, and revoking a server's key.
 - **No content in pushes.** The notification text is generic until the app fetches the real
   notification. The data model already holds a `push_subscriptions` row with kind `apns` (plan,
-  Technical -> Data); a relay kind or relay settings get added beside it.
+  Technical -> Data model (core tables)); a relay kind or relay settings get added beside it.
 - **Review.** One ADR now and a relay spec before M5. It changes no M1 code.
 
 ### Option B: one app, no native push for self-hosted servers
@@ -99,52 +109,57 @@ one new piece, and it is small, a pattern other self-hostable projects already r
 content-free, so it holds no learner data. Option B leaves self-hosters with a worse app, and
 Option C is the cost this ADR exists to avoid.
 
-Two points were inferred, not verified, and are checked before M5 (see Decision):
-
-- **APNs credentials.** Apple's APNs documentation should confirm that the signing key is the
-  developer account's and that `apns-topic` is the bundle id.
-- **Section 3.1.3(c).** Read the guideline text itself to confirm that an organization-bought
-  plan, used by its members in a free app with no purchase links, fits the exception on every
-  storefront.
-
 ## Decision
 
 Option A, accepted by the owner on 2026-11-17. One Stepclimb app serves every server. The
 maintainer runs a content-free push relay that any server can opt in to. The discovery document
-carries version fields, and billing stays on the web. The two points marked inferred above, the
-APNs credentials and section 3.1.3(c), are checked against Apple's full text in the relay spec
-before M5. If either reads differently, the relay spec or a superseding ADR says so.
+carries version fields, and billing stays on the web with no purchasing or purchase links in the
+app.
 
 ## Consequences
 
-
-- **Discovery (M4 or earlier).** Add `version`, `api_versions` and `min_app_version` to
-  `/.well-known/stepclimb`, in its spec and the OpenAPI document. The app checks them when a
-  server is linked and on each launch.
+- **Bundle identifier.** The app's bundle identifier is a contract with every server: the
+  compiled-in client accepts only `dev.stepclimb.shell:/oauth/callback` (`clients.rs`), the Tauri
+  shell uses `dev.stepclimb.shell` (`apps/app/src-tauri/tauri.conf.json`), and the APNs topic is
+  the bundle id. The App Store build ships under `dev.stepclimb.shell`, or the change lands in the
+  server before M5, so that older self-hosted servers keep accepting the official app's sign-in.
+- **Discovery.** Add `version`, `api_versions` and `min_app_version` to `/.well-known/stepclimb`,
+  in its spec and the OpenAPI document. The app checks them when a server is linked and on each
+  launch. When this lands is for the discovery and app specs to set; it has to precede the first
+  App Store release.
 - **Relay spec (before M5).**
   - The relay API: registration, the relay key, send and revoke.
   - The payload: no content, or content encrypted to the device as in Nextcloud.
   - Rate limits and abuse handling.
   - Where it runs, and whether it is open source in this repository. It should be, under the same
     license.
-  - How a self-hosted server opts in. It should be a setting that is off by default, since it
-    sends device tokens and a count to the maintainer's service, and the self-hosting guide says
-    so.
+  - How a self-hosted server opts in. The recommendation is a setting that is off by default,
+    since it sends device tokens and a count to the maintainer's service, and the self-hosting
+    guide says so.
 - **Notifications spec.** Treat APNs delivery through the relay as one more channel, following
   the same preferences (plan, Technical -> Notifications).
-- **App.** The account list is keyed by server and organization. A managed user in two
-  organizations sees two entries on one server, and a self-hosted server adds its own.
-- **Billing (M6).** Billing stays on the website. The app shows no prices and no purchase links,
-  and the operator console and Stripe flows stay web-only.
-- **Revisit.** If Apple's rules or the 3.1.3(c) reading turn out differently, or when Android is
-  scheduled (FCM through the same relay).
+- **App spec, open question.** How the app's account list is keyed: by server, or by server and
+  organization. That depends on how managed hosting resolves organizations (a subdomain or a
+  custom domain each, per the plan), which is not built yet.
+- **App Store submission (M5) and the billing spec (M6).** Settle which guideline section covers
+  the app, 3.1.3(f) or 3.1.3(c), against the guidelines current at submission. Under both, the
+  app keeps no purchasing and no calls to action, and the operator console and Stripe flows stay
+  web-only.
+- **Revisit.** If Apple's reading differs at submission, or when Android is scheduled (FCM through
+  the same relay).
 
 ## Sources
 
-1. Nextcloud notifications app, "Push notifications v2", accessed 2026-11-17:
+1. Apple, "Establishing a token-based connection to APNs", accessed 2026-11-17:
+   https://developer.apple.com/documentation/usernotifications/establishing-a-token-based-connection-to-apns
+   (primary; read through its JSON form at developer.apple.com/tutorials/data/documentation)
+2. Apple, "Sending notification requests to APNs", accessed 2026-11-17:
+   https://developer.apple.com/documentation/usernotifications/sending-notification-requests-to-apns
+   (primary)
+3. Nextcloud notifications app, "Push notifications v2", accessed 2026-11-17:
    https://github.com/nextcloud/notifications/blob/master/docs/push-v2.md (vendor documentation)
-2. matrix-org/sygnal README, accessed 2026-11-17: https://github.com/matrix-org/sygnal, now
-   maintained at element-hq/sygnal (vendor documentation)
-3. Apple, App Store Review Guidelines, section 3.1, accessed 2026-11-17:
-   https://developer.apple.com/app-store/review/guidelines/ (primary; fetched as a summary, so
-   the quoted conditions need checking against the full text)
+4. element-hq/sygnal README, accessed 2026-11-17: https://github.com/element-hq/sygnal (vendor
+   documentation; the earlier matrix-org repository is archived)
+5. Apple, App Store Review Guidelines, last updated October 16, 2026, sections 3.1.1, 3.1.3(b),
+   3.1.3(c) and 3.1.3(f), accessed 2026-11-17: https://developer.apple.com/app-store/review/guidelines/
+   (primary)
