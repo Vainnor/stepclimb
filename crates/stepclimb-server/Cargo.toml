@@ -65,7 +65,9 @@ stepclimb-core = { workspace = true, features = ["test-support"] }
 stepclimb-auth = { workspace = true, features = ["test-support"] }
 base64.workspace = true
 tower.workspace = true
-http-body-util.workspace = true
+# `channel` for request bodies a test holds open, such as an upload that stalls
+# (docs/specs/m1/06-files.md B5).
+http-body-util = { workspace = true, features = ["channel"] }
 # The software passkey the passkey enrollment tests register with, and the WebAuthn types it
 # reads the server's options into.
 webauthn-rs.workspace = true

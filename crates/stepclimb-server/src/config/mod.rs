@@ -140,6 +140,13 @@ pub const WORKER_CONCURRENCY: Setting = Setting {
     example: "4 (jobs one process runs at once, 1 to 64)",
 };
 
+pub const MAX_FILE_BYTES: Setting = Setting {
+    var: "STEPCLIMB_MAX_FILE_BYTES",
+    key: "max_file_bytes",
+    secret: false,
+    example: "104857600 (the largest file one upload may send, in bytes: 1 MiB to 5 GiB)",
+};
+
 /// Every setting [`Config`] reads.
 pub const SETTINGS: &[Setting] = &[
     BIND,
@@ -155,6 +162,7 @@ pub const SETTINGS: &[Setting] = &[
     ALLOW_INSECURE_PROVIDERS,
     ROLE,
     WORKER_CONCURRENCY,
+    MAX_FILE_BYTES,
     STORAGE_URL,
     STORAGE_S3_ENDPOINT,
     STORAGE_S3_REGION,
@@ -177,6 +185,16 @@ pub const MAX_WORKER_CONCURRENCY: u32 = 64;
 
 /// `worker_concurrency` when it is not set.
 pub const DEFAULT_WORKER_CONCURRENCY: NonZeroU32 = NonZeroU32::new(4).expect("4 is not zero");
+
+/// The smallest `max_file_bytes`: 1 MiB (docs/specs/m1/06-files.md B4, Q2).
+pub const MIN_MAX_FILE_BYTES: u64 = 1024 * 1024;
+
+/// The largest `max_file_bytes`: 5 GiB, the most one S3 copy request takes (B7 copies an upload
+/// to its file's key).
+pub const MAX_MAX_FILE_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+
+/// `max_file_bytes` when it is not set: 100 MiB (Q2).
+pub const DEFAULT_MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
 
 /// What a `stepclimb serve` process runs (`role`, `serve --role`; spec m1/01 B13, Q1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
@@ -271,6 +289,10 @@ pub struct Config {
     /// `worker_concurrency`: the most jobs this process runs at once, 1 to
     /// [`MAX_WORKER_CONCURRENCY`]; [`DEFAULT_WORKER_CONCURRENCY`] when unset.
     pub worker_concurrency: NonZeroU32,
+    /// `max_file_bytes`: the largest file one upload may send, in bytes, [`MIN_MAX_FILE_BYTES`]
+    /// to [`MAX_MAX_FILE_BYTES`]; [`DEFAULT_MAX_FILE_BYTES`] when unset
+    /// (docs/specs/m1/06-files.md B4, Q2).
+    pub max_file_bytes: u64,
     /// `[[providers]]`: the identity providers the file declares, checked, each with its
     /// client secret (spec 06 B11). `stepclimb serve` writes them to their organizations.
     pub providers: Vec<ConfigProvider>,
@@ -297,6 +319,7 @@ impl fmt::Debug for Config {
             .field("allow_insecure_providers", &self.allow_insecure_providers)
             .field("role", &self.role)
             .field("worker_concurrency", &self.worker_concurrency)
+            .field("max_file_bytes", &self.max_file_bytes)
             .field("providers", &self.providers)
             .field("storage", &self.storage)
             .finish()
@@ -508,6 +531,7 @@ impl Config {
             None => Role::default(),
         };
         let worker_concurrency = worker_concurrency(&sources)?;
+        let max_file_bytes = max_file_bytes(&sources)?;
         let providers = match file {
             Some(file) => file_providers(file, allow_insecure_providers)?,
             None => Vec::new(),
@@ -529,6 +553,7 @@ impl Config {
             allow_insecure_providers,
             role,
             worker_concurrency,
+            max_file_bytes,
             providers,
             storage,
         })
@@ -567,6 +592,7 @@ impl Config {
             ),
             (ROLE.key, self.role.to_string()),
             (WORKER_CONCURRENCY.key, self.worker_concurrency.to_string()),
+            (MAX_FILE_BYTES.key, self.max_file_bytes.to_string()),
         ]
     }
 
@@ -712,6 +738,29 @@ fn worker_concurrency(sources: &Sources<'_>) -> Result<NonZeroU32, ConfigError> 
             "{count} is more than {MAX_WORKER_CONCURRENCY}; for example {}",
             WORKER_CONCURRENCY.example
         ),
+    })
+}
+
+/// `max_file_bytes`: a whole number of bytes, digits only, from [`MIN_MAX_FILE_BYTES`] to
+/// [`MAX_MAX_FILE_BYTES`]; [`DEFAULT_MAX_FILE_BYTES`] when neither source sets it
+/// (docs/specs/m1/06-files.md B4, Q2).
+fn max_file_bytes(sources: &Sources<'_>) -> Result<u64, ConfigError> {
+    let Some((value, origin)) = sources.plain(&MAX_FILE_BYTES)? else {
+        return Ok(DEFAULT_MAX_FILE_BYTES);
+    };
+    let digits = !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit());
+    let problem = match value.parse::<u64>() {
+        Ok(bytes) if digits && (MIN_MAX_FILE_BYTES..=MAX_MAX_FILE_BYTES).contains(&bytes) => {
+            return Ok(bytes);
+        }
+        Ok(bytes) if digits => format!(
+            "{bytes} is outside {MIN_MAX_FILE_BYTES} (1 MiB) to {MAX_MAX_FILE_BYTES} (5 GiB)"
+        ),
+        _ => format!("{value:?} is not a whole number of bytes"),
+    };
+    Err(ConfigError::Invalid {
+        origin,
+        problem: format!("{problem}; for example {}", MAX_FILE_BYTES.example),
     })
 }
 

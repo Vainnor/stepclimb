@@ -190,6 +190,13 @@ The server stores course files on the `storage` volume (`STEPCLIMB_STORAGE_URL` 
 and make the bucket before the server starts: `serve` writes, reads and deletes a probe object at
 startup and stops when it cannot.
 
+An upload streams to an S3 store as a multipart upload. If the server stops in the middle of one,
+the parts it sent stay in the bucket as an incomplete multipart upload: not an object, so the
+hourly `files.cleanup` job never sees it, yet the store keeps (and AWS bills) its parts. On AWS
+S3, add a lifecycle rule with `AbortIncompleteMultipartUpload` (`DaysAfterInitiation: 1`) to the
+bucket. On another S3-compatible store, check how it expires incomplete multipart uploads and
+set the same up. A local directory (`file://`) needs nothing.
+
 ## Compose variables
 
 These `SC_*` variables configure the Compose file, not the server. Set them in the environment or
@@ -276,6 +283,7 @@ default or secrecy is wrong.
 | `STEPCLIMB_ALLOW_INSECURE_PROVIDERS` | `allow_insecure_providers` | `true` or `false` | `false` | no | Lets the server fetch `http` and loopback URLs for identity providers and the admission webhook. For tests and local development only: it lets an organization admin make the server call services on its own host |
 | `STEPCLIMB_ROLE` | `role` | `all`, `web` or `worker` | `all` | no | What `stepclimb serve` runs: `all` the HTTP application and the job worker, `web` the HTTP application only, `worker` the job worker with only `/healthz` and `/readyz` on the bind address. `serve --role` overrides it |
 | `STEPCLIMB_WORKER_CONCURRENCY` | `worker_concurrency` | whole number, 1 to 64 | `4` | no | Jobs one `all` or `worker` process runs at once |
+| `STEPCLIMB_MAX_FILE_BYTES` | `max_file_bytes` | whole number of bytes, 1048576 (1 MiB) to 5368709120 (5 GiB) | `104857600` | no | The largest file one upload may send (100 MiB unless set). A larger `Content-Length` answers 413 `file.too_large` before the body is read |
 | `STEPCLIMB_STORAGE_URL` | `storage_url` | URL | none | no | Where course files are stored: `file:///<absolute directory>` (the directory must exist) or `s3://<bucket>[/<prefix>]`. Unset, the server starts, logs a warning, and uploads and file downloads answer 503 `storage.not_configured`. When set, `serve` writes, reads and deletes an object under `<prefix>/.probe/` before it listens and stops if any step fails |
 | `STEPCLIMB_STORAGE_S3_ENDPOINT` | `storage_s3_endpoint` | origin | none | no | The origin of an S3-compatible store, such as `http://minio:9000`; unset for AWS S3. The `STEPCLIMB_STORAGE_S3_*` settings are refused without an `s3://` storage URL |
 | `STEPCLIMB_STORAGE_S3_REGION` | `storage_s3_region` | region name | `us-east-1` | no | The bucket's region |

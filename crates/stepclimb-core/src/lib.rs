@@ -28,7 +28,8 @@
 //! users and organizations are set to; and [`theme`], the server's port of the theme generator,
 //! with the [`branding`] repository that stores an organization's generated stylesheet; and
 //! [`appearance`], the theme and density a user chose; and [`files`], the stored files of an
-//! organization, once per SHA-256. The other
+//! organization, once per SHA-256, with [`course_files`], which places them in a course's folders,
+//! and [`sniff`], which reads an upload's type from its first bytes. The other
 //! repositories arrive with the M0 specs in `docs/specs/m0/`.
 
 pub mod accounts;
@@ -40,6 +41,7 @@ pub mod audit;
 pub mod auth_flows;
 pub mod branding;
 pub mod clock;
+pub mod course_files;
 pub mod courses;
 pub mod db;
 pub mod feature;
@@ -72,6 +74,7 @@ mod scope;
 pub mod service_accounts;
 pub mod sessions;
 mod settings;
+pub mod sniff;
 mod source;
 pub mod theme;
 pub mod tz;

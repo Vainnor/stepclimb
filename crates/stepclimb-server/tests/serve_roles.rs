@@ -147,8 +147,8 @@ async fn job_connections(pool: &PgPool) -> i64 {
     .expect("read pg_stat_activity")
 }
 
-/// Wait until both periodic jobs have been scheduled past their first run and have run: both
-/// schedule rows have moved on from the time startup wrote them, and no job is left.
+/// Wait until every periodic job has been scheduled past its first run and has run: each
+/// schedule row has moved on from the time startup wrote it, and no job is left.
 async fn periodic_jobs_ran(pool: &PgPool) {
     let deadline = Instant::now() + PATIENCE;
     loop {
@@ -162,7 +162,7 @@ async fn periodic_jobs_ran(pool: &PgPool) {
             .fetch_one(pool)
             .await
             .expect("count jobs");
-        if moved == ["auth.flows_cleanup", "jobs.prune"] && left == 0 {
+        if moved == ["auth.flows_cleanup", "files.cleanup", "jobs.prune"] && left == 0 {
             return;
         }
         assert!(
@@ -209,8 +209,8 @@ async fn a_worker_process_runs_jobs_and_answers_only_the_probes(pool: PgPool) {
         job_connections(&pool).await > 0,
         "the worker has its own pool"
     );
-    // Spec m1/01 B17, B18: startup wrote the schedules, the first tick enqueued both periodic
-    // jobs, and the worker ran them.
+    // Spec m1/01 B17, B18: startup wrote the schedules, the first tick enqueued every periodic
+    // job, and the worker ran them.
     periodic_jobs_ran(&pool).await;
     let status = server.terminate();
     assert!(

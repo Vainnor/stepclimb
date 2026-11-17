@@ -1979,6 +1979,175 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/api/v1/course-files/{course_file_id}": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Read a course file.",
+        "operationId": "getCourseFile",
+        "parameters": [
+          {
+            "name": "course_file_id",
+            "in": "path",
+            "description": "The course file's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The course file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CourseFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/FilesViewForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/CourseFileNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Delete a course file no `file` item references. Its bytes stay stored until no course file\nhas used them for 24 hours.",
+        "operationId": "deleteCourseFile",
+        "parameters": [
+          {
+            "name": "course_file_id",
+            "in": "path",
+            "description": "The course file's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The course file is deleted"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/ContentEditForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/CourseFileNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/CourseFileDeleteConflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      },
+      "patch": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Rename a course file, or move it to another folder of its course. A patch naming only current\nvalues changes nothing.",
+        "operationId": "updateCourseFile",
+        "parameters": [
+          {
+            "name": "course_file_id",
+            "in": "path",
+            "description": "The course file's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CourseFilePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The course file after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CourseFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/ContentEditForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/CourseFileNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/CourseFileWriteConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/CourseFileInvalid"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/api/v1/courses": {
       "get": {
         "tags": [
@@ -2329,6 +2498,271 @@
           },
           "422": {
             "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/courses/{course_id}/files": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "List the folders and files directly in a folder of the course: folders first, then files,\neach sorted by name (compared as bytes).",
+        "operationId": "listCourseFiles",
+        "parameters": [
+          {
+            "name": "course_id",
+            "in": "path",
+            "description": "The course's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "folder",
+            "in": "query",
+            "description": "The folder, such as `/handouts`; `/`, the course's top folder, when omitted.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page; omit it for the first page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many items to return, 1 to 200; 50 when omitted.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 200,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of the folder's entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_FolderEntry"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/FilesViewForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/FilesCourseNotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/CourseFileInvalid"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Upload a file into a folder of the course. The body is the file itself, with its\n`Content-Length`; its `Content-Type` is ignored: the server reads the type from the bytes.\nThe same bytes the organization already stores are kept once and add nothing to its storage.",
+        "operationId": "uploadCourseFile",
+        "parameters": [
+          {
+            "name": "course_id",
+            "in": "path",
+            "description": "The course's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "folder",
+            "in": "query",
+            "description": "The folder, such as `/handouts`; `/`, the course's top folder, when omitted.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "description": "The file's name in the folder.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The file's bytes, with `Content-Length`.",
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The file is stored and placed in the folder",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The course file's path"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CourseFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/UploadBadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/UploadForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/UploadCourseNotFound"
+          },
+          "408": {
+            "$ref": "#/components/responses/UploadTimeout"
+          },
+          "409": {
+            "$ref": "#/components/responses/UploadConflict"
+          },
+          "411": {
+            "$ref": "#/components/responses/UploadLengthRequired"
+          },
+          "413": {
+            "$ref": "#/components/responses/UploadTooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/CourseFileInvalid"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/UploadStorageUnavailable"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/courses/{course_id}/folders/rename": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Rename a folder of the course and every folder below it, in one change: either every file\nmoves or none does.",
+        "operationId": "renameCourseFolder",
+        "parameters": [
+          {
+            "name": "course_id",
+            "in": "path",
+            "description": "The course's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FolderRename"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "How many course files moved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FolderRenamed"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/ContentEditForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/FolderRenameNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/CourseFileWriteConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/FolderRenameInvalid"
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
@@ -6441,6 +6875,78 @@
         },
         "additionalProperties": false
       },
+      "CourseFile": {
+        "type": "object",
+        "description": "A file in a folder of a course.",
+        "required": [
+          "id",
+          "course_id",
+          "folder",
+          "name",
+          "size",
+          "mime",
+          "sha256",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "course_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          },
+          "folder": {
+            "type": "string",
+            "description": "`/` or a path such as `/handouts/week-1`, NFC-normalized."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "mime": {
+            "type": "string",
+            "description": "The type the server read from the file's first bytes; `application/octet-stream` when it\nrecognized none. Never the uploader's `Content-Type`."
+          },
+          "name": {
+            "type": "string",
+            "description": "NFC-normalized; unique in the folder."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "The SHA-256 of the bytes as the server computed it, 64 lowercase hexadecimal digits."
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "In bytes, as the server counted them.",
+            "minimum": 0
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          }
+        }
+      },
+      "CourseFilePatch": {
+        "type": "object",
+        "description": "A change to a course file; an omitted member is left as it is.",
+        "properties": {
+          "folder": {
+            "type": "string",
+            "description": "The folder to move the file to, in the same course."
+          },
+          "name": {
+            "type": "string",
+            "description": "The file's new name."
+          }
+        },
+        "additionalProperties": false
+      },
       "CourseHome": {
         "type": "object",
         "description": "What a learner sees first when opening the course.",
@@ -6887,6 +7393,87 @@
           "field": {
             "type": "string",
             "description": "A JSON Pointer (RFC 6901) to the member that broke the rule, such as `/name`."
+          }
+        }
+      },
+      "FolderEntry": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A folder that holds files, directly or below it.",
+            "required": [
+              "path",
+              "name",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "folder"
+                ]
+              },
+              "name": {
+                "type": "string",
+                "description": "Its last segment."
+              },
+              "path": {
+                "type": "string",
+                "description": "The folder's whole path, such as `/handouts/week-1`."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "file",
+              "kind"
+            ],
+            "properties": {
+              "file": {
+                "$ref": "#/components/schemas/CourseFile"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "file"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "One entry of a folder: a folder directly inside it, or a file in it."
+      },
+      "FolderRename": {
+        "type": "object",
+        "description": "A folder to rename, with everything below it.",
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": "string",
+            "description": "The folder's path now; not `/`."
+          },
+          "to": {
+            "type": "string",
+            "description": "Its new path; not `/`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "FolderRenamed": {
+        "type": "object",
+        "description": "How many course files a folder rename moved.",
+        "required": [
+          "moved"
+        ],
+        "properties": {
+          "moved": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -8357,6 +8944,75 @@
                   "description": "RFC 3339, UTC."
                 }
               }
+            },
+            "description": "The items, in the list's sort order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass this as `cursor` to get the next page; `null` on the last page."
+          }
+        }
+      },
+      "Page_FolderEntry": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "description": "A folder that holds files, directly or below it.",
+                  "required": [
+                    "path",
+                    "name",
+                    "kind"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "folder"
+                      ]
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "Its last segment."
+                    },
+                    "path": {
+                      "type": "string",
+                      "description": "The folder's whole path, such as `/handouts/week-1`."
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "file",
+                    "kind"
+                  ],
+                  "properties": {
+                    "file": {
+                      "$ref": "#/components/schemas/CourseFile"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "file"
+                      ]
+                    }
+                  }
+                }
+              ],
+              "description": "One entry of a folder: a folder directly inside it, or a file in it."
             },
             "description": "The items, in the list's sort order."
           },
@@ -10359,6 +11015,46 @@
           }
         }
       },
+      "CourseFileDeleteConflict": {
+        "description": "`course.archived`: the course is archived and takes no content change. `file.in_use`: a `file` item references the course file; remove it first.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "CourseFileInvalid": {
+        "description": "`request.invalid`: `errors` names `/folder` (`file.folder_invalid`: not `/` or a path of `/`-separated segments that are not empty, `.` or `..` and hold no `\\` or control character; `file.folder_too_long`: a segment over 100 characters; `file.folder_too_deep`: more than 8 segments) or `/name` (`file.name_invalid`: empty, `.`, `..`, or holding `/`, `\\` or a control character; `file.name_too_long`: over 255 characters). Both are compared after NFC normalization.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "CourseFileNotFound": {
+        "description": "`file.not_found`: no course file with this id exists in the organization, or you cannot see its course. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "CourseFileWriteConflict": {
+        "description": "`course.archived`: the course is archived and takes no content change. `file.name_taken`: the folder already holds a file with this name.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "CourseListNotFound": {
         "description": "`account.not_found`: no account with `account_id` exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined.",
         "content": {
@@ -10571,6 +11267,46 @@
       },
       "EnrollmentStartNotFound": {
         "description": "`auth.method_disabled`: the organization offers neither passkey nor password sign-in. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "FilesCourseNotFound": {
+        "description": "`course.not_found`: no course with this id exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "FilesViewForbidden": {
+        "description": "`permission.denied`: you can see the course but do not hold `course.view_all` at a scope containing it.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "FolderRenameInvalid": {
+        "description": "`request.invalid`: `errors` names `/from` or `/to` with `file.folder_invalid`, `file.folder_too_long` or `file.folder_too_deep` as for a course file's folder, `file.folder_root` (the top folder `/` cannot be renamed or be the new name), or `/to` with `file.folder_too_deep` when a moved file would be more than 8 levels deep.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "FolderRenameNotFound": {
+        "description": "`course.not_found`: no course with this id exists in the organization, or you cannot see it. `folder.not_found`: no file is in the folder `from` or below it. `org.not_found`: the request's organization cannot be determined.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -11467,6 +12203,86 @@
           }
         }
       },
+      "UploadBadRequest": {
+        "description": "`request.malformed`: `Content-Length` is not a number, the body is longer or shorter than it says, or a query parameter does not parse.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "UploadConflict": {
+        "description": "`course.archived`: the course is archived and takes no content change. `file.name_taken`: the folder already holds a file with this name.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "UploadCourseNotFound": {
+        "description": "`course.not_found`: no course with this id exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "UploadForbidden": {
+        "description": "`permission.denied`: you can see the course but do not hold `course.content_edit` at a scope containing it. `entitlement.limit_reached`: the file would take the organization past its plan's `storage` limit; `limit` and `max` say which and how much. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "UploadLengthRequired": {
+        "description": "`file.length_required`: the request has no `Content-Length`; send the file with its length.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "UploadStorageUnavailable": {
+        "description": "`storage.not_configured`: the server has no object storage configured, so it cannot store files; the operator sets `STEPCLIMB_STORAGE_URL`. `file.uploads_busy`: the server is receiving as many uploads as it takes at once; try again shortly. `org.none`: the instance has no organization yet.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "UploadTimeout": {
+        "description": "`file.body_timeout`: the body sent nothing for 30 seconds; send the file again.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "UploadTooLarge": {
+        "description": "`file.too_large`: `Content-Length` is over the largest file this server accepts (`max_file_bytes`, 100 MiB unless the operator set another).",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "UserCreateConflict": {
         "description": "`user.external_id_taken`: another user of the organization has this external id. `user.email_taken`: another user of the organization has this email, in any letter case. `identity.taken`: one of `identities` is already linked to a user.",
         "content": {
@@ -11587,6 +12403,10 @@
     {
       "name": "modules",
       "description": "A course's modules and their items"
+    },
+    {
+      "name": "files",
+      "description": "A course's files and folders"
     },
     {
       "name": "roles",

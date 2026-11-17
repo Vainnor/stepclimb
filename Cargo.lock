@@ -1338,6 +1338,7 @@ dependencies = [
  "http",
  "http-body",
  "pin-project-lite",
+ "tokio",
 ]
 
 [[package]]
@@ -3455,6 +3456,7 @@ dependencies = [
  "stepclimb-core",
  "thiserror 2.0.21",
  "tokio",
+ "unicode-normalization",
  "url",
  "uuid",
 ]

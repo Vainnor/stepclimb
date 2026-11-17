@@ -54,6 +54,7 @@
 use std::{
     future::Future,
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    path::PathBuf,
     pin::Pin,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -75,10 +76,11 @@ use stepclimb_core::{
     admission_webhooks::{self, Change, Fresh},
     audit::Actor,
     clock::ManualClock,
-    courses,
+    course_files, courses,
     feature::{
         self, AdmissionWebhook, ApiKeys, CustomBranding, CustomRoles, Feature, Limit, OidcProviders,
     },
+    files,
     grants::ScopeId,
     id::{Uuid, new_id},
     identities::{self, NewIdentity},
@@ -96,6 +98,7 @@ use stepclimb_core::{
 };
 use stepclimb_server::{
     AppState,
+    config::StorageConfig,
     error::{ApiError, Problem},
     extract::{ApiJson, ApiPath},
     openapi,
@@ -103,6 +106,7 @@ use stepclimb_server::{
     require::{AccountParentTarget, AccountTarget, AnyScope, Require},
     router,
     session::{self, Authenticated},
+    storage::Storage,
     web_origin::WebOrigin,
 };
 use tower::ServiceExt;
@@ -298,6 +302,38 @@ const TABLE: &[Entry] = &[
             feature_by_target: false,
             setup: copy_course_to_ground,
         },
+    },
+    Entry {
+        operation_id: "listCourseFiles",
+        access: permission(CourseViewAll::KEY, COURSE_NOT_FOUND, files_of_tower_course),
+    },
+    Entry {
+        operation_id: "uploadCourseFile",
+        access: permission(
+            CourseContentEdit::KEY,
+            COURSE_NOT_FOUND,
+            upload_into_tower_course,
+        ),
+    },
+    Entry {
+        operation_id: "getCourseFile",
+        access: permission(CourseViewAll::KEY, FILE_NOT_FOUND, course_file_in_tower),
+    },
+    Entry {
+        operation_id: "updateCourseFile",
+        access: permission(CourseContentEdit::KEY, FILE_NOT_FOUND, rename_course_file),
+    },
+    Entry {
+        operation_id: "deleteCourseFile",
+        access: permission(CourseContentEdit::KEY, FILE_NOT_FOUND, course_file_in_tower),
+    },
+    Entry {
+        operation_id: "renameCourseFolder",
+        access: permission(
+            CourseContentEdit::KEY,
+            COURSE_NOT_FOUND,
+            rename_tower_folder,
+        ),
     },
     Entry {
         operation_id: "listPermissions",
@@ -1403,6 +1439,78 @@ fn copy_course_to_ground(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send 
             body: Some(serde_json::json!({
                 "account_id": org.ground, "code": format!("K{}", &hex[hex.len() - 12..]),
             })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A course file that is not the organization's, or whose course the caller cannot see: 404
+/// `file.not_found` (M1 spec 06 API).
+const FILE_NOT_FOUND: Target = Target::Scoped {
+    not_found: "file.not_found",
+    cross_org: "file.not_found",
+};
+
+/// The query string a call of the operation carries, for the one route that takes its
+/// arguments there: the upload's name (M1 spec 06 B3).
+const QUERIES: &[(&str, &str)] = &[("uploadCourseFile", "name=suite.txt")];
+
+/// A draft course in Tower with a file in its top folder, listed.
+fn files_of_tower_course(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, false).await;
+        org.course_file(course, "/").await;
+        Call {
+            params: vec![("course_id", course)],
+            body: None,
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A draft course in Tower and a file's bytes; [`QUERIES`] names it.
+fn upload_into_tower_course(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: vec![("course_id", org.course(org.tower, false).await)],
+            body: Some(serde_json::json!("A suite file")),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A file of a draft course in Tower.
+fn course_file_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, false).await;
+        Call {
+            params: vec![("course_file_id", org.course_file(course, "/").await)],
+            body: None,
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A file of a draft course in Tower, renamed and moved.
+fn rename_course_file(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, false).await;
+        Call {
+            params: vec![("course_file_id", org.course_file(course, "/").await)],
+            body: Some(serde_json::json!({ "folder": "/moved", "name": "renamed.txt" })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A draft course in Tower whose folder `/a` holds a file, renamed to `/b`.
+fn rename_tower_folder(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, false).await;
+        org.course_file(course, "/a").await;
+        Call {
+            params: vec![("course_id", course)],
+            body: Some(serde_json::json!({ "from": "/a", "to": "/b" })),
             at: At::Account(org.tower),
         }
     })
@@ -2993,6 +3101,9 @@ async fn call_op(
     if uri.contains('{') {
         return Err(format!("the setup leaves a path parameter unset: {uri}"));
     }
+    if let Some((_, query)) = QUERIES.iter().find(|(id, _)| *id == op.id) {
+        uri = format!("{uri}?{query}");
+    }
     Ok(send(app, &op.method, &uri, org, cookie, call.body.as_ref()).await)
 }
 
@@ -3015,8 +3126,11 @@ async fn send(
     }
     let body = match body {
         Some(json) => {
-            request = request.header(header::CONTENT_TYPE, "application/json");
-            Body::from(json.to_string())
+            let json = json.to_string();
+            request = request
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::CONTENT_LENGTH, json.len());
+            Body::from(json)
         }
         None => Body::empty(),
     };
@@ -3074,19 +3188,36 @@ fn state_for(pool: &PgPool) -> AppState {
     }
 }
 
-/// The test's database, with the built-in roles synced.
+/// The test's database, with the built-in roles synced, and a local directory the router stores
+/// course files in, removed on drop.
 struct World {
     pool: PgPool,
+    files: PathBuf,
+}
+
+impl Drop for World {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.files);
+    }
 }
 
 impl World {
     async fn new(pool: PgPool) -> Self {
         roles::sync_builtin(&pool, now()).await.expect("sync roles");
-        Self { pool }
+        let files = std::env::temp_dir().join(format!("stepclimb-suite-{}", new_id()));
+        std::fs::create_dir_all(&files).expect("create the storage directory");
+        Self { pool, files }
     }
 
     fn state(&self) -> AppState {
-        state_for(&self.pool)
+        let config = StorageConfig::Local {
+            root: self.files.clone(),
+        };
+        let storage = Storage::open(&config, 1024 * 1024).expect("open the directory");
+        AppState {
+            storage,
+            ..state_for(&self.pool)
+        }
     }
 
     /// A new organization with Tower under the root and Ground under Tower.
@@ -3175,6 +3306,29 @@ impl Org {
             .expect("publish course");
         }
         id
+    }
+
+    /// A course file in `folder` of `course`, its bytes naming the slug and a new id: its id.
+    async fn course_file(&self, course: Uuid, folder: &str) -> Uuid {
+        let mut hasher = files::Sha256Hasher::new();
+        hasher.update(format!("File of {} {}", self.slug, new_id()).as_bytes());
+        let new = files::NewFile {
+            hashed: hasher.finish(),
+            mime: "text/plain; charset=utf-8".into(),
+        };
+        let file = files::insert(&self.pool, scope(self.id), &new, now())
+            .await
+            .expect("insert file")
+            .id;
+        let place = (
+            &course_files::Folder::parse(folder).expect("a folder"),
+            &course_files::Name::parse(&format!("{}.txt", new_id())).expect("a name"),
+        );
+        let mut conn = self.pool.acquire().await.expect("a connection");
+        course_files::create(&mut conn, scope(self.id), course, file, place, now())
+            .await
+            .expect("create course file")
+            .id
     }
 
     /// A new module, last in `course`: its id.

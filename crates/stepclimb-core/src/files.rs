@@ -23,7 +23,8 @@
 //! ```
 //!
 //! This module holds rows only; the bytes are the server's storage layer's. Which upload may
-//! add a row, and the order of object copy, insert and commit (B7), are the upload route's.
+//! add a row, and the order of object copy, insert and commit (B7), are the upload route's; the
+//! hash lock ([`lock_hash`]) is how uploads and `files.cleanup` take turns on one hash.
 
 use std::fmt;
 use std::time::SystemTime;
@@ -45,9 +46,10 @@ const HASH_CONSTRAINT: &str = "files_org_id_sha256_key";
 /// The shortest and longest stored MIME type, in characters (the table's check).
 const MIME_CHARS: std::ops::RangeInclusive<usize> = 3..=100;
 
-/// The SHA-256 digest of a file's bytes, computed by the server. Outside this crate the only way
-/// to get one is [`Sha256Hasher::finish`] (or reading a stored row), so no caller can supply a
-/// hash of its choosing.
+/// The SHA-256 digest of a file's bytes, computed by the server. Outside this crate the only ways
+/// to get one are [`Sha256Hasher::finish`], reading a stored row, and [`digest_of_key`] on the
+/// key of an object the server stored. None of them makes a [`Hashed`], so no caller can record
+/// a file under a hash of its choosing.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Sha256Digest([u8; 32]);
 
@@ -56,6 +58,11 @@ impl Sha256Digest {
     #[must_use]
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+
+    /// The digest a row stores, or `None` when it is not 32 bytes.
+    pub(crate) fn from_stored(bytes: &[u8]) -> Option<Self> {
+        <[u8; 32]>::try_from(bytes).ok().map(Self)
     }
 
     /// The digest as 64 lowercase hexadecimal digits, as object keys and `ETag`s write it.
@@ -146,6 +153,92 @@ pub fn storage_key(scope: OrgScope, sha256: Sha256Digest) -> String {
     format!("orgs/{}/files/{sha256}", scope.org_id())
 }
 
+/// The digest in `key`, the key of the scope's organization's file object as [`storage_key`]
+/// writes it (`orgs/<org_id>/files/<64 lowercase hex digits>`), or `None` for any other key. For
+/// `files.cleanup`, which lists the objects in storage and looks for those without a row (B21).
+#[must_use]
+pub fn digest_of_key(scope: OrgScope, key: &str) -> Option<Sha256Digest> {
+    let hex = key.strip_prefix(&format!("orgs/{}/files/", scope.org_id()))?;
+    let lower_hex = |b: &u8| b.is_ascii_digit() || (b'a'..=b'f').contains(b);
+    if hex.len() != 64 || !hex.as_bytes().iter().all(lower_hex) {
+        return None;
+    }
+    let mut digest = [0; 32];
+    for (byte, pair) in digest.iter_mut().zip(hex.as_bytes().chunks(2)) {
+        // Two lowercase hexadecimal digits, checked above.
+        *byte = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
+    }
+    Some(Sha256Digest(digest))
+}
+
+/// The first key of the advisory lock on one hash of one organization's files: the ASCII of
+/// `file`. PostgreSQL keeps two-`int4` keys apart from single-`bigint` ones, and this class keeps
+/// it apart from the account tree's lock.
+const HASH_LOCK_CLASS: i32 = 0x6669_6c65;
+
+/// The second key of the hash lock: the first four bytes of SHA-256 over the organization's id
+/// and the digest. Two hashes that share it only wait for each other.
+fn hash_lock_key(scope: OrgScope, sha256: Sha256Digest) -> i32 {
+    let mut key = sha2::Sha256::new();
+    key.update(scope.org_id().as_bytes());
+    key.update(sha256.0);
+    let key = key.finalize();
+    i32::from_be_bytes([key[0], key[1], key[2], key[3]])
+}
+
+/// Take the transaction-scoped advisory lock on the scope's organization's `sha256`, held until
+/// the transaction `conn` is in ends. An upload holds it from before it looks the hash up until
+/// it commits the row (B7), and `files.cleanup` holds [`lock_hash_session`] while it deletes the
+/// row and then the object (B21), so an object is never deleted while an upload of the same bytes
+/// is between copying it and committing its row.
+pub async fn lock_hash(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    sha256: Sha256Digest,
+) -> Result<(), Error> {
+    sqlx::query!(
+        "SELECT pg_advisory_xact_lock($1, $2)",
+        HASH_LOCK_CLASS,
+        hash_lock_key(scope, sha256),
+    )
+    .fetch_one(conn)
+    .await?;
+    Ok(())
+}
+
+/// [`lock_hash`]'s lock, held by the session `conn` until [`unlock_hash_session`], so it spans a
+/// commit and the object delete after it. A connection that drops releases it.
+pub async fn lock_hash_session(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    sha256: Sha256Digest,
+) -> Result<(), Error> {
+    sqlx::query!(
+        "SELECT pg_advisory_lock($1, $2)",
+        HASH_LOCK_CLASS,
+        hash_lock_key(scope, sha256),
+    )
+    .fetch_one(conn)
+    .await?;
+    Ok(())
+}
+
+/// Release [`lock_hash_session`]'s lock. `false` when the session did not hold it.
+pub async fn unlock_hash_session(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    sha256: Sha256Digest,
+) -> Result<bool, Error> {
+    let released = sqlx::query_scalar!(
+        r#"SELECT pg_advisory_unlock($1, $2) AS "released!""#,
+        HASH_LOCK_CLASS,
+        hash_lock_key(scope, sha256),
+    )
+    .fetch_one(conn)
+    .await?;
+    Ok(released)
+}
+
 /// A stored file as the repository reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct File {
@@ -173,8 +266,8 @@ pub struct NewFile {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// The organization already has a file with this hash: another upload of the same bytes
-    /// committed first. B7's loser reads the row with [`find_by_hash`] and adds nothing.
+    /// The organization already has a file with this hash. An upload holds [`lock_hash`] from
+    /// before its [`find_by_hash`] to its commit, so it finds the row instead of meeting this.
     #[error("the organization already has a file with this SHA-256")]
     HashTaken,
     /// A MIME type outside 3 to 100 characters, or one holding NUL.
@@ -259,7 +352,7 @@ pub async fn find_by_hash(
 
 /// Record the scope's organization's file `new`, whose bytes the caller has put at
 /// [`storage_key`], stamped `now`. [`Error::HashTaken`] when the organization already has the
-/// hash; in a transaction that error aborts it, so B7's caller rolls back and retries.
+/// hash, which aborts the caller's transaction.
 pub async fn insert(
     db: impl PgExecutor<'_>,
     scope: OrgScope,
@@ -305,6 +398,125 @@ pub async fn count_for_limit(db: impl PgExecutor<'_>, scope: OrgScope) -> Result
     Ok(bytes)
 }
 
+/// Whether the scope's organization has a file of exactly `size` bytes: an upload of that length
+/// may be one of its files again, which adds nothing to the `storage` limit (B4, B7).
+pub async fn any_of_size(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    size: u64,
+) -> Result<bool, Error> {
+    let Ok(size) = i64::try_from(size) else {
+        return Ok(false);
+    };
+    let found = sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM files WHERE org_id = $1 AND size = $2) AS "found!""#,
+        scope.org_id(),
+        size,
+    )
+    .fetch_one(db)
+    .await?;
+    Ok(found)
+}
+
+/// Whether the scope's organization has a file with `sha256`. Read under [`lock_hash`] or
+/// [`lock_hash_session`], the answer holds until the lock is released.
+pub async fn exists(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    sha256: Sha256Digest,
+) -> Result<bool, Error> {
+    let found = sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM files WHERE org_id = $1 AND sha256 = $2) AS "found!""#,
+        scope.org_id(),
+        &sha256.0[..],
+    )
+    .fetch_one(db)
+    .await?;
+    Ok(found)
+}
+
+/// The most rows [`unreferenced`] returns at once.
+pub const UNREFERENCED_BATCH: i64 = 1000;
+
+/// The ids and hashes of up to [`UNREFERENCED_BATCH`] of the scope's organization's files that
+/// no course file references and whose last reference went at or before `cutoff` (B21): stamped
+/// `unreferenced_since`, or, never having lost one, created by then. Spec 08's videos and
+/// captions add their references to this query.
+pub async fn unreferenced(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    cutoff: SystemTime,
+) -> Result<Vec<(Uuid, Sha256Digest)>, Error> {
+    let rows = sqlx::query!(
+        r#"SELECT f.id, f.sha256
+           FROM files f
+           WHERE f.org_id = $1
+             AND COALESCE(f.unreferenced_since, f.created_at)
+                 <= timestamptz 'epoch' + $2::bigint * interval '1 microsecond'
+             AND NOT EXISTS (
+                 SELECT 1 FROM course_files cf WHERE cf.org_id = f.org_id AND cf.file_id = f.id)
+           ORDER BY f.id
+           LIMIT $3"#,
+        scope.org_id(),
+        epoch_micros(cutoff)?,
+        UNREFERENCED_BATCH,
+    )
+    .fetch_all(db)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let sha256 =
+                <[u8; 32]>::try_from(row.sha256.as_slice()).map_err(|_| Error::Stored {
+                    id: row.id,
+                    column: "sha256",
+                })?;
+            Ok((row.id, Sha256Digest(sha256)))
+        })
+        .collect()
+}
+
+/// Delete the scope's organization's file `id` if it is still unreferenced as [`unreferenced`]
+/// reads it at `cutoff`, checked again with the row locked `FOR UPDATE`: an upload or a copy
+/// that is adding a reference holds `FOR KEY SHARE` on it, so this waits for it and then sees
+/// its course file. Returns the deleted row, whose object the caller deletes after the commit,
+/// or `None` when the row is gone or referenced again.
+pub async fn delete(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    id: Uuid,
+    cutoff: SystemTime,
+) -> Result<Option<File>, Error> {
+    let locked = sqlx::query_scalar!(
+        "SELECT id FROM files WHERE org_id = $1 AND id = $2 FOR UPDATE",
+        scope.org_id(),
+        id,
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+    if locked.is_none() {
+        return Ok(None);
+    }
+    sqlx::query_as!(
+        Row,
+        r#"DELETE FROM files f
+           WHERE f.org_id = $1 AND f.id = $2
+             AND COALESCE(f.unreferenced_since, f.created_at)
+                 <= timestamptz 'epoch' + $3::bigint * interval '1 microsecond'
+             AND NOT EXISTS (
+                 SELECT 1 FROM course_files cf WHERE cf.org_id = f.org_id AND cf.file_id = f.id)
+           RETURNING id, sha256, size, mime, storage_key,
+                     (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
+                     (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!""#,
+        scope.org_id(),
+        id,
+        epoch_micros(cutoff)?,
+    )
+    .fetch_optional(conn)
+    .await?
+    .map(File::try_from)
+    .transpose()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,6 +544,43 @@ mod tests {
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
         assert_eq!(empty.size(), 0);
+    }
+
+    #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a unit test stands in for a credential resolver"
+    )]
+    fn a_key_gives_back_its_digest_only_in_its_own_organization() {
+        let (org, other) = (Uuid::nil(), Uuid::max());
+        let sha256 = hashed(&[b"abc"]).sha256();
+        let key = storage_key(OrgScope::instance(org), sha256);
+        assert_eq!(digest_of_key(OrgScope::instance(org), &key), Some(sha256));
+        assert_eq!(digest_of_key(OrgScope::instance(other), &key), None);
+        let prefix = format!("orgs/{org}/files/");
+        for bad in [
+            format!("{prefix}{}", &ABC[..63]),
+            format!("{prefix}{ABC}0"),
+            format!("{prefix}{}", ABC.to_uppercase()),
+            format!("{prefix}{}g", &ABC[..63]),
+            format!("orgs/{org}/uploads/{ABC}"),
+        ] {
+            assert_eq!(digest_of_key(OrgScope::instance(org), &bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a unit test stands in for a credential resolver"
+    )]
+    fn the_hash_lock_key_depends_on_the_organization_and_the_hash() {
+        let (a, b) = (hashed(&[b"a"]).sha256(), hashed(&[b"b"]).sha256());
+        let org = OrgScope::instance(Uuid::nil());
+        let other = OrgScope::instance(Uuid::max());
+        assert_eq!(hash_lock_key(org, a), hash_lock_key(org, a));
+        assert_ne!(hash_lock_key(org, a), hash_lock_key(org, b));
+        assert_ne!(hash_lock_key(org, a), hash_lock_key(other, a));
     }
 
     #[test]

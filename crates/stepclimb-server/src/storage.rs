@@ -23,6 +23,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+
 use axum::{extract::FromRequestParts, http::StatusCode, http::request::Parts};
 use http_body_util::BodyExt as _;
 use object_store::{
@@ -38,7 +40,7 @@ use object_store::{
 use stepclimb_core::{
     OrgScope,
     files::{self, Sha256Digest},
-    id::new_id,
+    id::{Uuid, new_id},
 };
 
 use crate::{
@@ -74,11 +76,35 @@ fn retry_config() -> RetryConfig {
     }
 }
 
-/// The configured store and the prefix every key lives under. Cloning is cheap.
+/// How the upload route bounds the uploads it serves (docs/specs/m1/06-files.md B5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UploadLimits {
+    /// How long an upload's body may go without sending a frame before the upload is refused
+    /// and its multipart upload aborted.
+    pub idle: Duration,
+    /// How many uploads one server streams at once; one more answers 503 `file.uploads_busy`.
+    pub in_flight: usize,
+}
+
+impl UploadLimits {
+    /// 30 seconds without a frame, 16 uploads at once. With 5 MiB parts an upload holds about
+    /// 15 MiB, so 16 hold about 240 MiB.
+    pub const DEFAULT: Self = Self {
+        idle: Duration::from_secs(30),
+        in_flight: 16,
+    };
+}
+
+/// The configured store, the prefix every key lives under, the largest file one upload may send
+/// (`max_file_bytes`, B4), and the uploads in flight, which only the upload route reads. Cloning
+/// is cheap, and clones share the uploads in flight.
 #[derive(Clone)]
 pub struct Storage {
     store: Arc<dyn ObjectStore>,
     prefix: Path,
+    max_file_bytes: u64,
+    limits: UploadLimits,
+    uploads: Arc<Semaphore>,
 }
 
 impl std::fmt::Debug for Storage {
@@ -86,6 +112,8 @@ impl std::fmt::Debug for Storage {
         f.debug_struct("Storage")
             .field("store", &self.store.to_string())
             .field("prefix", &self.prefix.as_ref())
+            .field("max_file_bytes", &self.max_file_bytes)
+            .field("limits", &self.limits)
             .finish()
     }
 }
@@ -114,9 +142,10 @@ pub enum StorageError {
 }
 
 impl Storage {
-    /// The store `config` names, or `None` when storage is not configured. Builds the client
-    /// only; nothing is sent until [`Storage::probe`] or a later call.
-    pub fn open(config: &StorageConfig) -> Result<Option<Self>, StorageError> {
+    /// The store `config` names, with uploads of at most `max_file_bytes` (`Config`'s value), or
+    /// `None` when storage is not configured. Builds the client only; nothing is sent until
+    /// [`Storage::probe`] or a later call.
+    pub fn open(config: &StorageConfig, max_file_bytes: u64) -> Result<Option<Self>, StorageError> {
         let open = |source| StorageError::Open { source };
         let (store, prefix): (Arc<dyn ObjectStore>, &str) = match config {
             StorageConfig::NotConfigured => return Ok(None),
@@ -131,7 +160,40 @@ impl Storage {
         Ok(Some(Self {
             store,
             prefix: Path::from_iter(prefix.split('/').filter(|s| !s.is_empty())),
+            max_file_bytes,
+            limits: UploadLimits::DEFAULT,
+            uploads: Arc::new(Semaphore::new(UploadLimits::DEFAULT.in_flight)),
         }))
+    }
+
+    /// This store with `limits` instead of [`UploadLimits::DEFAULT`], and uploads in flight of
+    /// its own.
+    #[must_use]
+    pub fn with_upload_limits(self, limits: UploadLimits) -> Self {
+        Self {
+            limits,
+            uploads: Arc::new(Semaphore::new(limits.in_flight)),
+            ..self
+        }
+    }
+
+    /// The bounds of the uploads this store serves.
+    #[must_use]
+    pub fn upload_limits(&self) -> UploadLimits {
+        self.limits
+    }
+
+    /// A place for one more upload in flight, held until the permit drops, or `None` when
+    /// [`UploadLimits::in_flight`] uploads are already streaming.
+    #[must_use]
+    pub fn try_start_upload(&self) -> Option<OwnedSemaphorePermit> {
+        self.uploads.clone().try_acquire_owned().ok()
+    }
+
+    /// The largest file one upload may send, in bytes (`max_file_bytes`, B4).
+    #[must_use]
+    pub fn max_file_bytes(&self) -> u64 {
+        self.max_file_bytes
     }
 
     /// The store, for reading and writing objects at [`Storage::path`]s.
@@ -151,6 +213,40 @@ impl Storage {
     #[must_use]
     pub fn file_path(&self, scope: OrgScope, sha256: Sha256Digest) -> Path {
         self.path(&files::storage_key(scope, sha256))
+    }
+
+    /// The location of the temporary object an upload streams to,
+    /// `orgs/<org_id>/uploads/<upload_id>` (B5).
+    #[must_use]
+    pub fn upload_path(&self, scope: OrgScope, upload_id: Uuid) -> Path {
+        self.path(&format!("{}/{upload_id}", Self::uploads_key(scope)))
+    }
+
+    /// Where the scope's organization's temporary upload objects are (B8).
+    #[must_use]
+    pub fn uploads_prefix(&self, scope: OrgScope) -> Path {
+        self.path(&Self::uploads_key(scope))
+    }
+
+    /// Where the scope's organization's file objects are (B2, B21).
+    #[must_use]
+    pub fn files_prefix(&self, scope: OrgScope) -> Path {
+        self.path(&format!("orgs/{}/files", scope.org_id()))
+    }
+
+    fn uploads_key(scope: OrgScope) -> String {
+        format!("orgs/{}/uploads", scope.org_id())
+    }
+
+    /// The key of `location` relative to the store's prefix, as `files::storage_key` writes
+    /// one; `None` for a location outside the prefix.
+    #[must_use]
+    pub fn key_of(&self, location: &Path) -> Option<String> {
+        let parts: Vec<_> = location
+            .prefix_match(&self.prefix)?
+            .map(|p| p.as_ref().to_owned())
+            .collect();
+        Some(parts.join("/"))
     }
 
     /// Write, read back and delete an object under [`PROBE_PREFIX`] (B1). The first step that
