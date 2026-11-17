@@ -98,6 +98,8 @@ describe("VideoUploader", () => {
     const toggle = screen.getByRole("button", { name: "Pause" });
     await userEvent.click(toggle);
     expect(phase()).toBe("paused");
+    // The chunk in flight was aborted, not left to finish.
+    expect(s.server.held).toBe(0);
     expect(toggle).toHaveAccessibleName("Resume");
     expect(toggle).toHaveFocus();
     expect(s.server.uploads.get("u1")?.offset).toBe(0);
@@ -135,12 +137,14 @@ describe("VideoUploader", () => {
     s.server.overrides = [];
     s.server.hold = false;
 
+    const before = s.server.received.length;
     renderUploader(s);
     expect(screen.getByRole("heading", { name: "Unfinished uploads" })).toBeInTheDocument();
     expect(screen.getByText("Week 1.mp4: 33% uploaded")).toBeInTheDocument();
     await choose(file);
     await waitFor(() => expect(phase()).toBe("processing"));
-    const after = s.server.received.slice(-3);
+    // Straight from the stored offset: no chunk from 0 and no offset mismatch.
+    const after = s.server.received.slice(before);
     expect(after.map((r) => [r.method, r.headers.get("upload-offset")])).toEqual([
       ["HEAD", null],
       ["PATCH", String(MIB)],

@@ -67,7 +67,7 @@ export class MockTusServer {
     for (const go of waiting) go();
   }
 
-  /** How many chunks are waiting for `release`. */
+  /** How many chunks are waiting for `release`; an aborted one stops waiting. */
   get held(): number {
     return this.waiting.length;
   }
@@ -152,7 +152,14 @@ export class MockTusServer {
       onProgress(0.5);
       await new Promise<void>((resolve, reject) => {
         this.waiting.push(resolve);
-        signal.addEventListener("abort", () => reject(aborted()), { once: true });
+        signal.addEventListener(
+          "abort",
+          () => {
+            this.waiting = this.waiting.filter((go) => go !== resolve);
+            reject(aborted());
+          },
+          { once: true },
+        );
       });
     }
     onProgress(1);
