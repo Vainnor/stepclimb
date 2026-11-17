@@ -6,6 +6,9 @@ import { parseZonedDateTime } from "@internationalized/date";
 import { CheckCircleIcon, GearIcon, HouseIcon } from "@phosphor-icons/react";
 import type { ReactElement } from "react";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { DueBadge } from "../learning/due-badge";
+import { ProgressRail } from "../learning/progress-rail";
+import { RequirementLabel } from "../learning/requirement-label";
 import { StatusChip } from "../learning/status-chip";
 import { AppShell } from "../patterns/app-shell";
 import { BottomTabs } from "../patterns/bottom-tabs";
@@ -328,6 +331,48 @@ const components: [string, ReactElement][] = [
     />,
   ],
   ["StatusChip", <StatusChip key="sc" state="complete" />],
+  [
+    "DueBadge (overdue)",
+    <DueBadge
+      key="db"
+      due={new Date("2026-03-07T14:00:00Z")}
+      now={new Date("2026-03-10T14:00:00Z")}
+      timeZone="UTC"
+    />,
+  ],
+  [
+    "RequirementLabel",
+    <RequirementLabel key="rl" requirement={{ kind: "watch", min_percent: 80 }} />,
+  ],
+  [
+    "ProgressRail (every state and lock reason)",
+    <ProgressRail
+      key="pr"
+      aria-label="«caller»"
+      timeZone="UTC"
+      now={new Date("2026-03-10T14:00:00Z")}
+      currentId="b"
+      items={[
+        { id: "a", title: "«caller»", href: "/a", state: "complete" },
+        { id: "b", title: "«caller»", href: "/b", state: "available" },
+        { id: "c", title: "«caller»", href: "/c", state: "progress" },
+        { id: "d", title: "«caller»", href: "/d", state: "review" },
+        { id: "e", title: "«caller»", href: "/e", state: "overdue", due: new Date(0) },
+        {
+          id: "f",
+          title: "«caller»",
+          href: "/f",
+          state: "locked",
+          lockReasons: [
+            { kind: "unlock_at", at: new Date(0) },
+            { kind: "prerequisites", moduleTitles: ["«caller»"] },
+            { kind: "module_locked" },
+            { kind: "sequential", itemTitle: "«caller»" },
+          ],
+        },
+      ]}
+    />,
+  ],
   [
     "Tree (open)",
     <Tree key="tr" aria-label="«caller»" defaultExpandedKeys={["a"]}>

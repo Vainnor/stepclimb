@@ -241,6 +241,14 @@
   }
 }
 
+/* ProgressRail's course-completion fill (docs/specs/m1/16-learning-ui-components.md B8): a filled
+   segment grows from its start to the length it already has. */
+@keyframes sc-rail-fill {
+  from {
+    scale: 1 0;
+  }
+}
+
 /* Reduced motion (B11, B16): every transition and animation is instant. */
 @media (prefers-reduced-motion: reduce) {
   *,

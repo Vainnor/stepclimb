@@ -255,6 +255,111 @@ test.describe("at 1280 px @desktop", () => {
     expect(new Set(chips.map((c) => c.label)).size).toBe(6);
   });
 
+  test("T2: with forced colors, every ProgressRail node keeps its own icon and name", async ({
+    page,
+  }) => {
+    // docs/specs/m1/16-learning-ui-components.md B3, B8: color is never the only signal.
+    await openStory(page, story("learning-progressrail--all-states"), "light");
+    await page.emulateMedia({ forcedColors: "active" });
+    const nodes = await page.locator("[data-slot=progress-rail-link]").evaluateAll((els) =>
+      els.map((el) => {
+        const icon = el.querySelector("[data-slot=progress-rail-node] svg");
+        const box = icon?.getBoundingClientRect();
+        return {
+          drawing: icon?.innerHTML ?? "",
+          name: el.textContent ?? "",
+          visible:
+            box !== undefined &&
+            box.width > 0 &&
+            icon !== null &&
+            getComputedStyle(icon).color !== getComputedStyle(el).backgroundColor,
+        };
+      }),
+    );
+    expect(nodes).toHaveLength(6);
+    expect(nodes.every((n) => n.visible)).toBe(true);
+    expect(new Set(nodes.map((n) => n.drawing)).size).toBe(6);
+    expect(new Set(nodes.map((n) => n.name)).size).toBe(6);
+  });
+
+  test("T4: a completed item's segment fills over 320 ms, the course's rail once", async ({
+    page,
+  }) => {
+    await openStory(page, story("learning-progressrail--completion"), "light");
+    const next = page.getByRole("button", { name: "Complete the next item" });
+    const fills = page.locator("[data-slot=progress-rail-fill]");
+    // Computed times in milliseconds: Chromium serializes them in seconds.
+    const motion = () =>
+      fills.evaluateAll((els) =>
+        els.map((el) => {
+          const style = getComputedStyle(el);
+          const ms = (s: string) => Math.round(Number.parseFloat(s) * 100000) / 100;
+          return {
+            scale: style.scale,
+            transition: ms(style.transitionDuration),
+            animation: style.animationName,
+            duration: ms(style.animationDuration),
+            delay: ms(style.animationDelay),
+          };
+        }),
+      );
+    const before = await motion();
+    expect(before.map((m) => [m.scale, m.transition, m.animation])).toEqual([
+      ["1 0", 320, "none"],
+      ["1 0", 320, "none"],
+      ["1 0", 320, "none"],
+    ]);
+    // The scale change starts a transition on the first segment; the event outlives it.
+    await fills.first().evaluate((el) => {
+      const runs: string[] = [];
+      (window as { railRuns?: string[] }).railRuns = runs;
+      el.addEventListener("transitionrun", (event) =>
+        runs.push((event as TransitionEvent).propertyName),
+      );
+    });
+    await next.click();
+    await expect
+      .poll(() => page.evaluate(() => (window as { railRuns?: string[] }).railRuns))
+      .toEqual(["scale"]);
+    // The last completion completes the course: the three segments fill in turn over 320 ms.
+    await next.click();
+    await next.click();
+    await next.click();
+    // Mid-animation, so the scale is left out here and read once the fill has run.
+    expect((await motion()).map(({ scale: _, ...m }) => m)).toEqual([
+      { transition: 320, animation: "sc-rail-fill", duration: 106.67, delay: 0 },
+      { transition: 320, animation: "sc-rail-fill", duration: 106.67, delay: 106.67 },
+      { transition: 320, animation: "sc-rail-fill", duration: 106.67, delay: 213.33 },
+    ]);
+    await expect.poll(async () => (await motion()).map((m) => m.scale)).toEqual(["1", "1", "1"]);
+  });
+
+  test.describe("T4: with reduced motion", () => {
+    test.use({ reducedMotion: "reduce" });
+    test("the rail fills with no animation", async ({ page }) => {
+      await openStory(page, story("learning-progressrail--completion"), "light");
+      const next = page.getByRole("button", { name: "Complete the next item" });
+      for (let i = 0; i < 4; i++) {
+        await next.click();
+        const running = await page.evaluate(
+          () => document.getAnimations().filter((a) => a.playState === "running").length,
+        );
+        expect(running).toBe(0);
+      }
+      const fills = await page.locator("[data-slot=progress-rail-fill]").evaluateAll((els) =>
+        els.map((el) => {
+          const style = getComputedStyle(el);
+          return [style.scale, style.transitionDuration, style.animationDuration];
+        }),
+      );
+      expect(fills).toEqual([
+        ["1", "0s", "0s"],
+        ["1", "0s", "0s"],
+        ["1", "0s", "0s"],
+      ]);
+    });
+  });
+
   test("the document does not rubber-band, and controls are not text-selectable", async ({
     page,
   }) => {
