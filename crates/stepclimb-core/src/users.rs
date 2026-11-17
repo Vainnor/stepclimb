@@ -156,6 +156,13 @@ pub struct ListFilter {
     /// A case-insensitive prefix of the display name or the email (B10). `%`, `_` and `\` match
     /// themselves.
     pub q: Option<String>,
+    /// Only users "in" one of these accounts' subtrees (each account included), for a caller
+    /// whose `user.view` is held at these accounts only (spec 09 Q2 (B); M1 spec 02 B21): a user
+    /// holding a role assignment at an account in a subtree, or an `active` enrollment in a
+    /// course of such an account (owner decision, 2026-11-17). `Some(vec![])` matches nothing.
+    pub within: Option<Vec<Uuid>>,
+    /// Only the user with this id: [`covers`] asks whether `within` reaches one user.
+    pub id: Option<Uuid>,
 }
 
 /// The sort key of a user in [`list`]: `(display_name, id)`.
@@ -452,6 +459,23 @@ pub async fn list(
              AND ($3::text IS NULL OR source = $3)
              AND ($4::text IS NULL OR display_name ILIKE $4 OR email ILIKE $4)
              AND ($5::text IS NULL OR (display_name, id) > ($5, $6::uuid))
+             AND ($8::uuid[] IS NULL
+                  OR EXISTS (
+                      SELECT 1
+                      FROM role_assignments ra
+                      JOIN accounts a ON a.org_id = ra.org_id AND a.id = ra.scope_id
+                      JOIN accounts w ON w.org_id = a.org_id AND a.path <@ w.path
+                      WHERE ra.org_id = $1 AND ra.user_id = users.id
+                        AND ra.scope_type = 'account' AND w.id = ANY($8))
+                  OR EXISTS (
+                      SELECT 1
+                      FROM enrollments e
+                      JOIN courses c ON c.org_id = e.org_id AND c.id = e.course_id
+                      JOIN accounts a ON a.org_id = c.org_id AND a.id = c.account_id
+                      JOIN accounts w ON w.org_id = a.org_id AND a.path <@ w.path
+                      WHERE e.org_id = $1 AND e.user_id = users.id AND e.status = 'active'
+                        AND w.id = ANY($8)))
+             AND ($9::uuid IS NULL OR id = $9)
            ORDER BY display_name, id
            LIMIT $7"#,
         scope.org_id(),
@@ -461,10 +485,30 @@ pub async fn list(
         after_name,
         after.map(|(_, id)| *id),
         limit,
+        filter.within.as_deref(),
+        filter.id,
     )
     .fetch_all(db)
     .await?;
     rows.into_iter().map(User::try_from).collect()
+}
+
+/// Whether the user `id` exists in the scope's organization and is "in" `within` as [`list`]
+/// reads [`ListFilter::within`] (every user of the organization for `None`): the users a
+/// `user.view` holder at those accounts reaches. Enrolling a user needs it (M1 spec 02 B17,
+/// owner decision of 2026-11-17).
+pub async fn covers(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    id: Uuid,
+    within: Option<Vec<Uuid>>,
+) -> Result<bool, Error> {
+    let filter = ListFilter {
+        within,
+        id: Some(id),
+        ..ListFilter::default()
+    };
+    Ok(!list(db, scope, &filter, None, 1).await?.is_empty())
 }
 
 /// Create a user in the scope's organization, `active`, with `created_at` and `updated_at` set

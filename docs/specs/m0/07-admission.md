@@ -514,7 +514,9 @@ overrule one, which then updates this spec.
      outside-provider sign-in, a `PUT` whose `rules` names any list (`organization`, or at
      least one provider key) is refused with 403 `permission.escalation` unless the caller
      holds every catalog permission at organization scope, the rule of `PUT
-     /api/v1/admin/local-sign-in` (`04-local-accounts.md` I1, one shared helper). The check
+     /api/v1/admin/local-sign-in` (`04-local-accounts.md` I1, one shared helper; from M1 it
+     leaves out permissions grantable only at course scope, `../m1/02-courses-and-enrollments.md`
+     B24a). The check
      runs before the lists are read or validated, so a caller without every permission cannot
      probe which attributes the providers map, and it applies even to a list equal to the
      stored one. `{"rules": {}}` names no list and needs only `perm::AdmissionManage`. The

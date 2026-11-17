@@ -125,7 +125,9 @@ to `Require`, and makes the evaluator read enrollments. Modules and items are sp
   `GRANTABLE` list does not include `course` has no effect through an enrollment (`m0/09` B3).
 - **B17.** Creating an enrollment names `user_id` and `role_id` and needs `perm::EnrollmentManage`
   at the course, then runs `m0/09` B12's checks with the course as the scope, in order: the user
-  exists in the organization (404 `user.not_found`); the role is built-in or the organization's (404
+  exists in the organization and the caller's `user.view` covers them, held at the organization
+  or at an account the user is "in" by B21 (404 `user.not_found` either way, so the answer does
+  not show whether the user exists; owner decision, 2026-11-17); the role is built-in or the organization's (404
   `role.not_found`); the role is not Manager, and not Observer until `05-progress-and-events.md` I3
   adds observed learners (422 `request.invalid`, `enrollment.role_unavailable` at `/role_id`, Q9); a
   built-in role this binary does not define is refused (409 `role.unknown_builtin`); the caller
@@ -156,7 +158,8 @@ to `Require`, and makes the evaluator read enrollments. Modules and items are sp
   name (the minimum a roster needs; email needs `UserView`).
 - **B21.** A user with an enrollment in a course inside account A counts as "in" A for
   `UserView` at account scope (`m0/09` Q2 (B), `m0/03`): an account admin of A finds them through
-  `GET /api/v1/users`. The users list query adds the enrollment join.
+  `GET /api/v1/users`. The users list query adds the enrollment join. Owner decision (2026-11-17):
+  only an `active` enrollment counts; a concluded one puts no one in the account.
 - **B22.** `m0/09` B12 step 3 refuses course-scope role assignments "until the M1 courses spec
   enables it". This spec does not enable them (Q1): an active enrollment is the one course-scope
   grant, course-scope role assignments stay refused, and `role_assignment.scope_unavailable` keeps
@@ -205,7 +208,8 @@ to `Require`, and makes the evaluator read enrollments. Modules and items are sp
   of each changed member), `course.set_status` (`before` and `after`), `course.copy` (on the new
   course; `after`: the source id, account, template), `enrollment.create` (`after`: user, role,
   status, source), `course.move` (B9), `enrollment.update` (`before` and `after`: status) and
-  `enrollment.delete` (`before`: user, role, status). Content edits in later specs are not audited
+  `enrollment.delete` (`before`: user, role, status). As built in I2, `enrollment.create` and
+  `enrollment.delete` also record the course and the source. Content edits in later specs are not audited
   (pages keep versions, spec 07).
 
 ## API
@@ -385,7 +389,8 @@ each have the tree root, Tower, Enroute.
   `course.participate` and `organization.manage` is refused 403 `permission.escalation` to the
   same admin.
 - **T12** (B17). An Instructor of a course cannot enroll someone with a custom role holding
-  `course.manage` (403 `permission.escalation`), and can enroll another Instructor (201).
+  `course.manage` (403 `permission.escalation`), and can enroll another Instructor (201) when it
+  also holds `user.view` over them (B17, owner decision of 2026-11-17).
 - **T13** (B16, B23). An active Student enrollment gives `course.view` at that course and not at
   another course in the same account; after concluding it, `GET` the course answers 404 and the
   enrollment row remains.
@@ -396,7 +401,10 @@ each have the tree root, Tower, Enroute.
 - **T16** (B19). A role `PATCH` that adds a permission, racing an enrollment create that checks
   escalation, either commits first and is seen by the check, or waits (two connections).
 - **T17** (B21). An account admin of Tower finds through `GET /api/v1/users` a user whose only
-  link is a Student enrollment in a Tower course, and not one enrolled only in an Enroute course.
+  link is a Student enrollment in a Tower course, and not one enrolled only in an Enroute course
+  or whose Tower enrollment is concluded. Enrolling a user outside the admin's `user.view`
+  coverage, or one that does not exist, answers 404 `user.not_found` (owner decision of
+  2026-11-17).
 - **T18** (B22). `POST /api/v1/admin/role-assignments` with a course scope still answers 422
   `role_assignment.scope_unavailable`.
 - **T18a** (B22, Q1). Assigning Student or Observer at the organization or at an account answers
@@ -600,6 +608,67 @@ Q13's answer replaces I1's B24 behavior (I4).
   course it does not hold over it now, checked under the tree lock with the paths read there.
   Owner decision (2026-11-16): the comparison takes only the permissions grantable at course
   scope and leaves out `course.create` (B9).
+
+### Decisions made building I2
+
+Coordinator decisions (overnight, 2026-11-17), pending owner review. Q1, Q12 and B24a are the
+owner's answers of 2026-11-16 and are built as answered.
+
+- **Which permissions B24a leaves out.** The catalog marks a permission "course only" when its
+  `GRANTABLE` list names course scope alone (`perm::PermissionInfo::course_only`); every check
+  B24a lists leaves exactly those out, through `Grants::lacks_any_of` and
+  `Grants::lacks_any_held_by`. Today that is `course.participate`. A permission grantable at
+  course scope and also at an account (`course.manage`, `enrollment.manage`) is never left out.
+  When 05 I3 adds `progress.view_observed` (grantable at course scope only), the same rule leaves
+  it out of these checks, as B24a says, and 05 B19's own check on naming observed learners is
+  what guards it; 05 I3 must build that check with the permission.
+- **The order of B17's checks.** The user (404), the role (404), Manager and Observer (422
+  `enrollment.role_unavailable`), a built-in role of another release (409
+  `role.unknown_builtin`), the escalation rule (403), then the course's own rules: archived (409
+  `course.archived`), a template with a learner role (409 `course.template`), and a repeat (409
+  `enrollment.exists`). `PATCH` and `DELETE` check `enrollment.manage` on the course, the role
+  of another release (409), the escalation rule (403), then the source (409), as `m0/09` B14
+  orders them for assignments.
+- **One grant query.** `role_assignments::for_user_with_paths` reads the assignments and the
+  active enrollments in one statement (`UNION ALL`); an enrollment whose course or account is
+  missing fails the load. No separate `enrollments::for_user_active` exists, since nothing else
+  would call it.
+- **B21 counts active enrollments only** (owner decision, 2026-11-17, from the security review).
+  Only the list widens; `GET /api/v1/users/{user_id}` and the identity routes keep their
+  organization target.
+- **Enrolling needs `user.view` over the user** (owner decision, 2026-11-17, from the security
+  review). The coverage is the users list's: `user.view` at the organization, or at an account
+  the user is "in" (an account-scope role assignment or an active enrollment in its subtree),
+  checked by `users::covers` through the list's own query. A user outside it answers 404
+  `user.not_found`, as one that does not exist. An Instructor, whose role holds no `user.view`,
+  enrolls only with `user.view` from another grant.
+- **What reactivation may do.** Concluding and reactivating are allowed on an archived course:
+  B5 refuses new enrollments only, and reactivating restores a grant the course already gave.
+  Reactivating in a template is refused as creating is (409 `course.template` when the role holds
+  `course.participate`), so no learner enrollment of a template becomes active by any write.
+- **The removal migration is audited.** Each Student or Observer assignment it removes gets the
+  `role_assignment.remove` entry `role_assignments::delete` writes (`m0/09` B22), with the
+  instance as the actor and a UUID v7 id built in SQL, written before the row is deleted (security
+  review of the PR).
+- **The Student and Observer refusal is the repository's.** `role_assignments::create` answers
+  `Error::CourseRole` for either at the organization or an account, whoever calls it (the route,
+  `stepclimb admin create`, M4's sync), and the route maps it to 422
+  `role_assignment.course_role`; it is checked after the caller's permission and the escalation
+  rule, before the insert.
+- **Built-in role lists elsewhere.** Observer at the organization or an account answers
+  `role_assignment.course_role` (B22) instead of `m0/09` B13's `scope_unavailable`; Manager keeps
+  the M0 answer. A custom role with an enrollment cannot be deleted (`role.in_use`, as `m0/09`
+  B10 rules for assignments).
+- **API key scopes.** A new key may name only permissions its owner holds somewhere (`m0/08`),
+  now counting enrollments (B25): `course.participate` needs an enrollment.
+- **`permissions` (B10)** lists `course.participate` only where it is effective, through an
+  enrollment; an Organization admin's course answers do not list it.
+- **`EnrollmentTarget`** resolves through I4's course check (`require::check_course`), so a
+  draft or a template answers 404 `enrollment.not_found` (and the course routes
+  `course.not_found`) to a caller without `course.view_all`; the enrollment writes repeat that
+  check on the course row they lock.
+- **Module name.** The server module is `course_enrollments`, since `enrollment` holds spec 04's
+  enrollment links.
 
 ### Decisions for I3
 

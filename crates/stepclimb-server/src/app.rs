@@ -16,8 +16,8 @@ use tower_http::trace::TraceLayer;
 use utoipa_scalar::{Scalar, Servable};
 
 use crate::{
-    accounts, admission_settings, admission_webhook, appearance, auth, branding, course_files,
-    courses,
+    accounts, admission_settings, admission_webhook, appearance, auth, branding,
+    course_enrollments, course_files, courses,
     csrf::{self, OriginAllowlist},
     discovery, enrollment,
     error::ApiError,
@@ -308,6 +308,15 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         (
             "/api/v1/courses/{course_id}/copy",
             post(courses::copy_course),
+        ),
+        (
+            "/api/v1/courses/{course_id}/enrollments",
+            get(course_enrollments::list_enrollments).post(course_enrollments::create_enrollment),
+        ),
+        (
+            "/api/v1/enrollments/{enrollment_id}",
+            patch(course_enrollments::update_enrollment)
+                .delete(course_enrollments::delete_enrollment),
         ),
         (
             "/api/v1/courses/{course_id}/files",

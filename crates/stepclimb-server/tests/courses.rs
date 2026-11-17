@@ -3,10 +3,11 @@
 //! B24, B27; T1 to T10, T7a, T19 and T20 for the course routes). The permission suite's
 //! generated cases for each route are in `tests/permissions.rs`.
 //!
-//! Enrollments arrive with the spec's issue I2, so a learner here is a Student assigned at an
-//! account, which gives `course.view` over the account's courses as an enrollment will over one
-//! course. Every request names its organization with the `test-support` header, since most
-//! tests hold two organizations. Needs `DATABASE_URL` (`just up`).
+//! A learner here is a Student enrolled in a course (B16), and a holder of `course.view` over an
+//! account's courses is a custom role assigned at the account, since Student and Observer are
+//! course-scope roles (B22). The enrollment routes are `tests/course_enrollments.rs`. Every
+//! request names its organization with the `test-support` header, since most tests hold two
+//! organizations. Needs `DATABASE_URL` (`just up`).
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -25,7 +26,7 @@ use stepclimb_core::{
     OrgScope, Source, accounts,
     audit::{self, Actor},
     clock::ManualClock,
-    courses,
+    courses, enrollments,
     id::{Uuid, new_id},
     items::{self, Kind, NewItem},
     modules, organizations,
@@ -235,6 +236,35 @@ impl Fixture {
             .id;
         for at in at {
             self.assign(org, user, role, *at).await;
+        }
+        cookie
+    }
+
+    /// A signed-in user enrolled in each of `courses` with the built-in role `key`.
+    async fn enrolled(&self, org: Uuid, key: &str, courses: &[Uuid]) -> String {
+        let (cookie, user) = self.user(org).await;
+        let role = sqlx::query_scalar("SELECT id FROM roles WHERE org_id IS NULL AND key = $1")
+            .bind(key)
+            .fetch_one(&self.pool)
+            .await
+            .expect("a built-in role");
+        for course in courses {
+            let new = enrollments::NewEnrollment {
+                user_id: user,
+                role_id: role,
+                source: Source::Local,
+                external_id: None,
+            };
+            enrollments::create(
+                &self.pool,
+                scope(org),
+                *course,
+                &new,
+                now(),
+                Actor::Instance,
+            )
+            .await
+            .expect("enroll");
         }
         cookie
     }
@@ -793,13 +823,14 @@ async fn t7a_a_move_to_a_destination_carried_out_of_reach_meanwhile_is_not_found
 
 // Reading (B10, B11, B24).
 
-/// T8, with account-scope assignments standing in for enrollments.
+/// T8.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn t8_a_draft_is_hidden_from_a_student_and_shown_to_a_designer(pool: PgPool) {
     let f = Fixture::new(pool).await;
     let t = f.a;
     let draft = f.course(t.org, t.tower, "S1").await;
-    let student = f.holder(t.org, "student", Scope::Account(t.tower)).await;
+    let published = f.published(t.org, t.tower, "S2").await;
+    let student = f.enrolled(t.org, "student", &[draft, published]).await;
     f.get(&one(draft), t.org, &student)
         .await
         .expect(StatusCode::NOT_FOUND, "course.not_found");
@@ -813,11 +844,10 @@ async fn t8_a_draft_is_hidden_from_a_student_and_shown_to_a_designer(pool: PgPoo
         body["permissions"],
         json!(["course.content_edit", "course.view", "course.view_all"])
     );
-    let published = f.published(t.org, t.tower, "S2").await;
     let read = f.get(&one(published), t.org, &student).await;
     assert_eq!(
         read.ok(StatusCode::OK)["permissions"],
-        json!(["course.view"])
+        json!(["course.participate", "course.view"])
     );
     f.get(&one(new_id()), t.org, &designer)
         .await
@@ -841,7 +871,9 @@ async fn an_archived_template_needs_view_all_on_get_and_in_the_list(pool: PgPool
         .execute(&f.pool)
         .await
         .unwrap();
-    let student = f.holder(t.org, "student", Scope::Account(t.tower)).await;
+    let student = f
+        .custom_holder(t.org, &["course.view"], &[Scope::Account(t.tower)])
+        .await;
     let designer = f
         .holder(t.org, "course_designer", Scope::Account(t.tower))
         .await;
@@ -937,7 +969,9 @@ async fn t9_each_caller_lists_what_it_may_see(pool: PgPool) {
         .holder(t.org, "account_admin", Scope::Account(t.tower))
         .await;
     assert_eq!(f.get(COURSES, t.org, &tower_admin).await.ids(), [in_tower]);
-    let student = f.holder(t.org, "student", Scope::Account(t.enroute)).await;
+    let student = f
+        .enrolled(t.org, "student", &[in_enroute, draft_in_enroute])
+        .await;
     assert_eq!(f.get(COURSES, t.org, &student).await.ids(), [in_enroute]);
 
     let filtered = |query: String| format!("{COURSES}?{query}");
@@ -990,7 +1024,7 @@ async fn t19_a_student_gets_403_on_patch_of_their_own_course(pool: PgPool) {
     let f = Fixture::new(pool).await;
     let t = f.a;
     let id = f.published(t.org, t.tower, "S1").await;
-    let student = f.holder(t.org, "student", Scope::Account(t.tower)).await;
+    let student = f.enrolled(t.org, "student", &[id]).await;
     let before = f.rows(t.org).await;
     f.patch(t.org, &student, id, json!({ "title": "Mine" }))
         .await
@@ -1195,7 +1229,7 @@ async fn t10_a_copy_needs_view_all_at_the_source_and_create_at_the_destination(p
             &[Scope::Account(t.tower), Scope::Account(t.enroute)],
         )
         .await;
-    let student = f.holder(t.org, "student", Scope::Account(t.tower)).await;
+    let student = f.enrolled(t.org, "student", &[source]).await;
     let before = f.rows(t.org).await;
     let body = json!({ "account_id": t.enroute, "code": "S1-B" });
 
@@ -1403,12 +1437,13 @@ async fn t19a_a_draft_or_template_is_not_found_without_view_all_on_every_route(p
     let viewer = f
         .custom_holder(t.org, &["course.view"], &[Scope::Account(t.tower)])
         .await;
-    let student = f.holder(t.org, "student", Scope::Account(t.tower)).await;
     // `course.view_all` without `course.manage`: sees the draft, so the route's 403.
     let designer = f
         .holder(t.org, "course_designer", Scope::Account(t.tower))
         .await;
     let draft = f.course(t.org, t.tower, "D1").await;
+    // A Student enrolled in the draft; a template takes no learner (B17).
+    let student = f.enrolled(t.org, "student", &[draft]).await;
     let template = f.course(t.org, t.tower, "T1").await;
     make_template(&f, template).await;
     let before = f.rows(t.org).await;
@@ -1524,8 +1559,9 @@ async fn a_draft_courses_modules_and_items_are_not_found_without_view_all(pool: 
     let viewer = f
         .custom_holder(t.org, &["course.view"], &[Scope::Account(t.tower)])
         .await;
-    let student = f.holder(t.org, "student", Scope::Account(t.tower)).await;
     let draft = outline(&f, "D1").await;
+    // A Student enrolled in the draft; a template takes no learner (B17).
+    let student = f.enrolled(t.org, "student", &[draft.0]).await;
     let template = outline(&f, "T1").await;
     make_template(&f, template.0).await;
     let before = f.rows(t.org).await;

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The role assignments repository (docs/specs/m0/09-permissions-and-roles.md B11, B15, B16).
 //!
-//! An assignment grants one role to one user at one scope: the organization, an account (and
-//! its subtree) or, from M1, a course. Every query filters by `org_id = scope.org_id()`. The
+//! An assignment grants one role to one user at one scope: the organization or an account (and
+//! its subtree). The table also takes a course scope, which [`create`] refuses: the course-scope
+//! grant is an enrollment (M1 spec 02 Q1). Every query filters by `org_id = scope.org_id()`. The
 //! table keeps the user in the row's organization (a composite foreign key), the role built-in
 //! or the organization's own (the `role_assignments_role_in_org` trigger), and an organization
 //! scope pointing at the row's organization (a check). `scope_id` has no foreign key, so
@@ -51,6 +52,10 @@ const ROLE_IN_ORG_TRIGGER: &str = "role_assignments_role_in_org";
 /// The unique constraint on `(user_id, role_id, scope_type, scope_id)`.
 const UNIQUE_CONSTRAINT: &str = "role_assignments_user_id_role_id_scope_type_scope_id_key";
 
+/// The built-in course-scope roles: only an enrollment grants them, so [`create`] refuses them at
+/// the organization or an account (M1 spec 02 B22, Q1).
+pub const COURSE_ROLES: [&str; 2] = ["student", "observer"];
+
 /// Where an assignment takes effect.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Scope {
@@ -58,7 +63,8 @@ pub enum Scope {
     Organization,
     /// One account and its whole subtree.
     Account(Uuid),
-    /// One course. [`create`] refuses it until the M1 courses spec enables it.
+    /// One course. [`create`] refuses it: the course-scope grant is an enrollment (M1 spec 02
+    /// Q1, B22).
     Course(Uuid),
 }
 
@@ -130,12 +136,18 @@ pub enum GrantScope {
         id: Uuid,
         path: Vec<Uuid>,
     },
+    /// A course-scope assignment, which grants nothing: the course-scope grant is an
+    /// enrollment (M1 spec 02 Q1).
     Course(Uuid),
+    /// An `active` enrollment in the course (M1 spec 02 B16, B23).
+    Enrolled(Uuid),
 }
 
-/// One assignment of a user with its role's permissions, as the evaluator reads it (B16).
+/// One assignment or active enrollment of a user with its role's permissions, as the evaluator
+/// reads it (B16; M1 spec 02 B23).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UserGrant {
+    /// The assignment's id, or the enrollment's for [`GrantScope::Enrolled`].
     pub assignment_id: Uuid,
     pub role_id: Uuid,
     pub role_key: String,
@@ -160,9 +172,14 @@ pub enum Error {
     /// No account with the scope's id in the scope's organization.
     #[error("the account does not exist")]
     AccountNotFound,
-    /// Assignments at this scope type are not available yet (course scope until M1).
+    /// Assignments at this scope type are not available: a course scope, whose grant is an
+    /// enrollment (M1 spec 02 Q1).
     #[error("role assignments at this scope are not available")]
     ScopeUnavailable,
+    /// The role is a built-in course-scope role ([`COURSE_ROLES`]), which only an enrollment
+    /// grants (M1 spec 02 B22).
+    #[error("this role is granted only by an enrollment in a course")]
+    CourseRole,
     /// The user already holds the role at that scope.
     #[error("the user already holds this role at this scope")]
     Exists,
@@ -184,6 +201,11 @@ pub enum Error {
     /// and [`create`] keep this from happening, and the read fails closed if it does.
     #[error("role assignment {assignment_id} points at a missing account")]
     MissingAccount { assignment_id: Uuid },
+    /// An enrollment whose course has no row in the scope's organization: the table's composite
+    /// foreign key keeps this from happening, and the read fails closed if it does (M1 spec 02
+    /// B23).
+    #[error("enrollment {enrollment_id} points at a missing course")]
+    MissingCourse { enrollment_id: Uuid },
     /// A time that cannot be stored or read.
     #[error(transparent)]
     Time(#[from] TimeOutOfRange),
@@ -303,9 +325,10 @@ pub async fn list(
 /// Create an assignment in the scope's organization, with `created_at` and `updated_at` set to
 /// `now` (B11), and its `role_assignment.grant` audit entry by `actor`.
 ///
-/// Refuses a course scope ([`Error::ScopeUnavailable`]) and an account scope naming no account
-/// of the organization ([`Error::AccountNotFound`]); the table refuses a user or role outside
-/// the organization and a repeat of the same user, role and scope. Runs in one transaction (a
+/// Refuses a course scope ([`Error::ScopeUnavailable`]), a built-in course-scope role
+/// ([`COURSE_ROLES`], [`Error::CourseRole`]) and an account scope naming no account of the
+/// organization ([`Error::AccountNotFound`]); the table refuses a user or role outside the
+/// organization and a repeat of the same user, role and scope. Runs in one transaction (a
 /// savepoint when `db` is already one).
 pub async fn create<'c>(
     db: impl Acquire<'c, Database = Postgres>,
@@ -325,6 +348,9 @@ pub async fn create<'c>(
         Scope::Organization => {}
         Scope::Account(id) => lock_account(&mut tx, scope, id).await?,
         Scope::Course(_) => return Err(Error::ScopeUnavailable),
+    }
+    if is_course_role(&mut tx, assignment.role_id).await? {
+        return Err(Error::CourseRole);
     }
     let (scope_type, scope_id) = assignment.scope.as_parts(scope.org_id());
     let row = sqlx::query_as!(
@@ -355,6 +381,21 @@ pub async fn create<'c>(
     audit::record(&mut tx, scope, actor, grant, created.id, &data, now).await?;
     tx.commit().await?;
     Ok(created)
+}
+
+/// Whether the role `role_id` is a built-in course-scope role ([`COURSE_ROLES`]). Any other
+/// role is left to the table's checks, which refuse another organization's custom role with
+/// [`Error::RoleNotFound`].
+async fn is_course_role(conn: &mut PgConnection, role_id: Uuid) -> Result<bool, Error> {
+    // Built-in roles belong to no organization (`org_id` null), so this read of one takes no
+    // `OrgScope`; a custom role, of any organization, is never a course role.
+    let key = sqlx::query_scalar!(
+        "SELECT key FROM roles WHERE id = $1 AND org_id IS NULL",
+        role_id,
+    )
+    .fetch_optional(conn)
+    .await?;
+    Ok(key.is_some_and(|key| COURSE_ROLES.contains(&key.as_str())))
 }
 
 /// What an audit entry records of an assignment: who holds which role where, and its source.
@@ -507,25 +548,38 @@ pub(crate) async fn any_at_account(
     .await
 }
 
-/// Every assignment of the user `user_id` in the scope's organization with its role's key and
-/// permissions and, for an account scope, the account's path, in one query (B16). Empty for a
-/// user the organization does not have.
+/// Every assignment and every `active` enrollment of the user `user_id` in the scope's
+/// organization, with its role's key and permissions, in one query (B16; M1 spec 02 B23). An
+/// account-scope assignment's account and an enrollment's course must be the organization's, or
+/// the read fails ([`Error::MissingAccount`], [`Error::MissingCourse`]). Empty for a user the
+/// organization does not have.
 pub async fn for_user_with_paths(
     db: impl PgExecutor<'_>,
     scope: OrgScope,
     user_id: Uuid,
 ) -> Result<Vec<UserGrant>, Error> {
-    // The role filter repeats the trigger's rule, so a role row of another organization could
-    // not grant anything here even if one were stored.
+    // The role filter repeats the triggers' rule, so a role row of another organization could
+    // not grant anything here even if one were stored. `path` is the account's path for an
+    // account scope and the course's account's path for an enrollment, null otherwise.
     let rows = sqlx::query!(
-        r#"SELECT ra.id, ra.role_id, r.key, r.builtin, r.permissions, ra.scope_type, ra.scope_id,
+        r#"SELECT ra.id AS "id!", ra.role_id AS "role_id!", r.key AS "key!",
+                  r.builtin AS "builtin!", r.permissions AS "permissions!",
+                  ra.scope_type AS "scope_type!", ra.scope_id AS "scope_id!",
                   a.path::text AS path
            FROM role_assignments ra
            JOIN roles r ON r.id = ra.role_id AND (r.org_id IS NULL OR r.org_id = $1)
            LEFT JOIN accounts a
                   ON ra.scope_type = 'account' AND a.org_id = $1 AND a.id = ra.scope_id
            WHERE ra.org_id = $1 AND ra.user_id = $2
-           ORDER BY ra.id"#,
+           UNION ALL
+           SELECT e.id, e.role_id, r.key, r.builtin, r.permissions, 'enrollment', e.course_id,
+                  a.path::text
+           FROM enrollments e
+           JOIN roles r ON r.id = e.role_id AND (r.org_id IS NULL OR r.org_id = $1)
+           LEFT JOIN courses c ON c.org_id = $1 AND c.id = e.course_id
+           LEFT JOIN accounts a ON a.org_id = $1 AND a.id = c.account_id
+           WHERE e.org_id = $1 AND e.user_id = $2 AND e.status = 'active'
+           ORDER BY 1"#,
         scope.org_id(),
         user_id,
     )
@@ -533,16 +587,24 @@ pub async fn for_user_with_paths(
     .await?;
     rows.into_iter()
         .map(|row| {
-            let scope = match Scope::from_parts(&row.scope_type, row.scope_id)? {
-                Scope::Organization => GrantScope::Organization,
-                Scope::Course(id) => GrantScope::Course(id),
-                Scope::Account(id) => GrantScope::Account {
-                    id,
-                    path: row.path.as_deref().and_then(accounts::parse_path).ok_or(
-                        Error::MissingAccount {
-                            assignment_id: row.id,
-                        },
-                    )?,
+            let scope = match row.scope_type.as_str() {
+                "enrollment" if row.path.is_some() => GrantScope::Enrolled(row.scope_id),
+                "enrollment" => {
+                    return Err(Error::MissingCourse {
+                        enrollment_id: row.id,
+                    });
+                }
+                stored => match Scope::from_parts(stored, row.scope_id)? {
+                    Scope::Organization => GrantScope::Organization,
+                    Scope::Course(id) => GrantScope::Course(id),
+                    Scope::Account(id) => GrantScope::Account {
+                        id,
+                        path: row.path.as_deref().and_then(accounts::parse_path).ok_or(
+                            Error::MissingAccount {
+                                assignment_id: row.id,
+                            },
+                        )?,
+                    },
                 },
             };
             Ok(UserGrant {

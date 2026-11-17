@@ -235,3 +235,160 @@ async fn the_verified_email_migration_records_only_local_users(pool: PgPool) {
         ]
     );
 }
+
+/// The `enrollments` migration (M1 spec 02 I2, B22, T18a) removes the Student and Observer
+/// assignments at the organization or an account, which M0 allowed, and keeps every other
+/// assignment, a course-scope one included. The migrations before it run first, rows are
+/// inserted, and then it runs.
+#[sqlx::test(migrations = false)]
+async fn the_enrollments_migration_removes_course_role_assignments_above_courses(pool: PgPool) {
+    const VERSION: i64 = 20261117120000;
+    let run = |sql| sqlx::raw_sql(sql).execute(&pool);
+    for migration in MIGRATOR.iter().filter(|m| m.version < VERSION) {
+        run(migration.sql.clone())
+            .await
+            .expect("an earlier migration");
+    }
+    let new_id = stepclimb_core::id::new_id;
+    let (org, user, account) = (new_id(), new_id(), new_id());
+    sqlx::query("INSERT INTO organizations (id, slug, name) VALUES ($1, 'org-a', 'Org A')")
+        .bind(org)
+        .execute(&pool)
+        .await
+        .expect("insert organization");
+    sqlx::query(
+        "INSERT INTO users (id, org_id, source, display_name, tz)
+         VALUES ($1, $2, 'local', 'Pat', 'UTC')",
+    )
+    .bind(user)
+    .bind(org)
+    .execute(&pool)
+    .await
+    .expect("insert user");
+    let mut roles = Vec::new();
+    for key in ["student", "observer", "instructor"] {
+        let id = new_id();
+        sqlx::query("INSERT INTO roles (id, key, name, builtin) VALUES ($1, $2, $2, true)")
+            .bind(id)
+            .bind(key)
+            .execute(&pool)
+            .await
+            .expect("insert built-in role");
+        roles.push(id);
+    }
+    let custom = new_id();
+    sqlx::query(
+        "INSERT INTO roles (id, org_id, key, name, builtin) VALUES ($1, $2, 'student', 'S', false)",
+    )
+    .bind(custom)
+    .bind(org)
+    .execute(&pool)
+    .await
+    .expect("insert a custom role keyed student");
+    let (student, observer, instructor) = (roles[0], roles[1], roles[2]);
+    let rows = [
+        ("student at org", student, "organization", org),
+        ("student at account", student, "account", account),
+        ("observer at account", observer, "account", account),
+        ("student at course", student, "course", new_id()),
+        ("instructor at org", instructor, "organization", org),
+        ("instructor at account", instructor, "account", account),
+        ("custom student at org", custom, "organization", org),
+    ];
+    let mut ids = Vec::new();
+    for (name, role, scope_type, scope_id) in rows {
+        let id = new_id();
+        sqlx::query(
+            "INSERT INTO role_assignments (id, org_id, user_id, role_id, scope_type, scope_id)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(id)
+        .bind(org)
+        .bind(user)
+        .bind(role)
+        .bind(scope_type)
+        .bind(scope_id)
+        .execute(&pool)
+        .await
+        .expect(name);
+        ids.push((name, id));
+    }
+    let target = MIGRATOR
+        .iter()
+        .find(|m| m.version == VERSION)
+        .expect("the enrollments migration");
+    run(target.sql.clone()).await.expect("the migration");
+
+    let kept: Vec<stepclimb_core::id::Uuid> =
+        sqlx::query_scalar("SELECT id FROM role_assignments ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .expect("read assignments");
+    let kept: Vec<&str> = ids
+        .iter()
+        .filter(|(_, id)| kept.contains(id))
+        .map(|(name, _)| *name)
+        .collect();
+    assert_eq!(
+        kept,
+        [
+            "student at course",
+            "instructor at org",
+            "instructor at account",
+            "custom student at org",
+        ]
+    );
+
+    // Each removal wrote one instance entry, as `role_assignments::delete` would.
+    let entries: Vec<(
+        stepclimb_core::id::Uuid,
+        String,
+        Option<stepclimb_core::id::Uuid>,
+        String,
+        String,
+        serde_json::Value,
+    )> = sqlx::query_as(
+        "SELECT target_id, actor_type, actor_id, action, target_type, data
+             FROM audit_events ORDER BY target_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("read entries");
+    let removed = |name: &str| ids.iter().find(|(n, _)| *n == name).expect("a row").1;
+    let mut expected = vec![
+        (removed("student at org"), student, "organization", org),
+        (removed("student at account"), student, "account", account),
+        (removed("observer at account"), observer, "account", account),
+    ];
+    expected.sort_by_key(|(id, ..)| *id);
+    let expected: Vec<_> = expected
+        .into_iter()
+        .map(|(id, role, scope_type, scope_id)| {
+            (
+                id,
+                "instance".to_owned(),
+                None,
+                "role_assignment.remove".to_owned(),
+                "role_assignment".to_owned(),
+                serde_json::json!({ "before": {
+                    "user_id": user, "role_id": role, "scope_type": scope_type,
+                    "scope_id": scope_id, "source": "local",
+                } }),
+            )
+        })
+        .collect();
+    assert_eq!(entries, expected);
+    let versions: Vec<i32> =
+        sqlx::query_scalar("SELECT DISTINCT get_byte(uuid_send(id), 6) >> 4 FROM audit_events")
+            .fetch_all(&pool)
+            .await
+            .expect("read ids");
+    assert_eq!(versions, [7], "entry ids are UUID v7");
+    let temporary: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'removed_course_role_assignments')",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read catalog");
+    assert!(!temporary, "the work table is dropped");
+}

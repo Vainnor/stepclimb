@@ -2,10 +2,11 @@
 //! The user admin routes under `/api/v1/users`
 //! (docs/specs/m0/03-users-and-identities.md B3, B6, B7, B9, B10, B12 and API).
 //!
-//! Every route takes the organization as its target: reading needs `user.view` and writing
-//! `user.manage` at organization scope, so a `user.view` grant at an account does not reach them
-//! (spec 09 Q2). A user id of another organization is 404 `user.not_found`, as an id that does
-//! not exist.
+//! Every route but the list takes the organization as its target: reading needs `user.view` and
+//! writing `user.manage` at organization scope. The list needs `user.view` at any scope; held at
+//! accounts only, it lists the users "in" those accounts' subtrees, who hold a role assignment
+//! at an account there or an enrollment in a course there (spec 09 Q2 (B); M1 spec 02 B21). A
+//! user id of another organization is 404 `user.not_found`, as an id that does not exist.
 //!
 //! `POST` creates a `local`, `active` user. In the transaction that inserts it, it first runs
 //! the users limit check ([`Entitlements::check_room`], spec 10 B10), which locks the
@@ -65,7 +66,7 @@ use stepclimb_core::{
     OrgScope, Source, accounts,
     audit::Actor,
     feature::Limit,
-    grants::Grants,
+    grants::{Grants, ScopeId},
     id::Uuid,
     identities::{self, NewIdentity},
     identity_providers, organizations,
@@ -85,7 +86,7 @@ use crate::{
     openapi::problem_responses,
     organization::present,
     pagination::{Page, PageParams},
-    require::{Require, session_required},
+    require::{AnyScope, Require, session_required},
     role_assignments::code::{ROLE_ASSIGNMENT_LAST_ORG_ADMIN, USER_NOT_FOUND},
     roles::code::{NAME_EMPTY, PERMISSION_ESCALATION, TEXT_CONTAINS_NUL},
     session::{Authenticated, Via},
@@ -355,7 +356,9 @@ impl From<UserSource> for Source {
     }
 }
 
-/// List the organization's users, sorted by display name, then id.
+/// List the organization's users, sorted by display name, then id. A caller holding `user.view`
+/// at accounts only sees the users in those accounts' subtrees: those holding a role there, or
+/// enrolled in a course there.
 #[utoipa::path(
     get,
     path = "/api/v1/users",
@@ -373,7 +376,7 @@ impl From<UserSource> for Source {
     )
 )]
 pub async fn list_users(
-    require: Require<UserView>,
+    require: Require<UserView, AnyScope>,
     State(state): State<AppState>,
     ApiQuery(filter): ApiQuery<UserListParams>,
     ApiQuery(params): ApiQuery<PageParams>,
@@ -383,6 +386,8 @@ pub async fn list_users(
         status: filter.status.map(Into::into),
         source: filter.source.map(Into::into),
         q: filter.q,
+        within: user_view_accounts(require.grants()),
+        id: None,
     };
     let scope = require.principal().scope();
     let rows = repo::list(&state.db, scope, &filter, page.after(), page.fetch_limit())
@@ -400,6 +405,19 @@ pub async fn list_users(
         .collect::<Result<Vec<_>, _>>()?;
     page.page(rows, |user| (user.display_name.clone(), user.id))
         .map(Json)
+}
+
+/// The accounts whose subtrees a `user.view` holder sees the users of: `None` when it is held at
+/// the organization, which contains every user (spec 09 Q2 (B); M1 spec 02 B21).
+pub(crate) fn user_view_accounts(grants: &Grants) -> Option<Vec<Uuid>> {
+    let mut accounts = Vec::new();
+    for scope in grants.scopes_with::<UserView>() {
+        match scope {
+            ScopeId::Organization(_) => return None,
+            ScopeId::Account(id) => accounts.push(id),
+        }
+    }
+    Some(accounts)
 }
 
 /// Read one user.
@@ -733,10 +751,10 @@ fn refuse_key_on_owner(principal: Authenticated, user_id: Uuid) -> Result<(), Ap
 /// Whether `target` has an effective permission, at any scope, that is not effective for
 /// `caller` at organization scope. A caller acting on its own user passes unless its grants are
 /// narrower than the user's, as an API key's are when its scopes do not cover every permission
-/// of its owner: such a key is refused (coordinator decision of 2026-11-14, fail closed).
-//
-// course scopes: `Grants` ignores course-scope assignments, which grant nothing until M1. M1
-// must revisit this check once they do, so a permission held only at a course still counts.
+/// of its owner: such a key is refused (coordinator decision of 2026-11-14, fail closed). A
+/// permission the user holds through an enrollment counts; one grantable only at course scope
+/// (`course.participate`) does not, since the caller cannot hold it at organization scope (M1
+/// spec 02 B24a).
 fn escalates(caller: &Grants, target: &Grants) -> bool {
     caller.lacks_any_held_by(target)
 }
@@ -850,6 +868,21 @@ mod tests {
         assert!(!escalates(&manager, &peer));
         assert!(!escalates(&manager, &grants_of(&[], &[])));
         assert!(!escalates(&manager, &manager), "your own user");
+    }
+
+    #[test]
+    fn user_view_at_accounts_limits_the_list_to_them() {
+        assert_eq!(
+            user_view_accounts(&grants_of(&["user.view"], &["user.view"])),
+            None
+        );
+        let at_account = grants_of(&[], &["user.view"]);
+        let accounts = user_view_accounts(&at_account).expect("accounts only");
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(
+            user_view_accounts(&grants_of(&[], &["account.view"])),
+            Some(vec![])
+        );
     }
 
     /// An API key acts with its owner's grants narrowed to its scopes (spec 08 B27): a key that

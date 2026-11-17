@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Where a record came from (docs/specs/m0/03-users-and-identities.md B4).
 //!
-//! One enum for every record an outside system can own: users, role assignments (spec 09) and,
-//! in M4, groups. A record whose source is not [`Source::Local`] belongs to that source, and the
+//! One enum for every record an outside system can own: users, role assignments (spec 09),
+//! enrollments (M1 spec 02) and, in M4, groups. A record whose source is not [`Source::Local`] belongs to that source, and the
 //! admin API refuses changes to its source-owned fields (spec 03 B6). The stored spellings are
 //! [`Source::as_str`]; each table's `source` column has a check constraint listing the same five.
 

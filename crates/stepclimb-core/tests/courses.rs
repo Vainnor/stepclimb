@@ -528,7 +528,9 @@ async fn the_list_shows_drafts_only_where_view_all_reaches(pool: PgPool) {
     };
     let everything = Visibility {
         view: Reach::Organization,
+        view_courses: &[],
         view_all: Reach::Organization,
+        view_all_courses: &[],
     };
     assert_eq!(
         list(everything, ListFilter::default()).await,
@@ -538,7 +540,9 @@ async fn the_list_shows_drafts_only_where_view_all_reaches(pool: PgPool) {
     let tower = [a.tower];
     let learner = Visibility {
         view: Reach::Organization,
+        view_courses: &[],
         view_all: Reach::Accounts(&[]),
+        view_all_courses: &[],
     };
     assert_eq!(
         list(learner, ListFilter::default()).await,
@@ -546,11 +550,30 @@ async fn the_list_shows_drafts_only_where_view_all_reaches(pool: PgPool) {
     );
     let tower_staff = Visibility {
         view: Reach::Accounts(&tower),
+        view_courses: &[],
         view_all: Reach::Accounts(&tower),
+        view_all_courses: &[],
     };
     assert_eq!(
         list(tower_staff, ListFilter::default()).await,
         [draft_in_tower.id, in_tower.id]
+    );
+    // Enrollments reach their courses only, and a draft still needs `course.view_all` (B11).
+    let enrolled = [draft_in_tower.id, in_enroute.id];
+    let student = Visibility {
+        view: Reach::Accounts(&[]),
+        view_courses: &enrolled,
+        view_all: Reach::Accounts(&[]),
+        view_all_courses: &[],
+    };
+    assert_eq!(list(student, ListFilter::default()).await, [in_enroute.id]);
+    let designer = Visibility {
+        view_all_courses: &enrolled,
+        ..student
+    };
+    assert_eq!(
+        list(designer, ListFilter::default()).await,
+        [draft_in_tower.id, in_enroute.id]
     );
     let in_enroute_only = ListFilter {
         account_id: Some(a.enroute),

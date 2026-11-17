@@ -313,9 +313,10 @@ pub async fn delete_service_account(
 }
 
 /// 403 `service_account.scope_exceeds_owner` when a catalog key in `scopes` is not effective for
-/// the caller at any scope. A key outside the catalog is left to the repository's 422.
+/// the caller at any scope, a course the caller is enrolled in included (M1 spec 02 B25). A key
+/// outside the catalog is left to the repository's 422.
 fn refuse_exceeding_scopes(grants: &Grants, scopes: &[String]) -> Result<(), ApiError> {
-    let held = |scope: &str| grants.by_scope().any(|(_, keys)| keys.contains(&scope));
+    let held = |scope: &str| grants.holds_key_anywhere(scope);
     let in_catalog = |scope: &str| repo::check_scopes(&[scope]).is_ok();
     if scopes.iter().all(|s| !in_catalog(s) || held(s)) {
         return Ok(());

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, display_name, given_name, family_name, email, locale, tz, status, source,\n                  external_id, manager_id,\n                  (extract(epoch FROM created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM users\n           WHERE org_id = $1\n             AND ($2::text IS NULL OR status = $2)\n             AND ($3::text IS NULL OR source = $3)\n             AND ($4::text IS NULL OR display_name ILIKE $4 OR email ILIKE $4)\n             AND ($5::text IS NULL OR (display_name, id) > ($5, $6::uuid))\n           ORDER BY display_name, id\n           LIMIT $7",
+  "query": "SELECT id, display_name, given_name, family_name, email, locale, tz, status, source,\n                  external_id, manager_id,\n                  (extract(epoch FROM created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM users\n           WHERE org_id = $1\n             AND ($2::text IS NULL OR status = $2)\n             AND ($3::text IS NULL OR source = $3)\n             AND ($4::text IS NULL OR display_name ILIKE $4 OR email ILIKE $4)\n             AND ($5::text IS NULL OR (display_name, id) > ($5, $6::uuid))\n             AND ($8::uuid[] IS NULL\n                  OR EXISTS (\n                      SELECT 1\n                      FROM role_assignments ra\n                      JOIN accounts a ON a.org_id = ra.org_id AND a.id = ra.scope_id\n                      JOIN accounts w ON w.org_id = a.org_id AND a.path <@ w.path\n                      WHERE ra.org_id = $1 AND ra.user_id = users.id\n                        AND ra.scope_type = 'account' AND w.id = ANY($8))\n                  OR EXISTS (\n                      SELECT 1\n                      FROM enrollments e\n                      JOIN courses c ON c.org_id = e.org_id AND c.id = e.course_id\n                      JOIN accounts a ON a.org_id = c.org_id AND a.id = c.account_id\n                      JOIN accounts w ON w.org_id = a.org_id AND a.path <@ w.path\n                      WHERE e.org_id = $1 AND e.user_id = users.id AND e.status = 'active'\n                        AND w.id = ANY($8)))\n             AND ($9::uuid IS NULL OR id = $9)\n           ORDER BY display_name, id\n           LIMIT $7",
   "describe": {
     "columns": [
       {
@@ -145,7 +145,9 @@
         "Text",
         "Text",
         "Uuid",
-        "Int8"
+        "Int8",
+        "UuidArray",
+        "Uuid"
       ]
     },
     "nullable": [
@@ -164,5 +166,5 @@
       null
     ]
   },
-  "hash": "0c1c6962b7900935fe03fb341f82b13e7f45d2be3312940b50d2143dd2294a2f"
+  "hash": "d0d3601d05ce7b27bdd5246a99c8ccb0c80f3374381471e0af7b28fd7914e971"
 }

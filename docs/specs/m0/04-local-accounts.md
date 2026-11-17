@@ -81,7 +81,9 @@ creates and hands over.
     applied to every user of the organization at once; an Organization admin holds every
     catalog permission, so the two agree whenever one exists. A `PUT` equal to the current
     switches changes nothing and is answered 200 with `provider.manage` alone. The check reads
-    the switches under the organization row's lock, which settings writes take.
+    the switches under the organization row's lock, which settings writes take. From M1, "every catalog permission" leaves out
+    a permission grantable only at course scope (`course.participate`), which no one holds at
+    organization scope (`../m1/02-courses-and-enrollments.md` B24a, owner decision of 2026-11-16).
   - `local.magic_link_needs_email` is 422 `request.invalid` with the code at `/magic_link`. M0
     has no email sender, so `local_sign_in::update` refuses every change switching the magic
     link on.
@@ -130,7 +132,9 @@ creates and hands over.
   unless, at the time of use, that admin is still an active user of the organization, still
   holds `user.manage` at organization scope, and holds at organization scope every permission
   the link's user now holds at any scope (`03-users-and-identities.md` B6's escalation rule,
-  `Grants::lacks_any_held_by`). A refused link answers the same 400 `auth.enrollment_invalid`
+  `Grants::lacks_any_held_by`, which from M1 counts the user's enrollments and leaves out a
+  permission grantable only at course scope, `../m1/02-courses-and-enrollments.md` B24a). A
+  refused link answers the same 400 `auth.enrollment_invalid`
   as an unknown one. `local_tokens.created_by_instance` marks the links `stepclimb admin
   create` and `stepclimb admin enrollment-link` make, which skip these checks; a link that is
   not the instance's and has a NULL `created_by` lost its creator (`ON DELETE SET NULL`) and is

@@ -3,10 +3,12 @@
 //! B27 and API).
 //!
 //! A course sits in one account, and course permissions held at an account cover every course
-//! in its subtree (B23, B24). Reading needs `course.view` at the course. A draft or a template
-//! is hidden from a caller without `course.view_all` there on every route: it answers 404 as a
-//! course that does not exist, before the route's own permission is checked (B10, B24, Q13;
-//! `require::check_course`). Creating needs `course.create` at the account named in the body; changing details,
+//! in its subtree; an active enrollment gives its role's course permissions at its course (B16,
+//! B23, B24), and the list includes the courses of the caller's enrollments (B11). Reading needs
+//! `course.view` at the course. A draft or a template is hidden from a caller without
+//! `course.view_all` there on every route: it answers 404 as a course that does not exist,
+//! before the route's own permission is checked (B10, B24, Q13; `require::check_course`).
+//! Creating needs `course.create` at the account named in the body; changing details,
 //! status or account needs `course.manage` at the course, and a move also `course.create` at
 //! the destination (B9). A destination where the caller lacks `course.create` answers 404, as
 //! an account the caller cannot see does, and a move may not give the caller a permission
@@ -72,8 +74,12 @@ pub mod code {
     pub const COURSE_CODE_TAKEN: &str = "course.code_taken";
     /// B4 does not allow the status change (409).
     pub const COURSE_STATUS_INVALID: &str = "course.status_invalid";
-    /// A template cannot be published (409).
+    /// A template cannot be published, or take a learner (409).
     pub const COURSE_TEMPLATE: &str = "course.template";
+    /// A published course with learners cannot go back to draft (409).
+    pub const COURSE_HAS_LEARNERS: &str = "course.has_learners";
+    /// An archived course takes no new enrollment (409).
+    pub const COURSE_ARCHIVED: &str = "course.archived";
     /// `end_at` is before `start_at` (a 422 field code).
     pub const COURSE_DATES_INVERTED: &str = "course.dates_inverted";
     /// A date before 1970 or from 2200 on (a 422 field code).
@@ -91,7 +97,7 @@ problem_responses! {
     CourseCopyNotFound => "`course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `account.not_found`: the destination `account_id` does not exist or you do not hold `course.create` at a scope containing it. `org.not_found`: the request's organization cannot be determined.",
     CourseCopyForbidden => "`permission.denied`: you can see the course but do not hold `course.view_all` at a scope containing it. `permission.escalation`: the destination would give you, over the copy, a course permission (one grantable at course scope) you do not hold over the source. `auth.csrf_refused`: the request did not come from this site.",
     CourseCodeConflict => "`course.code_taken`: another course of the organization has this code, ignoring ASCII case.",
-    CourseStatusConflict => "`course.status_invalid`: the course cannot change from its status to this one; the allowed changes are draft to published, published to archived, archived to published and published to draft. `course.template`: a template cannot be published.",
+    CourseStatusConflict => "`course.status_invalid`: the course cannot change from its status to this one; the allowed changes are draft to published, published to archived, archived to published and published to draft. `course.has_learners`: the course has an active enrollment whose role holds `course.participate`, so it cannot go back to draft. `course.template`: a template cannot be published.",
 }
 
 /// A course's status.
@@ -403,9 +409,13 @@ pub async fn list_courses(
         check_visible_account(&state, grants, account_id).await?;
     }
     let (view, view_all) = (reach::<CourseView>(grants), reach::<CourseViewAll>(grants));
+    let view_courses = grants.courses_with::<CourseView>();
+    let view_all_courses = grants.courses_with::<CourseViewAll>();
     let visibility = courses::Visibility {
         view: as_reach(&view),
+        view_courses: &view_courses,
         view_all: as_reach(&view_all),
+        view_all_courses: &view_all_courses,
     };
     let filter = courses::ListFilter {
         account_id: filter.account_id,
@@ -899,6 +909,10 @@ fn course_error(error: courses::Error) -> ApiError {
             "The course cannot change from its status to this one.",
         ),
         E::Template => conflict(code::COURSE_TEMPLATE, "A template cannot be published."),
+        E::HasLearners => conflict(
+            code::COURSE_HAS_LEARNERS,
+            "The course has learners, so it cannot go back to draft. Conclude their enrollments first.",
+        ),
         other @ (E::Stored { .. }
         | E::ContentNotCopyable { .. }
         | E::CopiedUrlInvalid { .. }
@@ -964,7 +978,17 @@ mod tests {
                 "enrollment.manage",
                 "enrollment.view",
             ],
-            "no organization or account permission"
+            "no organization or account permission, and no course.participate without an enrollment"
+        );
+        let Target::Course { course_id, .. } = &course else {
+            unreachable!("a course target")
+        };
+        assert_eq!(
+            course_permissions(
+                &grants("student", GrantScope::Enrolled(*course_id)),
+                &course
+            ),
+            ["course.participate", "course.view"]
         );
         let elsewhere = GrantScope::Account {
             id: new_id(),
@@ -990,6 +1014,7 @@ mod tests {
                 None,
             ),
             (E::Template, 409, "course.template", None),
+            (E::HasLearners, 409, "course.has_learners", None),
             (
                 E::TitleEmpty,
                 422,

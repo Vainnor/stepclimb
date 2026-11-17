@@ -82,6 +82,9 @@ pub enum Action {
     CourseSetStatus,
     CourseMove,
     CourseCopy,
+    EnrollmentCreate,
+    EnrollmentUpdate,
+    EnrollmentDelete,
 }
 
 impl Action {
@@ -128,6 +131,9 @@ impl Action {
             Self::CourseSetStatus => "course.set_status",
             Self::CourseMove => "course.move",
             Self::CourseCopy => "course.copy",
+            Self::EnrollmentCreate => "enrollment.create",
+            Self::EnrollmentUpdate => "enrollment.update",
+            Self::EnrollmentDelete => "enrollment.delete",
         }
     }
 
@@ -166,6 +172,9 @@ impl Action {
             | Self::CourseSetStatus
             | Self::CourseMove
             | Self::CourseCopy => "course",
+            Self::EnrollmentCreate | Self::EnrollmentUpdate | Self::EnrollmentDelete => {
+                "enrollment"
+            }
         }
     }
 }
@@ -308,7 +317,7 @@ impl TryFrom<Row> for Entry {
 mod tests {
     use super::*;
 
-    const ALL: [Action; 35] = [
+    const ALL: [Action; 38] = [
         Action::RoleCreate,
         Action::RoleUpdate,
         Action::RoleDelete,
@@ -344,6 +353,9 @@ mod tests {
         Action::CourseSetStatus,
         Action::CourseMove,
         Action::CourseCopy,
+        Action::EnrollmentCreate,
+        Action::EnrollmentUpdate,
+        Action::EnrollmentDelete,
     ];
 
     #[test]

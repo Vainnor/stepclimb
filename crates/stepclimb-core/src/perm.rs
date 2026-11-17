@@ -60,6 +60,22 @@ impl PermissionInfo {
     pub fn grantable(&self) -> &'static [ScopeType] {
         self.grantable
     }
+
+    /// Whether the permission is grantable at course scope only, so that only an enrollment
+    /// makes it effective and it is never effective at the organization or an account (M1 spec
+    /// 02 B24a). The checks that ask a caller to hold permissions at organization or account
+    /// scope leave such a permission out: counting it would refuse every caller.
+    #[must_use]
+    pub fn course_only(&self) -> bool {
+        !self.grantable.contains(&ScopeType::Organization)
+            && !self.grantable.contains(&ScopeType::Account)
+    }
+}
+
+/// The catalog entry with `key`, or `None` for a key the catalog does not define.
+#[must_use]
+pub fn find(key: &str) -> Option<&'static PermissionInfo> {
+    ALL.iter().find(|p| p.key == key)
 }
 
 mod sealed {
@@ -144,6 +160,9 @@ catalog! {
     EnrollmentView => "enrollment.view", [Organization, Account, Course];
     /// Enroll, conclude and remove users.
     EnrollmentManage => "enrollment.manage", [Organization, Account, Course];
+    /// Take the course as a learner. Grantable at course scope only, so only an enrollment
+    /// gives it (M1 spec 02 Permissions).
+    CourseParticipate => "course.participate", [Course];
 }
 
 #[cfg(test)]
@@ -236,8 +255,31 @@ mod tests {
             ("course.content_edit", &[O, A, C]),
             ("enrollment.view", &[O, A, C]),
             ("enrollment.manage", &[O, A, C]),
+            ("course.participate", &[C]),
         ];
         let actual: Vec<_> = ALL.iter().map(|p| (p.key, p.grantable)).collect();
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn course_only_is_grantable_at_course_scope_alone() {
+        let course_only: Vec<_> = ALL
+            .iter()
+            .filter(|p| p.course_only())
+            .map(|p| p.key)
+            .collect();
+        assert_eq!(course_only, ["course.participate"]);
+        assert!(!find("course.view").unwrap().course_only());
+        assert!(!find("organization.manage").unwrap().course_only());
+    }
+
+    #[test]
+    fn find_answers_catalog_keys_only() {
+        assert_eq!(
+            find("course.participate").map(|p| p.key()),
+            Some("course.participate")
+        );
+        assert!(find("course.retired").is_none());
+        assert!(find("").is_none());
     }
 }
