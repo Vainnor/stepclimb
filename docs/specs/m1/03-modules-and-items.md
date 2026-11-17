@@ -334,7 +334,9 @@ or Q12.
   in those answers, and the catalog descriptions of `course.content_edit` and
   `course.view_all` (`stepclimb_core::perm`, `02` Permissions) say so. A custom role with
   `course.content_edit` and no `course.view_all` sees unpublished content only through its
-  edits, never through I2's read routes.
+  edits, never through I2's read routes, and only in a published or archived course: on a draft
+  or a template it does nothing, since the course, its modules and its items answer 404 to it
+  (`02` B24, Q13).
 - **Each route checks its own permission twice.** The handler repeats its `Require`'s check
   under the course lock with the same permission type (`recheck` takes the route's `Require`),
   so the two checks cannot name different permissions.

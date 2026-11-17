@@ -132,11 +132,13 @@ catalog! {
     CourseViewAll => "course.view_all", [Organization, Account, Course];
     /// Create courses in an account, and copies into it.
     CourseCreate => "course.create", [Organization, Account];
-    /// Change a course's details and status, and move it to another account.
+    /// Change a course's details and status, and move it to another account. On a draft or a
+    /// template it does nothing without `course.view_all` at the course: the course answers 404.
     CourseManage => "course.manage", [Organization, Account, Course];
     /// Edit a course's modules, items, files and pages. Editing implies reading what is
     /// edited: the answers to these edits show every module and item, unpublished ones
-    /// included.
+    /// included. On a draft or a template it does nothing without `course.view_all` at the
+    /// course: the course, its modules and its items answer 404.
     CourseContentEdit => "course.content_edit", [Organization, Account, Course];
     /// Read a course's enrollments.
     EnrollmentView => "enrollment.view", [Organization, Account, Course];

@@ -312,8 +312,8 @@ Org admin holds every entry through `perm::ALL`.
 | `perm::CourseView` | `course.view` | organization, account, course | Read a course and its published, unlocked content |
 | `perm::CourseViewAll` | `course.view_all` | organization, account, course | Read drafts, templates, unpublished modules and items, and locked content (specs 03, 04); `course.content_edit` also sees unpublished modules and items in the answers to its edits (`03` Decisions made building I1) |
 | `perm::CourseCreate` | `course.create` | organization, account | Create courses in an account, and copies into it |
-| `perm::CourseManage` | `course.manage` | organization, account, course | Change a course's details and status |
-| `perm::CourseContentEdit` | `course.content_edit` | organization, account, course | Edit modules, items, files and pages (specs 03, 06, 07), seeing unpublished modules and items in the answers to those edits; the plan's example `Require<perm::CourseContentEdit>` |
+| `perm::CourseManage` | `course.manage` | organization, account, course | Change a course's details and status; on a draft or a template, nothing without `course.view_all` at the course (B24, Q13) |
+| `perm::CourseContentEdit` | `course.content_edit` | organization, account, course | Edit modules, items, files and pages (specs 03, 06, 07), seeing unpublished modules and items in the answers to those edits; on a draft or a template, nothing without `course.view_all` at the course (B24, Q13); the plan's example `Require<perm::CourseContentEdit>` |
 | `perm::CourseParticipate` | `course.participate` | course | Take the course as a learner: record progress (spec 05) |
 | `perm::EnrollmentView` | `enrollment.view` | organization, account, course | Read a course's enrollments |
 | `perm::EnrollmentManage` | `enrollment.manage` | organization, account, course | Enroll, conclude and remove users |
@@ -657,9 +657,8 @@ Coordinator decisions (2026-11-17), pending owner review. They apply the owner's
 - **Rechecked under the course lock.** The writes that lock the course row (`PATCH`, status and
   move here; every module and item write in spec 03) run the same check on the locked row, so a
   course made a draft after the extractor ran is still hidden from a caller without
-  `course.view_all` (404, nothing written). `GET` relies on the extractor alone: it locks
-  nothing, and a draft made in the same instant shows only what the caller could read a moment
-  earlier.
+  `course.view_all` (404, nothing written). `GET` runs it again on the row it reads, so the body
+  it returns is never a draft or a template the caller cannot see; it locks nothing.
 - **Enrollment routes.** `EnrollmentTarget` arrives with I2 and resolves through the same check.
 
 ## Issues

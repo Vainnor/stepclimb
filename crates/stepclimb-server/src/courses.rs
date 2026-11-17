@@ -491,6 +491,13 @@ pub async fn get_course(
         .await
         .map_err(course_error)?
         .ok_or(Denied::CourseNotFound)?;
+    // Again on the row read here: a course made a draft after the extractor ran stays hidden,
+    // and its body is not returned.
+    let target = CourseTarget {
+        id: course.id,
+        account_path: course.account_path.clone(),
+    };
+    check_course::<CourseView>(grants, &target, course.needs_view_all(), COURSE_NOT_FOUND)?;
     Ok(Json(Course::from_repo(course, grants)?))
 }
 
