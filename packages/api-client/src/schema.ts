@@ -541,7 +541,8 @@ export interface paths {
         };
         /**
          * The course's modules in order, each with its items in order. A caller without
-         *     `course.view_all` gets only published modules and published items.
+         *     `course.view_all` gets only published modules and published items; a learner of the course
+         *     also gets their progress on each.
          */
         get: operations["listModules"];
         put?: never;
@@ -740,7 +741,7 @@ export interface paths {
         };
         /**
          * One item. An unpublished item, or an item of an unpublished module, answers 404 to a caller
-         *     without `course.view_all`.
+         *     without `course.view_all`; a learner of the course also gets their progress on it.
          */
         get: operations["getItem"];
         put?: never;
@@ -1000,7 +1001,8 @@ export interface paths {
         };
         /**
          * One module with its items in order. An unpublished module answers 404 to a caller without
-         *     `course.view_all`, who also gets only its published items.
+         *     `course.view_all`, who also gets only its published items; a learner of the course also gets
+         *     their progress.
          */
         get: operations["getModule"];
         put?: never;
@@ -2548,6 +2550,7 @@ export interface components {
              * @description 0-based, dense within the module.
              */
             position: number;
+            progress?: null | components["schemas"]["ItemProgress"];
             published: boolean;
             /**
              * Format: uuid
@@ -2806,6 +2809,7 @@ export interface components {
             position: number;
             /** @description The modules of the course this one waits for, in course order. */
             prerequisite_ids: string[];
+            progress?: null | components["schemas"]["ModuleProgress"];
             published: boolean;
             /** @description Whether the module's items go in order. */
             require_sequential: boolean;

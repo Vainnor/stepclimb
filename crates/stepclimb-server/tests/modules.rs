@@ -2,7 +2,8 @@
 //! The module and item routes over the router: authoring
 //! (docs/specs/m1/03-modules-and-items.md B1 to B12; T1 to T7 and T13 for the write routes),
 //! reading (B13 to B15; T9 and T13 for the read routes, and the references and URLs a read
-//! withholds from a learner until spec 04 I3), and
+//! withholds from a learner until spec 04 I3; spec 05 T10's outline case for the learner's own
+//! progress), and
 //! the rule fields those routes write (docs/specs/m1/04-unlock-and-completion-rules.md B1 to B3;
 //! T9, T10 and T15's cross-organization ids).
 //! The permission suite's generated cases for each route (T12) are in `tests/permissions.rs`;
@@ -32,7 +33,7 @@ use stepclimb_core::{
     id::Uuid,
     items, modules, organizations,
     role_assignments::{self, NewAssignment, Scope},
-    roles,
+    roles, rules,
     users::{self, NewUser},
 };
 use stepclimb_server::{
@@ -1460,4 +1461,125 @@ async fn t13_every_read_route_refuses_another_organizations_ids(pool: PgPool) {
         assert!(!text.contains("theirs.example"), "{text}");
     }
     assert_eq!(f.rows(b.org).await, before, "org B is unchanged");
+}
+
+/// Spec 05 T10 (B13) on the outline, module and item reads: a Student's answer carries their own
+/// module and item progress; another Student of the course gets null; a Course designer, who
+/// does not hold `course.participate`, gets no `progress` member. Progress shows only on what
+/// the Student can see, and the stand-in for spec 04 I3 still withholds the link.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn spec05_t10_the_outline_carries_the_learners_own_progress(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    f.set_course_status(t, courses::Status::Published).await;
+    let module = f.published_module(t).await;
+    let required = f.published_link(t, module, "https://example.com/r").await;
+    let plain = f.published_link(t, module, "https://example.com/p").await;
+    items::set_requirement(
+        &f.pool,
+        scope(t.org),
+        required,
+        Some(rules::Requirement::View),
+        now(),
+    )
+    .await
+    .unwrap();
+    let (first, second) = (f.student(t).await, f.student(t).await);
+    let designer = f
+        .holder(t.org, "course_designer", Scope::Account(t.tower))
+        .await;
+    let step = json!({ "action": "view" });
+    let uri = format!("{}/progress", item_path(required));
+    f.send(Method::POST, &uri, t.org, &first, Some(step))
+        .await
+        .ok(StatusCode::OK);
+
+    let list = f.get(&course_modules(t.course), t.org, &first).await;
+    let body = list.ok(StatusCode::OK);
+    assert_schema("ModuleList", body);
+    let mine = &body["modules"][0];
+    assert_eq!(mine["progress"]["module_id"], module.to_string());
+    assert_eq!(
+        (
+            &mine["progress"]["required_count"],
+            &mine["progress"]["completed_count"]
+        ),
+        (&json!(1), &json!(1))
+    );
+    assert!(mine["progress"]["completed_at"].is_string(), "{mine}");
+    assert_eq!(mine["items"][0]["progress"]["state"], "completed");
+    assert_eq!(
+        mine["items"][0]["progress"]["item_id"],
+        required.to_string()
+    );
+    assert_eq!(mine["items"][1]["progress"], Value::Null);
+    assert!(
+        mine["items"][1].get("progress").is_some(),
+        "null, not absent"
+    );
+
+    let theirs = f.get(&course_modules(t.course), t.org, &second).await;
+    let theirs = &theirs.ok(StatusCode::OK)["modules"][0];
+    assert!(
+        theirs.get("progress").is_some_and(Value::is_null),
+        "{theirs}"
+    );
+    for item in theirs["items"].as_array().unwrap() {
+        assert!(item.get("progress").is_some_and(Value::is_null), "{item}");
+    }
+
+    let staff = f.get(&course_modules(t.course), t.org, &designer).await;
+    let staff = &staff.ok(StatusCode::OK)["modules"][0];
+    assert!(staff.get("progress").is_none(), "{staff}");
+    assert!(
+        staff["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i.get("progress").is_none())
+    );
+
+    let one = f.get(&module_path(module), t.org, &first).await;
+    let one = one.ok(StatusCode::OK);
+    assert_schema("Module", one);
+    assert_eq!(one["progress"]["completed_count"], 1);
+    assert_eq!(one["items"][0]["progress"]["state"], "completed");
+    let item = f.get(&item_path(required), t.org, &first).await;
+    let item = item.ok(StatusCode::OK);
+    assert_schema("Item", item);
+    assert_eq!(item["progress"]["state"], "completed");
+    let item = f.get(&item_path(required), t.org, &second).await;
+    assert!(
+        item.ok(StatusCode::OK)
+            .get("progress")
+            .is_some_and(Value::is_null)
+    );
+    let item = f.get(&item_path(required), t.org, &designer).await;
+    assert!(item.ok(StatusCode::OK).get("progress").is_none());
+
+    // A rule added afterwards: the progress stays, the link is withheld.
+    let sequential = modules::RulesPatch {
+        require_sequential: Some(true),
+        ..Default::default()
+    };
+    modules::set_rules(&f.pool, scope(t.org), module, &sequential, now())
+        .await
+        .unwrap();
+    let item = f.get(&item_path(required), t.org, &first).await;
+    let item = item.ok(StatusCode::OK);
+    assert_eq!(item["progress"]["state"], "completed");
+    assert!(item.get("url").is_none(), "{item}");
+
+    // Unpublished, the completed item leaves the Student's answer, progress and all.
+    let hide = items::ItemPatch {
+        published: Some(false),
+        ..Default::default()
+    };
+    items::update(&f.pool, scope(t.org), required, &hide, now())
+        .await
+        .unwrap();
+    let list = f.get(&course_modules(t.course), t.org, &first).await;
+    let body = list.ok(StatusCode::OK);
+    assert!(!body.to_string().contains(&required.to_string()), "{body}");
+    assert_eq!(ids(&body["modules"][0]["items"]), [plain]);
 }

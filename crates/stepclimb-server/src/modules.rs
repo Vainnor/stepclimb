@@ -226,6 +226,12 @@ pub struct Item {
     /// What completes the item for a learner.
     #[schema(required = true)]
     pub requirement: Option<Requirement>,
+    /// Your progress on the item, on the outline, module and item reads when you are a learner
+    /// of the course (you hold `course.participate` there): null until your first step on it.
+    /// Absent for anyone else, and from every other operation's answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<crate::progress::ItemProgress>, required = false)]
+    pub progress: Option<Option<crate::progress::ItemProgress>>,
     /// RFC 3339, UTC.
     #[schema(format = DateTime)]
     pub created_at: String,
@@ -247,6 +253,7 @@ impl Item {
             position: item.position,
             published: item.published,
             requirement: item.requirement.map(Into::into),
+            progress: None,
             ref_id: item.ref_id,
             url: item.url,
         })
@@ -275,6 +282,12 @@ pub struct Module {
     /// Whether all or one of the module's requirements complete it.
     pub completion_rule: CompletionRule,
     pub items: Vec<Item>,
+    /// Your progress in the module, on the outline and module reads when you are a learner of
+    /// the course (you hold `course.participate` there): null until you complete one of its
+    /// items. Absent for anyone else, and from every other operation's answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<crate::progress::ModuleProgress>, required = false)]
+    pub progress: Option<Option<crate::progress::ModuleProgress>>,
     /// RFC 3339, UTC.
     #[schema(format = DateTime)]
     pub created_at: String,
@@ -304,6 +317,7 @@ impl Module {
             published: module.published,
             prerequisite_ids: module.prerequisite_ids,
             require_sequential: module.require_sequential,
+            progress: None,
         })
     }
 }

@@ -367,6 +367,15 @@ Coordinator decisions (overnight, 2026-11-17), pending owner review.
   200").
 - **Operation ids** are `listModules`, `getModule` and `getItem`; the 403 is the shared
   `permission.denied`.
+- **The learner's own progress (`05` B13, T10).** A caller who holds `course.participate` at
+  the course gets `progress` on each module and item of the three reads, read for their own
+  user id from `progress::for_learner_in_course` in the read's snapshot: null where they have
+  no row, absent for anyone else (staff without `course.participate`) and on every write
+  response, as on the course read. Progress is attached by id to the modules and items the
+  answer already holds, so it follows the published filter and never names what the caller
+  cannot see; the stand-in above still withholds the links of a module with an unlock rule. A
+  module's `progress` is `ModuleProgress` (`module_id`, `required_count`, `completed_count`,
+  `completed_at`, `05`'s Schemas), an item's the existing `ItemProgress`.
 
 ## Issues
 

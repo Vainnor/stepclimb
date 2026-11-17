@@ -2957,7 +2957,7 @@
         "tags": [
           "modules"
         ],
-        "summary": "The course's modules in order, each with its items in order. A caller without\n`course.view_all` gets only published modules and published items.",
+        "summary": "The course's modules in order, each with its items in order. A caller without\n`course.view_all` gets only published modules and published items; a learner of the course\nalso gets their progress on each.",
         "operationId": "listModules",
         "parameters": [
           {
@@ -3891,7 +3891,7 @@
         "tags": [
           "modules"
         ],
-        "summary": "One item. An unpublished item, or an item of an unpublished module, answers 404 to a caller\nwithout `course.view_all`.",
+        "summary": "One item. An unpublished item, or an item of an unpublished module, answers 404 to a caller\nwithout `course.view_all`; a learner of the course also gets their progress on it.",
         "operationId": "getItem",
         "parameters": [
           {
@@ -4875,7 +4875,7 @@
         "tags": [
           "modules"
         ],
-        "summary": "One module with its items in order. An unpublished module answers 404 to a caller without\n`course.view_all`, who also gets only its published items.",
+        "summary": "One module with its items in order. An unpublished module answers 404 to a caller without\n`course.view_all`, who also gets only its published items; a learner of the course also gets\ntheir progress.",
         "operationId": "getModule",
         "parameters": [
           {
@@ -9636,6 +9636,17 @@
             "format": "int32",
             "description": "0-based, dense within the module."
           },
+          "progress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ItemProgress",
+                "description": "Your progress on the item, on the outline, module and item reads when you are a learner\nof the course (you hold `course.participate` there): null until your first step on it.\nAbsent for anyone else, and from every other operation's answer."
+              }
+            ]
+          },
           "published": {
             "type": "boolean"
           },
@@ -10284,6 +10295,17 @@
               "type": "string"
             },
             "description": "The modules of the course this one waits for, in course order."
+          },
+          "progress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ModuleProgress",
+                "description": "Your progress in the module, on the outline and module reads when you are a learner of\nthe course (you hold `course.participate` there): null until you complete one of its\nitems. Absent for anyone else, and from every other operation's answer."
+              }
+            ]
           },
           "published": {
             "type": "boolean"

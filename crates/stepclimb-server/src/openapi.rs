@@ -38,10 +38,10 @@ use crate::{
     branding, course_enrollments, course_files, courses, discovery, enrollment,
     error::{CurrentVersion, FieldError, PROBLEM_JSON, Problem},
     health, identities, items, local_sign_in, manifest, me, modules, my_passkeys, oauth_authorize,
-    oauth_token, organization, outline, page_doc_schema, pages, passkey_enrollment, passkey_options,
-    passkey_sign_in, password, progress, provider_admin, provider_callback, provider_sign_in,
-    role_assignments, roles, service_accounts, totp, totp_enrollment, unlock, upload, users,
-    video_uploads, videos,
+    oauth_token, organization, outline, page_doc_schema, pages, passkey_enrollment,
+    passkey_options, passkey_sign_in, password, progress, provider_admin, provider_callback,
+    provider_sign_in, role_assignments, roles, service_accounts, totp, totp_enrollment, unlock,
+    upload, users, video_uploads, videos,
 };
 
 /// The operation extension that marks a handler as changing state (spec 08 B12, T17). Every
