@@ -1,0 +1,63 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT p.item_id, p.state,\n                  (extract(epoch FROM p.started_at) * 1000000)::bigint AS \"started_at_us!\",\n                  (extract(epoch FROM p.completed_at) * 1000000)::bigint AS completed_at_us,\n                  (extract(epoch FROM p.updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM item_progress p\n           JOIN module_items i ON i.org_id = p.org_id AND i.id = p.item_id\n           JOIN modules m ON m.org_id = i.org_id AND m.id = i.module_id\n           WHERE p.org_id = $1 AND p.user_id = $2 AND p.course_id = $3\n           ORDER BY m.position, i.position",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "item_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "item_progress",
+            "name": "item_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "state",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "item_progress",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "started_at_us!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "completed_at_us",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "updated_at_us!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "51b3441c6845ca3a1b93df32d2dbb8d15beccd89f825bfa44ab77523984f4294"
+}

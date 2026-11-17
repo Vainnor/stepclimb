@@ -55,6 +55,27 @@ pub enum Requirement {
     Watch { min_percent: u8 },
 }
 
+/// The kind of a [`Requirement`], without its parameters: what a completion reports it met
+/// (docs/specs/m1/05-progress-and-events.md B5, B11).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RequirementKind {
+    View,
+    MarkDone,
+    Watch,
+}
+
+impl RequirementKind {
+    /// The stored and API name, the `kind` member of a requirement.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::View => "view",
+            Self::MarkDone => "mark_done",
+            Self::Watch => "watch",
+        }
+    }
+}
+
 /// Why a requirement was refused (B3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RequirementError {
@@ -83,6 +104,16 @@ impl Requirement {
             "watch" if only(&["kind", "min_percent"]) => watch(object),
             "submit" | "score" | "mastery" => Err(RequirementError::Unavailable),
             _ => Err(RequirementError::Invalid),
+        }
+    }
+
+    /// The requirement's kind.
+    #[must_use]
+    pub fn kind(self) -> RequirementKind {
+        match self {
+            Self::View => RequirementKind::View,
+            Self::MarkDone => RequirementKind::MarkDone,
+            Self::Watch { .. } => RequirementKind::Watch,
         }
     }
 
@@ -204,6 +235,21 @@ mod tests {
                 Requirement::parse(&value),
                 Err(RequirementError::Unavailable),
                 "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_requirement_names_its_kind_as_its_json_does() {
+        for requirement in [
+            Requirement::View,
+            Requirement::MarkDone,
+            Requirement::Watch { min_percent: 40 },
+        ] {
+            assert_eq!(
+                requirement.to_json()["kind"],
+                requirement.kind().as_str(),
+                "{requirement:?}"
             );
         }
     }

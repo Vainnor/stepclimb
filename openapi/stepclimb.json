@@ -3700,7 +3700,7 @@
         "tags": [
           "modules"
         ],
-        "summary": "Delete an item. What it points at stays in the course.",
+        "summary": "Delete an item. What it points at stays in the course. An item any learner has progress on\ncannot be deleted; unpublish it instead.",
         "operationId": "deleteItem",
         "parameters": [
           {
@@ -3731,7 +3731,7 @@
             "$ref": "#/components/responses/ItemNotFound"
           },
           "409": {
-            "$ref": "#/components/responses/ItemWriteConflict"
+            "$ref": "#/components/responses/ItemDeleteConflict"
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
@@ -3878,6 +3878,80 @@
           },
           "422": {
             "$ref": "#/components/responses/ItemInvalid"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/items/{item_id}/progress": {
+      "post": {
+        "tags": [
+          "progress"
+        ],
+        "summary": "Record a step of yours on an item: `view` for a page, a file or an external link, or\n`mark_done` for an item whose requirement is `mark_done`. A step that meets the item's\nrequirement completes it, and completing an item can complete its module and the course. A\nstep that changes nothing answers your progress as it is. Completion is final.",
+        "operationId": "recordItemProgress",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "description": "The item's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProgressStep"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Your progress on the item after the step",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemProgress"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProgressForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProgressNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProgressConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProgressInvalid"
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
@@ -8259,6 +8333,17 @@
             },
             "description": "The catalog keys grantable at course scope that you hold at this course, sorted: what\nthe app may offer you here. The server checks every request itself."
           },
+          "progress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CourseProgress",
+                "description": "Your progress in the course, on `GET /api/v1/courses/{course_id}` when you are a learner\nof it (you hold `course.participate` there): null until you complete an item. Absent\nfor anyone else, and from every other operation's answer."
+              }
+            ]
+          },
           "settings": {
             "$ref": "#/components/schemas/CourseSettings"
           },
@@ -8286,6 +8371,59 @@
             "description": "RFC 3339, UTC."
           }
         }
+      },
+      "CourseCompletedData": {
+        "type": "object",
+        "description": "The `data` of `course.completed` (B11).",
+        "required": [
+          "user_id",
+          "course_id",
+          "completed_at"
+        ],
+        "properties": {
+          "completed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          },
+          "course_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "CourseCompletedEvent": {
+        "type": "object",
+        "description": "`course.completed`, schema version 1: a learner completed a course.",
+        "required": [
+          "type",
+          "timestamp",
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/CourseCompletedData"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC: when the change happened."
+          },
+          "type": {
+            "$ref": "#/components/schemas/CourseCompletedType"
+          }
+        }
+      },
+      "CourseCompletedType": {
+        "type": "string",
+        "description": "The type of a `course.completed` event.",
+        "enum": [
+          "course.completed"
+        ]
       },
       "CourseCopy": {
         "type": "object",
@@ -8448,6 +8586,33 @@
           }
         },
         "additionalProperties": false
+      },
+      "CourseProgress": {
+        "type": "object",
+        "description": "Your roll-up for a course: its modules that have a published requirement, and how many of\nthem you completed.",
+        "required": [
+          "required_count",
+          "completed_count",
+          "completed_at"
+        ],
+        "properties": {
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "RFC 3339, UTC: when you completed the course; null until then. Never cleared."
+          },
+          "completed_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "required_count": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
       },
       "CourseSettings": {
         "type": "object",
@@ -9203,6 +9368,77 @@
           }
         }
       },
+      "ItemCompletedData": {
+        "type": "object",
+        "description": "The `data` of `item.completed` (B11): ids and facts, never a name, an email or a title.",
+        "required": [
+          "user_id",
+          "course_id",
+          "module_id",
+          "item_id",
+          "item_kind",
+          "requirement_kind",
+          "completed_at"
+        ],
+        "properties": {
+          "completed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          },
+          "course_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "item_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "item_kind": {
+            "$ref": "#/components/schemas/ItemKind"
+          },
+          "module_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "requirement_kind": {
+            "$ref": "#/components/schemas/RequirementKind"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "ItemCompletedEvent": {
+        "type": "object",
+        "description": "`item.completed`, schema version 1: a learner completed an item.",
+        "required": [
+          "type",
+          "timestamp",
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ItemCompletedData"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC: when the change happened."
+          },
+          "type": {
+            "$ref": "#/components/schemas/ItemCompletedType"
+          }
+        }
+      },
+      "ItemCompletedType": {
+        "type": "string",
+        "description": "The type of an `item.completed` event.",
+        "enum": [
+          "item.completed"
+        ]
+      },
       "ItemKind": {
         "type": "string",
         "description": "What an item points at.",
@@ -9282,6 +9518,38 @@
           }
         },
         "additionalProperties": false
+      },
+      "ItemProgress": {
+        "type": "object",
+        "description": "Your progress on one item.",
+        "required": [
+          "item_id",
+          "state",
+          "started_at",
+          "completed_at"
+        ],
+        "properties": {
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "RFC 3339, UTC: when you completed it; null until then."
+          },
+          "item_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC: your first step on the item."
+          },
+          "state": {
+            "$ref": "#/components/schemas/ProgressState"
+          }
+        }
       },
       "LocalMethod": {
         "type": "string",
@@ -9663,6 +9931,64 @@
             "description": "RFC 3339, UTC."
           }
         }
+      },
+      "ModuleCompletedData": {
+        "type": "object",
+        "description": "The `data` of `module.completed` (B11).",
+        "required": [
+          "user_id",
+          "course_id",
+          "module_id",
+          "completed_at"
+        ],
+        "properties": {
+          "completed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          },
+          "course_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "module_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "ModuleCompletedEvent": {
+        "type": "object",
+        "description": "`module.completed`, schema version 1: a learner completed a module.",
+        "required": [
+          "type",
+          "timestamp",
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ModuleCompletedData"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC: when the change happened."
+          },
+          "type": {
+            "$ref": "#/components/schemas/ModuleCompletedType"
+          }
+        }
+      },
+      "ModuleCompletedType": {
+        "type": "string",
+        "description": "The type of a `module.completed` event.",
+        "enum": [
+          "module.completed"
+        ]
       },
       "ModuleList": {
         "type": "object",
@@ -11612,6 +11938,17 @@
                   },
                   "description": "The catalog keys grantable at course scope that you hold at this course, sorted: what\nthe app may offer you here. The server checks every request itself."
                 },
+                "progress": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CourseProgress",
+                      "description": "Your progress in the course, on `GET /api/v1/courses/{course_id}` when you are a learner\nof it (you hold `course.participate` there): null until you complete an item. Absent\nfor anyone else, and from every other operation's answer."
+                    }
+                  ]
+                },
                 "settings": {
                   "$ref": "#/components/schemas/CourseSettings"
                 },
@@ -12680,6 +13017,35 @@
           }
         }
       },
+      "ProgressAction": {
+        "type": "string",
+        "description": "A step a learner reports.",
+        "enum": [
+          "view",
+          "mark_done"
+        ]
+      },
+      "ProgressState": {
+        "type": "string",
+        "description": "Where a learner is with an item.",
+        "enum": [
+          "started",
+          "completed"
+        ]
+      },
+      "ProgressStep": {
+        "type": "object",
+        "description": "The body of a progress step.",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ProgressAction"
+          }
+        },
+        "additionalProperties": false
+      },
       "Provider": {
         "type": "object",
         "description": "An `oidc` or `oauth2` provider of the organization.",
@@ -12994,6 +13360,15 @@
           }
         ],
         "description": "What completes an item for a learner: `view` (open it) and `mark_done` (mark it done) on a\npage, file, external link or video; `watch` (at least `min_percent`, 1 to 100, of a video).\n`submit`, `score` and `mastery` are reserved for quizzes and activities."
+      },
+      "RequirementKind": {
+        "type": "string",
+        "description": "The kind of requirement a completion met.",
+        "enum": [
+          "view",
+          "mark_done",
+          "watch"
+        ]
       },
       "RevokeForm": {
         "type": "object",
@@ -14594,6 +14969,16 @@
           }
         }
       },
+      "ItemDeleteConflict": {
+        "description": "`course.archived`: the course is archived and takes no content change. `item.has_progress`: learners have progress on the item; unpublish it instead.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "ItemInvalid": {
         "description": "`request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space, control or Unicode format character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none), `/position` with `item.position_out_of_range` (outside 0 to the module's item count), or, on a patch, `/requirement` with `requirement.invalid` (an unknown shape or member, `min_percent` outside 1 to 100, or a requirement the item's kind does not take, such as any on a header) or `requirement.unavailable` (`submit`, `score` or `mastery`, reserved for quizzes and activities).",
         "content": {
@@ -15254,6 +15639,46 @@
           }
         }
       },
+      "ProgressConflict": {
+        "description": "`course.archived`: the course is archived and takes no progress.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ProgressForbidden": {
+        "description": "`permission.denied`: you are not a learner of the item's course (an active enrollment whose role holds `course.participate`). `item.locked`: the item is locked for you; `reasons` says what it waits for. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ProgressInvalid": {
+        "description": "`request.invalid`: `errors` names `/action` with `progress.action_invalid`: `view` on an item that is not a page, a file or an external link, or `mark_done` on an item whose requirement is not `mark_done`.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ProgressNotFound": {
+        "description": "`item.not_found`: no published item with this id in a published module exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "ProviderCreateConflict": {
         "description": "`provider.key_taken`: another provider of the organization has the key.",
         "content": {
@@ -15906,6 +16331,10 @@
     {
       "name": "enrollments",
       "description": "Who is in a course, and with which role"
+    },
+    {
+      "name": "progress",
+      "description": "Learners' steps and completions in a course"
     },
     {
       "name": "files",

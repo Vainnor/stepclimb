@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE course_progress\n             SET required_count = $4, completed_count = $5,\n                 completed_at = CASE WHEN $6 THEN timestamptz 'epoch' + $7::bigint * interval '1 microsecond'\n                                     ELSE completed_at END,\n                 updated_at = timestamptz 'epoch' + $7::bigint * interval '1 microsecond'\n             WHERE org_id = $1 AND user_id = $2 AND course_id = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Int4",
+        "Int4",
+        "Bool",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4a575f457ec0579a7c6d2e54928d1fc363801e10e2ffdf5e08cd6edf3ff6221b"
+}

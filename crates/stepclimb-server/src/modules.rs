@@ -58,6 +58,8 @@ pub mod code {
     pub const MODULE_NOT_EMPTY: &str = "module.not_empty";
     /// The module holds 200 items (409).
     pub const ITEM_LIMIT_REACHED: &str = "item.limit_reached";
+    /// Learners have progress on the item, which cannot be deleted (409).
+    pub const ITEM_HAS_PROGRESS: &str = "item.has_progress";
     /// A reorder's list is not exactly the current set of ids (409).
     pub const ORDER_STALE: &str = "order.stale";
     /// The kind cannot be created yet (a 422 field code at `/kind`).
@@ -652,6 +654,10 @@ pub(crate) fn content_error(error: Error) -> ApiError {
             "The module holds the most items it may.",
         ),
         Error::ModuleNotEmpty => conflict(code::MODULE_NOT_EMPTY, "The module has items."),
+        Error::ItemHasProgress => conflict(
+            code::ITEM_HAS_PROGRESS,
+            "Learners have progress on the item; unpublish it instead.",
+        ),
         Error::OrderStale => conflict(
             code::ORDER_STALE,
             "The list is not the current set of ids; reload and try again.",
@@ -703,6 +709,7 @@ mod tests {
             (Error::ModuleLimitReached, 409, "module.limit_reached", None),
             (Error::ItemLimitReached, 409, "item.limit_reached", None),
             (Error::ModuleNotEmpty, 409, "module.not_empty", None),
+            (Error::ItemHasProgress, 409, "item.has_progress", None),
             (Error::OrderStale, 409, "order.stale", None),
             (
                 Error::TitleEmpty,

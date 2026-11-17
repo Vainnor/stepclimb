@@ -41,6 +41,7 @@ problem_responses! {
     ItemCreateConflict => "`course.archived`: the course is archived and takes no content change. `item.limit_reached`: the module holds 200 items.",
     ItemOrderConflict => "`course.archived`: the course is archived and takes no content change. `order.stale`: the list is not exactly the current set of ids (one is missing, extra or repeated); reload and try again.",
     ItemWriteConflict => "`course.archived`: the course is archived and takes no content change.",
+    ItemDeleteConflict => "`course.archived`: the course is archived and takes no content change. `item.has_progress`: learners have progress on the item; unpublish it instead.",
     ItemMoveConflict => "`course.archived`: the course is archived and takes no content change. `item.limit_reached`: the destination module holds 200 items.",
     ItemInvalid => "`request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space, control or Unicode format character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none), `/position` with `item.position_out_of_range` (outside 0 to the module's item count), or, on a patch, `/requirement` with `requirement.invalid` (an unknown shape or member, `min_percent` outside 1 to 100, or a requirement the item's kind does not take, such as any on a header) or `requirement.unavailable` (`submit`, `score` or `mastery`, reserved for quizzes and activities).",
 }
@@ -315,7 +316,8 @@ pub async fn move_item(
     Ok(Json(Item::from_repo(item)?))
 }
 
-/// Delete an item. What it points at stays in the course.
+/// Delete an item. What it points at stays in the course. An item any learner has progress on
+/// cannot be deleted; unpublish it instead.
 #[utoipa::path(
     delete,
     path = "/api/v1/items/{item_id}",
@@ -329,7 +331,7 @@ pub async fn move_item(
         (status = 401, response = crate::openapi::Unauthenticated),
         (status = 403, response = ContentEditForbidden),
         (status = 404, response = ItemNotFound),
-        (status = 409, response = ItemWriteConflict),
+        (status = 409, response = ItemDeleteConflict),
         (status = 500, response = crate::openapi::InternalError),
         (status = 503, response = crate::openapi::NoOrganization),
     )

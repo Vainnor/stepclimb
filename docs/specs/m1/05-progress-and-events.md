@@ -328,8 +328,9 @@ Database tests use `#[sqlx::test]` and a `ManualClock`; route tests use the perm
   `item.has_progress`.
 - **T14** (every route). Four cases: anonymous 401; every permission but the route's at the course
   403 (for `POST /progress`, a user with every grantable permission through an account
-  assignment, which cannot hold `course.participate`, and a concluded Student); every permission at
-  a sibling account 404; only the route's permission 2xx.
+  assignment, which cannot hold `course.participate`); every permission at a sibling account 404;
+  only the route's permission 2xx. For `POST /progress`, a concluded Student holds nothing at the
+  course and answers 404 `item.not_found`.
 - **T14a** (B20, the two staff progress routes). These take `Require<perm::CourseView>` and decide
   in the handler, so the permission suite has one entry per granting permission: an entry for
   `progress.view` (2xx with every learner) and an entry for `progress.view_observed` (2xx with only
@@ -395,6 +396,50 @@ and stands until the owner reviews it.
   enrollment grant (`02` Q1), needs no new scope type in the evaluator, and an admin decides per
   course who oversees whom; (b) can come with M4's Manager scope, which is per person.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
+
+### Decisions made building I1
+
+Coordinator decisions (overnight, 2026-11-17), pending owner review.
+
+- **Events leave the repository as values.** `stepclimb-jobs` depends on `stepclimb-core`, so
+  `stepclimb_core::progress` cannot call `stepclimb_jobs::outbox::emit`. `record_step` and
+  `complete_item` stay the one place where completion is decided (B5) and return a `#[must_use]`
+  `Recorded` with the events of what became complete; the caller passes them to
+  `stepclimb_server::progress::emit` in the same transaction before it commits. Spec 09, M2 and
+  M3 call the two in that order. The three topics are registered in the job registry
+  (`progress::register_topics`), so the dispatcher claims their events; no subscriber exists yet.
+- **Locks and the order of checks.** A progress write reads the course row `FOR SHARE` first.
+  Content writes, status changes and enrollment writes lock it `FOR NO KEY UPDATE`, so during a
+  step the course cannot be archived, its rules and items cannot change, B16's delete waits, and
+  the learner's enrollment cannot end; steps of different learners do not wait for each other.
+  Under that lock the repository checks, in order: archived (409 `course.archived`), a learner
+  (an active enrollment whose role holds `course.participate`, checked again in the transaction:
+  403 `permission.denied`), the item published and unlocked (404 `item.not_found`, 403
+  `item.locked`), then the step (422 `progress.action_invalid`). A completing step takes the
+  learner's `course_progress` lock (B6) before it reads the completed items for the lock check.
+- **Which steps the route takes.** `view` is taken by page, file and external link items only;
+  a video's view comes from spec 09, and a header, quiz or activity takes none (422). An action
+  outside `view` and `mark_done` does not match the body's schema and answers 400
+  `request.malformed`, as every other unknown enum value in a body does.
+- **B13 in I1 covers the course read only.** The outline, module and item reads are
+  `03-modules-and-items.md` I2, not built yet. I1 adds `progress` to `GET
+  /api/v1/courses/{course_id}` (present for a learner, null before their first completion,
+  absent for anyone else and on every other course answer), and
+  `progress::for_learner_in_course` returns the course, module and item rows that 03 I2's reads
+  then add. T10's outline case moves to 03 I2; I1 tests the course read.
+- **T14's concluded Student answers 404.** A concluded enrollment grants nothing (`02` B16), so
+  the course is not visible to that user and `Require` answers 404 `item.not_found` before the
+  permission is looked at (`m0/09` B17 step 4), not 403. T14 now says so. A user holding every
+  permission through an account assignment answers 403.
+- **The course check runs again in the transaction.** The handler reads the course and its
+  account `FOR SHARE` and runs `require::check_course` for `course.participate` on that read
+  (`modules::recheck_shared`, which spec 08's uploads also use), so a course made a draft or moved out of the caller's reach
+  after the extractor ran answers 404 `item.not_found`. It does not use `modules::recheck`,
+  whose `FOR NO KEY UPDATE` would make every learner of a course wait for the others. The
+  repository's own `FOR SHARE` read is the same function.
+- **Two steps of one learner on one item.** The second `mark_done` waits on the learner's
+  `course_progress` row, then finds the item completed and returns it with no event; a test runs
+  the two on two connections.
 
 ## Issues
 

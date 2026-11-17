@@ -295,6 +295,12 @@ const TABLE: &[Entry] = &[
         access: permission(CourseContentEdit::KEY, ITEM_NOT_FOUND, item_in_module),
     },
     Entry {
+        operation_id: "recordItemProgress",
+        // `course.participate` is grantable at course scope only, so the role is held through
+        // an enrollment and there is no sibling-account case; tests/progress.rs has that one.
+        access: permission(CourseParticipate::KEY, ITEM_NOT_FOUND, view_published_link),
+    },
+    Entry {
         operation_id: "copyCourse",
         // The source needs `course.view_all` and the destination `course.create` (B12).
         access: Access::Permission {
@@ -1611,6 +1617,39 @@ fn item_in_module(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> 
     })
 }
 
+/// A `view` of a published external link with a `view` requirement, in a published module of
+/// a published course in Tower; the caller holds their role in the course.
+fn view_published_link(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        let module = org.module(course).await;
+        let item = org.link(module).await;
+        let publish = modules::ModulePatch {
+            published: Some(true),
+            ..modules::ModulePatch::default()
+        };
+        modules::update(&org.pool, scope(org.id), module, &publish, now())
+            .await
+            .expect("publish module");
+        let publish = items::ItemPatch {
+            published: Some(true),
+            ..items::ItemPatch::default()
+        };
+        items::update(&org.pool, scope(org.id), item, &publish, now())
+            .await
+            .expect("publish item");
+        let view = Some(stepclimb_core::rules::Requirement::View);
+        items::set_requirement(&org.pool, scope(org.id), item, view, now())
+            .await
+            .expect("set requirement");
+        Call {
+            params: vec![("item_id", item)],
+            body: Some(serde_json::json!({ "action": "view" })),
+            at: At::Course(course),
+        }
+    })
+}
+
 /// A published course in Tower copied to Ground, inside Tower's subtree, so a grant at Tower
 /// covers the source and the destination. Published, so the 403 case (every permission but
 /// `course.view_all`) sees the course: a draft would answer 404 to it (M1 spec 02 Q13).
@@ -2062,6 +2101,9 @@ struct Call {
 enum At {
     Org,
     Account(Uuid),
+    /// A course, where a role is held through an active enrollment (M1 spec 02 Q1): the only
+    /// way to hold a course-only permission such as `course.participate`.
+    Course(Uuid),
 }
 
 // The walker (B21, T16).
@@ -3969,14 +4011,17 @@ impl Org {
         (cookie.split(';').next().expect("a pair").to_owned(), id)
     }
 
+    /// `role` held by `user` at `at`: a role assignment's id, or an enrollment's at a course.
     async fn assign(&self, user: Uuid, role: Uuid, at: At) -> Uuid {
+        let scope_of = match at {
+            At::Org => Scope::Organization,
+            At::Account(id) => Scope::Account(id),
+            At::Course(course) => return self.enroll(user, role, course).await,
+        };
         let assignment = NewAssignment {
             user_id: user,
             role_id: role,
-            scope: match at {
-                At::Org => Scope::Organization,
-                At::Account(id) => Scope::Account(id),
-            },
+            scope: scope_of,
             source: Source::Local,
             external_id: None,
         };
@@ -4087,6 +4132,27 @@ impl Org {
         last.expect("two identities")
     }
 
+    /// `user` enrolled in `course` with `role`: the enrollment's id.
+    async fn enroll(&self, user: Uuid, role: Uuid, course: Uuid) -> Uuid {
+        let new = enrollments::NewEnrollment {
+            user_id: user,
+            role_id: role,
+            source: Source::Local,
+            external_id: None,
+        };
+        enrollments::create(
+            &self.pool,
+            scope(self.id),
+            course,
+            &new,
+            now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("create enrollment")
+        .id
+    }
+
     /// A new custom role holding only `course.participate`.
     async fn participant_role(&self) -> Uuid {
         let role = NewRole {
@@ -4103,23 +4169,8 @@ impl Org {
     /// A new user enrolled in `course` with [`Self::participant_role`]: the enrollment's id.
     async fn enrollment(&self, course: Uuid) -> Uuid {
         let (_, user) = self.user().await;
-        let new = enrollments::NewEnrollment {
-            user_id: user,
-            role_id: self.participant_role().await,
-            source: Source::Local,
-            external_id: None,
-        };
-        enrollments::create(
-            &self.pool,
-            scope(self.id),
-            course,
-            &new,
-            now(),
-            Actor::Instance,
-        )
-        .await
-        .expect("create enrollment")
-        .id
+        let role = self.participant_role().await;
+        self.enroll(user, role, course).await
     }
 
     /// A new custom role with no permissions and no assignment.

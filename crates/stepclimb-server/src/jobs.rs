@@ -5,11 +5,12 @@
 //! `all` or `worker` process serves every queue in it, and its scheduler runs the periodic ones:
 //! `jobs.prune` (hourly), `auth.flows_cleanup` (every 10 minutes), `files.cleanup` (hourly,
 //! docs/specs/m1/06-files.md B8, B21) and `videos.cleanup` (hourly,
-//! docs/specs/m1/08-uploaded-video.md B6).
+//! docs/specs/m1/08-uploaded-video.md B6). It also knows the progress event topics
+//! (docs/specs/m1/05-progress-and-events.md B10), so the outbox dispatcher claims their events.
 
 use stepclimb_jobs::{Registry, RegistryError, prune};
 
-use crate::{files_cleanup, flow, storage::Storage, videos_cleanup};
+use crate::{files_cleanup, flow, progress, storage::Storage, videos_cleanup};
 
 /// The registry a `stepclimb serve` worker runs with, its file and video upload cleanups on
 /// `storage` (`None` when storage is not configured).
@@ -19,6 +20,7 @@ pub fn registry(storage: Option<Storage>) -> Result<Registry, RegistryError> {
     flow::register_cleanup(&mut registry)?;
     files_cleanup::register(&mut registry, storage.clone())?;
     videos_cleanup::register(&mut registry, storage)?;
+    progress::register_topics(&mut registry)?;
     Ok(registry)
 }
 
@@ -45,5 +47,12 @@ mod tests {
         assert!(registry.knows(&files_cleanup::CLEANUP));
         assert!(registry.knows(&videos_cleanup::CLEANUP));
         assert_eq!(registry.queues(), ["default"]);
+        for topic in [
+            progress::ITEM_COMPLETED,
+            progress::MODULE_COMPLETED,
+            progress::COURSE_COMPLETED,
+        ] {
+            assert!(registry.knows_topic(&topic), "{}", topic.name);
+        }
     }
 }

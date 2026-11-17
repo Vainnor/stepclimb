@@ -688,7 +688,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Delete an item. What it points at stays in the course. */
+        /**
+         * Delete an item. What it points at stays in the course. An item any learner has progress on
+         *     cannot be deleted; unpublish it instead.
+         */
         delete: operations["deleteItem"];
         options?: never;
         head?: never;
@@ -710,6 +713,28 @@ export interface paths {
         put?: never;
         /** Move an item to a position in a module of the same course, its own included. */
         post: operations["moveItem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/items/{item_id}/progress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record a step of yours on an item: `view` for a page, a file or an external link, or
+         *     `mark_done` for an item whose requirement is `mark_done`. A step that meets the item's
+         *     requirement completes it, and completing an item can complete its module and the course. A
+         *     step that changes nothing answers your progress as it is. Completion is final.
+         */
+        post: operations["recordItemProgress"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1973,6 +1998,7 @@ export interface components {
              *     the app may offer you here. The server checks every request itself.
              */
             permissions: string[];
+            progress?: null | components["schemas"]["CourseProgress"];
             settings: components["schemas"]["CourseSettings"];
             /**
              * Format: date-time
@@ -1989,6 +2015,33 @@ export interface components {
              */
             updated_at: string;
         };
+        /** @description The `data` of `course.completed` (B11). */
+        CourseCompletedData: {
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            completed_at: string;
+            /** Format: uuid */
+            course_id: string;
+            /** Format: uuid */
+            user_id: string;
+        };
+        /** @description `course.completed`, schema version 1: a learner completed a course. */
+        CourseCompletedEvent: {
+            data: components["schemas"]["CourseCompletedData"];
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC: when the change happened.
+             */
+            timestamp: string;
+            type: components["schemas"]["CourseCompletedType"];
+        };
+        /**
+         * @description The type of a `course.completed` event.
+         * @enum {string}
+         */
+        CourseCompletedType: "course.completed";
         /** @description A copy to make of a course, as a draft. */
         CourseCopy: {
             /**
@@ -2079,6 +2132,21 @@ export interface components {
             start_at?: string | null;
             /** @description Trimmed; 1 to 200 characters. */
             title?: string;
+        };
+        /**
+         * @description Your roll-up for a course: its modules that have a published requirement, and how many of
+         *     them you completed.
+         */
+        CourseProgress: {
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC: when you completed the course; null until then. Never cleared.
+             */
+            completed_at: string | null;
+            /** Format: int32 */
+            completed_count: number;
+            /** Format: int32 */
+            required_count: number;
         };
         /** @description A course's settings. */
         CourseSettings: {
@@ -2423,6 +2491,39 @@ export interface components {
             /** @description Only for `external_link`. */
             url?: string;
         };
+        /** @description The `data` of `item.completed` (B11): ids and facts, never a name, an email or a title. */
+        ItemCompletedData: {
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            completed_at: string;
+            /** Format: uuid */
+            course_id: string;
+            /** Format: uuid */
+            item_id: string;
+            item_kind: components["schemas"]["ItemKind"];
+            /** Format: uuid */
+            module_id: string;
+            requirement_kind: components["schemas"]["RequirementKind"];
+            /** Format: uuid */
+            user_id: string;
+        };
+        /** @description `item.completed`, schema version 1: a learner completed an item. */
+        ItemCompletedEvent: {
+            data: components["schemas"]["ItemCompletedData"];
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC: when the change happened.
+             */
+            timestamp: string;
+            type: components["schemas"]["ItemCompletedType"];
+        };
+        /**
+         * @description The type of an `item.completed` event.
+         * @enum {string}
+         */
+        ItemCompletedType: "item.completed";
         /**
          * @description What an item points at.
          * @enum {string}
@@ -2454,6 +2555,22 @@ export interface components {
             title?: string;
             /** @description For an external link only. */
             url?: string;
+        };
+        /** @description Your progress on one item. */
+        ItemProgress: {
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC: when you completed it; null until then.
+             */
+            completed_at: string | null;
+            /** Format: uuid */
+            item_id: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC: your first step on the item.
+             */
+            started_at: string;
+            state: components["schemas"]["ProgressState"];
         };
         /**
          * @description A local sign-in method.
@@ -2603,6 +2720,35 @@ export interface components {
              */
             updated_at: string;
         };
+        /** @description The `data` of `module.completed` (B11). */
+        ModuleCompletedData: {
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            completed_at: string;
+            /** Format: uuid */
+            course_id: string;
+            /** Format: uuid */
+            module_id: string;
+            /** Format: uuid */
+            user_id: string;
+        };
+        /** @description `module.completed`, schema version 1: a learner completed a module. */
+        ModuleCompletedEvent: {
+            data: components["schemas"]["ModuleCompletedData"];
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC: when the change happened.
+             */
+            timestamp: string;
+            type: components["schemas"]["ModuleCompletedType"];
+        };
+        /**
+         * @description The type of a `module.completed` event.
+         * @enum {string}
+         */
+        ModuleCompletedType: "module.completed";
         /** @description A course's modules, in order. */
         ModuleList: {
             modules: components["schemas"]["Module"][];
@@ -3366,6 +3512,7 @@ export interface components {
                  *     the app may offer you here. The server checks every request itself.
                  */
                 permissions: string[];
+                progress?: null | components["schemas"]["CourseProgress"];
                 settings: components["schemas"]["CourseSettings"];
                 /**
                  * Format: date-time
@@ -3793,6 +3940,20 @@ export interface components {
             /** @description `about:blank` until the docs site documents each code. */
             type: string;
         };
+        /**
+         * @description A step a learner reports.
+         * @enum {string}
+         */
+        ProgressAction: "view" | "mark_done";
+        /**
+         * @description Where a learner is with an item.
+         * @enum {string}
+         */
+        ProgressState: "started" | "completed";
+        /** @description The body of a progress step. */
+        ProgressStep: {
+            action: components["schemas"]["ProgressAction"];
+        };
         /** @description An `oidc` or `oauth2` provider of the organization. */
         Provider: {
             /** @description Whether the provider has a client secret. The secret itself is never answered. */
@@ -3926,6 +4087,11 @@ export interface components {
              */
             min_percent: number;
         };
+        /**
+         * @description The kind of requirement a completion met.
+         * @enum {string}
+         */
+        RequirementKind: "view" | "mark_done" | "watch";
         /** @description The revocation request's form, for the document; the handler reads the body itself. */
         RevokeForm: {
             /** @description The app's client id, `stepclimb-app`. */
@@ -5002,6 +5168,15 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `course.archived`: the course is archived and takes no content change. `item.has_progress`: learners have progress on the item; unpublish it instead. */
+        ItemDeleteConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space, control or Unicode format character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none), `/position` with `item.position_out_of_range` (outside 0 to the module's item count), or, on a patch, `/requirement` with `requirement.invalid` (an unknown shape or member, `min_percent` outside 1 to 100, or a requirement the item's kind does not take, such as any on a header) or `requirement.unavailable` (`submit`, `score` or `mastery`, reserved for quizzes and activities). */
         ItemInvalid: {
             headers: {
@@ -5589,6 +5764,42 @@ export interface components {
         };
         /** @description `permission.denied`: the caller does not hold the operation's permission at a scope containing its target. */
         PermissionDenied: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.archived`: the course is archived and takes no progress. */
+        ProgressConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: you are not a learner of the item's course (an active enrollment whose role holds `course.participate`). `item.locked`: the item is locked for you; `reasons` says what it waits for. `auth.csrf_refused`: the request did not come from this site. */
+        ProgressForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.invalid`: `errors` names `/action` with `progress.action_invalid`: `view` on an item that is not a page, a file or an external link, or `mark_done` on an item whose requirement is not `mark_done`. */
+        ProgressInvalid: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `item.not_found`: no published item with this id in a published module exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined. */
+        ProgressNotFound: {
             headers: {
                 [name: string]: unknown;
             };
@@ -8110,7 +8321,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["ContentEditForbidden"];
             404: components["responses"]["ItemNotFound"];
-            409: components["responses"]["ItemWriteConflict"];
+            409: components["responses"]["ItemDeleteConflict"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };
@@ -8185,6 +8396,43 @@ export interface operations {
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             422: components["responses"]["ItemInvalid"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    recordItemProgress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The item's id. */
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProgressStep"];
+            };
+        };
+        responses: {
+            /** @description Your progress on the item after the step */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ItemProgress"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ProgressForbidden"];
+            404: components["responses"]["ProgressNotFound"];
+            409: components["responses"]["ProgressConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["ProgressInvalid"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };
