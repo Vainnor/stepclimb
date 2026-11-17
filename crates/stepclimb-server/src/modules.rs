@@ -569,24 +569,51 @@ pub(crate) const MODULE_NOT_FOUND: &str = crate::require::code::MODULE_NOT_FOUND
 /// `require`'s check of `P` again, on the course's path as `courses::lock` reads it in the
 /// transaction: 404 with `not_found` when the course is gone or out of the caller's reach, 403
 /// when it is visible without `P`. `P` is the permission the route's own `Require` names, so the
-/// two checks cannot differ. The course row stays locked until the transaction ends.
+/// two checks cannot differ. The course row stays locked until the transaction ends; the course
+/// as it was locked is returned for a caller that reads its status.
 pub(crate) async fn recheck<P: Permission, T>(
     tx: &mut Transaction<'static, Postgres>,
     require: &Require<P, T>,
     course_id: Uuid,
     not_found: &'static str,
-) -> Result<(), ApiError> {
-    let grants = require.grants();
-    let course = courses::lock(tx, grants.scope(), course_id)
-        .await
+) -> Result<courses::Course, ApiError> {
+    let locked = courses::lock(tx, require.grants().scope(), course_id).await;
+    check_locked(require, course_id, locked, not_found)
+}
+
+/// [`recheck`] with the course row `FOR SHARE` (`courses::lock_shared`): a status change waits
+/// for the transaction, but other writes that take it this way do not wait for each other.
+pub(crate) async fn recheck_shared<P: Permission, T>(
+    tx: &mut Transaction<'static, Postgres>,
+    require: &Require<P, T>,
+    course_id: Uuid,
+    not_found: &'static str,
+) -> Result<courses::Course, ApiError> {
+    let locked = courses::lock_shared(tx, require.grants().scope(), course_id).await;
+    check_locked(require, course_id, locked, not_found)
+}
+
+/// The check of [`recheck`] on the course as its transaction locked it.
+fn check_locked<P: Permission, T>(
+    require: &Require<P, T>,
+    course_id: Uuid,
+    locked: Result<Option<courses::Course>, courses::Error>,
+    not_found: &'static str,
+) -> Result<courses::Course, ApiError> {
+    let course = locked
         .map_err(|error| ApiError::internal(&error))?
         .ok_or_else(|| not_found_as(Denied::CourseNotFound, not_found))?;
-    let needs_view_all = course.needs_view_all();
     let target = CourseTarget {
         id: course_id,
-        account_path: course.account_path,
+        account_path: course.account_path.clone(),
     };
-    check_course::<P>(grants, &target, needs_view_all, not_found)
+    check_course::<P>(
+        require.grants(),
+        &target,
+        course.needs_view_all(),
+        not_found,
+    )?;
+    Ok(course)
 }
 
 pub(crate) async fn begin(state: &AppState) -> Result<Transaction<'static, Postgres>, ApiError> {

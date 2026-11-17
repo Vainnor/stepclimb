@@ -412,6 +412,7 @@ pub fn log_configuration(config: &Config) {
         role = %config.role,
         worker_concurrency = %config.worker_concurrency,
         max_file_bytes = %config.max_file_bytes,
+        max_video_bytes = %config.max_video_bytes,
         providers = %config.providers_or_none(),
         storage = %config.storage,
         "configuration loaded"
@@ -419,16 +420,18 @@ pub fn log_configuration(config: &Config) {
 }
 
 /// The store `config` names, opened and probed (docs/specs/m1/06-files.md B1) with uploads of
-/// at most `max_file_bytes` (B4), or `None` after one warning naming `STEPCLIMB_STORAGE_URL` when
-/// storage is not configured (B1a).
+/// at most `max_file_bytes` (B4) and video uploads of at most `max_video_bytes`
+/// (docs/specs/m1/08-uploaded-video.md B4), or `None` after one warning naming
+/// `STEPCLIMB_STORAGE_URL` when storage is not configured (B1a).
 pub async fn open_storage(
     config: &StorageConfig,
-    max_file_bytes: u64,
+    (max_file_bytes, max_video_bytes): (u64, u64),
 ) -> Result<Option<Storage>, StartupError> {
     let Some(storage) = Storage::open(config, max_file_bytes)? else {
         warn_storage_not_configured();
         return Ok(None);
     };
+    let storage = storage.with_max_video_bytes(max_video_bytes);
     storage.probe().await?;
     tracing::info!(storage = %config, "object storage passed the startup probe");
     Ok(Some(storage))
@@ -462,7 +465,11 @@ pub async fn serve(config: Config) -> Result<(), StartupError> {
     log_configuration(&config);
     warn_about_development_keys(&config.encryption_keys);
     warn_about_insecure_providers(&config);
-    let storage = open_storage(&config.storage, config.max_file_bytes).await?;
+    let storage = open_storage(
+        &config.storage,
+        (config.max_file_bytes, config.max_video_bytes),
+    )
+    .await?;
     let pool = connect(&config.database_url).await?;
     let clock = Clock::system();
     prepare(&pool, &clock).await?;

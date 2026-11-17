@@ -3396,6 +3396,188 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/api/v1/courses/{course_id}/video-uploads": {
+      "post": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "Start a tus upload of a video into the course. The request has no body; `Upload-Metadata`\ngives the video's title (`title`, or else `filename`). The video is created `uploading`,\nattached to the course, and the whole length counts toward the plan's `video_storage` limit\nfrom now on.",
+        "operationId": "createVideoUpload",
+        "parameters": [
+          {
+            "name": "course_id",
+            "in": "path",
+            "description": "The course's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Tus-Resumable",
+            "in": "header",
+            "description": "`1.0.0`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Upload-Length",
+            "in": "header",
+            "description": "The video's length in bytes.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "Upload-Metadata",
+            "in": "header",
+            "description": "Comma-separated `key base64value` pairs; `title` and `filename` are read.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "The upload is started; send the bytes with PATCH to its Location",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The upload's path"
+              },
+              "Tus-Resumable": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`1.0.0`"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VideoUploadCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/VideoUploadCreateBadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/VideoUploadForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/VideoUploadCourseNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VideoUploadCreateConflict"
+          },
+          "412": {
+            "$ref": "#/components/responses/TusVersionUnsupported"
+          },
+          "413": {
+            "$ref": "#/components/responses/VideoUploadCreateTooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/VideoUploadCreateInvalid"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/VideoUploadStorageUnavailable"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/courses/{course_id}/videos": {
+      "get": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "List the videos attached to the course, oldest first.",
+        "operationId": "listCourseVideos",
+        "parameters": [
+          {
+            "name": "course_id",
+            "in": "path",
+            "description": "The course's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page; omit it for the first page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many items to return, 1 to 200; 50 when omitted.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 200,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of the course's videos",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Video"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/VideosViewForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/VideosCourseNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      }
+    },
     "/api/v1/enrollments/{enrollment_id}": {
       "delete": {
         "tags": [
@@ -5739,6 +5921,388 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/api/v1/video-uploads/{upload_id}": {
+      "delete": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "End the upload: its parts, its video and the video's attachment are deleted. From the answer\non the upload is gone; its parts are deleted right after, or by the hourly cleanup if that\nfails. An upload whose video is already processing cannot be ended; delete the video instead.",
+        "operationId": "deleteVideoUpload",
+        "parameters": [
+          {
+            "name": "upload_id",
+            "in": "path",
+            "description": "The upload's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Tus-Resumable",
+            "in": "header",
+            "description": "`1.0.0`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The upload and its video are deleted",
+            "headers": {
+              "Tus-Resumable": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`1.0.0`"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/VideoUploadEditForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/VideoUploadNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/TerminateConflict"
+          },
+          "412": {
+            "$ref": "#/components/responses/TusVersionUnsupported"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/VideoUploadStorageUnavailable"
+          }
+        },
+        "x-stepclimb-mutates": true
+      },
+      "head": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "Ask how many bytes of the upload the server has: `Upload-Offset` is where the next chunk\nstarts. A response to `HEAD` has no body, so a refusal is told by its status only.",
+        "operationId": "getVideoUploadOffset",
+        "parameters": [
+          {
+            "name": "upload_id",
+            "in": "path",
+            "description": "The upload's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Tus-Resumable",
+            "in": "header",
+            "description": "`1.0.0`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The upload's offset and length",
+            "headers": {
+              "Tus-Resumable": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`1.0.0`"
+              },
+              "Upload-Length": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "The upload's whole length"
+              },
+              "Upload-Offset": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "The bytes stored, where the next chunk starts"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/VideoUploadEditForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/VideoUploadNotFound"
+          },
+          "412": {
+            "$ref": "#/components/responses/TusVersionUnsupported"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "Send the next chunk of the upload, starting at its `Upload-Offset`. A chunk is stored whole\nor not at all: after a dropped connection, ask for the offset with `HEAD` and send again from\nthere. The chunk that completes the upload starts the video's processing.",
+        "operationId": "appendVideoUpload",
+        "parameters": [
+          {
+            "name": "upload_id",
+            "in": "path",
+            "description": "The upload's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Tus-Resumable",
+            "in": "header",
+            "description": "`1.0.0`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Upload-Offset",
+            "in": "header",
+            "description": "Where this chunk starts: the offset `HEAD` answers.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The chunk's bytes, with `Content-Length`, at most 64 MiB.",
+          "content": {
+            "application/offset+octet-stream": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The chunk is stored",
+            "headers": {
+              "Tus-Resumable": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`1.0.0`"
+              },
+              "Upload-Offset": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "The bytes stored now"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ChunkBadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/VideoUploadEditForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/VideoUploadNotFound"
+          },
+          "408": {
+            "$ref": "#/components/responses/ChunkTimeout"
+          },
+          "409": {
+            "$ref": "#/components/responses/ChunkConflict"
+          },
+          "411": {
+            "$ref": "#/components/responses/ChunkLengthRequired"
+          },
+          "412": {
+            "$ref": "#/components/responses/TusVersionUnsupported"
+          },
+          "413": {
+            "$ref": "#/components/responses/ChunkTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ChunkUnsupportedMediaType"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ChunkStorageUnavailable"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/videos/{video_id}": {
+      "get": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "Read a video.",
+        "operationId": "getVideo",
+        "parameters": [
+          {
+            "name": "video_id",
+            "in": "path",
+            "description": "The video's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The video",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Video"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/VideosViewForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/VideoNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "Rename a video. A patch with no member changes nothing and answers the video.",
+        "operationId": "updateVideo",
+        "parameters": [
+          {
+            "name": "video_id",
+            "in": "path",
+            "description": "The video's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VideoPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The video after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Video"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/VideoEditForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/VideoNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VideoRenameConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/VideoInvalid"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/auth/local/enrollment/passkey": {
       "post": {
         "tags": [
@@ -7516,6 +8080,24 @@
           }
         ],
         "description": "A problem details body with the contrast report: `branding.contrast_failed` carries\n`report`, every other code leaves it out."
+      },
+      "Chapter": {
+        "type": "object",
+        "description": "A chapter mark of a video.",
+        "required": [
+          "at_s",
+          "title"
+        ],
+        "properties": {
+          "at_s": {
+            "type": "number",
+            "format": "double",
+            "description": "Seconds from the start."
+          },
+          "title": {
+            "type": "string"
+          }
+        }
       },
       "CodeRequired": {
         "type": "object",
@@ -11715,6 +12297,89 @@
           }
         }
       },
+      "Page_Video": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A video of the organization.",
+              "required": [
+                "id",
+                "source",
+                "title",
+                "status",
+                "chapters",
+                "created_at",
+                "updated_at"
+              ],
+              "properties": {
+                "chapters": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Chapter"
+                  },
+                  "description": "By `at_s`."
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "RFC 3339, UTC."
+                },
+                "duration_s": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "format": "double",
+                  "description": "The length in seconds, once a transcode has read it."
+                },
+                "error_code": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Why the video failed (`video.not_a_video`, ...); only when `status` is `failed`."
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "source": {
+                  "type": "string",
+                  "description": "`upload` for an uploaded video."
+                },
+                "status": {
+                  "type": "string",
+                  "description": "`uploading`, `processing`, `ready` or `failed`."
+                },
+                "title": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "RFC 3339, UTC."
+                }
+              }
+            },
+            "description": "The items, in the list's sort order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass this as `cursor` to get the next page; `null` on the last page."
+          }
+        }
+      },
       "PasskeyCreationOptions": {
         "type": "object",
         "description": "`CredentialCreationOptions` as JSON: pass `publicKey` to\n`PublicKeyCredential.parseCreationOptionsFromJSON`, then to `navigator.credentials.create`.",
@@ -13005,6 +13670,97 @@
           "suspended"
         ]
       },
+      "Video": {
+        "type": "object",
+        "description": "A video of the organization.",
+        "required": [
+          "id",
+          "source",
+          "title",
+          "status",
+          "chapters",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "chapters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Chapter"
+            },
+            "description": "By `at_s`."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          },
+          "duration_s": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The length in seconds, once a transcode has read it."
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the video failed (`video.not_a_video`, ...); only when `status` is `failed`."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source": {
+            "type": "string",
+            "description": "`upload` for an uploaded video."
+          },
+          "status": {
+            "type": "string",
+            "description": "`uploading`, `processing`, `ready` or `failed`."
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          }
+        }
+      },
+      "VideoPatch": {
+        "type": "object",
+        "description": "A change to a video; an omitted member is left as it is.",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "1 to 200 characters after trimming."
+          }
+        },
+        "additionalProperties": false
+      },
+      "VideoUploadCreated": {
+        "type": "object",
+        "description": "What a creation answers: the upload's path and the video it fills.",
+        "required": [
+          "upload_id",
+          "video"
+        ],
+        "properties": {
+          "upload_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The upload's id; its path is the `Location` header."
+          },
+          "video": {
+            "$ref": "#/components/schemas/Video"
+          }
+        }
+      },
       "WebManifest": {
         "type": "object",
         "description": "The organization's web app manifest.",
@@ -13270,6 +14026,76 @@
       },
       "BrandingWriteForbidden": {
         "description": "`permission.denied`: the caller does not hold `branding.manage` at organization scope. `entitlement.feature_unavailable`: the organization's plan does not include `custom_branding`. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ChunkBadRequest": {
+        "description": "`request.malformed`: `Upload-Offset` is missing or not a number, `Content-Length` is not a number, or the body is longer or shorter than it says. `video.chunk_too_small`: the chunk is under 1 MiB and does not complete the upload; send larger chunks.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ChunkConflict": {
+        "description": "`video.upload_offset_mismatch`: `Upload-Offset` is not the upload's offset; ask for it with `HEAD` and resume from there. `course.archived`: the course is archived and takes no content change.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ChunkLengthRequired": {
+        "description": "`file.length_required`: the request has no `Content-Length`; send the chunk with its length.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ChunkStorageUnavailable": {
+        "description": "`storage.not_configured`: the server has no object storage configured. `file.uploads_busy`: the server is receiving as many uploads as it takes at once; try again shortly. `org.none`: the instance has no organization yet.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ChunkTimeout": {
+        "description": "`file.body_timeout`: the body sent nothing for 30 seconds; send the chunk again from the stored offset.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ChunkTooLarge": {
+        "description": "`file.too_large`: the chunk is over 64 MiB, or runs past the upload's `Upload-Length`.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ChunkUnsupportedMediaType": {
+        "description": "`request.unsupported_media_type`: the chunk is not sent with `Content-Type: application/offset+octet-stream`.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -14606,6 +15432,16 @@
           }
         }
       },
+      "TerminateConflict": {
+        "description": "`course.archived`: the course is archived and takes no content change. `video.status_invalid`: the upload is complete and its video is being processed; delete the video instead.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "TotpEnrollmentBadRequest": {
         "description": "`request.malformed`: the body is not `{code}`. `auth.flow_invalid`: no password sign-in is waiting for TOTP set-up in this browser, it was already finished, or the password or TOTP changed since; sign in with the password again. `auth.flow_expired`: the password was checked more than 10 minutes ago; sign in with the password again.",
         "content": {
@@ -14658,6 +15494,16 @@
       },
       "TotpSignInUnauthorized": {
         "description": "`auth.totp_invalid`: the code is wrong, already used, or not the current one, and it is no unused recovery code. Sign in with the password again.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "TusVersionUnsupported": {
+        "description": "`tus.version_unsupported`: the request has no `Tus-Resumable: 1.0.0`; `Tus-Version` lists the version the server speaks.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -14858,6 +15704,156 @@
       },
       "UserWriteForbidden": {
         "description": "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email`, `status` or `manager_id` of a user who holds a permission the caller does not hold at organization scope. `auth.session_required`: an API key changes `email`, `status` or `manager_id` of its own owner, or an app token of its own user. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "VideoEditForbidden": {
+        "description": "`permission.denied`: you can see a course the video is attached to but do not hold `course.content_edit` at a scope containing any of them. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "VideoInvalid": {
+        "description": "`request.invalid`: `errors` names `/title` with `name.empty` (empty after trimming), `name.too_long` (over 200 characters) or `text.contains_nul`.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "VideoNotFound": {
+        "description": "`video.not_found`: no video with this id exists in the organization, or you cannot see any course it is attached to. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "VideoRenameConflict": {
+        "description": "`course.archived`: every course through which you may edit the video is archived.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "VideoUploadCourseNotFound": {
+        "description": "`course.not_found`: no course with this id exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "VideoUploadCreateBadRequest": {
+        "description": "`request.malformed`: `Upload-Length` is missing, not a number or 0, or `Upload-Metadata` is not comma-separated `key base64value` pairs with each key once and UTF-8 values.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "VideoUploadCreateConflict": {
+        "description": "`course.archived`: the course is archived and takes no content change.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "VideoUploadCreateInvalid": {
+        "description": "`request.invalid`: `errors` names `/title`, read from the metadata's `title` or else its `filename`: `name.empty` (neither is given, or it is empty after trimming), `name.too_long` (over 200 characters) or `text.contains_nul`.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "VideoUploadCreateTooLarge": {
+        "description": "`file.too_large`: `Upload-Length` is over the largest video this server accepts (`max_video_bytes`, 5 GiB unless the operator set another).",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "VideoUploadEditForbidden": {
+        "description": "`permission.denied`: you can see the upload's course but do not hold `course.content_edit` at a scope containing it. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "VideoUploadForbidden": {
+        "description": "`permission.denied`: you can see the course but do not hold `course.content_edit` at a scope containing it. `entitlement.limit_reached`: the upload's length would take the organization past its plan's `video_storage` limit; `limit` and `max` say which and how much. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "VideoUploadNotFound": {
+        "description": "`video_upload.not_found`: no video upload with this id exists in the organization, it is being deleted, or you cannot see its course. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "VideoUploadStorageUnavailable": {
+        "description": "`storage.not_configured`: the server has no object storage configured, so it cannot store videos; the operator sets `STEPCLIMB_STORAGE_URL`. `org.none`: the instance has no organization yet.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "VideosCourseNotFound": {
+        "description": "`course.not_found`: no course with this id exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "VideosViewForbidden": {
+        "description": "`permission.denied`: you can see the course, or a course the video is attached to, but do not hold `course.view_all` at a scope containing it.",
         "content": {
           "application/problem+json": {
             "schema": {

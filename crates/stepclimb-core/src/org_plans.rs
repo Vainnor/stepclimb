@@ -29,7 +29,7 @@ use crate::{
     feature::Limit,
     files,
     plans::{self, PlanEntitlements, UNLIMITED},
-    users,
+    users, videos,
 };
 
 /// How an organization got its plan. The stored spellings are [`PlanSource::as_str`]; the
@@ -214,6 +214,9 @@ pub async fn check_room(
             .await
             .map_err(|e| Error::Count(e.into()))?,
         Limit::Storage => files::count_for_limit(&mut **tx, scope)
+            .await
+            .map_err(|e| Error::Count(e.into()))?,
+        Limit::VideoStorage => videos::count_for_limit(&mut **tx, scope)
             .await
             .map_err(|e| Error::Count(e.into()))?,
     };

@@ -247,6 +247,7 @@ CREATE TABLE video_uploads (                    -- not in the data model: B4 to 
     course_id     uuid        NOT NULL,
     length        bigint      NOT NULL CHECK (length > 0),
     received      bigint      NOT NULL DEFAULT 0 CHECK (received >= 0 AND received <= length),
+    terminating   text        CHECK (terminating IN ('parts', 'video')),   -- D13
     created_by    uuid        NOT NULL,
     created_at    timestamptz NOT NULL DEFAULT now(),
     updated_at    timestamptz NOT NULL DEFAULT now(),
@@ -421,6 +422,83 @@ and stands until the owner reviews it.
   `dependency-researcher` finding a static build with a published source and license; I6 records
   the choice in an ADR for the owner.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review and I6's ADR.
+
+### Points I1 settled
+
+Coordinator decision (2026-11-17), pending owner review: the spec left each of these open while
+building I1.
+
+- **D1. The creation's body.** 201 carries `Location` and the body `VideoUploadCreated
+  { upload_id, video: Video }`, so the uploader learns the video's id without a second request.
+- **D2. The title.** `Upload-Metadata`'s `title`, or else its `filename`; with neither, 422
+  `request.invalid` at `/title` (`name.empty`). The file name is not stored.
+- **D3. The tus version.** A request without `Tus-Resumable: 1.0.0` answers 412
+  `tus.version_unsupported` with `Tus-Version: 1.0.0`; every response of the tus routes carries
+  `Tus-Resumable`. `OPTIONS` discovery is not served; B4 does not name it.
+- **D4. What `video_storage` counts.** Every `video_uploads` row's whole length, from its
+  creation until the row is deleted, complete or not, plus `storage_bytes`: a started upload always
+  has room to finish, and a complete one waiting for its transcode still counts the parts it
+  stores. I2 deletes the upload row when it deletes the parts (Q3).
+- **D5. How a chunk is stored.** The body streams to a temporary object
+  (`orgs/<org>/uploads/<uuid>`, the one `06` B5 uses), then, under the upload row's lock, the
+  offset is checked again, the object is copied to `upload/<offset>` and the length added. So
+  two chunks at one offset never both write that key, and a chunk is stored whole or not at all:
+  a dropped connection stores nothing and `HEAD` reports the offset before it.
+- **D6. Chunk bounds.** A chunk that runs past `Upload-Length` answers 413 `file.too_large`; an
+  empty chunk at the stored offset answers 204 and stores nothing (D15 sets the smallest chunk
+  that stores something).
+- **D7. A video that is not a video.** The chunk that completes it commits `failed` with
+  `video.not_a_video` and its upload marked terminating (D13), then deletes its parts and its
+  upload row; the failed video stays for the author to see. `videos.cleanup` deletes the parts
+  of a video failed as `video.not_a_video` only, so a delete that failed is retried; the original
+  of a video that failed for any other reason (`video.transcode_failed`, ...) is kept for B2's
+  retry. Coordinator decision (overnight, 2026-11-17).
+- **D8. Ending an upload.** `DELETE` on an upload whose video is `processing` or `ready` answers
+  409 `video.status_invalid` (delete the video instead, I3). A chunk or an ending in an archived
+  course answers 409 `course.archived`.
+- **D9. Renaming.** `PATCH /videos/{id}` answers 409 `course.archived` when every course through
+  which the caller holds `course.content_edit` is archived. In I1 `Video` has no `renditions`
+  and no `captions`: I2 writes the first and I4 adds the table of the second.
+- **D10. The video signatures.** QuickTime (`ftyp` brand `qt  `, or a first `moov`, `mdat`,
+  `wide` or `free` atom) and Matroska are added to the video check only; a course file of either
+  still sniffs as `application/octet-stream`.
+- **D12. What B7 sniffs.** The upload's first 8 KiB (`06` B6's window), read across parts
+  in offset order, not only the first chunk: a client whose first chunk is a few bytes long still
+  uploads a video.
+- **D11. `VideoTarget` with several courses.** None passing answers 403 when one course is
+  visible without the permission, otherwise 404 `video.not_found`.
+
+Coordinator decision (overnight, 2026-11-17), after the security review of I1:
+
+- **D13. Terminating uploads.** `video_uploads.terminating` (`parts` or `video`) marks an upload
+  whose parts are being deleted. A termination, a not-a-video discard and `videos.cleanup` set it
+  under the upload row's lock and commit; then the parts are deleted holding no lock, and a short
+  transaction deletes the upload row (`parts`) or the video (`video`). A chunk takes the same
+  row lock and answers 404 `video_upload.not_found` for a marked upload before it copies
+  anything, so no part is written after the parts are listed; `HEAD` and `DELETE` answer 404 too.
+  A delete that fails leaves the mark, and `videos.cleanup` finishes every marked upload. Parts
+  are deleted 16 at a time; object_store's `delete_stream` (bulk deletes on S3) needs the
+  `futures` crate as a direct dependency, which I1 does not add.
+- **D14. The course lock of a chunk.** A chunk reads its course row `FOR SHARE`: an archive or
+  move, which updates the row, waits for chunks in flight, and chunks of different uploads of one
+  course do not wait for each other. Creation, termination and rename keep `FOR NO KEY UPDATE`.
+- **D15. The smallest chunk.** A chunk that does not complete the upload must be at least 1 MiB
+  (`MIN_CHUNK_BYTES`), or the server answers 400 `video.chunk_too_small`: the chunk is
+  well-formed but breaks a protocol bound, like a bad `Upload-Offset`. So a 50 GiB upload has at
+  most 51,200 parts to store and delete. The completing chunk may be any size; an empty chunk
+  stays a no-op (D6).
+- **D16. Who may touch an upload.** Any holder of `course.content_edit` at the upload's course may
+  send its chunks, read its offset or end it, not only the user who started it: course content is
+  shared by its editors, as course files are. `created_by` records who started it and gates
+  nothing.
+- **Notes for I2.** ffprobe and ffmpeg get the demuxer pinned with `-f` (from the sniffed
+  container: `mov,mp4,m4a,3gp,3g2,mj2` or `matroska,webm`) and `-protocol_whitelist file`, so a
+  file that only claims a container (D10's QuickTime atoms) cannot pick another demuxer or reach a
+  network protocol. The transcode deletes the upload row with the parts (D4).
+- **Note for user deletion (M4).** `video_uploads.created_by` references `users` without
+  `ON DELETE`, so deleting a user who started an upload still in progress is refused by the
+  foreign key; per-user deletion has to end or reassign such uploads first.
+
 
 ## Issues
 

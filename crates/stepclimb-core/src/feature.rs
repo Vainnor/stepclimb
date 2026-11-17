@@ -90,8 +90,8 @@ catalog! {
 
 /// A limit a plan sets on what an organization can add.
 ///
-/// Each later limit (video storage, transcode minutes, API rate, connectors) is added by the
-/// spec that builds what it counts (B2).
+/// Each later limit (transcode minutes, API rate, connectors) is added by the spec that builds
+/// what it counts (B2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Limit {
     /// How many users the organization can have.
@@ -99,11 +99,14 @@ pub enum Limit {
     /// How many bytes of files the organization can store, each distinct file once
     /// (docs/specs/m1/06-files.md B22).
     Storage,
+    /// How many bytes of video the organization can store: its videos' renditions and its
+    /// uploads' lengths (docs/specs/m1/08-uploaded-video.md B21).
+    VideoStorage,
 }
 
 impl Limit {
     /// Every limit, in definition order.
-    pub const ALL: [Self; 2] = [Self::Users, Self::Storage];
+    pub const ALL: [Self; 3] = [Self::Users, Self::Storage, Self::VideoStorage];
 
     /// The stored and API name, one lowercase snake case word.
     #[must_use]
@@ -111,6 +114,7 @@ impl Limit {
         match self {
             Self::Users => "users",
             Self::Storage => "storage",
+            Self::VideoStorage => "video_storage",
         }
     }
 }
@@ -172,8 +176,8 @@ mod tests {
     }
 
     #[test]
-    fn the_limits_are_users_and_storage() {
+    fn the_limits_are_users_storage_and_video_storage() {
         let keys: Vec<_> = Limit::ALL.iter().map(|l| l.key()).collect();
-        assert_eq!(keys, ["users", "storage"]);
+        assert_eq!(keys, ["users", "storage", "video_storage"]);
     }
 }

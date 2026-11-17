@@ -45,7 +45,7 @@ use stepclimb_core::{
 
 use crate::{
     AppState,
-    config::{S3Config, STORAGE_URL, StorageConfig},
+    config::{DEFAULT_MAX_VIDEO_BYTES, S3Config, STORAGE_URL, StorageConfig},
     error::ApiError,
 };
 
@@ -103,6 +103,7 @@ pub struct Storage {
     store: Arc<dyn ObjectStore>,
     prefix: Path,
     max_file_bytes: u64,
+    max_video_bytes: u64,
     limits: UploadLimits,
     uploads: Arc<Semaphore>,
 }
@@ -113,6 +114,7 @@ impl std::fmt::Debug for Storage {
             .field("store", &self.store.to_string())
             .field("prefix", &self.prefix.as_ref())
             .field("max_file_bytes", &self.max_file_bytes)
+            .field("max_video_bytes", &self.max_video_bytes)
             .field("limits", &self.limits)
             .finish()
     }
@@ -161,6 +163,7 @@ impl Storage {
             store,
             prefix: Path::from_iter(prefix.split('/').filter(|s| !s.is_empty())),
             max_file_bytes,
+            max_video_bytes: DEFAULT_MAX_VIDEO_BYTES,
             limits: UploadLimits::DEFAULT,
             uploads: Arc::new(Semaphore::new(UploadLimits::DEFAULT.in_flight)),
         }))
@@ -175,6 +178,22 @@ impl Storage {
             uploads: Arc::new(Semaphore::new(limits.in_flight)),
             ..self
         }
+    }
+
+    /// This store with video uploads of at most `max_video_bytes` instead of
+    /// `max_video_bytes`'s default (docs/specs/m1/08-uploaded-video.md B4).
+    #[must_use]
+    pub fn with_max_video_bytes(self, max_video_bytes: u64) -> Self {
+        Self {
+            max_video_bytes,
+            ..self
+        }
+    }
+
+    /// The largest `Upload-Length` a video upload may declare, in bytes (`max_video_bytes`).
+    #[must_use]
+    pub fn max_video_bytes(&self) -> u64 {
+        self.max_video_bytes
     }
 
     /// The bounds of the uploads this store serves.
@@ -232,6 +251,24 @@ impl Storage {
     #[must_use]
     pub fn files_prefix(&self, scope: OrgScope) -> Path {
         self.path(&format!("orgs/{}/files", scope.org_id()))
+    }
+
+    /// Where every object of the scope's organization's video `video_id` is,
+    /// `orgs/<org_id>/videos/<video_id>` (docs/specs/m1/08-uploaded-video.md B6, B12).
+    #[must_use]
+    pub fn video_prefix(&self, scope: OrgScope, video_id: Uuid) -> Path {
+        self.path(&format!("orgs/{}/videos/{video_id}", scope.org_id()))
+    }
+
+    /// The location of the chunk of the video's upload that starts at `offset`,
+    /// `orgs/<org_id>/videos/<video_id>/upload/<offset>` (B6). Built from the scope, the row's
+    /// id and the offset the server counted, never from a client string.
+    #[must_use]
+    pub fn video_part_path(&self, scope: OrgScope, video_id: Uuid, offset: u64) -> Path {
+        self.path(&format!(
+            "orgs/{}/videos/{video_id}/upload/{offset}",
+            scope.org_id()
+        ))
     }
 
     fn uploads_key(scope: OrgScope) -> String {

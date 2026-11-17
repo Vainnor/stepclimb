@@ -9,6 +9,10 @@
 //!
 //! Text whose first character other than white space or a byte order mark is `<` is not plain
 //! text here: HTML, SVG and XML are served as downloads, never as anything a browser renders.
+//!
+//! [`video`] is the check an uploaded video's first chunk passes before it is transcoded
+//! (docs/specs/m1/08-uploaded-video.md B7): MP4 and WebM as [`sniff`] reads them, plus QuickTime
+//! and Matroska, which [`sniff`] leaves unmatched so a course file of either stays a download.
 
 /// How many bytes of a file [`sniff`] reads.
 pub const HEAD_BYTES: usize = 8 * 1024;
@@ -28,6 +32,38 @@ pub fn sniff(head: &[u8], complete: bool) -> &'static str {
     binary(head)
         .or_else(|| text(head, complete))
         .unwrap_or(OCTET_STREAM)
+}
+
+/// The video container whose first bytes are `head`: MP4, WebM, QuickTime or Matroska, or
+/// `None` for anything else (B7). It says only what the file claims to be; ffprobe decides
+/// whether it holds a video stream.
+#[must_use]
+pub fn video(head: &[u8]) -> Option<&'static str> {
+    let head = &head[..head.len().min(HEAD_BYTES)];
+    mp4(head)
+        .or_else(|| webm(head))
+        .or_else(|| quicktime(head))
+        .or_else(|| matroska(head))
+}
+
+/// What may be a QuickTime movie: an `ftyp` box with the `qt  ` brand, or a first atom of a type
+/// QuickTime files written without `ftyp` start with (`moov`, `mdat`, `wide`, `free`). Those four
+/// types are not unique to movies, so a match only lets the upload on to ffprobe, which decides
+/// (B9).
+fn quicktime(head: &[u8]) -> Option<&'static str> {
+    const FIRST_ATOMS: [&[u8; 4]; 4] = [b"moov", b"mdat", b"wide", b"free"];
+    let kind = head.get(4..8)?;
+    let branded = kind == b"ftyp" && head.get(8..12)? == b"qt  ";
+    (branded || FIRST_ATOMS.iter().any(|a| &a[..] == kind)).then_some("video/quicktime")
+}
+
+/// An EBML document whose `DocType` element is `matroska`, in the header at the start of the
+/// file.
+fn matroska(head: &[u8]) -> Option<&'static str> {
+    const DOC_TYPE: &[u8] = b"\x42\x82\x88matroska";
+    let header = &head[..head.len().min(64)];
+    (head.starts_with(b"\x1a\x45\xdf\xa3") && header.windows(DOC_TYPE.len()).any(|w| w == DOC_TYPE))
+        .then_some("video/x-matroska")
 }
 
 /// The fixed signatures: magic numbers at the start of the file.
@@ -258,6 +294,39 @@ mod tests {
             b"MZ\x90\0\x03",
         ] {
             assert_eq!(sniff(head, true), OCTET_STREAM, "{head:?}");
+        }
+    }
+
+    #[test]
+    fn a_video_is_mp4_webm_quicktime_or_matroska() {
+        let videos: [(&[u8], &str); 6] = [
+            (b"\0\0\0\x18ftypisom\0\0\0\0", "video/mp4"),
+            (
+                b"\x1a\x45\xdf\xa3\x9f\x42\x86\x81\x01\x42\x82\x84webm",
+                "video/webm",
+            ),
+            (b"\0\0\0\x14ftypqt  \0\0\0\0", "video/quicktime"),
+            (b"\0\0\0\x08wide\0\0\0\0mdat", "video/quicktime"),
+            (b"\0\x01\x2a\x10moov\0\0\0\x6cmvhd", "video/quicktime"),
+            (
+                b"\x1a\x45\xdf\xa3\xa3\x42\x86\x81\x01\x42\x82\x88matroska",
+                "video/x-matroska",
+            ),
+        ];
+        for (head, mime) in videos {
+            assert_eq!(video(head), Some(mime), "{head:?}");
+        }
+        for other in [
+            &b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"[..],
+            b"%PDF-1.7\n",
+            b"\0\0\0\x18ftypheic\0\0\0\0",
+            b"\0\0\0\x18ftypM4A \0\0\0\0",
+            b"ID3\x04\0\0\0\0\0\0",
+            b"\x1a\x45\xdf\xa3\x9f\x42\x82\x84abcd",
+            b"Week 1 notes",
+            b"",
+        ] {
+            assert_eq!(video(other), None, "{other:?}");
         }
     }
 
