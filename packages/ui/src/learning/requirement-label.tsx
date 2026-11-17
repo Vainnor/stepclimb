@@ -37,6 +37,12 @@ export function RequirementLabel({ requirement, className }: RequirementLabelPro
   );
 }
 
+/** A requirement in words ("Mark as done"), for a description that does not draw the label. */
+export function useRequirementText(): (requirement: Requirement) => string {
+  const { t } = useStepclimbStrings();
+  return (requirement) => requirementText(t, requirement);
+}
+
 function requirementText(t: ReturnType<typeof useStepclimbStrings>["t"], requirement: Requirement) {
   switch (requirement.kind) {
     case "view":

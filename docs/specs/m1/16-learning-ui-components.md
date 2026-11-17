@@ -97,6 +97,29 @@ listed here with a pointer so the inventory is complete in one place.
   locked, the reason in words ("Unlocks after Ground control", "Opens on 3 March"); ItemRow shows
   an item's kind icon, title, RequirementLabel, StatusChip and DueBadge. CourseHeader shows the
   course title, code, cover, the learner's progress bar and, for staff, the status.
+- **B9a.** Coordinator decisions for B9 (overnight, 2026-11-17), pending owner review:
+  - ModuleRow is a heading (level 2 by default) holding the module's number and title, then its
+    StatusChip and, unless it is locked, the learner's progress, drawn "3 / 5" and read "3 of 5
+    complete". It is not a control, a toggle or a landmark; its items follow as ItemRows in an
+    ordered list, including a locked module's (`04` B12 lists them). A locked module says its
+    reasons in one line, through the same phrases and unit list as the rail (B10a), with the date
+    and time in the user's zone as B10a gives them ("Opens on Mar 3, 2026, 10:00 AM EST").
+  - ItemRow's title is the link to the item view, named by the title alone, so no two links on a
+    course home read the same; the kind (in words), requirement, state and due label are its
+    description. The link's hit area covers the row, so the target is the row's height, at least
+    44 px under a coarse pointer, and hover and keyboard focus mark the whole row. Pressed draws
+    as hover. A locked item stays a link, as on the rail (B10a), and shows "Locked" without its
+    reasons: the item view and the rail say them. A header item (`03` B8) is a heading one level
+    below its module's, with no icon, state or link.
+  - Kind icons (Phosphor): page FileText, file Paperclip, external link ArrowSquareOut, video
+    Video, quiz ListChecks, activity PuzzlePiece. None is a circle, so none reads as a learning
+    state's icon.
+  - CourseHeader's title is the page's `h1` by default, with the code and, when the caller gives
+    it, the status ("Draft", "Published", "Archived") on the line below; no eyebrow label. The
+    caller gives the status where `Course.permissions` holds `course.view_all`. The cover is
+    decorative (`alt=""`), as the title beside it names the course, and is left out when it fails
+    to load. On the course home the header carries the course progress bar, so the page leaves
+    NextUp's `progress` out there (I11) and draws one bar.
 - **B10.** RequirementLabel says a requirement in words ("Mark as done", "Watch 80%"); DueBadge
   shows "Due in 3 days", "Due today" or "3 days overdue" in the user's time zone with the overdue
   state when past; NextUp shows Next up (`10` B2) with the one primary "Continue" action, or the

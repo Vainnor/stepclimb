@@ -16,8 +16,24 @@ export {
   calloutIcons,
   calloutKinds,
 } from "./learning/callout";
+export {
+  CourseHeader,
+  type CourseHeaderProps,
+  type CourseStatus,
+  courseHeader,
+} from "./learning/course-header";
 export { DueBadge, type DueBadgeProps, dueBadge, dueDays } from "./learning/due-badge";
+export {
+  type ItemKind,
+  ItemRow,
+  type ItemRowItem,
+  type ItemRowProps,
+  itemKindIcons,
+  itemKinds,
+  itemRow,
+} from "./learning/item-row";
 export type { LockReason } from "./learning/lock-reason";
+export { ModuleRow, type ModuleRowProps, moduleRow } from "./learning/module-row";
 export { NextUp, type NextUpProps, type NextUpStatus, nextUp } from "./learning/next-up";
 export {
   ProgressRail,
