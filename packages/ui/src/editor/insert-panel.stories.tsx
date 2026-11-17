@@ -6,6 +6,17 @@ import { ImagePanel, VideoPanel } from "./insert-panel";
 const png = () =>
   new File([new Uint8Array([137, 80, 78, 71])], "taxiway-diagram.png", { type: "image/png" });
 
+/**
+ * Chooses the file, then moves the pointer off the drop zone: the upload leaves the pointer over
+ * it, and its hover border would make the screenshot depend on where the pointer was.
+ */
+async function upload(canvasElement: HTMLElement) {
+  const input = canvasElement.querySelector<HTMLInputElement>("input[type=file]");
+  const zone = canvasElement.querySelector<HTMLElement>('[data-slot="file-drop"]');
+  if (input) await userEvent.upload(input, png());
+  if (zone) await userEvent.unhover(zone);
+}
+
 const meta = {
   title: "Authoring/InsertPanel",
   component: ImagePanel,
@@ -39,8 +50,7 @@ export const Image: Story = {};
 /** A file on its way to the server. */
 export const ImageUploading: Story = {
   play: async ({ canvasElement }) => {
-    const input = canvasElement.querySelector<HTMLInputElement>("input[type=file]");
-    if (input) await userEvent.upload(input, png());
+    await upload(canvasElement);
     await expect(await within(canvasElement).findByText(/Uploading/)).toBeInTheDocument();
   },
 };
@@ -49,8 +59,7 @@ export const ImageUploading: Story = {
 export const ImageNotAnImage: Story = {
   args: { onUpload: async () => ({ course_file_id: "f", mime: "application/pdf" }) },
   play: async ({ canvasElement }) => {
-    const input = canvasElement.querySelector<HTMLInputElement>("input[type=file]");
-    if (input) await userEvent.upload(input, png());
+    await upload(canvasElement);
     await expect(await within(canvasElement).findByText(/is not a PNG/)).toBeInTheDocument();
   },
 };
