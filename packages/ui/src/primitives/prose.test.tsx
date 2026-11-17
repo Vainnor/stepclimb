@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { act, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
+import { serverHtml } from "../lib/server-html";
 import { renderWithStrings as render } from "../test/strings";
 import { markScrollers, Prose } from "./prose";
 
@@ -22,6 +23,21 @@ describe("Prose", () => {
     expect(root).toHaveAttribute("data-slot", "prose");
     expect(root).toHaveClass("font-read", "text-read", "leading-read", "max-w-[31.5em]");
     expect(screen.getByText("Read back the clearance.").tagName).toBe("P");
+  });
+
+  it("inserts the server's HTML as its own children, so the element styles reach them", () => {
+    const { container } = render(
+      <Prose html={serverHtml("<h2>Readbacks</h2><p>Read back the clearance.</p>")} />,
+    );
+    const root = container.firstElementChild;
+    expect(root).toHaveAttribute("data-slot", "prose");
+    expect([...(root?.children ?? [])].map((el) => el.tagName)).toEqual(["H2", "P"]);
+  });
+
+  it("takes only ServerHtml as html: a plain string does not type-check", () => {
+    // @ts-expect-error a plain string is not ServerHtml
+    const element = <Prose html="<p>Typed in the browser</p>" />;
+    expect(element.props.html).toBe("<p>Typed in the browser</p>");
   });
 
   it("lets className add layout without dropping the recipe", () => {

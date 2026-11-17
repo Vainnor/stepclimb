@@ -12,12 +12,15 @@ export type Catalog = { readonly en: Messages } & Readonly<Partial<Record<string
 export const uiMessages: Catalog = {
   en: {
     "alertDialog.cancel": "Cancel",
+    "announcement.byline": "Posted by {author} on {date}",
     "appShell.skipToMain": "Skip to main content",
     "bottomTabs.label": "Main",
     "breadcrumbs.label": "Breadcrumbs",
     "button.pending": "In progress",
     "calendar.next": "Next month",
     "calendar.previous": "Previous month",
+    "callout.kind":
+      "{kind, select, info {Note} tip {Tip} warning {Warning} danger {Danger} other {Note}}",
     "comboBox.empty": "No matches",
     "comboBox.loading": "Loading",
     "comboBox.showSuggestions": "Show suggestions",
@@ -54,6 +57,11 @@ export const uiMessages: Catalog = {
     "lockReason.sequential": "Unlocks after {title}",
     "lockReason.unlockAt": "Opens on {when}",
     "meter.value": "{value, number, percent}",
+    "nextUp.completed": "Completed {when}",
+    "nextUp.continue": "Continue",
+    "nextUp.continueItem": "Continue: {item}",
+    "nextUp.heading": "Next up",
+    "nextUp.progress": "{Course} progress",
     "numberField.decrement": "Decrease",
     "numberField.increment": "Increase",
     "orgSwitcher.label": "{name}: switch organization",

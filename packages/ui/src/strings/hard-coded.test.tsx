@@ -6,10 +6,14 @@ import { parseZonedDateTime } from "@internationalized/date";
 import { CheckCircleIcon, GearIcon, HouseIcon } from "@phosphor-icons/react";
 import type { ReactElement } from "react";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { Announcement } from "../learning/announcement";
+import { Callout } from "../learning/callout";
 import { DueBadge } from "../learning/due-badge";
+import { NextUp } from "../learning/next-up";
 import { ProgressRail } from "../learning/progress-rail";
 import { RequirementLabel } from "../learning/requirement-label";
 import { StatusChip } from "../learning/status-chip";
+import { serverHtml } from "../lib/server-html";
 import { AppShell } from "../patterns/app-shell";
 import { BottomTabs } from "../patterns/bottom-tabs";
 import { CommandPalette } from "../patterns/command-palette";
@@ -287,6 +291,7 @@ const components: [string, ReactElement][] = [
       <p>«caller»</p>
     </Prose>,
   ],
+  ["Prose (HTML)", <Prose key="ph" html={serverHtml("<p>«caller»</p>")} />],
   ["SearchField", <SearchField key="sf" label="«caller»" defaultValue="«caller»" />],
   ["Separator", <Separator key="s" />],
   ["Text", <Text key="t">«caller»</Text>],
@@ -371,6 +376,43 @@ const components: [string, ReactElement][] = [
           ],
         },
       ]}
+    />,
+  ],
+  [
+    "NextUp (next)",
+    <NextUp
+      key="nu"
+      courseTitle="«caller»"
+      progress={{ completed: 1, required: 2 }}
+      timeZone="UTC"
+      status={{
+        kind: "next",
+        itemTitle: "«caller»",
+        moduleTitle: "«caller»",
+        href: "/a",
+        started: true,
+      }}
+    />,
+  ],
+  [
+    "NextUp (waiting)",
+    <NextUp key="nw" timeZone="UTC" status={{ kind: "waiting", until: new Date(0) }} />,
+  ],
+  [
+    "Callout",
+    <Callout key="co" kind="warning" title="«caller»">
+      «caller»
+    </Callout>,
+  ],
+  [
+    "Announcement",
+    <Announcement
+      key="an"
+      title="«caller»"
+      author="«caller»"
+      publishedAt={new Date(0)}
+      timeZone="UTC"
+      html={serverHtml("<p>«caller»</p>")}
     />,
   ],
   [
