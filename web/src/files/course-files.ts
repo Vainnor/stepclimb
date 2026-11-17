@@ -139,14 +139,14 @@ function responseHeaders(xhr: XMLHttpRequest): Headers {
 const NULL_BODY = new Set([204, 205, 304]);
 
 /**
- * Sends `request` with `body` through `XMLHttpRequest`, reporting the body's progress, and gives
- * back the answer as a `Response`. A request that gets no answer rejects with an
- * `UnreachableError`, as every other API request does (`fetchOrUnreachable`). Aborting `signal`
- * aborts the request and rejects with an `AbortError`, as `fetch` does.
+ * Sends `request` with `body` (none for `null`) through `XMLHttpRequest`, reporting the body's
+ * progress, and gives back the answer as a `Response`. A request that gets no answer rejects
+ * with an `UnreachableError`, as every other API request does (`fetchOrUnreachable`). Aborting
+ * `signal` aborts the request and rejects with an `AbortError`, as `fetch` does.
  */
 export function sendWithProgress(
   request: Request,
-  body: Blob,
+  body: Blob | null,
   onProgress: UploadProgress,
   signal?: AbortSignal,
 ): Promise<Response> {
