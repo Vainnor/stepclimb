@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE pages\n               SET current_version_id = $3,\n                   updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond'\n               WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9129562a4c84d9da4cba4b59c5893c610c8de3d98198a3ee2f5cbba3233ff80d"
+}

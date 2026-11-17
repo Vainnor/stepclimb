@@ -22,7 +22,7 @@ use crate::{
     discovery, enrollment,
     error::ApiError,
     health, identities, items, local_sign_in, manifest, me, modules, my_passkeys, oauth_authorize,
-    oauth_token, openapi, organization, passkey_enrollment, passkey_sign_in, password,
+    oauth_token, openapi, organization, pages, passkey_enrollment, passkey_sign_in, password,
     password_hasher::PasswordHasher,
     provider_admin, provider_callback, provider_sign_in,
     providers::Providers,
@@ -331,6 +331,27 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
             get(course_files::get_course_file)
                 .patch(course_files::update_course_file)
                 .delete(course_files::delete_course_file),
+        ),
+        (
+            "/api/v1/courses/{course_id}/pages",
+            get(pages::list_pages).post(pages::create_page),
+        ),
+        (
+            "/api/v1/pages/{page_id}",
+            patch(pages::update_page).delete(pages::delete_page),
+        ),
+        ("/api/v1/pages/{page_id}/body", put(pages::save_page_body)),
+        (
+            "/api/v1/pages/{page_id}/versions",
+            get(pages::list_page_versions),
+        ),
+        (
+            "/api/v1/pages/{page_id}/versions/{version_id}",
+            get(pages::get_page_version),
+        ),
+        (
+            "/api/v1/pages/{page_id}/versions/{version_id}/restore",
+            post(pages::restore_page_version),
         ),
         ("/api/v1/admin/permissions", get(roles::list_permissions)),
         (

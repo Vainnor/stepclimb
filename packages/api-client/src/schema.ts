@@ -586,6 +586,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/courses/{course_id}/pages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the course's pages by slug. */
+        get: operations["listPages"];
+        put?: never;
+        /** Create a page with version 1 of its body. */
+        post: operations["createPage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/courses/{course_id}/status": {
         parameters: {
             query?: never;
@@ -967,6 +985,99 @@ export interface paths {
          *     writes nothing.
          */
         patch: operations["updateOrganizationSettings"];
+        trace?: never;
+    };
+    "/api/v1/pages/{page_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete a page and all its versions, when no item references it. */
+        delete: operations["deletePage"];
+        options?: never;
+        head?: never;
+        /** Rename a page or change its slug. A patch naming only current values changes nothing. */
+        patch: operations["updatePage"];
+        trace?: never;
+    };
+    "/api/v1/pages/{page_id}/body": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Save a body as the page's new current version. The save is refused, writing nothing, when
+         *     `base_version_id` is no longer the current version; a body equal to the current one writes
+         *     nothing and answers the page as it is.
+         */
+        put: operations["savePageBody"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pages/{page_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the page's versions, newest first, without their bodies. */
+        get: operations["listPageVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pages/{page_id}/versions/{version_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one version of the page with its body. */
+        get: operations["getPageVersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pages/{page_id}/versions/{version_id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save a version's body as the page's new current version, with the save's conflict and image
+         *     checks.
+         */
+        post: operations["restorePageVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/users": {
@@ -1931,6 +2042,18 @@ export interface components {
             alg: number;
             type: string;
         };
+        /** @description The version that made a page save conflict: the page's current one (M1 spec 07 B3). */
+        CurrentVersion: {
+            /**
+             * Format: uuid
+             * @description The user who saved it.
+             */
+            author_id: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: int32 */
+            number: number;
+        };
         /**
          * @description The density a user chose. `compact` sets the shorter control heights.
          * @enum {string}
@@ -2535,6 +2658,18 @@ export interface components {
             /** @description What you call this passkey: trimmed, 1 to 200 characters. `Passkey` when absent. */
             name?: string | null;
         };
+        /** @description A page to create, with version 1 of its body. */
+        NewPage: {
+            /** @description Version 1's body; a document with one empty paragraph when omitted. */
+            body?: components["schemas"]["PageDoc"];
+            /**
+             * @description Lowercase letters and digits in runs joined by single hyphens, 1 to 100 characters,
+             *     unique in the course. Derived from the title when omitted.
+             */
+            slug?: string;
+            /** @description Trimmed; 1 to 200 characters. */
+            title: string;
+        };
         /** @description A provider to create. */
         NewProvider: {
             /**
@@ -2766,6 +2901,319 @@ export interface components {
             /** @description Trimmed; 1 to 200 characters. */
             name?: string;
         };
+        /** @description A top-level block. */
+        PageBlock: {
+            content?: components["schemas"]["PageInline"][];
+            /** @enum {string} */
+            type: "paragraph";
+        } | {
+            attrs: components["schemas"]["PageHeadingAttrs"];
+            content?: components["schemas"]["PageInline"][];
+            /** @enum {string} */
+            type: "heading";
+        } | {
+            /** @description One or more. */
+            content: components["schemas"]["PageListItem"][];
+            /** @enum {string} */
+            type: "bulletList";
+        } | {
+            attrs?: components["schemas"]["PageOrderedListAttrs"];
+            /** @description One or more. */
+            content: components["schemas"]["PageListItem"][];
+            /** @enum {string} */
+            type: "orderedList";
+        } | {
+            /** @description One or more. */
+            content: components["schemas"]["PageNestedBlock"][];
+            /** @enum {string} */
+            type: "blockquote";
+        } | {
+            /** @enum {string} */
+            type: "horizontalRule";
+        } | {
+            attrs?: components["schemas"]["PageCodeBlockAttrs"];
+            content?: components["schemas"]["PageCodeText"][];
+            /** @enum {string} */
+            type: "codeBlock";
+        } | {
+            /** @description One or more rows. */
+            content: components["schemas"]["PageTableRow"][];
+            /** @enum {string} */
+            type: "table";
+        } | {
+            attrs: components["schemas"]["PageImageAttrs"];
+            /** @enum {string} */
+            type: "image";
+        } | {
+            attrs: components["schemas"]["PageCalloutAttrs"];
+            /** @description One or more. */
+            content: components["schemas"]["PageNestedBlock"][];
+            /** @enum {string} */
+            type: "callout";
+        } | {
+            attrs: components["schemas"]["PageVideoEmbedAttrs"];
+            /** @enum {string} */
+            type: "videoEmbed";
+        } | {
+            /** @description One or more lines. */
+            content: components["schemas"]["PageTranscriptLine"][];
+            /** @enum {string} */
+            type: "transcript";
+        };
+        /** @description A body to save as the page's new current version. */
+        PageBodySave: {
+            /**
+             * Format: uuid
+             * @description The version the body was edited from; it must still be the page's current version.
+             */
+            base_version_id: string;
+            body: components["schemas"]["PageDoc"];
+        };
+        /** @description A callout's kind. */
+        PageCalloutAttrs: {
+            kind: components["schemas"]["PageCalloutKind"];
+        };
+        /** @enum {string} */
+        PageCalloutKind: "info" | "tip" | "warning" | "danger";
+        /** @description A cell's spans, each 1 to 20; 1 when omitted. */
+        PageCellAttrs: {
+            /** Format: int32 */
+            colspan?: number;
+            colwidth?: null;
+            /** Format: int32 */
+            rowspan?: number;
+        };
+        /**
+         * @description A code block's language for highlighting, one of `bash`, `c`, `cpp`, `csharp`, `css`, `go`,
+         *     `html`, `java`, `javascript`, `json`, `kotlin`, `markdown`, `php`, `python`, `ruby`, `rust`,
+         *     `sql`, `swift`, `typescript`, `xml`, `yaml`, or `null` for none.
+         */
+        PageCodeBlockAttrs: {
+            language?: string | null;
+        };
+        /** @description A code block's text: no marks. */
+        PageCodeText: {
+            /** @description Not empty; no control character but tab and newline. */
+            text: string;
+            type: components["schemas"]["PageTextKind"];
+        };
+        /**
+         * @description A page body: a ProseMirror document as Tiptap serializes it. At most 1 MiB serialized and
+         *     20,000 nodes. Any node, mark or attribute not listed here is refused.
+         */
+        PageDoc: {
+            /** @description One or more blocks. */
+            content: components["schemas"]["PageBlock"][];
+            type: components["schemas"]["PageDocKind"];
+        };
+        /**
+         * @description The root node's type.
+         * @enum {string}
+         */
+        PageDocKind: "doc";
+        /** @description A heading's level, 2 to 4; the page title is the level 1. */
+        PageHeadingAttrs: {
+            /** Format: int32 */
+            level: number;
+        };
+        /** @description An image: a PNG, JPEG, GIF or WebP course file of the page's course. */
+        PageImageAttrs: {
+            /** @description The image's text alternative; empty only when `decorative`. No control character. */
+            alt: string;
+            /** Format: uuid */
+            course_file_id: string;
+            /** @description Whether the image is decorative; `false` when omitted. */
+            decorative?: boolean;
+        };
+        /** @description Text or a line break inside a paragraph, a heading or a transcript line. */
+        PageInline: {
+            /** @description Each mark at most once. */
+            marks?: components["schemas"]["PageMark"][];
+            /** @description Not empty; no control character but tab and newline. */
+            text: string;
+            /** @enum {string} */
+            type: "text";
+        } | {
+            /** @enum {string} */
+            type: "hardBreak";
+        };
+        /**
+         * @description A link's target: an absolute `https`, `http` or `mailto` URL, or a path on this site that
+         *     starts with one `/`.
+         */
+        PageLinkAttrs: {
+            href: string;
+        };
+        /** @description A list item: a paragraph first, then any nested blocks. */
+        PageListItem: {
+            content: components["schemas"]["PageNestedBlock"][];
+            type: components["schemas"]["PageListItemKind"];
+        };
+        /** @enum {string} */
+        PageListItemKind: "listItem";
+        /** @description A mark on text. */
+        PageMark: {
+            /** @enum {string} */
+            type: "bold";
+        } | {
+            /** @enum {string} */
+            type: "italic";
+        } | {
+            /** @enum {string} */
+            type: "underline";
+        } | {
+            /** @enum {string} */
+            type: "strike";
+        } | {
+            /** @enum {string} */
+            type: "code";
+        } | {
+            attrs: components["schemas"]["PageLinkAttrs"];
+            /** @enum {string} */
+            type: "link";
+        } | {
+            /** @enum {string} */
+            type: "subscript";
+        } | {
+            /** @enum {string} */
+            type: "superscript";
+        };
+        /** @description A block inside a blockquote, a callout, a list item or a table cell. */
+        PageNestedBlock: {
+            content?: components["schemas"]["PageInline"][];
+            /** @enum {string} */
+            type: "paragraph";
+        } | {
+            content: components["schemas"]["PageListItem"][];
+            /** @enum {string} */
+            type: "bulletList";
+        } | {
+            attrs?: components["schemas"]["PageOrderedListAttrs"];
+            content: components["schemas"]["PageListItem"][];
+            /** @enum {string} */
+            type: "orderedList";
+        } | {
+            attrs?: components["schemas"]["PageCodeBlockAttrs"];
+            content?: components["schemas"]["PageCodeText"][];
+            /** @enum {string} */
+            type: "codeBlock";
+        };
+        /** @description The number an ordered list starts at; 1 when omitted. */
+        PageOrderedListAttrs: {
+            /** Format: int32 */
+            start?: number;
+        };
+        /** @description A change to a page; an omitted member is left as it is. */
+        PagePatch: {
+            /** @description As for a new page; unique in the course. */
+            slug?: string;
+            /** @description Trimmed; 1 to 200 characters. */
+            title?: string;
+        };
+        /** @description The version a restore was started from. */
+        PageRestore: {
+            /**
+             * Format: uuid
+             * @description The page's current version as the caller last saw it.
+             */
+            base_version_id: string;
+        };
+        /** @description A page of a course with its current version. */
+        PageSummary: {
+            /** Format: uuid */
+            course_id: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            created_at: string;
+            current_version: components["schemas"]["PageVersionSummary"];
+            /** Format: uuid */
+            id: string;
+            /** @description Unique in the course. */
+            slug: string;
+            title: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC: the last change to the title, the slug or the current version.
+             */
+            updated_at: string;
+        };
+        /** @description A data or header cell. */
+        PageTableCell: {
+            attrs?: components["schemas"]["PageCellAttrs"];
+            /** @description One or more. */
+            content: components["schemas"]["PageNestedBlock"][];
+            type: components["schemas"]["PageTableCellKind"];
+        };
+        /** @enum {string} */
+        PageTableCellKind: "tableCell" | "tableHeader";
+        /** @description A table row of one or more cells. */
+        PageTableRow: {
+            content: components["schemas"]["PageTableCell"][];
+            type: components["schemas"]["PageTableRowKind"];
+        };
+        /** @enum {string} */
+        PageTableRowKind: "tableRow";
+        /** @enum {string} */
+        PageTextKind: "text";
+        /** @description A line of a transcript: who speaks, and what. */
+        PageTranscriptLine: {
+            attrs: components["schemas"]["PageTranscriptLineAttrs"];
+            content?: components["schemas"]["PageInline"][];
+            type: components["schemas"]["PageTranscriptLineKind"];
+        };
+        /** @description A transcript line's speaker label, chosen per block: 1 to 40 characters, not blank. */
+        PageTranscriptLineAttrs: {
+            speaker: string;
+        };
+        /** @enum {string} */
+        PageTranscriptLineKind: "transcriptLine";
+        /** @description A version of a page with its body. */
+        PageVersion: {
+            /** Format: uuid */
+            author_id: string;
+            body: components["schemas"]["PageDoc"];
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            created_at: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: int32 */
+            number: number;
+        };
+        /** @description A version of a page, without its body. */
+        PageVersionSummary: {
+            /**
+             * Format: uuid
+             * @description The user who saved it.
+             */
+            author_id: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            created_at: string;
+            /** Format: uuid */
+            id: string;
+            /**
+             * Format: int32
+             * @description 1, 2, ... per page.
+             */
+            number: number;
+        };
+        /** @description A YouTube or Vimeo video by id; the server builds the player's URL. */
+        PageVideoEmbedAttrs: {
+            provider: components["schemas"]["PageVideoProvider"];
+            /** @description The player's accessible name: 1 to 200 characters, not blank. */
+            title: string;
+            /** @description YouTube: 11 characters of `A-Z`, `a-z`, `0-9`, `_` and `-`. Vimeo: 1 to 20 digits. */
+            video_id: string;
+        };
+        /** @enum {string} */
+        PageVideoProvider: "youtube" | "vimeo";
         /** @description One page of a list. */
         Page_Account: {
             /** @description The items, in the list's sort order. */
@@ -2885,6 +3333,57 @@ export interface components {
                 /** @enum {string} */
                 kind: "file";
             })[];
+            /** @description Pass this as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
+        };
+        /** @description One page of a list. */
+        Page_PageSummary: {
+            /** @description The items, in the list's sort order. */
+            items: {
+                /** Format: uuid */
+                course_id: string;
+                /**
+                 * Format: date-time
+                 * @description RFC 3339, UTC.
+                 */
+                created_at: string;
+                current_version: components["schemas"]["PageVersionSummary"];
+                /** Format: uuid */
+                id: string;
+                /** @description Unique in the course. */
+                slug: string;
+                title: string;
+                /**
+                 * Format: date-time
+                 * @description RFC 3339, UTC: the last change to the title, the slug or the current version.
+                 */
+                updated_at: string;
+            }[];
+            /** @description Pass this as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
+        };
+        /** @description One page of a list. */
+        Page_PageVersionSummary: {
+            /** @description The items, in the list's sort order. */
+            items: {
+                /**
+                 * Format: uuid
+                 * @description The user who saved it.
+                 */
+                author_id: string;
+                /**
+                 * Format: date-time
+                 * @description RFC 3339, UTC.
+                 */
+                created_at: string;
+                /** Format: uuid */
+                id: string;
+                /**
+                 * Format: int32
+                 * @description 1, 2, ... per page.
+                 */
+                number: number;
+            }[];
             /** @description Pass this as `cursor` to get the next page; `null` on the last page. */
             next_cursor: string | null;
         };
@@ -3137,6 +3636,7 @@ export interface components {
         Problem: {
             /** @description The stable error code, `area.reason`. */
             code: string;
+            current_version?: null | components["schemas"]["CurrentVersion"];
             /** @description A sentence for a human reader. Clients branch on `code`, never on this text. */
             detail: string;
             /** @description On a 422, each rule the body broke. */
@@ -3879,7 +4379,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `course.archived`: the course is archived and takes no content change. `file.in_use`: a `file` item references the course file; remove it first. */
+        /** @description `course.archived`: the course is archived and takes no content change. `file.in_use`: a `file` item or a version of a page references the course file; remove it first. */
         CourseFileDeleteConflict: {
             headers: {
                 [name: string]: unknown;
@@ -4646,6 +5146,105 @@ export interface components {
         };
         /** @description `org.not_found`: the request's organization cannot be determined. */
         OrganizationNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.archived`: the course is archived and takes no content change. `page.slug_taken`: the course already has a page with this slug. */
+        PageCreateConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.archived`: the course is archived and takes no content change. `page.in_use`: an item references the page; remove it first. */
+        PageDeleteConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/slug` with `page.slug_invalid` (not lowercase letters and digits in runs joined by single hyphens, 1 to 100 characters, or, with no slug given, a title from which none can be derived), or a member of `/body` with `page.body_invalid` (the first node, mark or attribute the page schema does not allow, or `/body` itself for a body over 1 MiB or 20,000 nodes) or `page.image_type` (an image's `course_file_id` names a file whose type, read from its bytes, is not PNG, JPEG, GIF or WebP). */
+        PageInvalid: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `page.not_found`: no page with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined. */
+        PageNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.archived`: the course is archived and takes no content change. `page.slug_taken`: the course already has another page with this slug. */
+        PagePatchConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.invalid`: `errors` names a member of `/body`, the version's body, with `page.image_type` (an image names a file whose type is not PNG, JPEG, GIF or WebP) or `page.body_invalid` (a node the page schema no longer allows). */
+        PageRestoreInvalid: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.archived`: the course is archived and takes no content change. `page.version_conflict`: `base_version_id` is not the page's current version, which `current_version` names; nothing was saved. Reload, merge and save again. */
+        PageSaveConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `page.not_found`: no page with this id exists in the organization, or you cannot see its course. `file.not_found`: an image of the body names no course file of the page's course. `org.not_found`: the request's organization cannot be determined. */
+        PageSaveNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `page.not_found`: no page with this id exists in the organization, or you cannot see its course. `page_version.not_found`: the page has no version with this id. `file.not_found`: an image of the version names a course file that no longer exists. `org.not_found`: the request's organization cannot be determined. */
+        PageVersionNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `file.not_found`: an image of the body names no course file of this course. `org.not_found`: the request's organization cannot be determined. */
+        PagesCourseNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: you can see the course but do not hold `course.view_all` at a scope containing it. */
+        PagesViewForbidden: {
             headers: {
                 [name: string]: unknown;
             };
@@ -6848,6 +7447,79 @@ export interface operations {
             503: components["responses"]["NoOrganization"];
         };
     };
+    listPages: {
+        parameters: {
+            query?: {
+                /** @description The `next_cursor` of the previous page; omit it for the first page. */
+                cursor?: string;
+                /** @description How many items to return, 1 to 200; 50 when omitted. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The course's id. */
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the course's pages */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_PageSummary"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["PagesViewForbidden"];
+            404: components["responses"]["ModuleCourseNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    createPage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The course's id. */
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewPage"];
+            };
+        };
+        responses: {
+            /** @description The page is created */
+            201: {
+                headers: {
+                    /** @description The page's path */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PageSummary"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ContentEditForbidden"];
+            404: components["responses"]["PagesCourseNotFound"];
+            409: components["responses"]["PageCreateConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["PageInvalid"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
     setCourseStatus: {
         parameters: {
             query?: never;
@@ -7713,6 +8385,212 @@ export interface operations {
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             422: components["responses"]["SettingsInvalid"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    deletePage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The page's id. */
+                page_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The page is deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ContentEditForbidden"];
+            404: components["responses"]["PageNotFound"];
+            409: components["responses"]["PageDeleteConflict"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    updatePage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The page's id. */
+                page_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PagePatch"];
+            };
+        };
+        responses: {
+            /** @description The page after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PageSummary"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ContentEditForbidden"];
+            404: components["responses"]["PageNotFound"];
+            409: components["responses"]["PagePatchConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["PageInvalid"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    savePageBody: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The page's id. */
+                page_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PageBodySave"];
+            };
+        };
+        responses: {
+            /** @description The page with its current version */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PageSummary"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ContentEditForbidden"];
+            404: components["responses"]["PageSaveNotFound"];
+            409: components["responses"]["PageSaveConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["PageInvalid"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    listPageVersions: {
+        parameters: {
+            query?: {
+                /** @description The `next_cursor` of the previous page; omit it for the first page. */
+                cursor?: string;
+                /** @description How many items to return, 1 to 200; 50 when omitted. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The page's id. */
+                page_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the versions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_PageVersionSummary"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["PagesViewForbidden"];
+            404: components["responses"]["PageNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    getPageVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The page's id. */
+                page_id: string;
+                /** @description The version's id. */
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The version with its body */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PageVersion"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["PagesViewForbidden"];
+            404: components["responses"]["PageVersionNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    restorePageVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The page's id. */
+                page_id: string;
+                /** @description The version to restore. */
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PageRestore"];
+            };
+        };
+        responses: {
+            /** @description The page with its current version */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PageSummary"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ContentEditForbidden"];
+            404: components["responses"]["PageVersionNotFound"];
+            409: components["responses"]["PageSaveConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["PageRestoreInvalid"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };

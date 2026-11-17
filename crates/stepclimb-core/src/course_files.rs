@@ -213,7 +213,7 @@ pub enum Error {
     /// Another course file of the course has the folder and name.
     #[error("the folder already holds a file with this name")]
     NameTaken,
-    /// A `file` item references the course file (B11).
+    /// A `file` item or a page version references the course file (B11).
     #[error("the course file is in use")]
     InUse,
     /// A folder rename would put a file more than [`MAX_FOLDER_DEPTH`] levels deep.
@@ -555,13 +555,16 @@ pub async fn rename_folder(
     Ok(moved)
 }
 
-/// Whether a `file` item references the course file `id` (B11). The course's cover joins this
-/// check with spec 06 I4.
+/// Whether a `file` item or any version of a page references the course file `id` (B11; spec
+/// 07 Data). The course's cover joins this check with spec 06 I4.
 pub async fn referenced(db: impl PgExecutor<'_>, scope: OrgScope, id: Uuid) -> Result<bool, Error> {
     let referenced = sqlx::query_scalar!(
-        r#"SELECT EXISTS (
-               SELECT 1 FROM module_items
-               WHERE org_id = $1 AND kind = 'file' AND ref_id = $2) AS "referenced!""#,
+        r#"SELECT (EXISTS (
+                       SELECT 1 FROM module_items
+                       WHERE org_id = $1 AND kind = 'file' AND ref_id = $2)
+                   OR EXISTS (
+                       SELECT 1 FROM page_version_files
+                       WHERE org_id = $1 AND course_file_id = $2)) AS "referenced!""#,
         scope.org_id(),
         id,
     )

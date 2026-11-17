@@ -32,6 +32,8 @@ use stepclimb_core::{
     course_files, courses, enrollments, files,
     id::{Uuid, new_id},
     items, modules, organizations,
+    page_doc::PageDoc,
+    pages,
     role_assignments::{self, NewAssignment, Scope},
     roles::{self, NewRole, RolePatch},
     users::{self, NewUser, Status},
@@ -341,6 +343,22 @@ impl Fixture {
         course_files::create(&mut conn, scope(self.org), course, file, place, now())
             .await
             .expect("create course file")
+            .id
+    }
+
+    /// A page of a new course in Tower: its id.
+    async fn page(&self) -> Uuid {
+        let course = self.course().await;
+        let author = self.user("Walk author").await;
+        let new = pages::NewPage {
+            title: "Walked page".into(),
+            slug: None,
+            body: PageDoc::empty(),
+        };
+        let mut conn = self.pool.acquire().await.expect("a connection");
+        pages::create(&mut conn, scope(self.org), course, &new, author, now())
+            .await
+            .expect("create page")
             .id
     }
 
@@ -1029,8 +1047,9 @@ const EMPTY_SCOPE_ALLOWED: &[&str] = &[
 
 /// B27, B44: a key with no scopes, whose owner holds every catalog permission at the
 /// organization, is refused on every `/api/v1` operation of the document but
-/// [`EMPTY_SCOPE_ALLOWED`]: 403, or for a route on an account, a course, a module or an item
-/// the 404 B17 answers for a target the principal cannot see (an enrollment's included). The walk reads the document, which lists every route the router
+/// [`EMPTY_SCOPE_ALLOWED`]: 403, or for a route on an account, a course, a module, an item, a
+/// course file or a page the 404 B17 answers for a target the principal cannot see (an
+/// enrollment's included). The walk reads the document, which lists every route the router
 /// mounts (`tests/csrf.rs` T17), so a new route is walked without being named here.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn an_empty_scope_key_is_refused_on_every_operation_but_the_allowed_ones(pool: PgPool) {
@@ -1066,6 +1085,10 @@ async fn an_empty_scope_key_is_refused_on_every_operation_but_the_allowed_ones(p
                 let course_file = f.course_file().await;
                 uri = uri.replace("{course_file_id}", &course_file.to_string());
             }
+            if uri.contains("{page_id}") {
+                let page = f.page().await;
+                uri = uri.replace("{page_id}", &page.to_string());
+            }
             if uri.contains("{user_id}") {
                 let target = f.user("Walk target").await;
                 uri = uri.replace("{user_id}", &target.to_string());
@@ -1093,6 +1116,7 @@ async fn an_empty_scope_key_is_refused_on_every_operation_but_the_allowed_ones(p
                 path.contains("{course_file_id}") && answer.code() == "file.not_found";
             let hidden_enrollment =
                 path.contains("{enrollment_id}") && answer.code() == "enrollment.not_found";
+            let hidden_page = path.contains("{page_id}") && answer.code() == "page.not_found";
             assert!(
                 answer.status == StatusCode::FORBIDDEN
                     || (answer.status == StatusCode::NOT_FOUND
@@ -1101,7 +1125,8 @@ async fn an_empty_scope_key_is_refused_on_every_operation_but_the_allowed_ones(p
                             || hidden_module
                             || hidden_item
                             || hidden_file
-                            || hidden_enrollment)),
+                            || hidden_enrollment
+                            || hidden_page)),
                 "{id} answered an empty-scope key: {answer:?}"
             );
         }

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO page_version_files (org_id, version_id, course_file_id, created_at,\n                                           updated_at)\n           SELECT $1, $2, file_id,\n                  timestamptz 'epoch' + $4::bigint * interval '1 microsecond',\n                  timestamptz 'epoch' + $4::bigint * interval '1 microsecond'\n           FROM unnest($3::uuid[]) AS file_id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "UuidArray",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "14a78173ee090e61d0f2aa6c8b0b54df596cbf4f9e80543261b50f7c0f4d9fa1"
+}

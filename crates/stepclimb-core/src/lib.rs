@@ -30,8 +30,9 @@
 //! [`appearance`], the theme and density a user chose; and [`files`], the stored files of an
 //! organization, once per SHA-256, with [`course_files`], which places them in a course's folders,
 //! and [`sniff`], which reads an upload's type from its first bytes; and [`unlock`], which decides
-//! for a learner which modules and items are locked and which are complete. The other
-//! repositories arrive with the M0 specs in `docs/specs/m0/`.
+//! for a learner which modules and items are locked and which are complete; and [`pages`], a
+//! course's pages and their immutable versions, whose bodies [`page_doc`] parses and checks. The
+//! other repositories arrive with the M0 specs in `docs/specs/m0/`.
 
 pub mod accounts;
 pub mod admission_rules;
@@ -65,6 +66,8 @@ pub mod oauth_codes;
 pub mod oauth_refresh_tokens;
 pub mod org_plans;
 pub mod organizations;
+pub mod page_doc;
+pub mod pages;
 pub mod passkeys;
 pub mod perm;
 pub mod plans;

@@ -66,7 +66,7 @@ problem_responses! {
     FolderRenameNotFound => "`course.not_found`: no course with this id exists in the organization, or you cannot see it. `folder.not_found`: no file is in the folder `from` or below it. `org.not_found`: the request's organization cannot be determined.",
     FilesViewForbidden => "`permission.denied`: you can see the course but do not hold `course.view_all` at a scope containing it.",
     CourseFileWriteConflict => "`course.archived`: the course is archived and takes no content change. `file.name_taken`: the folder already holds a file with this name.",
-    CourseFileDeleteConflict => "`course.archived`: the course is archived and takes no content change. `file.in_use`: a `file` item references the course file; remove it first.",
+    CourseFileDeleteConflict => "`course.archived`: the course is archived and takes no content change. `file.in_use`: a `file` item or a version of a page references the course file; remove it first.",
     CourseFileInvalid => "`request.invalid`: `errors` names `/folder` (`file.folder_invalid`: not `/` or a path of `/`-separated segments that are not empty, `.` or `..` and hold no `\\` or control character; `file.folder_too_long`: a segment over 100 characters; `file.folder_too_deep`: more than 8 segments) or `/name` (`file.name_invalid`: empty, `.`, `..`, or holding `/`, `\\` or a control character; `file.name_too_long`: over 255 characters). Both are compared after NFC normalization.",
     FolderRenameInvalid => "`request.invalid`: `errors` names `/from` or `/to` with `file.folder_invalid`, `file.folder_too_long` or `file.folder_too_deep` as for a course file's folder, `file.folder_root` (the top folder `/` cannot be renamed or be the new name), or `/to` with `file.folder_too_deep` when a moved file would be more than 8 levels deep.",
 }
@@ -213,7 +213,7 @@ pub(crate) fn file_error(error: Error) -> ApiError {
         ),
         Error::InUse => conflict(
             code::IN_USE,
-            "A file item references this course file; remove it first.",
+            "A file item or a page version references this course file; remove it first.",
         ),
         Error::TooDeep => ApiError::invalid(vec![FieldError::at(&["to"], code::FOLDER_TOO_DEEP)]),
         Error::RootFolder => ApiError::invalid(vec![FieldError::at(&["from"], code::FOLDER_ROOT)]),

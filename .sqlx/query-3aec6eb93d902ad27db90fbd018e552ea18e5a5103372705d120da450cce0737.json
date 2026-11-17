@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT EXISTS (\n               SELECT 1 FROM module_items\n               WHERE org_id = $1 AND kind = 'file' AND ref_id = $2) AS \"referenced!\"",
+  "query": "SELECT EXISTS (\n               SELECT 1 FROM module_items\n               WHERE org_id = $1 AND kind = 'page' AND ref_id = $2) AS \"referenced!\"",
   "describe": {
     "columns": [
       {
@@ -20,5 +20,5 @@
       null
     ]
   },
-  "hash": "f6dd5deaa10a841fb8cacbe3d5855e40749f76e7f0b9f8e075c5522c02650699"
+  "hash": "3aec6eb93d902ad27db90fbd018e552ea18e5a5103372705d120da450cce0737"
 }

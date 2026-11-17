@@ -3173,6 +3173,158 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/api/v1/courses/{course_id}/pages": {
+      "get": {
+        "tags": [
+          "pages"
+        ],
+        "summary": "List the course's pages by slug.",
+        "operationId": "listPages",
+        "parameters": [
+          {
+            "name": "course_id",
+            "in": "path",
+            "description": "The course's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page; omit it for the first page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many items to return, 1 to 200; 50 when omitted.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 200,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of the course's pages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_PageSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/PagesViewForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/ModuleCourseNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "pages"
+        ],
+        "summary": "Create a page with version 1 of its body.",
+        "operationId": "createPage",
+        "parameters": [
+          {
+            "name": "course_id",
+            "in": "path",
+            "description": "The course's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewPage"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The page is created",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The page's path"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/ContentEditForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/PagesCourseNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/PageCreateConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/PageInvalid"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/api/v1/courses/{course_id}/status": {
       "post": {
         "tags": [
@@ -4703,6 +4855,417 @@
           },
           "422": {
             "$ref": "#/components/responses/SettingsInvalid"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/pages/{page_id}": {
+      "delete": {
+        "tags": [
+          "pages"
+        ],
+        "summary": "Delete a page and all its versions, when no item references it.",
+        "operationId": "deletePage",
+        "parameters": [
+          {
+            "name": "page_id",
+            "in": "path",
+            "description": "The page's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The page is deleted"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/ContentEditForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/PageNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/PageDeleteConflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      },
+      "patch": {
+        "tags": [
+          "pages"
+        ],
+        "summary": "Rename a page or change its slug. A patch naming only current values changes nothing.",
+        "operationId": "updatePage",
+        "parameters": [
+          {
+            "name": "page_id",
+            "in": "path",
+            "description": "The page's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PagePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The page after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/ContentEditForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/PageNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/PagePatchConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/PageInvalid"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/pages/{page_id}/body": {
+      "put": {
+        "tags": [
+          "pages"
+        ],
+        "summary": "Save a body as the page's new current version. The save is refused, writing nothing, when\n`base_version_id` is no longer the current version; a body equal to the current one writes\nnothing and answers the page as it is.",
+        "operationId": "savePageBody",
+        "parameters": [
+          {
+            "name": "page_id",
+            "in": "path",
+            "description": "The page's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PageBodySave"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The page with its current version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/ContentEditForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/PageSaveNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/PageSaveConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/PageInvalid"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/pages/{page_id}/versions": {
+      "get": {
+        "tags": [
+          "pages"
+        ],
+        "summary": "List the page's versions, newest first, without their bodies.",
+        "operationId": "listPageVersions",
+        "parameters": [
+          {
+            "name": "page_id",
+            "in": "path",
+            "description": "The page's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page; omit it for the first page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many items to return, 1 to 200; 50 when omitted.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 200,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of the versions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_PageVersionSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/PagesViewForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/PageNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      }
+    },
+    "/api/v1/pages/{page_id}/versions/{version_id}": {
+      "get": {
+        "tags": [
+          "pages"
+        ],
+        "summary": "Read one version of the page with its body.",
+        "operationId": "getPageVersion",
+        "parameters": [
+          {
+            "name": "page_id",
+            "in": "path",
+            "description": "The page's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "description": "The version's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The version with its body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageVersion"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/PagesViewForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/PageVersionNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      }
+    },
+    "/api/v1/pages/{page_id}/versions/{version_id}/restore": {
+      "post": {
+        "tags": [
+          "pages"
+        ],
+        "summary": "Save a version's body as the page's new current version, with the save's conflict and image\nchecks.",
+        "operationId": "restorePageVersion",
+        "parameters": [
+          {
+            "name": "page_id",
+            "in": "path",
+            "description": "The page's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "description": "The version to restore.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PageRestore"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The page with its current version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/ContentEditForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/PageVersionNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/PageSaveConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/PageRestoreInvalid"
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
@@ -7444,6 +8007,30 @@
         },
         "additionalProperties": false
       },
+      "CurrentVersion": {
+        "type": "object",
+        "description": "The version that made a page save conflict: the page's current one (M1 spec 07 B3).",
+        "required": [
+          "id",
+          "number",
+          "author_id"
+        ],
+        "properties": {
+          "author_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The user who saved it."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
       "DensityChoice": {
         "type": "string",
         "description": "The density a user chose. `compact` sets the shorter control heights.",
@@ -8820,6 +9407,28 @@
         },
         "additionalProperties": false
       },
+      "NewPage": {
+        "type": "object",
+        "description": "A page to create, with version 1 of its body.",
+        "required": [
+          "title"
+        ],
+        "properties": {
+          "body": {
+            "$ref": "#/components/schemas/PageDoc",
+            "description": "Version 1's body; a document with one empty paragraph when omitted."
+          },
+          "slug": {
+            "type": "string",
+            "description": "Lowercase letters and digits in runs joined by single hyphens, 1 to 100 characters,\nunique in the course. Derived from the title when omitted."
+          },
+          "title": {
+            "type": "string",
+            "description": "Trimmed; 1 to 200 characters."
+          }
+        },
+        "additionalProperties": false
+      },
       "NewProvider": {
         "type": "object",
         "description": "A provider to create.",
@@ -9292,6 +9901,1007 @@
         },
         "additionalProperties": false
       },
+      "PageBlock": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "content": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PageInline"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "paragraph"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "attrs",
+              "type"
+            ],
+            "properties": {
+              "attrs": {
+                "$ref": "#/components/schemas/PageHeadingAttrs"
+              },
+              "content": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PageInline"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "heading"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "content",
+              "type"
+            ],
+            "properties": {
+              "content": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PageListItem"
+                },
+                "description": "One or more."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "bulletList"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "content",
+              "type"
+            ],
+            "properties": {
+              "attrs": {
+                "$ref": "#/components/schemas/PageOrderedListAttrs"
+              },
+              "content": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PageListItem"
+                },
+                "description": "One or more."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "orderedList"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "content",
+              "type"
+            ],
+            "properties": {
+              "content": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PageNestedBlock"
+                },
+                "description": "One or more."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "blockquote"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "horizontalRule"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "attrs": {
+                "$ref": "#/components/schemas/PageCodeBlockAttrs"
+              },
+              "content": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PageCodeText"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "codeBlock"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "content",
+              "type"
+            ],
+            "properties": {
+              "content": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PageTableRow"
+                },
+                "description": "One or more rows."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "table"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "attrs",
+              "type"
+            ],
+            "properties": {
+              "attrs": {
+                "$ref": "#/components/schemas/PageImageAttrs"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "image"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "attrs",
+              "content",
+              "type"
+            ],
+            "properties": {
+              "attrs": {
+                "$ref": "#/components/schemas/PageCalloutAttrs"
+              },
+              "content": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PageNestedBlock"
+                },
+                "description": "One or more."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "callout"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "attrs",
+              "type"
+            ],
+            "properties": {
+              "attrs": {
+                "$ref": "#/components/schemas/PageVideoEmbedAttrs"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "videoEmbed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "content",
+              "type"
+            ],
+            "properties": {
+              "content": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PageTranscriptLine"
+                },
+                "description": "One or more lines."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "transcript"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A top-level block."
+      },
+      "PageBodySave": {
+        "type": "object",
+        "description": "A body to save as the page's new current version.",
+        "required": [
+          "body",
+          "base_version_id"
+        ],
+        "properties": {
+          "base_version_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The version the body was edited from; it must still be the page's current version."
+          },
+          "body": {
+            "$ref": "#/components/schemas/PageDoc"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PageCalloutAttrs": {
+        "type": "object",
+        "description": "A callout's kind.",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/PageCalloutKind"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PageCalloutKind": {
+        "type": "string",
+        "enum": [
+          "info",
+          "tip",
+          "warning",
+          "danger"
+        ]
+      },
+      "PageCellAttrs": {
+        "type": "object",
+        "description": "A cell's spans, each 1 to 20; 1 when omitted.",
+        "properties": {
+          "colspan": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 1
+          },
+          "colwidth": {
+            "type": "null"
+          },
+          "rowspan": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "PageCodeBlockAttrs": {
+        "type": "object",
+        "description": "A code block's language for highlighting, one of `bash`, `c`, `cpp`, `csharp`, `css`, `go`,\n`html`, `java`, `javascript`, `json`, `kotlin`, `markdown`, `php`, `python`, `ruby`, `rust`,\n`sql`, `swift`, `typescript`, `xml`, `yaml`, or `null` for none.",
+        "properties": {
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "PageCodeText": {
+        "type": "object",
+        "description": "A code block's text: no marks.",
+        "required": [
+          "type",
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Not empty; no control character but tab and newline."
+          },
+          "type": {
+            "$ref": "#/components/schemas/PageTextKind"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PageDoc": {
+        "type": "object",
+        "description": "A page body: a ProseMirror document as Tiptap serializes it. At most 1 MiB serialized and\n20,000 nodes. Any node, mark or attribute not listed here is refused.",
+        "required": [
+          "type",
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PageBlock"
+            },
+            "description": "One or more blocks."
+          },
+          "type": {
+            "$ref": "#/components/schemas/PageDocKind"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PageDocKind": {
+        "type": "string",
+        "description": "The root node's type.",
+        "enum": [
+          "doc"
+        ]
+      },
+      "PageHeadingAttrs": {
+        "type": "object",
+        "description": "A heading's level, 2 to 4; the page title is the level 1.",
+        "required": [
+          "level"
+        ],
+        "properties": {
+          "level": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 2
+          }
+        },
+        "additionalProperties": false
+      },
+      "PageImageAttrs": {
+        "type": "object",
+        "description": "An image: a PNG, JPEG, GIF or WebP course file of the page's course.",
+        "required": [
+          "course_file_id",
+          "alt"
+        ],
+        "properties": {
+          "alt": {
+            "type": "string",
+            "description": "The image's text alternative; empty only when `decorative`. No control character."
+          },
+          "course_file_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "decorative": {
+            "type": "boolean",
+            "description": "Whether the image is decorative; `false` when omitted."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PageInline": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "text",
+              "type"
+            ],
+            "properties": {
+              "marks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PageMark"
+                },
+                "description": "Each mark at most once."
+              },
+              "text": {
+                "type": "string",
+                "description": "Not empty; no control character but tab and newline."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "text"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "hardBreak"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Text or a line break inside a paragraph, a heading or a transcript line."
+      },
+      "PageLinkAttrs": {
+        "type": "object",
+        "description": "A link's target: an absolute `https`, `http` or `mailto` URL, or a path on this site that\nstarts with one `/`.",
+        "required": [
+          "href"
+        ],
+        "properties": {
+          "href": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PageListItem": {
+        "type": "object",
+        "description": "A list item: a paragraph first, then any nested blocks.",
+        "required": [
+          "type",
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PageNestedBlock"
+            }
+          },
+          "type": {
+            "$ref": "#/components/schemas/PageListItemKind"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PageListItemKind": {
+        "type": "string",
+        "enum": [
+          "listItem"
+        ]
+      },
+      "PageMark": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "bold"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "italic"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "underline"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "strike"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "code"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "attrs",
+              "type"
+            ],
+            "properties": {
+              "attrs": {
+                "$ref": "#/components/schemas/PageLinkAttrs"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "link"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "subscript"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "superscript"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A mark on text."
+      },
+      "PageNestedBlock": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "content": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PageInline"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "paragraph"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "content",
+              "type"
+            ],
+            "properties": {
+              "content": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PageListItem"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "bulletList"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "content",
+              "type"
+            ],
+            "properties": {
+              "attrs": {
+                "$ref": "#/components/schemas/PageOrderedListAttrs"
+              },
+              "content": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PageListItem"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "orderedList"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "attrs": {
+                "$ref": "#/components/schemas/PageCodeBlockAttrs"
+              },
+              "content": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PageCodeText"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "codeBlock"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A block inside a blockquote, a callout, a list item or a table cell."
+      },
+      "PageOrderedListAttrs": {
+        "type": "object",
+        "description": "The number an ordered list starts at; 1 when omitted.",
+        "properties": {
+          "start": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "PagePatch": {
+        "type": "object",
+        "description": "A change to a page; an omitted member is left as it is.",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "description": "As for a new page; unique in the course."
+          },
+          "title": {
+            "type": "string",
+            "description": "Trimmed; 1 to 200 characters."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PageRestore": {
+        "type": "object",
+        "description": "The version a restore was started from.",
+        "required": [
+          "base_version_id"
+        ],
+        "properties": {
+          "base_version_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The page's current version as the caller last saw it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PageSummary": {
+        "type": "object",
+        "description": "A page of a course with its current version.",
+        "required": [
+          "id",
+          "course_id",
+          "title",
+          "slug",
+          "current_version",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "course_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          },
+          "current_version": {
+            "$ref": "#/components/schemas/PageVersionSummary"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string",
+            "description": "Unique in the course."
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC: the last change to the title, the slug or the current version."
+          }
+        }
+      },
+      "PageTableCell": {
+        "type": "object",
+        "description": "A data or header cell.",
+        "required": [
+          "type",
+          "content"
+        ],
+        "properties": {
+          "attrs": {
+            "$ref": "#/components/schemas/PageCellAttrs"
+          },
+          "content": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PageNestedBlock"
+            },
+            "description": "One or more."
+          },
+          "type": {
+            "$ref": "#/components/schemas/PageTableCellKind"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PageTableCellKind": {
+        "type": "string",
+        "enum": [
+          "tableCell",
+          "tableHeader"
+        ]
+      },
+      "PageTableRow": {
+        "type": "object",
+        "description": "A table row of one or more cells.",
+        "required": [
+          "type",
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PageTableCell"
+            }
+          },
+          "type": {
+            "$ref": "#/components/schemas/PageTableRowKind"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PageTableRowKind": {
+        "type": "string",
+        "enum": [
+          "tableRow"
+        ]
+      },
+      "PageTextKind": {
+        "type": "string",
+        "enum": [
+          "text"
+        ]
+      },
+      "PageTranscriptLine": {
+        "type": "object",
+        "description": "A line of a transcript: who speaks, and what.",
+        "required": [
+          "type",
+          "attrs"
+        ],
+        "properties": {
+          "attrs": {
+            "$ref": "#/components/schemas/PageTranscriptLineAttrs"
+          },
+          "content": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PageInline"
+            }
+          },
+          "type": {
+            "$ref": "#/components/schemas/PageTranscriptLineKind"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PageTranscriptLineAttrs": {
+        "type": "object",
+        "description": "A transcript line's speaker label, chosen per block: 1 to 40 characters, not blank.",
+        "required": [
+          "speaker"
+        ],
+        "properties": {
+          "speaker": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PageTranscriptLineKind": {
+        "type": "string",
+        "enum": [
+          "transcriptLine"
+        ]
+      },
+      "PageVersion": {
+        "type": "object",
+        "description": "A version of a page with its body.",
+        "required": [
+          "id",
+          "number",
+          "author_id",
+          "created_at",
+          "body"
+        ],
+        "properties": {
+          "author_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "body": {
+            "$ref": "#/components/schemas/PageDoc"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "PageVersionSummary": {
+        "type": "object",
+        "description": "A version of a page, without its body.",
+        "required": [
+          "id",
+          "number",
+          "author_id",
+          "created_at"
+        ],
+        "properties": {
+          "author_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The user who saved it."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1, 2, ... per page."
+          }
+        }
+      },
+      "PageVideoEmbedAttrs": {
+        "type": "object",
+        "description": "A YouTube or Vimeo video by id; the server builds the player's URL.",
+        "required": [
+          "provider",
+          "video_id",
+          "title"
+        ],
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/PageVideoProvider"
+          },
+          "title": {
+            "type": "string",
+            "description": "The player's accessible name: 1 to 200 characters, not blank."
+          },
+          "video_id": {
+            "type": "string",
+            "description": "YouTube: 11 characters of `A-Z`, `a-z`, `0-9`, `_` and `-`. Vimeo: 1 to 20 digits."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PageVideoProvider": {
+        "type": "string",
+        "enum": [
+          "youtube",
+          "vimeo"
+        ]
+      },
       "Page_Account": {
         "type": "object",
         "description": "One page of a list.",
@@ -9592,6 +11202,122 @@
                 }
               ],
               "description": "One entry of a folder: a folder directly inside it, or a file in it."
+            },
+            "description": "The items, in the list's sort order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass this as `cursor` to get the next page; `null` on the last page."
+          }
+        }
+      },
+      "Page_PageSummary": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A page of a course with its current version.",
+              "required": [
+                "id",
+                "course_id",
+                "title",
+                "slug",
+                "current_version",
+                "created_at",
+                "updated_at"
+              ],
+              "properties": {
+                "course_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "RFC 3339, UTC."
+                },
+                "current_version": {
+                  "$ref": "#/components/schemas/PageVersionSummary"
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "slug": {
+                  "type": "string",
+                  "description": "Unique in the course."
+                },
+                "title": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "RFC 3339, UTC: the last change to the title, the slug or the current version."
+                }
+              }
+            },
+            "description": "The items, in the list's sort order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass this as `cursor` to get the next page; `null` on the last page."
+          }
+        }
+      },
+      "Page_PageVersionSummary": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A version of a page, without its body.",
+              "required": [
+                "id",
+                "number",
+                "author_id",
+                "created_at"
+              ],
+              "properties": {
+                "author_id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "The user who saved it."
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "RFC 3339, UTC."
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "number": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "1, 2, ... per page."
+                }
+              }
             },
             "description": "The items, in the list's sort order."
           },
@@ -10227,6 +11953,17 @@
           "code": {
             "type": "string",
             "description": "The stable error code, `area.reason`."
+          },
+          "current_version": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CurrentVersion",
+                "description": "On `page.version_conflict`, the page's current version, which the save was not based on."
+              }
+            ]
           },
           "detail": {
             "type": "string",
@@ -11602,7 +13339,7 @@
         }
       },
       "CourseFileDeleteConflict": {
-        "description": "`course.archived`: the course is archived and takes no content change. `file.in_use`: a `file` item references the course file; remove it first.",
+        "description": "`course.archived`: the course is archived and takes no content change. `file.in_use`: a `file` item or a version of a page references the course file; remove it first.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -12461,6 +14198,116 @@
           }
         }
       },
+      "PageCreateConflict": {
+        "description": "`course.archived`: the course is archived and takes no content change. `page.slug_taken`: the course already has a page with this slug.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "PageDeleteConflict": {
+        "description": "`course.archived`: the course is archived and takes no content change. `page.in_use`: an item references the page; remove it first.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "PageInvalid": {
+        "description": "`request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/slug` with `page.slug_invalid` (not lowercase letters and digits in runs joined by single hyphens, 1 to 100 characters, or, with no slug given, a title from which none can be derived), or a member of `/body` with `page.body_invalid` (the first node, mark or attribute the page schema does not allow, or `/body` itself for a body over 1 MiB or 20,000 nodes) or `page.image_type` (an image's `course_file_id` names a file whose type, read from its bytes, is not PNG, JPEG, GIF or WebP).",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "PageNotFound": {
+        "description": "`page.not_found`: no page with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "PagePatchConflict": {
+        "description": "`course.archived`: the course is archived and takes no content change. `page.slug_taken`: the course already has another page with this slug.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "PageRestoreInvalid": {
+        "description": "`request.invalid`: `errors` names a member of `/body`, the version's body, with `page.image_type` (an image names a file whose type is not PNG, JPEG, GIF or WebP) or `page.body_invalid` (a node the page schema no longer allows).",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "PageSaveConflict": {
+        "description": "`course.archived`: the course is archived and takes no content change. `page.version_conflict`: `base_version_id` is not the page's current version, which `current_version` names; nothing was saved. Reload, merge and save again.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "PageSaveNotFound": {
+        "description": "`page.not_found`: no page with this id exists in the organization, or you cannot see its course. `file.not_found`: an image of the body names no course file of the page's course. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "PageVersionNotFound": {
+        "description": "`page.not_found`: no page with this id exists in the organization, or you cannot see its course. `page_version.not_found`: the page has no version with this id. `file.not_found`: an image of the version names a course file that no longer exists. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "PagesCourseNotFound": {
+        "description": "`course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `file.not_found`: an image of the body names no course file of this course. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "PagesViewForbidden": {
+        "description": "`permission.denied`: you can see the course but do not hold `course.view_all` at a scope containing it.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "ParentNotFound": {
         "description": "`account.not_found`: no account with `parent_id` exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined.",
         "content": {
@@ -13067,6 +14914,10 @@
     {
       "name": "files",
       "description": "A course's files and folders"
+    },
+    {
+      "name": "pages",
+      "description": "A course's pages and their versions"
     },
     {
       "name": "roles",
