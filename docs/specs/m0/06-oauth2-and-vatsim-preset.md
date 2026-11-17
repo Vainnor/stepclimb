@@ -288,7 +288,9 @@ server every sign-in test and the Playwright stack use instead of a real provide
   organization scope, the rule of `PUT /api/v1/admin/local-sign-in`: creating a provider with
   `trusted_for_email_matching: true`, turning it on, or, while it is on, changing
   `claims.email`, `claims.email_verified` or the `oidc` `issuer`. Each decides which existing
-  users a new identity can reach by email.
+  users a new identity can reach by email. From M1, "every catalog permission" leaves out a
+  permission grantable only at course scope (`course.participate`), which no one holds at
+  organization scope (`../m1/02-courses-and-enrollments.md` B24a, owner decision of 2026-11-16).
 
   Coordinator decisions (2026-11-15), for I5 (`stepclimb_server::provider_admin`,
   `stepclimb_core::identity_providers::admin`):

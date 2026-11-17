@@ -29,7 +29,7 @@ use stepclimb_core::{
     OrgScope, Source, accounts,
     audit::{self, Actor},
     clock::ManualClock,
-    course_files, courses, files,
+    course_files, courses, enrollments, files,
     id::{Uuid, new_id},
     items, modules, organizations,
     role_assignments::{self, NewAssignment, Scope},
@@ -267,6 +267,28 @@ impl Fixture {
             .await
             .expect("create course")
             .id
+    }
+
+    /// An enrollment of a new user in a new course in Tower, with a role of no permissions.
+    async fn enrollment(&self) -> Uuid {
+        let new = enrollments::NewEnrollment {
+            user_id: self.user("Walked learner").await,
+            role_id: self.custom_role(&[]).await,
+            source: Source::Local,
+            external_id: None,
+        };
+        let course = self.course().await;
+        enrollments::create(
+            &self.pool,
+            scope(self.org),
+            course,
+            &new,
+            now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("create enrollment")
+        .id
     }
 
     /// A module of a new course in Tower and an item in it.
@@ -1008,7 +1030,7 @@ const EMPTY_SCOPE_ALLOWED: &[&str] = &[
 /// B27, B44: a key with no scopes, whose owner holds every catalog permission at the
 /// organization, is refused on every `/api/v1` operation of the document but
 /// [`EMPTY_SCOPE_ALLOWED`]: 403, or for a route on an account, a course, a module or an item
-/// the 404 B17 answers for a target the principal cannot see. The walk reads the document, which lists every route the router
+/// the 404 B17 answers for a target the principal cannot see (an enrollment's included). The walk reads the document, which lists every route the router
 /// mounts (`tests/csrf.rs` T17), so a new route is walked without being named here.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn an_empty_scope_key_is_refused_on_every_operation_but_the_allowed_ones(pool: PgPool) {
@@ -1035,6 +1057,10 @@ async fn an_empty_scope_key_is_refused_on_every_operation_but_the_allowed_ones(p
                 uri = uri
                     .replace("{module_id}", &module.to_string())
                     .replace("{item_id}", &item.to_string());
+            }
+            if uri.contains("{enrollment_id}") {
+                let enrollment = f.enrollment().await;
+                uri = uri.replace("{enrollment_id}", &enrollment.to_string());
             }
             if uri.contains("{course_file_id}") {
                 let course_file = f.course_file().await;
@@ -1065,6 +1091,8 @@ async fn an_empty_scope_key_is_refused_on_every_operation_but_the_allowed_ones(p
             let hidden_item = path.contains("{item_id}") && answer.code() == "item.not_found";
             let hidden_file =
                 path.contains("{course_file_id}") && answer.code() == "file.not_found";
+            let hidden_enrollment =
+                path.contains("{enrollment_id}") && answer.code() == "enrollment.not_found";
             assert!(
                 answer.status == StatusCode::FORBIDDEN
                     || (answer.status == StatusCode::NOT_FOUND
@@ -1072,7 +1100,8 @@ async fn an_empty_scope_key_is_refused_on_every_operation_but_the_allowed_ones(p
                             || hidden_course
                             || hidden_module
                             || hidden_item
-                            || hidden_file)),
+                            || hidden_file
+                            || hidden_enrollment)),
                 "{id} answered an empty-scope key: {answer:?}"
             );
         }
@@ -1129,7 +1158,14 @@ async fn a_page_load_with_a_key_does_not_look_it_up(pool: PgPool) {
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn the_every_permission_rule_reads_a_keys_narrowed_grants(pool: PgPool) {
     let f = Fixture::new(pool).await;
-    let every: Vec<&str> = stepclimb_core::perm::ALL.iter().map(|p| p.key()).collect();
+    // Every catalog permission the owner can hold here: a course-only one (`course.participate`)
+    // takes an enrollment, which this owner lacks, and the every-permission rule leaves it out
+    // (M1 spec 02 B24a).
+    let every: Vec<&str> = stepclimb_core::perm::ALL
+        .iter()
+        .filter(|p| !p.course_only())
+        .map(|p| p.key())
+        .collect();
     let (_, cookie, _) = f.manager(&every).await;
     let admission = key_of(&f.create(Auth::Cookie(&cookie), &["admission.manage"]).await);
     let provider = key_of(&f.create(Auth::Cookie(&cookie), &["provider.manage"]).await);
@@ -1174,7 +1210,14 @@ async fn the_every_permission_rule_reads_a_keys_narrowed_grants(pool: PgPool) {
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn turning_email_matching_on_reads_a_keys_narrowed_grants(pool: PgPool) {
     let f = Fixture::new(pool).await;
-    let every: Vec<&str> = stepclimb_core::perm::ALL.iter().map(|p| p.key()).collect();
+    // Every catalog permission the owner can hold here: a course-only one (`course.participate`)
+    // takes an enrollment, which this owner lacks, and the every-permission rule leaves it out
+    // (M1 spec 02 B24a).
+    let every: Vec<&str> = stepclimb_core::perm::ALL
+        .iter()
+        .filter(|p| !p.course_only())
+        .map(|p| p.key())
+        .collect();
     let (_, cookie, _) = f.manager(&every).await;
     let settings = key_of(
         &f.create(Auth::Cookie(&cookie), &["organization.manage"])

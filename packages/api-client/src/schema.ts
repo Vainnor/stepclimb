@@ -469,6 +469,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/courses/{course_id}/enrollments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a course's enrollments, sorted by the user's display name, then the enrollment's id. */
+        get: operations["listEnrollments"];
+        put?: never;
+        /** Enroll a user in a course with a role, as `active`. */
+        post: operations["createEnrollment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/courses/{course_id}/files": {
         parameters: {
             query?: never;
@@ -583,6 +601,24 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/enrollments/{enrollment_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove an enrollment. */
+        delete: operations["deleteEnrollment"];
+        options?: never;
+        head?: never;
+        /** Conclude or reactivate an enrollment. Its current status changes nothing. */
+        patch: operations["updateEnrollment"];
         trace?: never;
     };
     "/api/v1/items/{item_id}": {
@@ -940,7 +976,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List the organization's users, sorted by display name, then id. */
+        /**
+         * List the organization's users, sorted by display name, then id. A caller holding `user.view`
+         *     at accounts only sees the users in those accounts' subtrees: those holding a role there, or
+         *     enrolled in a course there.
+         */
         get: operations["listUsers"];
         put?: never;
         /** Create a user, `local` and `active`, and link the identities given to them. */
@@ -1949,6 +1989,36 @@ export interface components {
             /** @description The path on this site to open next. */
             return_to: string;
         };
+        /** @description The enrolled user, as much as a roster needs. */
+        EnrolledUser: {
+            display_name: string;
+            /** Format: uuid */
+            id: string;
+        };
+        /** @description A user's enrollment in a course with a role. */
+        Enrollment: {
+            /** Format: uuid */
+            course_id: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            created_at: string;
+            /** @description The owning system's id for the enrollment; `null` for a `local` one. */
+            external_id: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            role_id: string;
+            source: components["schemas"]["EnrollmentSource"];
+            status: components["schemas"]["EnrollmentStatus"];
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            updated_at: string;
+            user: components["schemas"]["EnrolledUser"];
+        };
         /** @description An enrollment link, returned once: the only copy of its token. */
         EnrollmentLink: {
             /**
@@ -1962,6 +2032,10 @@ export interface components {
              */
             url: string;
         };
+        /** @description The status to give an enrollment. */
+        EnrollmentPatch: {
+            status: components["schemas"]["EnrollmentStatus"];
+        };
         /** @description A right password whose account must set up TOTP first: no session exists yet. Shown once. */
         EnrollmentRequired: {
             /**
@@ -1974,6 +2048,12 @@ export interface components {
             /** @description The secret in base32, for typing into the app instead. */
             secret: string;
         };
+        /**
+         * @description Who owns an enrollment: an admin of this organization (`local`), or the identity provider,
+         *     sync API, SCIM or connector that wrote it, in which case it cannot be changed here.
+         * @enum {string}
+         */
+        EnrollmentSource: "local" | "idp" | "sync" | "scim" | "connector";
         /** @description The token from an enrollment link. */
         EnrollmentStart: {
             /** @description The text after `#token=` in the link. */
@@ -1992,6 +2072,12 @@ export interface components {
              */
             passkey_options?: components["schemas"]["PasskeyCreationOptions"];
         };
+        /**
+         * @description An enrollment's status: `active` grants the role at the course, `concluded` grants nothing
+         *     and is kept as history.
+         * @enum {string}
+         */
+        EnrollmentStatus: "active" | "concluded";
         /** @description The organization's plan and what it allows: every feature and limit of the server's catalogs. */
         Entitlements: {
             /** @description Every catalog feature, by key, with whether the plan includes it. */
@@ -2397,6 +2483,17 @@ export interface components {
             /** @description Trimmed; 1 to 200 characters. */
             title: string;
         };
+        /** @description An enrollment to create, `active`. */
+        NewEnrollmentBody: {
+            /**
+             * Format: uuid
+             * @description A built-in role other than `manager` and `observer`, or a custom role of the
+             *     organization.
+             */
+            role_id: string;
+            /** Format: uuid */
+            user_id: string;
+        };
         /** @description An identity to link to a user, so they can sign in with it the first time. */
         NewIdentity: {
             /** @description The key of one of the organization's identity providers. */
@@ -2493,11 +2590,14 @@ export interface components {
         NewRoleAssignment: {
             /**
              * Format: uuid
-             * @description A built-in role other than `manager` and `observer`, or a custom role of the
-             *     organization.
+             * @description A built-in role other than `manager`, `student` and `observer`, or a custom role of the
+             *     organization. Student and Observer are granted by enrolling the user in a course.
              */
             role_id: string;
-            /** @description The organization (its own id) or an account of it. `course` is not available yet. */
+            /**
+             * @description The organization (its own id) or an account of it. `course` is not available: the
+             *     course-scope grant is an enrollment.
+             */
             scope: components["schemas"]["ScopeRef"];
             /** Format: uuid */
             user_id: string;
@@ -2737,6 +2837,35 @@ export interface components {
                  * @description RFC 3339, UTC.
                  */
                 updated_at: string;
+            }[];
+            /** @description Pass this as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
+        };
+        /** @description One page of a list. */
+        Page_Enrollment: {
+            /** @description The items, in the list's sort order. */
+            items: {
+                /** Format: uuid */
+                course_id: string;
+                /**
+                 * Format: date-time
+                 * @description RFC 3339, UTC.
+                 */
+                created_at: string;
+                /** @description The owning system's id for the enrollment; `null` for a `local` one. */
+                external_id: string | null;
+                /** Format: uuid */
+                id: string;
+                /** Format: uuid */
+                role_id: string;
+                source: components["schemas"]["EnrollmentSource"];
+                status: components["schemas"]["EnrollmentStatus"];
+                /**
+                 * Format: date-time
+                 * @description RFC 3339, UTC.
+                 */
+                updated_at: string;
+                user: components["schemas"]["EnrolledUser"];
             }[];
             /** @description Pass this as `cursor` to get the next page; `null` on the last page. */
             next_cursor: string | null;
@@ -3831,7 +3960,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `course.status_invalid`: the course cannot change from its status to this one; the allowed changes are draft to published, published to archived, archived to published and published to draft. `course.template`: a template cannot be published. */
+        /** @description `course.status_invalid`: the course cannot change from its status to this one; the allowed changes are draft to published, published to archived, archived to published and published to draft. `course.has_learners`: the course has an active enrollment whose role holds `course.participate`, so it cannot go back to draft. `course.template`: a template cannot be published. */
         CourseStatusConflict: {
             headers: {
                 [name: string]: unknown;
@@ -3939,6 +4068,33 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `enrollment.exists`: the user already holds the role in the course. `role.unknown_builtin`: the role is a built-in role of another Stepclimb release. `course.archived`: an archived course takes no new enrollment. `course.template`: a template takes no enrollment whose role holds `course.participate`. */
+        EnrollmentCreateConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: you can see the course but do not hold `enrollment.manage` at a scope containing it. `permission.escalation`: the role has a catalog permission grantable at organization or account scope that you do not hold at the course. `auth.csrf_refused`: the request did not come from this site. */
+        EnrollmentCreateForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `user.not_found`: no user of the organization has this id. `role.not_found`: no built-in role and no custom role of the organization has this id. `org.not_found`: the request's organization cannot be determined. */
+        EnrollmentCreateNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `local.email_required`: the user has no email address, which local sign-in finds them by; add one first. */
         EnrollmentLinkConflict: {
             headers: {
@@ -3950,6 +4106,24 @@ export interface components {
         };
         /** @description `auth.session_required`: the request carries a bearer credential; only a signed-in browser session creates enrollment links. `permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the user holds a permission, at any scope, that the caller does not hold at organization scope. `auth.csrf_refused`: the request did not come from this site. */
         EnrollmentLinkForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined. */
+        EnrollmentListNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `enrollment.not_found`: no enrollment with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined. */
+        EnrollmentNotFound: {
             headers: {
                 [name: string]: unknown;
             };
@@ -3977,6 +4151,24 @@ export interface components {
         };
         /** @description `auth.method_disabled`: the organization offers neither passkey nor password sign-in. `org.not_found`: the request's organization cannot be determined. */
         EnrollmentStartNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `enrollment.externally_managed`: an identity provider, the sync API, SCIM or a connector owns the enrollment. `role.unknown_builtin`: the enrollment's role is a built-in role of another Stepclimb release. */
+        EnrollmentWriteConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: you can see the enrollment's course but do not hold `enrollment.manage` at a scope containing it. `permission.escalation`: the enrollment's role has a catalog permission grantable at organization or account scope that you do not hold at the course. `auth.csrf_refused`: the request did not come from this site. */
+        EnrollmentWriteForbidden: {
             headers: {
                 [name: string]: unknown;
             };
@@ -6350,6 +6542,82 @@ export interface operations {
             503: components["responses"]["NoOrganization"];
         };
     };
+    listEnrollments: {
+        parameters: {
+            query?: {
+                status?: components["schemas"]["EnrollmentStatus"];
+                role_id?: string;
+                user_id?: string;
+                /** @description The `next_cursor` of the previous page; omit it for the first page. */
+                cursor?: string;
+                /** @description How many items to return, 1 to 200; 50 when omitted. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The course's id. */
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of enrollments */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_Enrollment"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["PermissionDenied"];
+            404: components["responses"]["EnrollmentListNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    createEnrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The course's id. */
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewEnrollmentBody"];
+            };
+        };
+        responses: {
+            /** @description The enrollment is created */
+            201: {
+                headers: {
+                    /** @description The enrollment's path */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Enrollment"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["EnrollmentCreateForbidden"];
+            404: components["responses"]["EnrollmentCreateNotFound"];
+            409: components["responses"]["EnrollmentCreateConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["UnprocessableEntity"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
     listCourseFiles: {
         parameters: {
             query?: {
@@ -6610,6 +6878,70 @@ export interface operations {
             403: components["responses"]["CourseManageForbidden"];
             404: components["responses"]["CourseNotFound"];
             409: components["responses"]["CourseStatusConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    deleteEnrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The enrollment's id. */
+                enrollment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The enrollment is removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["EnrollmentWriteForbidden"];
+            404: components["responses"]["EnrollmentNotFound"];
+            409: components["responses"]["EnrollmentWriteConflict"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    updateEnrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The enrollment's id. */
+                enrollment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnrollmentPatch"];
+            };
+        };
+        responses: {
+            /** @description The enrollment after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Enrollment"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["EnrollmentWriteForbidden"];
+            404: components["responses"]["EnrollmentNotFound"];
+            409: components["responses"]["EnrollmentWriteConflict"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             500: components["responses"]["InternalError"];

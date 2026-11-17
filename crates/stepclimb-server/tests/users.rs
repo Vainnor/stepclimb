@@ -1123,8 +1123,9 @@ async fn suspending_the_last_organization_admin_is_refused(pool: PgPool) {
 
 // Permissions and organizations (T19, T20).
 
-/// T19: `user.view` at an account does not reach the organization's users, and `user.view`
-/// alone does not change them.
+/// T19: `user.view` at an account does not reach a user's route, which acts at organization
+/// scope, and lists only the users in its subtree (M1 spec 02 B21); `user.view` alone does not
+/// change them.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn t19_the_routes_need_their_permission_at_organization_scope(pool: PgPool) {
     let f = Fixture::new(pool).await;
@@ -1139,11 +1140,23 @@ async fn t19_the_routes_need_their_permission_at_organization_scope(pool: PgPool
     let body = json!({ "display_name": "Renamed" });
 
     for cookie in [&at_account, &account_manager] {
-        for (method, uri) in [(Method::GET, USERS), (Method::GET, user_uri.as_str())] {
-            let answer = f.send(method, uri, cookie, None).await;
-            answer.refused(StatusCode::FORBIDDEN, "permission.denied");
-        }
+        let answer = f.send(Method::GET, &user_uri, cookie, None).await;
+        answer.refused(StatusCode::FORBIDDEN, "permission.denied");
     }
+    f.send(Method::GET, USERS, &account_manager, None)
+        .await
+        .refused(StatusCode::FORBIDDEN, "permission.denied");
+    // Sam holds nothing in the root's subtree: the account-scope holder lists only themself.
+    let listed = f.send(Method::GET, USERS, &at_account, None).await;
+    assert_eq!(listed.status, StatusCode::OK, "{listed:?}");
+    let ids: Vec<&str> = listed.body["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|u| u["id"].as_str().expect("an id"))
+        .collect();
+    assert!(!ids.contains(&sam.to_string().as_str()), "{ids:?}");
+    assert_eq!(ids.len(), 1, "{ids:?}");
     for cookie in [&at_account, &viewer] {
         f.post(cookie, body.clone())
             .await

@@ -10,8 +10,9 @@
 //!
 //! `POST` checks in B12's order: the user (404 `user.not_found`), the role (404
 //! `role.not_found`; 409 `role.unknown_builtin` for a built-in role this release does not
-//! define), Manager and Observer (422, B13), the scope (404, or 422 for a course), the
-//! caller's `role.assign` there (404 when the scope is hidden from the caller, else 403), the
+//! define), Manager (422, B13), the scope (404, or 422 for a course), Student and Observer at
+//! the organization or an account (422 `role_assignment.course_role`: they are course-scope
+//! roles, granted only by an enrollment, M1 spec 02 B22), the caller's `role.assign` there (404 when the scope is hidden from the caller, else 403), the
 //! escalation rule (403), and a repeat (409). Both writes take the account tree lock before
 //! they read the scope's path, so an account move or delete cannot carry the scope out of the
 //! caller's reach between the check and the write. The role is read `FOR KEY SHARE` in the
@@ -22,9 +23,9 @@
 //! the last-admin rule (409) to `stepclimb_core::role_assignments::delete`, which serializes
 //! removals per organization.
 //!
-//! A course-scope assignment cannot be created until the M1 courses spec. One that exists
-//! anyway is treated as inside the organization only: an organization-scope grant reaches it,
-//! an account grant does not, since M0 cannot tell which account a course belongs to.
+//! A course-scope assignment cannot be created: an active enrollment is the course-scope grant
+//! (M1 spec 02 Q1). One that exists anyway grants nothing and is treated as inside the
+//! organization only: an organization-scope grant reaches it, an account grant does not.
 
 use axum::{
     Json,
@@ -38,7 +39,7 @@ use stepclimb_core::{
     Source, accounts,
     grants::{self, Denied, Grants, RequireError, ScopeId},
     id::Uuid,
-    perm::{self, Permission, RoleAssign, RoleView},
+    perm::{Permission, RoleAssign, RoleView},
     role_assignments::{self as repo, ListFilter, NewAssignment, Scope},
     roles, users,
 };
@@ -61,8 +62,12 @@ use crate::{
 /// `{ROLE_ASSIGNMENTS_PATH}/{assignment_id}`.
 pub const ROLE_ASSIGNMENTS_PATH: &str = "/api/v1/admin/role-assignments";
 
-/// Built-in roles whose scope (reporting lines, named students) does not exist yet (B13).
-const NOT_ASSIGNABLE_YET: [&str; 2] = ["manager", "observer"];
+/// The built-in role whose scope (reporting lines) does not exist yet (B13).
+const NOT_ASSIGNABLE_YET: [&str; 1] = ["manager"];
+
+/// Built-in course-scope roles, granted only by an enrollment and never assigned at the
+/// organization or an account (M1 spec 02 B22, Q1).
+const COURSE_ROLES: [&str; 2] = ["student", "observer"];
 
 /// The codes this module produces.
 pub mod code {
@@ -83,6 +88,9 @@ pub mod code {
     /// In a 422's `errors`: assignments of this role, or at this scope type, are not available
     /// yet.
     pub const ROLE_ASSIGNMENT_SCOPE_UNAVAILABLE: &str = "role_assignment.scope_unavailable";
+    /// In a 422's `errors`: the role is a course-scope role (Student, Observer), which only an
+    /// enrollment grants.
+    pub const ROLE_ASSIGNMENT_COURSE_ROLE: &str = "role_assignment.course_role";
 }
 
 problem_responses! {
@@ -164,11 +172,12 @@ impl RoleAssignment {
 pub struct NewRoleAssignment {
     #[schema(value_type = String, format = "uuid")]
     pub user_id: Uuid,
-    /// A built-in role other than `manager` and `observer`, or a custom role of the
-    /// organization.
+    /// A built-in role other than `manager`, `student` and `observer`, or a custom role of the
+    /// organization. Student and Observer are granted by enrolling the user in a course.
     #[schema(value_type = String, format = "uuid")]
     pub role_id: Uuid,
-    /// The organization (its own id) or an account of it. `course` is not available yet.
+    /// The organization (its own id) or an account of it. `course` is not available: the
+    /// course-scope grant is an enrollment.
     pub scope: ScopeRef,
 }
 
@@ -326,6 +335,12 @@ pub async fn create_role_assignment(
     if let Scope::Course(_) = at {
         return Err(scope_unavailable(&["scope", "type"]));
     }
+    if is_course_role(&role) {
+        return Err(ApiError::invalid(vec![FieldError::at(
+            &["role_id"],
+            code::ROLE_ASSIGNMENT_COURSE_ROLE,
+        )]));
+    }
     let target = permission_at::<RoleAssign>(&mut tx, grants, at).await?;
     refuse_escalation(grants, &role.permissions, &target)?;
     let new = NewAssignment {
@@ -472,15 +487,16 @@ fn visible_accounts<P: Permission>(grants: &Grants) -> Option<Vec<Uuid>> {
 
 /// 403 `permission.escalation` when the role has a catalog permission that is not effective for
 /// the caller at `target`, the assignment's scope (B12 step 5, B14, Q4). Every catalog key of the
-/// role counts, also one not grantable at the scope's type, so an account admin cannot hand out
-/// or take away Organization admin at its own account. A key the catalog does not define grants
-/// nothing anywhere and is not checked.
+/// role grantable at organization or account scope counts, also one not grantable at the scope's
+/// type, so an account admin cannot hand out or take away Organization admin at its own account.
+/// A key the catalog does not define grants nothing anywhere and is not checked, nor is one
+/// grantable only at course scope, which no assignment makes effective (M1 spec 02 B24a).
 fn refuse_escalation(
     grants: &Grants,
     permissions: &[String],
     target: &grants::Target,
 ) -> Result<(), ApiError> {
-    if !holds_unheld(grants, permissions, target) {
+    if !grants.lacks_any_of(permissions, target) {
         return Ok(());
     }
     Err(ApiError::new(
@@ -490,25 +506,10 @@ fn refuse_escalation(
     ))
 }
 
-/// Whether `permissions` has a catalog key that is not effective for the caller (`grants`) at
-/// `target`: the escalation rule of role assignments (spec 09 B12, Q4), and of the user admin
-/// routes' email and status changes (spec 03, owner decision of 2026-11-14). A key the catalog
-/// does not define grants nothing anywhere and does not count.
-pub(crate) fn holds_unheld(
-    grants: &Grants,
-    permissions: &[String],
-    target: &grants::Target,
-) -> bool {
-    let in_catalog = |key: &str| perm::ALL.iter().any(|p| p.key() == key);
-    permissions
-        .iter()
-        .any(|key| in_catalog(key) && !grants.holds_key(key, target))
-}
-
 /// 409 `role.unknown_builtin` for a built-in role this server does not define, such as a newer
 /// release's during a rolling deploy: it grants nothing here, so the escalation check could not
 /// see what it grants on the release that defines it, and the request fails closed.
-fn refuse_unknown_builtin(role: &roles::Role) -> Result<(), ApiError> {
+pub(crate) fn refuse_unknown_builtin(role: &roles::Role) -> Result<(), ApiError> {
     if !role.builtin || roles::builtin(&role.key).is_some() {
         return Ok(());
     }
@@ -541,6 +542,12 @@ fn assignment_not_found() -> ApiError {
     )
 }
 
+/// Whether `role` is a built-in course-scope role, which an enrollment grants and an assignment
+/// at the organization or an account may not (M1 spec 02 B22).
+fn is_course_role(role: &roles::Role) -> bool {
+    role.builtin && COURSE_ROLES.contains(&role.key.as_str())
+}
+
 /// 422 `request.invalid` with `role_assignment.scope_unavailable` at `path`.
 fn scope_unavailable(path: &[&str]) -> ApiError {
     ApiError::invalid(vec![FieldError::at(
@@ -571,6 +578,7 @@ fn assignment_error(error: repo::Error) -> ApiError {
         other @ (E::ContainsNul { .. }
         | E::UnknownStoredValue { .. }
         | E::MissingAccount { .. }
+        | E::MissingCourse { .. }
         | E::IsolationLevel { .. }
         | E::Time(_)
         | E::Database(_)) => ApiError::internal(&other),
@@ -637,6 +645,10 @@ mod tests {
         assert!(!ok(&["account.view"], &at_org));
         // A key outside the catalog grants nothing and is not checked.
         assert!(ok(&["gone.key"], &at_tower));
+        // Nor is a key grantable only at course scope (M1 spec 02 B24a), but it excuses
+        // nothing else.
+        assert!(ok(&["course.participate", "account.view"], &at_tower));
+        assert!(!ok(&["course.participate", "account.manage"], &at_tower));
     }
 
     #[test]

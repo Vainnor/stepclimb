@@ -412,12 +412,14 @@ async fn a_course_scope_is_unavailable_at_its_field(pool: PgPool) {
     );
 }
 
+/// Spec 09 T10: the Manager cannot be assigned yet (B13). The Observer is answered by M1 spec 02
+/// T18a's `role_assignment.course_role` instead.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn t10_manager_and_observer_cannot_be_assigned(pool: PgPool) {
+async fn t10_manager_cannot_be_assigned(pool: PgPool) {
     let f = Fixture::new(pool).await;
     let (admin, _) = f.holder_of("org_admin", At::Org).await;
     let (_, pat) = f.user().await;
-    for key in ["manager", "observer"] {
+    for key in ["manager"] {
         for at in [At::Org, At::Account(f.a.tower)] {
             let answer = f
                 .create(&admin, pat, f.builtin(key).await, at.json(f.a.id))
@@ -444,6 +446,62 @@ async fn t10_manager_and_observer_cannot_be_assigned(pool: PgPool) {
         .unwrap()
         .id;
     let answer = f.create(&admin, pat, custom, At::Org.json(f.a.id)).await;
+    assert_eq!(answer.status, StatusCode::CREATED, "{answer:?}");
+}
+
+/// M1 spec 02 T18a (B22, Q1): Student and Observer are course-scope roles, granted only by an
+/// enrollment. Assigning either at the organization or an account answers 422
+/// `role_assignment.course_role` and writes nothing; an Instructor at an account still succeeds,
+/// and a course scope still answers `role_assignment.scope_unavailable` (T18).
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t18a_student_and_observer_are_course_roles(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (admin, _) = f.holder_of("org_admin", At::Org).await;
+    let (_, pat) = f.user().await;
+    let counts = || async {
+        let assignments: i64 = sqlx::query_scalar("SELECT count(*) FROM role_assignments")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+        let entries: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_events")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+        (assignments, entries)
+    };
+    let before = counts().await;
+    for key in ["student", "observer"] {
+        for at in [At::Org, At::Account(f.a.tower)] {
+            let answer = f
+                .create(&admin, pat, f.builtin(key).await, at.json(f.a.id))
+                .await;
+            assert_eq!(answer.status, StatusCode::UNPROCESSABLE_ENTITY, "{key}");
+            assert_eq!(answer.code(), "request.invalid");
+            assert_eq!(
+                answer.errors(),
+                [(
+                    "/role_id".to_owned(),
+                    "role_assignment.course_role".to_owned()
+                )],
+                "{key}"
+            );
+        }
+        let course = json!({ "type": "course", "id": new_id() });
+        let answer = f.create(&admin, pat, f.builtin(key).await, course).await;
+        assert_eq!(
+            answer.errors(),
+            [(
+                "/scope/type".to_owned(),
+                "role_assignment.scope_unavailable".to_owned()
+            )],
+            "{key}"
+        );
+    }
+    assert_eq!(counts().await, before, "nothing written");
+    let instructor = f.builtin("instructor").await;
+    let answer = f
+        .create(&admin, pat, instructor, At::Account(f.a.tower).json(f.a.id))
+        .await;
     assert_eq!(answer.status, StatusCode::CREATED, "{answer:?}");
 }
 

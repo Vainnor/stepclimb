@@ -205,7 +205,8 @@ to `Require`, and makes the evaluator read enrollments. Modules and items are sp
   of each changed member), `course.set_status` (`before` and `after`), `course.copy` (on the new
   course; `after`: the source id, account, template), `enrollment.create` (`after`: user, role,
   status, source), `course.move` (B9), `enrollment.update` (`before` and `after`: status) and
-  `enrollment.delete` (`before`: user, role, status). Content edits in later specs are not audited
+  `enrollment.delete` (`before`: user, role, status). As built in I2, `enrollment.create` and
+  `enrollment.delete` also record the course and the source. Content edits in later specs are not audited
   (pages keep versions, spec 07).
 
 ## API
@@ -600,6 +601,52 @@ Q13's answer replaces I1's B24 behavior (I4).
   course it does not hold over it now, checked under the tree lock with the paths read there.
   Owner decision (2026-11-16): the comparison takes only the permissions grantable at course
   scope and leaves out `course.create` (B9).
+
+### Decisions made building I2
+
+Coordinator decisions (overnight, 2026-11-17), pending owner review. Q1, Q12 and B24a are the
+owner's answers of 2026-11-16 and are built as answered.
+
+- **Which permissions B24a leaves out.** The catalog marks a permission "course only" when its
+  `GRANTABLE` list names course scope alone (`perm::PermissionInfo::course_only`); every check
+  B24a lists leaves exactly those out, through `Grants::lacks_any_of` and
+  `Grants::lacks_any_held_by`. Today that is `course.participate`. A permission grantable at
+  course scope and also at an account (`course.manage`, `enrollment.manage`) is never left out.
+  When 05 I3 adds `progress.view_observed` (grantable at course scope only), the same rule leaves
+  it out of these checks, as B24a says, and 05 B19's own check on naming observed learners is
+  what guards it; 05 I3 must build that check with the permission.
+- **The order of B17's checks.** The user (404), the role (404), Manager and Observer (422
+  `enrollment.role_unavailable`), a built-in role of another release (409
+  `role.unknown_builtin`), the escalation rule (403), then the course's own rules: archived (409
+  `course.archived`), a template with a learner role (409 `course.template`), and a repeat (409
+  `enrollment.exists`). `PATCH` and `DELETE` check `enrollment.manage` on the course, the role
+  of another release (409), the escalation rule (403), then the source (409), as `m0/09` B14
+  orders them for assignments.
+- **One grant query.** `role_assignments::for_user_with_paths` reads the assignments and the
+  active enrollments in one statement (`UNION ALL`); an enrollment whose course or account is
+  missing fails the load. No separate `enrollments::for_user_active` exists, since nothing else
+  would call it.
+- **B21 counts any enrollment.** A user with an enrollment in a course of the account, active
+  or concluded, is "in" the account for the users list, as a roster lists both. Only the list
+  widens; `GET /api/v1/users/{user_id}` and the identity routes keep their organization target.
+- **What reactivation may do.** Concluding and reactivating are allowed on an archived course:
+  B5 refuses new enrollments only, and reactivating restores a grant the course already gave.
+- **The removal migration writes no audit entries.** It runs as no actor, before the server
+  has a clock or ids to give entries; the migration itself is the record.
+- **Built-in role lists elsewhere.** Observer at the organization or an account answers
+  `role_assignment.course_role` (B22) instead of `m0/09` B13's `scope_unavailable`; Manager keeps
+  the M0 answer. A custom role with an enrollment cannot be deleted (`role.in_use`, as `m0/09`
+  B10 rules for assignments).
+- **API key scopes.** A new key may name only permissions its owner holds somewhere (`m0/08`),
+  now counting enrollments (B25): `course.participate` needs an enrollment.
+- **`permissions` (B10)** lists `course.participate` only where it is effective, through an
+  enrollment; an Organization admin's course answers do not list it.
+- **`EnrollmentTarget`** resolves through I4's course check (`require::check_course`), so a
+  draft or a template answers 404 `enrollment.not_found` (and the course routes
+  `course.not_found`) to a caller without `course.view_all`; the enrollment writes repeat that
+  check on the course row they lock.
+- **Module name.** The server module is `course_enrollments`, since `enrollment` holds spec 04's
+  enrollment links.
 
 ### Decisions for I3
 

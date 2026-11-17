@@ -447,7 +447,12 @@ async fn an_organization_grant_comes_first_and_a_removed_assignment_is_gone(pool
         grants[0]["scope"],
         json!({ "type": "organization", "id": fixture.org.to_string() })
     );
-    let mut every: Vec<&str> = stepclimb_core::perm::ALL.iter().map(|p| p.key()).collect();
+    // `course.participate` is grantable only at course scope: not effective at the organization.
+    let mut every: Vec<&str> = stepclimb_core::perm::ALL
+        .iter()
+        .filter(|p| !p.course_only())
+        .map(|p| p.key())
+        .collect();
     every.sort_unstable();
     assert_eq!(grants[0]["permissions"], json!(every));
     assert_eq!(removed.body["grants"], json!([]));

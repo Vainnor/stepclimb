@@ -45,6 +45,7 @@ pub mod clock;
 pub mod course_files;
 pub mod courses;
 pub mod db;
+pub mod enrollments;
 pub mod feature;
 pub mod files;
 pub mod grants;

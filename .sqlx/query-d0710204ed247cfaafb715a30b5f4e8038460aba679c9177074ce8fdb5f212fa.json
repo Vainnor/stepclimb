@@ -1,0 +1,73 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT ra.id AS \"id!\", ra.role_id AS \"role_id!\", r.key AS \"key!\",\n                  r.builtin AS \"builtin!\", r.permissions AS \"permissions!\",\n                  ra.scope_type AS \"scope_type!\", ra.scope_id AS \"scope_id!\",\n                  a.path::text AS path\n           FROM role_assignments ra\n           JOIN roles r ON r.id = ra.role_id AND (r.org_id IS NULL OR r.org_id = $1)\n           LEFT JOIN accounts a\n                  ON ra.scope_type = 'account' AND a.org_id = $1 AND a.id = ra.scope_id\n           WHERE ra.org_id = $1 AND ra.user_id = $2\n           UNION ALL\n           SELECT e.id, e.role_id, r.key, r.builtin, r.permissions, 'enrollment', e.course_id,\n                  a.path::text\n           FROM enrollments e\n           JOIN roles r ON r.id = e.role_id AND (r.org_id IS NULL OR r.org_id = $1)\n           LEFT JOIN courses c ON c.org_id = $1 AND c.id = e.course_id\n           LEFT JOIN accounts a ON a.org_id = $1 AND a.id = c.account_id\n           WHERE e.org_id = $1 AND e.user_id = $2 AND e.status = 'active'\n           ORDER BY 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "role_id!",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "key!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "builtin!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "permissions!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "scope_type!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "scope_id!",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "path",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "d0710204ed247cfaafb715a30b5f4e8038460aba679c9177074ce8fdb5f212fa"
+}

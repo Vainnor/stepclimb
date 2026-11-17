@@ -125,7 +125,7 @@ static GRADER: BuiltinRole = BuiltinRole {
 static STUDENT: BuiltinRole = BuiltinRole {
     key: "student",
     name: "Student",
-    permissions: RolePermissions::Keys(&[perm::CourseView::KEY]),
+    permissions: RolePermissions::Keys(&[perm::CourseView::KEY, perm::CourseParticipate::KEY]),
 };
 
 static MANAGER: BuiltinRole = BuiltinRole {
@@ -183,6 +183,10 @@ const ORG_KEY_INDEX: &str = "roles_org_key";
 /// The foreign key from `role_assignments` to `roles`, whose default action refuses deleting a
 /// role that still has assignments (B10).
 const ASSIGNMENT_ROLE_FKEY: &str = "role_assignments_role_id_fkey";
+
+/// The foreign key from `enrollments` to `roles`, which refuses deleting a role that still has
+/// enrollments, as B10 does for assignments (M1 spec 02).
+const ENROLLMENT_ROLE_FKEY: &str = "enrollments_role_id_fkey";
 
 /// A role as the repository reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -258,8 +262,8 @@ pub enum Error {
     /// Built-in roles cannot be changed or deleted (B7).
     #[error("a built-in role cannot be changed or deleted")]
     BuiltinImmutable,
-    /// The custom role still has assignments (B10).
-    #[error("a role with assignments cannot be deleted")]
+    /// The custom role still has assignments or enrollments (B10; M1 spec 02).
+    #[error("a role with assignments or enrollments cannot be deleted")]
     InUse,
     /// A time that cannot be stored or read.
     #[error(transparent)]
@@ -273,7 +277,7 @@ impl From<sqlx::Error> for Error {
         let constraint = error.as_database_error().and_then(|e| e.constraint());
         match constraint {
             Some(ORG_KEY_INDEX) => Self::KeyTaken,
-            Some(ASSIGNMENT_ROLE_FKEY) => Self::InUse,
+            Some(ASSIGNMENT_ROLE_FKEY | ENROLLMENT_ROLE_FKEY) => Self::InUse,
             _ => Self::Database(error),
         }
     }
@@ -440,7 +444,7 @@ pub async fn get_for_key_share(
 }
 
 /// Lock `FOR KEY SHARE`, until the caller's transaction ends, every custom role of the scope's
-/// organization that the user `user_id` holds an assignment of, in id order. A change of one of
+/// organization that the user `user_id` holds an assignment or an enrollment of, in id order. A change of one of
 /// them through [`lock_custom`] (and so [`update_custom`]) waits for the caller to commit, so a
 /// check on the user's grants read after this holds until then (the user routes' escalation
 /// rule, spec 03 B6). Built-in roles change only when startup syncs them and are not locked.
@@ -453,7 +457,10 @@ pub async fn key_share_custom_of_user(
         "SELECT r.id FROM roles r
          WHERE r.org_id = $1
            AND r.id IN (SELECT a.role_id FROM role_assignments a
-                        WHERE a.org_id = $1 AND a.user_id = $2)
+                        WHERE a.org_id = $1 AND a.user_id = $2
+                        UNION
+                        SELECT e.role_id FROM enrollments e
+                        WHERE e.org_id = $1 AND e.user_id = $2)
          ORDER BY r.id
          FOR KEY SHARE",
         scope.org_id(),
@@ -628,7 +635,8 @@ fn update_data(before: &Role, after: &Row) -> Value {
 
 /// Delete the custom role `id` of the scope's organization and write its `role.delete` audit
 /// entry by `actor` at `now`, with the role as it was. A built-in role is refused with
-/// [`Error::BuiltinImmutable`], a role with any assignment with [`Error::InUse`] (B7, B10).
+/// [`Error::BuiltinImmutable`], a role with any assignment or enrollment with [`Error::InUse`]
+/// (B7, B10).
 ///
 /// Runs in one transaction (a savepoint when `db` is already one).
 pub async fn delete_custom<'c>(
@@ -883,7 +891,7 @@ mod tests {
                 ],
             ),
             ("grader", &[]),
-            ("student", &["course.view"]),
+            ("student", &["course.view", "course.participate"]),
             ("manager", &[]),
             ("observer", &["course.view"]),
         ];

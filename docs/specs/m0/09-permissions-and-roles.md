@@ -98,7 +98,10 @@ organizations' ids.
   `/permissions/<i>` of the repeat), which bounds a list at the catalog's length (coordinator
   decision, 13 Nov 2026). The
   creator must hold every permission they put in the role at organization scope (403
-  `permission.escalation`), so `RoleManage` alone does not let anyone mint a stronger role.
+  `permission.escalation`), so `RoleManage` alone does not let anyone mint a stronger role. A
+  permission grantable only at course scope (`course.participate`) is not checked, since no one
+  holds it at organization scope (`../m1/02-courses-and-enrollments.md` B24a, owner decision of
+  2026-11-16); it excuses no other permission of the list.
 - **B9.** Changing a custom role's `name` or `permissions` follows B8's checks and takes effect
   for every holder on their next request. On a change of `permissions`, the escalation check
   covers every permission the role gains and every permission it loses; a permission the new list
@@ -109,8 +112,8 @@ organizations' ids.
   current holder at their assignment's scope (accounts included), without holding
   `role.assign`. A stored permission key that a later release removed
   from the catalog is ignored when evaluating and logged once per startup at `warn`.
-- **B10.** A custom role with any assignment cannot be deleted (409 `role.in_use`); the caller
-  removes the assignments first.
+- **B10.** A custom role with any assignment, or from M1 any enrollment, cannot be deleted (409
+  `role.in_use`); the caller removes them first.
 
 ### Role assignments
 
@@ -124,12 +127,17 @@ organizations' ids.
   2. the role is built-in or one of the organization's custom roles (else 404 `role.not_found`);
   3. the scope exists in the organization: `organization` must name the caller's organization id,
      `account` an account of the organization (else 404 `account.not_found`); `course` answers 422
-     `role_assignment.scope_unavailable` until the M1 courses spec enables it;
+     `role_assignment.scope_unavailable`, since an active enrollment is the course-scope grant
+     (`../m1/02-courses-and-enrollments.md` Q1, B22). Student and Observer are course-scope roles:
+     at the organization or an account they answer 422 `request.invalid` with
+     `role_assignment.course_role` at `/role_id` (B22 there, owner decision of 2026-11-16);
   4. the caller holds `RoleAssign` at that scope, mapped to 404 or 403 as in B17;
   5. the caller holds, at that scope, every catalog permission of the role, including those not
      grantable at the scope's type, each as B3 evaluates it (403 `permission.escalation`); a key
-     the catalog does not define grants nothing and is not checked. An account admin cannot hand
-     out Organization admin at its account (decided by the owner, 13 Nov 2026);
+     the catalog does not define grants nothing and is not checked, nor is one grantable only at
+     course scope (`course.participate`), which no assignment makes effective
+     (`../m1/02-courses-and-enrollments.md` B24a, Q12, owner decision of 2026-11-16). An account
+     admin cannot hand out Organization admin at its account (decided by the owner, 13 Nov 2026);
   6. the same `(user, role, scope)` does not already exist (409 `role_assignment.exists`).
 
   Coordinator decision (2026-11-13), for issue 6. B13's refusal runs between steps 2 and 3. A 422
@@ -153,11 +161,12 @@ organizations' ids.
   that transaction. An account move or delete therefore cannot carry the scope out of the
   caller's reach between the check and the write: a request that waits on a move checks the
   account's new path (404 when it left the caller's subtree, nothing written).
-- **B13.** Manager and Observer cannot be assigned in M0 (422 `role_assignment.scope_unavailable`):
-  their scopes (reports, named students) do not exist yet, and assigning them at organization or
-  account scope would mean something the plan does not say.
-- **B14.** Removing an assignment needs what creating it would (B12 steps 4 and 5) at the
-  assignment's scope. An assignment whose `source` is not `local` is read-only (409
+- **B13.** Manager cannot be assigned (422 `role_assignment.scope_unavailable`): its scope
+  (reports) does not exist until M4, and assigning it at organization or account scope would mean
+  something the plan does not say. The Observer, refused here in M0 too, is a course-scope role
+  from M1 and answers `role_assignment.course_role` (B12 step 3).
+- **B14.** Removing an assignment needs what creating it would (B12 steps 4 and 5, with step 5's
+  course-only exclusion) at the assignment's scope. An assignment whose `source` is not `local` is read-only (409
   `role_assignment.externally_managed`). Removing the last organization-scope Organization admin
   assignment held by an `active` user answers 409 `role_assignment.last_org_admin`; recovery from a
   lost admin is `stepclimb admin create` (`02-organizations-and-accounts.md` B27).
@@ -217,7 +226,10 @@ organizations' ids.
     effective at any scope; otherwise 403. The handler or repository then filters by
     `grants.scopes_with::<P>()`, or calls `grants.require_at::<P>(scope)` for a body target,
     which applies steps 3 to 5 with the same mapping.
-  `CourseTarget` arrives with M1's courses spec and resolves a course to its account path.
+  `CourseTarget` arrives with M1's courses spec and resolves a course to its account path;
+  `EnrollmentTarget` resolves an enrollment to its course (`../m1/02-courses-and-enrollments.md`
+  API). From M1 the evaluator also reads the user's active enrollments, each a grant at its
+  course of the role's permissions grantable at course scope (B23 there).
 - **B19.** A protected handler without a `Require` extractor is a bug. The permission suite (B20)
   catches it: the anonymous case of every non-public route expects 401.
 
@@ -274,6 +286,9 @@ also writes to:
   | `role.delete` | `role` | `roles::delete_custom` | `before`: key, name, permissions |
   | `role_assignment.grant` | `role_assignment` | `role_assignments::create` | `after`: user, role, scope type and id, source |
   | `role_assignment.remove` | `role_assignment` | `role_assignments::delete` | `before`: the same |
+  | `enrollment.create` | `enrollment` | `enrollments::create` (`../m1/02-courses-and-enrollments.md` I2) | `after`: course, user, role, status, source |
+  | `enrollment.update` | `enrollment` | `enrollments::set_status` (M1 02 I2) | `before` and `after`: status |
+  | `enrollment.delete` | `enrollment` | `enrollments::delete` (M1 02 I2) | `before`: course, user, role, status, source |
   | `account.create` | `account` | `accounts::create` | `after`: parent, name |
   | `account.rename` | `account` | `accounts::rename` | `before` and `after`: name |
   | `account.move` | `account` | `accounts::move_to` | `before` and `after`: parent |
@@ -503,8 +518,8 @@ entitlement feature (a `Require<Feature>` on the role-writing routes) is
   `role_assignment.scope_unavailable`; an account admin of Tower assigning at Enroute gives 404;
   assigning `org_admin` at Tower gives 403 `permission.escalation`; assigning `account_admin` at
   Ground gives 201; repeating it gives 409 `role_assignment.exists`.
-- **T10** (B13). Assigning `manager` or `observer` answers 422
-  `role_assignment.scope_unavailable`.
+- **T10** (B13). Assigning `manager` answers 422 `role_assignment.scope_unavailable`; `observer`
+  answers `role_assignment.course_role` (`../m1/02-courses-and-enrollments.md` T18a).
 - **T11** (B14). Removing the only active Organization admin's organization assignment answers 409
   `role_assignment.last_org_admin`; with a second active admin it answers 204. Removing an
   assignment with `source = 'sync'` (inserted by SQL) answers 409

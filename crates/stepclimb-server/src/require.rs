@@ -62,6 +62,8 @@ pub mod code {
     pub const ITEM_NOT_FOUND: &str = "item.not_found";
     /// The course file does not exist in the organization or its course is not visible (404).
     pub const FILE_NOT_FOUND: &str = "file.not_found";
+    /// The enrollment does not exist in the organization or its course is not visible (404).
+    pub const ENROLLMENT_NOT_FOUND: &str = "enrollment.not_found";
 }
 
 /// The path parameter [`AccountTarget`] and [`AccountParentTarget`] read.
@@ -78,6 +80,9 @@ pub const ITEM_ID_PARAM: &str = "item_id";
 
 /// The path parameter [`CourseFileTarget`] reads.
 pub const COURSE_FILE_ID_PARAM: &str = "course_file_id";
+
+/// The path parameter [`EnrollmentTarget`] reads.
+pub const ENROLLMENT_ID_PARAM: &str = "enrollment_id";
 
 /// A request whose principal holds the permission `R` at the target `T` resolves to (B17), or
 /// whose organization's plan includes the feature `R` (spec 10 B9).
@@ -208,7 +213,7 @@ pub fn check_at_parent<P: Permission>(
 /// The course named by the path parameter `course_id`, which `P` must be effective over (M1 spec
 /// 02 B24): resolved to its account's path inside the principal's organization, then
 /// [`check_course`] with code `course.not_found`. A course is visible to a principal holding any
-/// effective permission at a scope containing it, and a draft or a template only to one that
+/// effective permission at a scope containing it (an active enrollment in it included), and a draft or a template only to one that
 /// also holds `course.view_all` there (Q13).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CourseTarget {
@@ -310,7 +315,31 @@ impl Target for CourseFileTarget {
     }
 }
 
-/// The course `course_id` (of the path, a module, an item or a course file) as a
+/// The enrollment named by the path parameter `enrollment_id`, which `P` must be effective over
+/// at its course (M1 spec 02 API): resolved to its course inside the principal's organization,
+/// then [`CourseTarget`]'s check with code `enrollment.not_found`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EnrollmentTarget {
+    pub id: Uuid,
+    pub course: CourseTarget,
+}
+
+impl Target for EnrollmentTarget {
+    async fn resolve<P: Permission>(
+        parts: &mut Parts,
+        state: &AppState,
+        grants: &Grants,
+    ) -> Result<Self, ApiError> {
+        let id = uuid_param(parts, state, ENROLLMENT_ID_PARAM).await?;
+        let course_id = stepclimb_core::enrollments::course_of(&state.db, grants.scope(), id)
+            .await
+            .map_err(|error| ApiError::internal(&error))?;
+        let course = course_of::<P>(state, grants, course_id, code::ENROLLMENT_NOT_FOUND).await?;
+        Ok(Self { id, course })
+    }
+}
+
+/// The course `course_id` (of the path, a module, an item, a course file or an enrollment) as a
 /// [`CourseTarget`] that `P` is effective over: 404 with `not_found` when there is no such row
 /// (`None`) or [`check_course`] hides the course; 403 when it is visible without `P`.
 async fn course_of<P: Permission>(
@@ -358,12 +387,13 @@ pub fn check_course<P: Permission>(
 
 /// `denied` as an answer, with a course that is not found or not visible answered as 404
 /// `code` instead, for a target reached through its course: `module.not_found`,
-/// `item.not_found`, `file.not_found`, or `course.not_found` itself.
+/// `item.not_found`, `file.not_found`, `enrollment.not_found`, or `course.not_found` itself.
 pub fn not_found_as(denied: Denied, code: &'static str) -> ApiError {
     let detail = match code {
         code::MODULE_NOT_FOUND => "No module with this id exists, or you cannot see it.",
         code::ITEM_NOT_FOUND => "No item with this id exists, or you cannot see it.",
         code::FILE_NOT_FOUND => "No course file with this id exists, or you cannot see it.",
+        code::ENROLLMENT_NOT_FOUND => "No enrollment with this id exists, or you cannot see it.",
         _ => "No course with this id exists, or you cannot see it.",
     };
     match denied {
@@ -770,6 +800,8 @@ mod tests {
             (file.status(), file.code()),
             (StatusCode::NOT_FOUND, "file.not_found")
         );
+        let enrollment = not_found_as(Denied::CourseNotFound, code::ENROLLMENT_NOT_FOUND);
+        assert_eq!(enrollment.code(), "enrollment.not_found");
         let item_forbidden = not_found_as(Denied::Forbidden, code::ITEM_NOT_FOUND);
         assert_eq!(item_forbidden.code(), "permission.denied");
         let course = ApiError::from(Denied::CourseNotFound);

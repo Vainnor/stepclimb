@@ -1,18 +1,26 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The permission evaluator (docs/specs/m0/09-permissions-and-roles.md B3, B9, B16 to B18).
+//! The permission evaluator (docs/specs/m0/09-permissions-and-roles.md B3, B9, B16 to B18;
+//! docs/specs/m1/02-courses-and-enrollments.md B16, B23 to B26).
 //!
-//! [`Grants::load`] reads a user's role assignments in one query and turns them into grants:
-//! the permissions effective at the organization, and those effective at each account. A
-//! permission is effective at an assignment's scope only when the catalog lists it and its
-//! [`Permission::GRANTABLE`] includes that scope type (B3); stored keys the catalog does not
-//! know are left out and reported by [`Grants::ignored_keys`] (B9). Course-scope assignments
-//! grant nothing: how a role is granted at course scope is M1 spec 02 Q1, still open.
+//! [`Grants::load`] reads a user's role assignments and active enrollments in one query and
+//! turns them into grants: the permissions effective at the organization, at each account, and
+//! at each course the user is enrolled in. A permission is effective at a grant's scope only
+//! when the catalog lists it and its [`Permission::GRANTABLE`] includes that scope type (B3), so
+//! an enrollment gives only permissions grantable at course scope; stored keys the catalog does
+//! not know are left out and reported by [`Grants::ignored_keys`] (B9). An active enrollment is
+//! the one course-scope grant (M1 spec 02 Q1): a course-scope role assignment grants nothing.
 //!
 //! Scopes nest. A grant at the organization contains every account and course; a grant at
 //! account A contains A, every account whose path runs through A, and every course in those
-//! accounts. The checks take the target's path ([`Target`]), so "does a grant contain the
-//! target" is "is the grant's account on the target's path"; a course's path is its account's
-//! (M1 spec 02 B23, B24).
+//! accounts; an enrollment in course C contains C only. The checks take the target's path
+//! ([`Target`]), so "does a grant contain the target" is "is the grant's account on the target's
+//! path, or is the target the grant's course"; a course's path is its account's.
+//!
+//! A permission grantable only at course scope ([`perm::PermissionInfo::course_only`], such as
+//! `course.participate`) can come only from an enrollment. The checks that ask a caller to hold
+//! permissions at organization or account scope leave it out ([`Grants::lacks_any_of`],
+//! [`Grants::lacks_any_held_by`]; M1 spec 02 B24a), since no caller could ever pass them
+//! otherwise.
 //!
 //! A [`Grants`] is built for one request and never cached across requests, so a removed
 //! assignment or a changed custom role takes effect on the next request (B16).
@@ -35,8 +43,8 @@ pub enum Target {
     Organization,
     /// An account, by the ids on its path: the root first, the account itself last.
     Account(Vec<Uuid>),
-    /// A course, by its id and the path of the account it belongs to. No grant is held at a
-    /// course itself, so the grants on the account's path decide.
+    /// A course, by its id and the path of the account it belongs to: the grants on the
+    /// account's path and an enrollment in the course decide.
     Course {
         account_path: Vec<Uuid>,
         course_id: Uuid,
@@ -50,6 +58,14 @@ impl Target {
             Self::Organization => &[],
             Self::Account(path) => path,
             Self::Course { account_path, .. } => account_path,
+        }
+    }
+
+    /// The course whose enrollments contain the target, if the target is a course.
+    fn course(&self) -> Option<Uuid> {
+        match self {
+            Self::Course { course_id, .. } => Some(*course_id),
+            Self::Organization | Self::Account(_) => None,
         }
     }
 }
@@ -101,12 +117,33 @@ pub struct Grants {
     organization: BTreeSet<&'static str>,
     /// Only accounts where at least one permission is effective.
     accounts: BTreeMap<Uuid, BTreeSet<&'static str>>,
+    /// Only courses where an active enrollment makes at least one permission effective.
+    courses: BTreeMap<Uuid, BTreeSet<&'static str>>,
     ignored: BTreeSet<String>,
 }
 
+/// Where a grant takes effect, once read.
+#[derive(Clone, Copy)]
+enum Placement {
+    Organization,
+    Account(Uuid),
+    Course(Uuid),
+}
+
+impl Placement {
+    fn scope_type(self) -> ScopeType {
+        match self {
+            Self::Organization => ScopeType::Organization,
+            Self::Account(_) => ScopeType::Account,
+            Self::Course(_) => ScopeType::Course,
+        }
+    }
+}
+
 impl Grants {
-    /// The grants of the user `user_id` in the scope's organization, from one query (B16).
-    /// A user the organization does not have holds nothing.
+    /// The grants of the user `user_id` in the scope's organization, from their role
+    /// assignments and active enrollments, read in one query (B16; M1 spec 02 B23). A user the
+    /// organization does not have holds nothing.
     pub async fn load(
         db: impl PgExecutor<'_>,
         scope: OrgScope,
@@ -116,8 +153,8 @@ impl Grants {
         Ok(Self::from_assignments(scope, assignments))
     }
 
-    /// The grants a user's assignments in the scope's organization give, as
-    /// [`role_assignments::for_user_with_paths`] reads them.
+    /// The grants a user's assignments and active enrollments in the scope's organization
+    /// give, as [`role_assignments::for_user_with_paths`] reads them.
     #[must_use]
     pub fn from_assignments(
         scope: OrgScope,
@@ -127,42 +164,45 @@ impl Grants {
             scope,
             organization: BTreeSet::new(),
             accounts: BTreeMap::new(),
+            courses: BTreeMap::new(),
             ignored: BTreeSet::new(),
         };
         for assignment in assignments {
-            // `None` for a course scope, which grants nothing until M1; its unknown keys are
-            // still reported.
+            // `None` for a course-scope assignment, which grants nothing (M1 spec 02 Q1); its
+            // unknown keys are still reported.
             let placement = match assignment.scope {
-                GrantScope::Organization => Some((ScopeType::Organization, None)),
-                GrantScope::Account { id, .. } => Some((ScopeType::Account, Some(id))),
+                GrantScope::Organization => Some(Placement::Organization),
+                GrantScope::Account { id, .. } => Some(Placement::Account(id)),
+                GrantScope::Enrolled(course_id) => Some(Placement::Course(course_id)),
                 GrantScope::Course(_) => None,
             };
             let mut effective = BTreeSet::new();
             for key in assignment.permissions {
-                let Some(p) = perm::ALL.iter().find(|p| p.key() == key) else {
+                let Some(p) = perm::find(&key) else {
                     grants.ignored.insert(key);
                     continue;
                 };
-                if let Some((scope_type, _)) = placement
-                    && p.grantable().contains(&scope_type)
+                if let Some(placement) = placement
+                    && p.grantable().contains(&placement.scope_type())
                 {
                     effective.insert(p.key());
                 }
             }
-            if let Some((_, account)) = placement {
-                grants.add(account, effective);
+            if let Some(placement) = placement {
+                grants.add(placement, effective);
             }
         }
         grants
     }
 
-    fn add(&mut self, account: Option<Uuid>, effective: BTreeSet<&'static str>) {
+    fn add(&mut self, placement: Placement, effective: BTreeSet<&'static str>) {
         if effective.is_empty() {
             return;
         }
-        match account {
-            None => self.organization.extend(effective),
-            Some(id) => self.accounts.entry(id).or_default().extend(effective),
+        match placement {
+            Placement::Organization => self.organization.extend(effective),
+            Placement::Account(id) => self.accounts.entry(id).or_default().extend(effective),
+            Placement::Course(id) => self.courses.entry(id).or_default().extend(effective),
         }
     }
 
@@ -172,10 +212,11 @@ impl Grants {
     pub fn intersect_key_scopes<S: AsRef<str>>(&mut self, key_scopes: &[S]) {
         let named = |key: &&str| key_scopes.iter().any(|s| s.as_ref() == *key);
         self.organization.retain(named);
-        for keys in self.accounts.values_mut() {
+        for keys in self.accounts.values_mut().chain(self.courses.values_mut()) {
             keys.retain(named);
         }
         self.accounts.retain(|_, keys| !keys.is_empty());
+        self.courses.retain(|_, keys| !keys.is_empty());
     }
 
     /// The organization these grants are in.
@@ -184,9 +225,11 @@ impl Grants {
         self.scope
     }
 
-    /// Each scope where at least one permission is effective, with those permissions sorted:
-    /// the organization first, then the accounts by id (spec 03 B22's `grants`). Permissions
-    /// an account inherits from the organization or an ancestor are listed at that scope only.
+    /// Each organization or account scope where at least one permission is effective, with
+    /// those permissions sorted: the organization first, then the accounts by id (spec 03 B22's
+    /// `grants`). Permissions an account inherits from the organization or an ancestor are
+    /// listed at that scope only. Enrollments are not listed: a learner may hold hundreds, and
+    /// a course reports the caller's permissions there itself (M1 spec 02 B26).
     pub fn by_scope(&self) -> impl Iterator<Item = (ScopeId, Vec<&'static str>)> + '_ {
         let organization = (!self.organization.is_empty()).then(|| {
             (
@@ -217,15 +260,23 @@ impl Grants {
 
     /// Whether the principal may learn that the target exists: the organization always is
     /// visible to its members, and an account or a course when any permission is effective at
-    /// a scope containing it (B17 step 4; M1 spec 02 B24).
+    /// a scope containing it, a course also through an enrollment in it (B17 step 4; M1 spec 02
+    /// B24).
     #[must_use]
     pub fn is_visible(&self, target: &Target) -> bool {
         match target {
             Target::Organization => true,
-            Target::Account(path)
-            | Target::Course {
-                account_path: path, ..
-            } => !self.organization.is_empty() || self.account_keys_on(path).next().is_some(),
+            Target::Account(path) => {
+                !self.organization.is_empty() || self.account_keys_on(path).next().is_some()
+            }
+            Target::Course {
+                account_path,
+                course_id,
+            } => {
+                !self.organization.is_empty()
+                    || self.account_keys_on(account_path).next().is_some()
+                    || self.courses.contains_key(course_id)
+            }
         }
     }
 
@@ -243,27 +294,63 @@ impl Grants {
         if self.organization.contains(key) {
             return true;
         }
-        self.account_keys_on(target.path())
+        if self
+            .account_keys_on(target.path())
             .any(|keys| keys.contains(key))
+        {
+            return true;
+        }
+        target
+            .course()
+            .and_then(|id| self.courses.get(&id))
+            .is_some_and(|keys| keys.contains(key))
     }
 
-    /// Whether `other` has an effective permission, at any scope, that is not effective for
-    /// these grants at organization scope: the escalation rule of the user routes (spec 03,
-    /// owner decision of 2026-11-14), which an enrollment link's creator is held to at the
-    /// link's use as well (spec 04 B6). Course-scope assignments grant nothing until M1, so they
-    /// do not count here either.
+    /// Whether `keys` names a catalog permission, grantable at organization or account scope,
+    /// that is not effective at a scope containing the target: the escalation rule of custom
+    /// roles at organization scope (spec 09 B8, B9), of role assignments at their scope (B12
+    /// step 5, B14) and of enrollments at their course (M1 spec 02 B17, B18). A key the catalog
+    /// does not define grants nothing and does not count; nor does a permission grantable only
+    /// at course scope, which no assignment makes effective, so asking a caller to hold it would
+    /// refuse everyone (M1 spec 02 B24a, Q12).
+    #[must_use]
+    pub fn lacks_any_of<K: AsRef<str>>(&self, keys: &[K], target: &Target) -> bool {
+        keys.iter().any(|key| {
+            perm::find(key.as_ref())
+                .is_some_and(|p| !p.course_only() && !self.holds_key(p.key(), target))
+        })
+    }
+
+    /// Whether `other` has an effective permission, at any scope (its enrollments' courses
+    /// included), that is not effective for these grants at organization scope: the escalation
+    /// rule of the user routes (spec 03, owner decision of 2026-11-14), which an enrollment
+    /// link's creator is held to at the link's use as well (spec 04 B6). A permission grantable
+    /// only at course scope does not count (M1 spec 02 B24a).
     #[must_use]
     pub fn lacks_any_held_by(&self, other: &Grants) -> bool {
-        other
-            .by_scope()
-            .flat_map(|(_, keys)| keys)
-            .any(|key| !self.holds_key(key, &Target::Organization))
+        other.all_keys().any(|key| {
+            perm::find(key)
+                .is_some_and(|p| !p.course_only() && !self.holds_key(key, &Target::Organization))
+        })
     }
 
-    /// Whether `P` is effective at any scope.
+    /// Every effective permission, at every scope, with repeats.
+    fn all_keys(&self) -> impl Iterator<Item = &'static str> + '_ {
+        let accounts = self.accounts.values().chain(self.courses.values());
+        self.organization.iter().chain(accounts.flatten()).copied()
+    }
+
+    /// Whether `P` is effective at any scope, a course the principal is enrolled in included.
     #[must_use]
     pub fn holds_anywhere<P: Permission>(&self) -> bool {
-        self.organization.contains(P::KEY) || self.accounts.values().any(|k| k.contains(P::KEY))
+        self.holds_key_anywhere(P::KEY)
+    }
+
+    /// Whether the permission with catalog key `key` is effective at any scope, a course the
+    /// principal is enrolled in included.
+    #[must_use]
+    pub fn holds_key_anywhere(&self, key: &str) -> bool {
+        self.all_keys().any(|held| held == key)
     }
 
     /// B17 steps 4 and 5 for a target that exists: not visible is
@@ -282,9 +369,10 @@ impl Grants {
         Ok(())
     }
 
-    /// Every scope where `P` is effective, for a list filtered to what the principal may see
-    /// (B18 `AnyScope`). Just the organization when `P` is effective there, since it contains
-    /// every account; otherwise the accounts, sorted by id.
+    /// Every organization or account scope where `P` is effective, for a list filtered to what
+    /// the principal may see (B18 `AnyScope`). Just the organization when `P` is effective
+    /// there, since it contains every account; otherwise the accounts, sorted by id. The courses
+    /// of the principal's enrollments are [`Self::courses_with`].
     #[must_use]
     pub fn scopes_with<P: Permission>(&self) -> Vec<ScopeId> {
         if self.organization.contains(P::KEY) {
@@ -294,6 +382,17 @@ impl Grants {
             .iter()
             .filter(|(_, keys)| keys.contains(P::KEY))
             .map(|(id, _)| ScopeId::Account(*id))
+            .collect()
+    }
+
+    /// Every course where an active enrollment makes `P` effective, sorted by id: the courses a
+    /// list adds to [`Self::scopes_with`]'s scopes (M1 spec 02 B11).
+    #[must_use]
+    pub fn courses_with<P: Permission>(&self) -> Vec<Uuid> {
+        self.courses
+            .iter()
+            .filter(|(_, keys)| keys.contains(P::KEY))
+            .map(|(id, _)| *id)
             .collect()
     }
 
@@ -325,7 +424,8 @@ mod tests {
     use crate::{
         id::new_id,
         perm::{
-            AccountManage, AccountView, CourseManage, CourseView, OrgManage, RoleManage, UserView,
+            AccountManage, AccountView, CourseManage, CourseParticipate, CourseView,
+            EnrollmentManage, OrgManage, RoleManage, UserView,
         },
         roles,
     };
@@ -540,7 +640,7 @@ mod tests {
     }
 
     #[test]
-    fn course_grants_grant_nothing() {
+    fn course_scope_assignments_grant_nothing() {
         let tree = Tree::new();
         let g = grants(vec![
             builtin("org_admin", GrantScope::Course(new_id())),
@@ -673,5 +773,121 @@ mod tests {
         let mut nothing = grants(vec![builtin("account_admin", tree.at(tree.tower))]);
         nothing.intersect_key_scopes::<&str>(&[]);
         assert!(!nothing.is_visible(&tree.tower()));
+    }
+
+    fn course_in(path: Vec<Uuid>, course_id: Uuid) -> Target {
+        Target::Course {
+            account_path: path,
+            course_id,
+        }
+    }
+
+    #[test]
+    fn an_enrollment_grants_its_course_only_and_only_course_permissions() {
+        let tree = Tree::new();
+        let (enrolled, other) = (new_id(), new_id());
+        let g = grants(vec![assignment(
+            &[
+                "course.view",
+                "course.participate",
+                "organization.manage",
+                "account.view",
+            ],
+            GrantScope::Enrolled(enrolled),
+        )]);
+        let here = course_in(vec![tree.root, tree.tower], enrolled);
+        let beside = course_in(vec![tree.root, tree.tower], other);
+        assert_eq!(g.check::<CourseView>(&here), Ok(()));
+        assert!(g.holds::<CourseParticipate>(&here));
+        assert_eq!(g.check::<CourseView>(&beside), Err(Denied::CourseNotFound));
+        assert_eq!(g.check::<CourseManage>(&here), Err(Denied::Forbidden));
+        // Not grantable at course scope: no effect through an enrollment (B16, T14).
+        assert!(!g.holds::<OrgManage>(&here));
+        assert!(!g.holds_anywhere::<OrgManage>());
+        assert!(!g.holds_anywhere::<AccountView>());
+        assert!(!g.is_visible(&tree.tower()));
+        assert!(g.holds_anywhere::<CourseView>());
+        assert_eq!(g.courses_with::<CourseView>(), [enrolled]);
+        assert!(g.courses_with::<CourseManage>().is_empty());
+        assert_eq!(g.scopes_with::<CourseView>(), []);
+        assert_eq!(g.by_scope().count(), 0, "/me lists no course grant (B26)");
+    }
+
+    #[test]
+    fn an_enrollment_adds_to_the_grants_on_the_courses_path() {
+        let tree = Tree::new();
+        let course = new_id();
+        let g = grants(vec![
+            assignment(&["course.view"], tree.at(tree.tower)),
+            assignment(&["enrollment.manage"], GrantScope::Enrolled(course)),
+        ]);
+        let target = course_in(vec![tree.root, tree.tower], course);
+        assert!(g.holds::<CourseView>(&target));
+        assert!(g.holds::<EnrollmentManage>(&target));
+        assert!(!g.holds::<EnrollmentManage>(&tree.tower()));
+    }
+
+    #[test]
+    fn an_api_key_narrows_enrollment_grants_too() {
+        let course = new_id();
+        let mut g = grants(vec![assignment(
+            &["course.view", "course.participate"],
+            GrantScope::Enrolled(course),
+        )]);
+        g.intersect_key_scopes(&["course.view"]);
+        let target = course_in(vec![new_id()], course);
+        assert!(g.holds::<CourseView>(&target));
+        assert!(!g.holds::<CourseParticipate>(&target));
+        g.intersect_key_scopes::<&str>(&[]);
+        assert!(!g.is_visible(&target));
+        assert!(g.courses_with::<CourseView>().is_empty());
+    }
+
+    #[test]
+    fn lacks_any_of_leaves_out_course_only_and_unknown_keys() {
+        let tree = Tree::new();
+        let admin = grants(vec![builtin("org_admin", GrantScope::Organization)]);
+        let every: Vec<&str> = perm::ALL.iter().map(|p| p.key()).collect();
+        // The Organization admin holds every key that can be held at organization scope.
+        assert!(!admin.lacks_any_of(&every, &Target::Organization));
+        assert!(!admin.lacks_any_of(&["course.participate", "gone.key"], &tree.tower()));
+        let account = grants(vec![builtin("account_admin", tree.at(tree.tower))]);
+        let course = course_in(vec![tree.root, tree.tower], new_id());
+        assert!(!account.lacks_any_of(&["course.view", "course.participate"], &course));
+        // A course-only key does not excuse the others (T12a).
+        assert!(account.lacks_any_of(&["course.participate", "organization.manage"], &course));
+        assert!(account.lacks_any_of(&["course.view"], &tree.enroute()));
+    }
+
+    #[test]
+    fn lacks_any_held_by_counts_enrollments_but_not_course_only_keys() {
+        let course = new_id();
+        let caller = grants(vec![assignment(&["user.manage"], GrantScope::Organization)]);
+        let student = grants(vec![builtin("student", GrantScope::Enrolled(course))]);
+        let participant = grants(vec![assignment(
+            &["course.participate"],
+            GrantScope::Enrolled(course),
+        )]);
+        let instructor = grants(vec![builtin("instructor", GrantScope::Enrolled(course))]);
+        assert!(!caller.lacks_any_held_by(&participant));
+        assert!(
+            caller.lacks_any_held_by(&student),
+            "course.view at a course counts"
+        );
+        assert!(caller.lacks_any_held_by(&instructor));
+        let admin = grants(vec![builtin("org_admin", GrantScope::Organization)]);
+        assert!(!admin.lacks_any_held_by(&instructor));
+        assert!(!admin.lacks_any_held_by(&student));
+        assert!(!admin.lacks_any_held_by(&admin));
+    }
+
+    #[test]
+    fn holds_key_anywhere_includes_enrollments() {
+        let g = grants(vec![assignment(
+            &["course.participate"],
+            GrantScope::Enrolled(new_id()),
+        )]);
+        assert!(g.holds_key_anywhere("course.participate"));
+        assert!(!g.holds_key_anywhere("course.view"));
     }
 }

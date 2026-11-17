@@ -82,6 +82,12 @@ these rows are in `04` to `07`.
   I6, which goes further: any key acting on its own owner answers 403 `auth.session_required`,
   `08` B44).
 
+  From M1 the target's permissions include those of their active enrollments, at their courses,
+  and a permission grantable only at course scope (`course.participate`) is left out of the
+  comparison, since no caller holds it at organization scope (`Grants::lacks_any_held_by`;
+  `../m1/02-courses-and-enrollments.md` B24a, owner decision of 2026-11-16). The roles locked
+  `FOR KEY SHARE` below include the custom roles of the target's enrollments.
+
   What the check is serialized with: the route takes the organization's account tree lock, which
   the role assignment routes take before they create or remove an assignment, then locks `FOR KEY
   SHARE` the custom roles the target holds, which an edit of a role's permissions
@@ -300,7 +306,7 @@ Common errors as in `02-organizations-and-accounts.md` -> API (400, 401, 415, 50
 | `GET /api/v1/me` | | 200 `Me` | 403 `auth.not_a_user` (not answered in M0, B24) | authenticated user |
 | `GET /api/v1/me/identities` | | 200 `MyIdentity[]` | 403 `auth.not_a_user` | authenticated user |
 | `DELETE /api/v1/me/identities/{identity_id}` | | 204 | 404 `identity.not_found`, 409 `identity.last_sign_in_method`, 409 `identity.externally_managed`, 409 `identity.local` | authenticated user (own identities only) |
-| `GET /api/v1/users` | `?status&source&q&cursor&limit` | 200 `Page<User>` | 400 `pagination.invalid_cursor`, 400 `request.malformed` | `perm::UserView` (organization) |
+| `GET /api/v1/users` | `?status&source&q&cursor&limit` | 200 `Page<User>` | 400 `pagination.invalid_cursor`, 400 `request.malformed` | `perm::UserView` (organization; from M1 any scope, an account scope listing the users in its subtrees, `../m1/02-courses-and-enrollments.md` B21) |
 | `GET /api/v1/users/{user_id}` | | 200 `User` | 404 `user.not_found` | `perm::UserView` (organization) |
 | `POST /api/v1/users` | `{ display_name, given_name?, family_name?, email?, locale?, tz?, external_id?, identities?: [{ provider_key, subject }] }` | 201 `User`, `Location` | 409 `identity.taken`, 409 `user.external_id_taken`, 409 `user.email_taken`, 422 `request.invalid`, limit error from `10` | `perm::UserManage` (organization) |
 | `PATCH /api/v1/users/{user_id}` | `{ display_name?, given_name?, family_name?, email?, locale?, tz?, status? }` | 200 `User` | 404 `user.not_found`, 409 `user.externally_managed`, 409 `user.cannot_suspend_self`, 409 `user.email_taken`, 409 `role_assignment.last_org_admin`, 422 `request.invalid` | `perm::UserManage` (organization) |
@@ -333,7 +339,11 @@ audit entry (spec 09 Q5); a status change writes `user.set_status`.
 `PATCH` with `status: "suspended"` on the caller's own user answers 409
 `user.cannot_suspend_self`, so an admin cannot lock themselves out by accident. The users routes
 take an organization target in M0, so a `user.view` grant at account scope
-(`09-permissions-and-roles.md` Q2) does not reach them.
+(`09-permissions-and-roles.md` Q2) does not reach them. M1 widens the list
+(`../m1/02-courses-and-enrollments.md` B21): `GET /api/v1/users` takes `user.view` at any scope,
+and held at accounts only it lists the users "in" those accounts' subtrees, who hold a role
+assignment at an account there or an enrollment, in any status, in a course there. The other
+users routes keep their organization target.
 
 ## Data
 
@@ -477,7 +487,8 @@ synthetic.
 - **T18** (B23). `/me/identities` never contains `attributes`.
 - **T19** (every `/api/v1/users` route). Four cases: anonymous 401; a user with
   `AccountManage` on the root but no user permission gets 403; a user holding `UserView` at account
-  scope only gets 403 on `GET /api/v1/users`, since the route's target is the organization;
+  scope only gets 403 on `GET /api/v1/users/{user_id}`, since the route's target is the
+  organization, and from M1 a list of the users in its subtree from `GET /api/v1/users`;
   wrong scope (404) is not applicable to an organization target; an organization admin gets the
   2xx. Routes with `UserManage` also get a 403 for a user holding only `UserView`.
 - **T20** (every route with an id). Cross-organization: org A's organization admin calling each

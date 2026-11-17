@@ -76,7 +76,7 @@ use stepclimb_core::{
     admission_webhooks::{self, Change, Fresh},
     audit::Actor,
     clock::ManualClock,
-    course_files, courses,
+    course_files, courses, enrollments,
     feature::{
         self, AdmissionWebhook, ApiKeys, CustomBranding, CustomRoles, Feature, Limit, OidcProviders,
     },
@@ -87,9 +87,9 @@ use stepclimb_core::{
     items, modules, organizations,
     perm::{
         self, AccountManage, AccountView, AdmissionManage, BrandingManage, CourseContentEdit,
-        CourseCreate, CourseManage, CourseView, CourseViewAll, OrgManage, Permission,
-        ProviderManage, RoleAssign, RoleManage, RoleView, ScopeType, ServiceAccountManage,
-        UserManage, UserView,
+        CourseCreate, CourseManage, CourseParticipate, CourseView, CourseViewAll, EnrollmentManage,
+        EnrollmentView, OrgManage, Permission, ProviderManage, RoleAssign, RoleManage, RoleView,
+        ScopeType, ServiceAccountManage, UserManage, UserView,
     },
     role_assignments::{self, NewAssignment, Scope},
     roles::{self, NewRole},
@@ -304,6 +304,34 @@ const TABLE: &[Entry] = &[
         },
     },
     Entry {
+        operation_id: "listEnrollments",
+        access: permission(EnrollmentView::KEY, COURSE_NOT_FOUND, course_in_tower),
+    },
+    Entry {
+        operation_id: "createEnrollment",
+        access: permission(
+            EnrollmentManage::KEY,
+            COURSE_NOT_FOUND,
+            participant_for_tower_course,
+        ),
+    },
+    Entry {
+        operation_id: "updateEnrollment",
+        access: permission(
+            EnrollmentManage::KEY,
+            ENROLLMENT_NOT_FOUND,
+            conclude_enrollment,
+        ),
+    },
+    Entry {
+        operation_id: "deleteEnrollment",
+        access: permission(
+            EnrollmentManage::KEY,
+            ENROLLMENT_NOT_FOUND,
+            enrollment_in_path,
+        ),
+    },
+    Entry {
         operation_id: "listCourseFiles",
         access: permission(CourseViewAll::KEY, COURSE_NOT_FOUND, files_of_tower_course),
     },
@@ -397,7 +425,8 @@ const TABLE: &[Entry] = &[
     },
     Entry {
         operation_id: "listUsers",
-        access: permission(UserView::KEY, Target::Org, at_org),
+        // Account-scope `user.view` lists the users in its subtrees (M1 spec 02 B21).
+        access: permission(UserView::KEY, Target::AnyScope, at_org),
     },
     Entry {
         operation_id: "getUser",
@@ -627,6 +656,7 @@ const EVERY_PERMISSION: &[&str] = &[
     "course.content_edit",
     "enrollment.view",
     "enrollment.manage",
+    "course.participate",
 ];
 
 #[test]
@@ -1284,6 +1314,63 @@ fn move_course_to_ground(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send 
             params: vec![("course_id", org.course(org.tower, true).await)],
             body: Some(serde_json::json!({ "account_id": org.ground })),
             at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A published course in Tower, named in the path; the caller acts at Tower. Published, so
+/// the route's permission alone reaches it (M1 spec 02 B24, Q13).
+fn course_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: vec![("course_id", org.course(org.tower, true).await)],
+            body: None,
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A new user enrolled in a published course in Tower with a custom role holding only
+/// `course.participate`, which is left out of the escalation check (M1 spec 02 B24a), so
+/// `enrollment.manage` alone enrolls them.
+fn participant_for_tower_course(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let (_, user) = org.user().await;
+        Call {
+            params: vec![("course_id", org.course(org.tower, true).await)],
+            body: Some(serde_json::json!({
+                "user_id": user, "role_id": org.participant_role().await,
+            })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// An enrollment that is not the organization's, or whose course the caller cannot see: 404
+/// `enrollment.not_found` (M1 spec 02 API).
+const ENROLLMENT_NOT_FOUND: Target = Target::Scoped {
+    not_found: "enrollment.not_found",
+    cross_org: "enrollment.not_found",
+};
+
+/// An enrollment in a published course in Tower, named in the path; the caller acts at Tower.
+fn enrollment_in_path(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        Call {
+            params: vec![("enrollment_id", org.enrollment(course).await)],
+            body: None,
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// [`enrollment_in_path`], concluded.
+fn conclude_enrollment(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            body: Some(serde_json::json!({ "status": "concluded" })),
+            ..enrollment_in_path(org).await
         }
     })
 }
@@ -3425,6 +3512,8 @@ impl Org {
             .id;
         self.assign(user, role, At::Org).await;
         self.service_account(user, &format!("Key of {slug}")).await;
+        let course = self.course(self.tower, true).await;
+        self.enrollment(course).await;
     }
 
     /// A service account of `owner` named `name`, with a new key: its id.
@@ -3591,6 +3680,41 @@ impl Org {
             last = Some(linked.id);
         }
         last.expect("two identities")
+    }
+
+    /// A new custom role holding only `course.participate`.
+    async fn participant_role(&self) -> Uuid {
+        let role = NewRole {
+            key: format!("r{}", new_id().simple()),
+            name: format!("Participant of {}", self.slug),
+            permissions: vec![CourseParticipate::KEY.to_owned()],
+        };
+        roles::create_custom(&self.pool, scope(self.id), &role, now(), Actor::Instance)
+            .await
+            .expect("create role")
+            .id
+    }
+
+    /// A new user enrolled in `course` with [`Self::participant_role`]: the enrollment's id.
+    async fn enrollment(&self, course: Uuid) -> Uuid {
+        let (_, user) = self.user().await;
+        let new = enrollments::NewEnrollment {
+            user_id: user,
+            role_id: self.participant_role().await,
+            source: Source::Local,
+            external_id: None,
+        };
+        enrollments::create(
+            &self.pool,
+            scope(self.id),
+            course,
+            &new,
+            now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("create enrollment")
+        .id
     }
 
     /// A new custom role with no permissions and no assignment.

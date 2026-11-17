@@ -36,6 +36,7 @@ use crate::{
     accounts::{self, Reach},
     audit::{self, Action, Actor},
     db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
+    enrollments,
     id::new_id,
     items, name,
 };
@@ -85,7 +86,7 @@ impl Status {
     }
 
     /// Whether B4 allows the change from `self` to `to`, another status. Published back to
-    /// draft is allowed here; B4's refusal while the course has learners needs enrollments.
+    /// draft is allowed here; [`set_status`] refuses it while the course has learners.
     fn may_become(self, to: Self) -> bool {
         matches!(
             (self, to),
@@ -186,14 +187,18 @@ pub struct ListFilter {
     pub template: Option<bool>,
 }
 
-/// Which courses [`list_visible`] may return (B10, B11): those in `view`, and of those the
-/// drafts and templates only when also in `view_all`.
+/// Which courses [`list_visible`] may return (B10, B11): those in `view` or `view_courses`,
+/// and of those the drafts and templates only when also in `view_all` or `view_all_courses`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Visibility<'a> {
-    /// Where the caller holds `course.view`.
+    /// Where the caller holds `course.view` through the organization or accounts.
     pub view: Reach<'a>,
-    /// Where the caller holds `course.view_all`.
+    /// The courses where an enrollment gives the caller `course.view` (B16).
+    pub view_courses: &'a [Uuid],
+    /// Where the caller holds `course.view_all` through the organization or accounts.
     pub view_all: Reach<'a>,
+    /// The courses where an enrollment gives the caller `course.view_all`.
+    pub view_all_courses: &'a [Uuid],
 }
 
 /// The sort key of a course in [`list_visible`]: `(title, id)`.
@@ -244,6 +249,9 @@ pub enum Error {
     /// A template cannot be published (Q5).
     #[error("a template cannot be published")]
     Template,
+    /// A published course with learners cannot go back to draft (B4).
+    #[error("the course has learners and cannot go back to draft")]
+    HasLearners,
     /// A stored value this release cannot read: a status or `settings` the table's checks and
     /// [`CourseSettings`] keep from happening.
     #[error("the {column} of course {id} cannot be read")]
@@ -482,10 +490,11 @@ pub async fn list_visible(
                   (extract(epoch FROM c.updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM courses c JOIN accounts a ON a.org_id = c.org_id AND a.id = c.account_id
            WHERE c.org_id = $1
-             AND ($2::bool OR EXISTS (
+             AND ($2::bool OR c.id = ANY($12::uuid[]) OR EXISTS (
                      SELECT 1 FROM accounts v
                      WHERE v.org_id = $1 AND v.id = ANY($3::uuid[]) AND a.path <@ v.path))
-             AND ((c.status <> 'draft' AND NOT c.template) OR $4::bool OR EXISTS (
+             AND ((c.status <> 'draft' AND NOT c.template) OR $4::bool
+                  OR c.id = ANY($13::uuid[]) OR EXISTS (
                      SELECT 1 FROM accounts v
                      WHERE v.org_id = $1 AND v.id = ANY($5::uuid[]) AND a.path <@ v.path))
              AND ($6::uuid IS NULL OR a.path <@ (
@@ -506,6 +515,8 @@ pub async fn list_visible(
         after_title,
         after.map(|(_, id)| *id),
         limit,
+        visibility.view_courses,
+        visibility.view_all_courses,
     )
     .fetch_all(db)
     .await?;
@@ -985,6 +996,9 @@ pub async fn set_status<'c>(
             from: from.as_str(),
             to: to.as_str(),
         });
+    }
+    if to == Status::Draft && enrollments::has_learners(&mut tx, scope, id).await? {
+        return Err(Error::HasLearners);
     }
     sqlx::query!(
         "UPDATE courses

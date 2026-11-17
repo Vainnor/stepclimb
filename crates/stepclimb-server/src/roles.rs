@@ -436,12 +436,12 @@ pub async fn delete_role(
 }
 
 /// 403 `permission.escalation` when a catalog key in `keys` is not effective for the caller at
-/// organization scope (B8, Q4). A key outside the catalog is left to the repository's 422.
+/// organization scope (B8, Q4). A key outside the catalog is left to the repository's 422. A
+/// permission grantable only at course scope (`course.participate`) is not checked: no caller
+/// can hold it at organization scope, and it gives an enrolled person a relation to their own
+/// course (M1 spec 02 B24a).
 fn refuse_escalation(grants: &Grants, keys: &[String]) -> Result<(), ApiError> {
-    let unheld = keys.iter().any(|key| {
-        perm::ALL.iter().any(|p| p.key() == key) && !grants.holds_key(key, &Target::Organization)
-    });
-    if !unheld {
+    if !grants.lacks_any_of(keys, &Target::Organization) {
         return Ok(());
     }
     Err(ApiError::new(
@@ -511,20 +511,18 @@ fn role_error(error: roles::Error) -> ApiError {
 
 /// 403 `permission.escalation` with `detail` unless the caller holds every catalog permission
 /// at organization scope: the owner's rule for a write that changes how every user signs in
-/// (`PUT /api/v1/admin/local-sign-in`, the admission rules of `PUT /api/v1/admin/admission`).
-/// An Organization admin holds every catalog permission, so in an organization that has one
-/// this is the user routes' rule applied to every user at once.
-//
-// course scopes: like the user routes' check, this counts every catalog permission at
-// organization scope; M1 must revisit it if it adds a permission not grantable there.
+/// (`PUT /api/v1/admin/local-sign-in`, the admission rules of `PUT /api/v1/admin/admission`,
+/// the admission webhook, email matching and a trusted provider's anchors). An Organization
+/// admin holds every catalog permission that can be held there, so in an organization that has
+/// one this is the user routes' rule applied to every user at once. A permission grantable only
+/// at course scope (`course.participate`) is left out, since no one holds it at organization
+/// scope (M1 spec 02 B24a).
 pub(crate) fn refuse_unless_holds_every_permission(
     grants: &Grants,
     detail: &'static str,
 ) -> Result<(), ApiError> {
-    let holds_all = perm::ALL
-        .iter()
-        .all(|p| grants.holds_key(p.key(), &Target::Organization));
-    if holds_all {
+    let every: Vec<&str> = perm::ALL.iter().map(|p| p.key()).collect();
+    if !grants.lacks_any_of(&every, &Target::Organization) {
         return Ok(());
     }
     Err(ApiError::new(
@@ -588,6 +586,24 @@ mod tests {
         assert!(refuse_escalation(&g, &keys(&["user.view", "user.manage"])).is_err());
         // An unknown key is the repository's 422, not a 403.
         assert!(refuse_escalation(&g, &keys(&["nonexistent.perm"])).is_ok());
+        // A key grantable only at course scope is not checked (M1 spec 02 B24a), and excuses
+        // nothing else.
+        assert!(refuse_escalation(&g, &keys(&["course.participate", "user.view"])).is_ok());
+        assert!(refuse_escalation(&g, &keys(&["course.participate", "user.manage"])).is_err());
+    }
+
+    #[test]
+    fn every_permission_means_every_one_holdable_at_organization_scope() {
+        let every: Vec<&str> = perm::ALL.iter().map(|p| p.key()).collect();
+        let admin = grants(&every, &[]);
+        assert!(refuse_unless_holds_every_permission(&admin, "detail").is_ok());
+        let without: Vec<&str> = every
+            .iter()
+            .copied()
+            .filter(|k| *k != "enrollment.view")
+            .collect();
+        let refused = refuse_unless_holds_every_permission(&grants(&without, &[]), "detail");
+        assert_eq!(refused.unwrap_err().code(), code::PERMISSION_ESCALATION);
     }
 
     #[test]

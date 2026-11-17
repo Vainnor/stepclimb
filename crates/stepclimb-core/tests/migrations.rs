@@ -235,3 +235,107 @@ async fn the_verified_email_migration_records_only_local_users(pool: PgPool) {
         ]
     );
 }
+
+/// The `enrollments` migration (M1 spec 02 I2, B22, T18a) removes the Student and Observer
+/// assignments at the organization or an account, which M0 allowed, and keeps every other
+/// assignment, a course-scope one included. The migrations before it run first, rows are
+/// inserted, and then it runs.
+#[sqlx::test(migrations = false)]
+async fn the_enrollments_migration_removes_course_role_assignments_above_courses(pool: PgPool) {
+    const VERSION: i64 = 20261117120000;
+    let run = |sql| sqlx::raw_sql(sql).execute(&pool);
+    for migration in MIGRATOR.iter().filter(|m| m.version < VERSION) {
+        run(migration.sql.clone())
+            .await
+            .expect("an earlier migration");
+    }
+    let new_id = stepclimb_core::id::new_id;
+    let (org, user, account) = (new_id(), new_id(), new_id());
+    sqlx::query("INSERT INTO organizations (id, slug, name) VALUES ($1, 'org-a', 'Org A')")
+        .bind(org)
+        .execute(&pool)
+        .await
+        .expect("insert organization");
+    sqlx::query(
+        "INSERT INTO users (id, org_id, source, display_name, tz)
+         VALUES ($1, $2, 'local', 'Pat', 'UTC')",
+    )
+    .bind(user)
+    .bind(org)
+    .execute(&pool)
+    .await
+    .expect("insert user");
+    let mut roles = Vec::new();
+    for key in ["student", "observer", "instructor"] {
+        let id = new_id();
+        sqlx::query("INSERT INTO roles (id, key, name, builtin) VALUES ($1, $2, $2, true)")
+            .bind(id)
+            .bind(key)
+            .execute(&pool)
+            .await
+            .expect("insert built-in role");
+        roles.push(id);
+    }
+    let custom = new_id();
+    sqlx::query(
+        "INSERT INTO roles (id, org_id, key, name, builtin) VALUES ($1, $2, 'student', 'S', false)",
+    )
+    .bind(custom)
+    .bind(org)
+    .execute(&pool)
+    .await
+    .expect("insert a custom role keyed student");
+    let (student, observer, instructor) = (roles[0], roles[1], roles[2]);
+    let rows = [
+        ("student at org", student, "organization", org),
+        ("student at account", student, "account", account),
+        ("observer at account", observer, "account", account),
+        ("student at course", student, "course", new_id()),
+        ("instructor at org", instructor, "organization", org),
+        ("instructor at account", instructor, "account", account),
+        ("custom student at org", custom, "organization", org),
+    ];
+    let mut ids = Vec::new();
+    for (name, role, scope_type, scope_id) in rows {
+        let id = new_id();
+        sqlx::query(
+            "INSERT INTO role_assignments (id, org_id, user_id, role_id, scope_type, scope_id)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(id)
+        .bind(org)
+        .bind(user)
+        .bind(role)
+        .bind(scope_type)
+        .bind(scope_id)
+        .execute(&pool)
+        .await
+        .expect(name);
+        ids.push((name, id));
+    }
+    let target = MIGRATOR
+        .iter()
+        .find(|m| m.version == VERSION)
+        .expect("the enrollments migration");
+    run(target.sql.clone()).await.expect("the migration");
+
+    let kept: Vec<stepclimb_core::id::Uuid> =
+        sqlx::query_scalar("SELECT id FROM role_assignments ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .expect("read assignments");
+    let kept: Vec<&str> = ids
+        .iter()
+        .filter(|(_, id)| kept.contains(id))
+        .map(|(name, _)| *name)
+        .collect();
+    assert_eq!(
+        kept,
+        [
+            "student at course",
+            "instructor at org",
+            "instructor at account",
+            "custom student at org",
+        ]
+    );
+}

@@ -156,6 +156,11 @@ pub struct ListFilter {
     /// A case-insensitive prefix of the display name or the email (B10). `%`, `_` and `\` match
     /// themselves.
     pub q: Option<String>,
+    /// Only users "in" one of these accounts' subtrees (each account included), for a caller
+    /// whose `user.view` is held at these accounts only (spec 09 Q2 (B); M1 spec 02 B21): a user
+    /// holding a role assignment at an account in a subtree, or an enrollment, in any status, in
+    /// a course of such an account. `Some(vec![])` matches nothing.
+    pub within: Option<Vec<Uuid>>,
 }
 
 /// The sort key of a user in [`list`]: `(display_name, id)`.
@@ -452,6 +457,21 @@ pub async fn list(
              AND ($3::text IS NULL OR source = $3)
              AND ($4::text IS NULL OR display_name ILIKE $4 OR email ILIKE $4)
              AND ($5::text IS NULL OR (display_name, id) > ($5, $6::uuid))
+             AND ($8::uuid[] IS NULL
+                  OR EXISTS (
+                      SELECT 1
+                      FROM role_assignments ra
+                      JOIN accounts a ON a.org_id = ra.org_id AND a.id = ra.scope_id
+                      JOIN accounts w ON w.org_id = a.org_id AND a.path <@ w.path
+                      WHERE ra.org_id = $1 AND ra.user_id = users.id
+                        AND ra.scope_type = 'account' AND w.id = ANY($8))
+                  OR EXISTS (
+                      SELECT 1
+                      FROM enrollments e
+                      JOIN courses c ON c.org_id = e.org_id AND c.id = e.course_id
+                      JOIN accounts a ON a.org_id = c.org_id AND a.id = c.account_id
+                      JOIN accounts w ON w.org_id = a.org_id AND a.path <@ w.path
+                      WHERE e.org_id = $1 AND e.user_id = users.id AND w.id = ANY($8)))
            ORDER BY display_name, id
            LIMIT $7"#,
         scope.org_id(),
@@ -461,6 +481,7 @@ pub async fn list(
         after_name,
         after.map(|(_, id)| *id),
         limit,
+        filter.within.as_deref(),
     )
     .fetch_all(db)
     .await?;
