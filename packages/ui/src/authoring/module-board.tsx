@@ -96,36 +96,7 @@ export function ModuleBoard(props: ModuleBoardProps) {
   const listRef = useRef<HTMLDivElement>(null);
   useRestoreFocus(listRef, board.restoreKey, shown);
   const editing = useEditing(props);
-  const { dragAndDropHooks } = useDragAndDrop<BoardRow>({
-    isDisabled: props.isDisabled === true || board.pending,
-    getItems: (keys) => [...keys].map((key) => ({ [ROW_TYPE]: String(key) })),
-    acceptedDragTypes: [ROW_TYPE],
-    getDropOperation: (target, _types, _allowed) => {
-      const dragged = board.dragging.current;
-      if (target.type !== "item" || dragged === null) return "cancel";
-      const spot = dropSpot(rows, target);
-      return spot !== null && dropMove(shown, dragged, spot) !== null ? "move" : "cancel";
-    },
-    onDragStart: (e) => {
-      board.dragging.current = String([...e.keys][0]);
-    },
-    onDragEnd: () => {
-      board.dragging.current = null;
-    },
-    onReorder: (e) => {
-      const key = String([...e.keys][0]);
-      const spot = dropSpot(rows, e.target);
-      const move = spot === null ? null : dropMove(shown, key, spot);
-      if (move !== null) board.run(key, move);
-    },
-    renderDropIndicator: (target) => (
-      <DropIndicator
-        target={target}
-        data-slot="module-board-drop-indicator"
-        className={styles.dropIndicator()}
-      />
-    ),
-  });
+  const dragAndDropHooks = useBoardDrag(board, rows, props.isDisabled === true);
   const actions = {
     onMove: (key: string, action: string) => board.menuMove(key, action),
     onEdit: props.itemEditor === undefined ? undefined : editing.open,
@@ -164,6 +135,50 @@ export function ModuleBoard(props: ModuleBoardProps) {
       <EditSheet {...editing} modules={shown} itemEditor={props.itemEditor} />
     </div>
   );
+}
+
+/**
+ * React Aria's drag and drop over the rows: every drop target that makes a write is offered, and
+ * a drop runs that write. Off while a move saves or the board is disabled.
+ */
+function useBoardDrag(
+  board: ReturnType<typeof useBoardMoves>,
+  rows: readonly BoardRow[],
+  isDisabled: boolean,
+) {
+  const { shown } = board;
+  const styles = moduleBoard();
+  const { dragAndDropHooks } = useDragAndDrop<BoardRow>({
+    isDisabled: isDisabled || board.pending,
+    getItems: (keys) => [...keys].map((key) => ({ [ROW_TYPE]: String(key) })),
+    acceptedDragTypes: [ROW_TYPE],
+    getDropOperation: (target, _types, _allowed) => {
+      const dragged = board.dragging.current;
+      if (target.type !== "item" || dragged === null) return "cancel";
+      const spot = dropSpot(rows, target);
+      return spot !== null && dropMove(shown, dragged, spot) !== null ? "move" : "cancel";
+    },
+    onDragStart: (e) => {
+      board.dragging.current = String([...e.keys][0]);
+    },
+    onDragEnd: () => {
+      board.dragging.current = null;
+    },
+    onReorder: (e) => {
+      const key = String([...e.keys][0]);
+      const spot = dropSpot(rows, e.target);
+      const move = spot === null ? null : dropMove(shown, key, spot);
+      if (move !== null) void board.run(key, move);
+    },
+    renderDropIndicator: (target) => (
+      <DropIndicator
+        target={target}
+        data-slot="module-board-drop-indicator"
+        className={styles.dropIndicator()}
+      />
+    ),
+  });
+  return dragAndDropHooks;
 }
 
 /**
