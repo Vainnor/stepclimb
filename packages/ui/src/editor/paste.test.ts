@@ -79,7 +79,9 @@ describe("paste", () => {
         const c = child as { type: string; content?: unknown[] };
         return [c.type, ...nestedTypes(c)];
       });
-    for (const block of doc.content.filter((b) => b.type === "bulletList" || b.type === "blockquote")) {
+    for (const block of doc.content.filter(
+      (b) => b.type === "bulletList" || b.type === "blockquote",
+    )) {
       expect(nestedTypes(block)).not.toContain("heading");
       expect(nestedTypes(block)).not.toContain("table");
     }

@@ -262,7 +262,7 @@ function useHeight(ref: RefObject<HTMLElement | null>, mounted: boolean): number
   const [height, setHeight] = useState(0);
   useEffect(() => {
     const element = ref.current;
-    if (!element) return;
+    if (!mounted || !element) return;
     const observer = new ResizeObserver(() => setHeight(element.offsetHeight));
     observer.observe(element);
     setHeight(element.offsetHeight);

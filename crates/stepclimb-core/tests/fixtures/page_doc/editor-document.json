@@ -131,7 +131,10 @@
                     {
                       "type": "listItem",
                       "content": [
-                        { "type": "paragraph", "content": [{ "type": "text", "text": "In a cell" }] }
+                        {
+                          "type": "paragraph",
+                          "content": [{ "type": "text", "text": "In a cell" }]
+                        }
                       ]
                     }
                   ]
