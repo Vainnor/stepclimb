@@ -8,7 +8,10 @@ import type { ReactElement } from "react";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Announcement } from "../learning/announcement";
 import { Callout } from "../learning/callout";
+import { CourseHeader } from "../learning/course-header";
 import { DueBadge } from "../learning/due-badge";
+import { ItemRow } from "../learning/item-row";
+import { ModuleRow } from "../learning/module-row";
 import { NextUp } from "../learning/next-up";
 import { ProgressRail } from "../learning/progress-rail";
 import { RequirementLabel } from "../learning/requirement-label";
@@ -376,6 +379,63 @@ const components: [string, ReactElement][] = [
           ],
         },
       ]}
+    />,
+  ],
+  [
+    "ModuleRow",
+    <ModuleRow
+      key="mr"
+      number={1}
+      title="«caller»"
+      state="progress"
+      progress={{ completed: 1, required: 2 }}
+      timeZone="UTC"
+      now={new Date(0)}
+      items={[
+        { id: "h", kind: "header", title: "«caller»" },
+        {
+          id: "a",
+          kind: "page",
+          title: "«caller»",
+          href: "/a",
+          state: "overdue",
+          requirement: { kind: "view" },
+          due: new Date(0),
+        },
+      ]}
+    />,
+  ],
+  [
+    "ModuleRow (locked)",
+    <ModuleRow
+      key="ml"
+      number={2}
+      title="«caller»"
+      state="locked"
+      lockReasons={[{ kind: "unlock_at", at: new Date(0) }]}
+      timeZone="UTC"
+      now={new Date(0)}
+      items={[]}
+    />,
+  ],
+  [
+    "ItemRow",
+    <ul key="ir">
+      <ItemRow
+        item={{ id: "v", kind: "video", title: "«caller»", href: "/v", state: "locked" }}
+        timeZone="UTC"
+        now={new Date(0)}
+      />
+    </ul>,
+  ],
+  [
+    "CourseHeader",
+    <CourseHeader
+      key="ch"
+      title="«caller»"
+      code="«caller»"
+      status="archived"
+      progress={{ completed: 1, required: 2 }}
     />,
   ],
   [

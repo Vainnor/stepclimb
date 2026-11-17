@@ -282,6 +282,46 @@ test.describe("at 1280 px @desktop", () => {
     expect(new Set(nodes.map((n) => n.name)).size).toBe(6);
   });
 
+  test("T2: with forced colors, every ItemRow and ModuleRow state keeps its own icon and label", async ({
+    page,
+  }) => {
+    // docs/specs/m1/16-learning-ui-components.md B3, B9: color is never the only signal.
+    const states = async (id: string, row: string) => {
+      await openStory(page, story(id), "light");
+      await page.emulateMedia({ forcedColors: "active" });
+      return page.locator(`[data-slot=${row}]`).evaluateAll((els) =>
+        els.map((el) => {
+          const chip = el.querySelector("[data-slot=status-chip]");
+          const icon = chip?.querySelector("svg") ?? null;
+          const box = icon?.getBoundingClientRect();
+          return {
+            state: el.getAttribute("data-state") ?? "",
+            drawing: icon?.innerHTML ?? "",
+            label: chip?.textContent ?? "",
+            visible:
+              chip !== null &&
+              box !== undefined &&
+              box.width > 0 &&
+              icon !== null &&
+              getComputedStyle(icon).color !== getComputedStyle(chip).backgroundColor,
+          };
+        }),
+      );
+    };
+    const items = await states("learning-itemrow--all-states", "item-row");
+    const modules = [
+      ...(await states("learning-modulerow--all-states", "module-row")),
+      ...(await states("learning-modulerow--locked", "module-row")),
+    ];
+    for (const rows of [items, modules]) {
+      expect(rows).toHaveLength(6);
+      expect(rows.every((r) => r.visible)).toBe(true);
+      expect(new Set(rows.map((r) => r.state)).size).toBe(6);
+      expect(new Set(rows.map((r) => r.drawing)).size).toBe(6);
+      expect(new Set(rows.map((r) => r.label)).size).toBe(6);
+    }
+  });
+
   test("T4: a completed item's segment fills over 320 ms, the course's rail once", async ({
     page,
   }) => {
