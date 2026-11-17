@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The route tree (docs/specs/m0/11-app-shell.md B2, B7, B16): a signed-out layout for the sign-in
-// steps and the enrollment page, and a signed-in layout for everything else that exists. Any other path, the M1 deep link included,
+// steps and the enrollment page, and a signed-in layout for everything else that exists: home, the
+// account page and a course's files area. Any other path, the M1 deep link included,
 // renders the not-found view. A route that fails to load renders its error inside its layout (B28).
 import {
   createRootRouteWithContext,
@@ -12,12 +13,14 @@ import {
   useMatch,
 } from "@tanstack/react-router";
 import type { AppContext } from "./context";
+import { folderFromSearch } from "./files/folders";
 import { Root } from "./layouts/root";
 import { type ErrorPlace, RouteError } from "./layouts/route-error";
 import { SignedInLayout } from "./layouts/signed-in";
 import { SignedOutLayout } from "./layouts/signed-out";
 import { AccountView } from "./routes/account";
 import { EnrollView } from "./routes/enroll";
+import { FilesView } from "./routes/files";
 import { HomeView } from "./routes/home";
 import { NotFoundView } from "./routes/not-found";
 import { SignInView } from "./routes/sign-in";
@@ -120,6 +123,24 @@ const accountRoute = createRoute({
   component: AccountView,
 });
 
+export interface FilesSearch {
+  /** The folder on screen; the course's top folder when absent. */
+  folder?: string;
+}
+
+function validateFilesSearch(search: Record<string, unknown>): FilesSearch {
+  return search.folder === undefined ? {} : { folder: folderFromSearch(search.folder) };
+}
+
+/** A course's files area (docs/specs/m1/16-learning-ui-components.md B20). */
+const courseFilesRoute = createRoute({
+  getParentRoute: () => signedInRoute,
+  path: "c/$courseId/files",
+  validateSearch: validateFilesSearch,
+  staticData: { view: { title: (t) => t("files.title") } },
+  component: FilesView,
+});
+
 export const routeTree = rootRoute.addChildren([
   signedOutRoute.addChildren([
     signInRoute,
@@ -129,7 +150,7 @@ export const routeTree = rootRoute.addChildren([
     signInTotpSetupRoute,
     enrollRoute,
   ]),
-  signedInRoute.addChildren([homeRoute, accountRoute]),
+  signedInRoute.addChildren([homeRoute, accountRoute, courseFilesRoute]),
 ]);
 
 /** The layout a route sits in: a route under one draws its error inside it. */

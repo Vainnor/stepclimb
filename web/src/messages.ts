@@ -88,6 +88,88 @@ export const webMessages: Catalog = {
     "enroll.problem.signIn": "Go to sign in",
     "enroll.problem.title": "This setup link could not be opened",
     "enroll.title": "Set up your account",
+    "files.actions": "Actions for {name}",
+    "files.archived": "This {course} is archived, so its files cannot be changed.",
+    "files.cancel": "Cancel",
+    "files.column.actions": "Actions",
+    "files.column.name": "Name",
+    "files.column.size": "Size",
+    "files.column.type": "Type",
+    "files.column.updated": "Last changed",
+    "files.delete": "Delete",
+    "files.delete.confirm": "Delete file",
+    "files.delete.description": "The file is removed from this folder. This cannot be undone.",
+    "files.delete.failed": "{name} was not deleted",
+    "files.delete.title": "Delete {name}?",
+    "files.deleted": "{name} deleted",
+    "files.empty.course": "This {course} has no files.",
+    "files.empty.courseEdit": "This {course} has no files yet. Upload the first one above.",
+    "files.empty.folder": "This folder is empty.",
+    "files.folderRenamed": "Folder renamed to {name}",
+    "files.folders": "Folders",
+    "files.forbidden.description":
+      "Only staff who can see everything in this {course} can open its files. Learners reach files through the items of its modules.",
+    "files.forbidden.title": "You cannot open these files",
+    "files.list": "Files in {folder}",
+    "files.move": "Move",
+    "files.move.description":
+      "A folder path such as /handouts/week-1, or / for the top folder. A folder that does not exist yet is made when the file moves into it.",
+    "files.move.label": "Folder",
+    "files.move.submit": "Move file",
+    "files.move.title": "Move {name}",
+    "files.moved": "{name} moved to {folder}",
+    "files.notFound.description":
+      "It may have been deleted, or you may not have access to it. Check the address.",
+    "files.notFound.title": "This {course} could not be found",
+    "files.problem.archived": "This {course} is archived, so its files cannot be changed.",
+    "files.problem.bodyTimeout":
+      "The upload of {name} stopped sending. Check your connection, then try again.",
+    "files.problem.courseGone":
+      "This {course} no longer exists, or you no longer have access to it.",
+    "files.problem.failed": "Something went wrong. Try again.",
+    "files.problem.fileGone":
+      "This file no longer exists. It may have been deleted in another tab. The list has been refreshed.",
+    "files.problem.folderGone":
+      "This folder no longer exists. Its files may have been moved in another tab. The list has been refreshed.",
+    "files.problem.folderInvalid":
+      "That folder path cannot be used. Separate folder names with /, and leave out \\, . and .. as names.",
+    "files.problem.folderRoot": "Choose a name for the folder.",
+    "files.problem.folderTooDeep": "Folders can be at most 8 levels deep.",
+    "files.problem.folderTooLong": "Each folder name can be at most 100 characters.",
+    "files.problem.forbidden":
+      "You do not have permission to change the files of this {course}. Ask an administrator if you need to.",
+    "files.problem.inUse":
+      "{name} is used by an item or a page of this {course}, so it cannot be deleted. Remove it from there first.",
+    "files.problem.nameInvalid":
+      "That name cannot be used. Leave out / and \\, and do not use . or .. as a name.",
+    "files.problem.nameTaken":
+      "This folder already has a file named {name}. Rename one of them, then try again.",
+    "files.problem.nameTooLong": "Use at most 255 characters.",
+    "files.problem.storageFull":
+      "Your organization has used all the file storage its plan allows, so {name} was not uploaded. Delete files that are no longer needed, or ask an administrator.",
+    "files.problem.storageNotConfigured":
+      "File storage is not set up on this server, so files cannot be uploaded. An administrator has to set STEPCLIMB_STORAGE_URL.",
+    "files.problem.tooLarge":
+      "{name} is larger than this server accepts. Ask an administrator for the size limit.",
+    "files.problem.unknown":
+      "Something went wrong. Try again. If it keeps happening, give an administrator this code:",
+    "files.problem.unreachable":
+      "Stepclimb could not reach the server. Check your connection, then try again.",
+    "files.problem.uploadsBusy": "The server is busy with other uploads. Try again in a moment.",
+    "files.rename": "Rename",
+    "files.rename.label": "Name",
+    "files.rename.submit": "Save name",
+    "files.rename.title": "Rename {name}",
+    "files.renameFolder.title": "Rename folder {name}",
+    "files.renamed": "Renamed to {name}",
+    "files.size.bytes": "{count, plural, one {# byte} other {# bytes}}",
+    "files.title": "Files",
+    "files.topFolder": "Top folder",
+    "files.updated": "{updated, date, medium}",
+    "files.upload.description": "Files go into {folder}.",
+    "files.upload.done": "{name} uploaded",
+    "files.upload.notSent":
+      "{count, plural, one {The file chosen after it was not uploaded.} other {The # files chosen after it were not uploaded.}}",
     "home.empty": "You have no {courses} yet.",
     "home.title": "Home",
     "loadError.documentTitle": "Could not load",
