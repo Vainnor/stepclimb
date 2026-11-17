@@ -638,7 +638,7 @@ pub async fn restore(
     let version = version(&mut *conn, scope, id, version_id)
         .await?
         .ok_or(Error::VersionNotFound)?;
-    let body = PageDoc::parse(&version.body)?;
+    let body = PageDoc::parse_stored(&version.body)?;
     let save_of = Save {
         body: &body,
         base_version_id,

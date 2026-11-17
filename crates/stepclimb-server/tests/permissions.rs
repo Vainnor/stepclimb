@@ -3596,7 +3596,7 @@ impl Org {
     /// A new version of `page` saved over `base`: its id.
     async fn save_page(&self, page: Uuid, base: Uuid) -> Uuid {
         let (_, author) = self.user().await;
-        let body = PageDoc::parse(&serde_json::json!({ "type": "doc", "content": [
+        let body = PageDoc::parse_new(&serde_json::json!({ "type": "doc", "content": [
             { "type": "paragraph", "content": [{ "type": "text", "text": "Second" }] },
         ] }))
         .expect("a body");

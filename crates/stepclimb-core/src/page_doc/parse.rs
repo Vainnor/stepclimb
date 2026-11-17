@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! [`super::PageDoc::parse`]: Tiptap JSON to the typed model, refusing the first member the
-//! schema does not allow with its path.
+//! [`super::PageDoc::parse_stored`], which `parse_new` also runs: Tiptap JSON to the typed
+//! model, refusing the first member the schema does not allow with its path.
 //!
 //! The recursion follows the JSON's nesting, which serde_json bounds at 128 levels when it
 //! parses a request or a stored body.

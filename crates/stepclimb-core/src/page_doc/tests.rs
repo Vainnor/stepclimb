@@ -84,9 +84,9 @@ fn everything() -> Value {
 #[test]
 fn every_allowed_node_and_mark_parses_and_writes_back_unchanged() {
     let body = everything();
-    let doc = PageDoc::parse(&body).expect("the full schema parses");
+    let doc = PageDoc::parse_stored(&body).expect("the full schema parses");
     assert_eq!(doc.to_value(), body);
-    assert_eq!(PageDoc::parse(&doc.to_value()), Ok(doc));
+    assert_eq!(PageDoc::parse_stored(&doc.to_value()), Ok(doc));
 }
 
 #[test]
@@ -103,7 +103,7 @@ fn omitted_optional_attributes_take_their_defaults() {
         ] }] },
         { "type": "image", "attrs": { "course_file_id": "0190f000-0000-7000-8000-000000000001", "alt": "x" } },
     ] });
-    let doc = PageDoc::parse(&body).expect("defaults apply");
+    let doc = PageDoc::parse_stored(&body).expect("defaults apply");
     assert_eq!(
         doc.to_value(),
         json!({ "type": "doc", "content": [
@@ -132,12 +132,12 @@ fn the_empty_document_is_one_empty_paragraph() {
         empty.to_value(),
         json!({ "type": "doc", "content": [{ "type": "paragraph" }] })
     );
-    assert_eq!(PageDoc::parse(&empty.to_value()), Ok(empty));
+    assert_eq!(PageDoc::parse_stored(&empty.to_value()), Ok(empty));
 }
 
 /// The pointer `body` is refused at.
 fn refused_at(body: &Value) -> String {
-    match PageDoc::parse(body) {
+    match PageDoc::parse_stored(body) {
         Ok(doc) => panic!("accepted {body}: {doc:?}"),
         Err(invalid) => invalid.pointer(),
     }
@@ -200,7 +200,7 @@ fn a_body_whose_stored_form_is_over_one_mebibyte_is_refused_at_its_root() {
     let over = with(MAX_BODY_BYTES - overhead + 1);
     assert_eq!(PageDoc::parse_new(&over).unwrap_err().pointer(), "");
     // A stored body is not measured again.
-    assert!(PageDoc::parse(&over).is_ok());
+    assert!(PageDoc::parse_stored(&over).is_ok());
 }
 
 /// The review's case: 9,900 table cells without attributes and a paragraph of padding, under
@@ -219,7 +219,7 @@ fn the_limit_is_on_the_stored_form_not_the_submitted_one() {
     let body = cells_that_grow_past_the_limit();
     let submitted = serde_json::to_vec(&body).unwrap().len();
     assert!(submitted < MAX_BODY_BYTES, "{submitted}");
-    let parsed = PageDoc::parse(&body).expect("the structure is allowed");
+    let parsed = PageDoc::parse_stored(&body).expect("the structure is allowed");
     assert!(
         parsed.stored_size() > MAX_BODY_BYTES,
         "{}",
@@ -240,7 +240,7 @@ fn deep_nesting_parses_without_overflowing() {
         ] });
     }
     let body = doc(json!([list]));
-    let parsed = PageDoc::parse(&body).expect("nesting depth is not a rule of its own");
+    let parsed = PageDoc::parse_stored(&body).expect("nesting depth is not a rule of its own");
     assert_eq!(parsed.to_value(), body);
 }
 
@@ -248,7 +248,7 @@ fn deep_nesting_parses_without_overflowing() {
 fn a_body_over_20000_nodes_is_refused_at_the_first_node_past_it() {
     // The document, the paragraph, then text nodes: 20,000 nodes in all.
     let texts = |n: usize| Value::Array((0..n).map(|_| text("x")).collect());
-    assert!(PageDoc::parse(&doc(json!([para(texts(MAX_NODES - 2))]))).is_ok());
+    assert!(PageDoc::parse_stored(&doc(json!([para(texts(MAX_NODES - 2))]))).is_ok());
     let over = doc(json!([para(texts(MAX_NODES - 1))]));
     assert_eq!(
         refused_at(&over),
@@ -541,6 +541,15 @@ fn links_take_only_the_allowed_targets() {
         "/a<b",
         "/a>b",
         "/a`b",
+        "mailto:a@example.com\"><svg/onload=alert(1)>",
+        "mailto:a@example.com'x",
+        "mailto:a@example.com<b>",
+        "https://a\"onmouseover=alert(1).example/",
+        "https://a%22onmouseover=alert(1).example/",
+        "https://a'b.example/",
+        "https://a`b.example/",
+        "https://a.example/it's",
+        "https://a.example/#it's",
     ] {
         assert_eq!(link_target(refused), None, "{refused:?}");
         let body = doc(json!([para(
@@ -570,13 +579,18 @@ fn links_take_only_the_allowed_targets() {
             { "type": "link", "attrs": { "href": given } },
         ] }])
         )]));
-        let saved = PageDoc::parse(&body).expect("an allowed link").to_value();
+        let saved = PageDoc::parse_stored(&body)
+            .expect("an allowed link")
+            .to_value();
         assert_eq!(
             saved["content"][0]["content"][0]["marks"][0]["attrs"]["href"],
             stored
         );
         // The stored form parses back to itself.
-        assert_eq!(PageDoc::parse(&saved).expect("stored").to_value(), saved);
+        assert_eq!(
+            PageDoc::parse_stored(&saved).expect("stored").to_value(),
+            saved
+        );
     }
     let missing = doc(json!([para(
         json!([{ "type": "text", "text": "a", "marks": [{ "type": "link" }] }])
@@ -589,7 +603,7 @@ fn links_take_only_the_allowed_targets() {
 
 #[test]
 fn images_are_listed_with_the_path_of_their_file_id() {
-    let doc = PageDoc::parse(&everything()).unwrap();
+    let doc = PageDoc::parse_stored(&everything()).unwrap();
     let images = doc.images();
     let pointers: Vec<(String, String)> = images
         .iter()

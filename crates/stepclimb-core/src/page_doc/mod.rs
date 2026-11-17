@@ -2,8 +2,9 @@
 //! The page document model (docs/specs/m1/07-pages-and-the-editor.md B7 to B13).
 //!
 //! A page body is a ProseMirror document as Tiptap serializes it: `{ "type": "doc", "content":
-//! [...] }`. [`PageDoc::parse`] reads one into the typed model below, which lists every node,
-//! mark and attribute M1 allows; anything else is an [`Invalid`] naming the JSON Pointer of the
+//! [...] }`. [`PageDoc::parse_new`] (a body to save) and [`PageDoc::parse_stored`] (a body read
+//! back) read one into the typed model below, which lists every node, mark and attribute M1
+//! allows; anything else is an [`Invalid`] naming the JSON Pointer of the
 //! first offense, and nothing is dropped. [`PageDoc::to_value`] writes the model back as Tiptap
 //! JSON with every attribute spelled out, so the stored body is the canonical form of what was
 //! parsed and two saves of the same document compare equal.
@@ -300,20 +301,20 @@ impl PageDoc {
         }
     }
 
-    /// `value` as a page body, or the first rule of its structure it breaks (B7, B8): for a
-    /// body read back from the database, whose size was checked when it was saved. A body to
-    /// save goes through [`Self::parse_new`].
-    pub fn parse(value: &Value) -> Result<Self, Invalid> {
+    /// `value` as a page body read back from the database, or the first rule of its structure
+    /// it breaks (B7, B8). It skips the size check: a stored body's size was checked when it was
+    /// saved. A body to save goes through [`Self::parse_new`].
+    pub fn parse_stored(value: &Value) -> Result<Self, Invalid> {
         parse::document(value)
     }
 
-    /// [`Self::parse`] for a body about to be saved, which also refuses, at its root, a body
+    /// [`Self::parse_stored`] for a body about to be saved, which also refuses, at its root, a body
     /// whose stored form ([`Self::to_value`], every attribute written out) is over
     /// [`MAX_BODY_BYTES`] serialized. The limit is on what is stored, so a saved body always
     /// restores and saves again. The submitted JSON is bounded by the request body limit before
     /// it gets here.
     pub fn parse_new(value: &Value) -> Result<Self, Invalid> {
-        let doc = Self::parse(value)?;
+        let doc = Self::parse_stored(value)?;
         if doc.stored_size() > MAX_BODY_BYTES {
             return Err(Invalid {
                 path: Vec::new(),
@@ -359,22 +360,35 @@ impl PageDoc {
     }
 }
 
-/// The characters a same-origin link path may not hold: they could end an HTML attribute or
-/// start markup in a renderer that forgot to escape one.
+/// The characters no stored link target may hold: they could end an HTML attribute or start
+/// markup in a renderer that forgot to escape one.
 const PATH_REFUSED: &[char] = &['"', '\'', '<', '>', '`', '\\'];
 
-/// `href` as the link target B9 allows, in the form to store, or `None`. An absolute `https` or
-/// `http` URL as an external link item takes it (`items::url_is_valid`), or a `mailto:` URL, is
-/// stored as the `url` crate serializes it (`Url::as_str`: scheme and host lowercased, `"` and
-/// other characters outside a URL percent-encoded). A path on the same origin that starts with
-/// one `/` keeps spec m0/08 B19's rule (not `//` or `/\`, printable ASCII, no `.` or `..`
-/// segment, at most 2,048 bytes) and holds none of `"`, `'`, `<`, `>`, a backtick or `\`; it is
+/// `href` as the link target B9 allows, in the form to store, or `None`.
+///
+/// An absolute `https` or `http` URL as an external link item takes it
+/// (`items::url_is_valid`), or a `mailto:` URL, is serialized by the `url` crate
+/// (`Url::as_str`: scheme and host lowercased, some characters in a path, query or fragment
+/// percent-encoded). That encoding does not cover every character that matters in HTML: a
+/// `mailto:` address is an opaque path where only control characters are encoded, a host may
+/// hold `"`, `'` and a backtick (and `%22` there is decoded to `"`), and `'` is never encoded in
+/// a path or fragment. So the serialized form is checked again, as a same-origin path is: a
+/// target holding any of `"`, `'`, `<`, `>`, a backtick, `\` or a control character is refused,
+/// whatever its kind. A same-origin path also keeps spec m0/08 B19's rule (it starts with one
+/// `/`, not `//` or `/\`, printable ASCII, no `.` or `..` segment, at most 2,048 bytes) and is
 /// stored as given.
 #[must_use]
 pub fn link_target(href: &str) -> Option<String> {
+    let stored = stored_form(href)?;
+    let plain = !stored.contains(PATH_REFUSED) && !stored.chars().any(char::is_control);
+    plain.then_some(stored)
+}
+
+/// The form [`link_target`] would store for `href` before its character check, or `None` when
+/// `href` is no target B9 allows.
+fn stored_form(href: &str) -> Option<String> {
     if href.starts_with('/') {
-        let safe = auth_flows::is_safe_path(href) && !href.contains(PATH_REFUSED);
-        return safe.then(|| href.to_owned());
+        return auth_flows::is_safe_path(href).then(|| href.to_owned());
     }
     let scheme = href.get(..7).map(str::to_ascii_lowercase);
     let valid = if scheme.as_deref() == Some("mailto:") {

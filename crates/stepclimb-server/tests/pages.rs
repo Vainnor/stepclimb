@@ -1189,8 +1189,9 @@ async fn the_size_limit_is_on_the_stored_form(pool: PgPool) {
     assert_eq!(f.versions(page).await, 1);
 }
 
-/// Review case: absolute link targets are stored as the URL parser writes them, and a
-/// same-origin path that could close an attribute is refused. I2's renderer still escapes
+/// Review cases: absolute link targets are stored as the URL parser writes them, and a target
+/// that could close an attribute after that (a same-origin path, a `mailto:` address, a host,
+/// a `'` in a path) is refused. I2's renderer still escapes
 /// every attribute it writes.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn link_targets_are_stored_normalized(pool: PgPool) {
@@ -1201,12 +1202,17 @@ async fn link_targets_are_stored_normalized(pool: PgPool) {
             { "type": "text", "text": "a", "marks": [{ "type": "link", "attrs": { "href": href } }] },
         ] }] })
     };
-    f.save(page, &link("/\"><svg/onload=alert(1)>"), v1)
-        .await
-        .invalid_at(
+    for refused in [
+        "/\"><svg/onload=alert(1)>",
+        "mailto:a@example.com\"><svg/onload=alert(1)>",
+        "https://a\"onmouseover=alert(1).example/",
+        "https://a.example/it's",
+    ] {
+        f.save(page, &link(refused), v1).await.invalid_at(
             "/body/content/0/content/0/marks/0/attrs/href",
             "page.body_invalid",
         );
+    }
     let saved = f
         .save(
             page,
@@ -1267,9 +1273,10 @@ async fn a_deeply_nested_body_is_refused_without_a_crash(pool: PgPool) {
 
 /// T2 (B3) at the same moment: two saves from one base, sent together, give one new version
 /// and one conflict. A transaction holding `page_versions` in `EXCLUSIVE` mode (reads pass,
-/// writes wait) stops both saves at their first write until it ends, so both have read the
-/// page before either writes: only the page and course locks keep the second from reading the
-/// base the first is replacing.
+/// writes wait) holds both saves until it ends. The course lock alone serializes them: the
+/// first holds it until it commits, so the second reads the page only after the first's
+/// version is current. The page-row lock under it adds nothing for two saves of one page;
+/// removing it alone leaves this test green, removing both turns it red.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn two_simultaneous_saves_from_one_base_give_one_version(pool: PgPool) {
     let f = Fixture::new(pool).await;

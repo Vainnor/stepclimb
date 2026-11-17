@@ -555,18 +555,25 @@ pub async fn rename_folder(
     Ok(moved)
 }
 
-/// Whether a `file` item or any version of a page references the course file `id` (B11; spec
-/// 07 Data). The course's cover joins this check with spec 06 I4.
-pub async fn referenced(db: impl PgExecutor<'_>, scope: OrgScope, id: Uuid) -> Result<bool, Error> {
+/// Whether a `file` item or any version of a page references the course file `id` of the course
+/// `course_id` (B11; spec 07 Data). The course's cover joins this check with spec 06 I4.
+pub async fn referenced(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    course_id: Uuid,
+    id: Uuid,
+) -> Result<bool, Error> {
     let referenced = sqlx::query_scalar!(
         r#"SELECT (EXISTS (
                        SELECT 1 FROM module_items
                        WHERE org_id = $1 AND kind = 'file' AND ref_id = $2)
                    OR EXISTS (
                        SELECT 1 FROM page_version_files
-                       WHERE org_id = $1 AND course_file_id = $2)) AS "referenced!""#,
+                       WHERE org_id = $1 AND course_id = $3 AND course_file_id = $2))
+               AS "referenced!""#,
         scope.org_id(),
         id,
+        course_id,
     )
     .fetch_one(db)
     .await?;
@@ -586,7 +593,7 @@ pub async fn delete(
         .await?
         .ok_or(Error::NotFound)?;
     lock_course(conn, scope, course_id).await?;
-    if referenced(&mut *conn, scope, id).await? {
+    if referenced(&mut *conn, scope, course_id, id).await? {
         return Err(Error::InUse);
     }
     let file_id = sqlx::query_scalar!(

@@ -311,11 +311,17 @@ Coordinator decisions (overnight, 2026-11-17, after the review of #320), pending
   limit, and serde_json refuses nesting deeper than 128 levels (400 `request.malformed`).
 - Coordinator decision (overnight, 2026-11-17): link targets are stored normalized. An absolute
   `https`, `http` or `mailto` URL is stored as the `url` crate serializes it (`Url::as_str`:
-  scheme and host lowercased, `"`, `<`, `>` and the other characters outside a URL
+  scheme and host lowercased, and in a path, query or fragment some characters
   percent-encoded), so `https://a.example/"onmouseover=alert(1)//` is stored as
-  `https://a.example/%22onmouseover=alert(1)//`. A same-origin path holding `"`, `'`, `<`, `>`,
-  a backtick or `\` is refused (`/"><svg/onload=alert(1)>`). I2's renderer must still escape
-  every attribute it writes, and its T4 and T6 golden files must include both of these cases.
+  `https://a.example/%22onmouseover=alert(1)//`. That encoding does not cover every character
+  that matters in HTML: a `mailto:` address is an opaque path where only control characters are
+  encoded, a host may hold `"`, `'` and a backtick (and `%22` in a host is decoded to `"`), and
+  `'` is never encoded in a path or fragment. So every target, absolute or a same-origin path, is
+  checked once more in the form it would be stored in: one holding `"`, `'`, `<`, `>`, a
+  backtick, `\` or a control character is refused (`/"><svg/onload=alert(1)>`,
+  `mailto:a@example.com"><svg/onload=alert(1)>`, `https://a"onmouseover=alert(1).example/`,
+  `https://a.example/it's`). I2's renderer must still escape every attribute it writes, and its
+  T4 and T6 golden files must include these cases.
 - Coordinator decision (overnight, 2026-11-17): `page_versions` and `page_version_files` carry
   `course_id`, held equal to the page's course by three-column foreign keys
   (`(org_id, course_id, page_id)` to `pages`, `(org_id, course_id, version_id)` to
