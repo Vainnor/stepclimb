@@ -322,6 +322,64 @@ test.describe("at 1280 px @desktop", () => {
     }
   });
 
+  test("T5: dragging a ModuleBoard row with the pointer makes the move and announces it", async ({
+    page,
+  }) => {
+    // docs/specs/m1/16-learning-ui-components.md B13, T5: React Aria's drag and drop in a browser.
+    await openStory(page, story("authoring-moduleboard--default"), "light");
+    const order = () =>
+      page
+        .locator("[data-slot=module-board] [role=row][aria-label]")
+        .evaluateAll((rows) => rows.map((r) => r.getAttribute("aria-label")));
+    const before = await order();
+    // Over the top edge of "Taxi diagram": the place before it, the first of Ground control.
+    await page
+      .getByRole("row", { name: /^Readbacks/ })
+      .dragTo(page.getByRole("row", { name: /^Taxi diagram/ }), {
+        targetPosition: { x: 40, y: 4 },
+      });
+    await expect(page.getByRole("status")).toHaveText(
+      "Moved Readbacks to position 1 of 2 in Ground control.",
+    );
+    const after = await order();
+    expect(after).toEqual(
+      before
+        .filter((n) => n !== "Readbacks")
+        .flatMap((n) => (n === "Taxi diagram" ? ["Readbacks", n] : [n])),
+    );
+  });
+
+  test("T5: after a ModuleBoard move from the menu or the keyboard, focus stays on the moved row", async ({
+    page,
+  }) => {
+    await openStory(page, story("authoring-moduleboard--default"), "light");
+    const focused = () =>
+      page.evaluate(() => ({
+        label: document.activeElement?.getAttribute("aria-label") ?? "",
+        row: document.activeElement?.closest("[role=row]")?.getAttribute("aria-label") ?? "",
+      }));
+    const status = page.locator("[data-slot=module-board-status]");
+    // The Move menu: focus comes back to the row's Move button.
+    await page.getByRole("button", { name: "Move Phraseology" }).click();
+    await page.getByRole("menuitem", { name: "Move down" }).click();
+    await expect(status).toHaveText("Moved Phraseology to position 2 of 4 in Radio basics.");
+    expect((await focused()).label).toBe("Move Phraseology");
+    // A keyboard drag from the row's handle to the end of the module.
+    for (let i = 0; i < 6 && (await focused()).label !== "Drag Phraseology"; i++) {
+      await page.keyboard.press("ArrowLeft");
+    }
+    expect((await focused()).label).toBe("Drag Phraseology");
+    await page.keyboard.press("Enter");
+    const target = "Insert between Frequency list and 2 Ground control";
+    for (let i = 0; i < 20 && (await focused()).label !== target; i++) {
+      await page.keyboard.press("ArrowDown");
+    }
+    expect((await focused()).label).toBe(target);
+    await page.keyboard.press("Enter");
+    await expect(status).toHaveText("Moved Phraseology to position 4 of 4 in Radio basics.");
+    expect((await focused()).row).toMatch(/^Phraseology/);
+  });
+
   test("T4: a completed item's segment fills over 320 ms, the course's rail once", async ({
     page,
   }) => {

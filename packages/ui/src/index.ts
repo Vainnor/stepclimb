@@ -3,6 +3,18 @@
 // the M0 forms, Overlays, Navigation and the M0 data components), the M1 components of
 // docs/specs/m1/16-learning-ui-components.md built so far, and the theme and strings providers.
 
+export type {
+  BoardItem,
+  BoardModule,
+  BoardMove,
+} from "./authoring/board-moves";
+export {
+  ModuleBoard,
+  type ModuleBoardProps,
+  type MoveOutcome,
+  moduleBoard,
+} from "./authoring/module-board";
+export { moduleBoardRow } from "./authoring/module-board-rows";
 export {
   Announcement,
   type AnnouncementProps,

@@ -212,6 +212,55 @@ listed here with a pointer so the inventory is complete in one place.
   down and "move to module"). Each move calls `03`'s order or move route and reloads on 409
   `order.stale`. It shows publish state, requirements and unlock rules per row, and opens item
   editing in a side sheet (not a modal, `ui.md` pitfalls).
+- **B13a.** Coordinator decisions for B13 (overnight, 2026-11-17), pending owner review:
+  - The board is one flat `GridList`: each module's row, then its items' rows. This replaces
+    B13's "modules as sections": a module row has to be dragged like any other row, and React Aria
+    drags rows of a collection, not section headers, so a module is a row and its items follow it.
+    Every item's description says its module ("in 2 Ground control"), which a section would have
+    said. React Aria's `Tree` (modules as parents, items as children) was the alternative
+    considered; it was left out because dropping an item into another module, or a module
+    between two others, there means expanding and nesting, which a two-level course does not
+    need, and the flat list keeps one keyboard model for both kinds of row.
+  - A module is dropped only between modules; an item before any item, and a place just before
+    a module's row is the end of the module above it, so an empty module takes items. While an
+    item is dragged the drop line starts where item rows do, so it reads as joining the module
+    above. A drop on a row, or at the row's own place, does nothing and is not offered.
+  - Moves map onto `03`'s routes one to one: modules reorder through `PUT
+    /courses/{id}/modules/order`, items within their module through `PUT
+    /modules/{id}/items/order`, and an item into another module through `POST /items/{id}/move`.
+    The board makes one request per move and never a second while one is saving.
+  - The Move menu has Move up and Move down, within the module for an item and within the course
+    for a module, unavailable at the ends, and for an item "Move to module", a submenu of the
+    other modules that puts the item at the end of the one chosen. Under 768 px, where the menu
+    is a bottom sheet, it starts with the row's name.
+  - While a move saves, the board draws the new order and says "Saving the new order." in a
+    status line. The new order stays drawn until the caller passes the server's modules, so the
+    old one never shows in between, and the report is read from those modules ("Moved Readbacks
+    to position 1 of 2 in Ground control."). On 409 `order.stale` it asks the caller to reload
+    and shows an alert. Any other refusal puts the order back and shows the caller's message.
+    Focus goes back to the moved row's Move button only on the render that the move, its undoing
+    or its reload makes, and only if focus fell to the page; a later change to the modules leaves
+    focus alone. React Aria announces a keyboard or screen reader drag itself.
+  - A module row shows its number and title (a heading, level 2 by default), its publish state and
+    its unlock rules in the learner's lock-reason phrases (B10a: "Opens on ...", "Unlocks
+    after ..."), then "Items in order" for `require_sequential` and "No items yet" when empty. The
+    completion rule is not shown; B13 does not list it, and the editing screen (I14) sets it. An
+    item row shows its kind icon (B9a) on the title's first line, the title, RequirementLabel and
+    publish state; a header item has no icon and a bold title. Publish state is a pill on every
+    row, the pill CourseHeader's status uses: "Published", or "Unpublished" with an EyeSlash
+    icon, a dashed edge and a sunken fill, so the two differ without color. StatusChip is not
+    used, as an author has no learning state.
+  - A row is named by its title (a module by its number and title); an item title that repeats on
+    the board adds its place ("Quiz, item 2 of module 3"). The handle and the Move and Edit
+    buttons are named after the row ("Move Readbacks"), so no two read the same. The rest of the
+    row is one visually hidden text, joined with `Intl.ListFormat` (`type: "unit"`).
+  - Edit opens the caller's item editor in a `Sheet` (at the inline end at 768 px and wider, from
+    the bottom under it), controlled or uncontrolled through the item's id. The modules are the
+    caller's, as the server last sent them; the board keeps no order of its own once a move ends.
+  - `isDisabled` makes the board read-only, as an archived course is (every write answers 409):
+    no Move or Edit buttons and no editing sheet. Coordinator decision (2026-11-17): a disabled
+    board also removes the drag handles, keeping their space so the rows line up with an
+    editable board's; a disabled handle would be a control no one can use.
 - **B14.** BrandPreview shows a sample screen (top bar, a course row, a button, a callout, text) in
   a draft brand in light, dark and high contrast side by side, with the contrast report of the
   generator (`m0/12`). The branding screen gains it and ColorField, replacing M0's minimal screen

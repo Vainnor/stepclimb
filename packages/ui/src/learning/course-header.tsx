@@ -9,6 +9,7 @@ import { tv } from "../lib/tv";
 import { Heading, type HeadingLevel } from "../primitives/heading";
 import { ProgressBar } from "../primitives/progress-bar";
 import { useStepclimbStrings } from "../strings/strings";
+import { statusPill } from "./status-pill";
 
 /** The API's `CourseStatus`. */
 export type CourseStatus = "draft" | "published" | "archived";
@@ -22,10 +23,7 @@ export const courseHeader = tv({
     summary: "flex min-w-0 flex-col gap-1.5",
     details: "flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg-sub",
     code: "break-words",
-    status: [
-      "inline-flex items-center rounded-pill border border-line-strong bg-raised px-2.5 py-0.5",
-      "text-caption font-control text-fg-default",
-    ],
+    status: statusPill(),
     progress: "flex-[1_1_14rem]",
   },
 });

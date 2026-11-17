@@ -6,6 +6,7 @@ import { parseZonedDateTime } from "@internationalized/date";
 import { CheckCircleIcon, GearIcon, HouseIcon } from "@phosphor-icons/react";
 import type { ReactElement } from "react";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { ModuleBoard } from "../authoring/module-board";
 import { Announcement } from "../learning/announcement";
 import { Callout } from "../learning/callout";
 import { CourseHeader } from "../learning/course-header";
@@ -382,6 +383,47 @@ const components: [string, ReactElement][] = [
     />,
   ],
   [
+    "ModuleBoard",
+    <ModuleBoard
+      key="mb"
+      modules={[
+        {
+          id: "m",
+          title: "«caller»",
+          published: false,
+          unlockAt: new Date(0),
+          prerequisiteIds: ["n"],
+          requireSequential: true,
+          items: [
+            { id: "h", kind: "header", title: "«caller»", published: true, requirement: null },
+            {
+              id: "a",
+              kind: "video",
+              title: "«caller»",
+              published: true,
+              requirement: { kind: "watch", min_percent: 80 },
+            },
+          ],
+        },
+        {
+          id: "n",
+          title: "«caller»",
+          published: true,
+          unlockAt: null,
+          prerequisiteIds: [],
+          requireSequential: false,
+          items: [],
+        },
+      ]}
+      onReorderModules={async () => ({ status: "moved" })}
+      onReorderItems={async () => ({ status: "moved" })}
+      onMoveItem={async () => ({ status: "moved" })}
+      onReload={() => undefined}
+      itemEditor={() => null}
+      timeZone="UTC"
+    />,
+  ],
+  [
     "ModuleRow",
     <ModuleRow
       key="mr"
@@ -531,10 +573,15 @@ describe("no hard-coded strings", () => {
   // React Aria's own accessibility strings, which it translates and offers no prop to replace
   // (spec 13 B5): the hidden "Dismiss" button at each end of a modal overlay, and a table's
   // "sortable column" description of a sortable header and "sorted by column … in … order"
-  // description of the table, with the column's name taken from the caller. They are the only text
-  // a component shows that is not a Stepclimb message.
+  // description of the table, with the column's name taken from the caller, and ModuleBoard's
+  // drag and drop: the handle's description ("Click to start dragging", or "Press Enter to start
+  // dragging" after a key press), which this test sees, and, only while a drag runs, the drop
+  // indicators' names ("Insert before ...", "Insert between ... and ...", "Insert after ...")
+  // and the live announcements of a drag started, dropped and canceled. They are the only text a
+  // component shows that is not a Stepclimb message.
   const reactAria = [
     /^Dismiss$/,
+    /^(Click|PressEnter)tostartdragging$/,
     /^sortablecolumn$/,
     /^sortedbycolumnin(ascending|descending)order$/,
   ];
