@@ -322,6 +322,31 @@ test.describe("at 1280 px @desktop", () => {
     }
   });
 
+  test("T5: dragging a ModuleBoard row with the pointer makes the move and announces it", async ({
+    page,
+  }) => {
+    // docs/specs/m1/16-learning-ui-components.md B13, T5: React Aria's drag and drop in a browser.
+    await openStory(page, story("authoring-moduleboard--default"), "light");
+    const order = () =>
+      page.locator("[data-slot=module-board] [role=row][aria-label]").evaluateAll((rows) =>
+        rows.map((r) => r.getAttribute("aria-label")),
+      );
+    const before = await order();
+    // Over the top edge of "Taxi diagram": the place before it, the first of Ground control.
+    await page
+      .getByRole("row", { name: /^Readbacks/ })
+      .dragTo(page.getByRole("row", { name: /^Taxi diagram/ }), {
+        targetPosition: { x: 40, y: 4 },
+      });
+    await expect(page.getByRole("status")).toHaveText(
+      "Moved Readbacks to position 1 of 2 in Ground control.",
+    );
+    const after = await order();
+    expect(after).toEqual(
+      before.filter((n) => n !== "Readbacks").flatMap((n) => (n === "Taxi diagram" ? ["Readbacks", n] : [n])),
+    );
+  });
+
   test("T4: a completed item's segment fills over 320 ms, the course's rail once", async ({
     page,
   }) => {
