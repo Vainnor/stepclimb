@@ -19,6 +19,7 @@ import {
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { tv } from "../lib/tv";
 import { FileDrop, sizeValues } from "../patterns/file-drop";
+import { AlertDialog } from "../primitives/alert-dialog";
 import { Button } from "../primitives/button";
 import { Code } from "../primitives/code";
 import { Heading } from "../primitives/heading";
@@ -185,6 +186,7 @@ export function VideoUploadCard({ state, onPause, onResume, onCancel }: VideoUpl
       {controls ? (
         <CardActions
           phase={phase}
+          sent={sent}
           onPause={onPause}
           onResume={onResume}
           onCancel={onCancel}
@@ -199,12 +201,27 @@ export function VideoUploadCard({ state, onPause, onResume, onCancel }: VideoUpl
 
 interface CardActionsProps extends Omit<VideoUploadCardProps, "state"> {
   phase: UploadPhase;
+  /** Bytes sent so far; with any, Cancel asks first. */
+  sent: number;
   /** Called as the buttons leave the page while one of them has focus. */
   onUnmountWithFocus: () => void;
 }
 
-function CardActions({ phase, onPause, onResume, onCancel, onUnmountWithFocus }: CardActionsProps) {
+/**
+ * Pause or Resume, and Cancel. Cancel deletes the upload and its video on the server, so once any
+ * bytes are sent it asks first, saying how much would be deleted; with none sent it cancels at
+ * once.
+ */
+function CardActions({
+  phase,
+  sent,
+  onPause,
+  onResume,
+  onCancel,
+  onUnmountWithFocus,
+}: CardActionsProps) {
   const { t } = useStepclimbStrings();
+  const [confirming, setConfirming] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const stopped = STOPPED.has(phase);
   const lostFocus = useRef(onUnmountWithFocus);
@@ -230,11 +247,22 @@ function CardActions({ phase, onPause, onResume, onCancel, onUnmountWithFocus }:
         data-slot="video-upload-cancel"
         intent="danger"
         isPending={phase === "cancelling"}
-        onPress={onCancel}
+        onPress={() => (sent > 0 ? setConfirming(true) : onCancel?.())}
       >
         <Icon icon={XIcon} />
         {t("videoUploader.cancel")}
       </Button>
+      <AlertDialog
+        isOpen={confirming}
+        onOpenChange={setConfirming}
+        title={t("videoUploader.cancelConfirm.title")}
+        confirmLabel={t("videoUploader.cancelConfirm.confirm")}
+        cancelLabel={t("videoUploader.cancelConfirm.keep")}
+        intent="danger"
+        onConfirm={() => onCancel?.()}
+      >
+        {t("videoUploader.cancelConfirm.body", { size: bytes(t, sent) })}
+      </AlertDialog>
     </div>
   );
 }

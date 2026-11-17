@@ -533,9 +533,13 @@ building I5.
   with the code.
 - **D33. One upload at a time** per uploader; a file chosen while one runs or waits is refused
   with a message naming the running one.
-- **D34. Cancel** sends `DELETE` at once, with no confirmation, and stays available while paused
-  or stopped. When the server answers 409 `video.status_invalid` (the last chunk completed the
-  upload first), the uploader says so and shows the video processing.
+- **D34. Cancel** sends `DELETE`, which deletes the upload and its video, and stays available while
+  paused or stopped. Coordinator decision (2026-11-17): once any bytes are sent, Cancel first asks
+  in an AlertDialog, "Cancel this upload?" with "The {size} sent so far will be deleted.", whose
+  destructive action is "Delete upload" and whose dismiss button is "Keep uploading" (AlertDialog
+  gains an optional `cancelLabel`, since "Cancel" would be ambiguous there); an upload with no
+  bytes sent cancels at once. When the server answers 409 `video.status_invalid` (the last chunk
+  completed the upload first), the uploader says so and shows the video processing.
 - **D35. Announcements.** A polite status region says each phase and the progress in 10% steps;
   a refusal goes to the upload's alert region.
 - **D36. The video panel.** The course authoring screen (`16` B19, `16` I14) does not exist yet.

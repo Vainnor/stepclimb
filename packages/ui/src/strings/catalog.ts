@@ -123,6 +123,10 @@ export const uiMessages: Catalog = {
       "{name} is still uploading. Wait for it to finish, or cancel it, before choosing another video.",
     "videoUploader.bytes": "{share, number, percent} · {sent} of {size}",
     "videoUploader.cancel": "Cancel upload",
+    "videoUploader.cancelConfirm.body": "The {size} sent so far will be deleted.",
+    "videoUploader.cancelConfirm.confirm": "Delete upload",
+    "videoUploader.cancelConfirm.keep": "Keep uploading",
+    "videoUploader.cancelConfirm.title": "Cancel this upload?",
     "videoUploader.dropTarget": "Drop a video here",
     "videoUploader.pause": "Pause",
     "videoUploader.pending.description":

@@ -251,12 +251,45 @@ describe("VideoUploader", () => {
     await choose(video());
     await waitFor(() => expect(s.server.held).toBe(1));
     await userEvent.click(screen.getByRole("button", { name: "Cancel upload" }));
+    // Half of the first 1 MiB chunk is out: Cancel asks first, saying what would be deleted.
+    const dialog = screen.getByRole("alertdialog", { name: "Cancel this upload?" });
+    expect(dialog).toHaveAccessibleDescription("The 524.3 kB sent so far will be deleted.");
+    expect(s.server.received.some((r) => r.method === "DELETE")).toBe(false);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete upload" }));
     await waitFor(() => expect(phase()).toBe("cancelled"));
     expect(s.server.received.at(-1)?.method).toBe("DELETE");
     expect(s.server.uploads.size).toBe(0);
     expect(stored(s.storage)).toEqual([]);
     expect(inCard().getByText("Upload of Week 1.mp4 canceled")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
+  });
+
+  it("keeps uploading when the confirmation is dismissed", async () => {
+    const s = setup();
+    renderUploader(s);
+    s.server.hold = true;
+    await choose(video());
+    await waitFor(() => expect(s.server.held).toBe(1));
+    await userEvent.click(screen.getByRole("button", { name: "Cancel upload" }));
+    await userEvent.click(screen.getByRole("button", { name: "Keep uploading" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    s.server.hold = false;
+    s.server.release();
+    await waitFor(() => expect(phase()).toBe("processing"));
+    expect(s.server.received.some((r) => r.method === "DELETE")).toBe(false);
+  });
+
+  it("cancels at once, without asking, when no byte has been sent", async () => {
+    const s = setup();
+    renderUploader(s);
+    // The first chunk's connection drops before any of it is reported sent.
+    s.server.overrides.push((request) => (request.method === "PATCH" ? "drop" : undefined));
+    await choose(video());
+    await waitFor(() => expect(phase()).toBe("interrupted"));
+    await userEvent.click(screen.getByRole("button", { name: "Cancel upload" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() => expect(phase()).toBe("cancelled"));
+    expect(s.server.received.at(-1)?.method).toBe("DELETE");
   });
 
   it("says when the upload finished before the cancel reached the server", async () => {
@@ -274,6 +307,7 @@ describe("VideoUploader", () => {
     await choose(video());
     await waitFor(() => expect(s.server.held).toBe(1));
     await userEvent.click(screen.getByRole("button", { name: "Cancel upload" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete upload" }));
     await waitFor(() => expect(phase()).toBe("processing"));
     expect(alertText()).toBe(
       "Week 1.mp4 has finished uploading and is being processed, so its upload can no longer be canceled.",

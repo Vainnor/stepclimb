@@ -24,6 +24,32 @@ function Example({ onConfirm }: { onConfirm: () => void }) {
 }
 
 describe("AlertDialog", () => {
+  it("names its dismiss button with cancelLabel when given", async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn();
+    renderWithStrings(
+      <DialogTrigger>
+        <Button>Stop</Button>
+        <AlertDialog
+          title="Cancel this upload?"
+          confirmLabel="Delete upload"
+          cancelLabel="Keep uploading"
+          intent="danger"
+          onConfirm={onConfirm}
+        >
+          The 4 MB sent so far will be deleted.
+        </AlertDialog>
+      </DialogTrigger>,
+    );
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+    const keep = screen.getByRole("button", { name: "Keep uploading" });
+    expect(keep).toHaveAttribute("data-slot", "alert-dialog-cancel");
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    await user.click(keep);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
   it("is an alertdialog whose confirm names its action in the danger intent (T12)", async () => {
     const user = userEvent.setup();
     renderWithStrings(<Example onConfirm={vi.fn()} />);
