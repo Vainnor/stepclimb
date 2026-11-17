@@ -122,7 +122,12 @@ async fn sync_writes_the_unlimited_plan_from_the_catalogs(pool: PgPool) {
     assert_eq!(features, catalog_features());
     assert_eq!(
         limits,
-        serde_json::json!({ "users": null, "storage": null, "video_storage": null })
+        serde_json::json!({
+            "users": null,
+            "storage": null,
+            "video_storage": null,
+            "transcode_minutes": null
+        })
     );
     assert_eq!(updated, 1_763_000_000_123_456);
     assert_eq!(id.get_version_num(), 7);
@@ -156,7 +161,12 @@ async fn a_sync_rewrites_an_edited_unlimited_row(pool: PgPool) {
     assert_eq!(features, catalog_features());
     assert_eq!(
         limits,
-        serde_json::json!({ "users": null, "storage": null, "video_storage": null })
+        serde_json::json!({
+            "users": null,
+            "storage": null,
+            "video_storage": null,
+            "transcode_minutes": null
+        })
     );
     assert_eq!(updated, 1_763_000_060_123_456);
 }
@@ -378,7 +388,7 @@ async fn unknown_keys_lists_other_plans_keys_the_catalogs_lack(pool: PgPool) {
         r#"{"users": null}"#,
     )
     .await;
-    insert_plan(&pool, "c_plan", "{}", r#"{"transcode_minutes": 10}"#).await;
+    insert_plan(&pool, "c_plan", "{}", r#"{"api_rate": 10}"#).await;
 
     let unknown = plans::unknown_keys(&pool).await.unwrap();
 
@@ -393,7 +403,7 @@ async fn unknown_keys_lists_other_plans_keys_the_catalogs_lack(pool: PgPool) {
             UnknownKeys {
                 plan: "c_plan".to_owned(),
                 features: vec![],
-                limits: vec!["transcode_minutes".to_owned()],
+                limits: vec!["api_rate".to_owned()],
             },
         ]
     );
@@ -434,7 +444,12 @@ async fn create_inserts_a_missing_unlimited_plan_but_never_rewrites_one(pool: Pg
     assert_eq!(features, catalog_features());
     assert_eq!(
         limits,
-        serde_json::json!({ "users": null, "storage": null, "video_storage": null })
+        serde_json::json!({
+            "users": null,
+            "storage": null,
+            "video_storage": null,
+            "transcode_minutes": null
+        })
     );
     assert_eq!(created, 1_763_000_000_123_456);
     sqlx::query("UPDATE plans SET features = '{\"retired\": true}' WHERE key = 'unlimited'")

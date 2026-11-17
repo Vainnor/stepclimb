@@ -55,7 +55,7 @@ use stepclimb_core::{
     sniff,
     videos::{self, NewUpload, Terminating, Upload},
 };
-use stepclimb_jobs::{Kind, NewJob, enqueue};
+use stepclimb_jobs::{NewJob, enqueue};
 
 use crate::{
     AppState,
@@ -71,6 +71,7 @@ use crate::{
     storage::Storage,
     upload::{self, content_length, stream_to_temporary},
     video_parts,
+    video_transcode::TRANSCODE,
     videos::{Video, code as video_code, video_error},
 };
 
@@ -86,9 +87,6 @@ pub const MIN_CHUNK_BYTES: u64 = 1024 * 1024;
 
 /// The path of an upload; `{VIDEO_UPLOADS_PATH}/{upload_id}`.
 pub const VIDEO_UPLOADS_PATH: &str = "/api/v1/video-uploads";
-
-/// The job that transcodes a video once its upload is complete (B7, B9).
-pub const TRANSCODE: Kind = Kind::new("video.transcode", "transcode");
 
 /// The codes this module produces besides [`crate::videos::code`]'s.
 pub mod code {
@@ -262,7 +260,7 @@ pub async fn create_video_upload(
         return Err(video_error(videos::Error::CourseArchived));
     }
     entitlements
-        .check_room(&mut tx, Limit::VideoStorage, length)
+        .check_room(&mut tx, Limit::VideoStorage, length, state.clock.now())
         .await?;
     let new = NewUpload {
         course_id,

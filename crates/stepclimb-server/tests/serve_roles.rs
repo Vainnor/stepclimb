@@ -283,6 +283,58 @@ async fn an_all_process_serves_the_application_and_runs_the_worker(pool: PgPool)
     );
 }
 
+// docs/specs/m1/08-uploaded-video.md T13 (B8): `transcoder` runs only the transcode queue's
+// worker, with no scheduler, and answers only the probes.
+#[sqlx::test(migrations = false)]
+async fn a_transcoder_process_runs_only_transcodes_and_answers_only_the_probes(pool: PgPool) {
+    let mut server = serve(&pool, &["--role", "transcoder"], &[]);
+    server.wait_for("ffmpeg and ffprobe passed the startup check");
+    let started = server.wait_for("job worker started");
+    assert_eq!(started["fields"]["concurrency"], "1", "{started}");
+    assert_eq!(started["fields"]["transcode_concurrency"], "1", "{started}");
+    assert_eq!(started["fields"]["queues"], "[]", "{started}");
+    let addr = server.listening();
+    assert_eq!(status_of(&addr, "/healthz"), 200);
+    assert_eq!(status_of(&addr, "/readyz"), 200);
+    assert_eq!(status_of(&addr, "/api/v1/me"), 404);
+    let schedules: i64 = sqlx::query_scalar("SELECT count(*) FROM job_schedules")
+        .fetch_one(&pool)
+        .await
+        .expect("count schedules");
+    assert_eq!(schedules, 0, "a transcoder runs no scheduler");
+    let status = server.terminate();
+    assert!(
+        status.success(),
+        "{status}; log:\n{}",
+        server.seen.join("\n")
+    );
+}
+
+// T13 (B8): a transcoder whose ffmpeg does not run stops at startup naming `ffmpeg_path`.
+#[sqlx::test(migrations = false)]
+async fn a_transcoder_without_ffmpeg_stops_naming_ffmpeg_path(pool: PgPool) {
+    let mut server = serve(
+        &pool,
+        &["--role", "transcoder"],
+        &[("STEPCLIMB_FFMPEG_PATH", "/nonexistent/ffmpeg")],
+    );
+    let deadline = Instant::now() + PATIENCE;
+    let status = loop {
+        if let Some(status) = server.child.try_wait().expect("wait on the server") {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "the transcoder did not stop");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    while let Ok(line) = server.lines.recv_timeout(Duration::from_secs(2)) {
+        server.seen.push(line);
+    }
+    assert_eq!(status.code(), Some(1));
+    let log = server.seen.join("\n");
+    assert!(log.contains("ffmpeg_path (STEPCLIMB_FFMPEG_PATH)"), "{log}");
+    assert!(!server.logged("listening"), "{log}");
+}
+
 #[test]
 fn an_unknown_role_flag_exits_2_naming_it() {
     let output = Command::new(env!("CARGO_BIN_EXE_stepclimb"))
@@ -293,7 +345,7 @@ fn an_unknown_role_flag_exits_2_naming_it() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("'--role <ROLE>'"), "{stderr}");
     assert!(
-        stderr.contains("[possible values: all, web, worker]"),
+        stderr.contains("[possible values: all, web, worker, transcoder]"),
         "{stderr}"
     );
 }

@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE videos\n         SET output_run = output_run + 1,\n             updated_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond'\n         WHERE org_id = $1 AND id = $2\n         RETURNING output_run",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "output_run",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "videos",
+            "name": "output_run"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "42a49b35528cd65ee1b177e8be90e30f70f112caf30c386b86c6e05ef207b0c5"
+}

@@ -280,7 +280,7 @@ impl Upload<'_> {
         let mut tx = begin(self.state).await?;
         let room = self
             .entitlements
-            .check_room(&mut tx, Limit::Storage, length)
+            .check_room(&mut tx, Limit::Storage, length, self.state.clock.now())
             .await;
         if let Err(full) = room {
             let maybe_repeat = full.code() == entitlements::code::LIMIT_REACHED
@@ -366,7 +366,7 @@ impl Upload<'_> {
             None => streamed.hashed.size(),
         };
         self.entitlements
-            .check_room(tx, Limit::Storage, adding)
+            .check_room(tx, Limit::Storage, adding, self.state.clock.now())
             .await?;
         let file_id = match existing {
             Some(id) => id,

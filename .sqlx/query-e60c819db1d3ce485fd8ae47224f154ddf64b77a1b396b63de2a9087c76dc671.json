@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO transcode_usage (org_id, month, minutes, created_at, updated_at)\n         VALUES ($1,\n                 date_trunc('month', (timestamptz 'epoch' + $3::bigint * interval '1 microsecond')\n                                     AT TIME ZONE 'UTC')::date,\n                 $2,\n                 timestamptz 'epoch' + $3::bigint * interval '1 microsecond',\n                 timestamptz 'epoch' + $3::bigint * interval '1 microsecond')\n         ON CONFLICT (org_id, month) DO UPDATE\n         SET minutes = transcode_usage.minutes + EXCLUDED.minutes,\n             updated_at = EXCLUDED.updated_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e60c819db1d3ce485fd8ae47224f154ddf64b77a1b396b63de2a9087c76dc671"
+}

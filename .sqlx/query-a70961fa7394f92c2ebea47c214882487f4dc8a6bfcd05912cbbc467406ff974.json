@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE videos\n         SET status = 'ready', error_code = NULL, duration_s = $4::float8, renditions = $5::text::jsonb,\n             poster_key = $6, storage_bytes = $7,\n             updated_at = timestamptz 'epoch' + $8::bigint * interval '1 microsecond'\n         WHERE org_id = $1 AND id = $2 AND output_run = $3 AND status = 'processing'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4",
+        "Float8",
+        "Text",
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a70961fa7394f92c2ebea47c214882487f4dc8a6bfcd05912cbbc467406ff974"
+}

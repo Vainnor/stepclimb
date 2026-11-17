@@ -391,6 +391,7 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
             "/api/v1/videos/{video_id}",
             get(videos::get_video).patch(videos::update_video),
         ),
+        ("/api/v1/videos/{video_id}/retry", post(videos::retry_video)),
         ("/api/v1/admin/permissions", get(roles::list_permissions)),
         (
             roles::ROLES_PATH,

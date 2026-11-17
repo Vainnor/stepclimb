@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT ((SELECT COALESCE(sum(storage_bytes), 0) FROM videos WHERE org_id = $1)\n                 + (SELECT COALESCE(sum(u.length), 0)\n                    FROM video_uploads u JOIN videos v ON v.org_id = u.org_id AND v.id = u.video_id\n                    WHERE u.org_id = $1 AND v.status <> 'ready')\n                )::bigint AS \"bytes!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "bytes!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "115f10dc89b893cf89921b03d0e5868d8ce44321a721c6f77e47440bb785a423"
+}

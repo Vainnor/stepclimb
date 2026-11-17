@@ -245,6 +245,12 @@ fn every_known_variable_is_accepted() {
             "STEPCLIMB_WORKER_CONCURRENCY",
             "STEPCLIMB_MAX_FILE_BYTES",
             "STEPCLIMB_MAX_VIDEO_BYTES",
+            "STEPCLIMB_MAX_VIDEO_SECONDS",
+            "STEPCLIMB_TRANSCODE_CONCURRENCY",
+            "STEPCLIMB_TRANSCODE_THREADS",
+            "STEPCLIMB_TRANSCODE_DIR",
+            "STEPCLIMB_FFMPEG_PATH",
+            "STEPCLIMB_FFPROBE_PATH",
             "STEPCLIMB_STORAGE_URL",
             "STEPCLIMB_STORAGE_S3_ENDPOINT",
             "STEPCLIMB_STORAGE_S3_REGION",
@@ -452,6 +458,8 @@ fn every_config_field_is_a_classified_setting() {
         worker_concurrency: _,
         max_file_bytes: _,
         max_video_bytes: _,
+        // The six transcode settings below (`transcode_settings_*` tests).
+        transcode: _,
         // `[[providers]]` is a record of the file, not a setting (`providers::tests`).
         providers: _,
         // The six storage settings below (`storage::tests`).
@@ -473,6 +481,12 @@ fn every_config_field_is_a_classified_setting() {
         (WORKER_CONCURRENCY, false),
         (MAX_FILE_BYTES, false),
         (MAX_VIDEO_BYTES, false),
+        (MAX_VIDEO_SECONDS, false),
+        (TRANSCODE_CONCURRENCY, false),
+        (TRANSCODE_THREADS, false),
+        (TRANSCODE_DIR, false),
+        (FFMPEG_PATH, false),
+        (FFPROBE_PATH, false),
         (STORAGE_URL, false),
         (STORAGE_S3_ENDPOINT, false),
         (STORAGE_S3_REGION, false),
@@ -825,6 +839,12 @@ fn non_secret_values_list_every_non_secret_setting_and_no_secret() {
             ("worker_concurrency", "4".to_owned()),
             ("max_file_bytes", "104857600".to_owned()),
             ("max_video_bytes", "5368709120".to_owned()),
+            ("max_video_seconds", "14400".to_owned()),
+            ("transcode_concurrency", "1".to_owned()),
+            ("transcode_threads", "0".to_owned()),
+            ("transcode_dir", std::env::temp_dir().display().to_string()),
+            ("ffmpeg_path", "(PATH)".to_owned()),
+            ("ffprobe_path", "(PATH)".to_owned()),
         ]
     );
     let printed = format!("{values:?}");
@@ -1288,8 +1308,13 @@ fn reference_default(setting: &Setting) -> String {
                 setting.var
             )
         });
-    if value == "(none)" {
+    if setting.key == TRANSCODE_DIR.key {
+        // The OS temporary directory, which differs by host.
+        "the OS temporary directory".to_owned()
+    } else if value == "(none)" {
         "none".to_owned()
+    } else if value == "(PATH)" {
+        "found on `PATH`".to_owned()
     } else {
         format!("`{value}`")
     }
@@ -1442,6 +1467,7 @@ fn the_role_is_all_unless_set() {
         ("all", Role::All),
         ("web", Role::Web),
         ("worker", Role::Worker),
+        ("transcoder", Role::Transcoder),
         ("", Role::All),
     ] {
         let config = Config::load(&with_required(&[(ROLE.var, value)]), None).unwrap();
@@ -1452,7 +1478,7 @@ fn the_role_is_all_unless_set() {
 // Spec m1/01 T11.
 #[test]
 fn an_unknown_role_is_refused_naming_the_setting() {
-    for value in ["other", "WEB", "transcoder", " all"] {
+    for value in ["other", "WEB", "transcoders", " all"] {
         let error = Config::load(&with_required(&[(ROLE.var, value)]), None).unwrap_err();
         assert_eq!(
             error.to_string(),
@@ -1614,4 +1640,98 @@ fn a_role_says_what_it_runs() {
     assert!(Role::All.serves_app() && Role::All.runs_jobs());
     assert!(Role::Web.serves_app() && !Role::Web.runs_jobs());
     assert!(!Role::Worker.serves_app() && Role::Worker.runs_jobs());
+    assert!(!Role::Transcoder.serves_app() && Role::Transcoder.runs_jobs());
+    // docs/specs/m1/08-uploaded-video.md B8: `worker` leaves the transcode queue to `all` and
+    // `transcoder`, and only those two run it.
+    let general: Vec<_> = [Role::All, Role::Web, Role::Worker, Role::Transcoder]
+        .into_iter()
+        .map(|r| (r.runs_general_jobs(), r.runs_transcodes()))
+        .collect();
+    assert_eq!(
+        general,
+        [(true, true), (false, false), (true, false), (false, true)]
+    );
+}
+
+// docs/specs/m1/08-uploaded-video.md B8, B9, API -> Configuration added.
+#[test]
+fn transcode_settings_have_their_defaults_unless_set() {
+    let unset = Config::load(&with_required(&[]), None).unwrap().transcode;
+    assert_eq!(unset.max_video_seconds.get(), 14_400);
+    assert_eq!(unset.concurrency.get(), 1);
+    assert_eq!(unset.threads, 0);
+    assert_eq!(unset.dir, std::env::temp_dir());
+    assert_eq!((unset.ffmpeg, unset.ffprobe), (None, None));
+    let set = Config::load(
+        &with_required(&[
+            (MAX_VIDEO_SECONDS.var, "2"),
+            (TRANSCODE_CONCURRENCY.var, "16"),
+            (TRANSCODE_THREADS.var, "64"),
+            (TRANSCODE_DIR.var, "/var/tmp/stepclimb"),
+            (FFMPEG_PATH.var, "/opt/ff/ffmpeg"),
+            (FFPROBE_PATH.var, "/opt/ff/ffprobe"),
+        ]),
+        None,
+    )
+    .unwrap()
+    .transcode;
+    assert_eq!(set.max_video_seconds.get(), 2);
+    assert_eq!(set.concurrency.get(), 16);
+    assert_eq!(set.threads, 64);
+    assert_eq!(set.dir, std::path::Path::new("/var/tmp/stepclimb"));
+    assert_eq!(
+        set.ffmpeg.as_deref(),
+        Some(std::path::Path::new("/opt/ff/ffmpeg"))
+    );
+    assert_eq!(
+        set.ffprobe.as_deref(),
+        Some(std::path::Path::new("/opt/ff/ffprobe"))
+    );
+}
+
+#[test]
+fn transcode_settings_out_of_range_or_relative_are_refused_naming_the_setting() {
+    for (setting, value, problem) in [
+        (
+            MAX_VIDEO_SECONDS,
+            "0",
+            "\"0\" is not a whole number from 1 to 86400",
+        ),
+        (
+            MAX_VIDEO_SECONDS,
+            "86401",
+            "\"86401\" is not a whole number from 1 to 86400",
+        ),
+        (
+            TRANSCODE_CONCURRENCY,
+            "17",
+            "\"17\" is not a whole number from 1 to 16",
+        ),
+        (
+            TRANSCODE_CONCURRENCY,
+            "+1",
+            "\"+1\" is not a whole number from 1 to 16",
+        ),
+        (
+            TRANSCODE_THREADS,
+            "65",
+            "\"65\" is not a whole number from 0 to 64",
+        ),
+        (TRANSCODE_DIR, "tmp", "\"tmp\" is not an absolute path"),
+        (FFMPEG_PATH, "ffmpeg", "\"ffmpeg\" is not an absolute path"),
+        (
+            FFPROBE_PATH,
+            "./ffprobe",
+            "\"./ffprobe\" is not an absolute path",
+        ),
+    ] {
+        let error = Config::load(&with_required(&[(setting.var, value)]), None).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "{}: {problem}; for example {}",
+                setting.var, setting.example
+            )
+        );
+    }
 }

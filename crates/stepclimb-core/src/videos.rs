@@ -81,6 +81,8 @@ pub struct Video {
     pub error_code: Option<String>,
     /// Seconds; known once a transcode has probed the video.
     pub duration_s: Option<f64>,
+    /// The heights of its HLS renditions, shortest first; empty until a transcode succeeds.
+    pub heights: Vec<u32>,
     /// By `at_s`.
     pub chapters: Vec<Chapter>,
     pub created_at: SystemTime,
@@ -102,12 +104,13 @@ pub struct Upload {
     pub updated_at: SystemTime,
 }
 
-/// What a terminating upload's delete removes after its parts (D7, D13).
+/// What a terminating upload's delete removes (D7, D13).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Terminating {
-    /// The upload row only: the video stays, failed as not a video.
+    /// The upload's parts and row only: the video stays, failed as not a video or transcoded.
     Parts,
-    /// The video, with its upload and attachments.
+    /// Every object of the video, transcode outputs included, then the video with its upload
+    /// and attachments.
     Video,
 }
 
@@ -335,6 +338,27 @@ pub async fn lock_upload(
            FROM video_uploads WHERE org_id = $1 AND id = $2 FOR UPDATE"#,
         scope.org_id(),
         id,
+    )
+    .fetch_optional(conn)
+    .await?
+    .map(Upload::try_from)
+    .transpose()
+}
+
+/// The upload of the video `video_id` locked `FOR UPDATE` in the transaction `conn` belongs to,
+/// or `None` when it has none: a transcode reads the original it concatenates from it.
+pub async fn lock_upload_of_video(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    video_id: Uuid,
+) -> Result<Option<Upload>, Error> {
+    sqlx::query_as!(
+        UploadRow,
+        r#"SELECT id, video_id, course_id, length, received, terminating,
+                  (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM video_uploads WHERE org_id = $1 AND video_id = $2 FOR UPDATE"#,
+        scope.org_id(),
+        video_id,
     )
     .fetch_optional(conn)
     .await?
@@ -578,6 +602,7 @@ struct VideoRow {
     status: String,
     error_code: Option<String>,
     duration_s: Option<f64>,
+    heights: Vec<i32>,
     created_at_us: i64,
     updated_at_us: i64,
 }
@@ -596,6 +621,15 @@ impl VideoRow {
             title: self.title,
             error_code: self.error_code,
             duration_s: self.duration_s,
+            heights: self
+                .heights
+                .into_iter()
+                .map(u32::try_from)
+                .collect::<Result<_, _>>()
+                .map_err(|_| Error::Stored {
+                    id: self.id,
+                    column: "renditions",
+                })?,
             chapters,
         })
     }
@@ -610,6 +644,8 @@ pub async fn get(
     let row = sqlx::query_as!(
         VideoRow,
         r#"SELECT id, source, title, status, error_code, duration_s::float8 AS duration_s,
+                  ARRAY(SELECT h::int FROM jsonb_array_elements_text(
+                            COALESCE(renditions->'heights', '[]'::jsonb)) AS h) AS "heights!",
                   (extract(epoch FROM created_at) * 1000000)::bigint AS "created_at_us!",
                   (extract(epoch FROM updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM videos WHERE org_id = $1 AND id = $2"#,
@@ -637,6 +673,8 @@ pub async fn list_for_course(
         VideoRow,
         r#"SELECT v.id, v.source, v.title, v.status, v.error_code,
                   v.duration_s::float8 AS duration_s,
+                  ARRAY(SELECT h::int FROM jsonb_array_elements_text(
+                            COALESCE(v.renditions->'heights', '[]'::jsonb)) AS h) AS "heights!",
                   (extract(epoch FROM v.created_at) * 1000000)::bigint AS "created_at_us!",
                   (extract(epoch FROM v.updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM course_videos cv JOIN videos v ON v.org_id = cv.org_id AND v.id = cv.video_id
@@ -721,10 +759,14 @@ pub async fn rename(
 /// The bytes the `video_storage` limit counts for the scope's organization (B21): the stored
 /// renditions of its videos, plus the length of every upload whose parts are still stored. An
 /// upload counts its whole length from its start, so a started upload always has room to finish.
+/// The upload of a `ready` video is not counted: its parts are being deleted (Q3), and the
+/// video's renditions count in their place.
 pub async fn count_for_limit(db: impl PgExecutor<'_>, scope: OrgScope) -> Result<i64, Error> {
     let bytes = sqlx::query_scalar!(
         r#"SELECT ((SELECT COALESCE(sum(storage_bytes), 0) FROM videos WHERE org_id = $1)
-                 + (SELECT COALESCE(sum(length), 0) FROM video_uploads WHERE org_id = $1)
+                 + (SELECT COALESCE(sum(u.length), 0)
+                    FROM video_uploads u JOIN videos v ON v.org_id = u.org_id AND v.id = u.video_id
+                    WHERE u.org_id = $1 AND v.status <> 'ready')
                 )::bigint AS "bytes!""#,
         scope.org_id(),
     )

@@ -6666,6 +6666,61 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/api/v1/videos/{video_id}/retry": {
+      "post": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "Transcode again a video whose transcode failed (`video.transcode_failed`), from its upload,\nwhich the server keeps until a transcode succeeds. The video is `processing` again when this\nanswers; read it to follow the new transcode.",
+        "operationId": "retryVideo",
+        "parameters": [
+          {
+            "name": "video_id",
+            "in": "path",
+            "description": "The video's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The video, processing again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Video"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/VideoEditForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/VideoNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VideoRetryConflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/auth/local/enrollment/passkey": {
       "post": {
         "tags": [
@@ -13292,6 +13347,17 @@
                   "type": "string",
                   "format": "uuid"
                 },
+                "renditions": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Renditions",
+                      "description": "What a successful transcode produced; absent until then."
+                    }
+                  ]
+                },
                 "source": {
                   "type": "string",
                   "description": "`upload` for an uploaded video."
@@ -13927,6 +13993,24 @@
           }
         },
         "additionalProperties": false
+      },
+      "Renditions": {
+        "type": "object",
+        "description": "The HLS renditions of a ready video.",
+        "required": [
+          "heights"
+        ],
+        "properties": {
+          "heights": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "Their heights in pixels, shortest first (360, 720, 1080, or one below 360)."
+          }
+        }
       },
       "Requirement": {
         "oneOf": [
@@ -14709,6 +14793,17 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "renditions": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Renditions",
+                "description": "What a successful transcode produced; absent until then."
+              }
+            ]
           },
           "source": {
             "type": "string",
@@ -16850,6 +16945,16 @@
       },
       "VideoRenameConflict": {
         "description": "`course.archived`: every course through which you may edit the video is archived.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "VideoRetryConflict": {
+        "description": "`video.status_invalid`: the video did not fail as `video.transcode_failed`, or its upload is no longer stored; upload it again as a new video. `course.archived`: every course through which you may edit the video is archived.",
         "content": {
           "application/problem+json": {
             "schema": {

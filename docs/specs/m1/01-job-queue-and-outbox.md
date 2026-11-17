@@ -178,7 +178,7 @@ Configuration added (ADR 0022 flat keys; every one in `check-config`'s output):
 
 | Variable | File key | Values | Default |
 | --- | --- | --- | --- |
-| `STEPCLIMB_ROLE` (and `serve --role`) | `role` | `all`, `web`, `worker` | `all` |
+| `STEPCLIMB_ROLE` (and `serve --role`) | `role` | `all`, `web`, `worker`, `transcoder` (spec 08) | `all` |
 | `STEPCLIMB_WORKER_CONCURRENCY` | `worker_concurrency` | 1 to 64 | 4 |
 
 ## Data

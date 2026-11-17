@@ -109,7 +109,9 @@ async fn create_user(
 ) -> Result<&'static str, ApiError> {
     let scope = require.principal().scope();
     let mut tx = state.db.begin().await.map_err(|e| ApiError::internal(&e))?;
-    entitlements.check_room(&mut tx, Limit::Users, 1).await?;
+    entitlements
+        .check_room(&mut tx, Limit::Users, 1, now())
+        .await?;
     users::create(&mut *tx, scope, &new_user("New User"), now())
         .await
         .map_err(|e| ApiError::internal(&e))?;

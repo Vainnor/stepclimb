@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT v.id, v.source, v.title, v.status, v.error_code,\n                  v.duration_s::float8 AS duration_s,\n                  (extract(epoch FROM v.created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM v.updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM course_videos cv JOIN videos v ON v.org_id = cv.org_id AND v.id = cv.video_id\n           WHERE cv.org_id = $1 AND cv.course_id = $2 AND ($3::uuid IS NULL OR v.id > $3)\n           ORDER BY v.id\n           LIMIT $4",
+  "query": "SELECT v.id, v.source, v.title, v.status, v.error_code,\n                  v.duration_s::float8 AS duration_s,\n                  ARRAY(SELECT h::int FROM jsonb_array_elements_text(\n                            COALESCE(v.renditions->'heights', '[]'::jsonb)) AS h) AS \"heights!\",\n                  (extract(epoch FROM v.created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM v.updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM course_videos cv JOIN videos v ON v.org_id = cv.org_id AND v.id = cv.video_id\n           WHERE cv.org_id = $1 AND cv.course_id = $2 AND ($3::uuid IS NULL OR v.id > $3)\n           ORDER BY v.id\n           LIMIT $4",
   "describe": {
     "columns": [
       {
@@ -66,12 +66,18 @@
       },
       {
         "ordinal": 6,
+        "name": "heights!",
+        "type_info": "Int4Array",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
         "name": "created_at_us!",
         "type_info": "Int8",
         "origin": "Expression"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "updated_at_us!",
         "type_info": "Int8",
         "origin": "Expression"
@@ -93,8 +99,9 @@
       true,
       null,
       null,
+      null,
       null
     ]
   },
-  "hash": "da96a52d0e0c3bf6aa12c4bb23d1583a39f82f090e09154920d051e75004855e"
+  "hash": "14999118284c3ade05b5caf1820799aab00aa39652bb91ee763ffe8981d73eaf"
 }

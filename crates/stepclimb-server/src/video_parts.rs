@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Deleting a video upload's stored parts (docs/specs/m1/08-uploaded-video.md B5, B6, D7, D13).
+//! Deleting a video's stored objects (docs/specs/m1/08-uploaded-video.md B5, B6, B12, D7, D13):
+//! an upload's parts, every object of a video, and the outputs of transcode runs a newer run
+//! replaced.
 //!
 //! An upload is first marked terminating in a transaction that holds its row's lock
 //! (`stepclimb_core::videos::mark_terminating`). From that commit on no chunk is stored for it:
@@ -30,35 +32,49 @@ pub enum Error {
     Database(#[from] sqlx::Error),
 }
 
-/// Delete every stored part of the video `video_id`'s upload, [`DELETES_AT_ONCE`] at a time. A
-/// part already gone counts as deleted. The number deleted.
+/// The prefix of the video `video_id`'s upload parts, `orgs/<org>/videos/<id>/upload/`.
+pub(crate) fn parts_prefix(storage: &Storage, scope: OrgScope, video_id: Uuid) -> Path {
+    Path::from_iter(
+        storage
+            .video_prefix(scope, video_id)
+            .parts()
+            .chain(std::iter::once("upload".into())),
+    )
+}
+
+/// Delete every stored part of the video `video_id`'s upload. The number deleted.
 pub async fn delete_parts(
     storage: &Storage,
     scope: OrgScope,
     video_id: Uuid,
 ) -> Result<usize, Error> {
-    let prefix = Path::from_iter(
-        storage
-            .video_prefix(scope, video_id)
-            .parts()
-            .chain(std::iter::once("upload".into())),
-    );
-    let listed = storage.store().list_with_delimiter(Some(&prefix)).await?;
-    let count = listed.objects.len();
+    delete_tree(storage, &parts_prefix(storage, scope, video_id)).await
+}
+
+/// Delete every object under `prefix`, at any depth, [`DELETES_AT_ONCE`] at a time. An object
+/// already gone counts as deleted. The number deleted.
+pub async fn delete_tree(storage: &Storage, prefix: &Path) -> Result<usize, Error> {
+    let mut count = 0;
+    let mut pending = vec![prefix.clone()];
     let mut running = JoinSet::new();
-    for object in listed.objects {
-        if running.len() >= DELETES_AT_ONCE
-            && let Some(done) = running.join_next().await
-        {
-            done??;
-        }
-        let store = storage.store().clone();
-        running.spawn(async move {
-            match store.delete(&object.location).await {
-                Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
-                Err(error) => Err(error),
+    while let Some(at) = pending.pop() {
+        let listed = storage.store().list_with_delimiter(Some(&at)).await?;
+        pending.extend(listed.common_prefixes);
+        count += listed.objects.len();
+        for object in listed.objects {
+            if running.len() >= DELETES_AT_ONCE
+                && let Some(done) = running.join_next().await
+            {
+                done??;
             }
-        });
+            let store = storage.store().clone();
+            running.spawn(async move {
+                match store.delete(&object.location).await {
+                    Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
+                    Err(error) => Err(error),
+                }
+            });
+        }
     }
     while let Some(done) = running.join_next().await {
         done??;
@@ -66,8 +82,34 @@ pub async fn delete_parts(
     Ok(count)
 }
 
-/// Finish the terminating upload `upload_id`: delete its parts, then, under its row's lock, its
-/// row or its video as the mark says. Whether it was finished here; an upload that is gone or not
+/// Delete the outputs of every transcode run of the video `video_id` but `keep`
+/// (`orgs/<org>/videos/<id>/v<n>/` for each `n` other than `keep`), after `keep` committed
+/// (docs/specs/m1/08-uploaded-video.md B12). The upload's parts are left to [`finish`].
+pub async fn delete_other_runs(
+    storage: &Storage,
+    scope: OrgScope,
+    video_id: Uuid,
+    keep: i32,
+) -> Result<usize, Error> {
+    let prefix = storage.video_prefix(scope, video_id);
+    let listed = storage.store().list_with_delimiter(Some(&prefix)).await?;
+    let keep = format!("v{keep}");
+    let mut count = 0;
+    for run in listed.common_prefixes {
+        let name = run.filename().unwrap_or_default();
+        let is_run = name
+            .strip_prefix('v')
+            .is_some_and(|n| n.parse::<u32>().is_ok());
+        if is_run && name != keep {
+            count += delete_tree(storage, &run).await?;
+        }
+    }
+    Ok(count)
+}
+
+/// Finish the terminating upload `upload_id`: delete its parts ([`videos::Terminating::Parts`])
+/// or every object of its video, transcode outputs included ([`videos::Terminating::Video`]),
+/// then, under its row's lock, its row or its video as the mark says. Whether it was finished here; an upload that is gone or not
 /// marked is left alone.
 pub async fn finish(
     pool: &PgPool,
@@ -78,10 +120,16 @@ pub async fn finish(
     let Some(upload) = videos::get_upload(pool, scope, upload_id).await? else {
         return Ok(false);
     };
-    if upload.terminating.is_none() {
-        return Ok(false);
+    match upload.terminating {
+        None => return Ok(false),
+        Some(videos::Terminating::Parts) => {
+            delete_parts(storage, scope, upload.video_id).await?;
+        }
+        // A failed video may hold transcode outputs besides its parts.
+        Some(videos::Terminating::Video) => {
+            delete_tree(storage, &storage.video_prefix(scope, upload.video_id)).await?;
+        }
     }
-    delete_parts(storage, scope, upload.video_id).await?;
     let mut tx = pool.begin().await?;
     let Some(locked) = videos::lock_upload(&mut tx, scope, upload_id).await? else {
         return Ok(false);

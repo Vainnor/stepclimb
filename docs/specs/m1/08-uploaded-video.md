@@ -572,6 +572,64 @@ building I5.
   axe in every theme) answer the video routes in the browser, as the files area's tests do, so
   they can hold a chunk and run without a signed-in session.
 
+### Points I2 settled
+
+Coordinator decision (overnight, 2026-11-17), pending owner review: the spec left each of these
+open while building I2.
+
+- **D17. ffmpeg missing from an `all` process.** The release image gets ffmpeg in I6, so a
+  default `all` install would not start if B8 applied to it as written. A `transcoder` process
+  refuses to start when ffmpeg or ffprobe does not run (T13), and so does an `all` process whose
+  `transcode_dir`, `ffmpeg_path` or `ffprobe_path` is set and fails. An `all` process that relies
+  on `PATH` and finds no program there starts without serving the `transcode` queue, with one
+  warning naming the setting; its uploads stay `processing` until a process that can transcode
+  takes them. Once I6 ships ffmpeg in the image, an issue against this spec can make `all` refuse
+  too.
+- **D18. Workers per role.** `all` runs two job loops: the general one (every queue but
+  `transcode`, `worker_concurrency`, with the scheduler and the outbox dispatcher) and the
+  transcode one (`transcode` only, `transcode_concurrency`), so a long transcode never takes a
+  general slot. `transcoder` runs only the transcode loop and answers only `/healthz` and
+  `/readyz`. The job pool has one connection per job of both loops, plus 3.
+- **D19. B10's limits.** The wall-clock limit of 4 x the duration plus 10 minutes covers the
+  four ffmpeg runs of one transcode together (HLS, MP4, poster, sprites). The output directory may
+  hold at most 64 MiB plus 3 MB per second of video, about twice what the ladder, the MP4 and their
+  sound add up to. Each run may hold 4 GiB of resident memory, read from `/proc` every 250 ms on
+  Linux, and ffmpeg's `-max_alloc` caps any single allocation at 256 MiB. ffprobe gets 60 s and
+  1 GiB. Every child runs with an empty environment, stdin closed, no shell, and drops the
+  source's metadata and chapters (`-map_metadata -1`, `-map_chapters -1`).
+- **D20. Failures and retries.** A run ffmpeg fails, or one that breaks a limit, fails the video
+  `video.transcode_failed` at once; an author retries it (B2). A failure of the database, the store
+  or the host (ffmpeg missing at run time, a full disk) is retried by the queue: `video.transcode`
+  has a 10-minute lease, extended every 2 minutes while ffmpeg runs, and 5 attempts from 1 to 30
+  minutes apart. A transient failure on the last attempt fails the video
+  `video.transcode_failed`. ffprobe finding no video stream fails it `video.not_a_video` and
+  deletes its parts, as B7's discard does (D7).
+- **D21. `renditions`.** The stored object is `{ run, heights, bitrates, master, playlists,
+  mp4, mp4_height, sprites }`, each key a store key under `v<n>/`. `Video` shows
+  `renditions: { heights }` once the video is `ready`, and omits it before.
+- **D22. `video_storage` after a transcode.** The upload of a `ready` video no longer counts: its
+  parts are being deleted and its renditions count instead. The transaction that sets `ready`
+  marks the upload's parts for deletion (`terminating = 'parts'`, so `videos.cleanup` finishes a
+  delete that fails), records the minutes and re-checks the limit with nothing added.
+- **D23. The retry route.** `POST /api/v1/videos/{video_id}/retry` answers 202 with the
+  `processing` video and enqueues the job in the same transaction (dedupe key: the video id). It
+  needs a video failed as `video.transcode_failed` whose upload is complete and not being deleted
+  (409 `video.status_invalid` otherwise), and answers 409 `course.archived` when every course
+  through which the caller may edit the video is archived, as D9's rename does.
+- **D24. Setting ranges.** `max_video_seconds` 1 to 86,400; `transcode_threads` 0 to 64;
+  `transcode_dir`, `ffmpeg_path` and `ffprobe_path` must be absolute paths. The startup check
+  makes and removes a work directory in `transcode_dir`, so a missing or read-only directory stops
+  a process that transcodes.
+- **D25. Thumbnails.** The sprite run uses `fps=1/10:eof_action=pass`, so a video shorter than
+  10 s still gets its one thumbnail; a video of `d` seconds gets `ceil(d / 10)`.
+- **D26. The limit check takes the clock.** `org_plans::check_room` and
+  `Entitlements::check_room` take the caller's `now`, which picks the month `transcode_minutes`
+  counts.
+- **D27. ffmpeg in the dev shell.** `flake.nix` adds `ffmpeg-headless` from the flake's pinned
+  nixpkgs (ffmpeg 9.0.2 with libx264 at the time of writing), so the tests run the same ffmpeg on
+  every machine with the dev shell; `flake.lock` does not change.
+
+
 ## Issues
 
 1. **I1. Video rows, tus upload and limits.** Migration for `videos`, `course_videos`,

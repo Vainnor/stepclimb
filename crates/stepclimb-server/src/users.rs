@@ -492,7 +492,9 @@ pub async fn create_user(
     let now = state.clock.now();
     let mut new = valid_new_user(body.clone())?;
     let mut tx = state.db.begin().await.map_err(|e| ApiError::internal(&e))?;
-    entitlements.check_room(&mut tx, Limit::Users, 1).await?;
+    entitlements
+        .check_room(&mut tx, Limit::Users, 1, state.clock.now())
+        .await?;
     if body.tz.is_none() {
         new.tz = organizations::settings(&mut *tx, scope)
             .await
