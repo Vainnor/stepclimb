@@ -2,7 +2,7 @@
 // The details an image or a video embed needs before it is inserted
 // (docs/specs/m1/07-pages-and-the-editor.md B10, B10a, B12), asked in a panel inside the editor
 // rather than a modal: an image's file and text alternative, an embed's address and title.
-import { type FormEvent, useId, useState } from "react";
+import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { tv } from "../lib/tv";
 import { FileDrop } from "../patterns/file-drop";
 import { Button } from "../primitives/button";
@@ -49,6 +49,11 @@ function uploadProblem(error: unknown, t: (id: string) => string): string {
 export function ImagePanel({ onUpload, onInsert, onCancel }: ImagePanelProps) {
   const { t } = useStepclimbStrings();
   const headingId = useId();
+  const form = useRef<HTMLFormElement>(null);
+  // The panel opens from a menu that has closed: focus goes to its first control, "Choose file".
+  useEffect(() => {
+    form.current?.querySelector<HTMLElement>("button")?.focus();
+  }, []);
   const [uploading, setUploading] = useState<{ name: string; fraction: number }>();
   const [file, setFile] = useState<UploadedImage>();
   const [problem, setProblem] = useState<string>();
@@ -83,6 +88,7 @@ export function ImagePanel({ onUpload, onInsert, onCancel }: ImagePanelProps) {
 
   return (
     <form
+      ref={form}
       data-slot="insert-panel"
       className={styles.root()}
       onSubmit={submit}
@@ -91,7 +97,7 @@ export function ImagePanel({ onUpload, onInsert, onCancel }: ImagePanelProps) {
       <Heading level={3} size="base" id={headingId}>
         {t("editor.image.title")}
       </Heading>
-      <div className={styles.fields()}>
+      <div data-slot="insert-panel-fields" className={styles.fields()}>
         <FileDrop
           aria-label={t("editor.image.file")}
           acceptedFileTypes={imageTypes}
@@ -115,7 +121,7 @@ export function ImagePanel({ onUpload, onInsert, onCancel }: ImagePanelProps) {
           {t("editor.image.decorativeOption")}
         </Checkbox>
       </div>
-      <div className={styles.actions()}>
+      <div data-slot="insert-panel-actions" className={styles.actions()}>
         <Button type="submit" intent="primary" size="sm" isDisabled={uploading !== undefined}>
           {t("editor.insertBlock", { kind: "image" })}
         </Button>
@@ -152,7 +158,7 @@ export function VideoPanel({ onInsert, onCancel }: PanelProps) {
       <Heading level={3} size="base" id={headingId}>
         {t("editor.video.title")}
       </Heading>
-      <div className={styles.fields()}>
+      <div data-slot="insert-panel-fields" className={styles.fields()}>
         <TextField
           validationBehavior="aria"
           label={t("editor.video.address")}
@@ -178,7 +184,7 @@ export function VideoPanel({ onInsert, onCancel }: PanelProps) {
           errorMessage={t("editor.labelMissing", { field: "title" })}
         />
       </div>
-      <div className={styles.actions()}>
+      <div data-slot="insert-panel-actions" className={styles.actions()}>
         <Button type="submit" intent="primary" size="sm">
           {t("editor.insertBlock", { kind: "videoEmbed" })}
         </Button>

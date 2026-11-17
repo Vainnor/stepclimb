@@ -49,6 +49,8 @@ export const uiMessages: Catalog = {
     "editor.callout.kind": "Kind",
     "editor.cancel": "Cancel",
     "editor.code.language": "Language",
+    "editor.code.languageName":
+      "{language, select, bash {Bash} c {C} cpp {C++} csharp {C#} css {CSS} go {Go} html {HTML} java {Java} javascript {JavaScript} json {JSON} kotlin {Kotlin} markdown {Markdown} php {PHP} python {Python} ruby {Ruby} rust {Rust} sql {SQL} swift {Swift} typescript {TypeScript} xml {XML} yaml {YAML} other {{language}}}",
     "editor.code.none": "None",
     "editor.contentLabel": "Page text",
     "editor.deleteBlock": "Delete block",
@@ -68,6 +70,8 @@ export const uiMessages: Catalog = {
     "editor.insert": "Insert",
     "editor.insertBlock":
       "{kind, select, image {Insert image} videoEmbed {Insert video} other {Insert}}",
+    "editor.keys":
+      "Type / at the start of an empty line to insert a block. In a table, Tab moves between cells, and in a list it indents. To leave the page text, press Escape, then Tab.",
     "editor.label": "{field, select, title {Title} speaker {Speaker} other {Label}}",
     "editor.labelMissing":
       "{field, select, title {Give the video a title.} speaker {Name the speaker.} other {Fill in this field.}}",

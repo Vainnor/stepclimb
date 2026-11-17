@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api";
-import { pageImageName, uploadPageImage } from "./page-api";
+import { pageImageName, uploadedFile, uploadPageImage } from "./page-api";
 
 describe("pageImageName", () => {
   it("prefixes the file's name so two uploads of the same name do not collide", () => {
@@ -71,6 +71,19 @@ describe("uploadPageImage", () => {
     expect(url.searchParams.get("folder")).toBe("/_page-images");
     expect(url.searchParams.get("name")).toMatch(/-diagram\.png$/);
     expect(request?.body).toBe(file);
+  });
+
+  it("rejects an answer that is not a course file", async () => {
+    stubXhr(201, { id: 7 });
+    await expect(uploadPageImage("course-1", file, () => undefined)).rejects.toThrow(
+      "not a course file",
+    );
+    expect(uploadedFile("not json")).toBeUndefined();
+    expect(uploadedFile("null")).toBeUndefined();
+    expect(uploadedFile('{"id":"f","mime":"image/png"}')).toEqual({
+      course_file_id: "f",
+      mime: "image/png",
+    });
   });
 
   it("rejects with the server's problem", async () => {

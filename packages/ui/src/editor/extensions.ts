@@ -27,10 +27,16 @@ import Underline from "@tiptap/extension-underline";
 import { Dropcursor, Gapcursor, UndoRedo } from "@tiptap/extensions";
 import { Fragment, type Node as PmNode, Slice } from "@tiptap/pm/model";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
-import type { CalloutKind } from "../learning/callout";
+import { type CalloutKind, calloutKinds } from "../learning/callout";
 import type { MessageValues } from "../strings/strings";
 import { linkTarget } from "./link-target";
-import { codeLanguages, headingLevels } from "./page-doc";
+import {
+  codeLanguages,
+  headingLevels,
+  MAX_CELL_SPAN,
+  MAX_EMBED_TITLE_CHARS,
+  MAX_SPEAKER_CHARS,
+} from "./page-doc";
 import { type VideoProvider, videoIdIsValid } from "./video-url";
 
 /** The blocks a nested position takes. */
@@ -41,6 +47,11 @@ export type Translate = (id: string, values?: MessageValues) => string;
 
 /** A control character (Unicode category Cc). */
 const CONTROL = /\p{Cc}/u;
+
+/** A pasted label without control characters, cut to `max` characters. */
+function label(value: string | null, max: number): string {
+  return [...(value ?? "").replace(ATTR_CONTROL, "")].slice(0, max).join("");
+}
 
 /** A course file id: what an image copied from a page carries. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -96,9 +107,15 @@ const PageCodeBlock = CodeBlock.extend({
 });
 
 /** Cell attributes: spans, and `colwidth` always `null`, since M1 keeps no column widths. */
+/** A pasted cell span as the integer 1 to 20 the model takes, or 1. */
+function span(el: HTMLElement, name: "colspan" | "rowspan"): number {
+  const value = Number(el.getAttribute(name) ?? "1");
+  return Number.isInteger(value) && value >= 1 && value <= MAX_CELL_SPAN ? value : 1;
+}
+
 const cellAttributes = () => ({
-  colspan: { default: 1 },
-  rowspan: { default: 1 },
+  colspan: { default: 1, parseHTML: (el: HTMLElement) => span(el, "colspan") },
+  rowspan: { default: 1, parseHTML: (el: HTMLElement) => span(el, "rowspan") },
   colwidth: { default: null, parseHTML: () => null, rendered: false },
 });
 const PageTableCell = TableCell.extend({ content: `${NESTED}+`, addAttributes: cellAttributes });
@@ -188,7 +205,10 @@ const callout = (t: Translate) =>
       return {
         kind: {
           default: "info" satisfies CalloutKind,
-          parseHTML: (el: HTMLElement) => el.getAttribute("data-kind") ?? "info",
+          parseHTML: (el: HTMLElement) => {
+            const kind = el.getAttribute("data-kind");
+            return (calloutKinds as readonly (string | null)[]).includes(kind) ? kind : "info";
+          },
         },
       };
     },
@@ -269,7 +289,7 @@ const videoEmbed = (t: Translate) =>
         title: {
           default: "",
           parseHTML: (el: HTMLElement) =>
-            (el.getAttribute("data-title") ?? "").replace(ATTR_CONTROL, ""),
+            label(el.getAttribute("data-title"), MAX_EMBED_TITLE_CHARS),
         },
       };
     },
@@ -320,8 +340,7 @@ const transcriptLine = Node.create({
       speaker: {
         default: "",
         keepOnSplit: true,
-        parseHTML: (el: HTMLElement) =>
-          (el.getAttribute("data-speaker") ?? "").replace(ATTR_CONTROL, ""),
+        parseHTML: (el: HTMLElement) => label(el.getAttribute("data-speaker"), MAX_SPEAKER_CHARS),
       },
     };
   },
@@ -356,6 +375,63 @@ export const sanitizePaste = Extension.create({
           transformPastedText: (text) => plainText(text.replaceAll("\r\n", "\n")),
           transformPasted: (slice) =>
             new Slice(cleanFragment(slice.content), slice.openStart, slice.openEnd),
+        },
+      }),
+    ];
+  },
+});
+
+const FOCUSABLE = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled]):not([type=hidden])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[contenteditable=true]",
+  '[tabindex]:not([tabindex="-1"])',
+].join(", ");
+
+/** The focusable element after (`1`) or before (`-1`) `from` in document order, outside it. */
+function focusableBeside(from: HTMLElement, direction: 1 | -1): HTMLElement | undefined {
+  const all = [...document.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
+    (el) => !el.closest("[hidden], [inert]") && el !== from && !from.contains(el),
+  );
+  const dom = globalThis.Node;
+  const side = direction === 1 ? dom.DOCUMENT_POSITION_FOLLOWING : dom.DOCUMENT_POSITION_PRECEDING;
+  const beside = all.filter((el) => from.compareDocumentPosition(el) & side);
+  return direction === 1 ? beside[0] : beside.at(-1);
+}
+
+/**
+ * Escape, then Tab, leaves the page text: inside a table Tab moves between cells and inside a
+ * list it indents, so without this a keyboard user could not Tab out of either. Escape arms the
+ * next Tab (or Shift+Tab) to move focus to the next (or previous) control outside the text; any
+ * other key disarms it.
+ */
+export const escapeToLeave = Extension.create({
+  name: "escapeToLeave",
+  priority: 1000,
+  addProseMirrorPlugins() {
+    let armed = false;
+    return [
+      new Plugin({
+        key: new PluginKey("escapeToLeave"),
+        props: {
+          handleKeyDown: (view, event) => {
+            if (event.key === "Escape") {
+              armed = true;
+              return false;
+            }
+            if (event.key !== "Tab" || !armed) {
+              armed = false;
+              return false;
+            }
+            armed = false;
+            const target = focusableBeside(view.dom, event.shiftKey ? -1 : 1);
+            if (!target) return false;
+            target.focus();
+            return true;
+          },
         },
       }),
     ];
@@ -397,5 +473,6 @@ export function pageExtensions({ t }: Labels): Extensions {
     Gapcursor,
     Dropcursor,
     sanitizePaste,
+    escapeToLeave,
   ];
 }

@@ -222,6 +222,7 @@ export const webMessages: Catalog = {
       "You have unsaved changes to this page from {when, date, medium} at {when, time, short}.",
     "pageEdit.draft.label": "Unsaved changes",
     "pageEdit.draft.restore": "Restore my changes",
+    "pageEdit.loaded": "Version {number} loaded",
     "pageEdit.problem.archived": "This {course} is archived, so its pages cannot be changed.",
     "pageEdit.problem.bodyInvalid":
       "The outlined block holds something a page cannot hold. Change or delete it, then save again.",

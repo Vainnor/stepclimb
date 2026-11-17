@@ -153,7 +153,7 @@ function LanguageField({
       <SelectItem id="none">{t("editor.code.none")}</SelectItem>
       {codeLanguages.map((language) => (
         <SelectItem key={language} id={language}>
-          {language}
+          {t("editor.code.languageName", { language })}
         </SelectItem>
       ))}
     </Select>

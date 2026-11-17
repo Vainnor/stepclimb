@@ -3,13 +3,14 @@
 // against a stubbed server: it loads the current version, saves against it with Save and with
 // Ctrl+S, offers back unsaved work kept in this browser, and handles the server's conflict and
 // body refusals.
-import { screen, waitFor, within } from "@testing-library/react";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type Handler,
   json,
   meFixture,
+  orgId,
   renderApp,
   requestsTo,
   stubMatchMedia,
@@ -21,6 +22,8 @@ const PAGE = "01900000-0000-7000-8000-0000000000c1";
 const AUTHOR = "01900000-0000-7000-8000-000000000002";
 const v = (n: number) => `01900000-0000-7000-8000-0000000000d${n}`;
 const PATH = `/c/${COURSE}/pages/${PAGE}/edit`;
+/** The signed-in user's draft of the page: `meFixture()`'s organization and user. */
+const DRAFT_KEY = `stepclimb.page-draft.${orgId}.${AUTHOR}.${PAGE}`;
 const BODY_PATH = `/api/v1/pages/${PAGE}/body`;
 
 const summary = (n: number) => ({
@@ -99,6 +102,8 @@ beforeEach(() => {
   );
 });
 afterEach(() => {
+  // Unmounting writes a pending draft, so the screen goes before the storage is cleared.
+  cleanup();
   vi.unstubAllGlobals();
   localStorage.clear();
 });
@@ -244,7 +249,7 @@ describe("the page editor screen", () => {
       await user.click(screen.getByRole("button", { name: "Bold" }));
       expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
       await vi.advanceTimersByTimeAsync(1_100);
-      const stored = JSON.parse(localStorage.getItem(`stepclimb.page-draft.${PAGE}`) ?? "null");
+      const stored = JSON.parse(localStorage.getItem(DRAFT_KEY) ?? "null");
       expect(stored).toMatchObject({ base_version_id: v(1) });
       expect(stored.body.content[0].content[0].marks).toEqual([{ type: "bold" }]);
       void first.router.navigate({ to: "/" });
@@ -260,5 +265,162 @@ describe("the page editor screen", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+  it("offers a draft only to the user who wrote it, and an explicit sign-out clears it", async () => {
+    const draft = { base_version_id: v(1), body: doc("Mine"), saved_at: Date.now() };
+    const someoneElse = `stepclimb.page-draft.${orgId}.01900000-0000-7000-8000-0000000000ee.${PAGE}`;
+    localStorage.setItem(someoneElse, JSON.stringify(draft));
+    server(1, "Readback", { "POST /auth/sign-out": () => new Response(null, { status: 204 }) });
+    renderApp(PATH);
+    expect(await editor()).toHaveTextContent("Readback");
+    expect(screen.queryByRole("region", { name: "Unsaved changes" })).not.toBeInTheDocument();
+
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /account menu/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "Sign out" }));
+    await screen.findByRole("heading", { level: 1, name: "Sign in" });
+    expect(localStorage.getItem(DRAFT_KEY)).toBeNull();
+    // Another user's draft is theirs to lose, not this sign-out's.
+    expect(localStorage.getItem(someoneElse)).not.toBeNull();
+  });
+
+  it("keeps writing while the offer shows, and the first edit answers it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const old = { base_version_id: v(1), body: doc("Old draft"), saved_at: Date.now() };
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(old));
+      server(1, "Readback");
+      renderApp(PATH);
+      await screen.findByRole("region", { name: "Unsaved changes" });
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      await user.click(await editor());
+      await user.keyboard("{Control>}a{/Control}");
+      await user.click(screen.getByRole("button", { name: "Bold" }));
+      expect(screen.queryByRole("region", { name: "Unsaved changes" })).not.toBeInTheDocument();
+      await vi.advanceTimersByTimeAsync(1_100);
+      const stored = JSON.parse(localStorage.getItem(DRAFT_KEY) ?? "null");
+      expect(stored.body.content[0].content[0]).toEqual({
+        type: "text",
+        text: "Readback",
+        marks: [{ type: "bold" }],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a save while the offer shows ends it, so the old draft cannot come back", async () => {
+    const old = { base_version_id: v(1), body: doc("Old draft"), saved_at: Date.now() };
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(old));
+    server(1, "Readback", { [`PUT ${BODY_PATH}`]: () => json(pageSummary(2)) });
+    renderApp(PATH);
+    await screen.findByRole("region", { name: "Unsaved changes" });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved as version 2")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Restore my changes" })).not.toBeInTheDocument();
+    expect(localStorage.getItem(DRAFT_KEY)).toBeNull();
+  });
+
+  it("writes the pending draft at once when the author leaves the screen", async () => {
+    server(1, "Readback");
+    const app = renderApp(PATH);
+    const user = userEvent.setup();
+    await user.click(await editor());
+    await user.keyboard("{Control>}a{/Control}");
+    await user.click(screen.getByRole("button", { name: "Bold" }));
+    // Well inside the second the writer waits for.
+    void app.router.navigate({ to: "/" });
+    await screen.findByText(/You have no/);
+    const stored = JSON.parse(localStorage.getItem(DRAFT_KEY) ?? "null");
+    expect(stored?.body.content[0].content[0].marks).toEqual([{ type: "bold" }]);
+  });
+
+  it("writes the pending draft when the browser hides the page", async () => {
+    server(1, "Readback");
+    renderApp(PATH);
+    const user = userEvent.setup();
+    await user.click(await editor());
+    await user.keyboard("{Control>}a{/Control}");
+    await user.click(screen.getByRole("button", { name: "Bold" }));
+    window.dispatchEvent(new Event("pagehide"));
+    expect(localStorage.getItem(DRAFT_KEY)).not.toBeNull();
+  });
+});
+
+describe("focus on the page editor screen", () => {
+  it("stays on Save after a save, and after a refusal of the body", async () => {
+    let calls = 0;
+    server(1, "Readback", {
+      [`PUT ${BODY_PATH}`]: () => {
+        calls += 1;
+        return calls === 1
+          ? json(pageSummary(2))
+          : problemWith(422, "request.invalid", {
+              errors: [{ code: "page.body_invalid", field: "/body/content/0" }],
+            });
+      },
+    });
+    renderApp(PATH);
+    await editor();
+    const user = userEvent.setup();
+    const save = screen.getByRole("button", { name: "Save" });
+    await user.click(save);
+    await screen.findByText("Saved as version 2");
+    expect(save).toHaveFocus();
+    await user.click(save);
+    await screen.findByText(/The outlined block holds something/);
+    expect(screen.getByRole("button", { name: "Save" })).toHaveFocus();
+  });
+
+  it("moves to Save once a save over a newer version settles", async () => {
+    let calls = 0;
+    server(1, "Readback", {
+      [`PUT ${BODY_PATH}`]: () => {
+        calls += 1;
+        return calls === 1
+          ? problemWith(409, "page.version_conflict", { current_version: summary(2) })
+          : json(pageSummary(3));
+      },
+    });
+    renderApp(PATH);
+    await editor();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    const notice = await screen.findByRole("region", { name: "Newer version saved" });
+    await user.click(
+      within(notice).getByRole("button", { name: "Save my changes as the newest version" }),
+    );
+    await screen.findByText("Saved as version 3");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toHaveFocus());
+  });
+
+  it("moves to the page text and announces the version after loading the newer one", async () => {
+    let current = 1;
+    stubServer({
+      "GET /api/v1/me": () => json(meFixture()),
+      [`GET /api/v1/pages/${PAGE}/versions`]: () =>
+        json({ items: [summary(current)], next_cursor: null }),
+      [`GET /api/v1/pages/${PAGE}/versions/${v(1)}`]: () =>
+        json({ ...summary(1), body: doc("Old") }),
+      [`GET /api/v1/pages/${PAGE}/versions/${v(2)}`]: () =>
+        json({ ...summary(2), body: doc("New") }),
+      [`PUT ${BODY_PATH}`]: () => {
+        current = 2;
+        return problemWith(409, "page.version_conflict", { current_version: summary(2) });
+      },
+    });
+    renderApp(PATH);
+    await editor();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    const notice = await screen.findByRole("region", { name: "Newer version saved" });
+    await user.click(within(notice).getByRole("button", { name: "Load version 2" }));
+    const confirm = await screen.findByRole("alertdialog");
+    await user.click(within(confirm).getByRole("button", { name: "Discard my changes" }));
+    expect(await screen.findByText("Version 2 loaded")).toBeInTheDocument();
+    await waitFor(async () => expect(await editor()).toHaveTextContent("New"));
+    await waitFor(async () => expect(await editor()).toHaveFocus());
   });
 });

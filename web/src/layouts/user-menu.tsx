@@ -31,6 +31,7 @@ import {
   type UserAppearance,
 } from "../appearance";
 import { useAppContext } from "../context";
+import { clearOwnerDrafts, draftOwner } from "../pages/draft";
 import { type Me, meQuery, signOut } from "../session";
 import { clearVideoUploads } from "../videos/videos";
 
@@ -92,10 +93,14 @@ export function UserMenu({ name, appearance, organizationDefault }: UserMenuProp
   const signOutMutation = useMutation({
     mutationFn: signOut,
     onSuccess: () => {
-      // An explicit sign-out takes the user's unfinished video uploads with it (spec 08 D30); a
-      // session that expired keeps them for when they sign in again.
+      // An explicit sign-out takes the user's unfinished video uploads (spec 08 D30) and unsaved
+      // page work (spec 07 B4) with it; a session that expired keeps both for when they sign in
+      // again.
       const me = queryClient.getQueryData(meQuery.queryKey);
-      if (me) clearVideoUploads(me);
+      if (me) {
+        clearVideoUploads(me);
+        clearOwnerDrafts(draftOwner(me));
+      }
       return leaveSession();
     },
     onError: () => {

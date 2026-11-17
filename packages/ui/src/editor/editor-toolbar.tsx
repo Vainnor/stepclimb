@@ -107,7 +107,7 @@ export function EditorToolbar({
           isDisabled={style === null || !editor.isEditable}
           className={styles.style()}
         >
-          <span className={styles.styleValue()}>
+          <span data-slot="editor-style-value" className={styles.styleValue()}>
             {t("editor.block", { kind: style ?? "other" })}
           </span>
           <Icon icon={CaretDownIcon} size="sm" />
@@ -263,7 +263,7 @@ function LinkButton({ editor }: { editor: Editor }) {
               isInvalid={tried && stored === null}
               errorMessage={t("editor.link.invalid")}
             />
-            <div className={styles.linkActions()}>
+            <div data-slot="editor-link-actions" className={styles.linkActions()}>
               {active ? (
                 <Button intent="secondary" size="sm" onPress={remove}>
                   {t("editor.link.remove")}

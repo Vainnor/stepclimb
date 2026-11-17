@@ -44,6 +44,9 @@ export const imageTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"]
 /** The heading levels a body takes; the page title is the level 1. */
 export const headingLevels = [2, 3, 4] as const;
 
+/** The largest `colspan` or `rowspan` of a table cell (`page_doc::MAX_CELL_SPAN`). */
+export const MAX_CELL_SPAN = 20;
+
 /** The longest transcript speaker label and video title, in characters (B11, B12). */
 export const MAX_SPEAKER_CHARS = 40;
 export const MAX_EMBED_TITLE_CHARS = 200;

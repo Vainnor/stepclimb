@@ -51,6 +51,19 @@ export const editablePageQuery = (pageId: string) =>
     refetchOnWindowFocus: false,
   });
 
+/**
+ * `body` for the save request: the one place the editor's body meets the generated types.
+ * openapi-typescript-helpers' `Writable`, which openapi-fetch applies to request bodies, reads a
+ * member whose schema is `"type": "null"` (a cell's `colwidth`, always `null`) as read-only and
+ * types it `never`, so neither the editor's body nor the API's own `PageDoc` satisfies the request
+ * type (#353 tracks the schema change). Until then the body passes as `never` here, checked as
+ * `PageDoc` on the way in; the fixtures shared with the server's tests
+ * (crates/stepclimb-core/tests/fixtures/page_doc/) pin its shape.
+ */
+function asRequestDoc(body: PageDoc): never {
+  return body as never;
+}
+
 /** Saves `body` as the page's new current version, refused when `base` is no longer current. */
 export async function savePageBody(
   pageId: string,
@@ -60,11 +73,7 @@ export async function savePageBody(
   return unwrap(
     await api.PUT("/api/v1/pages/{page_id}/body", {
       params: { path: { page_id: pageId } },
-      // openapi-fetch's request type turns the schema's `"type": "null"` (a cell's `colwidth`)
-      // into `undefined`, which no body with `null`, the server's own stored form, satisfies.
-      // The fixtures shared with the server's tests (crates/stepclimb-core/tests/fixtures/
-      // page_doc/) pin the body's shape instead.
-      body: { body: body as never, base_version_id: base },
+      body: { body: asRequestDoc(body), base_version_id: base },
     }),
   );
 }
@@ -93,6 +102,21 @@ function problemOf(text: string): Problem | undefined {
   }
 }
 
+/** The id and sniffed type of a `CourseFile` answer, or `undefined` for anything else. */
+export function uploadedFile(text: string): UploadedImage | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null) return undefined;
+  const { id, mime } = parsed as Record<string, unknown>;
+  return typeof id === "string" && typeof mime === "string"
+    ? { course_file_id: id, mime }
+    : undefined;
+}
+
 /**
  * Uploads `file` into the course's page image folder with `XMLHttpRequest`, which reports how
  * much of the body has been sent; `fetch` does not. The answer is the server's sniffed type, which
@@ -115,8 +139,9 @@ export function uploadPageImage(
     request.onerror = () => reject(new Error("the server did not answer"));
     request.onload = () => {
       if (request.status === 201) {
-        const created = JSON.parse(request.responseText) as components["schemas"]["CourseFile"];
-        resolve({ course_file_id: created.id, mime: created.mime });
+        const created = uploadedFile(request.responseText);
+        if (created) resolve(created);
+        else reject(new Error("the upload's answer is not a course file"));
       } else {
         reject(new ApiError(request.status, problemOf(request.responseText)));
       }

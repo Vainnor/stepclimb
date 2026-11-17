@@ -31,7 +31,7 @@ import {
 } from "./blocks";
 import { EditorToolbar } from "./editor-toolbar";
 import { ImagePanel, type UploadedImage, VideoPanel } from "./insert-panel";
-import { emptyPageDoc, type PageDoc, sameDoc } from "./page-doc";
+import { emptyPageDoc, type PageDoc, sameDoc, toPageDoc } from "./page-doc";
 import { problemKey, problemPlugin } from "./problem-mark";
 import { usePageEditor } from "./use-page-editor";
 
@@ -73,6 +73,8 @@ export interface EditorProps {
   "aria-label"?: string;
   /** Read only, such as while a save is in flight. */
   isDisabled?: boolean;
+  /** Puts the caret at the start of the page once the editor is drawn. */
+  autoFocus?: boolean;
   /** The server's refusal of the last save, shown above the content and at its block. */
   problem?: EditorProblem;
   /**
@@ -106,6 +108,7 @@ export function Editor({
   onChange,
   "aria-label": ariaLabel,
   isDisabled = false,
+  autoFocus = false,
   problem,
   onUploadImage,
   actions,
@@ -115,10 +118,13 @@ export function Editor({
   const mount = useRef<HTMLDivElement>(null);
   const chrome = useRef<HTMLDivElement>(null);
   const problemId = useId();
+  const keysId = useId();
   const [menuOpen, setMenuOpen] = useState(false);
   const [panel, setPanel] = useState<Panel>();
-  // Set while a menu opened by `/` is open; if it closes with no block chosen, the `/` is typed.
-  const slash = useRef<"open" | "chosen" | undefined>(undefined);
+  // Set while a menu opened by `/` is open; if the author leaves it with Escape, the `/` is typed.
+  const slash = useRef<"open" | "escape" | "chosen" | undefined>(undefined);
+  // The last body this editor gave `onChange`: a `value` that is that body is the editor's own.
+  const emitted = useRef<PageDoc | undefined>(undefined);
   const initial = useRef(value ?? defaultValue ?? emptyPageDoc());
 
   const attributes = useMemo(() => {
@@ -126,19 +132,23 @@ export function Editor({
       role: "textbox",
       "aria-multiline": "true",
       "aria-label": ariaLabel ?? t("editor.contentLabel"),
+      "aria-describedby": keysId,
       "data-slot": "prose",
       class: prose({ className: styles.surface() }),
     };
-    if (problem) attrs["aria-describedby"] = problemId;
+    if (problem) attrs["aria-describedby"] = `${problemId} ${keysId}`;
     return attrs;
-  }, [ariaLabel, t, problem, problemId]);
+  }, [ariaLabel, t, problem, problemId, keysId]);
 
   const instance = usePageEditor(mount, {
     initial: initial.current,
     t,
     attributes,
     isDisabled,
-    onChange: (doc) => onChange?.(doc),
+    onChange: (doc) => {
+      emitted.current = doc;
+      onChange?.(doc);
+    },
     onTextInput: (current, text) => {
       if (!isSlash(current, text)) return false;
       slash.current = "open";
@@ -150,11 +160,17 @@ export function Editor({
   // A controlled value that is not what the editor holds replaces its content: a restored draft
   // or a reloaded version. The editor's own changes come back equal and are left alone.
   useEffect(() => {
-    if (!instance || value === undefined) return;
-    if (!sameDoc(value, instance.getJSON())) {
+    if (!instance || value === undefined || value === emitted.current) return;
+    if (!sameDoc(value, toPageDoc(instance.getJSON()))) {
       instance.commands.setContent(value, { emitUpdate: false });
     }
   }, [instance, value]);
+
+  useEffect(() => {
+    if (instance && autoFocus) instance.commands.focus("start");
+  }, [instance, autoFocus]);
+
+  useSlashEscape(menuOpen, slash);
 
   useMarkProblemBlock(instance, problem?.block);
   const chromeHeight = useHeight(chrome, instance !== null);
@@ -169,8 +185,8 @@ export function Editor({
   const menuChange = (open: boolean) => {
     setMenuOpen(open);
     if (open || !instance) return;
-    // Escape after `/`: the author meant the character.
-    if (slash.current === "open") instance.chain().focus().insertContent("/").run();
+    // Escape after `/`: the author meant the character. A click elsewhere types nothing.
+    if (slash.current === "escape") instance.chain().focus().insertContent("/").run();
     slash.current = undefined;
   };
   const insertWithDetails = (attrs: Record<string, unknown>) => {
@@ -238,6 +254,9 @@ export function Editor({
         </div>
       ) : null}
       <div data-slot="editor-content" ref={mount} className={styles.content()} />
+      <p id={keysId} hidden>
+        {t("editor.keys")}
+      </p>
     </div>
   );
 }
@@ -269,4 +288,16 @@ function useHeight(ref: RefObject<HTMLElement | null>, mounted: boolean): number
     return () => observer.disconnect();
   }, [ref, mounted]);
   return height;
+}
+
+/** Records an Escape pressed while the slash menu is open, so its close types the `/`. */
+function useSlashEscape(open: boolean, slash: RefObject<"open" | "escape" | "chosen" | undefined>) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && slash.current === "open") slash.current = "escape";
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open, slash]);
 }
