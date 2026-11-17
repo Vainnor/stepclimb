@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { serverHtml } from "../lib/server-html";
 import { renderWithStrings, unmarkedText } from "../test/strings";
 import { Announcement } from "./announcement";
 
 // 03:00 UTC on 4 March is 22:00 on 3 March in New York.
 const publishedAt = new Date("2026-03-04T03:00:00Z");
-const html =
-  '<p>The <a href="/c/1">ground course</a> opens next week.</p><ul><li>Bring a headset.</li></ul>';
+const html = serverHtml(
+  '<p>The <a href="/c/1">ground course</a> opens next week.</p><ul><li>Bring a headset.</li></ul>',
+);
 
 describe("Announcement", () => {
   it("is an article named by its title, with the author and the date in the user's zone", () => {
@@ -33,7 +35,13 @@ describe("Announcement", () => {
 
   it("reads the date in the zone it is given", () => {
     renderWithStrings(
-      <Announcement title="T" author="Pat Lee" publishedAt={publishedAt} timeZone="UTC" html="" />,
+      <Announcement
+        title="T"
+        author="Pat Lee"
+        publishedAt={publishedAt}
+        timeZone="UTC"
+        html={serverHtml("")}
+      />,
     );
     expect(screen.getByText("Posted by Pat Lee on Mar 4, 2026")).toBeInTheDocument();
   });
@@ -47,6 +55,20 @@ describe("Announcement", () => {
     expect(screen.getByRole("link", { name: "ground course" })).toHaveAttribute("href", "/c/1");
   });
 
+  it("takes only ServerHtml as html: a plain string does not type-check", () => {
+    const element = (
+      <Announcement
+        title="T"
+        author="A"
+        publishedAt={publishedAt}
+        timeZone="UTC"
+        // @ts-expect-error a plain string is not ServerHtml
+        html="<p>Typed in the browser</p>"
+      />
+    );
+    expect(element.props.html).toBe("<p>Typed in the browser</p>");
+  });
+
   it("takes the heading level the page needs", () => {
     renderWithStrings(
       <Announcement
@@ -54,7 +76,7 @@ describe("Announcement", () => {
         author="A"
         publishedAt={publishedAt}
         timeZone="UTC"
-        html=""
+        html={serverHtml("")}
         headingLevel={3}
       />,
     );
@@ -68,7 +90,7 @@ describe("Announcement", () => {
         author="«caller»"
         publishedAt={publishedAt}
         timeZone="UTC"
-        html="<p>«caller»</p>"
+        html={serverHtml("<p>«caller»</p>")}
       />,
       { marked: true },
     );

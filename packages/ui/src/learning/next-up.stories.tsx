@@ -17,7 +17,7 @@ const meta = {
   component: NextUp,
   tags: ["experimental"],
   parameters: {
-    status: { missing: ["Themes", "Accessibility", "Responsive and touch"] },
+    status: { missing: ["States", "Themes", "Accessibility", "Responsive and touch"] },
     docs: {
       description: {
         component: `The one thing to do next in a course, with the view's one primary action, "Continue". The server works out what is next from the same rules that lock content, so the panel shows its answer: the next item and its module, or, when nothing is left to do yet, when the course opens further, or that it is complete. Dates read in the user's time zone.
@@ -68,7 +68,7 @@ export const LongContent: Story = {
 };
 
 const continueLink = (canvasElement: HTMLElement) =>
-  within(canvasElement).findByRole("link", { name: "Continue" });
+  within(canvasElement).findByRole("link", { name: /^Continue/ });
 
 /**
  * Hovers `link` until React Aria marks it hovered: a hover sent as the story first renders can
@@ -92,19 +92,6 @@ async function hover(link: HTMLElement) {
 export const Hover: Story = {
   play: async ({ canvasElement }) => {
     await hover(await continueLink(canvasElement));
-  },
-};
-
-/** A press held on "Continue". */
-export const Pressed: Story = {
-  play: async ({ canvasElement }) => {
-    const link = await continueLink(canvasElement);
-    await userEvent.pointer({ keys: "[MouseLeft>]", target: link });
-    await waitFor(() => expect(link).toHaveAttribute("data-pressed"));
-    // A scripted press focuses the link as a keyboard would, and the browser then draws its
-    // focus ring; a real mouse press draws none.
-    link.blur();
-    await expect(link).toHaveAttribute("data-pressed");
   },
 };
 

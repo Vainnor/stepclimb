@@ -39,6 +39,7 @@ export {
   type StatusChipProps,
   statusChip,
 } from "./learning/status-chip";
+export { type ServerHtml, serverHtml } from "./lib/server-html";
 export { AppShell, type AppShellProps, appShell } from "./patterns/app-shell";
 export { BottomTabs, type BottomTabsProps, bottomTabs } from "./patterns/bottom-tabs";
 export {

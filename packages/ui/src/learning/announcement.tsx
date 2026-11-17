@@ -5,6 +5,7 @@
 // in the user's time zone.
 import { useId, useMemo } from "react";
 import { useLocale } from "react-aria-components";
+import type { ServerHtml } from "../lib/server-html";
 import { tv } from "../lib/tv";
 import { Heading, type HeadingLevel } from "../primitives/heading";
 import { Prose } from "../primitives/prose";
@@ -28,7 +29,7 @@ export interface AnnouncementProps {
   /** The user's IANA time zone (`users.tz`), in which the date reads. */
   timeZone: string;
   /** The body as the server's sanitized HTML (`Announcement.html`), inserted as given. */
-  html: string;
+  html: ServerHtml;
   /** The title's place in the page outline; 2 by default. */
   headingLevel?: HeadingLevel;
   /** Layout only. */

@@ -149,11 +149,13 @@ listed here with a pointer so the inventory is complete in one place.
   - The next item shows its module and item titles, a StatusChip ("Available", or "In progress"
     once started), the course progress bar when the caller passes `CourseProgress`, and the
     course title only where the page does not already say it (the dashboard). The requirement is
-    not repeated; the item view shows it. "Continue" is a primary-styled link whose name is its
-    visible label, so it passes axe's label-in-name check, with the item's title as its
-    description. Waiting reads "Opens on Mar 3, 2026, 10:00 AM EST" (date and time with the
-    zone's short name, as the lock reasons do); complete reads "Completed Mar 3, 2026". Both
-    are in the user's time zone and have no action.
+    not repeated; the item view shows it. Waiting reads as the `unlock_at` lock reason does (B10a,
+    "Opens on Mar 3, 2026, 10:00 AM EST"); complete reads "Completed Mar 3, 2026". Both are in
+    the user's time zone and have no action.
+  - Coordinator decision (2026-11-17), on the dashboard's several "Continue" links (`10` B10):
+    the link shows "Continue" and is named "Continue: Taxi instructions", so each link says which
+    item it opens and the name starts with the visible label (axe's label-in-name check). The
+    item's title is in the name, so it is not given again as a description.
   - Callout's kinds take the status tints, although the plan keeps status colors for feedback and
     grades: the plan names the kinds after the statuses and asks for a tinted surface. `info`,
     `warning` and `danger` take their own; `tip` takes `success-soft`, not `brand-soft`, since a
@@ -170,6 +172,11 @@ listed here with a pointer so the inventory is complete in one place.
   - Announcement reads "Posted by Pat Lee on Mar 3, 2026" (the date in the user's time zone) and
     does not show `edited_at`, which B11 does not list. Its body is the server's HTML, inserted
     as given through Prose's `html` property, so base.css's element styles reach it.
+  - Coordinator decision (2026-11-17), while no server sanitizer exists yet: Prose's and
+    Announcement's `html` is `ServerHtml`, a branded string that only `serverHtml()` makes, so a
+    plain string fails `tsc`. `serverHtml()` checks nothing; it is called only where the
+    api-client's response for a server-rendered field (`Announcement.html`, a page's render) is
+    parsed, once those fields exist.
 - **B12.** AssignmentList lists the caller's assignments (`13` B18) with DueBadge and StatusChip,
   overdue first; DownloadButton (`15` B8) shows a course's download state (not downloaded,
   downloading with progress, downloaded with date and size, update available) and its actions.

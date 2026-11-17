@@ -22,9 +22,10 @@ describe("NextUp", () => {
     expect(panel).toHaveAttribute("data-status", "next");
     const links = within(panel).getAllByRole("link");
     expect(links).toHaveLength(1);
-    // The visible label is the whole name (axe label-in-name); the item is its description.
-    expect(links[0]).toHaveAccessibleName("Continue");
-    expect(links[0]).toHaveAccessibleDescription("Taxi instructions");
+    // The name starts with the visible label (axe label-in-name) and says which item it opens.
+    expect(links[0]).toHaveAccessibleName("Continue: Taxi instructions");
+    expect(links[0]).toHaveTextContent(/^Continue$/);
+    expect(links[0]).not.toHaveAttribute("aria-describedby");
     expect(links[0]).toHaveAttribute("href", "/c/1/m/2/i/3");
     expect(links[0]).toHaveClass("bg-brand");
     expect(within(panel).getByText("Ground control")).toHaveAttribute(

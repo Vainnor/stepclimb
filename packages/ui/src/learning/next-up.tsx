@@ -4,7 +4,8 @@
 // B2, B10, B11). The server decides what is next, so the panel shows its answer: the next item,
 // or, when there is none, when the course opens further or that it is complete. Dates read in the
 // user's time zone. The course home shows it under the course header; the dashboard shows it for
-// its first course, with the course's title.
+// its first course, with the course's title. The link is named "Continue: <item>", so a page
+// with several (the dashboard's course rows) tells them apart.
 import { ArrowRightIcon } from "@phosphor-icons/react";
 import { useId, useMemo } from "react";
 import { useLocale } from "react-aria-components";
@@ -14,6 +15,7 @@ import { Heading, type HeadingLevel } from "../primitives/heading";
 import { ProgressBar } from "../primitives/progress-bar";
 import { useStepclimbStrings } from "../strings/strings";
 import { Icon } from "../theme/icon";
+import { useLockReasonText } from "./lock-reason";
 import { StatusChip } from "./status-chip";
 
 /** What the server answered for the course (spec 10 B1, B4). */
@@ -55,25 +57,13 @@ export interface NextUpProps {
   className?: string;
 }
 
-/** The date-time and date formats the panel's sentences use, in `timeZone`. */
-function useDateFormats(timeZone: string) {
+/** The day `at` falls on in `timeZone`, as the locale writes a medium date. */
+function useDayFormat(timeZone: string): (at: Date) => string {
   const { locale } = useLocale();
-  return useMemo(
-    () => ({
-      // An opening has a time of day; say it with the zone's short name, as the lock reasons do.
-      opens: new Intl.DateTimeFormat(locale, {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-        timeZone,
-        timeZoneName: "short",
-      }),
-      day: new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeZone }),
-    }),
-    [locale, timeZone],
-  );
+  return useMemo(() => {
+    const format = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeZone });
+    return (at: Date) => format.format(at);
+  }, [locale, timeZone]);
 }
 
 export function NextUp({
@@ -86,8 +76,9 @@ export function NextUp({
 }: NextUpProps) {
   const { t } = useStepclimbStrings();
   const headingId = useId();
-  const itemId = useId();
-  const formats = useDateFormats(timeZone);
+  const day = useDayFormat(timeZone);
+  // A waiting course opens on a date, said the way a module's lock reason says it.
+  const lockReason = useLockReasonText(timeZone);
   const styles = nextUp();
   return (
     <section
@@ -111,7 +102,7 @@ export function NextUp({
               <p data-slot="next-up-module" className={styles.module()}>
                 {status.moduleTitle}
               </p>
-              <p id={itemId} data-slot="next-up-item" className={styles.item()}>
+              <p data-slot="next-up-item" className={styles.item()}>
                 {status.itemTitle}
               </p>
               <div>
@@ -122,8 +113,8 @@ export function NextUp({
             <p data-slot="next-up-status" className={styles.status()}>
               <StatusChip state={status.kind === "waiting" ? "locked" : "complete"} labelHidden />
               {status.kind === "waiting"
-                ? t("nextUp.waiting", { when: formats.opens.format(status.until) })
-                : t("nextUp.completed", { when: formats.day.format(status.completedAt) })}
+                ? lockReason({ kind: "unlock_at", at: status.until })
+                : t("nextUp.completed", { when: day(status.completedAt) })}
             </p>
           )}
         </div>
@@ -139,7 +130,7 @@ export function NextUp({
           <ButtonLink
             intent="primary"
             href={status.href}
-            aria-describedby={itemId}
+            aria-label={t("nextUp.continueItem", { item: status.itemTitle })}
             className={styles.action()}
           >
             {t("nextUp.continue")}

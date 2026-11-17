@@ -13,6 +13,7 @@ import { NextUp } from "../learning/next-up";
 import { ProgressRail } from "../learning/progress-rail";
 import { RequirementLabel } from "../learning/requirement-label";
 import { StatusChip } from "../learning/status-chip";
+import { serverHtml } from "../lib/server-html";
 import { AppShell } from "../patterns/app-shell";
 import { BottomTabs } from "../patterns/bottom-tabs";
 import { CommandPalette } from "../patterns/command-palette";
@@ -290,7 +291,7 @@ const components: [string, ReactElement][] = [
       <p>«caller»</p>
     </Prose>,
   ],
-  ["Prose (HTML)", <Prose key="ph" html="<p>«caller»</p>" />],
+  ["Prose (HTML)", <Prose key="ph" html={serverHtml("<p>«caller»</p>")} />],
   ["SearchField", <SearchField key="sf" label="«caller»" defaultValue="«caller»" />],
   ["Separator", <Separator key="s" />],
   ["Text", <Text key="t">«caller»</Text>],
@@ -411,7 +412,7 @@ const components: [string, ReactElement][] = [
       author="«caller»"
       publishedAt={new Date(0)}
       timeZone="UTC"
-      html="<p>«caller»</p>"
+      html={serverHtml("<p>«caller»</p>")}
     />,
   ],
   [

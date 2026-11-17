@@ -3,9 +3,10 @@
 // size and line height (docs/specs/m0/13-base-ui-components.md M0 inventory; spec 12 Q4). The
 // styles of the elements inside (headings, lists, code, tables that scroll on their own) are in
 // styles/base.css, under `[data-slot="prose"]`, because the content is HTML the server sanitized
-// and carries no classes. That HTML can be given as `html`, inserted as it is: the server is the
-// one that sanitizes it, so only HTML from the server's renderer goes there.
+// and carries no classes. That HTML can be given as `html`, inserted as it is; it is `ServerHtml`,
+// which only `serverHtml()` makes, so a plain string from anywhere else does not type-check.
 import { type ReactNode, useEffect, useRef } from "react";
+import type { ServerHtml } from "../lib/server-html";
 import { tv } from "../lib/tv";
 import { useStepclimbStrings } from "../strings/strings";
 
@@ -29,7 +30,7 @@ export type ProseProps = {
     }
   | {
       /** The content as the server's sanitized HTML, inserted as given (spec 07 B14, B22). */
-      html: string;
+      html: ServerHtml;
       children?: never;
     }
 );
@@ -109,7 +110,7 @@ export function Prose({ children, html, className }: ProseProps) {
         ref={ref}
         data-slot="prose"
         className={prose({ className })}
-        // biome-ignore lint/security/noDangerouslySetInnerHtml: HTML the server's renderer sanitized (spec 07 B14), inserted as given (B22)
+        // biome-ignore lint/security/noDangerouslySetInnerHtml: `html` is ServerHtml, which only serverHtml() makes, from the API's server-rendered fields (spec 07 B14, B22)
         dangerouslySetInnerHTML={{ __html: html }}
       />
     );
