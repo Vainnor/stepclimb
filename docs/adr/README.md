@@ -40,3 +40,4 @@ Decided list (`docs/plan/technical.md` -> Decided, and `docs/plan/ui.md` -> UI d
 | [0031](0031-release-image-signing-and-sbom.md) | The release image: one archive pushed by digest, signed keyless, an SPDX SBOM from syft | Proposed |
 | [0032](0032-app-token-signing-key-and-rights.md) | App access tokens: a signing key derived from the encryption key ring, and the user's rights | Accepted |
 | [0033](0033-contributor-license-agreement.md) | A Contributor License Agreement alongside the DCO | Accepted |
+| [0034](0034-one-app-for-every-server.md) | One app for every server, with a push relay | Accepted |
