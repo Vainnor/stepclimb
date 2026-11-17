@@ -309,6 +309,33 @@ Coordinator decisions (overnight, 2026-11-17), pending owner review.
   current set in any order, writes nothing; any rule change sets `updated_at`. Rule changes are
   not audited (`02` B27: content edits are not).
 
+### Decisions made building I2
+
+Coordinator decisions (overnight, 2026-11-16), pending owner review.
+
+- **Progress is an argument.** `evaluate` and `unlock::require_unlocked` take the learner's
+  completed item ids as a set; spec 05 I1 reads them from its progress rows and passes them in.
+  An item is complete when it is in the set, whatever its requirement now is (B4); only items
+  with a published requirement count toward a module's completion.
+- **`require_unlocked` always applies the lock.** Whether a caller is held to it is the
+  route's decision (B5): content reads skip it for a holder of `perm::CourseViewAll`, and
+  progress routes call it for every caller who records progress.
+- **An item the learner cannot see answers `item.not_found`.** `require_unlocked` refuses an
+  unpublished item, an item of an unpublished module, and another organization's item as not
+  found (404), as `03` B13 does for reads. It assumes the route's item target has already
+  passed `require::check_course`, which hides a course the caller cannot see, a draft and a
+  template (`02` B24); it does not check the course itself, so without that check its 403 and
+  404 would tell a caller whether an item exists in a course they cannot see.
+- **A locked module's items carry `module_locked` alone** (T7), not also their `sequential`
+  reason.
+- **`reasons` is a member of the shared problem body**, beside `errors`, `limit` and `max`, so
+  every content and progress route answers `item.locked` without a problem schema of its own.
+- **Fail closed on bad stored data.** A prerequisite cycle, which the write path refuses,
+  keeps every module on it that is not complete locked if one is ever stored; a complete module
+  still satisfies a prerequisite on it (B8). A stored requirement this release cannot read is a
+  server error, never a missing requirement. The cost is availability: one such row makes every
+  lock check and learner read of its course answer 500 until the row is fixed.
+
 ## Issues
 
 Order across specs 04 and 05: 04 I1, 04 I2, 05 I1, 04 I3, 05 I2 and on.

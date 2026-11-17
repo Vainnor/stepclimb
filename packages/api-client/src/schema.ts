@@ -2186,6 +2186,28 @@ export interface components {
              */
             totp_required: boolean;
         };
+        /** @description One condition that keeps a module or item locked. */
+        LockReason: {
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            at: string;
+            /** @enum {string} */
+            kind: "unlock_at";
+        } | {
+            /** @enum {string} */
+            kind: "prerequisites";
+            module_ids: string[];
+        } | {
+            /** @enum {string} */
+            kind: "module_locked";
+        } | {
+            /** Format: uuid */
+            item_id: string;
+            /** @enum {string} */
+            kind: "sequential";
+        };
         /** @description One icon of the manifest. */
         ManifestIcon: {
             /** @description `maskable` for the icon drawn to be cropped to the platform's shape; absent otherwise. */
@@ -3000,6 +3022,8 @@ export interface components {
              * @description On `entitlement.limit_reached`, the plan's value for that limit.
              */
             max?: number | null;
+            /** @description On `item.locked`, every condition that keeps the item locked. */
+            reasons?: components["schemas"]["LockReason"][];
             /**
              * Format: int32
              * @description The HTTP status code, repeated.

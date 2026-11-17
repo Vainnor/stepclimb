@@ -7793,6 +7793,90 @@
         },
         "additionalProperties": false
       },
+      "LockReason": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The module opens at `at`.",
+            "required": [
+              "at",
+              "kind"
+            ],
+            "properties": {
+              "at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "RFC 3339, UTC."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "unlock_at"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The module waits for these modules of the course, in course order.",
+            "required": [
+              "module_ids",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "prerequisites"
+                ]
+              },
+              "module_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The item's module is locked.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "module_locked"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The item waits for this earlier item of its sequential module.",
+            "required": [
+              "item_id",
+              "kind"
+            ],
+            "properties": {
+              "item_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "sequential"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "One condition that keeps a module or item locked."
+      },
       "ManifestIcon": {
         "type": "object",
         "description": "One icon of the manifest.",
@@ -9675,6 +9759,13 @@
             "format": "int64",
             "description": "On `entitlement.limit_reached`, the plan's value for that limit.",
             "minimum": 0
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LockReason"
+            },
+            "description": "On `item.locked`, every condition that keeps the item locked."
           },
           "status": {
             "type": "integer",
