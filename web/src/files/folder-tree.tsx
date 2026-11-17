@@ -51,7 +51,7 @@ export function FolderTree({ courseId, folder, onOpenFolder, className }: Folder
         key={path}
         id={path}
         title={title}
-        icon={isOpen ? FolderOpenIcon : FolderIcon}
+        icon={isOpen && children !== undefined ? FolderOpenIcon : FolderIcon}
         hasChildItems={children === undefined || children.length > 0}
       >
         {isOpen && children !== undefined ? children.map(row) : null}

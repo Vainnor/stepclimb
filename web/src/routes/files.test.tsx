@@ -34,12 +34,12 @@ function courseFixture(permissions: string[], status: Course["status"] = "draft"
     status,
     template: false,
     permissions,
-    settings: {} as Course["settings"],
+    settings: { home: { kind: "modules" } },
     start_at: null,
     end_at: null,
     created_at: "2026-11-01T12:00:00Z",
     updated_at: "2026-11-01T12:00:00Z",
-  } as Course;
+  };
 }
 
 const AUTHOR = ["course.content_edit", "course.view", "course.view_all"];
@@ -128,8 +128,7 @@ describe("the files area", () => {
     );
     expect(rows[2]).toHaveTextContent("Handbook.pdf");
     expect(rows[2]).toHaveTextContent("2.4 MB");
-    expect(rows[2]).toHaveTextContent("application/pdf");
-    expect(rows[2]).toHaveTextContent("Nov 3, 2026");
+    expect(rows[2]).toHaveTextContent("application/pdf · Changed Nov 3, 2026");
     expect(screen.getByRole("treegrid", { name: "Folders" })).toBeInTheDocument();
     expect(document.title).toBe("Files · Example Training");
   });
