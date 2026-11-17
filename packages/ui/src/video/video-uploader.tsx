@@ -16,7 +16,7 @@ import {
   WarningCircleIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { tv } from "../lib/tv";
 import { FileDrop, sizeValues } from "../patterns/file-drop";
 import { Button } from "../primitives/button";
@@ -136,7 +136,6 @@ function Alert({ problem, name }: { problem: UploadProblem | undefined; name: st
 export function VideoUploadCard({ state, onPause, onResume, onCancel }: VideoUploadCardProps) {
   const { t } = useStepclimbStrings();
   const titleRef = useRef<HTMLSpanElement>(null);
-  const actionsRef = useRef<HTMLDivElement>(null);
   const { phase, name, size, sent, problem } = state;
   const stopped = STOPPED.has(phase);
   const controls = phase === "uploading" || phase === "cancelling" || stopped;
@@ -184,37 +183,59 @@ export function VideoUploadCard({ state, onPause, onResume, onCancel }: VideoUpl
       ) : null}
       <Alert problem={problem} name={name} />
       {controls ? (
-        <div
-          ref={actionsRef}
-          data-slot="video-upload-actions"
-          className={styles.actions()}
-          onFocus={() => {
+        <CardActions
+          phase={phase}
+          onPause={onPause}
+          onResume={onResume}
+          onCancel={onCancel}
+          onUnmountWithFocus={() => {
             hadFocus.current = true;
           }}
-          onBlur={(event) => {
-            hadFocus.current = actionsRef.current?.contains(event.relatedTarget as Node) ?? false;
-          }}
-        >
-          <Button
-            data-slot="video-upload-toggle"
-            isDisabled={phase === "cancelling"}
-            onPress={stopped ? onResume : onPause}
-          >
-            <Icon icon={stopped ? PlayIcon : PauseIcon} />
-            {stopped ? t("videoUploader.resume") : t("videoUploader.pause")}
-          </Button>
-          <Button
-            data-slot="video-upload-cancel"
-            intent="danger"
-            isPending={phase === "cancelling"}
-            onPress={onCancel}
-          >
-            <Icon icon={XIcon} />
-            {t("videoUploader.cancel")}
-          </Button>
-        </div>
+        />
       ) : null}
     </section>
+  );
+}
+
+interface CardActionsProps extends Omit<VideoUploadCardProps, "state"> {
+  phase: UploadPhase;
+  /** Called as the buttons leave the page while one of them has focus. */
+  onUnmountWithFocus: () => void;
+}
+
+function CardActions({ phase, onPause, onResume, onCancel, onUnmountWithFocus }: CardActionsProps) {
+  const { t } = useStepclimbStrings();
+  const ref = useRef<HTMLDivElement>(null);
+  const stopped = STOPPED.has(phase);
+  const lostFocus = useRef(onUnmountWithFocus);
+  lostFocus.current = onUnmountWithFocus;
+  // A layout cleanup runs before React removes the buttons, so the focused one is still there.
+  useLayoutEffect(() => {
+    const actions = ref.current;
+    return () => {
+      if (actions?.contains(document.activeElement)) lostFocus.current();
+    };
+  }, []);
+  return (
+    <div ref={ref} data-slot="video-upload-actions" className={styles.actions()}>
+      <Button
+        data-slot="video-upload-toggle"
+        isDisabled={phase === "cancelling"}
+        onPress={stopped ? onResume : onPause}
+      >
+        <Icon icon={stopped ? PlayIcon : PauseIcon} />
+        {stopped ? t("videoUploader.resume") : t("videoUploader.pause")}
+      </Button>
+      <Button
+        data-slot="video-upload-cancel"
+        intent="danger"
+        isPending={phase === "cancelling"}
+        onPress={onCancel}
+      >
+        <Icon icon={XIcon} />
+        {t("videoUploader.cancel")}
+      </Button>
+    </div>
   );
 }
 
@@ -294,9 +315,7 @@ export function VideoUploader({ isDisabled, className, ...options }: VideoUpload
         isDisabled={isDisabled}
         errorMessage={busy}
       />
-      {pending.length === 0 ? null : (
-        <PendingList entries={pending} onDiscard={upload.discard} />
-      )}
+      {pending.length === 0 ? null : <PendingList entries={pending} onDiscard={upload.discard} />}
       {state === undefined ? null : (
         <VideoUploadCard
           state={state}

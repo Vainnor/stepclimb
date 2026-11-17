@@ -152,7 +152,10 @@ export const uiMessages: Catalog = {
       "{name} could not be prepared: your organization has used the video storage or processing time its plan allows. Ask an administrator about the plan.",
     "videoUploader.problem.probeFailed":
       "{name} could not be read as a video. It may be damaged: export it again and upload the new file.",
-    "videoUploader.problem.serverFailed": "Something went wrong on the server. Try again in a moment.",
+    "videoUploader.problem.protocol":
+      "This page sent the upload in a form the server does not accept. Reload the page and choose the file again; if it happens again, report this code:",
+    "videoUploader.problem.serverFailed":
+      "Something went wrong on the server. Try again in a moment.",
     "videoUploader.problem.signedOut":
       "You were signed out. Sign in again, then choose {name} again to continue its upload.",
     "videoUploader.problem.storageFull":

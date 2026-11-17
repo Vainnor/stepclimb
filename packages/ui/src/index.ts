@@ -293,6 +293,16 @@ export {
 export { defaultTerms, type Term, type TermForms, type TermOverrides } from "./strings/terms";
 export { Icon, type IconProps, type IconState, icon, iconWeights } from "./theme/icon";
 export {
+  type Appearance,
+  type Density,
+  densities,
+  type Theme,
+  ThemeProvider,
+  type ThemeProviderProps,
+  themes,
+  useAppearance,
+} from "./theme/theme-provider";
+export {
   CHUNK_BYTES,
   MIN_CHUNK_BYTES,
   type Send as TusSend,
@@ -314,13 +324,3 @@ export {
   type VideoUploaderProps,
   videoUploader,
 } from "./video/video-uploader";
-export {
-  type Appearance,
-  type Density,
-  densities,
-  type Theme,
-  ThemeProvider,
-  type ThemeProviderProps,
-  themes,
-  useAppearance,
-} from "./theme/theme-provider";

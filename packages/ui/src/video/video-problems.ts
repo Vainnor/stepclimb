@@ -34,8 +34,27 @@ export function isResumable(problem: UploadProblem): boolean {
   return status === 408 || status === 429 || status >= 500;
 }
 
+/**
+ * Refusals of a request this page built wrongly, and answers it could not use: nothing the
+ * person did causes them, so the message asks for a reload and names the code to report.
+ */
+const PROTOCOL_CODES: ReadonlySet<string> = new Set([
+  "video.chunk_too_small",
+  "file.length_required",
+  "request.unsupported_media_type",
+  "request.malformed",
+  "tus.version_unsupported",
+  "tus.header_invalid",
+  "tus.body_invalid",
+  "tus.location_missing",
+]);
+
 /** The message for a code a tus route answers, or undefined. */
-function refusalMessage(code: string | undefined, name: string, t: Strings["t"]): string | undefined {
+function refusalMessage(
+  code: string | undefined,
+  name: string,
+  t: Strings["t"],
+): string | undefined {
   switch (code) {
     case "storage.not_configured":
       return t("videoUploader.problem.storageNotConfigured");
@@ -105,6 +124,9 @@ export function problemText(problem: UploadProblem, name: string, t: Strings["t"
     case "refused": {
       const known = refusalMessage(problem.code, name, t);
       if (known !== undefined) return { message: known };
+      if (problem.code !== undefined && PROTOCOL_CODES.has(problem.code)) {
+        return { message: t("videoUploader.problem.protocol"), code: problem.code };
+      }
       if (problem.status >= 500) return { message: t("videoUploader.problem.serverFailed") };
       return {
         message: t("videoUploader.problem.unknown"),

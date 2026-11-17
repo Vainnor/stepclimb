@@ -118,9 +118,9 @@ describe("sendFile", () => {
       return undefined;
     });
     const options = { chunkBytes: MIB, signal: signal(), onProgress: () => {}, onStored: () => {} };
-    await expect(sendFile(server.send, created.url, file, { ...options, offset: 0 })).rejects.toThrow(
-      "Failed to fetch",
-    );
+    await expect(
+      sendFile(server.send, created.url, file, { ...options, offset: 0 }),
+    ).rejects.toThrow("Failed to fetch");
     const stored = checkedLength(await readOffset(server.send, created.url, signal()), file.size);
     expect(stored).toEqual({ offset: 2 * MIB, length: 3 * MIB });
     await sendFile(server.send, created.url, file, { ...options, offset: stored.offset });
@@ -200,7 +200,14 @@ describe("sendFile", () => {
   it("is refused by the server for a short chunk that does not complete the upload", async () => {
     const server = new MockTusServer();
     const created = await createUpload(server.send, ENDPOINT, video(3 * MIB), signal());
-    const short = sendChunk(server.send, created.url, 0, new Blob([new Uint8Array(512)]), () => {}, signal());
+    const short = sendChunk(
+      server.send,
+      created.url,
+      0,
+      new Blob([new Uint8Array(512)]),
+      () => {},
+      signal(),
+    );
     await expect(short).rejects.toEqual(new TusProblem(400, "video.chunk_too_small"));
   });
 
