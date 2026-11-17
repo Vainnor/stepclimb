@@ -10,7 +10,8 @@
 # libsoup 3, GTK 3, librsvg). QEMU's user-mode emulators run the arm64 server image's binary on
 # an amd64 machine whose Docker cannot run arm64 containers (bin/check-image.sh). git-cliff writes
 # the release notes (cliff.toml, bin/release.py); skopeo pushes the release image and cosign signs
-# it (bin/release_artifacts.py, docs/adr/0031-release-image-signing-and-sbom.md).
+# it (bin/release_artifacts.py, docs/adr/0031-release-image-signing-and-sbom.md). ffmpeg and
+# ffprobe run the video transcoder's tests (docs/specs/m1/08-uploaded-video.md B8 to B11).
 {
   description = "Stepclimb dev shell";
 
@@ -53,6 +54,7 @@
                 pnpm
                 playwright-driver.browsers
                 git
+                ffmpeg-headless
               ]
               ++ lib.optionals isLinux [
                 webkitgtk_4_1
