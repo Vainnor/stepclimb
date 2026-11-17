@@ -392,15 +392,29 @@ const FOCUSABLE = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(", ");
 
-/** The focusable element after (`1`) or before (`-1`) `from` in document order, outside it. */
-function focusableBeside(from: HTMLElement, direction: 1 | -1): HTMLElement | undefined {
-  const all = [...document.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
-    (el) => !el.closest("[hidden], [inert]") && el !== from && !from.contains(el),
-  );
+/**
+ * The focusable elements after (`1`, nearest first) or before (`-1`, nearest first) `from` in
+ * document order, outside it.
+ */
+function focusablesBeside(from: HTMLElement, direction: 1 | -1): HTMLElement[] {
   const dom = globalThis.Node;
   const side = direction === 1 ? dom.DOCUMENT_POSITION_FOLLOWING : dom.DOCUMENT_POSITION_PRECEDING;
-  const beside = all.filter((el) => from.compareDocumentPosition(el) & side);
-  return direction === 1 ? beside[0] : beside.at(-1);
+  const beside = [...document.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
+    (el) =>
+      !el.closest("[hidden], [inert]") &&
+      !from.contains(el) &&
+      from.compareDocumentPosition(el) & side,
+  );
+  return direction === 1 ? beside : beside.reverse();
+}
+
+/** Focuses the first of `candidates` that takes focus (one that is drawn and enabled). */
+function focusFirst(candidates: HTMLElement[]): boolean {
+  for (const el of candidates) {
+    el.focus();
+    if (document.activeElement === el) return true;
+  }
+  return false;
 }
 
 /**
@@ -428,10 +442,8 @@ export const escapeToLeave = Extension.create({
               return false;
             }
             armed = false;
-            const target = focusableBeside(view.dom, event.shiftKey ? -1 : 1);
-            // Nothing after the text: leave it all the same, and the next Tab starts the page over.
-            if (target) target.focus();
-            else view.dom.blur();
+            // Nothing to move to: leave the text all the same, and the next Tab starts over.
+            if (!focusFirst(focusablesBeside(view.dom, event.shiftKey ? -1 : 1))) view.dom.blur();
             return true;
           },
         },
