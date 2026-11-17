@@ -9,7 +9,7 @@
 //! the conversion below turns its refusal into the answer.
 
 use axum::http::StatusCode;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use stepclimb_core::{id::Uuid, unlock};
 use utoipa::ToSchema;
 
@@ -27,7 +27,7 @@ pub mod code {
 }
 
 /// One condition that keeps a module or item locked.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LockReason {
     /// The module opens at `at`.
@@ -127,6 +127,17 @@ mod tests {
                 { "kind": "sequential", "item_id": item },
             ])
         );
+    }
+
+    #[test]
+    fn a_parsed_item_locked_problem_keeps_its_code_and_drops_the_reasons() {
+        let error = ApiError::from(unlock::RequireError::Locked(vec![
+            unlock::LockReason::ModuleLocked,
+        ]));
+        let body = serde_json::to_string(&error.problem()).unwrap();
+        let parsed: crate::error::Problem = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed.code, "item.locked");
+        assert!(parsed.reasons.is_empty(), "{parsed:?}");
     }
 
     #[test]

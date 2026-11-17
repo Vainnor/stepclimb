@@ -97,8 +97,23 @@ pub struct Problem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max: Option<u64>,
     /// On `item.locked`, every condition that keeps the item locked.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    //
+    // Written, never read back: the server parses no problem body, and `LockReason` is an
+    // internally tagged enum, which `tests/body_shapes.rs` keeps out of every `Deserialize`
+    // type. A parsed problem has no reasons.
+    #[serde(
+        default,
+        deserialize_with = "ignore_reasons",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub reasons: Vec<LockReason>,
+}
+
+/// Reads past a problem's `reasons` and keeps none (see [`Problem::reasons`]).
+fn ignore_reasons<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<LockReason>, D::Error> {
+    serde::de::IgnoredAny::deserialize(deserializer).map(|_| Vec::new())
 }
 
 /// An error a handler or extractor answers with.
