@@ -139,7 +139,7 @@ export function ModuleBoard(props: ModuleBoardProps) {
         ref={listRef}
         data-slot="module-board-list"
         aria-label={props["aria-label"] ?? t("moduleBoard.label")}
-        aria-busy={board.pending || undefined}
+        data-pending={board.pending || undefined}
         items={rows}
         dependencies={[names, actions.movesDisabled, props.timeZone, headingLevel]}
         dragAndDropHooks={dragAndDropHooks}
