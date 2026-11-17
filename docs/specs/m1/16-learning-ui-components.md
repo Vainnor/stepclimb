@@ -258,7 +258,9 @@ listed here with a pointer so the inventory is complete in one place.
     the bottom under it), controlled or uncontrolled through the item's id. The modules are the
     caller's, as the server last sent them; the board keeps no order of its own once a move ends.
   - `isDisabled` makes the board read-only, as an archived course is (every write answers 409):
-    no drag handles, no Move or Edit buttons, and no editing sheet.
+    no Move or Edit buttons and no editing sheet. Coordinator decision (2026-11-17): a disabled
+    board also removes the drag handles, keeping their space so the rows line up with an
+    editable board's; a disabled handle would be a control no one can use.
 - **B14.** BrandPreview shows a sample screen (top bar, a course row, a button, a callout, text) in
   a draft brand in light, dark and high contrast side by side, with the contrast report of the
   generator (`m0/12`). The branding screen gains it and ColorField, replacing M0's minimal screen
