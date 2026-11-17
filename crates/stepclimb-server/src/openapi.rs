@@ -446,6 +446,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             course_enrollments::EnrollmentNotFound,
             course_enrollments::EnrollmentWriteForbidden,
             course_enrollments::EnrollmentWriteConflict,
+            course_enrollments::EnrollmentDeleteConflict,
             modules::ModuleCourseNotFound,
             modules::ModuleNotFound,
             modules::ContentEditForbidden,

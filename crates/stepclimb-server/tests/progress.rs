@@ -757,18 +757,21 @@ impl Fixture {
         self.send(Method::GET, uri, org, cookie, None).await
     }
 
-    /// A new user holding a custom role of exactly `keys`, enrolled in `course`: their cookie.
-    async fn enrolled_with(&self, org: Uuid, course: Uuid, keys: &[&str]) -> String {
-        let (cookie, user) = self.user(org).await;
+    /// A new custom role of exactly `keys`: its id.
+    async fn custom_role(&self, org: Uuid, keys: &[&str]) -> Uuid {
         let role = NewRole {
             key: format!("r{}", new_id().simple()),
             name: "Course role".into(),
             permissions: keys.iter().map(|&k| k.to_owned()).collect(),
         };
-        let role = roles::create_custom(&self.pool, scope(org), &role, now(), Actor::Instance)
+        roles::create_custom(&self.pool, scope(org), &role, now(), Actor::Instance)
             .await
             .expect("create role")
-            .id;
+            .id
+    }
+
+    /// `user` enrolled in `course` with `role` through the repository: the enrollment's id.
+    async fn enroll(&self, org: Uuid, course: Uuid, user: Uuid, role: Uuid) -> Uuid {
         let new = enrollments::NewEnrollment {
             user_id: user,
             role_id: role,
@@ -778,7 +781,15 @@ impl Fixture {
         };
         enrollments::create(&self.pool, scope(org), course, &new, now(), Actor::Instance)
             .await
-            .expect("enroll");
+            .expect("enroll")
+            .id
+    }
+
+    /// A new user holding a custom role of exactly `keys`, enrolled in `course`: their cookie.
+    async fn enrolled_with(&self, org: Uuid, course: Uuid, keys: &[&str]) -> String {
+        let (cookie, user) = self.user(org).await;
+        let role = self.custom_role(org, keys).await;
+        self.enroll(org, course, user, role).await;
         cookie
     }
 
@@ -1304,98 +1315,168 @@ async fn staff_reads_show_unpublished_content_only_to_view_all(pool: PgPool) {
     );
 }
 
-/// T12, T18 (B15, B20): deleting a Student enrollment removes that learner's progress in the
-/// course and the Observer links naming them, keeps their progress in another course, records
-/// the counts, and removes them from the Observer's list. With a second participating
-/// enrollment in the course nothing is removed. Deleting an Observer enrollment removes its
-/// links only.
+/// T12, T18 (B15, B20; owner decision of 2026-11-16, deleting an enrollment keeps history):
+/// until spec 14 I4 archives progress first, the last learner enrollment of a user with
+/// progress in the course answers 409 `enrollment.has_progress` and changes nothing, whatever
+/// the deleted enrollment's role. A learner without progress is deleted with the Observer
+/// links naming them, and leaves the Observer's list; a second participating enrollment keeps
+/// the links; an Observer enrollment takes its own links.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn t12_t18_deleting_an_enrollment_removes_live_progress(pool: PgPool) {
+async fn t12_t18_deleting_an_enrollment_keeps_learner_history(pool: PgPool) {
     let f = Fixture::new(pool).await;
     let org = f.org("a").await;
     let item = f.link(org.id, org.module, Some(Requirement::View)).await;
-    let other_course = f
-        .course(org.id, org.tower, &[courses::Status::Published])
-        .await;
-    let other_module = f.module(org.id, other_course).await;
-    let other_item = f.link(org.id, other_module, Some(Requirement::View)).await;
     let admin = f.holder_of_everything(org.id, Scope::Organization).await;
+    let delete = |id: Uuid| format!("/api/v1/enrollments/{id}");
 
+    // A Student with progress: 409, and nothing changes.
     let (one_cookie, one, one_enrollment) = f.enrolled(org.id, org.course, "student").await;
-    let new = enrollments::NewEnrollment {
-        user_id: one,
-        role_id: f.builtin("student").await,
-        source: Source::Local,
-        external_id: None,
-        observed_user_ids: Vec::new(),
+    f.step(org.id, &one_cookie, item, "view").await.ok();
+    let (_, three, three_enrollment) = f.enrolled(org.id, org.course, "student").await;
+    let (created, observer) = f
+        .enroll_observer(org.id, &admin, org.course, json!([one, three]))
+        .await;
+    let observer_enrollment: Uuid = created.body["id"].as_str().unwrap().parse().unwrap();
+    let before = (
+        f.rows(org.id).await,
+        f.observee_links(org.id).await,
+        f.audit_data(org.id, "enrollment.delete").await,
+    );
+    let refused = f
+        .send(
+            Method::DELETE,
+            &delete(one_enrollment),
+            org.id,
+            &admin,
+            None,
+        )
+        .await;
+    refused.expect(StatusCode::CONFLICT, "enrollment.has_progress");
+    assert!(
+        refused.body["detail"]
+            .as_str()
+            .unwrap()
+            .contains("Conclude the enrollment"),
+        "{refused:?}"
+    );
+    let after = (
+        f.rows(org.id).await,
+        f.observee_links(org.id).await,
+        f.audit_data(org.id, "enrollment.delete").await,
+    );
+    assert_eq!(after, before);
+    assert_eq!(f.progress_of(one, org.course).await.len(), 3);
+    let still: i64 = sqlx::query_scalar("SELECT count(*) FROM enrollments WHERE id = $1")
+        .bind(one_enrollment)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(still, 1);
+
+    // A former learner, whose learner role lost `course.participate`: deleting their staff
+    // enrollment is refused too, since their progress is all that is left of their record.
+    let (two_cookie, two) = f.user(org.id).await;
+    let learner = f
+        .custom_role(
+            org.id,
+            &[perm::CourseView::KEY, perm::CourseParticipate::KEY],
+        )
+        .await;
+    let assistant = f.custom_role(org.id, &[perm::CourseView::KEY]).await;
+    f.enroll(org.id, org.course, two, learner).await;
+    let staff = f.enroll(org.id, org.course, two, assistant).await;
+    f.step(org.id, &two_cookie, item, "view").await.ok();
+    let patch = roles::RolePatch {
+        name: None,
+        permissions: Some(vec![perm::CourseView::KEY.to_owned()]),
     };
-    enrollments::create(
+    roles::update_custom(
         &f.pool,
         scope(org.id),
-        other_course,
-        &new,
+        learner,
+        &patch,
         now(),
         Actor::Instance,
     )
     .await
-    .expect("enroll in the other course");
-    f.step(org.id, &one_cookie, item, "view").await.ok();
-    f.step(org.id, &one_cookie, other_item, "view").await.ok();
-    let (two_cookie, two, two_enrollment) = f.enrolled(org.id, org.course, "student").await;
-    f.step(org.id, &two_cookie, item, "view").await.ok();
-    let (created, observer) = f
-        .enroll_observer(org.id, &admin, org.course, json!([one, two]))
-        .await;
-    let observer_enrollment: Uuid = created.body["id"].as_str().unwrap().parse().unwrap();
-    let other_progress = f.progress_of(one, other_course).await;
-    assert_eq!(other_progress.len(), 3);
-    assert_eq!(f.progress_of(one, org.course).await.len(), 3);
+    .expect("drop course.participate");
+    f.send(Method::DELETE, &delete(staff), org.id, &admin, None)
+        .await
+        .expect(StatusCode::CONFLICT, "enrollment.has_progress");
+    assert_eq!(f.progress_of(two, org.course).await.len(), 3);
 
+    // A Student without progress is deleted with the links naming them.
     f.send(
         Method::DELETE,
-        &format!("/api/v1/enrollments/{one_enrollment}"),
+        &delete(three_enrollment),
         org.id,
         &admin,
         None,
     )
     .await
     .expect_status(StatusCode::NO_CONTENT);
-    assert_eq!(f.progress_of(one, org.course).await, Vec::<String>::new());
-    assert_eq!(f.progress_of(one, other_course).await, other_progress);
-    assert_eq!(f.progress_of(two, org.course).await.len(), 3);
-    assert_eq!(f.observee_links(org.id).await, [(observer_enrollment, two)]);
+    assert_eq!(f.observee_links(org.id).await, [(observer_enrollment, one)]);
     let audit = f.audit_data(org.id, "enrollment.delete").await;
     assert_eq!(
         audit.last().unwrap()["removed"],
-        json!({
-            "enrollment_observees": 1,
-            "item_progress": 1,
-            "module_progress": 1,
-            "course_progress": 1,
-        })
+        json!({ "enrollment_observees": 1 })
     );
     let page = f.get(org.id, &observer, &list_uri(org.course)).await;
-    assert_eq!(learners(page.ok()), [two]);
+    assert_eq!(learners(page.ok()), [one]);
 
-    // A second participating enrollment keeps everything.
-    let participant = NewRole {
-        key: format!("r{}", new_id().simple()),
-        name: "Participant".into(),
-        permissions: vec![perm::CourseParticipate::KEY.to_owned()],
-    };
-    let participant =
-        roles::create_custom(&f.pool, scope(org.id), &participant, now(), Actor::Instance)
-            .await
-            .expect("create role")
-            .id;
+    // With a second participating enrollment, the user stays a learner: the delete goes ahead
+    // and keeps their progress and the links naming them.
+    let participant = f.custom_role(org.id, &[perm::CourseParticipate::KEY]).await;
+    let second = f.enroll(org.id, org.course, one, participant).await;
+    f.send(Method::DELETE, &delete(second), org.id, &admin, None)
+        .await
+        .expect_status(StatusCode::NO_CONTENT);
+    assert_eq!(f.progress_of(one, org.course).await.len(), 3);
+    assert_eq!(f.observee_links(org.id).await, [(observer_enrollment, one)]);
+
+    // An Observer enrollment takes its own links and nothing else.
+    f.send(
+        Method::DELETE,
+        &delete(observer_enrollment),
+        org.id,
+        &admin,
+        None,
+    )
+    .await
+    .expect_status(StatusCode::NO_CONTENT);
+    assert_eq!(f.observee_links(org.id).await, []);
+    assert_eq!(f.progress_of(one, org.course).await.len(), 3);
+    let audit = f.audit_data(org.id, "enrollment.delete").await;
+    assert_eq!(
+        audit.last().unwrap()["removed"],
+        json!({ "enrollment_observees": 1 })
+    );
+}
+
+/// Spec 05 B19: reactivating an enrollment that still has observer links needs
+/// `progress.view`, even once its role no longer holds `progress.view_observed`, since the role
+/// can get the permission back and the links would grant sight again.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn reactivating_an_enrollment_with_stale_links_needs_progress_view(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let org = f.org("a").await;
+    let admin = f.holder_of_everything(org.id, Scope::Organization).await;
+    let (_, one) = f.student(org.id, org.course).await;
+    let (_, mentor) = f.user(org.id).await;
+    let role = f
+        .custom_role(
+            org.id,
+            &[perm::CourseView::KEY, perm::ProgressViewObserved::KEY],
+        )
+        .await;
     let new = enrollments::NewEnrollment {
-        user_id: two,
-        role_id: participant,
+        user_id: mentor,
+        role_id: role,
         source: Source::Local,
         external_id: None,
-        observed_user_ids: Vec::new(),
+        observed_user_ids: vec![one],
     };
-    let second = enrollments::create(
+    let enrollment = enrollments::create(
         &f.pool,
         scope(org.id),
         org.course,
@@ -1404,52 +1485,104 @@ async fn t12_t18_deleting_an_enrollment_removes_live_progress(pool: PgPool) {
         Actor::Instance,
     )
     .await
-    .expect("enroll again")
+    .expect("enroll the mentor")
     .id;
+    let uri = format!("/api/v1/enrollments/{enrollment}");
+    f.send(
+        Method::PATCH,
+        &uri,
+        org.id,
+        &admin,
+        Some(json!({ "status": "concluded" })),
+    )
+    .await
+    .ok();
+    let patch = roles::RolePatch {
+        name: None,
+        permissions: Some(vec![perm::CourseView::KEY.to_owned()]),
+    };
+    roles::update_custom(&f.pool, scope(org.id), role, &patch, now(), Actor::Instance)
+        .await
+        .expect("drop progress.view_observed");
+    let manager = f
+        .enrolled_with(
+            org.id,
+            org.course,
+            &[perm::CourseView::KEY, perm::EnrollmentManage::KEY],
+        )
+        .await;
+    f.send(
+        Method::PATCH,
+        &uri,
+        org.id,
+        &manager,
+        Some(json!({ "status": "active" })),
+    )
+    .await
+    .expect(StatusCode::FORBIDDEN, "permission.escalation");
+    let reactivated = f
+        .send(
+            Method::PATCH,
+            &uri,
+            org.id,
+            &admin,
+            Some(json!({ "status": "active" })),
+        )
+        .await;
+    assert_eq!(reactivated.ok()["status"], "active");
+}
+
+/// Coordinator decisions (overnight, 2026-11-17): an Observer keeps reading a learner they
+/// observe whose enrollment is concluded, and the staff reads leave out suspended users.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn reads_keep_concluded_learners_and_leave_out_suspended_ones(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let org = f.org("a").await;
+    let admin = f.holder_of_everything(org.id, Scope::Organization).await;
+    let (instructor, _, _) = f.enrolled(org.id, org.course, "instructor").await;
+    let (_, one, one_enrollment) = f.enrolled(org.id, org.course, "student").await;
+    let (_, two) = f.student(org.id, org.course).await;
+    let (_, observer) = f
+        .enroll_observer(org.id, &admin, org.course, json!([one, two]))
+        .await;
     enrollments::set_status(
         &f.pool,
         scope(org.id),
-        second,
+        one_enrollment,
         enrollments::Status::Concluded,
         now(),
         Actor::Instance,
     )
     .await
     .expect("conclude");
-    f.send(
-        Method::DELETE,
-        &format!("/api/v1/enrollments/{two_enrollment}"),
-        org.id,
-        &admin,
-        None,
-    )
-    .await
-    .expect_status(StatusCode::NO_CONTENT);
-    assert_eq!(f.progress_of(two, org.course).await.len(), 3);
-    assert_eq!(f.observee_links(org.id).await, [(observer_enrollment, two)]);
+    let page = f.get(org.id, &observer, &list_uri(org.course)).await;
+    let page = page.ok();
+    assert_eq!(learners(page), sorted(vec![one, two]));
+    let concluded = page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["user"]["id"] == one.to_string())
+        .unwrap();
+    assert_eq!(concluded["enrollment_status"], "concluded");
 
-    // An Observer enrollment takes its links and nothing else.
-    f.send(
-        Method::DELETE,
-        &format!("/api/v1/enrollments/{observer_enrollment}"),
-        org.id,
-        &admin,
-        None,
+    users::set_status(
+        &f.pool,
+        scope(org.id),
+        two,
+        users::Status::Suspended,
+        now(),
+        Actor::Instance,
     )
     .await
-    .expect_status(StatusCode::NO_CONTENT);
-    assert_eq!(f.observee_links(org.id).await, []);
-    assert_eq!(f.progress_of(two, org.course).await.len(), 3);
-    let audit = f.audit_data(org.id, "enrollment.delete").await;
-    assert_eq!(
-        audit.last().unwrap()["removed"],
-        json!({
-            "enrollment_observees": 1,
-            "item_progress": 0,
-            "module_progress": 0,
-            "course_progress": 0,
-        })
-    );
+    .expect("suspend");
+    for cookie in [&observer, &instructor] {
+        let page = f.get(org.id, cookie, &list_uri(org.course)).await;
+        assert_eq!(learners(page.ok()), [one]);
+        f.get(org.id, cookie, &detail_uri(org.course, two))
+            .await
+            .expect(StatusCode::NOT_FOUND, "progress.not_found");
+    }
 }
 
 /// T15 (B14): org A's admin naming org B's course, or org A's course with org B's learner, gets

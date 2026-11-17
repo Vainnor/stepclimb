@@ -712,9 +712,10 @@ export interface paths {
         put?: never;
         post?: never;
         /**
-         * Remove an enrollment. When the user keeps no other enrollment in the course whose role holds
-         *     `course.participate`, this also deletes their progress in the course and the Observer links
-         *     that name them; an Observer enrollment's own links always go with it.
+         * Remove an enrollment. An Observer enrollment's own links go with it, and when the user keeps
+         *     no other enrollment in the course whose role holds `course.participate`, so do the Observer
+         *     links that name them. A user with no other such enrollment and progress in the course keeps
+         *     their enrollment: conclude it instead (409 `enrollment.has_progress`).
          */
         delete: operations["deleteEnrollment"];
         options?: never;
@@ -5133,6 +5134,15 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `enrollment.has_progress`: the user has no other enrollment in the course whose role holds `course.participate` and has progress there, which deleting would erase; conclude the enrollment instead. `enrollment.externally_managed`: an identity provider, the sync API, SCIM or a connector owns the enrollment. `role.unknown_builtin`: the enrollment's role is a built-in role of another Stepclimb release. */
+        EnrollmentDeleteConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `local.email_required`: the user has no email address, which local sign-in finds them by; add one first. */
         EnrollmentLinkConflict: {
             headers: {
@@ -8487,7 +8497,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["EnrollmentWriteForbidden"];
             404: components["responses"]["EnrollmentNotFound"];
-            409: components["responses"]["EnrollmentWriteConflict"];
+            409: components["responses"]["EnrollmentDeleteConflict"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };

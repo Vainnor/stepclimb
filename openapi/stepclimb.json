@@ -3725,7 +3725,7 @@
         "tags": [
           "enrollments"
         ],
-        "summary": "Remove an enrollment. When the user keeps no other enrollment in the course whose role holds\n`course.participate`, this also deletes their progress in the course and the Observer links\nthat name them; an Observer enrollment's own links always go with it.",
+        "summary": "Remove an enrollment. An Observer enrollment's own links go with it, and when the user keeps\nno other enrollment in the course whose role holds `course.participate`, so do the Observer\nlinks that name them. A user with no other such enrollment and progress in the course keeps\ntheir enrollment: conclude it instead (409 `enrollment.has_progress`).",
         "operationId": "deleteEnrollment",
         "parameters": [
           {
@@ -3756,7 +3756,7 @@
             "$ref": "#/components/responses/EnrollmentNotFound"
           },
           "409": {
-            "$ref": "#/components/responses/EnrollmentWriteConflict"
+            "$ref": "#/components/responses/EnrollmentDeleteConflict"
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
@@ -15122,6 +15122,16 @@
       },
       "EnrollmentCreateNotFound": {
         "description": "`course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `user.not_found`: no user of the organization has this id, or your `user.view` does not cover them (held at the organization, or at an account where they hold a role or an active enrollment). `role.not_found`: no built-in role and no custom role of the organization has this id. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "EnrollmentDeleteConflict": {
+        "description": "`enrollment.has_progress`: the user has no other enrollment in the course whose role holds `course.participate` and has progress there, which deleting would erase; conclude the enrollment instead. `enrollment.externally_managed`: an identity provider, the sync API, SCIM or a connector owns the enrollment. `role.unknown_builtin`: the enrollment's role is a built-in role of another Stepclimb release.",
         "content": {
           "application/problem+json": {
             "schema": {

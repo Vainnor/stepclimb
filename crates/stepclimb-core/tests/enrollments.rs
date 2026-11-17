@@ -352,12 +352,7 @@ async fn status_changes_and_deletes_are_audited_once(pool: PgPool) {
                 "enrollment.delete".to_owned(),
                 json!({
                     "before": row("concluded"),
-                    "removed": {
-                        "enrollment_observees": 0,
-                        "item_progress": 0,
-                        "module_progress": 0,
-                        "course_progress": 0,
-                    },
+                    "removed": { "enrollment_observees": 0 },
                 })
             ),
         ]

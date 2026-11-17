@@ -33,8 +33,10 @@
 //! is guarded instead by spec 05 B19's check on naming observed learners. `PATCH` and `DELETE`
 //! run the same check on the enrollment's role (B18), then refuse an enrollment an outside
 //! source owns (409 `enrollment.externally_managed`). A `PATCH` that names observed learners,
-//! or reactivates an enrollment that observes learners, also needs `progress.view` at the
-//! course (403 `permission.escalation`).
+//! or reactivates an enrollment that has observer links, also needs `progress.view` at the
+//! course (403 `permission.escalation`). `DELETE` keeps a learner's history: the last learner
+//! enrollment of a user with progress in the course answers 409 `enrollment.has_progress`
+//! (spec 05 B15, until spec 14 I4 archives progress first).
 //!
 //! Every write checks `enrollment.manage` again on the course's path as `courses::lock` reads it
 //! in the write's transaction, which also locks the course row (B19), and reads the role
@@ -92,6 +94,9 @@ const NOT_ENROLLABLE: [&str; 1] = ["manager"];
 pub mod code {
     /// The user already holds the role in the course (409).
     pub const ENROLLMENT_EXISTS: &str = "enrollment.exists";
+    /// The enrollment is the user's last learner enrollment in the course and they have
+    /// progress there, which a delete would erase (409; spec 05 B15 until spec 14 I4).
+    pub const ENROLLMENT_HAS_PROGRESS: &str = "enrollment.has_progress";
     /// An outside source owns the enrollment (409).
     pub const ENROLLMENT_EXTERNALLY_MANAGED: &str = "enrollment.externally_managed";
     /// In a 422's `errors`: the role cannot be enrolled (Manager).
@@ -110,6 +115,7 @@ problem_responses! {
     EnrollmentNotFound => "`enrollment.not_found`: no enrollment with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined.",
     EnrollmentWriteForbidden => "`permission.denied`: you can see the enrollment's course but do not hold `enrollment.manage` at a scope containing it. `permission.escalation`: the enrollment's role has a catalog permission grantable at organization or account scope that you do not hold at the course, or the change names observed learners or reactivates an enrollment that observes learners and you do not hold `progress.view` at the course. `auth.csrf_refused`: the request did not come from this site.",
     EnrollmentWriteConflict => "`enrollment.externally_managed`: an identity provider, the sync API, SCIM or a connector owns the enrollment. `role.unknown_builtin`: the enrollment's role is a built-in role of another Stepclimb release.",
+    EnrollmentDeleteConflict => "`enrollment.has_progress`: the user has no other enrollment in the course whose role holds `course.participate` and has progress there, which deleting would erase; conclude the enrollment instead. `enrollment.externally_managed`: an identity provider, the sync API, SCIM or a connector owns the enrollment. `role.unknown_builtin`: the enrollment's role is a built-in role of another Stepclimb release.",
 }
 
 /// An enrollment's status: `active` grants the role at the course, `concluded` grants nothing
@@ -439,7 +445,10 @@ pub async fn update_enrollment(
         status: body.status.map(Into::into),
         observed_user_ids: body.observed_user_ids,
     };
-    if widens_observation(&enrollment, &change) {
+    let has_links = repo::has_observer_links(&mut tx, grants.scope(), enrollment.id)
+        .await
+        .map_err(|error| ApiError::internal(&error))?;
+    if widens_observation(&enrollment, &change, has_links) {
         refuse_observing_without_progress_view(grants, &course)?;
     }
     let (now, actor) = (state.clock.now(), client.actor(require.principal()));
@@ -450,9 +459,10 @@ pub async fn update_enrollment(
     Ok(Json(Enrollment::from_repo(updated)?))
 }
 
-/// Remove an enrollment. When the user keeps no other enrollment in the course whose role holds
-/// `course.participate`, this also deletes their progress in the course and the Observer links
-/// that name them; an Observer enrollment's own links always go with it.
+/// Remove an enrollment. An Observer enrollment's own links go with it, and when the user keeps
+/// no other enrollment in the course whose role holds `course.participate`, so do the Observer
+/// links that name them. A user with no other such enrollment and progress in the course keeps
+/// their enrollment: conclude it instead (409 `enrollment.has_progress`).
 #[utoipa::path(
     delete,
     path = "/api/v1/enrollments/{enrollment_id}",
@@ -466,7 +476,7 @@ pub async fn update_enrollment(
         (status = 401, response = crate::openapi::Unauthenticated),
         (status = 403, response = EnrollmentWriteForbidden),
         (status = 404, response = EnrollmentNotFound),
-        (status = 409, response = EnrollmentWriteConflict),
+        (status = 409, response = EnrollmentDeleteConflict),
         (status = 500, response = crate::openapi::InternalError),
         (status = 503, response = crate::openapi::NoOrganization),
     )
@@ -544,16 +554,18 @@ async fn writable(
     Ok((enrollment, course))
 }
 
-/// Whether `change` names observed learners, or reactivates `enrollment` while it observes
-/// learners: either gives its holder sight of those learners' progress (spec 05 B19, B20).
-fn widens_observation(enrollment: &repo::Enrollment, change: &repo::Change) -> bool {
-    let observes = enrollment
-        .observed_user_ids
-        .as_ref()
-        .is_some_and(|users| !users.is_empty());
+/// Whether `change` names observed learners, or reactivates `enrollment` while it has observer
+/// links (`has_links`, whatever its role holds now, since a role that regains
+/// `progress.view_observed` makes stale links grant sight again): either can give its holder
+/// sight of those learners' progress (spec 05 B19, B20).
+fn widens_observation(
+    enrollment: &repo::Enrollment,
+    change: &repo::Change,
+    has_links: bool,
+) -> bool {
     let reactivates =
         change.status == Some(repo::Status::Active) && enrollment.status != repo::Status::Active;
-    change.observed_user_ids.is_some() || (reactivates && observes)
+    change.observed_user_ids.is_some() || (reactivates && has_links)
 }
 
 /// 403 `permission.escalation` unless the caller holds `progress.view` at the course (spec 05
@@ -673,6 +685,10 @@ fn enrollment_error(error: repo::Error) -> ApiError {
             COURSE_TEMPLATE,
             "A template takes no learner. Copy it to an ordinary course first.",
         ),
+        E::HasProgress => conflict(
+            code::ENROLLMENT_HAS_PROGRESS,
+            "The learner has progress in this course, which deleting the enrollment would erase. Conclude the enrollment instead.",
+        ),
         E::ObservedUnavailable | E::ObservedInvalid { index: None } => {
             observed(&["observed_user_ids"])
         }
@@ -769,6 +785,7 @@ mod tests {
             (repo::Error::Exists, 409, "enrollment.exists"),
             (repo::Error::CourseArchived, 409, "course.archived"),
             (repo::Error::Template, 409, "course.template"),
+            (repo::Error::HasProgress, 409, "enrollment.has_progress"),
         ];
         for (error, status, code) in cases {
             let problem = enrollment_error(error).problem();

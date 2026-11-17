@@ -28,9 +28,8 @@
 //! Staff read every learner's progress in a course through [`list_for_course`] and
 //! [`learner_in_course`] (B14); who may read whom (B20) is the routes' to decide, and they pass
 //! the users an Observer may see as [`LearnerFilter::only`]. A learner is a user holding an
-//! enrollment in the course, active or concluded, whose role has `course.participate`.
-//! [`delete_for_enrollment`] removes a former learner's live progress in a course (B15), for
-//! `enrollments::delete`.
+//! enrollment in the course, active or concluded, whose role has `course.participate`, and who
+//! is not suspended.
 //!
 //! Every query filters by `org_id = scope.org_id()`.
 
@@ -803,17 +802,9 @@ pub struct LearnerFilter {
 /// The sort key of a learner in [`list_for_course`]: the display name, then the user's id.
 pub type LearnerKey = (String, Uuid);
 
-/// The rows [`delete_for_enrollment`] removed, per table.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct RemovedProgress {
-    pub item_progress: u64,
-    pub module_progress: u64,
-    pub course_progress: u64,
-}
-
-/// The learners of the course `course_id` of the scope's organization matching `filter`, with
-/// their course and `shown` module progress, sorted by display name then user id, starting
-/// after `after` (the sort key of the previous page's last learner) and at most `limit` of them
+/// The learners of the course `course_id` of the scope's organization who are not suspended,
+/// matching `filter`, with their course and `shown` module progress, sorted by display name
+/// then user id, starting after `after` (the sort key of the previous page's last learner) and at most `limit` of them
 /// (B14). `after` comes from a client's cursor and only bounds a query already filtered by the
 /// scope; a NUL in its name is [`Error::InvalidCursor`].
 pub async fn list_for_course(
@@ -834,6 +825,7 @@ pub async fn list_for_course(
                   bool_or(e.status = 'active') AS "active!"
            FROM enrollments e JOIN users u ON u.org_id = e.org_id AND u.id = e.user_id
            WHERE e.org_id = $1 AND e.course_id = $2 AND e.role_id = ANY($3)
+             AND u.status = 'active'
              AND ($4::uuid[] IS NULL OR e.user_id = ANY($4))
            GROUP BY u.id, u.display_name
            HAVING ($5::text IS NULL
@@ -873,7 +865,7 @@ pub async fn list_for_course(
 
 /// The learner `user_id` of the course `course_id` of the scope's organization with their
 /// course, `shown` module and `shown` item progress, or `None` when they are not a learner of
-/// it (B14).
+/// it or are suspended (B14).
 pub async fn learner_in_course(
     conn: &mut PgConnection,
     scope: OrgScope,
@@ -981,51 +973,6 @@ async fn module_rows(
             });
     }
     Ok(by_user)
-}
-
-/// Delete the live progress of the user `user_id` in the course `course_id` of the scope's
-/// organization: their `item_progress`, `module_progress` and `course_progress` rows there
-/// (B15). For `enrollments::delete`, in its transaction, once it found the user keeps no
-/// learner enrollment in the course, under its `FOR NO KEY UPDATE` lock on the course row,
-/// which every progress write's `FOR SHARE` read waits for.
-pub(crate) async fn delete_for_enrollment(
-    conn: &mut PgConnection,
-    scope: OrgScope,
-    course_id: Uuid,
-    user_id: Uuid,
-) -> Result<RemovedProgress, sqlx::Error> {
-    let item_progress = sqlx::query!(
-        "DELETE FROM item_progress WHERE org_id = $1 AND course_id = $2 AND user_id = $3",
-        scope.org_id(),
-        course_id,
-        user_id,
-    )
-    .execute(&mut *conn)
-    .await?
-    .rows_affected();
-    let module_progress = sqlx::query!(
-        "DELETE FROM module_progress WHERE org_id = $1 AND course_id = $2 AND user_id = $3",
-        scope.org_id(),
-        course_id,
-        user_id,
-    )
-    .execute(&mut *conn)
-    .await?
-    .rows_affected();
-    let course_progress = sqlx::query!(
-        "DELETE FROM course_progress WHERE org_id = $1 AND course_id = $2 AND user_id = $3",
-        scope.org_id(),
-        course_id,
-        user_id,
-    )
-    .execute(&mut *conn)
-    .await?
-    .rows_affected();
-    Ok(RemovedProgress {
-        item_progress,
-        module_progress,
-        course_progress,
-    })
 }
 
 #[cfg(test)]

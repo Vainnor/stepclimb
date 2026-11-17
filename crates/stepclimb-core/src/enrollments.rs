@@ -26,8 +26,9 @@
 //! routes' to decide.
 //!
 //! [`delete`] removes, in its transaction, the enrollment's own observer links and, when the
-//! user keeps no learner enrollment in the course, the links that name them and their live
-//! progress in the course (spec 05 B15, B20).
+//! user keeps no learner enrollment in the course, the links that name them (spec 05 B15, B20).
+//! It refuses to delete the last learner enrollment of a user with progress in the course, so
+//! no learner history is erased before spec 14 I4 archives it.
 
 use std::{collections::HashSet, time::SystemTime};
 
@@ -41,7 +42,7 @@ use crate::{
     db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
     id::new_id,
     perm::{CourseParticipate, Permission, ProgressViewObserved},
-    progress, roles,
+    roles,
 };
 
 /// The most learners one Observer enrollment observes (spec 05 B17).
@@ -126,11 +127,10 @@ pub struct Change {
     pub observed_user_ids: Option<Vec<Uuid>>,
 }
 
-/// The rows [`delete`] removed besides the enrollment, per table (spec 05 B15).
+/// The rows [`delete`] removed besides the enrollment (spec 05 B15).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Removed {
     pub enrollment_observees: u64,
-    pub progress: progress::RemovedProgress,
 }
 
 /// The filters of [`list_for_course`]; `None` filters nothing.
@@ -173,6 +173,10 @@ pub enum Error {
     /// `progress.view_observed` (spec 05 B17).
     #[error("only an enrollment whose role holds progress.view_observed observes learners")]
     ObservedUnavailable,
+    /// The user keeps no other learner enrollment in the course and has progress there, which a
+    /// delete would erase (spec 05 B15, until spec 14 I4 archives it first).
+    #[error("the learner has progress in the course; conclude the enrollment instead")]
+    HasProgress,
     /// The observed learners are not 1 to [`MAX_OBSERVED`] distinct learners of the course:
     /// `index` names the first entry at fault, or is `None` when the list's length is.
     #[error("the observed learners are invalid")]
@@ -526,16 +530,22 @@ pub async fn update<'c>(
 }
 
 /// Delete the enrollment `id` of the scope's organization and write the `enrollment.delete`
-/// audit entry by `actor` at `now`, with the enrollment as it was and the rows removed per
-/// table (B18, B27; spec 05 B15).
+/// audit entry by `actor` at `now`, with the enrollment as it was and the observer links
+/// removed (B18, B27; spec 05 B15, B20).
 ///
-/// In the same transaction it deletes the enrollment's own observer links and, when no other
+/// Deleting an enrollment keeps the learner's history (owner decision, 2026-11-16): spec 05
+/// B15 archives live progress first, which spec 14 I4 builds. Until then, when no other
 /// enrollment of the user in the course, active or concluded, has a role holding
-/// `course.participate`, the observer links that name the user in the course and the user's
-/// live progress there ([`progress::delete_for_enrollment`]). Otherwise the user stays a
-/// learner and keeps all of it. Locks the enrollment's course row `FOR NO KEY UPDATE` first
-/// (B19), which every progress write's `FOR SHARE` read waits for. Runs in one transaction (a
-/// savepoint when `db` is already one).
+/// `course.participate`, and the user has any `item_progress`, `module_progress` or
+/// `course_progress` row in the course, the delete is [`Error::HasProgress`] and writes nothing:
+/// the enrollment is concluded instead. This does not depend on the deleted enrollment's role,
+/// so deleting a staff or Observer enrollment of a former learner is refused the same way.
+///
+/// Otherwise it deletes the enrollment's own observer links and, when the user keeps no
+/// learner enrollment in the course, the links that name them there. Locks the enrollment's
+/// course row `FOR NO KEY UPDATE` first (B19), which every progress write's `FOR SHARE` read
+/// waits for, so no progress appears between the check and the delete. Runs in one transaction
+/// (a savepoint when `db` is already one).
 pub async fn delete<'c>(
     db: impl Acquire<'c, Database = Postgres>,
     scope: OrgScope,
@@ -546,7 +556,14 @@ pub async fn delete<'c>(
     let now = epoch_micros(now)?;
     let mut tx = db.begin().await?;
     let (current, _) = lock(&mut tx, scope, id).await?;
-    let own_links = delete_own_links(&mut tx, scope, id).await?;
+    let (course_id, user_id) = (current.course_id, current.user_id);
+    let stays_learner = participates(&mut tx, scope, course_id, user_id, false, Some(id)).await?;
+    if !stays_learner && has_live_progress(&mut tx, scope, course_id, user_id).await? {
+        return Err(Error::HasProgress);
+    }
+    let mut removed = Removed {
+        enrollment_observees: delete_own_links(&mut tx, scope, id).await?,
+    };
     sqlx::query!(
         "DELETE FROM enrollments WHERE org_id = $1 AND id = $2",
         scope.org_id(),
@@ -554,16 +571,21 @@ pub async fn delete<'c>(
     )
     .execute(&mut *tx)
     .await?;
-    let mut removed = remove_former_learner(&mut tx, scope, &current).await?;
-    removed.enrollment_observees += own_links;
+    if !stays_learner {
+        removed.enrollment_observees += sqlx::query!(
+            "DELETE FROM enrollment_observees
+             WHERE org_id = $1 AND course_id = $2 AND user_id = $3",
+            scope.org_id(),
+            course_id,
+            user_id,
+        )
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    }
     let data = json!({
         "before": audit_data(&current),
-        "removed": {
-            "enrollment_observees": removed.enrollment_observees,
-            "item_progress": removed.progress.item_progress,
-            "module_progress": removed.progress.module_progress,
-            "course_progress": removed.progress.course_progress,
-        },
+        "removed": { "enrollment_observees": removed.enrollment_observees },
     });
     audit::record(
         &mut tx,
@@ -614,34 +636,46 @@ async fn delete_own_links(
     Ok(deleted.rows_affected())
 }
 
-/// For [`delete`], once `deleted` is gone: when no other enrollment of its user in its course,
-/// active or concluded, has a role holding `course.participate`, delete the observer links that
-/// name the user in the course and their live progress there (spec 05 B15, B20). Otherwise the
-/// user is still a learner and keeps all of it.
-async fn remove_former_learner(
+/// Whether the user `user_id` has any live progress row (`item_progress`, `module_progress` or
+/// `course_progress`) in the course `course_id` of the scope's organization.
+async fn has_live_progress(
     conn: &mut PgConnection,
     scope: OrgScope,
-    deleted: &Enrollment,
-) -> Result<Removed, Error> {
-    let (course_id, user_id) = (deleted.course_id, deleted.user_id);
-    if participates(conn, scope, course_id, user_id, false).await? {
-        return Ok(Removed::default());
-    }
-    let links = sqlx::query!(
-        "DELETE FROM enrollment_observees WHERE org_id = $1 AND course_id = $2 AND user_id = $3",
+    course_id: Uuid,
+    user_id: Uuid,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM item_progress
+                          WHERE org_id = $1 AND course_id = $2 AND user_id = $3)
+               OR EXISTS (SELECT 1 FROM module_progress
+                          WHERE org_id = $1 AND course_id = $2 AND user_id = $3)
+               OR EXISTS (SELECT 1 FROM course_progress
+                          WHERE org_id = $1 AND course_id = $2 AND user_id = $3) AS "exists!""#,
         scope.org_id(),
         course_id,
         user_id,
     )
-    .execute(&mut *conn)
+    .fetch_one(conn)
+    .await
+}
+
+/// Whether the enrollment `id` has observer link rows, whatever its role holds now: a stale
+/// link of a role that lost `progress.view_observed` would grant sight again if the role got
+/// it back (spec 05 B19).
+pub async fn has_observer_links(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    id: Uuid,
+) -> Result<bool, Error> {
+    let exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM enrollment_observees
+                          WHERE org_id = $1 AND enrollment_id = $2) AS "exists!""#,
+        scope.org_id(),
+        id,
+    )
+    .fetch_one(conn)
     .await?;
-    let progress = progress::delete_for_enrollment(conn, scope, course_id, user_id)
-        .await
-        .map_err(Error::Database)?;
-    Ok(Removed {
-        enrollment_observees: links.rows_affected(),
-        progress,
-    })
+    Ok(exists)
 }
 
 /// Whether `role`'s effective permissions include `key`.
@@ -839,19 +873,21 @@ pub(crate) async fn is_learner(
     course_id: Uuid,
     user_id: Uuid,
 ) -> Result<bool, sqlx::Error> {
-    participates(conn, scope, course_id, user_id, true).await
+    participates(conn, scope, course_id, user_id, true, None).await
 }
 
 /// Whether the user `user_id` holds an enrollment in the course `course_id` of the scope's
 /// organization whose role holds `course.participate`: an `active` one when `active_only`,
-/// otherwise active or concluded. The custom roles read are locked `FOR KEY SHARE`, as in
-/// [`has_learners`], so a change of their permissions waits until the caller commits.
+/// otherwise active or concluded, leaving out the enrollment `except`. The custom roles read are
+/// locked `FOR KEY SHARE`, as in [`has_learners`], so a change of their permissions waits until
+/// the caller commits.
 async fn participates(
     conn: &mut PgConnection,
     scope: OrgScope,
     course_id: Uuid,
     user_id: Uuid,
     active_only: bool,
+    except: Option<Uuid>,
 ) -> Result<bool, sqlx::Error> {
     let roles = sqlx::query!(
         "SELECT r.key, r.builtin, r.permissions
@@ -859,13 +895,15 @@ async fn participates(
          WHERE (r.org_id IS NULL OR r.org_id = $1)
            AND r.id IN (SELECT e.role_id FROM enrollments e
                         WHERE e.org_id = $1 AND e.course_id = $2 AND e.user_id = $3
-                          AND (e.status = 'active' OR NOT $4))
+                          AND (e.status = 'active' OR NOT $4)
+                          AND ($5::uuid IS NULL OR e.id <> $5))
          ORDER BY r.id
          FOR KEY SHARE",
         scope.org_id(),
         course_id,
         user_id,
         active_only,
+        except,
     )
     .fetch_all(conn)
     .await?;
