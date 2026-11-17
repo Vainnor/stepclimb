@@ -604,6 +604,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/courses/{course_id}/progress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the learners of a course with their course and module progress, sorted by display
+         *     name, then user id. With `progress.view` you read every learner; with only
+         *     `progress.view_observed`, the learners your active Observer enrollments in the course name.
+         */
+        get: operations["listCourseProgress"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/courses/{course_id}/progress/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one learner's progress in a course: the course, each module and each item they took a
+         *     step on. With only `progress.view_observed`, only a learner you observe.
+         */
+        get: operations["getLearnerProgress"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/courses/{course_id}/status": {
         parameters: {
             query?: never;
@@ -670,11 +711,19 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Remove an enrollment. */
+        /**
+         * Remove an enrollment. An Observer enrollment's own links go with it, and when the user keeps
+         *     no other enrollment in the course whose role holds `course.participate`, so do the Observer
+         *     links that name them. A user with no other such enrollment and progress in the course keeps
+         *     their enrollment: conclude it instead (409 `enrollment.has_progress`).
+         */
         delete: operations["deleteEnrollment"];
         options?: never;
         head?: never;
-        /** Conclude or reactivate an enrollment. Its current status changes nothing. */
+        /**
+         * Conclude or reactivate an enrollment, or replace the learners an Observer enrollment
+         *     observes. A change naming only current values changes nothing.
+         */
         patch: operations["updateEnrollment"];
         trace?: never;
     };
@@ -2295,6 +2344,11 @@ export interface components {
             external_id: string | null;
             /** Format: uuid */
             id: string;
+            /**
+             * @description The learners this enrollment observes, sorted by id: present when its role holds
+             *     `progress.view_observed` (an Observer), absent otherwise.
+             */
+            observed_user_ids?: string[];
             /** Format: uuid */
             role_id: string;
             source: components["schemas"]["EnrollmentSource"];
@@ -2319,9 +2373,16 @@ export interface components {
              */
             url: string;
         };
-        /** @description The status to give an enrollment. */
+        /** @description A change to an enrollment; an absent member keeps its value. */
         EnrollmentPatch: {
-            status: components["schemas"]["EnrollmentStatus"];
+            /**
+             * @description The whole new list of learners the enrollment observes, for a role holding
+             *     `progress.view_observed`: 1 to 100 distinct learners of the course. Needs `progress.view`
+             *     at the course.
+             */
+            observed_user_ids?: string[];
+            /** @description Reactivating an enrollment that observes learners needs `progress.view` at the course. */
+            status?: components["schemas"]["EnrollmentStatus"];
         };
         /** @description A right password whose account must set up TOTP first: no session exists yet. Shown once. */
         EnrollmentRequired: {
@@ -2573,6 +2634,32 @@ export interface components {
             state: components["schemas"]["ProgressState"];
         };
         /**
+         * @description One learner of a course and their progress. `modules` lists the modules the learner
+         *     completed an item of, in course order; without `course.view_all` at the course, published
+         *     modules only.
+         */
+        LearnerProgress: {
+            course: null | components["schemas"]["CourseProgress"];
+            /**
+             * @description `active` when any of the learner's enrollments in the course that make them a learner
+             *     is, otherwise `concluded`.
+             */
+            enrollment_status: components["schemas"]["EnrollmentStatus"];
+            modules: components["schemas"]["ModuleProgress"][];
+            user: components["schemas"]["ProgressUser"];
+        };
+        /**
+         * @description One learner of a course with their progress on each item they took a step on, in course
+         *     order; without `course.view_all` at the course, published items in published modules only.
+         */
+        LearnerProgressDetail: {
+            course: null | components["schemas"]["CourseProgress"];
+            enrollment_status: components["schemas"]["EnrollmentStatus"];
+            items: components["schemas"]["ItemProgress"][];
+            modules: components["schemas"]["ModuleProgress"][];
+            user: components["schemas"]["ProgressUser"];
+        };
+        /**
          * @description A local sign-in method.
          * @enum {string}
          */
@@ -2777,6 +2864,23 @@ export interface components {
              */
             unlock_at?: string | null;
         };
+        /**
+         * @description A learner's roll-up for one module: its published items with a requirement, and how many of
+         *     them the learner completed.
+         */
+        ModuleProgress: {
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC: when the learner completed the module; null until then. Never cleared.
+             */
+            completed_at: string | null;
+            /** Format: int32 */
+            completed_count: number;
+            /** Format: uuid */
+            module_id: string;
+            /** Format: int32 */
+            required_count: number;
+        };
         /** @description One of the signed-in user's identities. */
         MyIdentity: {
             /**
@@ -2851,9 +2955,15 @@ export interface components {
         /** @description An enrollment to create, `active`. */
         NewEnrollmentBody: {
             /**
+             * @description The learners the enrollment observes: required, 1 to 100 distinct learners of the course
+             *     (users holding an enrollment there whose role has `course.participate`), when the role
+             *     holds `progress.view_observed`, and refused otherwise. Naming them needs `progress.view`
+             *     at the course.
+             */
+            observed_user_ids?: string[];
+            /**
              * Format: uuid
-             * @description A built-in role other than `manager` and `observer`, or a custom role of the
-             *     organization.
+             * @description A built-in role other than `manager`, or a custom role of the organization.
              */
             role_id: string;
             /** Format: uuid */
@@ -3547,6 +3657,11 @@ export interface components {
                 external_id: string | null;
                 /** Format: uuid */
                 id: string;
+                /**
+                 * @description The learners this enrollment observes, sorted by id: present when its role holds
+                 *     `progress.view_observed` (an Observer), absent otherwise.
+                 */
+                observed_user_ids?: string[];
                 /** Format: uuid */
                 role_id: string;
                 source: components["schemas"]["EnrollmentSource"];
@@ -3576,6 +3691,22 @@ export interface components {
                 /** @enum {string} */
                 kind: "file";
             })[];
+            /** @description Pass this as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
+        };
+        /** @description One page of a list. */
+        Page_LearnerProgress: {
+            /** @description The items, in the list's sort order. */
+            items: {
+                course: null | components["schemas"]["CourseProgress"];
+                /**
+                 * @description `active` when any of the learner's enrollments in the course that make them a learner
+                 *     is, otherwise `concluded`.
+                 */
+                enrollment_status: components["schemas"]["EnrollmentStatus"];
+                modules: components["schemas"]["ModuleProgress"][];
+                user: components["schemas"]["ProgressUser"];
+            }[];
             /** @description Pass this as `cursor` to get the next page; `null` on the last page. */
             next_cursor: string | null;
         };
@@ -3953,6 +4084,12 @@ export interface components {
         /** @description The body of a progress step. */
         ProgressStep: {
             action: components["schemas"]["ProgressAction"];
+        };
+        /** @description A learner as a progress list names them. */
+        ProgressUser: {
+            display_name: string;
+            /** Format: uuid */
+            id: string;
         };
         /** @description An `oidc` or `oauth2` provider of the organization. */
         Provider: {
@@ -4979,7 +5116,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `permission.denied`: you can see the course but do not hold `enrollment.manage` at a scope containing it. `permission.escalation`: the role has a catalog permission grantable at organization or account scope that you do not hold at the course. `auth.csrf_refused`: the request did not come from this site. */
+        /** @description `permission.denied`: you can see the course but do not hold `enrollment.manage` at a scope containing it. `permission.escalation`: the role has a catalog permission grantable at organization or account scope that you do not hold at the course, or the body names observed learners and you do not hold `progress.view` at the course. `auth.csrf_refused`: the request did not come from this site. */
         EnrollmentCreateForbidden: {
             headers: {
                 [name: string]: unknown;
@@ -4990,6 +5127,15 @@ export interface components {
         };
         /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `user.not_found`: no user of the organization has this id, or your `user.view` does not cover them (held at the organization, or at an account where they hold a role or an active enrollment). `role.not_found`: no built-in role and no custom role of the organization has this id. `org.not_found`: the request's organization cannot be determined. */
         EnrollmentCreateNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `enrollment.has_progress`: the user has no other enrollment in the course whose role holds `course.participate` and has progress there, which deleting would erase; conclude the enrollment instead. `enrollment.externally_managed`: an identity provider, the sync API, SCIM or a connector owns the enrollment. `role.unknown_builtin`: the enrollment's role is a built-in role of another Stepclimb release. */
+        EnrollmentDeleteConflict: {
             headers: {
                 [name: string]: unknown;
             };
@@ -5069,7 +5215,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `permission.denied`: you can see the enrollment's course but do not hold `enrollment.manage` at a scope containing it. `permission.escalation`: the enrollment's role has a catalog permission grantable at organization or account scope that you do not hold at the course. `auth.csrf_refused`: the request did not come from this site. */
+        /** @description `permission.denied`: you can see the enrollment's course but do not hold `enrollment.manage` at a scope containing it. `permission.escalation`: the enrollment's role has a catalog permission grantable at organization or account scope that you do not hold at the course, or the change names observed learners or reactivates an enrollment that observes learners and you do not hold `progress.view` at the course. `auth.csrf_refused`: the request did not come from this site. */
         EnrollmentWriteForbidden: {
             headers: {
                 [name: string]: unknown;
@@ -5224,6 +5370,33 @@ export interface components {
         };
         /** @description `course.archived`: the course is archived and takes no content change. */
         ItemWriteConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: you do not hold `progress.view` at the course, nor `progress.view_observed` through an active enrollment in it. */
+        LearnerProgressForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined. */
+        LearnerProgressListNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `progress.not_found`: the user is not a learner of the course (no enrollment there, active or concluded, whose role holds `course.participate`), or you read only the learners you observe and do not observe them. `org.not_found`: the request's organization cannot be determined. */
+        LearnerProgressNotFound: {
             headers: {
                 [name: string]: unknown;
             };
@@ -8120,6 +8293,73 @@ export interface operations {
             503: components["responses"]["NoOrganization"];
         };
     };
+    listCourseProgress: {
+        parameters: {
+            query?: {
+                /** @description Only learners whose enrollment status is this. */
+                status?: components["schemas"]["EnrollmentStatus"];
+                /** @description The `next_cursor` of the previous page; omit it for the first page. */
+                cursor?: string;
+                /** @description How many items to return, 1 to 200; 50 when omitted. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The course's id. */
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of learners */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_LearnerProgress"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["LearnerProgressForbidden"];
+            404: components["responses"]["LearnerProgressListNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    getLearnerProgress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The course's id. */
+                course_id: string;
+                /** @description The learner's user id. */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The learner's progress */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LearnerProgressDetail"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["LearnerProgressForbidden"];
+            404: components["responses"]["LearnerProgressNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
     setCourseStatus: {
         parameters: {
             query?: never;
@@ -8257,7 +8497,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["EnrollmentWriteForbidden"];
             404: components["responses"]["EnrollmentNotFound"];
-            409: components["responses"]["EnrollmentWriteConflict"];
+            409: components["responses"]["EnrollmentDeleteConflict"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };

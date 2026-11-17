@@ -254,6 +254,7 @@ impl Fixture {
                 role_id: role,
                 source: Source::Local,
                 external_id: None,
+                observed_user_ids: Vec::new(),
             };
             enrollments::create(
                 &self.pool,

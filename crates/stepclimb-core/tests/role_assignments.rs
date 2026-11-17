@@ -467,6 +467,7 @@ async fn grants_carry_the_scope_path_and_builtin_permissions_from_code(pool: PgP
             "course.content_edit",
             "enrollment.view",
             "enrollment.manage",
+            "progress.view",
         ]
     );
     assert_eq!(

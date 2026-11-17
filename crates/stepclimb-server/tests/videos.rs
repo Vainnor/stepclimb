@@ -1459,6 +1459,7 @@ async fn an_enrolled_student_is_refused_every_upload_and_video_route(pool: PgPoo
         role_id: student_role,
         source: Source::Local,
         external_id: None,
+        observed_user_ids: Vec::new(),
     };
     enrollments::create(
         &f.pool,

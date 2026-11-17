@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM enrollment_observees\n             WHERE org_id = $1 AND course_id = $2 AND user_id = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5a257af70a2ada7a6cf402c96eff876d1f2b08cdc2ed36e2e56e1b0a883cd5f3"
+}

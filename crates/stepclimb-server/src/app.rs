@@ -311,6 +311,14 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
             post(progress::record_item_progress),
         ),
         (
+            "/api/v1/courses/{course_id}/progress",
+            get(progress::list_course_progress),
+        ),
+        (
+            "/api/v1/courses/{course_id}/progress/{user_id}",
+            get(progress::get_learner_progress),
+        ),
+        (
             "/api/v1/courses/{course_id}/copy",
             post(courses::copy_course),
         ),

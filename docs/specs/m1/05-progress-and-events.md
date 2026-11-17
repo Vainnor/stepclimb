@@ -126,6 +126,18 @@ enrolled to observe.
   through M4's per-user data deletion. Deleting writes no event. The `enrollment.delete` audit entry
   gains the count of rows removed per table. Each later spec that adds learner data for a course
   adds its table to this list and to T12, in the issue named above.
+
+  **Waiting on 14 I4 (#310).** Until 14 I4 archives live progress before deleting it, nothing
+  deletes live progress. Under the course lock, before any delete: when no other active or
+  concluded enrollment of the user in the course has `course.participate`, and the user has any
+  `item_progress`, `module_progress` or `course_progress` row in the course, the delete answers
+  409 `enrollment.has_progress` and changes nothing; the enrollment is concluded instead (Q8's
+  "history kept"). The check does not look at the deleted enrollment's role, so deleting a staff
+  or Observer enrollment of a former learner (whose learner role lost `course.participate`) is
+  refused the same way. B15's link deletion stands. 14 I4 lifts this 409 when it adds the
+  archive. M4's sync and SCIM enrollment removal must conclude the enrollment rather than delete
+  it, so an outside system never erases learner history (coordinator decision, overnight,
+  2026-11-17).
 - **B16.** Deleting an item that has any `item_progress` row answers 409 `item.has_progress`
   (`03` B9); the check and the delete run under the course lock.
 
@@ -176,7 +188,8 @@ roles holding `progress.view_observed`).
 
 Changed: the reads of `03` (outline, module, item) and `GET /api/v1/courses/{course_id}` add the
 caller's own progress (B13); `DELETE /api/v1/items/{item_id}` adds 409 `item.has_progress`;
-`DELETE /api/v1/enrollments/{enrollment_id}` removes progress (B15).
+`DELETE /api/v1/enrollments/{enrollment_id}` removes Observer links and, until 14 I4, answers 409
+`enrollment.has_progress` rather than remove progress (B15).
 
 Schemas: `ItemProgress { item_id, state: "started" | "completed", started_at, completed_at }`;
 `ModuleProgress { module_id, required_count, completed_count, completed_at }`;
@@ -272,10 +285,15 @@ CREATE INDEX enrollment_observees_by_user ON enrollment_observees (org_id, cours
 
 The repository checks that `course_id` is the enrollment's course and that each user is a learner
 of it (B17); deleting a learner's enrollment deletes their rows here when they have no other
-learner enrollment in the course (B20).
+learner enrollment in the course (B20). As built (I3), the table references `enrollments
+(org_id, course_id, id)` rather than `enrollments (id)` (Decisions made building I3).
+`enrollment_observees.user_id` references `users` with `NO ACTION`, so M4's per-user data
+deletion must delete the user's rows here (both as an observed learner and through their
+Observer enrollments) before it deletes the user; it belongs on that deletion's list.
 
 Repository functions (each takes `OrgScope`): `progress::{record_step, complete_item,
-for_learner_in_course, list_for_course, recompute_course, delete_for_enrollment}`. Job kind
+for_learner_in_course, list_for_course, learner_in_course, recompute_course}`; 14 I4 adds the
+archive-then-delete of live progress that B15 describes. Job kind
 `progress.recompute_course` on the `default` queue.
 
 ## Permissions
@@ -317,13 +335,17 @@ Database tests use `#[sqlx::test]` and a `ManualClock`; route tests use the perm
   progress never appears in it.
 - **T11** (B14). An Instructor lists both learners' progress; `?status=concluded` lists the
   concluded one only; a user with no enrollment answers 404 `progress.not_found`.
-- **T12** (B15). Deleting a Student enrollment removes that learner's progress rows for the course
-  (and, as 09 I2 adds them, video progress and watch reports) and leaves their rows in another
-  course, their assignment rows and timeline, and (as 14 I1 and I4 add them) their completions and
-  archives, with one `enrollment_deleted` archive of the removed rows; it removes the Observer links
-  that named them; with a second participating enrollment in the course, no learner data is removed.
-  Deleting an Observer enrollment removes its links only. The audit entry records the counts.
-  Mutation: skipping the delete turns the test red.
+- **T12** (B15). Waiting on 14 I4 (#310); until then: deleting the enrollment of a Student with
+  progress in the course answers 409 `enrollment.has_progress` and changes no row; so does
+  deleting the staff enrollment of a former learner whose learner role lost
+  `course.participate`. Deleting a Student without progress removes the enrollment and the
+  Observer links that named them; with a second participating enrollment in the course, the
+  links and progress stay. Deleting an Observer enrollment removes its links only. The audit
+  entry records the links removed. Mutation: dropping the 409 check turns the test red. From
+  14 I4: deleting a Student enrollment with progress archives and then removes that learner's
+  progress rows for the course (and, as 09 I2 adds them, video progress and watch reports) and
+  leaves their rows in another course, their assignment rows and timeline, and their
+  completions and archives, with one `enrollment_deleted` archive of the removed rows.
 - **T13** (B16). Deleting an item with one learner's `started` row answers 409
   `item.has_progress`.
 - **T14** (every route). Four cases: anonymous 401; every permission but the route's at the course
@@ -346,8 +368,10 @@ Database tests use `#[sqlx::test]` and a `ManualClock`; route tests use the perm
   `permission.escalation`; `observed_user_ids` on a Student enrollment answers 422.
 - **T17** (B18, B20). The Observer lists progress and sees exactly the two named Students; the
   detail of a third Student answers 404 `progress.not_found`; posting progress answers 403; after
-  the Observer enrollment is concluded, the list answers 403 `permission.denied`. Mutation:
-  dropping the observed-learner filter turns the test red.
+  the Observer enrollment is concluded, the list answers 404 `course.not_found` (a concluded
+  enrollment grants nothing, so the course is not visible), and 403 `permission.denied` once
+  another enrollment gives the same user `course.view` alone. Mutation: dropping the
+  observed-learner filter turns the test red.
 - **T18** (B20). Deleting a named Student's enrollment removes them from the Observer's list.
 
 ## Out of scope
@@ -440,6 +464,63 @@ Coordinator decisions (overnight, 2026-11-17), pending owner review.
 - **Two steps of one learner on one item.** The second `mark_done` waits on the learner's
   `course_progress` row, then finds the item completed and returns it with no event; a test runs
   the two on two connections.
+
+### Decisions made building I3
+
+Coordinator decision (overnight, 2026-11-17), each pending owner review.
+
+- **Who is a learner in the staff reads.** A user holding an enrollment in the course, active
+  or concluded, whose role has `course.participate`. `enrollment_status` is `active` when any
+  such enrollment is and `concluded` otherwise, and `?status` filters on it. The detail route
+  answers 404 `progress.not_found` for anyone else (no enrollment, a staff-only enrollment, a
+  user of another organization) and for a learner an Observer does not observe.
+- **The order of B20's checks.** The extractor checks `course.view` at the course (404
+  `course.not_found` when the course is not visible, or is a draft or a template and the caller
+  lacks `course.view_all`). The handler then reads every learner with `progress.view`, the
+  observed learners with `progress.view_observed`, and answers 403 `permission.denied`
+  otherwise, before it looks at the user in the path. A concluded Observer enrollment grants
+  nothing, so its course answers 404 rather than 403 (T17 now says so).
+- **Which links an Observer reads.** The learners named by the caller's active enrollments in
+  the course whose role holds `progress.view_observed` at the time of the read. A link on a
+  concluded enrollment, or on one whose custom role lost the permission, names no one.
+- **Unpublished content stays out of the reads.** A caller without `course.view_all` at the
+  course (an Observer, a custom `progress.view` role) gets module rows of published modules and
+  item rows of published items in published modules only; `course.view_all` reads every row.
+  The course counts already cover published content only (B6).
+- **The observed list's rules.** On a role holding `progress.view_observed` the list is
+  required on create and holds 1 to 100 distinct learners; on any other role it is refused, on
+  create and on `PATCH`. Every refusal is 422 `request.invalid` with
+  `enrollment.observed_invalid`: at `/observed_user_ids` for the list as a whole (absent, empty,
+  over 100, or present on a role without the permission), at `/observed_user_ids/<i>` for a
+  repeat or a user who is not a learner of the course. On create, absence or presence is
+  checked beside Manager's 422, before the escalation rule; the learners themselves are checked
+  in the repository under the course lock.
+- **B19 on `PATCH`, and reactivation.** `PATCH /api/v1/enrollments/{enrollment_id}` takes
+  `status` and `observed_user_ids`, both optional (`null` is 400), and writes one
+  `enrollment.update` entry with the changed members. Naming learners needs `progress.view` at
+  the course, and so does reactivating an enrollment that has observer links, decided by the
+  link rows whatever its role holds now, since a role that regains `progress.view_observed`
+  makes stale links grant sight again (403 `permission.escalation`). Concluding does not.
+- **The table is tied to the enrollment's course.** `enrollment_observees` references
+  `enrollments (org_id, course_id, id)`, a unique constraint the migration adds, so a link's
+  course and organization are always its enrollment's.
+- **Audit data.** `enrollment.create` and `enrollment.delete` record `observed_user_ids` for an
+  Observer. `enrollment.delete` records `removed: { enrollment_observees }`, the links deleted;
+  14 I4 adds the progress tables it archives and removes.
+- **B15 as built.** No live progress is deleted before 14 I4: the last learner enrollment of a
+  user with progress answers 409 `enrollment.has_progress` (B15's note). Spec 09's
+  `video_progress` and `watch_reports` join that check when 09 I2 adds them.
+- **Concluded learners stay in an Observer's reads.** An Observer keeps reading a learner they
+  observe whose enrollment is concluded: their history is what the Observer is there to see.
+  Coordinator decision (overnight, 2026-11-17), pending owner review.
+- **Suspended users are left out of the reads.** The staff reads list no suspended user, and the
+  detail answers 404 `progress.not_found` for one. Their rows are kept. Coordinator decision
+  (overnight, 2026-11-17), pending owner review.
+- **The permission suite's per-grant entries.** The two staff routes have two entries each
+  (T14a). An entry may name permissions its 403 case also leaves out (`progress.view` for the
+  `progress.view_observed` entries), and a course-scope holder can be enrolled as an Observer of
+  the setup's learner. The 404 for `progress.view_observed` is an explicit test, since the
+  permission cannot be held at a sibling account.
 
 ## Issues
 

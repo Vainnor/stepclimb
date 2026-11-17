@@ -2,9 +2,10 @@
 //! Recording progress over the router, its outbox events and the learner's own progress in
 //! the course read (docs/specs/m1/05-progress-and-events.md B1 to B3, B10 to B13, B16; T1 to T3,
 //! T5, T9, T10 for `GET /api/v1/courses/{course_id}`, T13, and T14's explicit cases for
-//! `POST /api/v1/items/{item_id}/progress`). The repository's own cases (T4, T6, T7) are in
-//! `stepclimb-core`'s `tests/progress.rs`; the generated permission and cross-organization cases
-//! in `tests/permissions.rs`.
+//! `POST /api/v1/items/{item_id}/progress`), and the staff and Observer reads, Observer
+//! enrollments and enrollment deletion (B14, B15, B17 to B20; T11, T12, T14a, T15 to T18). The
+//! repository's own cases (T4, T6, T7) are in `stepclimb-core`'s `tests/progress.rs`; the
+//! generated permission and cross-organization cases in `tests/permissions.rs`.
 //!
 //! Every request names its organization with the `test-support` header, since tests hold two
 //! organizations. Needs `DATABASE_URL` (`just up`).
@@ -30,7 +31,8 @@ use stepclimb_core::{
     id::{Uuid, new_id},
     items::{self, ItemPatch, Kind, NewItem},
     modules::{self, ModulePatch, RulesPatch},
-    organizations, perm,
+    organizations,
+    perm::{self, Permission},
     role_assignments::{self, NewAssignment, Scope},
     roles::{self, NewRole},
     rules::Requirement,
@@ -97,6 +99,17 @@ impl Answer {
     fn ok(&self) -> &Value {
         assert_eq!(self.status, StatusCode::OK, "{self:?}");
         &self.body
+    }
+
+    #[track_caller]
+    fn ok_with(&self, status: StatusCode) -> &Value {
+        assert_eq!(self.status, status, "{self:?}");
+        &self.body
+    }
+
+    #[track_caller]
+    fn expect_status(&self, status: StatusCode) {
+        assert_eq!(self.status, status, "{self:?}");
     }
 }
 
@@ -275,6 +288,7 @@ impl Fixture {
             role_id: self.builtin(role).await,
             source: Source::Local,
             external_id: None,
+            observed_user_ids: Vec::new(),
         };
         let enrollment =
             enrollments::create(&self.pool, scope(org), course, &new, now(), Actor::Instance)
@@ -704,4 +718,1031 @@ async fn a_course_made_a_draft_before_the_transaction_reads_it_answers_404(pool:
         "{body}"
     );
     assert_eq!(f.rows(org.id).await, before, "nothing is written");
+}
+
+// Staff and Observer reads, Observer enrollments and enrollment deletion (I3: B14, B15, B17 to
+// B20; T11, T12, T14a, T15 to T18).
+
+fn list_uri(course: Uuid) -> String {
+    format!("/api/v1/courses/{course}/progress")
+}
+
+fn detail_uri(course: Uuid, user: Uuid) -> String {
+    format!("/api/v1/courses/{course}/progress/{user}")
+}
+
+/// The user ids of a progress page, in order.
+fn learners(page: &Value) -> Vec<Uuid> {
+    page["items"]
+        .as_array()
+        .expect("a page")
+        .iter()
+        .map(|l| {
+            l["user"]["id"]
+                .as_str()
+                .expect("an id")
+                .parse()
+                .expect("a UUID")
+        })
+        .collect()
+}
+
+fn sorted(mut ids: Vec<Uuid>) -> Vec<Uuid> {
+    ids.sort();
+    ids
+}
+
+impl Fixture {
+    async fn get(&self, org: Uuid, cookie: &str, uri: &str) -> Answer {
+        self.send(Method::GET, uri, org, cookie, None).await
+    }
+
+    /// A new custom role of exactly `keys`: its id.
+    async fn custom_role(&self, org: Uuid, keys: &[&str]) -> Uuid {
+        let role = NewRole {
+            key: format!("r{}", new_id().simple()),
+            name: "Course role".into(),
+            permissions: keys.iter().map(|&k| k.to_owned()).collect(),
+        };
+        roles::create_custom(&self.pool, scope(org), &role, now(), Actor::Instance)
+            .await
+            .expect("create role")
+            .id
+    }
+
+    /// `user` enrolled in `course` with `role` through the repository: the enrollment's id.
+    async fn enroll(&self, org: Uuid, course: Uuid, user: Uuid, role: Uuid) -> Uuid {
+        let new = enrollments::NewEnrollment {
+            user_id: user,
+            role_id: role,
+            source: Source::Local,
+            external_id: None,
+            observed_user_ids: Vec::new(),
+        };
+        enrollments::create(&self.pool, scope(org), course, &new, now(), Actor::Instance)
+            .await
+            .expect("enroll")
+            .id
+    }
+
+    /// A new user holding a custom role of exactly `keys`, enrolled in `course`: their cookie.
+    async fn enrolled_with(&self, org: Uuid, course: Uuid, keys: &[&str]) -> String {
+        let (cookie, user) = self.user(org).await;
+        let role = self.custom_role(org, keys).await;
+        self.enroll(org, course, user, role).await;
+        cookie
+    }
+
+    /// `POST` an Observer enrollment of a new user naming `observed`, as `admin`: the answer
+    /// and the Observer's cookie.
+    async fn enroll_observer(
+        &self,
+        org: Uuid,
+        admin: &str,
+        course: Uuid,
+        observed: Value,
+    ) -> (Answer, String) {
+        let (cookie, user) = self.user(org).await;
+        let body = json!({
+            "user_id": user,
+            "role_id": self.builtin("observer").await,
+            "observed_user_ids": observed,
+        });
+        let uri = format!("/api/v1/courses/{course}/enrollments");
+        let answer = self.send(Method::POST, &uri, org, admin, Some(body)).await;
+        (answer, cookie)
+    }
+
+    /// The learner progress rows of `user` in `course`, as text.
+    async fn progress_of(&self, user: Uuid, course: Uuid) -> Vec<String> {
+        sqlx::query_scalar(
+            "SELECT to_jsonb(p)::text FROM item_progress p WHERE user_id = $1 AND course_id = $2
+             UNION ALL SELECT to_jsonb(m)::text FROM module_progress m
+                       WHERE user_id = $1 AND course_id = $2
+             UNION ALL SELECT to_jsonb(c)::text FROM course_progress c
+                       WHERE user_id = $1 AND course_id = $2
+             ORDER BY 1",
+        )
+        .bind(user)
+        .bind(course)
+        .fetch_all(&self.pool)
+        .await
+        .expect("read rows")
+    }
+
+    async fn observee_links(&self, org: Uuid) -> Vec<(Uuid, Uuid)> {
+        sqlx::query_as(
+            "SELECT enrollment_id, user_id FROM enrollment_observees WHERE org_id = $1
+             ORDER BY 1, 2",
+        )
+        .bind(org)
+        .fetch_all(&self.pool)
+        .await
+        .expect("read links")
+    }
+
+    async fn audit_data(&self, org: Uuid, action: &str) -> Vec<Value> {
+        sqlx::query_scalar(
+            "SELECT data FROM audit_events WHERE org_id = $1 AND action = $2 ORDER BY id",
+        )
+        .bind(org)
+        .bind(action)
+        .fetch_all(&self.pool)
+        .await
+        .expect("read audit")
+    }
+}
+
+/// T11 (B14): an Instructor lists every learner with their progress, `?status` filters over
+/// their enrollment, the detail carries item rows, and a user who is not a learner answers 404
+/// `progress.not_found`. An Account admin of the course's account reads the same.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t11_staff_read_every_learner(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let org = f.org("a").await;
+    let item = f.link(org.id, org.module, Some(Requirement::View)).await;
+    let (instructor, instructor_id, _) = f.enrolled(org.id, org.course, "instructor").await;
+    let (one_cookie, one) = f.student(org.id, org.course).await;
+    let (_, two, two_enrollment) = f.enrolled(org.id, org.course, "student").await;
+    f.step(org.id, &one_cookie, item, "view").await.ok();
+    enrollments::set_status(
+        &f.pool,
+        scope(org.id),
+        two_enrollment,
+        enrollments::Status::Concluded,
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .expect("conclude");
+
+    let page = f.get(org.id, &instructor, &list_uri(org.course)).await;
+    let page = page.ok();
+    assert_eq!(learners(page), sorted(vec![one, two]));
+    assert_schema("LearnerProgress", &page["items"][0]);
+    let first = page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["user"]["id"] == one.to_string())
+        .unwrap();
+    assert_eq!(first["enrollment_status"], "active");
+    assert_eq!(first["user"]["display_name"], NAME);
+    assert_eq!(first["course"]["completed_count"], 1);
+    assert_eq!(first["modules"][0]["module_id"], org.module.to_string());
+    let uri = format!("{}?status=concluded", list_uri(org.course));
+    assert_eq!(learners(f.get(org.id, &instructor, &uri).await.ok()), [two]);
+    let uri = format!("{}?status=active", list_uri(org.course));
+    assert_eq!(learners(f.get(org.id, &instructor, &uri).await.ok()), [one]);
+
+    let detail = f
+        .get(org.id, &instructor, &detail_uri(org.course, one))
+        .await;
+    let detail = detail.ok();
+    assert_schema("LearnerProgressDetail", detail);
+    assert_eq!(detail["items"][0]["item_id"], item.to_string());
+    assert_eq!(detail["items"][0]["state"], "completed");
+    let detail = f
+        .get(org.id, &instructor, &detail_uri(org.course, two))
+        .await;
+    assert_eq!(detail.ok()["course"], Value::Null);
+    let (_, stranger) = f.user(org.id).await;
+    for user in [instructor_id, stranger, new_id()] {
+        f.get(org.id, &instructor, &detail_uri(org.course, user))
+            .await
+            .expect(StatusCode::NOT_FOUND, "progress.not_found");
+    }
+
+    let (admin, admin_id) = f.user(org.id).await;
+    let assignment = NewAssignment {
+        user_id: admin_id,
+        role_id: f.builtin("account_admin").await,
+        scope: Scope::Account(org.tower),
+        source: Source::Local,
+        external_id: None,
+    };
+    role_assignments::create(&f.pool, scope(org.id), &assignment, now(), Actor::Instance)
+        .await
+        .expect("assign");
+    let page = f.get(org.id, &admin, &list_uri(org.course)).await;
+    assert_eq!(learners(page.ok()), sorted(vec![one, two]));
+}
+
+/// T14a (B20): a Student (holding `course.view` and `course.participate`), a holder of only
+/// `course.view`, and a Course designer get 403 `permission.denied` on both staff routes.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t14a_learners_and_viewers_are_refused_staff_reads(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let org = f.org("a").await;
+    let (student, student_id) = f.student(org.id, org.course).await;
+    let viewer = f
+        .enrolled_with(org.id, org.course, &[perm::CourseView::KEY])
+        .await;
+    let (designer, _, _) = f.enrolled(org.id, org.course, "course_designer").await;
+    for cookie in [&student, &viewer, &designer] {
+        for uri in [list_uri(org.course), detail_uri(org.course, student_id)] {
+            f.get(org.id, cookie, &uri)
+                .await
+                .expect(StatusCode::FORBIDDEN, "permission.denied");
+        }
+    }
+}
+
+/// T16 (B17, B19): enrolling an Observer names learners of the course; the list's rules, the
+/// `progress.view` check on naming and the Student refusal.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t16_observer_enrollments_name_learners(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let org = f.org("a").await;
+    let admin = f.holder_of_everything(org.id, Scope::Organization).await;
+    let (_, one) = f.student(org.id, org.course).await;
+    let (_, two) = f.student(org.id, org.course).await;
+    let (_, outsider) = f.user(org.id).await;
+
+    let (created, _) = f
+        .enroll_observer(org.id, &admin, org.course, json!([two, one]))
+        .await;
+    let body = created.ok_with(StatusCode::CREATED);
+    assert_eq!(body["observed_user_ids"], json!(sorted(vec![one, two])));
+    assert_schema("Enrollment", body);
+    let created_audit = f.audit_data(org.id, "enrollment.create").await;
+    assert_eq!(
+        created_audit.last().unwrap()["after"]["observed_user_ids"],
+        json!(sorted(vec![one, two]))
+    );
+
+    let invalid = |answer: Answer, field: &str| {
+        answer.expect(StatusCode::UNPROCESSABLE_ENTITY, "request.invalid");
+        assert_eq!(answer.body["errors"][0]["field"], field, "{answer:?}");
+        assert_eq!(
+            answer.body["errors"][0]["code"], "enrollment.observed_invalid",
+            "{answer:?}"
+        );
+    };
+    let (answer, _) = f
+        .enroll_observer(org.id, &admin, org.course, json!([one, outsider]))
+        .await;
+    invalid(answer, "/observed_user_ids/1");
+    let (answer, _) = f
+        .enroll_observer(org.id, &admin, org.course, json!([one, one]))
+        .await;
+    invalid(answer, "/observed_user_ids/1");
+    let (answer, _) = f
+        .enroll_observer(org.id, &admin, org.course, json!([]))
+        .await;
+    invalid(answer, "/observed_user_ids");
+    let many: Vec<Uuid> = (0..101).map(|_| one).collect();
+    let (answer, _) = f
+        .enroll_observer(org.id, &admin, org.course, json!(many))
+        .await;
+    invalid(answer, "/observed_user_ids");
+    // An Observer without the list, and a Student with one.
+    let (_, user) = f.user(org.id).await;
+    let uri = format!("/api/v1/courses/{}/enrollments", org.course);
+    let observer = json!({ "user_id": user, "role_id": f.builtin("observer").await });
+    invalid(
+        f.send(Method::POST, &uri, org.id, &admin, Some(observer))
+            .await,
+        "/observed_user_ids",
+    );
+    let student = json!({
+        "user_id": user,
+        "role_id": f.builtin("student").await,
+        "observed_user_ids": [one],
+    });
+    invalid(
+        f.send(Method::POST, &uri, org.id, &admin, Some(student))
+            .await,
+        "/observed_user_ids",
+    );
+
+    // `enrollment.manage` without `progress.view`: naming learners is an escalation (B19).
+    let (manager, manager_id) = f.user(org.id).await;
+    let role = NewRole {
+        key: format!("r{}", new_id().simple()),
+        name: "Enroller".into(),
+        permissions: vec![
+            perm::EnrollmentManage::KEY.to_owned(),
+            perm::UserView::KEY.to_owned(),
+            perm::CourseView::KEY.to_owned(),
+        ],
+    };
+    let role = roles::create_custom(&f.pool, scope(org.id), &role, now(), Actor::Instance)
+        .await
+        .expect("create role")
+        .id;
+    // At the organization, so its `user.view` covers the new Observer (spec 02 B17).
+    let assignment = NewAssignment {
+        user_id: manager_id,
+        role_id: role,
+        scope: Scope::Organization,
+        source: Source::Local,
+        external_id: None,
+    };
+    role_assignments::create(&f.pool, scope(org.id), &assignment, now(), Actor::Instance)
+        .await
+        .expect("assign");
+    let before = f.observee_links(org.id).await;
+    let (answer, _) = f
+        .enroll_observer(org.id, &manager, org.course, json!([one]))
+        .await;
+    answer.expect(StatusCode::FORBIDDEN, "permission.escalation");
+    assert_eq!(f.observee_links(org.id).await, before);
+    // The same caller still enrolls a Student.
+    let (_, three) = f.user(org.id).await;
+    let student = json!({ "user_id": three, "role_id": f.builtin("student").await });
+    f.send(Method::POST, &uri, org.id, &manager, Some(student))
+        .await
+        .ok_with(StatusCode::CREATED);
+}
+
+/// B17, B19 on `PATCH`: the list is replaced whole; naming learners or reactivating an Observer
+/// needs `progress.view`; a Student enrollment takes no list.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn observed_learners_are_replaced_by_patch(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let org = f.org("a").await;
+    let admin = f.holder_of_everything(org.id, Scope::Organization).await;
+    let (_, one) = f.student(org.id, org.course).await;
+    let (_, three, three_enrollment) = f.enrolled(org.id, org.course, "student").await;
+    let (created, observer) = f
+        .enroll_observer(org.id, &admin, org.course, json!([one]))
+        .await;
+    let observer_enrollment = created.body["id"].as_str().unwrap().to_owned();
+    let uri = format!("/api/v1/enrollments/{observer_enrollment}");
+
+    let patched = f
+        .send(
+            Method::PATCH,
+            &uri,
+            org.id,
+            &admin,
+            Some(json!({ "observed_user_ids": [three] })),
+        )
+        .await;
+    assert_eq!(patched.ok()["observed_user_ids"], json!([three]));
+    let audit = f.audit_data(org.id, "enrollment.update").await;
+    assert_eq!(
+        audit.last().unwrap(),
+        &json!({
+            "before": { "observed_user_ids": [one] },
+            "after": { "observed_user_ids": [three] },
+        })
+    );
+    let page = f.get(org.id, &observer, &list_uri(org.course)).await;
+    assert_eq!(learners(page.ok()), [three]);
+    // The same list again writes nothing.
+    let count = audit.len();
+    f.send(
+        Method::PATCH,
+        &uri,
+        org.id,
+        &admin,
+        Some(json!({ "observed_user_ids": [three] })),
+    )
+    .await
+    .ok();
+    assert_eq!(f.audit_data(org.id, "enrollment.update").await.len(), count);
+
+    let student_uri = format!("/api/v1/enrollments/{three_enrollment}");
+    let answer = f
+        .send(
+            Method::PATCH,
+            &student_uri,
+            org.id,
+            &admin,
+            Some(json!({ "observed_user_ids": [one] })),
+        )
+        .await;
+    answer.expect(StatusCode::UNPROCESSABLE_ENTITY, "request.invalid");
+    assert_eq!(answer.body["errors"][0]["field"], "/observed_user_ids");
+
+    // A holder of `enrollment.manage` without `progress.view` at the course concludes the
+    // Observer, but neither reactivates it nor names learners.
+    let manager = f
+        .enrolled_with(
+            org.id,
+            org.course,
+            &[perm::CourseView::KEY, perm::EnrollmentManage::KEY],
+        )
+        .await;
+    for body in [json!({ "observed_user_ids": [one] })] {
+        f.send(Method::PATCH, &uri, org.id, &manager, Some(body))
+            .await
+            .expect(StatusCode::FORBIDDEN, "permission.escalation");
+    }
+    let concluded = f
+        .send(
+            Method::PATCH,
+            &uri,
+            org.id,
+            &manager,
+            Some(json!({ "status": "concluded" })),
+        )
+        .await;
+    assert_eq!(concluded.ok()["status"], "concluded");
+    f.send(
+        Method::PATCH,
+        &uri,
+        org.id,
+        &manager,
+        Some(json!({ "status": "active" })),
+    )
+    .await
+    .expect(StatusCode::FORBIDDEN, "permission.escalation");
+    let reactivated = f
+        .send(
+            Method::PATCH,
+            &uri,
+            org.id,
+            &admin,
+            Some(json!({ "status": "active" })),
+        )
+        .await;
+    assert_eq!(reactivated.ok()["status"], "active");
+    f.send(
+        Method::PATCH,
+        &uri,
+        org.id,
+        &admin,
+        Some(json!({ "status": null })),
+    )
+    .await
+    .expect(StatusCode::BAD_REQUEST, "request.malformed");
+}
+
+/// T17 (B18, B20): the Observer lists exactly the learners they observe and reads only their
+/// detail, records no progress, and reads nothing once the enrollment is concluded.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t17_an_observer_reads_only_the_learners_they_observe(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let org = f.org("a").await;
+    let item = f.link(org.id, org.module, Some(Requirement::View)).await;
+    let admin = f.holder_of_everything(org.id, Scope::Organization).await;
+    let (_, one) = f.student(org.id, org.course).await;
+    let (_, two) = f.student(org.id, org.course).await;
+    let (third_cookie, third) = f.student(org.id, org.course).await;
+    f.step(org.id, &third_cookie, item, "view").await.ok();
+    let (created, observer) = f
+        .enroll_observer(org.id, &admin, org.course, json!([one, two]))
+        .await;
+    let enrollment = created.ok_with(StatusCode::CREATED)["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let page = f.get(org.id, &observer, &list_uri(org.course)).await;
+    assert_eq!(learners(page.ok()), sorted(vec![one, two]));
+    f.get(org.id, &observer, &detail_uri(org.course, one))
+        .await
+        .ok();
+    f.get(org.id, &observer, &detail_uri(org.course, third))
+        .await
+        .expect(StatusCode::NOT_FOUND, "progress.not_found");
+    f.step(org.id, &observer, item, "view")
+        .await
+        .expect(StatusCode::FORBIDDEN, "permission.denied");
+
+    let uri = format!("/api/v1/enrollments/{enrollment}");
+    f.send(
+        Method::PATCH,
+        &uri,
+        org.id,
+        &admin,
+        Some(json!({ "status": "concluded" })),
+    )
+    .await
+    .ok();
+    // A concluded enrollment grants nothing: the published course is out of the Observer's
+    // sight altogether.
+    for uri in [list_uri(org.course), detail_uri(org.course, one)] {
+        f.get(org.id, &observer, &uri)
+            .await
+            .expect(StatusCode::NOT_FOUND, "course.not_found");
+    }
+    // Still holding `course.view` through another enrollment, they read no one's progress.
+    let observer_id: Uuid = created.body["user"]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let viewer_role = NewRole {
+        key: format!("r{}", new_id().simple()),
+        name: "Viewer".into(),
+        permissions: vec![perm::CourseView::KEY.to_owned()],
+    };
+    let viewer_role =
+        roles::create_custom(&f.pool, scope(org.id), &viewer_role, now(), Actor::Instance)
+            .await
+            .expect("create role")
+            .id;
+    let new = enrollments::NewEnrollment {
+        user_id: observer_id,
+        role_id: viewer_role,
+        source: Source::Local,
+        external_id: None,
+        observed_user_ids: Vec::new(),
+    };
+    enrollments::create(
+        &f.pool,
+        scope(org.id),
+        org.course,
+        &new,
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .expect("enroll");
+    f.get(org.id, &observer, &list_uri(org.course))
+        .await
+        .expect(StatusCode::FORBIDDEN, "permission.denied");
+}
+
+/// Without `course.view_all` a staff read leaves out unpublished modules and items; with it,
+/// they are read.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn staff_reads_show_unpublished_content_only_to_view_all(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let org = f.org("a").await;
+    let item = f.link(org.id, org.module, Some(Requirement::View)).await;
+    let admin = f.holder_of_everything(org.id, Scope::Organization).await;
+    let (student, one) = f.student(org.id, org.course).await;
+    f.step(org.id, &student, item, "view").await.ok();
+    let (_, observer) = f
+        .enroll_observer(org.id, &admin, org.course, json!([one]))
+        .await;
+    let reader = f
+        .enrolled_with(
+            org.id,
+            org.course,
+            &[perm::CourseView::KEY, perm::ProgressView::KEY],
+        )
+        .await;
+    let (instructor, _, _) = f.enrolled(org.id, org.course, "instructor").await;
+    let unpublish = ItemPatch {
+        published: Some(false),
+        ..ItemPatch::default()
+    };
+    items::update(&f.pool, scope(org.id), item, &unpublish, now())
+        .await
+        .expect("unpublish item");
+    for cookie in [&observer, &reader] {
+        let detail = f.get(org.id, cookie, &detail_uri(org.course, one)).await;
+        assert_eq!(detail.ok()["items"], json!([]), "{detail:?}");
+    }
+    let detail = f
+        .get(org.id, &instructor, &detail_uri(org.course, one))
+        .await;
+    assert_eq!(detail.ok()["items"][0]["item_id"], item.to_string());
+
+    let unpublish = ModulePatch {
+        published: Some(false),
+        ..ModulePatch::default()
+    };
+    modules::update(&f.pool, scope(org.id), org.module, &unpublish, now())
+        .await
+        .expect("unpublish module");
+    for cookie in [&observer, &reader] {
+        let page = f.get(org.id, cookie, &list_uri(org.course)).await;
+        assert_eq!(page.ok()["items"][0]["modules"], json!([]), "{page:?}");
+        let detail = f.get(org.id, cookie, &detail_uri(org.course, one)).await;
+        assert_eq!(detail.ok()["modules"], json!([]), "{detail:?}");
+    }
+    let page = f.get(org.id, &instructor, &list_uri(org.course)).await;
+    assert_eq!(
+        page.ok()["items"][0]["modules"][0]["module_id"],
+        org.module.to_string()
+    );
+}
+
+/// T12, T18 (B15, B20; owner decision of 2026-11-16, deleting an enrollment keeps history):
+/// until spec 14 I4 archives progress first, the last learner enrollment of a user with
+/// progress in the course answers 409 `enrollment.has_progress` and changes nothing, whatever
+/// the deleted enrollment's role. A learner without progress is deleted with the Observer
+/// links naming them, and leaves the Observer's list; a second participating enrollment keeps
+/// the links; an Observer enrollment takes its own links.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t12_t18_deleting_an_enrollment_keeps_learner_history(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let org = f.org("a").await;
+    let item = f.link(org.id, org.module, Some(Requirement::View)).await;
+    let admin = f.holder_of_everything(org.id, Scope::Organization).await;
+    let delete = |id: Uuid| format!("/api/v1/enrollments/{id}");
+
+    // A Student with progress: 409, and nothing changes.
+    let (one_cookie, one, one_enrollment) = f.enrolled(org.id, org.course, "student").await;
+    f.step(org.id, &one_cookie, item, "view").await.ok();
+    let (_, three, three_enrollment) = f.enrolled(org.id, org.course, "student").await;
+    let (created, observer) = f
+        .enroll_observer(org.id, &admin, org.course, json!([one, three]))
+        .await;
+    let observer_enrollment: Uuid = created.body["id"].as_str().unwrap().parse().unwrap();
+    let before = (
+        f.rows(org.id).await,
+        f.observee_links(org.id).await,
+        f.audit_data(org.id, "enrollment.delete").await,
+    );
+    let refused = f
+        .send(
+            Method::DELETE,
+            &delete(one_enrollment),
+            org.id,
+            &admin,
+            None,
+        )
+        .await;
+    refused.expect(StatusCode::CONFLICT, "enrollment.has_progress");
+    assert!(
+        refused.body["detail"]
+            .as_str()
+            .unwrap()
+            .contains("Conclude the enrollment"),
+        "{refused:?}"
+    );
+    let after = (
+        f.rows(org.id).await,
+        f.observee_links(org.id).await,
+        f.audit_data(org.id, "enrollment.delete").await,
+    );
+    assert_eq!(after, before);
+    assert_eq!(f.progress_of(one, org.course).await.len(), 3);
+    let still: i64 = sqlx::query_scalar("SELECT count(*) FROM enrollments WHERE id = $1")
+        .bind(one_enrollment)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(still, 1);
+
+    // A former learner, whose learner role lost `course.participate`: deleting their staff
+    // enrollment is refused too, since their progress is all that is left of their record.
+    let (two_cookie, two) = f.user(org.id).await;
+    let learner = f
+        .custom_role(
+            org.id,
+            &[perm::CourseView::KEY, perm::CourseParticipate::KEY],
+        )
+        .await;
+    let assistant = f.custom_role(org.id, &[perm::CourseView::KEY]).await;
+    f.enroll(org.id, org.course, two, learner).await;
+    let staff = f.enroll(org.id, org.course, two, assistant).await;
+    f.step(org.id, &two_cookie, item, "view").await.ok();
+    let patch = roles::RolePatch {
+        name: None,
+        permissions: Some(vec![perm::CourseView::KEY.to_owned()]),
+    };
+    roles::update_custom(
+        &f.pool,
+        scope(org.id),
+        learner,
+        &patch,
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .expect("drop course.participate");
+    f.send(Method::DELETE, &delete(staff), org.id, &admin, None)
+        .await
+        .expect(StatusCode::CONFLICT, "enrollment.has_progress");
+    assert_eq!(f.progress_of(two, org.course).await.len(), 3);
+
+    // A Student without progress is deleted with the links naming them.
+    f.send(
+        Method::DELETE,
+        &delete(three_enrollment),
+        org.id,
+        &admin,
+        None,
+    )
+    .await
+    .expect_status(StatusCode::NO_CONTENT);
+    assert_eq!(f.observee_links(org.id).await, [(observer_enrollment, one)]);
+    let audit = f.audit_data(org.id, "enrollment.delete").await;
+    assert_eq!(
+        audit.last().unwrap()["removed"],
+        json!({ "enrollment_observees": 1 })
+    );
+    let page = f.get(org.id, &observer, &list_uri(org.course)).await;
+    assert_eq!(learners(page.ok()), [one]);
+
+    // With a second participating enrollment, the user stays a learner: the delete goes ahead
+    // and keeps their progress and the links naming them.
+    let participant = f.custom_role(org.id, &[perm::CourseParticipate::KEY]).await;
+    let second = f.enroll(org.id, org.course, one, participant).await;
+    f.send(Method::DELETE, &delete(second), org.id, &admin, None)
+        .await
+        .expect_status(StatusCode::NO_CONTENT);
+    assert_eq!(f.progress_of(one, org.course).await.len(), 3);
+    assert_eq!(f.observee_links(org.id).await, [(observer_enrollment, one)]);
+
+    // An Observer enrollment takes its own links and nothing else.
+    f.send(
+        Method::DELETE,
+        &delete(observer_enrollment),
+        org.id,
+        &admin,
+        None,
+    )
+    .await
+    .expect_status(StatusCode::NO_CONTENT);
+    assert_eq!(f.observee_links(org.id).await, []);
+    assert_eq!(f.progress_of(one, org.course).await.len(), 3);
+    let audit = f.audit_data(org.id, "enrollment.delete").await;
+    assert_eq!(
+        audit.last().unwrap()["removed"],
+        json!({ "enrollment_observees": 1 })
+    );
+}
+
+/// Spec 05 B19: reactivating an enrollment that still has observer links needs
+/// `progress.view`, even once its role no longer holds `progress.view_observed`, since the role
+/// can get the permission back and the links would grant sight again.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn reactivating_an_enrollment_with_stale_links_needs_progress_view(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let org = f.org("a").await;
+    let admin = f.holder_of_everything(org.id, Scope::Organization).await;
+    let (_, one) = f.student(org.id, org.course).await;
+    let (_, mentor) = f.user(org.id).await;
+    let role = f
+        .custom_role(
+            org.id,
+            &[perm::CourseView::KEY, perm::ProgressViewObserved::KEY],
+        )
+        .await;
+    let new = enrollments::NewEnrollment {
+        user_id: mentor,
+        role_id: role,
+        source: Source::Local,
+        external_id: None,
+        observed_user_ids: vec![one],
+    };
+    let enrollment = enrollments::create(
+        &f.pool,
+        scope(org.id),
+        org.course,
+        &new,
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .expect("enroll the mentor")
+    .id;
+    let uri = format!("/api/v1/enrollments/{enrollment}");
+    f.send(
+        Method::PATCH,
+        &uri,
+        org.id,
+        &admin,
+        Some(json!({ "status": "concluded" })),
+    )
+    .await
+    .ok();
+    let patch = roles::RolePatch {
+        name: None,
+        permissions: Some(vec![perm::CourseView::KEY.to_owned()]),
+    };
+    roles::update_custom(&f.pool, scope(org.id), role, &patch, now(), Actor::Instance)
+        .await
+        .expect("drop progress.view_observed");
+    let manager = f
+        .enrolled_with(
+            org.id,
+            org.course,
+            &[perm::CourseView::KEY, perm::EnrollmentManage::KEY],
+        )
+        .await;
+    f.send(
+        Method::PATCH,
+        &uri,
+        org.id,
+        &manager,
+        Some(json!({ "status": "active" })),
+    )
+    .await
+    .expect(StatusCode::FORBIDDEN, "permission.escalation");
+    let reactivated = f
+        .send(
+            Method::PATCH,
+            &uri,
+            org.id,
+            &admin,
+            Some(json!({ "status": "active" })),
+        )
+        .await;
+    assert_eq!(reactivated.ok()["status"], "active");
+}
+
+/// Coordinator decisions (overnight, 2026-11-17): an Observer keeps reading a learner they
+/// observe whose enrollment is concluded, and the staff reads leave out suspended users.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn reads_keep_concluded_learners_and_leave_out_suspended_ones(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let org = f.org("a").await;
+    let admin = f.holder_of_everything(org.id, Scope::Organization).await;
+    let (instructor, _, _) = f.enrolled(org.id, org.course, "instructor").await;
+    let (_, one, one_enrollment) = f.enrolled(org.id, org.course, "student").await;
+    let (_, two) = f.student(org.id, org.course).await;
+    let (_, observer) = f
+        .enroll_observer(org.id, &admin, org.course, json!([one, two]))
+        .await;
+    enrollments::set_status(
+        &f.pool,
+        scope(org.id),
+        one_enrollment,
+        enrollments::Status::Concluded,
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .expect("conclude");
+    let page = f.get(org.id, &observer, &list_uri(org.course)).await;
+    let page = page.ok();
+    assert_eq!(learners(page), sorted(vec![one, two]));
+    let concluded = page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["user"]["id"] == one.to_string())
+        .unwrap();
+    assert_eq!(concluded["enrollment_status"], "concluded");
+
+    users::set_status(
+        &f.pool,
+        scope(org.id),
+        two,
+        users::Status::Suspended,
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .expect("suspend");
+    for cookie in [&observer, &instructor] {
+        let page = f.get(org.id, cookie, &list_uri(org.course)).await;
+        assert_eq!(learners(page.ok()), [one]);
+        f.get(org.id, cookie, &detail_uri(org.course, two))
+            .await
+            .expect(StatusCode::NOT_FOUND, "progress.not_found");
+    }
+}
+
+/// T15 (B14): org A's admin naming org B's course, or org A's course with org B's learner, gets
+/// 404, and org B's rows are unchanged.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t15_another_organizations_course_and_learner_are_not_found(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let a = f.org("a").await;
+    let b = f.org("b").await;
+    let item = f.link(b.id, b.module, Some(Requirement::View)).await;
+    let (student, learner) = f.student(b.id, b.course).await;
+    f.step(b.id, &student, item, "view").await.ok();
+    let admin = f.holder_of_everything(a.id, Scope::Organization).await;
+    let before = f.rows(b.id).await;
+    for uri in [list_uri(b.course), detail_uri(b.course, learner)] {
+        f.get(a.id, &admin, &uri)
+            .await
+            .expect(StatusCode::NOT_FOUND, "course.not_found");
+    }
+    f.get(a.id, &admin, &detail_uri(a.course, learner))
+        .await
+        .expect(StatusCode::NOT_FOUND, "progress.not_found");
+    // Org A's Observer cannot be pointed at org B's learner.
+    let (answer, _) = f
+        .enroll_observer(a.id, &admin, a.course, json!([learner]))
+        .await;
+    answer.expect(StatusCode::UNPROCESSABLE_ENTITY, "request.invalid");
+    assert_eq!(f.rows(b.id).await, before);
+}
+
+/// T14a's 404 for `progress.view_observed`, which the permission suite cannot build since it is
+/// grantable at course scope only: an Observer of another course gets 404 `course.not_found` on
+/// a course they hold nothing at.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t14a_an_observer_of_another_course_does_not_find_this_one(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let org = f.org("a").await;
+    let admin = f.holder_of_everything(org.id, Scope::Organization).await;
+    let other = f
+        .course(org.id, org.tower, &[courses::Status::Published])
+        .await;
+    let (_, learner) = f.student(org.id, other).await;
+    let (_, here) = f.student(org.id, org.course).await;
+    let (created, observer) = f
+        .enroll_observer(org.id, &admin, other, json!([learner]))
+        .await;
+    created.ok_with(StatusCode::CREATED);
+    for uri in [list_uri(org.course), detail_uri(org.course, here)] {
+        f.get(org.id, &observer, &uri)
+            .await
+            .expect(StatusCode::NOT_FOUND, "course.not_found");
+    }
+}
+
+/// B20: an Observer reads only the links of their active enrollments whose role holds
+/// `progress.view_observed`. A link on a concluded Observer enrollment, or on an active one
+/// whose role lacks the permission (written by SQL, as a role edit would leave it), names no
+/// one.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn only_active_observer_enrollments_name_learners(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let org = f.org("a").await;
+    let admin = f.holder_of_everything(org.id, Scope::Organization).await;
+    let (_, one) = f.student(org.id, org.course).await;
+    let (_, two) = f.student(org.id, org.course).await;
+    let (_, three) = f.student(org.id, org.course).await;
+    let (created, observer) = f
+        .enroll_observer(org.id, &admin, org.course, json!([one]))
+        .await;
+    let observer_id: Uuid = created.body["user"]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    // A second Observer role of the organization's own, concluded, naming `two`.
+    let custom = NewRole {
+        key: format!("r{}", new_id().simple()),
+        name: "Mentor".into(),
+        permissions: vec![
+            perm::CourseView::KEY.to_owned(),
+            perm::ProgressViewObserved::KEY.to_owned(),
+        ],
+    };
+    let custom = roles::create_custom(&f.pool, scope(org.id), &custom, now(), Actor::Instance)
+        .await
+        .expect("create role")
+        .id;
+    let new = enrollments::NewEnrollment {
+        user_id: observer_id,
+        role_id: custom,
+        source: Source::Local,
+        external_id: None,
+        observed_user_ids: vec![two],
+    };
+    let mentor = enrollments::create(
+        &f.pool,
+        scope(org.id),
+        org.course,
+        &new,
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .expect("enroll as a mentor")
+    .id;
+    enrollments::set_status(
+        &f.pool,
+        scope(org.id),
+        mentor,
+        enrollments::Status::Concluded,
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .expect("conclude");
+    // An active enrollment whose role lacks the permission, with a link to `three`.
+    let viewer = NewRole {
+        key: format!("r{}", new_id().simple()),
+        name: "Viewer".into(),
+        permissions: vec![perm::CourseView::KEY.to_owned()],
+    };
+    let viewer = roles::create_custom(&f.pool, scope(org.id), &viewer, now(), Actor::Instance)
+        .await
+        .expect("create role")
+        .id;
+    let new = enrollments::NewEnrollment {
+        user_id: observer_id,
+        role_id: viewer,
+        source: Source::Local,
+        external_id: None,
+        observed_user_ids: Vec::new(),
+    };
+    let plain = enrollments::create(
+        &f.pool,
+        scope(org.id),
+        org.course,
+        &new,
+        now(),
+        Actor::Instance,
+    )
+    .await
+    .expect("enroll as a viewer")
+    .id;
+    sqlx::query(
+        "INSERT INTO enrollment_observees (org_id, enrollment_id, course_id, user_id)
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(org.id)
+    .bind(plain)
+    .bind(org.course)
+    .bind(three)
+    .execute(&f.pool)
+    .await
+    .expect("a stale link");
+
+    let page = f.get(org.id, &observer, &list_uri(org.course)).await;
+    assert_eq!(learners(page.ok()), [one]);
+    for user in [two, three] {
+        f.get(org.id, &observer, &detail_uri(org.course, user))
+            .await
+            .expect(StatusCode::NOT_FOUND, "progress.not_found");
+    }
 }

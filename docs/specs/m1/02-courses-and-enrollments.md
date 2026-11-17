@@ -147,7 +147,8 @@ to `Require`, and makes the evaluator read enrollments. Modules and items are sp
   an enrollment, needing what creating it would (B17's permission and escalation check). `DELETE`
   removes the enrollment with the same checks; from spec 05 it also deletes the user's live progress
   in the course in the same transaction (Q8), after archiving it, and keeps their completions and
-  archives (`05` B15, owner decision of 2026-11-16). An enrollment whose `source` is not `local` is
+  archives (`05` B15, owner decision of 2026-11-16); until spec 14 I4 builds the archive, the last
+  learner enrollment of a user with progress answers 409 `enrollment.has_progress` instead. An enrollment whose `source` is not `local` is
   read-only (409 `enrollment.externally_managed`), as `m0/09` B14 rules for assignments.
 - **B19.** Enrollment writes lock the course row (`FOR NO KEY UPDATE`) and the role row (`FOR
   KEY SHARE`, as `m0/09` B12's decision does for assignments), so a role edit or a status change to

@@ -171,6 +171,7 @@ impl Org {
             role_id,
             source: Source::Local,
             external_id: None,
+            observed_user_ids: Vec::new(),
         };
         let enrollment =
             enrollments::create(pool, self.scope(), self.course, &new, t0(), Actor::Instance)

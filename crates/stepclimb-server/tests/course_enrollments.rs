@@ -348,6 +348,7 @@ impl Fixture {
             role_id: role,
             source: Source::Local,
             external_id: None,
+            observed_user_ids: Vec::new(),
         };
         enrollments::create(&self.pool, scope(org), course, &new, now(), Actor::Instance)
             .await
@@ -521,17 +522,27 @@ async fn t11_enrolling_checks_the_user_the_role_and_repeats(pool: PgPool) {
     f.post_enrollment(t.org, &admin, course, pat, student)
         .await
         .expect(StatusCode::CONFLICT, "enrollment.exists");
-    for key in ["manager", "observer"] {
-        let refused = f
-            .post_enrollment(t.org, &admin, course, pat, f.builtin(key).await)
-            .await;
-        refused.expect(StatusCode::UNPROCESSABLE_ENTITY, "request.invalid");
-        assert_eq!(
-            refused.errors(),
-            [("/role_id".into(), "enrollment.role_unavailable".into())],
-            "{key}"
-        );
-    }
+    let refused = f
+        .post_enrollment(t.org, &admin, course, pat, f.builtin("manager").await)
+        .await;
+    refused.expect(StatusCode::UNPROCESSABLE_ENTITY, "request.invalid");
+    assert_eq!(
+        refused.errors(),
+        [("/role_id".into(), "enrollment.role_unavailable".into())]
+    );
+    // An Observer is enrollable from spec 05 I3, naming the learners it observes; without them
+    // it is refused (spec 05 B17).
+    let refused = f
+        .post_enrollment(t.org, &admin, course, pat, f.builtin("observer").await)
+        .await;
+    refused.expect(StatusCode::UNPROCESSABLE_ENTITY, "request.invalid");
+    assert_eq!(
+        refused.errors(),
+        [(
+            "/observed_user_ids".into(),
+            "enrollment.observed_invalid".into()
+        )]
+    );
     let (_, b_user) = f.user(f.b.org, "Bo").await;
     f.post_enrollment(t.org, &admin, course, b_user, student)
         .await

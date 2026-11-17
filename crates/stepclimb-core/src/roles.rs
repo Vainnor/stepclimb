@@ -94,6 +94,7 @@ static ACCOUNT_ADMIN: BuiltinRole = BuiltinRole {
         perm::CourseContentEdit::KEY,
         perm::EnrollmentView::KEY,
         perm::EnrollmentManage::KEY,
+        perm::ProgressView::KEY,
     ]),
 };
 
@@ -112,7 +113,11 @@ static INSTRUCTOR: BuiltinRole = BuiltinRole {
     name: "Instructor",
     permissions: RolePermissions::Extends {
         base: &COURSE_DESIGNER,
-        own: &[perm::EnrollmentView::KEY, perm::EnrollmentManage::KEY],
+        own: &[
+            perm::EnrollmentView::KEY,
+            perm::EnrollmentManage::KEY,
+            perm::ProgressView::KEY,
+        ],
     },
 };
 
@@ -137,7 +142,7 @@ static MANAGER: BuiltinRole = BuiltinRole {
 static OBSERVER: BuiltinRole = BuiltinRole {
     key: "observer",
     name: "Observer",
-    permissions: RolePermissions::Keys(&[perm::CourseView::KEY]),
+    permissions: RolePermissions::Keys(&[perm::CourseView::KEY, perm::ProgressViewObserved::KEY]),
 };
 
 /// Every built-in role.
@@ -168,6 +173,31 @@ pub(crate) fn effective_permissions(key: &str, builtin: bool, stored: Vec<String
     self::builtin(key)
         .map(|role| role.permissions().into_iter().map(str::to_owned).collect())
         .unwrap_or_default()
+}
+
+/// The ids of the roles the scope's organization can use (its custom roles and the built-in
+/// rows) whose effective permissions include `key`, for queries that ask which enrollments make
+/// a learner or an Observer (M1 spec 05 B14, B20). Reads lock nothing.
+pub(crate) async fn ids_holding(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    key: &str,
+) -> Result<Vec<Uuid>, sqlx::Error> {
+    let rows = sqlx::query!(
+        "SELECT id, key, builtin, permissions FROM roles WHERE org_id IS NULL OR org_id = $1",
+        scope.org_id(),
+    )
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .filter(|role| {
+            effective_permissions(&role.key, role.builtin, role.permissions.clone())
+                .iter()
+                .any(|held| held == key)
+        })
+        .map(|role| role.id)
+        .collect())
 }
 
 /// The longest role name, in characters (Unicode scalar values): the organization and account
@@ -868,11 +898,12 @@ mod tests {
                 "course.content_edit",
                 "enrollment.view",
                 "enrollment.manage",
+                "progress.view",
             ])
         );
     }
 
-    /// The M1 lists of M1 spec 02 -> Permissions.
+    /// The M1 lists of M1 spec 02 -> Permissions, with spec 05's progress keys (Q2, B18).
     #[test]
     fn the_course_roles_hold_their_m1_lists() {
         let cases: [(&str, &[&str]); 6] = [
@@ -888,12 +919,13 @@ mod tests {
                     "course.content_edit",
                     "enrollment.view",
                     "enrollment.manage",
+                    "progress.view",
                 ],
             ),
             ("grader", &[]),
             ("student", &["course.view", "course.participate"]),
             ("manager", &[]),
-            ("observer", &["course.view"]),
+            ("observer", &["course.view", "progress.view_observed"]),
         ];
         for (key, expected) in cases {
             assert_eq!(role(key).permissions(), expected, "{key}");
@@ -1031,6 +1063,7 @@ mod tests {
                 "course.content_edit",
                 "enrollment.view",
                 "enrollment.manage",
+                "progress.view",
             ]
         );
         assert_eq!(
