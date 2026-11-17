@@ -376,6 +376,23 @@ Coordinator decisions (overnight, 2026-11-17), pending owner review.
   cannot see; the stand-in above still withholds the links of a module with an unlock rule. A
   module's `progress` is `ModuleProgress` (`module_id`, `required_count`, `completed_count`,
   `completed_at`, `05`'s Schemas), an item's the existing `ItemProgress`.
+- **Positions are numbered over what the caller sees.** For a caller without
+  `course.view_all`, a module's `position` is its place among the course's published modules
+  and an item's its place among the published items of its module, 0-based and dense, on all
+  three reads. The stored positions count unpublished rows too, so a gap in them would tell a
+  learner how many unpublished modules or items sit before one. Staff get the stored positions,
+  which number every row.
+- **Known gap until `05` I2: a module's counts can include unpublished items.** A module's
+  `required_count` and `completed_count` are the roll-up stored when the learner's progress was
+  written. An item unpublished afterwards still counts in them until `05` I2 recomputes the
+  roll-ups on such a change; the read does not recompute them. The counts show no item's id,
+  title or content.
+- **Observers.** A user who holds `course.view` alone (the built-in Observer) reads as a
+  learner does, published content only, with links withheld under the stand-in above, and
+  gets no `progress` member, since they hold no `course.participate`.
+- **Templates.** A template's outline, modules and items answer 404 to a caller without
+  `course.view_all`, as a draft's do (`02` B24, Q13), even to a Student with an active
+  enrollment in it.
 
 ## Issues
 

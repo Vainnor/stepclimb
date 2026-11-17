@@ -11,14 +11,15 @@
 //! A caller without `course.view_all` at the course (a learner) sees only published modules and,
 //! in them, only published items; an unpublished module or item, or an item of an unpublished
 //! module, answers 404 as an id that does not exist. A module's `prerequisite_ids` keep only
-//! published modules for them. Until spec 04 I3 computes lock state, [`withholds_content`] keeps
+//! published modules for them, and every `position` is numbered over the modules or items they
+//! can see. Until spec 04 I3 computes lock state, [`withholds_content`] keeps
 //! the references and URLs of every item of a module with an unlock rule from them.
 //!
 //! A caller who holds `course.participate` at the course gets their own progress on each module
 //! and item of the answer (spec 05 B13), read for their own user id. Progress is looked up by the
 //! ids the answer already holds, so it never names a module or item the caller cannot see.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use axum::{Json, extract::State};
 use sqlx::{Postgres, Transaction};
@@ -171,20 +172,33 @@ pub async fn get_item(
     let all_modules = modules::list_for_course(&mut *tx, scope, course_id)
         .await
         .map_err(content_error)?;
-    let item = items::get(&mut *tx, scope, target.id)
+    let module_id = items::get(&mut *tx, scope, target.id)
         .await
-        .map_err(content_error)?;
+        .map_err(content_error)?
+        .map(|item| item.module_id);
+    let siblings = match module_id {
+        Some(module_id) => items::list_for_module(&mut *tx, scope, module_id)
+            .await
+            .map_err(content_error)?,
+        None => Vec::new(),
+    };
     let reader = Reader::new(&mut tx, &require, viewer, course_id, &all_modules).await?;
     end(tx).await?;
-    let module = item
-        .as_ref()
-        .and_then(|item| all_modules.iter().find(|m| m.id == item.module_id));
-    match (item, module) {
-        (Some(item), Some(module)) if reader.sees(module) && reader.sees_item(&item) => {
-            Ok(Json(reader.item(module, item)?))
-        }
-        _ => Err(content_error(Error::ItemNotFound)),
-    }
+    let module = all_modules
+        .iter()
+        .find(|module| Some(module.id) == module_id && reader.sees(module))
+        .ok_or_else(|| content_error(Error::ItemNotFound))?;
+    let mut visible: Vec<_> = siblings
+        .into_iter()
+        .filter(|item| reader.sees_item(item))
+        .collect();
+    let index = visible
+        .iter()
+        .position(|item| item.id == target.id)
+        .ok_or_else(|| content_error(Error::ItemNotFound))?;
+    let mut answer = reader.item(module, visible.swap_remove(index))?;
+    reader.renumber(&mut answer.position, index);
+    Ok(Json(answer))
 }
 
 /// Whether a learner's read of `module` withholds its items' `ref_id` and `url`: whenever the
@@ -225,8 +239,8 @@ struct Own {
 #[derive(Debug)]
 struct Reader {
     sees_all: bool,
-    /// The course's published module ids.
-    published: HashSet<Uuid>,
+    /// The course's published modules, each with its position among them.
+    published: HashMap<Uuid, usize>,
     /// `Some` for a learner of the course, `None` for anyone else.
     own: Option<Own>,
 }
@@ -263,7 +277,8 @@ impl Reader {
         let published = all_modules
             .iter()
             .filter(|module| module.published)
-            .map(|module| module.id)
+            .enumerate()
+            .map(|(index, module)| (module.id, index))
             .collect();
         Self {
             sees_all,
@@ -281,8 +296,9 @@ impl Reader {
     }
 
     /// `module` with `items` as the caller may see them: for a caller without `course.view_all`,
-    /// only published items and published prerequisites, with references and URLs withheld as
-    /// [`withholds_content`] says; and a learner's own progress on the module and each item.
+    /// only published items and published prerequisites, positions numbered over what they see
+    /// ([`Self::renumber`]), references and URLs withheld as [`withholds_content`] says; and a
+    /// learner's own progress on the module and each item.
     fn module(
         &self,
         mut module: modules::Module,
@@ -291,15 +307,24 @@ impl Reader {
         if !self.sees_all {
             module
                 .prerequisite_ids
-                .retain(|id| self.published.contains(id));
+                .retain(|id| self.published.contains_key(id));
         }
         let items = items
             .into_iter()
             .filter(|item| self.sees_item(item))
-            .map(|item| self.item(&module, item))
-            .collect::<Result<_, _>>()?;
+            .enumerate()
+            .map(|(index, item)| {
+                let mut answer = self.item(&module, item)?;
+                self.renumber(&mut answer.position, index);
+                Ok(answer)
+            })
+            .collect::<Result<_, ApiError>>()?;
+        let index = self.published.get(&module.id).copied();
         let mut answer = Module::from_repo(module, Vec::new())?;
         answer.items = items;
+        if let Some(index) = index {
+            self.renumber(&mut answer.position, index);
+        }
         if let Some(own) = &self.own {
             let stored = own.modules.get(&answer.id).cloned();
             answer.progress = Some(stored.map(ModuleProgress::from_core).transpose()?);
@@ -307,7 +332,17 @@ impl Reader {
         Ok(answer)
     }
 
-    /// `item` of `module` as the caller may see it.
+    /// For a caller without `course.view_all`, `position` becomes `index`, the row's place among
+    /// the rows they can see, so the numbering does not reveal how many unpublished rows sit
+    /// before it. Staff keep the stored position, which is the same numbering over every row.
+    fn renumber(&self, position: &mut i32, index: usize) {
+        if !self.sees_all {
+            // An index is under 200, the most modules a course or items a module holds.
+            *position = i32::try_from(index).unwrap_or(i32::MAX);
+        }
+    }
+
+    /// `item` of `module` as the caller may see it, with its stored position.
     fn item(&self, module: &modules::Module, item: items::Item) -> Result<Item, ApiError> {
         let mut answer = Item::from_repo(item)?;
         if !self.sees_all && withholds_content(module) {
