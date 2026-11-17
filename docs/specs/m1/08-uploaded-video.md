@@ -503,6 +503,51 @@ Coordinator decision (overnight, 2026-11-17), after the security review of I1:
   (overnight, 2026-11-17): `Terminating::Video` deletes only the `upload/` prefix, which is all a
   video has in I1; once transcodes write renditions under `v<n>/`, ending a failed video must
   delete the whole `orgs/<org>/videos/<id>/` prefix.
+### Points I5 settled
+
+Coordinator decision (2026-11-17), pending owner review: the spec left each of these open while
+building I5.
+
+- **D17. A tus client of our own.** tus-js-client 4.3.1 (MIT, released 2025-01-16; the 5.0 line
+  is still pre-release) ships 86,773 bytes minified (22,246 gzip) in its browser build and pulls 7
+  direct and 7 further packages, among them `proper-lockfile` and `graceful-fs` for Node, and
+  `combine-errors`, which declares no license in any version and was republished as 3.0.4 on
+  2026-10-31 after ten years without a release (npm registry, accessed 2026-11-17). The server
+  speaks only creation, `HEAD`, `PATCH` and termination, so `packages/ui/src/video/tus.ts` (270
+  lines) implements those; no dependency is added.
+- **D18. Where the uploader's requests go.** VideoUploader lives in `packages/ui` and takes the
+  caller's `send` (one request, with its progress) and `getVideo`, so the package needs no API
+  client. The web app sends through `XMLHttpRequest`, as file uploads do, since `fetch` reports no
+  upload progress.
+- **D19. Resuming after a reload.** A browser does not hand a page a file again after a reload, so
+  local storage keeps each unfinished upload's address with the file's name, size, type and last
+  change, per course, and the uploader lists them; choosing the same file again resumes it from
+  the offset `HEAD` answers, and an upload the server no longer has starts again. An entry not
+  advanced for 24 h is dropped, as B6 deletes the upload. Discard ends one with `DELETE`.
+- **D20. The title.** The uploader sends `filename` and a `title` made of the file name without
+  its extension, cut to 200 characters (D2). Renaming is `PATCH /videos/{id}`, not this issue.
+- **D21. Failures.** A request that got no answer, a 408, a 429 or a 5xx stops the upload
+  resumable: it goes on when the browser fires `online`, or on Resume. A 409
+  `video.upload_offset_mismatch` takes the offset from `HEAD` and goes on, up to three times in a
+  row. Any other refusal fails the upload with its own message; a code without one is shown
+  with the code.
+- **D22. One upload at a time** per uploader; a file chosen while one runs or waits is refused
+  with a message naming the running one.
+- **D23. Cancel** sends `DELETE` at once, with no confirmation, and stays available while paused
+  or stopped. When the server answers 409 `video.status_invalid` (the last chunk completed the
+  upload first), the uploader says so and shows the video processing.
+- **D24. Announcements.** A polite status region says each phase and the progress in 10% steps;
+  a refusal goes to the upload's alert region.
+- **D25. The video panel.** The course authoring screen (`16` B19, `16` I14) does not exist yet.
+  Until it does, the panel is `/c/:course/videos`, reached by its address like the files area
+  (`16` B20a): VideoUploader for holders of `course.content_edit` in a course that is not
+  archived, then the course's videos with their status and why one failed, read again every 10 s
+  while one is processing. I14 places the same panel in its screen. The page editor's video panel
+  (`07` B12) takes YouTube and Vimeo addresses only, and uploaded videos in pages are out of scope
+  here, so the two do not meet.
+- **D26. T14's Playwright journey** answers the video routes in the browser, as the files area's
+  test does: the gate's server has no transcoder until I2, so a video never becomes ready there.
+
 - **Note for user deletion (M4).** `video_uploads.created_by` references `users` without
   `ON DELETE`, so deleting a user who started an upload still in progress is refused by the
   foreign key; per-user deletion has to end or reassign such uploads first.
