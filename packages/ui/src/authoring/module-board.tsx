@@ -60,8 +60,8 @@ export interface ModuleBoardProps {
   defaultEditingItemId?: string | null;
   onEditingItemIdChange?: (itemId: string | null) => void;
   /**
-   * Read-only, as in an archived course, where every write answers 409: no Move or Edit buttons,
-   * and the drag handles are off.
+   * Read-only, as in an archived course, where every write answers 409: no drag handles and no
+   * Move or Edit buttons.
    */
   isDisabled?: boolean;
   /** The user's IANA time zone (`users.tz`), for unlock dates. */
@@ -91,6 +91,7 @@ export function ModuleBoard(props: ModuleBoardProps) {
     onMove: readOnly ? undefined : (key: string, action: string) => board.menuMove(key, action),
     onEdit: props.itemEditor === undefined || readOnly ? undefined : editing.open,
     movesDisabled: readOnly || board.pending,
+    readOnly,
   };
   const headingLevel = props.headingLevel ?? 2;
   return (
@@ -103,7 +104,7 @@ export function ModuleBoard(props: ModuleBoardProps) {
         data-pending={board.pending || undefined}
         items={rows}
         dependencies={[names, actions.movesDisabled, readOnly, props.timeZone, headingLevel]}
-        dragAndDropHooks={dragAndDropHooks}
+        dragAndDropHooks={readOnly ? undefined : dragAndDropHooks}
         renderEmptyState={() => (
           <div data-slot="module-board-empty" className={styles.empty()}>
             {props.emptyState}

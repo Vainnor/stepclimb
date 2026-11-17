@@ -50,6 +50,7 @@ export const moduleBoardRow = tv({
       "text-fg-sub outline-none data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50",
       "data-[focus-visible]:ring-2 data-[focus-visible]:ring-ring",
     ],
+    dragSpace: "size-(--sc-control-h) shrink-0",
     // The title and the meta share a column between the handle and the buttons, so the meta wraps
     // under the title on a narrow screen and the buttons stay on the first line.
     body: "flex min-w-0 flex-1 flex-wrap items-center gap-x-4",
@@ -70,7 +71,11 @@ export const moduleBoardRow = tv({
   },
   variants: {
     type: {
-      module: { root: "mt-4 border-t border-line pt-2 first:mt-0 first:border-t-0" },
+      // The heading's line height sets the padding that centers its first line.
+      module: {
+        root: "mt-4 border-t border-line pt-2 first:mt-0 first:border-t-0",
+        main: "text-lg",
+      },
       item: { root: "ps-6" },
       header: { root: "ps-6", title: "font-heading text-fg-strong" },
     },
@@ -87,6 +92,8 @@ export interface RowActions {
   onEdit?: (itemId: string) => void;
   /** No move while a move is saving. */
   movesDisabled: boolean;
+  /** No drag handle: the board is read-only. */
+  readOnly: boolean;
 }
 
 export interface BoardRowProps extends RowActions {
@@ -113,7 +120,12 @@ export function ModuleBoardRow(props: BoardRowProps) {
       textValue={name}
       className={styles.root()}
     >
-      <DragHandle name={name} className={styles.drag()} />
+      {props.readOnly ? (
+        // Holds the handle's place, so a read-only board lines up as an editable one does.
+        <span data-slot="module-board-drag-space" className={styles.dragSpace()} />
+      ) : (
+        <DragHandle name={name} className={styles.drag()} />
+      )}
       <span data-slot="module-board-row-body" className={styles.body()}>
         {row.type === "module" ? (
           <ModuleMain {...props} row={row} styles={styles} />

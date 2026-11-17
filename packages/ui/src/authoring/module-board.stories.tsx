@@ -129,9 +129,9 @@ const meta = {
 
 Hover, pressed and disabled of the handle and the buttons are those of Button and IconButton; no story captures them here, so States is listed as missing.
 
-**Usage.** \`<ModuleBoard modules={modules} onReorderModules={(ids) => put(...)} onReorderItems={(moduleId, ids) => put(...)} onMoveItem={(itemId, { moduleId, position }) => post(...)} onReload={refetch} itemEditor={(item, { close }) => <ItemForm ... />} timeZone={me.tz} />\`. Each handler resolves \`{ status: "moved" }\` once \`modules\` holds the server's answer, \`{ status: "stale" }\` on 409 \`order.stale\`, or \`{ status: "failed", message }\` with the message to show for any other refusal.
+**Usage.** \`<ModuleBoard modules={modules} onReorderModules={(ids) => put(...)} onReorderItems={(moduleId, ids) => put(...)} onMoveItem={(itemId, { moduleId, position }) => post(...)} onReload={refetch} itemEditor={(item, { close }) => <ItemForm ... />} timeZone={me.tz} />\`. Each handler resolves \`{ status: "moved" }\` once the server has stored the move, and the caller then passes the new \`modules\`: the board keeps the new order drawn until they arrive and reads its report from them. It resolves \`{ status: "stale" }\` on 409 \`order.stale\`, or \`{ status: "failed", message }\` with the message to show for any other refusal.
 
-**Do** pass \`isDisabled\` for an archived course, where every write is refused.
+**Do** pass \`isDisabled\` for an archived course, where every write is refused: the board is then read-only, with no handles, Move or Edit buttons.
 
 **Don't** apply a move to \`modules\` before the server accepts it: the board already shows it meanwhile.`,
       },
@@ -196,7 +196,7 @@ export const Stale: Story = {
   },
 };
 
-/** An archived course: every write is refused, so nothing moves. */
+/** An archived course: read-only, with no handles, Move or Edit buttons. */
 export const Disabled: Story = { args: { isDisabled: true } };
 
 /** An item's editor open in the side sheet. */

@@ -349,6 +349,37 @@ test.describe("at 1280 px @desktop", () => {
     );
   });
 
+  test("T5: after a ModuleBoard move from the menu or the keyboard, focus stays on the moved row", async ({
+    page,
+  }) => {
+    await openStory(page, story("authoring-moduleboard--default"), "light");
+    const focused = () =>
+      page.evaluate(() => ({
+        label: document.activeElement?.getAttribute("aria-label") ?? "",
+        row: document.activeElement?.closest("[role=row]")?.getAttribute("aria-label") ?? "",
+      }));
+    const status = page.locator("[data-slot=module-board-status]");
+    // The Move menu: focus comes back to the row's Move button.
+    await page.getByRole("button", { name: "Move Phraseology" }).click();
+    await page.getByRole("menuitem", { name: "Move down" }).click();
+    await expect(status).toHaveText("Moved Phraseology to position 2 of 4 in Radio basics.");
+    expect((await focused()).label).toBe("Move Phraseology");
+    // A keyboard drag from the row's handle to the end of the module.
+    for (let i = 0; i < 6 && (await focused()).label !== "Drag Phraseology"; i++) {
+      await page.keyboard.press("ArrowLeft");
+    }
+    expect((await focused()).label).toBe("Drag Phraseology");
+    await page.keyboard.press("Enter");
+    const target = "Insert between Frequency list and 2 Ground control";
+    for (let i = 0; i < 20 && (await focused()).label !== target; i++) {
+      await page.keyboard.press("ArrowDown");
+    }
+    expect((await focused()).label).toBe(target);
+    await page.keyboard.press("Enter");
+    await expect(status).toHaveText("Moved Phraseology to position 4 of 4 in Radio basics.");
+    expect((await focused()).row).toMatch(/^Phraseology/);
+  });
+
   test("T4: a completed item's segment fills over 320 ms, the course's rail once", async ({
     page,
   }) => {

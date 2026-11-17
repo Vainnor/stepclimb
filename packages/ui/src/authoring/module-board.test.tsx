@@ -361,9 +361,9 @@ describe("ModuleBoard", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("The move was not saved.");
   });
 
-  it("is read-only when disabled: no Move or Edit buttons, no drag, no sheet", () => {
+  it("is read-only when disabled: no handles, no Move or Edit buttons, no sheet", () => {
     setup({ isDisabled: true, itemEditor: () => <p>Editor</p>, editingItemId: "i1" });
-    expect(screen.getByRole("button", { name: "Drag Phraseology" })).toBeDisabled();
+    expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByRole("button", { name: "Move Phraseology" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Edit Phraseology" })).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
