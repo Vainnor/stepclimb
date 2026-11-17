@@ -441,7 +441,7 @@ pub async fn append_video_upload(
     if chunk.length == 0 {
         return Ok((StatusCode::NO_CONTENT, offset_headers(&upload)).into_response());
     }
-    let _in_flight = storage
+    let in_flight = storage
         .try_start_upload()
         .ok_or_else(upload::uploads_busy)?;
     let temporary = stream_to_temporary(&storage, scope, body, chunk.length).await?;
@@ -452,6 +452,8 @@ pub async fn append_video_upload(
     };
     let stored = appender.store(&chunk, &temporary.path).await;
     appender.delete_object(&temporary.path).await;
+    // The place for an upload in flight is the body's; the deletes below hold none.
+    drop(in_flight);
     let (upload, failed) = stored?;
     if failed && let Err(error) = video_parts::finish(&state.db, &storage, scope, upload.id).await {
         let upload_id = upload.id;

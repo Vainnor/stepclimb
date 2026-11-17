@@ -33,6 +33,7 @@ use stepclimb_core::{
     role_assignments::{self, NewAssignment, Scope},
     roles::{self, NewRole},
     users::{self, NewUser},
+    videos::{self, Terminating},
 };
 use stepclimb_server::{
     AppState,
@@ -1005,6 +1006,63 @@ async fn cleanup_finishes_a_termination_and_a_marked_upload_takes_no_chunk(pool:
     assert_eq!((report.finished, report.failed), (1, 0));
     assert!(f.objects(t.org).await.is_empty());
     assert_eq!(f.count("videos", t.org).await, 0);
+}
+
+/// D13: a chunk that passed its first look at the upload and then waits for the upload row's
+/// lock, while a termination marks the upload and commits, answers 404 once it gets the lock and
+/// writes no part: the check under the lock, not the first look, is what stops it.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_chunk_waiting_on_a_termination_writes_no_part(pool: PgPool) {
+    let f = Fixture::new(pool, Backend::Local).await;
+    let t = f.a;
+    let path = f.started(t.course, 2 * MIB).await;
+    let id = upload_id(&path);
+    let mut holder = f.pool.begin().await.unwrap();
+    videos::lock_upload(&mut holder, scope(t.org), id)
+        .await
+        .unwrap()
+        .expect("the upload");
+    let request = f
+        .base(Method::PATCH, &path, t.org)
+        .header(header::CONTENT_TYPE, "application/offset+octet-stream")
+        .header("upload-offset", 0)
+        .header(header::CONTENT_LENGTH, MIB)
+        .body(Body::from(mp4(to_usize(MIB))))
+        .unwrap();
+    let app = f.app.clone();
+    let chunk = tokio::spawn(async move { answer(&app, request).await });
+    // Wait until the chunk's transaction waits for the row lock the holder has.
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        )
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+        if waiting > 0 {
+            break;
+        }
+        assert!(!chunk.is_finished(), "the chunk did not wait for the lock");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the chunk never waited"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    videos::mark_terminating(&mut holder, scope(t.org), id, Terminating::Video, f.now())
+        .await
+        .unwrap();
+    holder.commit().await.unwrap();
+    chunk
+        .await
+        .unwrap()
+        .expect(StatusCode::NOT_FOUND, "video_upload.not_found");
+    assert!(
+        f.objects(t.org).await.is_empty(),
+        "no part, and no temporary object"
+    );
 }
 
 /// B5: ending an upload deletes its parts and its video; a complete upload whose video is

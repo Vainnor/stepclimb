@@ -479,6 +479,11 @@ Coordinator decision (overnight, 2026-11-17), after the security review of I1:
   A delete that fails leaves the mark, and `videos.cleanup` finishes every marked upload. Parts
   are deleted 16 at a time; object_store's `delete_stream` (bulk deletes on S3) needs the
   `futures` crate as a direct dependency, which I1 does not add.
+  Known limit, coordinator decision (overnight, 2026-11-17): a chunk whose `CopyObject` to its
+  part is still running in the store when its client disconnects can land that part after a
+  termination has listed the parts, leaving an object under `upload/` that no row names and that
+  no quota counts. A cleanup sweep for such orphaned `upload/` objects is tracked in a follow-up
+  issue.
 - **D14. The course lock of a chunk.** A chunk reads its course row `FOR SHARE`: an archive or
   move, which updates the row, waits for chunks in flight, and chunks of different uploads of one
   course do not wait for each other. Creation, termination and rename keep `FOR NO KEY UPDATE`.
@@ -494,7 +499,10 @@ Coordinator decision (overnight, 2026-11-17), after the security review of I1:
 - **Notes for I2.** ffprobe and ffmpeg get the demuxer pinned with `-f` (from the sniffed
   container: `mov,mp4,m4a,3gp,3g2,mj2` or `matroska,webm`) and `-protocol_whitelist file`, so a
   file that only claims a container (D10's QuickTime atoms) cannot pick another demuxer or reach a
-  network protocol. The transcode deletes the upload row with the parts (D4).
+  network protocol. The transcode deletes the upload row with the parts (D4). Coordinator decision
+  (overnight, 2026-11-17): `Terminating::Video` deletes only the `upload/` prefix, which is all a
+  video has in I1; once transcodes write renditions under `v<n>/`, ending a failed video must
+  delete the whole `orgs/<org>/videos/<id>/` prefix.
 - **Note for user deletion (M4).** `video_uploads.created_by` references `users` without
   `ON DELETE`, so deleting a user who started an upload still in progress is refused by the
   foreign key; per-user deletion has to end or reassign such uploads first.
