@@ -69,11 +69,10 @@ is sold.
 
 - Every outside pull request needs a CLA signature before it merges, in addition to the DCO box
   in the PR template. The maintainer's own pull requests and release PRs do not.
-- Setting up CLA Assistant is the owner's step: install the GitHub App on the repository and
-  link it to a Gist holding `docs/cla/individual.md`. No outside pull request merges before it is
-  installed.
-- The CLA links to the repository, which is private today; outside contributors can read the
-  texts once it is public.
+- CLA Assistant is installed on the repository and linked to a Gist holding
+  `docs/cla/individual.md`. It acts only on public repositories: its pull request webhook skips a
+  repository whose `private` flag is set (`src/server/src/webhooks/pull_request.js` in
+  https://github.com/cla-assistant/cla-assistant, checked 16 Nov 2026).
 - CLA Assistant cannot record an entity signature, so an employee covered by the entity CLA also
   signs the individual CLA, as its section 3(c) allows (`CONTRIBUTING.md`).
 - A new CLA version means a new Gist revision, and CLA Assistant asks contributors to sign again.
