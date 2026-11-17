@@ -101,6 +101,41 @@ listed here with a pointer so the inventory is complete in one place.
   shows "Due in 3 days", "Due today" or "3 days overdue" in the user's time zone with the overdue
   state when past; NextUp shows Next up (`10` B2) with the one primary "Continue" action, or the
   waiting and completed states.
+- **B10a.** Coordinator decisions for B8 and B10 (overnight, 2026-11-17), pending owner review:
+  - The rail takes lock reasons with their module and item ids resolved by the caller to the
+    titles the learner already sees (`04` B14), and says each as a phrase: "Unlocks after Ground
+    control", "Unlocks after Ground and Delivery", "Unlocks when its module unlocks", "Opens on
+    Mar 3, 2026, 10:00 AM EST" (the user's zone, with its short name, as Q2 does for date
+    fields). A locked node needs at least one reason.
+  - A locked node stays a link to its item view, which explains the lock (`04` B13 answers 200
+    there). Its reasons, joined as the locale lists units (`Intl.ListFormat`, `type: "unit"`),
+    are its accessible description at all times, and a Tooltip shows them on hover and keyboard
+    focus; a touch screen shows no tooltip, so a tap opens the item view.
+  - A node's name is its title and its state through one message ("Radio basics, Complete");
+    an overdue node's state is its due label ("Clearance delivery, 3 days overdue"), so the name
+    holds all the text the link draws.
+  - The segment after an item fills when that item is complete; the last item has none. A
+    transition fills it over the `motion.slow` token (320 ms) with the `ease.out-expo` token.
+  - Up and Down move between nodes, Home and End jump to the ends; every node stays a tab stop,
+    as links in a list do.
+  - The "Module" button and the 768 px switch to a bottom sheet are the item view's (B16, I11);
+    the rail works inside a bottom `Sheet`.
+  - DueBadge counts calendar days in the user's time zone, from a `now` the caller passes from its
+    clock. It is overdue only after the due instant; 1 day reads "Due tomorrow", and a due time
+    already past today reads "Overdue".
+  - RequirementLabel covers the requirement kinds the API accepts (`04` B3): `view` reads "View",
+    `mark_done` "Mark as done", `watch` "Watch 80%". `submit`, `score` and `mastery` come with
+    M2 and M3.
+  - Coordinator decision (2026-11-17), on the plan's "current (ring with a dot)": the current
+    node is ringed in the brand color in every state, with a dot while available. An overdue
+    current node keeps its overdue ring and gets a second, outer brand ring, so it is marked as
+    current by more than the title's weight.
+  - Coordinator decision (2026-11-17), on the plan's "the whole rail fills once": once the course
+    is complete every segment is drawn filled, including those after items a `one` completion
+    rule left incomplete. When `courseComplete` turns true while the rail is shown, every segment
+    fills from empty, one after another, all within the `motion.slow` token, each with the
+    `ease.out-expo` token; a rail first drawn complete does not animate. Both motions are CSS, so
+    `base.css`'s reduced-motion rule makes them instant.
 - **B11.** Callout (`info`, `tip`, `warning`, `danger`) is an icon on a tinted surface, never a
   colored side stripe (`ui.md` pitfalls), used by PageReader and announcements. Announcement shows
   an announcement's title, author, date and body HTML.

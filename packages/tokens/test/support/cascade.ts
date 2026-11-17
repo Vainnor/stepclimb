@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // A small model of the CSS cascade for the shape of CSS the build and base.css write: rules
 // whose selectors are compounds of `html`, `:root`, `[attr="value"]` and
-// `:not([attr="value"])`, inside optional `@media` and `@layer` blocks. It answers "what is
-// this property on this element", which is what the theme and density selectors exist to
-// decide, so the tests check outcomes rather than selector strings.
+// `:not([attr="value"])`, inside optional `@media` and `@layer` blocks. `@keyframes` blocks
+// style no element and are skipped. It answers "what is this property on this element", which
+// is what the theme and density selectors exist to decide, so the tests check outcomes rather
+// than selector strings.
 
 export interface Rule {
   media: string[];
@@ -31,7 +32,15 @@ export function parseRules(css: string): Rule[] {
   const atRule = (prelude: string, media: string[], layered: boolean) => {
     if (prelude.startsWith("@media")) block([...media, prelude.replace(/^@media\s*/, "")], layered);
     else if (prelude.startsWith("@layer")) block(media, true);
+    else if (prelude.startsWith("@keyframes")) skip();
     else throw new Error(`at-rule outside the model: ${prelude}`);
+  };
+  /** Moves past the block just opened, with every block nested in it. */
+  const skip = () => {
+    for (let depth = 1; depth > 0 && i < src.length; i++) {
+      if (src[i] === "{") depth++;
+      else if (src[i] === "}") depth--;
+    }
   };
   const block = (media: string[], layered: boolean) => {
     while (i < src.length) {

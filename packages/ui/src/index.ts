@@ -2,6 +2,20 @@
 // Stepclimb UI: the M0 inventory of docs/specs/m0/13-base-ui-components.md (Foundations, Actions,
 // the M0 forms, Overlays, Navigation and the M0 data components), the M1 components of
 // docs/specs/m1/16-learning-ui-components.md built so far, and the theme and strings providers.
+export { DueBadge, type DueBadgeProps, dueBadge, dueDays } from "./learning/due-badge";
+export type { LockReason } from "./learning/lock-reason";
+export {
+  ProgressRail,
+  type ProgressRailItem,
+  type ProgressRailProps,
+  progressRail,
+} from "./learning/progress-rail";
+export {
+  type Requirement,
+  RequirementLabel,
+  type RequirementLabelProps,
+  requirementLabel,
+} from "./learning/requirement-label";
 export {
   type LearningState,
   learningStateIcons,

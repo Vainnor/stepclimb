@@ -29,6 +29,17 @@ beforeAll(async () => {
   }));
 });
 
+describe("the cascade model", () => {
+  it("skips a @keyframes block and keeps the rules after it", () => {
+    const parsed = parseRules(
+      "@keyframes fill { from { scale: 1 0; } to { scale: 1; } } html { color-scheme: light; }",
+    );
+    expect(parsed.map((r) => [r.selectors, [...r.decls]])).toEqual([
+      [["html"], [["color-scheme", "light"]]],
+    ]);
+  });
+});
+
 describe("base.css color-scheme", () => {
   it.each([
     [undefined, false, "light"],
