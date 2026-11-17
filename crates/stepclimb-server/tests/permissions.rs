@@ -1460,10 +1460,13 @@ const FILE_NOT_FOUND: Target = Target::Scoped {
 /// arguments there: the upload's name (M1 spec 06 B3).
 const QUERIES: &[(&str, &str)] = &[("uploadCourseFile", "name=suite.txt")];
 
-/// A draft course in Tower with a file in its top folder, listed.
+/// A published course in Tower with a file in its top folder, listed. The file setups use
+/// published courses: on a draft, the 403 case of a `course.view_all` route (every permission but
+/// that one) and the 2xx case of a `course.content_edit` route (that one alone) would both get
+/// 404 (M1 spec 02 Q13).
 fn files_of_tower_course(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
-        let course = org.course(org.tower, false).await;
+        let course = org.course(org.tower, true).await;
         org.course_file(course, "/").await;
         Call {
             params: vec![("course_id", course)],
@@ -1473,21 +1476,21 @@ fn files_of_tower_course(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send 
     })
 }
 
-/// A draft course in Tower and a file's bytes; [`QUERIES`] names it.
+/// A published course in Tower and a file's bytes; [`QUERIES`] names it.
 fn upload_into_tower_course(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
         Call {
-            params: vec![("course_id", org.course(org.tower, false).await)],
+            params: vec![("course_id", org.course(org.tower, true).await)],
             body: Some(serde_json::json!("A suite file")),
             at: At::Account(org.tower),
         }
     })
 }
 
-/// A file of a draft course in Tower.
+/// A file of a published course in Tower.
 fn course_file_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
-        let course = org.course(org.tower, false).await;
+        let course = org.course(org.tower, true).await;
         Call {
             params: vec![("course_file_id", org.course_file(course, "/").await)],
             body: None,
@@ -1496,10 +1499,10 @@ fn course_file_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send +
     })
 }
 
-/// A file of a draft course in Tower, renamed and moved.
+/// A file of a published course in Tower, renamed and moved.
 fn rename_course_file(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
-        let course = org.course(org.tower, false).await;
+        let course = org.course(org.tower, true).await;
         Call {
             params: vec![("course_file_id", org.course_file(course, "/").await)],
             body: Some(serde_json::json!({ "folder": "/moved", "name": "renamed.txt" })),
@@ -1508,10 +1511,10 @@ fn rename_course_file(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '
     })
 }
 
-/// A draft course in Tower whose folder `/a` holds a file, renamed to `/b`.
+/// A published course in Tower whose folder `/a` holds a file, renamed to `/b`.
 fn rename_tower_folder(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
-        let course = org.course(org.tower, false).await;
+        let course = org.course(org.tower, true).await;
         org.course_file(course, "/a").await;
         Call {
             params: vec![("course_id", course)],
