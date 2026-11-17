@@ -13,7 +13,7 @@ use stepclimb_core::{
     courses::{self, NewCourse},
     id::Uuid,
     items::{self, ItemPatch, Kind, NewItem},
-    modules::{self, ModulePatch, RulesPatch},
+    modules::{self, Error, ModulePatch, RulesPatch},
     organizations,
     rules::{CompletionRule, Requirement},
     unlock::{self, ItemRules, LockReason, RequireError, State},
@@ -273,4 +273,38 @@ async fn b13_require_unlocked_hides_unpublished_and_other_organizations_items(po
         .await
         .unwrap();
     assert!(rules.modules.is_empty(), "{rules:?}");
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_stored_requirement_this_release_cannot_read_fails_closed(pool: PgPool) {
+    let a = Org::new(&pool, "org-a").await;
+    let module = a.module(&pool, true).await;
+    let item = a.item(&pool, module, true, Some(Requirement::View)).await;
+    // The column's check takes any object with a `kind`; only the typed parse refuses this one.
+    sqlx::query(
+        "UPDATE module_items SET requirement = '{\"kind\":\"bogus\"}'::jsonb
+         WHERE org_id = $1 AND id = $2",
+    )
+    .bind(a.id)
+    .bind(item)
+    .execute(&pool)
+    .await
+    .expect("write a bogus requirement");
+
+    let loaded = unlock::load_course_rules(&pool, a.scope(), a.course).await;
+    assert!(
+        matches!(loaded, Err(Error::Stored { id, column: "requirement" }) if id == item),
+        "{loaded:?}"
+    );
+    let checked = check(&pool, a.scope(), item, &[]).await;
+    assert!(
+        matches!(
+            checked,
+            Err(RequireError::Repository(Error::Stored {
+                column: "requirement",
+                ..
+            }))
+        ),
+        "{checked:?}"
+    );
 }

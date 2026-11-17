@@ -6,12 +6,18 @@
 //!
 //! A route runs the check as
 //! `unlock::require_unlocked(&mut conn, scope, item_id, &completed, state.clock.now()).await?`;
-//! the conversion below turns its refusal into the answer.
+//! the conversion below turns its refusal into the answer. It runs only after the route's item
+//! target has passed `require::check_course`, which hides a course the caller cannot see, a
+//! draft and a template; without that check, its 403 and 404 would tell a caller whether an item
+//! exists in a course they cannot see.
 
 use axum::http::StatusCode;
 use serde::Serialize;
 use stepclimb_core::{id::Uuid, unlock};
-use utoipa::ToSchema;
+use utoipa::{
+    ToSchema,
+    openapi::schema::{Array, ArrayBuilder, ObjectBuilder, SchemaFormat, Type},
+};
 
 use crate::{
     error::ApiError,
@@ -38,7 +44,7 @@ pub enum LockReason {
     },
     /// The module waits for these modules of the course, in course order.
     Prerequisites {
-        #[schema(value_type = Vec<String>)]
+        #[schema(schema_with = uuid_list)]
         module_ids: Vec<Uuid>,
     },
     /// The item's module is locked.
@@ -48,6 +54,17 @@ pub enum LockReason {
         #[schema(value_type = String, format = "uuid")]
         item_id: Uuid,
     },
+}
+
+/// The schema of a list of UUIDs: an array of strings in the `uuid` format.
+fn uuid_list() -> Array {
+    ArrayBuilder::new()
+        .items(
+            ObjectBuilder::new()
+                .schema_type(Type::String)
+                .format(Some(SchemaFormat::Custom("uuid".to_owned()))),
+        )
+        .build()
 }
 
 impl LockReason {

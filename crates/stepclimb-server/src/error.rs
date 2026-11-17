@@ -151,7 +151,8 @@ impl ApiError {
     }
 
     /// This error with the `limit` and `max` members: the key of the limit the request would
-    /// pass and the plan's value for it.
+    /// pass and the plan's value for it. Shares one slot with [`Self::with_reasons`]: the later
+    /// call replaces the earlier one.
     pub fn with_limit(self, limit: &'static str, max: u64) -> Self {
         Self {
             extension: Some(Box::new(Extension::Limit { limit, max })),
@@ -165,7 +166,8 @@ impl ApiError {
         Self { errors, ..self }
     }
 
-    /// This error with `reasons`, what keeps an item locked, for `item.locked`.
+    /// This error with `reasons`, what keeps an item locked, for `item.locked`. Shares one slot
+    /// with [`Self::with_limit`]: the later call replaces the earlier one.
     pub fn with_reasons(self, reasons: Vec<LockReason>) -> Self {
         Self {
             extension: Some(Box::new(Extension::Reasons(reasons))),

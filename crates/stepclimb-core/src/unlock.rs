@@ -250,8 +250,9 @@ impl<'a> Course<'a> {
     /// or it has no published requirement and is itself unlocked.
     ///
     /// A module reached again while its own reasons are being worked out is on a cycle, which
-    /// `rules::closes_cycle` keeps out of the stored graph. Should one get in, the module is
-    /// not satisfied, so everything on the cycle stays locked and the walk ends.
+    /// `rules::closes_cycle` keeps out of the stored graph. Should one get in, that module
+    /// counts as not satisfied, so every module on the cycle that is not complete stays locked,
+    /// and the walk ends. A complete module still satisfies a prerequisite on it (B8).
     fn satisfied(&mut self, index: usize) -> bool {
         if self.complete[index] {
             return true;
@@ -415,6 +416,11 @@ pub enum RequireError {
 /// module, and unlocked at `now` for a learner who has completed the items `completed` (B13).
 /// Evaluates the item's whole course with [`evaluate`], so the answer is the one the learner's
 /// reads show.
+///
+/// The caller must already have passed the route's item target through the server's
+/// `require::check_course`, which hides a course the caller cannot see, a draft and a template.
+/// This function does not check the course, so without that check its answers would tell a
+/// caller whether an item exists in a course they cannot see.
 pub async fn require_unlocked(
     conn: &mut PgConnection,
     scope: OrgScope,
