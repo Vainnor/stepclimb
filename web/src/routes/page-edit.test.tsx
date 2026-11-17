@@ -255,8 +255,8 @@ describe("the page editor screen", () => {
       void first.router.navigate({ to: "/" });
       await screen.findByText(/You have no/);
       void first.router.navigate({
-        to: "/c/$course/pages/$page/edit",
-        params: { course: COURSE, page: PAGE },
+        to: "/c/$courseId/pages/$pageId/edit",
+        params: { courseId: COURSE, pageId: PAGE },
       });
       const offer = await screen.findByRole("region", { name: "Unsaved changes" });
       await user.click(within(offer).getByRole("button", { name: "Restore my changes" }));

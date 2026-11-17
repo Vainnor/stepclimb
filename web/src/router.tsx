@@ -157,7 +157,7 @@ const courseVideosRoute = createRoute({
 
 const pageEditRoute = createRoute({
   getParentRoute: () => signedInRoute,
-  path: "c/$course/pages/$page/edit",
+  path: "c/$courseId/pages/$pageId/edit",
   staticData: { view: { title: (t) => t("pageEdit.title") } },
   // Tiptap and ProseMirror load only when an author opens the editor, not with every page.
   component: lazyRouteComponent(() => import("./routes/page-edit"), "PageEditView"),

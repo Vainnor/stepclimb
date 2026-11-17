@@ -44,7 +44,9 @@ const DRAFT_DELAY_MS = 1_000;
 type CurrentVersion = NonNullable<Problem["current_version"]>;
 
 export function PageEditView() {
-  const { course, page } = useParams({ from: "/signed-in/c/$course/pages/$page/edit" });
+  const { courseId: course, pageId: page } = useParams({
+    from: "/signed-in/c/$courseId/pages/$pageId/edit",
+  });
   const query = useQuery(editablePageQuery(page));
   // The signed-in layout loaded `/me` before drawing this view; drafts are that user's.
   const me = useQuery(meQuery).data;
