@@ -3,7 +3,8 @@
 // size and line height (docs/specs/m0/13-base-ui-components.md M0 inventory; spec 12 Q4). The
 // styles of the elements inside (headings, lists, code, tables that scroll on their own) are in
 // styles/base.css, under `[data-slot="prose"]`, because the content is HTML the server sanitized
-// and carries no classes.
+// and carries no classes. That HTML can be given as `html`, inserted as it is: the server is the
+// one that sanitizes it, so only HTML from the server's renderer goes there.
 import { type ReactNode, useEffect, useRef } from "react";
 import { tv } from "../lib/tv";
 import { useStepclimbStrings } from "../strings/strings";
@@ -17,12 +18,21 @@ export const prose = tv({
   base: "max-w-[31.5em] font-read text-read leading-read text-fg-default break-words",
 });
 
-export interface ProseProps {
-  /** The content: elements rendered from the server's sanitized HTML. */
-  children: ReactNode;
+export type ProseProps = {
   /** Layout only. */
   className?: string;
-}
+} & (
+  | {
+      /** The content as elements. */
+      children: ReactNode;
+      html?: never;
+    }
+  | {
+      /** The content as the server's sanitized HTML, inserted as given (spec 07 B14, B22). */
+      html: string;
+      children?: never;
+    }
+);
 
 /** The elements base.css lets scroll sideways on their own. */
 const SCROLLERS = "table, pre";
@@ -81,7 +91,7 @@ function watchLayout(root: HTMLElement, onChange: () => void): () => void {
   };
 }
 
-export function Prose({ children, className }: ProseProps) {
+export function Prose({ children, html, className }: ProseProps) {
   const ref = useRef<HTMLDivElement>(null);
   const { t } = useStepclimbStrings();
   const codeLabel = t("prose.codeBlock");
@@ -93,6 +103,17 @@ export function Prose({ children, className }: ProseProps) {
     mark();
     return watchLayout(root, mark);
   });
+  if (html !== undefined) {
+    return (
+      <div
+        ref={ref}
+        data-slot="prose"
+        className={prose({ className })}
+        // biome-ignore lint/security/noDangerouslySetInnerHtml: HTML the server's renderer sanitized (spec 07 B14), inserted as given (B22)
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    );
+  }
   return (
     <div ref={ref} data-slot="prose" className={prose({ className })}>
       {children}

@@ -24,6 +24,15 @@ describe("Prose", () => {
     expect(screen.getByText("Read back the clearance.").tagName).toBe("P");
   });
 
+  it("inserts the server's HTML as its own children, so the element styles reach them", () => {
+    const { container } = render(
+      <Prose html="<h2>Readbacks</h2><p>Read back the clearance.</p>" />,
+    );
+    const root = container.firstElementChild;
+    expect(root).toHaveAttribute("data-slot", "prose");
+    expect([...(root?.children ?? [])].map((el) => el.tagName)).toEqual(["H2", "P"]);
+  });
+
   it("lets className add layout without dropping the recipe", () => {
     const { container } = render(
       <Prose className="mx-auto">
