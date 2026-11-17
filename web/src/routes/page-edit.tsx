@@ -37,6 +37,10 @@ type CurrentVersion = NonNullable<Problem["current_version"]>;
 export function PageEditView() {
   const { course, page } = useParams({ from: "/signed-in/c/$course/pages/$page/edit" });
   const query = useQuery(editablePageQuery(page));
+  const queryClient = useQueryClient();
+  // Counts the times the author chose to load the newest version: each starts a new editing
+  // session. A save does not, so the editor keeps its undo history and caret across saves.
+  const [session, setSession] = useState(0);
   if (query.isPending) {
     return (
       <div aria-busy="true" className="flex flex-col gap-3 p-4 md:p-6">
@@ -52,9 +56,19 @@ export function PageEditView() {
       </div>
     );
   }
-  // A newly loaded version starts a new editing session.
+  const reload = async () => {
+    clearDraft(page);
+    await queryClient.refetchQueries({ queryKey: editablePageQuery(page).queryKey });
+    setSession((n) => n + 1);
+  };
   return (
-    <PageEditor key={query.data.version.id} courseId={course} pageId={page} loaded={query.data} />
+    <PageEditor
+      key={session}
+      courseId={course}
+      pageId={page}
+      loaded={query.data}
+      onReload={() => void reload()}
+    />
   );
 }
 
@@ -62,6 +76,8 @@ interface PageEditorProps {
   courseId: string;
   pageId: string;
   loaded: EditablePage;
+  /** Drops the author's work and loads the page's newest version. */
+  onReload: () => void;
 }
 
 /** The page's draft when it holds work the loaded body does not; a stale copy is dropped. */
@@ -75,7 +91,7 @@ function offeredDraft(pageId: string, loaded: EditablePage): PageDraft | undefin
   return draft;
 }
 
-function PageEditor({ courseId, pageId, loaded }: PageEditorProps) {
+function PageEditor({ courseId, pageId, loaded, onReload }: PageEditorProps) {
   const { t } = useStepclimbStrings();
   const { toasts } = useAppContext();
   const queryClient = useQueryClient();
@@ -126,10 +142,6 @@ function PageEditor({ courseId, pageId, loaded }: PageEditorProps) {
   );
   useSaveShortcut(saveNow);
 
-  const reload = () => {
-    clearDraft(pageId);
-    void queryClient.invalidateQueries({ queryKey: editablePageQuery(pageId).queryKey });
-  };
   const restore = (offered: PageDraft) => {
     setBody(offered.body);
     if (offered.base_version_id !== base.id) setBase({ id: offered.base_version_id, number: 0 });
@@ -153,7 +165,7 @@ function PageEditor({ courseId, pageId, loaded }: PageEditorProps) {
           current={conflict}
           isPending={save.isPending}
           onOverwrite={() => saveNow(conflict.id)}
-          onReload={reload}
+          onReload={onReload}
         />
       ) : null}
       <Editor

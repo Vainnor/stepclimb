@@ -34,6 +34,13 @@ const doc = (text: string) => ({
   content: [{ type: "paragraph", content: [{ type: "text", text }] }],
 });
 
+const bold = {
+  type: "doc",
+  content: [
+    { type: "paragraph", content: [{ type: "text", text: "Readback", marks: [{ type: "bold" }] }] },
+  ],
+};
+
 function pageSummary(n: number) {
   return {
     id: PAGE,
@@ -79,7 +86,18 @@ beforeAll(() => {
     Object.assign([], { item: () => null }) as unknown as DOMRectList;
   Range.prototype.getBoundingClientRect = () => new DOMRect();
 });
-beforeEach(() => stubMatchMedia(true));
+beforeEach(() => {
+  stubMatchMedia(true);
+  // jsdom has no ResizeObserver, which the editor uses to follow its bar's height.
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+});
 afterEach(() => {
   vi.unstubAllGlobals();
   localStorage.clear();
@@ -95,12 +113,22 @@ describe("the page editor screen", () => {
     expect(await editor()).toHaveTextContent("Readback");
     expect(screen.getByText("Version 1, all changes saved")).toBeInTheDocument();
     const user = userEvent.setup();
+    await user.click(await editor());
+    await user.keyboard("{Control>}a{/Control}");
+    await user.click(screen.getByRole("button", { name: "Bold" }));
+    expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(async () =>
-      expect(await sentBodies(fetch)).toEqual([{ body: doc("Readback"), base_version_id: v(1) }]),
+      expect(await sentBodies(fetch)).toEqual([{ body: bold, base_version_id: v(1) }]),
     );
     expect(await screen.findByText("Saved as version 2")).toBeInTheDocument();
     expect(screen.getByText("Version 2, all changes saved")).toBeInTheDocument();
+    // The save did not start the editor over: the bold it just saved can still be undone.
+    expect(screen.getByRole("button", { name: "Undo" })).toBeEnabled();
+    // The next save is based on the version the last one wrote.
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(async () => expect(await sentBodies(fetch)).toHaveLength(2));
+    expect((await sentBodies(fetch))[1]).toEqual({ body: bold, base_version_id: v(2) });
   });
 
   it("saves with Ctrl+S", async () => {

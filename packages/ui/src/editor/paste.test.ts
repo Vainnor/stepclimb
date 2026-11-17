@@ -38,6 +38,7 @@ const HOSTILE = [
   `<table><tr><td style="text-align:right" colwidth="40" data-colwidth="40">c</td></tr></table>`,
   "<h5>five</h5>",
   "<blockquote><h2>quoted heading</h2></blockquote>",
+  "<ul><li><p>item</p><h3>heading in a list</h3><table><tr><td>t</td></tr></table></li></ul>",
   `<iframe src="https://evil.example"></iframe><style>body{}</style><svg onload="alert(4)"></svg>`,
   `<figure data-course-file-id="not-a-file"></figure>`,
   `<div data-provider="youtube" data-video-id="short">embed</div>`,
@@ -71,6 +72,17 @@ describe("paste", () => {
     });
     expect(text).toContain('"marks":[{"type":"link","attrs":{"href":"https://example.com/"}}]');
     expect(text).toContain('"text":"nulhere"');
+    // A list item and a quote hold only paragraphs, lists and code: a heading or a table pasted
+    // into one lands after it.
+    const nestedTypes = (node: { type: string; content?: unknown[] }): string[] =>
+      (node.content ?? []).flatMap((child) => {
+        const c = child as { type: string; content?: unknown[] };
+        return [c.type, ...nestedTypes(c)];
+      });
+    for (const block of doc.content.filter((b) => b.type === "bulletList" || b.type === "blockquote")) {
+      expect(nestedTypes(block)).not.toContain("heading");
+      expect(nestedTypes(block)).not.toContain("table");
+    }
     await expect(`${JSON.stringify(doc, null, 2)}\n`).toMatchFileSnapshot(PASTED);
   });
 
