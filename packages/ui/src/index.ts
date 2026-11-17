@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Stepclimb UI: the M0 inventory of docs/specs/m0/13-base-ui-components.md (Foundations, Actions,
 // the M0 forms, Overlays, Navigation and the M0 data components), the M1 components of
-// docs/specs/m1/16-learning-ui-components.md built so far, and the theme and strings providers.
+// docs/specs/m1/16-learning-ui-components.md built so far, VideoUploader (08-uploaded-video.md
+// B22), and the theme and strings providers.
 
 export type {
   BoardItem,
@@ -291,6 +292,28 @@ export {
 } from "./strings/strings";
 export { defaultTerms, type Term, type TermForms, type TermOverrides } from "./strings/terms";
 export { Icon, type IconProps, type IconState, icon, iconWeights } from "./theme/icon";
+export {
+  CHUNK_BYTES,
+  MIN_CHUNK_BYTES,
+  type Send as TusSend,
+  TUS_VERSION,
+} from "./video/tus";
+export {
+  type GetVideo,
+  POLL_MS,
+  type UploadPhase,
+  type UploadState,
+  type VideoStatus,
+} from "./video/use-video-upload";
+export { type ProblemText, problemText, type UploadProblem } from "./video/video-problems";
+export {
+  VIDEO_FILE_TYPES,
+  VideoUploadCard,
+  type VideoUploadCardProps,
+  VideoUploader,
+  type VideoUploaderProps,
+  videoUploader,
+} from "./video/video-uploader";
 export {
   type Appearance,
   type Density,
