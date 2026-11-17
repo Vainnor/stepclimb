@@ -7,7 +7,7 @@ use axum::{
     http::{HeaderValue, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{MethodRouter, delete, get, patch, post, put},
+    routing::{MethodRouter, delete, get, head, patch, post, put},
 };
 use sqlx::PgPool;
 use stepclimb_auth::encryption::KeyRing;
@@ -28,6 +28,7 @@ use crate::{
     providers::Providers,
     rate_limit::RateLimiter,
     role_assignments, roles, service_accounts, spa, totp, totp_enrollment, upload, users,
+    video_uploads, videos,
     web_origin::WebOrigin,
 };
 
@@ -352,6 +353,26 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         (
             "/api/v1/pages/{page_id}/versions/{version_id}/restore",
             post(pages::restore_page_version),
+        ),
+        (
+            "/api/v1/courses/{course_id}/videos",
+            get(videos::list_course_videos),
+        ),
+        (
+            "/api/v1/courses/{course_id}/video-uploads",
+            post(video_uploads::create_video_upload)
+                .layer(middleware::from_fn(video_uploads::tus_header)),
+        ),
+        (
+            "/api/v1/video-uploads/{upload_id}",
+            head(video_uploads::get_video_upload_offset)
+                .patch(video_uploads::append_video_upload)
+                .delete(video_uploads::delete_video_upload)
+                .layer(middleware::from_fn(video_uploads::tus_header)),
+        ),
+        (
+            "/api/v1/videos/{video_id}",
+            get(videos::get_video).patch(videos::update_video),
         ),
         ("/api/v1/admin/permissions", get(roles::list_permissions)),
         (

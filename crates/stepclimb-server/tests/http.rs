@@ -142,6 +142,7 @@ async fn startup_migrations_create_the_schema_on_an_empty_database(pool: PgPool)
             "audit_events",
             "auth_flows",
             "course_files",
+            "course_videos",
             "courses",
             "enrollments",
             "files",
@@ -171,7 +172,11 @@ async fn startup_migrations_create_the_schema_on_an_empty_database(pool: PgPool)
             "service_accounts",
             "sessions",
             "totp_recovery_codes",
-            "users"
+            "transcode_usage",
+            "users",
+            "video_chapters",
+            "video_uploads",
+            "videos"
         ]
     );
 }
@@ -225,6 +230,8 @@ async fn the_openapi_document_is_3_1_and_lists_every_route() {
             "/api/v1/courses/{course_id}/move",
             "/api/v1/courses/{course_id}/pages",
             "/api/v1/courses/{course_id}/status",
+            "/api/v1/courses/{course_id}/video-uploads",
+            "/api/v1/courses/{course_id}/videos",
             "/api/v1/enrollments/{enrollment_id}",
             "/api/v1/items/{item_id}",
             "/api/v1/items/{item_id}/move",
@@ -254,6 +261,8 @@ async fn the_openapi_document_is_3_1_and_lists_every_route() {
             "/api/v1/users/{user_id}",
             "/api/v1/users/{user_id}/identities",
             "/api/v1/users/{user_id}/identities/{identity_id}",
+            "/api/v1/video-uploads/{upload_id}",
+            "/api/v1/videos/{video_id}",
             "/auth/local/enrollment/passkey",
             "/auth/local/enrollment/password",
             "/auth/local/enrollment/start",

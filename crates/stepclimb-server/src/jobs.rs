@@ -3,20 +3,22 @@
 //!
 //! [`registry`] is every kind `stepclimb serve` registers with its handler; the worker of an
 //! `all` or `worker` process serves every queue in it, and its scheduler runs the periodic ones:
-//! `jobs.prune` (hourly), `auth.flows_cleanup` (every 10 minutes) and `files.cleanup` (hourly,
-//! docs/specs/m1/06-files.md B8, B21).
+//! `jobs.prune` (hourly), `auth.flows_cleanup` (every 10 minutes), `files.cleanup` (hourly,
+//! docs/specs/m1/06-files.md B8, B21) and `videos.cleanup` (hourly,
+//! docs/specs/m1/08-uploaded-video.md B6).
 
 use stepclimb_jobs::{Registry, RegistryError, prune};
 
-use crate::{files_cleanup, flow, storage::Storage};
+use crate::{files_cleanup, flow, storage::Storage, videos_cleanup};
 
-/// The registry a `stepclimb serve` worker runs with, its file cleanup on `storage` (`None` when
-/// storage is not configured).
+/// The registry a `stepclimb serve` worker runs with, its file and video upload cleanups on
+/// `storage` (`None` when storage is not configured).
 pub fn registry(storage: Option<Storage>) -> Result<Registry, RegistryError> {
     let mut registry = Registry::new();
     prune::register(&mut registry)?;
     flow::register_cleanup(&mut registry)?;
-    files_cleanup::register(&mut registry, storage)?;
+    files_cleanup::register(&mut registry, storage.clone())?;
+    videos_cleanup::register(&mut registry, storage)?;
     Ok(registry)
 }
 
@@ -35,11 +37,13 @@ mod tests {
                 ("auth.flows_cleanup", Duration::from_secs(10 * 60)),
                 ("files.cleanup", Duration::from_secs(60 * 60)),
                 ("jobs.prune", Duration::from_secs(60 * 60)),
+                ("videos.cleanup", Duration::from_secs(60 * 60)),
             ]
         );
         assert!(registry.knows(&prune::PRUNE));
         assert!(registry.knows(&flow::CLEANUP));
         assert!(registry.knows(&files_cleanup::CLEANUP));
+        assert!(registry.knows(&videos_cleanup::CLEANUP));
         assert_eq!(registry.queues(), ["default"]);
     }
 }

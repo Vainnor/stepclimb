@@ -379,6 +379,35 @@ pub async fn lock(
     .transpose()
 }
 
+/// [`lock`] with the course row `FOR SHARE`: for a write that must wait for a status change in
+/// progress and keep the course from changing until it commits, without making other such
+/// writes to the same course wait for it (spec m1/08 D14: chunks of different uploads).
+pub async fn lock_shared(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    id: Uuid,
+) -> Result<Option<Course>, Error> {
+    sqlx::query_as!(
+        Row,
+        r#"SELECT c.id, c.account_id, a.path::text AS "account_path!", c.code, c.title, c.status,
+                  c.template,
+                  (extract(epoch FROM c.start_at) * 1000000)::bigint AS start_at_us,
+                  (extract(epoch FROM c.end_at) * 1000000)::bigint AS end_at_us,
+                  c.settings::text AS "settings!",
+                  (extract(epoch FROM c.created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM c.updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM courses c JOIN accounts a ON a.org_id = c.org_id AND a.id = c.account_id
+           WHERE c.org_id = $1 AND c.id = $2
+           FOR SHARE OF c FOR SHARE OF a"#,
+        scope.org_id(),
+        id,
+    )
+    .fetch_optional(conn)
+    .await?
+    .map(Course::try_from)
+    .transpose()
+}
+
 /// The ids on the path of the account the course `id` belongs to, the root first, or `None`
 /// when the scope's organization has no such course. [`locate`] reads it with B10's draft and
 /// template flag, for `CourseTarget` (B24).

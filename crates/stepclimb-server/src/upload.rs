@@ -163,13 +163,7 @@ pub async fn upload_course_file(
     let length = content_length(&headers, storage.max_file_bytes())?;
     let place = Place::parse(&params)?;
     upload.precheck(&place, length).await?;
-    let _in_flight = storage.try_start_upload().ok_or_else(|| {
-        ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            code::UPLOADS_BUSY,
-            "The server is receiving as many uploads as it takes at once; try again shortly.",
-        )
-    })?;
+    let _in_flight = storage.try_start_upload().ok_or_else(uploads_busy)?;
     let streamed = upload.stream(body, length).await?;
     let stored = upload.store(&place, &streamed).await;
     upload.delete_temporary(&streamed.temporary).await;
@@ -183,8 +177,17 @@ pub async fn upload_course_file(
         .into_response())
 }
 
+/// 503 `file.uploads_busy`: the server streams as many uploads as `UploadLimits::in_flight`.
+pub(crate) fn uploads_busy() -> ApiError {
+    ApiError::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        code::UPLOADS_BUSY,
+        "The server is receiving as many uploads as it takes at once; try again shortly.",
+    )
+}
+
 /// The request's `Content-Length`: 411 without one, 400 when it is not a number, 413 over `max`.
-fn content_length(headers: &HeaderMap, max: u64) -> Result<u64, ApiError> {
+pub(crate) fn content_length(headers: &HeaderMap, max: u64) -> Result<u64, ApiError> {
     let value = headers.get(header::CONTENT_LENGTH).ok_or_else(|| {
         ApiError::new(
             StatusCode::LENGTH_REQUIRED,
@@ -297,34 +300,12 @@ impl Upload<'_> {
     /// first bytes (B6). A body of another length than `length` answers 400; on any failure the
     /// multipart upload is aborted, so no temporary object is left.
     async fn stream(&self, body: Body, length: u64) -> Result<Streamed, ApiError> {
-        let temporary = self.storage.upload_path(self.scope(), new_id());
-        let multipart = self
-            .storage
-            .store()
-            .put_multipart(&temporary)
-            .await
-            .map_err(|error| ApiError::internal(&error))?;
-        let mut writer = WriteMultipart::new(multipart);
-        let idle = self.storage.upload_limits().idle;
-        let copied = copy_body(body, length, idle, &mut writer).await;
-        let (hasher, head) = match copied {
-            Ok(done) => done,
-            Err(error) => {
-                if let Err(abort) = writer.abort().await {
-                    tracing::warn!(error = %abort, key = %temporary, "could not abort an upload");
-                }
-                return Err(error);
-            }
-        };
-        writer
-            .finish()
-            .await
-            .map_err(|error| ApiError::internal(&error))?;
-        let complete = u64::try_from(head.len()).is_ok_and(|n| n == length);
+        let written = stream_to_temporary(self.storage, self.scope(), body, length).await?;
+        let complete = u64::try_from(written.head.len()).is_ok_and(|n| n == length);
         Ok(Streamed {
-            temporary,
-            hashed: hasher.finish(),
-            mime: sniff::sniff(&head, complete),
+            temporary: written.path,
+            hashed: written.hashed,
+            mime: sniff::sniff(&written.head, complete),
         })
     }
 
@@ -433,6 +414,56 @@ impl Upload<'_> {
             tracing::warn!(%error, key = %location, "could not delete an object of an upload");
         }
     }
+}
+
+/// A body [`stream_to_temporary`] stored: where, its hash and length, and its first
+/// [`sniff::HEAD_BYTES`].
+pub(crate) struct Temporary {
+    pub(crate) path: Path,
+    pub(crate) hashed: Hashed,
+    pub(crate) head: Vec<u8>,
+}
+
+/// Write `body` of `length` bytes to a new temporary object `orgs/<org_id>/uploads/<uuid>` with
+/// a multipart upload, with back pressure on the store, so at most about 15 MiB of it is in
+/// memory at once. A body of another length answers 400, one that stalls for the store's
+/// `UploadLimits::idle` 408; on any failure the multipart upload is aborted, so no temporary
+/// object is left. The course file upload and a video upload's chunks
+/// ([`crate::video_uploads`]) both stream through here; `files.cleanup` deletes a temporary
+/// object a crash left behind.
+pub(crate) async fn stream_to_temporary(
+    storage: &Storage,
+    scope: OrgScope,
+    body: Body,
+    length: u64,
+) -> Result<Temporary, ApiError> {
+    let path = storage.upload_path(scope, new_id());
+    let multipart = storage
+        .store()
+        .put_multipart(&path)
+        .await
+        .map_err(|error| ApiError::internal(&error))?;
+    let mut writer = WriteMultipart::new(multipart);
+    let idle = storage.upload_limits().idle;
+    let copied = copy_body(body, length, idle, &mut writer).await;
+    let (hasher, head) = match copied {
+        Ok(done) => done,
+        Err(error) => {
+            if let Err(abort) = writer.abort().await {
+                tracing::warn!(error = %abort, key = %path, "could not abort an upload");
+            }
+            return Err(error);
+        }
+    };
+    writer
+        .finish()
+        .await
+        .map_err(|error| ApiError::internal(&error))?;
+    Ok(Temporary {
+        path,
+        hashed: hasher.finish(),
+        head,
+    })
 }
 
 /// Every chunk of `body` fed to the hasher and the writer in order, with back pressure on the

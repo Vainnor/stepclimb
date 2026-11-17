@@ -162,7 +162,13 @@ async fn periodic_jobs_ran(pool: &PgPool) {
             .fetch_one(pool)
             .await
             .expect("count jobs");
-        if moved == ["auth.flows_cleanup", "files.cleanup", "jobs.prune"] && left == 0 {
+        let all = [
+            "auth.flows_cleanup",
+            "files.cleanup",
+            "jobs.prune",
+            "videos.cleanup",
+        ];
+        if moved == all && left == 0 {
             return;
         }
         assert!(

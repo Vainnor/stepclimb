@@ -97,6 +97,7 @@ use stepclimb_core::{
     roles::{self, NewRole},
     service_accounts,
     users::{self, NewUser},
+    videos,
 };
 use stepclimb_server::{
     AppState,
@@ -401,6 +402,50 @@ const TABLE: &[Entry] = &[
     Entry {
         operation_id: "restorePageVersion",
         access: permission(CourseContentEdit::KEY, PAGE_NOT_FOUND, restore_page_version),
+    },
+    Entry {
+        operation_id: "listCourseVideos",
+        access: permission(CourseViewAll::KEY, COURSE_NOT_FOUND, videos_of_tower_course),
+    },
+    Entry {
+        operation_id: "createVideoUpload",
+        access: permission(CourseContentEdit::KEY, COURSE_NOT_FOUND, tower_course),
+    },
+    Entry {
+        operation_id: "getVideoUploadOffset",
+        access: permission(
+            CourseContentEdit::KEY,
+            VIDEO_UPLOAD_NOT_FOUND,
+            video_upload_in_tower,
+        ),
+    },
+    Entry {
+        operation_id: "appendVideoUpload",
+        access: permission(
+            CourseContentEdit::KEY,
+            VIDEO_UPLOAD_NOT_FOUND,
+            chunk_of_video_upload_in_tower,
+        ),
+    },
+    Entry {
+        operation_id: "deleteVideoUpload",
+        access: permission(
+            CourseContentEdit::KEY,
+            VIDEO_UPLOAD_NOT_FOUND,
+            video_upload_in_tower,
+        ),
+    },
+    Entry {
+        operation_id: "getVideo",
+        access: permission(CourseViewAll::KEY, VIDEO_NOT_FOUND, video_in_tower),
+    },
+    Entry {
+        operation_id: "updateVideo",
+        access: permission(
+            CourseContentEdit::KEY,
+            VIDEO_NOT_FOUND,
+            rename_video_in_tower,
+        ),
     },
     Entry {
         operation_id: "listPermissions",
@@ -1678,6 +1723,57 @@ fn pages_of_tower_course(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send 
     })
 }
 
+/// A video upload that is not the organization's, or whose course the caller cannot see: 404
+/// `video_upload.not_found` (M1 spec 08 API).
+const VIDEO_UPLOAD_NOT_FOUND: Target = Target::Scoped {
+    not_found: "video_upload.not_found",
+    cross_org: "video_upload.not_found",
+};
+
+/// A video that is not the organization's, or none of whose courses the caller can see: 404
+/// `video.not_found` (M1 spec 08 API).
+const VIDEO_NOT_FOUND: Target = Target::Scoped {
+    not_found: "video.not_found",
+    cross_org: "video.not_found",
+};
+
+/// The headers a call of the operation carries besides the suite's own: tus's (M1 spec 08 B4,
+/// B5). A `Content-Type` here replaces the JSON one, and the body is sent as its JSON text.
+const HEADERS: &[(&str, &[(&str, &str)])] = &[
+    (
+        "createVideoUpload",
+        &[
+            ("tus-resumable", "1.0.0"),
+            ("upload-length", "64"),
+            ("upload-metadata", "title U3VpdGUgdmlkZW8="),
+        ],
+    ),
+    ("getVideoUploadOffset", &[("tus-resumable", "1.0.0")]),
+    (
+        "appendVideoUpload",
+        &[
+            ("tus-resumable", "1.0.0"),
+            ("upload-offset", "0"),
+            ("content-type", "application/offset+octet-stream"),
+        ],
+    ),
+    ("deleteVideoUpload", &[("tus-resumable", "1.0.0")]),
+];
+
+/// A published course in Tower with an upload started in it, listed. The video setups use
+/// published courses for the reason the file setups do.
+fn videos_of_tower_course(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        org.video_upload(course).await;
+        Call {
+            params: vec![("course_id", course)],
+            body: None,
+            at: At::Account(org.tower),
+        }
+    })
+}
+
 /// A new page of a published course in Tower.
 fn new_page_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
@@ -1695,6 +1791,17 @@ fn page_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
         let course = org.course(org.tower, true).await;
         Call {
             params: vec![("page_id", org.page(course).await.0)],
+            body: None,
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A published course in Tower; [`HEADERS`] start an upload in it.
+fn tower_course(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: vec![("course_id", org.course(org.tower, true).await)],
             body: None,
             at: At::Account(org.tower),
         }
@@ -1742,6 +1849,18 @@ fn page_version_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send 
     })
 }
 
+/// An upload of 15 bytes started in a published course in Tower.
+fn video_upload_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        Call {
+            params: vec![("upload_id", org.video_upload(course).await.0)],
+            body: None,
+            at: At::Account(org.tower),
+        }
+    })
+}
+
 /// Version 1 of a page of a published course in Tower restored over version 2.
 fn restore_page_version(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
@@ -1751,6 +1870,43 @@ fn restore_page_version(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send +
         Call {
             params: vec![("page_id", page), ("version_id", first)],
             body: Some(serde_json::json!({ "base_version_id": second })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// The chunk that completes an upload in a published course in Tower: the JSON text of a
+/// string, the upload's 15 bytes.
+fn chunk_of_video_upload_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        Call {
+            params: vec![("upload_id", org.video_upload(course).await.0)],
+            body: Some(serde_json::json!("A suite chunk")),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// The video of an upload in a published course in Tower.
+fn video_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        Call {
+            params: vec![("video_id", org.video_upload(course).await.1)],
+            body: None,
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// The video of an upload in a published course in Tower, renamed.
+fn rename_video_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        Call {
+            params: vec![("video_id", org.video_upload(course).await.1)],
+            body: Some(serde_json::json!({ "title": "Renamed" })),
             at: At::Account(org.tower),
         }
     })
@@ -3304,6 +3460,9 @@ struct Answer {
     status: StatusCode,
     headers: HeaderMap,
     body: String,
+    /// The answer to a `HEAD` request, which has no body: [`Answer::expect`] checks its status
+    /// only, the code being in no header.
+    head: bool,
 }
 
 impl Answer {
@@ -3314,7 +3473,8 @@ impl Answer {
     }
 
     fn expect(&self, status: StatusCode, code: &str) -> Result<(), String> {
-        if self.status == status && self.code().as_deref() == Some(code) {
+        let code_matches = self.head || self.code().as_deref() == Some(code);
+        if self.status == status && code_matches {
             Ok(())
         } else {
             Err(format!(
@@ -3351,7 +3511,16 @@ async fn call_op(
     if let Some((_, query)) = QUERIES.iter().find(|(id, _)| *id == op.id) {
         uri = format!("{uri}?{query}");
     }
-    Ok(send(app, &op.method, &uri, org, cookie, call.body.as_ref()).await)
+    let headers = HEADERS
+        .iter()
+        .find(|(id, _)| *id == op.id)
+        .map_or(&[][..], |(_, headers)| *headers);
+    let request = Sent {
+        method: &op.method,
+        uri: &uri,
+        headers,
+    };
+    Ok(send_with(app, request, org, cookie, call.body.as_ref()).await)
 }
 
 /// One request, same-origin as the browser app sends it, in the organization `org`.
@@ -3363,20 +3532,48 @@ async fn send(
     cookie: Option<&str>,
     body: Option<&Value>,
 ) -> Answer {
+    let request = Sent {
+        method,
+        uri,
+        headers: &[],
+    };
+    send_with(app, request, org, cookie, body).await
+}
+
+/// The method, URI and extra headers of a request [`send_with`] sends.
+struct Sent<'a> {
+    method: &'a Method,
+    uri: &'a str,
+    headers: &'a [(&'a str, &'a str)],
+}
+
+/// [`send`] with `sent`'s extra headers; one of them that is `Content-Type` replaces the JSON one.
+async fn send_with(
+    app: &Router,
+    sent: Sent<'_>,
+    org: Uuid,
+    cookie: Option<&str>,
+    body: Option<&Value>,
+) -> Answer {
     let mut request = Request::builder()
-        .method(method)
-        .uri(uri)
+        .method(sent.method)
+        .uri(sent.uri)
         .header(TEST_ORG_HEADER, org.to_string())
         .header("sec-fetch-site", "same-origin");
     if let Some(cookie) = cookie {
         request = request.header(header::COOKIE, cookie);
     }
+    for (name, value) in sent.headers {
+        request = request.header(*name, *value);
+    }
+    let typed = sent.headers.iter().any(|(name, _)| *name == "content-type");
     let body = match body {
         Some(json) => {
             let json = json.to_string();
-            request = request
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::CONTENT_LENGTH, json.len());
+            if !typed {
+                request = request.header(header::CONTENT_TYPE, "application/json");
+            }
+            request = request.header(header::CONTENT_LENGTH, json.len());
             Body::from(json)
         }
         None => Body::empty(),
@@ -3398,6 +3595,7 @@ async fn send(
         status,
         headers,
         body: String::from_utf8_lossy(&bytes).into_owned(),
+        head: *sent.method == Method::HEAD,
     }
 }
 
@@ -3553,6 +3751,26 @@ impl Org {
             .expect("publish course");
         }
         id
+    }
+
+    /// An upload of 15 bytes started in `course` by a new user: the upload's and its video's
+    /// ids. 15 bytes is the JSON text of [`chunk_of_video_upload_in_tower`]'s body, so that chunk
+    /// completes the upload and the 1 MiB minimum of a chunk that does not (D15) is not met.
+    async fn video_upload(&self, course: Uuid) -> (Uuid, Uuid) {
+        let (_, user) = self.user().await;
+        let title = format!("Video of {}", self.slug);
+        let new = videos::NewUpload {
+            course_id: course,
+            title: &title,
+            length: 15,
+            created_by: user,
+        };
+        let mut tx = self.pool.begin().await.expect("begin");
+        let (video, upload) = videos::create_upload(&mut tx, scope(self.id), &new, now())
+            .await
+            .expect("start an upload");
+        tx.commit().await.expect("commit");
+        (upload.id, video.id)
     }
 
     /// A course file in `folder` of `course`, its bytes naming the slug and a new id: its id.
@@ -4646,6 +4864,7 @@ async fn the_test_header_picks_one_of_several_organizations(pool: PgPool) {
                 status,
                 headers,
                 body: String::from_utf8_lossy(&body).into_owned(),
+                head: false,
             }
         }
     };
@@ -4697,6 +4916,7 @@ async fn a_malformed_test_header_names_no_organization(pool: PgPool) {
         status,
         headers,
         body: String::from_utf8_lossy(&body).into_owned(),
+        head: false,
     }
     .expect(StatusCode::NOT_FOUND, "org.not_found")
     .unwrap();

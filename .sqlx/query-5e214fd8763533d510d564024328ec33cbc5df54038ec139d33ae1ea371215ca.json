@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH video AS (\n               INSERT INTO videos (id, org_id, source, title, status, created_at, updated_at)\n               VALUES ($1, $3, 'upload', $5, 'uploading',\n                       timestamptz 'epoch' + $8::bigint * interval '1 microsecond',\n                       timestamptz 'epoch' + $8::bigint * interval '1 microsecond')\n               RETURNING id),\n           attached AS (\n               INSERT INTO course_videos (org_id, course_id, video_id, created_at, updated_at)\n               SELECT $3, $4, id,\n                      timestamptz 'epoch' + $8::bigint * interval '1 microsecond',\n                      timestamptz 'epoch' + $8::bigint * interval '1 microsecond'\n               FROM video)\n           INSERT INTO video_uploads (id, org_id, video_id, course_id, length, created_by,\n                                      created_at, updated_at)\n           SELECT $2, $3, id, $4, $6, $7,\n                  timestamptz 'epoch' + $8::bigint * interval '1 microsecond',\n                  timestamptz 'epoch' + $8::bigint * interval '1 microsecond'\n           FROM video",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Int8",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5e214fd8763533d510d564024328ec33cbc5df54038ec139d33ae1ea371215ca"
+}

@@ -123,6 +123,10 @@ pub mod totp_enrollment;
 pub mod unlock;
 pub mod upload;
 pub mod users;
+pub mod video_parts;
+pub mod video_uploads;
+pub mod videos;
+pub mod videos_cleanup;
 pub mod web_origin;
 
 pub use app::{AppState, router};

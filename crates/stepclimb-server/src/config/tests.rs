@@ -244,6 +244,7 @@ fn every_known_variable_is_accepted() {
             "STEPCLIMB_ROLE",
             "STEPCLIMB_WORKER_CONCURRENCY",
             "STEPCLIMB_MAX_FILE_BYTES",
+            "STEPCLIMB_MAX_VIDEO_BYTES",
             "STEPCLIMB_STORAGE_URL",
             "STEPCLIMB_STORAGE_S3_ENDPOINT",
             "STEPCLIMB_STORAGE_S3_REGION",
@@ -450,6 +451,7 @@ fn every_config_field_is_a_classified_setting() {
         role: _,
         worker_concurrency: _,
         max_file_bytes: _,
+        max_video_bytes: _,
         // `[[providers]]` is a record of the file, not a setting (`providers::tests`).
         providers: _,
         // The six storage settings below (`storage::tests`).
@@ -470,6 +472,7 @@ fn every_config_field_is_a_classified_setting() {
         (ROLE, false),
         (WORKER_CONCURRENCY, false),
         (MAX_FILE_BYTES, false),
+        (MAX_VIDEO_BYTES, false),
         (STORAGE_URL, false),
         (STORAGE_S3_ENDPOINT, false),
         (STORAGE_S3_REGION, false),
@@ -821,6 +824,7 @@ fn non_secret_values_list_every_non_secret_setting_and_no_secret() {
             ("role", "all".to_owned()),
             ("worker_concurrency", "4".to_owned()),
             ("max_file_bytes", "104857600".to_owned()),
+            ("max_video_bytes", "5368709120".to_owned()),
         ]
     );
     let printed = format!("{values:?}");
@@ -1562,6 +1566,43 @@ fn max_file_bytes_is_100_mib_unless_set_and_1_mib_to_5_gib() {
             format!(
                 "STEPCLIMB_MAX_FILE_BYTES: {problem}; for example {}",
                 MAX_FILE_BYTES.example
+            ),
+            "{value:?}"
+        );
+    }
+}
+
+// docs/specs/m1/08-uploaded-video.md B4.
+#[test]
+fn max_video_bytes_is_5_gib_unless_set_and_1_mib_to_50_gib() {
+    let unset = Config::load(&with_required(&[]), None).unwrap();
+    assert_eq!(unset.max_video_bytes, 5_368_709_120);
+    for (value, bytes) in [
+        ("1048576", 1_048_576),
+        ("53687091200", 53_687_091_200),
+        ("", 5_368_709_120),
+    ] {
+        let config = Config::load(&with_required(&[(MAX_VIDEO_BYTES.var, value)]), None).unwrap();
+        assert_eq!(config.max_video_bytes, bytes, "{value:?}");
+    }
+    for (value, problem) in [
+        (
+            "1048575",
+            "1048575 is outside 1048576 (1 MiB) to 53687091200 (50 GiB)",
+        ),
+        (
+            "53687091201",
+            "53687091201 is outside 1048576 (1 MiB) to 53687091200 (50 GiB)",
+        ),
+        ("5GiB", "\"5GiB\" is not a whole number of bytes"),
+    ] {
+        let error =
+            Config::load(&with_required(&[(MAX_VIDEO_BYTES.var, value)]), None).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "STEPCLIMB_MAX_VIDEO_BYTES: {problem}; for example {}",
+                MAX_VIDEO_BYTES.example
             ),
             "{value:?}"
         );

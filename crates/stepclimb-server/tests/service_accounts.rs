@@ -37,6 +37,7 @@ use stepclimb_core::{
     role_assignments::{self, NewAssignment, Scope},
     roles::{self, NewRole, RolePatch},
     users::{self, NewUser, Status},
+    videos,
 };
 use stepclimb_server::{AppState, openapi, router, session, web_origin::WebOrigin};
 use tower::ServiceExt;
@@ -312,6 +313,24 @@ impl Fixture {
             .expect("create item")
             .id;
         (module, item)
+    }
+
+    /// An upload started in a new course in Tower: its id and its video's.
+    async fn video_upload(&self) -> (Uuid, Uuid) {
+        let course = self.course().await;
+        let user = self.user("Walked uploader").await;
+        let new = videos::NewUpload {
+            course_id: course,
+            title: "Walked video",
+            length: 64,
+            created_by: user,
+        };
+        let mut tx = self.pool.begin().await.expect("begin");
+        let (video, upload) = videos::create_upload(&mut tx, scope(self.org), &new, now())
+            .await
+            .expect("start an upload");
+        tx.commit().await.expect("commit");
+        (upload.id, video.id)
     }
 
     /// A file in the top folder of a new course in Tower: its course file's id.
@@ -1089,6 +1108,12 @@ async fn an_empty_scope_key_is_refused_on_every_operation_but_the_allowed_ones(p
                 let page = f.page().await;
                 uri = uri.replace("{page_id}", &page.to_string());
             }
+            if uri.contains("{upload_id}") || uri.contains("{video_id}") {
+                let (upload, video) = f.video_upload().await;
+                uri = uri
+                    .replace("{upload_id}", &upload.to_string())
+                    .replace("{video_id}", &video.to_string());
+            }
             if uri.contains("{user_id}") {
                 let target = f.user("Walk target").await;
                 uri = uri.replace("{user_id}", &target.to_string());
@@ -1102,7 +1127,7 @@ async fn an_empty_scope_key_is_refused_on_every_operation_but_the_allowed_ones(p
                     json!({})
                 }
             });
-            let answer = send(&f.app, method, &uri, &[Auth::Key(&key)], body).await;
+            let answer = send(&f.app, method.clone(), &uri, &[Auth::Key(&key)], body).await;
             if EMPTY_SCOPE_ALLOWED.contains(&id) {
                 assert!(answer.status.is_success(), "{id}: {answer:?}");
                 continue;
@@ -1117,6 +1142,10 @@ async fn an_empty_scope_key_is_refused_on_every_operation_but_the_allowed_ones(p
             let hidden_enrollment =
                 path.contains("{enrollment_id}") && answer.code() == "enrollment.not_found";
             let hidden_page = path.contains("{page_id}") && answer.code() == "page.not_found";
+            let hidden_video = path.contains("{video_id}") && answer.code() == "video.not_found";
+            // A response to HEAD has no body to carry a code.
+            let hidden_upload = path.contains("{upload_id}")
+                && (answer.code() == "video_upload.not_found" || method == Method::HEAD);
             assert!(
                 answer.status == StatusCode::FORBIDDEN
                     || (answer.status == StatusCode::NOT_FOUND
@@ -1126,7 +1155,9 @@ async fn an_empty_scope_key_is_refused_on_every_operation_but_the_allowed_ones(p
                             || hidden_item
                             || hidden_file
                             || hidden_enrollment
-                            || hidden_page)),
+                            || hidden_page
+                            || hidden_video
+                            || hidden_upload)),
                 "{id} answered an empty-scope key: {answer:?}"
             );
         }

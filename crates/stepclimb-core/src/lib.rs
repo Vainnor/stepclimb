@@ -31,8 +31,9 @@
 //! organization, once per SHA-256, with [`course_files`], which places them in a course's folders,
 //! and [`sniff`], which reads an upload's type from its first bytes; and [`unlock`], which decides
 //! for a learner which modules and items are locked and which are complete; and [`pages`], a
-//! course's pages and their immutable versions, whose bodies [`page_doc`] parses and checks. The
-//! other repositories arrive with the M0 specs in `docs/specs/m0/`.
+//! course's pages and their immutable versions, whose bodies [`page_doc`] parses and checks;
+//! and [`videos`], an organization's videos, the courses they are attached to and their tus
+//! uploads. The other repositories arrive with the M0 specs in `docs/specs/m0/`.
 
 pub mod accounts;
 pub mod admission_rules;
@@ -85,6 +86,7 @@ pub mod theme;
 pub mod tz;
 pub mod unlock;
 pub mod users;
+pub mod videos;
 
 pub use scope::{OrgScope, ScopeOrigin};
 pub use settings::{OrgSettings, OrgSettingsPatch};

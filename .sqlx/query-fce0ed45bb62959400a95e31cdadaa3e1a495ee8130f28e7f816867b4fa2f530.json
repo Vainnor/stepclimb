@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM video_uploads WHERE org_id = $1 AND id = $2 AND terminating = 'parts'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fce0ed45bb62959400a95e31cdadaa3e1a495ee8130f28e7f816867b4fa2f530"
+}

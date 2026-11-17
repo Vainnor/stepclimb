@@ -621,6 +621,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/courses/{course_id}/video-uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a tus upload of a video into the course. The request has no body; `Upload-Metadata`
+         *     gives the video's title (`title`, or else `filename`). The video is created `uploading`,
+         *     attached to the course, and the whole length counts toward the plan's `video_storage` limit
+         *     from now on.
+         */
+        post: operations["createVideoUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/courses/{course_id}/videos": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the videos attached to the course, oldest first. */
+        get: operations["listCourseVideos"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/enrollments/{enrollment_id}": {
         parameters: {
             query?: never;
@@ -1156,6 +1195,54 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/video-uploads/{upload_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * End the upload: its parts, its video and the video's attachment are deleted. From the answer
+         *     on the upload is gone; its parts are deleted right after, or by the hourly cleanup if that
+         *     fails. An upload whose video is already processing cannot be ended; delete the video instead.
+         */
+        delete: operations["deleteVideoUpload"];
+        options?: never;
+        /**
+         * Ask how many bytes of the upload the server has: `Upload-Offset` is where the next chunk
+         *     starts. A response to `HEAD` has no body, so a refusal is told by its status only.
+         */
+        head: operations["getVideoUploadOffset"];
+        /**
+         * Send the next chunk of the upload, starting at its `Upload-Offset`. A chunk is stored whole
+         *     or not at all: after a dropped connection, ask for the offset with `HEAD` and send again from
+         *     there. The chunk that completes the upload starts the video's processing.
+         */
+        patch: operations["appendVideoUpload"];
+        trace?: never;
+    };
+    "/api/v1/videos/{video_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a video. */
+        get: operations["getVideo"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Rename a video. A patch with no member changes nothing and answers the video. */
+        patch: operations["updateVideo"];
         trace?: never;
     };
     "/auth/local/enrollment/passkey": {
@@ -1805,6 +1892,15 @@ export interface components {
         BrandingProblem: components["schemas"]["Problem"] & {
             /** @description On `branding.contrast_failed`, every appearance's report, failing pairs first. */
             report?: components["schemas"]["ContrastReport"][] | null;
+        };
+        /** @description A chapter mark of a video. */
+        Chapter: {
+            /**
+             * Format: double
+             * @description Seconds from the start.
+             */
+            at_s: number;
+            title: string;
         };
         /** @description A right password whose account also needs a TOTP code: no session exists yet. */
         CodeRequired: {
@@ -3537,6 +3633,40 @@ export interface components {
             /** @description Pass this as `cursor` to get the next page; `null` on the last page. */
             next_cursor: string | null;
         };
+        /** @description One page of a list. */
+        Page_Video: {
+            /** @description The items, in the list's sort order. */
+            items: {
+                /** @description By `at_s`. */
+                chapters: components["schemas"]["Chapter"][];
+                /**
+                 * Format: date-time
+                 * @description RFC 3339, UTC.
+                 */
+                created_at: string;
+                /**
+                 * Format: double
+                 * @description The length in seconds, once a transcode has read it.
+                 */
+                duration_s?: number | null;
+                /** @description Why the video failed (`video.not_a_video`, ...); only when `status` is `failed`. */
+                error_code?: string | null;
+                /** Format: uuid */
+                id: string;
+                /** @description `upload` for an uploaded video. */
+                source: string;
+                /** @description `uploading`, `processing`, `ready` or `failed`. */
+                status: string;
+                title: string;
+                /**
+                 * Format: date-time
+                 * @description RFC 3339, UTC.
+                 */
+                updated_at: string;
+            }[];
+            /** @description Pass this as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
+        };
         /**
          * @description `CredentialCreationOptions` as JSON: pass `publicKey` to
          *     `PublicKeyCredential.parseCreationOptionsFromJSON`, then to `navigator.credentials.create`.
@@ -4106,6 +4236,49 @@ export interface components {
          * @enum {string}
          */
         UserStatus: "active" | "suspended";
+        /** @description A video of the organization. */
+        Video: {
+            /** @description By `at_s`. */
+            chapters: components["schemas"]["Chapter"][];
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            created_at: string;
+            /**
+             * Format: double
+             * @description The length in seconds, once a transcode has read it.
+             */
+            duration_s?: number | null;
+            /** @description Why the video failed (`video.not_a_video`, ...); only when `status` is `failed`. */
+            error_code?: string | null;
+            /** Format: uuid */
+            id: string;
+            /** @description `upload` for an uploaded video. */
+            source: string;
+            /** @description `uploading`, `processing`, `ready` or `failed`. */
+            status: string;
+            title: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            updated_at: string;
+        };
+        /** @description A change to a video; an omitted member is left as it is. */
+        VideoPatch: {
+            /** @description 1 to 200 characters after trimming. */
+            title?: string;
+        };
+        /** @description What a creation answers: the upload's path and the video it fills. */
+        VideoUploadCreated: {
+            /**
+             * Format: uuid
+             * @description The upload's id; its path is the `Location` header.
+             */
+            upload_id: string;
+            video: components["schemas"]["Video"];
+        };
         /** @description The organization's web app manifest. */
         WebManifest: {
             /** @description The organization's light theme `bg-canvas` color, as `#rrggbb`. */
@@ -4318,6 +4491,69 @@ export interface components {
         };
         /** @description `permission.denied`: the caller does not hold `branding.manage` at organization scope. `entitlement.feature_unavailable`: the organization's plan does not include `custom_branding`. `auth.csrf_refused`: the request did not come from this site. */
         BrandingWriteForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.malformed`: `Upload-Offset` is missing or not a number, `Content-Length` is not a number, or the body is longer or shorter than it says. `video.chunk_too_small`: the chunk is under 1 MiB and does not complete the upload; send larger chunks. */
+        ChunkBadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `video.upload_offset_mismatch`: `Upload-Offset` is not the upload's offset; ask for it with `HEAD` and resume from there. `course.archived`: the course is archived and takes no content change. */
+        ChunkConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `file.length_required`: the request has no `Content-Length`; send the chunk with its length. */
+        ChunkLengthRequired: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `storage.not_configured`: the server has no object storage configured. `file.uploads_busy`: the server is receiving as many uploads as it takes at once; try again shortly. `org.none`: the instance has no organization yet. */
+        ChunkStorageUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `file.body_timeout`: the body sent nothing for 30 seconds; send the chunk again from the stored offset. */
+        ChunkTimeout: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `file.too_large`: the chunk is over 64 MiB, or runs past the upload's `Upload-Length`. */
+        ChunkTooLarge: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.unsupported_media_type`: the chunk is not sent with `Content-Type: application/offset+octet-stream`. */
+        ChunkUnsupportedMediaType: {
             headers: {
                 [name: string]: unknown;
             };
@@ -5515,6 +5751,15 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `course.archived`: the course is archived and takes no content change. `video.status_invalid`: the upload is complete and its video is being processed; delete the video instead. */
+        TerminateConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `request.malformed`: the body is not `{code}`. `auth.flow_invalid`: no password sign-in is waiting for TOTP set-up in this browser, it was already finished, or the password or TOTP changed since; sign in with the password again. `auth.flow_expired`: the password was checked more than 10 minutes ago; sign in with the password again. */
         TotpEnrollmentBadRequest: {
             headers: {
@@ -5562,6 +5807,15 @@ export interface components {
         };
         /** @description `auth.totp_invalid`: the code is wrong, already used, or not the current one, and it is no unused recovery code. Sign in with the password again. */
         TotpSignInUnauthorized: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `tus.version_unsupported`: the request has no `Tus-Resumable: 1.0.0`; `Tus-Version` lists the version the server speaks. */
+        TusVersionUnsupported: {
             headers: {
                 [name: string]: unknown;
             };
@@ -5742,6 +5996,141 @@ export interface components {
         };
         /** @description `permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email`, `status` or `manager_id` of a user who holds a permission the caller does not hold at organization scope. `auth.session_required`: an API key changes `email`, `status` or `manager_id` of its own owner, or an app token of its own user. `auth.csrf_refused`: the request did not come from this site. */
         UserWriteForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: you can see a course the video is attached to but do not hold `course.content_edit` at a scope containing any of them. `auth.csrf_refused`: the request did not come from this site. */
+        VideoEditForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.invalid`: `errors` names `/title` with `name.empty` (empty after trimming), `name.too_long` (over 200 characters) or `text.contains_nul`. */
+        VideoInvalid: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `video.not_found`: no video with this id exists in the organization, or you cannot see any course it is attached to. `org.not_found`: the request's organization cannot be determined. */
+        VideoNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.archived`: every course through which you may edit the video is archived. */
+        VideoRenameConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined. */
+        VideoUploadCourseNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.malformed`: `Upload-Length` is missing, not a number or 0, or `Upload-Metadata` is not comma-separated `key base64value` pairs with each key once and UTF-8 values. */
+        VideoUploadCreateBadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.archived`: the course is archived and takes no content change. */
+        VideoUploadCreateConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.invalid`: `errors` names `/title`, read from the metadata's `title` or else its `filename`: `name.empty` (neither is given, or it is empty after trimming), `name.too_long` (over 200 characters) or `text.contains_nul`. */
+        VideoUploadCreateInvalid: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `file.too_large`: `Upload-Length` is over the largest video this server accepts (`max_video_bytes`, 5 GiB unless the operator set another). */
+        VideoUploadCreateTooLarge: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: you can see the upload's course but do not hold `course.content_edit` at a scope containing it. `auth.csrf_refused`: the request did not come from this site. */
+        VideoUploadEditForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: you can see the course but do not hold `course.content_edit` at a scope containing it. `entitlement.limit_reached`: the upload's length would take the organization past its plan's `video_storage` limit; `limit` and `max` say which and how much. `auth.csrf_refused`: the request did not come from this site. */
+        VideoUploadForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `video_upload.not_found`: no video upload with this id exists in the organization, it is being deleted, or you cannot see its course. `org.not_found`: the request's organization cannot be determined. */
+        VideoUploadNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `storage.not_configured`: the server has no object storage configured, so it cannot store videos; the operator sets `STEPCLIMB_STORAGE_URL`. `org.none`: the instance has no organization yet. */
+        VideoUploadStorageUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined. */
+        VideosCourseNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: you can see the course, or a course the video is attached to, but do not hold `course.view_all` at a scope containing it. */
+        VideosViewForbidden: {
             headers: {
                 [name: string]: unknown;
             };
@@ -7556,6 +7945,84 @@ export interface operations {
             503: components["responses"]["NoOrganization"];
         };
     };
+    createVideoUpload: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description `1.0.0`. */
+                "Tus-Resumable": string;
+                /** @description The video's length in bytes. */
+                "Upload-Length": number;
+                /** @description Comma-separated `key base64value` pairs; `title` and `filename` are read. */
+                "Upload-Metadata"?: string | null;
+            };
+            path: {
+                /** @description The course's id. */
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The upload is started; send the bytes with PATCH to its Location */
+            201: {
+                headers: {
+                    /** @description The upload's path */
+                    Location?: string;
+                    /** @description `1.0.0` */
+                    "Tus-Resumable"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VideoUploadCreated"];
+                };
+            };
+            400: components["responses"]["VideoUploadCreateBadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["VideoUploadForbidden"];
+            404: components["responses"]["VideoUploadCourseNotFound"];
+            409: components["responses"]["VideoUploadCreateConflict"];
+            412: components["responses"]["TusVersionUnsupported"];
+            413: components["responses"]["VideoUploadCreateTooLarge"];
+            422: components["responses"]["VideoUploadCreateInvalid"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["VideoUploadStorageUnavailable"];
+        };
+    };
+    listCourseVideos: {
+        parameters: {
+            query?: {
+                /** @description The `next_cursor` of the previous page; omit it for the first page. */
+                cursor?: string;
+                /** @description How many items to return, 1 to 200; 50 when omitted. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The course's id. */
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the course's videos */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_Video"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["VideosViewForbidden"];
+            404: components["responses"]["VideosCourseNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
     deleteEnrollment: {
         parameters: {
             query?: never;
@@ -8824,6 +9291,190 @@ export interface operations {
             403: components["responses"]["IdentityWriteForbidden"];
             404: components["responses"]["IdentityDeleteNotFound"];
             409: components["responses"]["IdentityDeleteConflict"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    deleteVideoUpload: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description `1.0.0`. */
+                "Tus-Resumable": string;
+            };
+            path: {
+                /** @description The upload's id. */
+                upload_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The upload and its video are deleted */
+            204: {
+                headers: {
+                    /** @description `1.0.0` */
+                    "Tus-Resumable"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["VideoUploadEditForbidden"];
+            404: components["responses"]["VideoUploadNotFound"];
+            409: components["responses"]["TerminateConflict"];
+            412: components["responses"]["TusVersionUnsupported"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["VideoUploadStorageUnavailable"];
+        };
+    };
+    getVideoUploadOffset: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description `1.0.0`. */
+                "Tus-Resumable": string;
+            };
+            path: {
+                /** @description The upload's id. */
+                upload_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The upload's offset and length */
+            200: {
+                headers: {
+                    /** @description `1.0.0` */
+                    "Tus-Resumable"?: string;
+                    /** @description The upload's whole length */
+                    "Upload-Length"?: number;
+                    /** @description The bytes stored, where the next chunk starts */
+                    "Upload-Offset"?: number;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["VideoUploadEditForbidden"];
+            404: components["responses"]["VideoUploadNotFound"];
+            412: components["responses"]["TusVersionUnsupported"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    appendVideoUpload: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description `1.0.0`. */
+                "Tus-Resumable": string;
+                /** @description Where this chunk starts: the offset `HEAD` answers. */
+                "Upload-Offset": number;
+            };
+            path: {
+                /** @description The upload's id. */
+                upload_id: string;
+            };
+            cookie?: never;
+        };
+        /** @description The chunk's bytes, with `Content-Length`, at most 64 MiB. */
+        requestBody: {
+            content: {
+                "application/offset+octet-stream": number[];
+            };
+        };
+        responses: {
+            /** @description The chunk is stored */
+            204: {
+                headers: {
+                    /** @description `1.0.0` */
+                    "Tus-Resumable"?: string;
+                    /** @description The bytes stored now */
+                    "Upload-Offset"?: number;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["ChunkBadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["VideoUploadEditForbidden"];
+            404: components["responses"]["VideoUploadNotFound"];
+            408: components["responses"]["ChunkTimeout"];
+            409: components["responses"]["ChunkConflict"];
+            411: components["responses"]["ChunkLengthRequired"];
+            412: components["responses"]["TusVersionUnsupported"];
+            413: components["responses"]["ChunkTooLarge"];
+            415: components["responses"]["ChunkUnsupportedMediaType"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ChunkStorageUnavailable"];
+        };
+    };
+    getVideo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The video's id. */
+                video_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The video */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Video"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["VideosViewForbidden"];
+            404: components["responses"]["VideoNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    updateVideo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The video's id. */
+                video_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VideoPatch"];
+            };
+        };
+        responses: {
+            /** @description The video after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Video"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["VideoEditForbidden"];
+            404: components["responses"]["VideoNotFound"];
+            409: components["responses"]["VideoRenameConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["VideoInvalid"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE video_uploads\n         SET terminating = $3,\n             updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond'\n         WHERE org_id = $1 AND id = $2 AND terminating IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f6e7ea5037de1917d682d8286fb5b897e7066a263b1ecd732501fc9713665d9e"
+}

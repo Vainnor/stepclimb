@@ -146,6 +146,12 @@ pub const MAX_FILE_BYTES: Setting = Setting {
     secret: false,
     example: "104857600 (the largest file one upload may send, in bytes: 1 MiB to 5 GiB)",
 };
+pub const MAX_VIDEO_BYTES: Setting = Setting {
+    var: "STEPCLIMB_MAX_VIDEO_BYTES",
+    key: "max_video_bytes",
+    secret: false,
+    example: "5368709120 (the largest video one upload may send, in bytes: 1 MiB to 50 GiB)",
+};
 
 /// Every setting [`Config`] reads.
 pub const SETTINGS: &[Setting] = &[
@@ -163,6 +169,7 @@ pub const SETTINGS: &[Setting] = &[
     ROLE,
     WORKER_CONCURRENCY,
     MAX_FILE_BYTES,
+    MAX_VIDEO_BYTES,
     STORAGE_URL,
     STORAGE_S3_ENDPOINT,
     STORAGE_S3_REGION,
@@ -195,6 +202,16 @@ pub const MAX_MAX_FILE_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 
 /// `max_file_bytes` when it is not set: 100 MiB (Q2).
 pub const DEFAULT_MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
+
+/// The smallest `max_video_bytes`: 1 MiB (docs/specs/m1/08-uploaded-video.md B4).
+pub const MIN_MAX_VIDEO_BYTES: u64 = 1024 * 1024;
+
+/// The largest `max_video_bytes`: 50 GiB (B4). Each chunk is stored as its own object, so no
+/// object nears S3's 5 GiB copy limit.
+pub const MAX_MAX_VIDEO_BYTES: u64 = 50 * 1024 * 1024 * 1024;
+
+/// `max_video_bytes` when it is not set: 5 GiB (B4).
+pub const DEFAULT_MAX_VIDEO_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 
 /// What a `stepclimb serve` process runs (`role`, `serve --role`; spec m1/01 B13, Q1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
@@ -293,6 +310,10 @@ pub struct Config {
     /// to [`MAX_MAX_FILE_BYTES`]; [`DEFAULT_MAX_FILE_BYTES`] when unset
     /// (docs/specs/m1/06-files.md B4, Q2).
     pub max_file_bytes: u64,
+    /// `max_video_bytes`: the largest video one tus upload may declare, in bytes,
+    /// [`MIN_MAX_VIDEO_BYTES`] to [`MAX_MAX_VIDEO_BYTES`]; [`DEFAULT_MAX_VIDEO_BYTES`] when unset
+    /// (docs/specs/m1/08-uploaded-video.md B4).
+    pub max_video_bytes: u64,
     /// `[[providers]]`: the identity providers the file declares, checked, each with its
     /// client secret (spec 06 B11). `stepclimb serve` writes them to their organizations.
     pub providers: Vec<ConfigProvider>,
@@ -320,6 +341,7 @@ impl fmt::Debug for Config {
             .field("role", &self.role)
             .field("worker_concurrency", &self.worker_concurrency)
             .field("max_file_bytes", &self.max_file_bytes)
+            .field("max_video_bytes", &self.max_video_bytes)
             .field("providers", &self.providers)
             .field("storage", &self.storage)
             .finish()
@@ -532,6 +554,7 @@ impl Config {
         };
         let worker_concurrency = worker_concurrency(&sources)?;
         let max_file_bytes = max_file_bytes(&sources)?;
+        let max_video_bytes = max_video_bytes(&sources)?;
         let providers = match file {
             Some(file) => file_providers(file, allow_insecure_providers)?,
             None => Vec::new(),
@@ -554,6 +577,7 @@ impl Config {
             role,
             worker_concurrency,
             max_file_bytes,
+            max_video_bytes,
             providers,
             storage,
         })
@@ -593,6 +617,7 @@ impl Config {
             (ROLE.key, self.role.to_string()),
             (WORKER_CONCURRENCY.key, self.worker_concurrency.to_string()),
             (MAX_FILE_BYTES.key, self.max_file_bytes.to_string()),
+            (MAX_VIDEO_BYTES.key, self.max_video_bytes.to_string()),
         ]
     }
 
@@ -745,22 +770,39 @@ fn worker_concurrency(sources: &Sources<'_>) -> Result<NonZeroU32, ConfigError> 
 /// [`MAX_MAX_FILE_BYTES`]; [`DEFAULT_MAX_FILE_BYTES`] when neither source sets it
 /// (docs/specs/m1/06-files.md B4, Q2).
 fn max_file_bytes(sources: &Sources<'_>) -> Result<u64, ConfigError> {
-    let Some((value, origin)) = sources.plain(&MAX_FILE_BYTES)? else {
-        return Ok(DEFAULT_MAX_FILE_BYTES);
+    let range = (MIN_MAX_FILE_BYTES, "1 MiB", MAX_MAX_FILE_BYTES, "5 GiB");
+    byte_count(sources, &MAX_FILE_BYTES, range).map(|n| n.unwrap_or(DEFAULT_MAX_FILE_BYTES))
+}
+
+/// `max_video_bytes`: as [`max_file_bytes`], from [`MIN_MAX_VIDEO_BYTES`] to
+/// [`MAX_MAX_VIDEO_BYTES`]; [`DEFAULT_MAX_VIDEO_BYTES`] when neither source sets it
+/// (docs/specs/m1/08-uploaded-video.md B4).
+fn max_video_bytes(sources: &Sources<'_>) -> Result<u64, ConfigError> {
+    let range = (MIN_MAX_VIDEO_BYTES, "1 MiB", MAX_MAX_VIDEO_BYTES, "50 GiB");
+    byte_count(sources, &MAX_VIDEO_BYTES, range).map(|n| n.unwrap_or(DEFAULT_MAX_VIDEO_BYTES))
+}
+
+/// The byte count `setting` names, digits only, within `(min, min_label, max, max_label)`;
+/// `None` when neither source sets it.
+fn byte_count(
+    sources: &Sources<'_>,
+    setting: &Setting,
+    (min, min_label, max, max_label): (u64, &str, u64, &str),
+) -> Result<Option<u64>, ConfigError> {
+    let Some((value, origin)) = sources.plain(setting)? else {
+        return Ok(None);
     };
     let digits = !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit());
     let problem = match value.parse::<u64>() {
-        Ok(bytes) if digits && (MIN_MAX_FILE_BYTES..=MAX_MAX_FILE_BYTES).contains(&bytes) => {
-            return Ok(bytes);
+        Ok(bytes) if digits && (min..=max).contains(&bytes) => return Ok(Some(bytes)),
+        Ok(bytes) if digits => {
+            format!("{bytes} is outside {min} ({min_label}) to {max} ({max_label})")
         }
-        Ok(bytes) if digits => format!(
-            "{bytes} is outside {MIN_MAX_FILE_BYTES} (1 MiB) to {MAX_MAX_FILE_BYTES} (5 GiB)"
-        ),
         _ => format!("{value:?} is not a whole number of bytes"),
     };
     Err(ConfigError::Invalid {
         origin,
-        problem: format!("{problem}; for example {}", MAX_FILE_BYTES.example),
+        problem: format!("{problem}; for example {}", setting.example),
     })
 }
 

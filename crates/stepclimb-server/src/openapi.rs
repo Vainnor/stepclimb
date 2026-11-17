@@ -16,7 +16,7 @@
 //! 2.1 authorization, token and revocation endpoints for Stepclimb's own apps (`/oauth/authorize`,
 //! `/oauth/token`, `/oauth/revoke`), service
 //! accounts and their API keys, course file uploads and the files area, a course's pages and
-//! their versions, and the shared error
+//! their versions, video uploads (tus) and the videos of a course, and the shared error
 //! schemas and responses below. The other M0 specs add their endpoints under `/api/v1`.
 //!
 //! Every `/api/v1` operation lists its errors in `#[utoipa::path]` (spec 02 B6). The errors
@@ -40,6 +40,7 @@ use crate::{
     oauth_token, organization, page_doc_schema, pages, passkey_enrollment, passkey_options,
     passkey_sign_in, password, provider_admin, provider_callback, provider_sign_in,
     role_assignments, roles, service_accounts, totp, totp_enrollment, unlock, upload, users,
+    video_uploads, videos,
 };
 
 /// The operation extension that marks a handler as changing state (spec 08 B12, T17). Every
@@ -127,6 +128,13 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         pages::list_page_versions,
         pages::get_page_version,
         pages::restore_page_version,
+        videos::list_course_videos,
+        video_uploads::create_video_upload,
+        video_uploads::get_video_upload_offset,
+        video_uploads::append_video_upload,
+        video_uploads::delete_video_upload,
+        videos::get_video,
+        videos::update_video,
         roles::list_permissions,
         roles::list_roles,
         roles::get_role,
@@ -282,6 +290,10 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             page_doc_schema::PageInline,
             page_doc_schema::PageMark,
             page_doc_schema::PageLinkAttrs,
+            videos::Video,
+            videos::Chapter,
+            videos::VideoPatch,
+            video_uploads::VideoUploadCreated,
             roles::ScopeType,
             roles::PermissionInfo,
             roles::Role,
@@ -455,6 +467,30 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             upload::UploadTooLarge,
             upload::UploadTimeout,
             upload::UploadStorageUnavailable,
+            videos::VideoNotFound,
+            videos::VideosCourseNotFound,
+            videos::VideosViewForbidden,
+            videos::VideoEditForbidden,
+            videos::VideoRenameConflict,
+            videos::VideoInvalid,
+            video_uploads::VideoUploadCourseNotFound,
+            video_uploads::VideoUploadNotFound,
+            video_uploads::VideoUploadForbidden,
+            video_uploads::VideoUploadEditForbidden,
+            video_uploads::VideoUploadCreateBadRequest,
+            video_uploads::VideoUploadCreateConflict,
+            video_uploads::VideoUploadCreateTooLarge,
+            video_uploads::VideoUploadCreateInvalid,
+            video_uploads::TusVersionUnsupported,
+            video_uploads::VideoUploadStorageUnavailable,
+            video_uploads::ChunkBadRequest,
+            video_uploads::ChunkConflict,
+            video_uploads::ChunkLengthRequired,
+            video_uploads::ChunkTooLarge,
+            video_uploads::ChunkTimeout,
+            video_uploads::ChunkUnsupportedMediaType,
+            video_uploads::ChunkStorageUnavailable,
+            video_uploads::TerminateConflict,
             roles::RoleNotFound,
             roles::WriteForbidden,
             roles::DeleteForbidden,
