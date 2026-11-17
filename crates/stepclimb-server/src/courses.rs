@@ -3,9 +3,10 @@
 //! B27 and API).
 //!
 //! A course sits in one account, and course permissions held at an account cover every course
-//! in its subtree (B23, B24). Reading needs `course.view` at the course, and a draft or a
-//! template also `course.view_all` there, or it answers 404 as a course that does not exist
-//! (B10). Creating needs `course.create` at the account named in the body; changing details,
+//! in its subtree (B23, B24). Reading needs `course.view` at the course. A draft or a template
+//! is hidden from a caller without `course.view_all` there on every route: it answers 404 as a
+//! course that does not exist, before the route's own permission is checked (B10, B24, Q13;
+//! `require::check_course`). Creating needs `course.create` at the account named in the body; changing details,
 //! status or account needs `course.manage` at the course, and a move also `course.create` at
 //! the destination (B9). A destination where the caller lacks `course.create` answers 404, as
 //! an account the caller cannot see does, and a move may not give the caller a permission
@@ -55,7 +56,7 @@ use crate::{
     openapi::problem_responses,
     organization::present,
     pagination::{Page, PageParams},
-    require::{AnyScope, CourseTarget, Require},
+    require::{AnyScope, CourseTarget, Require, check_course, code::COURSE_NOT_FOUND},
     roles::code::{NAME_EMPTY, NAME_TOO_LONG, PERMISSION_ESCALATION, TEXT_CONTAINS_NUL},
     timestamp,
     users::code::TEXT_TOO_LONG,
@@ -83,11 +84,11 @@ problem_responses! {
     CourseNotFound => "`course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined.",
     CourseListNotFound => "`account.not_found`: no account with `account_id` exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined.",
     CourseCreateNotFound => "`account.not_found`: no account with `account_id` exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined.",
-    CourseMoveNotFound => "`course.not_found`: no course with this id exists in the organization, or you cannot see it. `account.not_found`: the destination `account_id` does not exist or you do not hold `course.create` at a scope containing it. `org.not_found`: the request's organization cannot be determined.",
+    CourseMoveNotFound => "`course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `account.not_found`: the destination `account_id` does not exist or you do not hold `course.create` at a scope containing it. `org.not_found`: the request's organization cannot be determined.",
     CourseCreateForbidden => "`permission.denied`: you hold `course.create` nowhere, or you can see the account without holding it there. `auth.csrf_refused`: the request did not come from this site.",
     CourseManageForbidden => "`permission.denied`: you can see the course but do not hold `course.manage` at a scope containing it. `auth.csrf_refused`: the request did not come from this site.",
     CourseMoveForbidden => "`permission.denied`: you can see the course but do not hold `course.manage` at a scope containing it. `permission.escalation`: the destination would give you, over the course, a course permission (one grantable at course scope) you do not hold over it now. `auth.csrf_refused`: the request did not come from this site.",
-    CourseCopyNotFound => "`course.not_found`: no course with this id exists in the organization, or you cannot see it. `account.not_found`: the destination `account_id` does not exist or you do not hold `course.create` at a scope containing it. `org.not_found`: the request's organization cannot be determined.",
+    CourseCopyNotFound => "`course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `account.not_found`: the destination `account_id` does not exist or you do not hold `course.create` at a scope containing it. `org.not_found`: the request's organization cannot be determined.",
     CourseCopyForbidden => "`permission.denied`: you can see the course but do not hold `course.view_all` at a scope containing it. `permission.escalation`: the destination would give you, over the copy, a course permission (one grantable at course scope) you do not hold over the source. `auth.csrf_refused`: the request did not come from this site.",
     CourseCodeConflict => "`course.code_taken`: another course of the organization has this code, ignoring ASCII case.",
     CourseStatusConflict => "`course.status_invalid`: the course cannot change from its status to this one; the allowed changes are draft to published, published to archived, archived to published and published to draft. `course.template`: a template cannot be published.",
@@ -490,13 +491,13 @@ pub async fn get_course(
         .await
         .map_err(course_error)?
         .ok_or(Denied::CourseNotFound)?;
-    let target = Target::Course {
+    // Again on the row read here: a course made a draft after the extractor ran stays hidden,
+    // and its body is not returned.
+    let target = CourseTarget {
+        id: course.id,
         account_path: course.account_path.clone(),
-        course_id: course.id,
     };
-    if course.needs_view_all() && !grants.holds::<CourseViewAll>(&target) {
-        return Err(Denied::CourseNotFound.into());
-    }
+    check_course::<CourseView>(grants, &target, course.needs_view_all(), COURSE_NOT_FOUND)?;
     Ok(Json(Course::from_repo(course, grants)?))
 }
 
@@ -795,9 +796,10 @@ async fn recheck_view_all(
     Ok(target)
 }
 
-/// The extractor's `course.manage` check again, on the course's path as `courses::lock` reads
-/// it in the transaction: 404 when the course is gone or out of the caller's reach, 403 when it
-/// is visible without `course.manage`. Returns the course as the evaluator's target.
+/// The extractor's `course.manage` check again ([`check_course`]), on the course as
+/// `courses::lock` reads it in the transaction: 404 when the course is gone, out of the caller's
+/// reach, or a draft or template without `course.view_all` (Q13); 403 when it is visible without
+/// `course.manage`. Returns the course as the evaluator's target.
 async fn recheck_manage(
     tx: &mut Transaction<'static, Postgres>,
     grants: &Grants,
@@ -807,12 +809,13 @@ async fn recheck_manage(
         .await
         .map_err(course_error)?
         .ok_or(Denied::CourseNotFound)?;
-    let target = Target::Course {
+    let needs_view_all = course.needs_view_all();
+    let course = CourseTarget {
+        id,
         account_path: course.account_path,
-        course_id: id,
     };
-    grants.check::<CourseManage>(&target)?;
-    Ok(target)
+    check_course::<CourseManage>(grants, &course, needs_view_all, COURSE_NOT_FOUND)?;
+    Ok(course.target())
 }
 
 /// 403 `permission.escalation`, with `detail`, when the course at `to` would give the caller a

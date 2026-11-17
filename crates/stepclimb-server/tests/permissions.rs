@@ -229,7 +229,7 @@ const TABLE: &[Entry] = &[
     },
     Entry {
         operation_id: "setCourseStatus",
-        access: permission(CourseManage::KEY, COURSE_NOT_FOUND, publish_course_in_tower),
+        access: permission(CourseManage::KEY, COURSE_NOT_FOUND, archive_course_in_tower),
     },
     Entry {
         operation_id: "moveCourse",
@@ -1252,34 +1252,36 @@ fn new_course_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + 
     })
 }
 
-/// A draft course in Tower with a new title in the body.
+/// A published course in Tower with a new title in the body: a draft would answer 404 to a
+/// caller without `course.view_all` (M1 spec 02 Q13), and the 2xx case holds `course.manage`
+/// alone.
 fn retitle_course_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
         Call {
-            params: vec![("course_id", org.course(org.tower, false).await)],
+            params: vec![("course_id", org.course(org.tower, true).await)],
             body: Some(serde_json::json!({ "title": "Retitled course" })),
             at: At::Account(org.tower),
         }
     })
 }
 
-/// A draft course in Tower, published.
-fn publish_course_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+/// A published course in Tower, archived.
+fn archive_course_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
         Call {
-            params: vec![("course_id", org.course(org.tower, false).await)],
-            body: Some(serde_json::json!({ "status": "published" })),
+            params: vec![("course_id", org.course(org.tower, true).await)],
+            body: Some(serde_json::json!({ "status": "archived" })),
             at: At::Account(org.tower),
         }
     })
 }
 
-/// A course in Tower moved to Ground, inside Tower's subtree, so a grant at Tower covers both
-/// ends of the move.
+/// A published course in Tower moved to Ground, inside Tower's subtree, so a grant at Tower
+/// covers both ends of the move.
 fn move_course_to_ground(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
         Call {
-            params: vec![("course_id", org.course(org.tower, false).await)],
+            params: vec![("course_id", org.course(org.tower, true).await)],
             body: Some(serde_json::json!({ "account_id": org.ground })),
             at: At::Account(org.tower),
         }
@@ -1300,11 +1302,13 @@ const ITEM_NOT_FOUND: Target = Target::Scoped {
     cross_org: "item.not_found",
 };
 
-/// A draft course in Tower and a new module's title.
+/// A published course in Tower and a new module's title. The content setups below use published
+/// courses: a draft's modules and items answer 404 to a caller without `course.view_all` (M1 spec
+/// 02 Q13), and the 2xx case holds `course.content_edit` alone.
 fn new_module_in_tower_course(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
         Call {
-            params: vec![("course_id", org.course(org.tower, false).await)],
+            params: vec![("course_id", org.course(org.tower, true).await)],
             body: Some(serde_json::json!({ "title": "Suite module" })),
             at: At::Account(org.tower),
         }
@@ -1314,7 +1318,7 @@ fn new_module_in_tower_course(org: &Org) -> Pin<Box<dyn Future<Output = Call> + 
 /// A course in Tower with two modules, put in the reverse order.
 fn reverse_modules(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
-        let course = org.course(org.tower, false).await;
+        let course = org.course(org.tower, true).await;
         let first = org.module(course).await;
         let second = org.module(course).await;
         Call {
@@ -1329,7 +1333,7 @@ fn reverse_modules(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>>
 /// module.
 fn retitle_module(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
-        let course = org.course(org.tower, false).await;
+        let course = org.course(org.tower, true).await;
         let first = org.module(course).await;
         Call {
             params: vec![("module_id", org.module(course).await)],
@@ -1349,7 +1353,7 @@ fn retitle_module(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> 
 /// An empty module of a course in Tower.
 fn empty_module(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
-        let course = org.course(org.tower, false).await;
+        let course = org.course(org.tower, true).await;
         Call {
             params: vec![("module_id", org.module(course).await)],
             body: None,
@@ -1361,7 +1365,7 @@ fn empty_module(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
 /// A module of a course in Tower and a new header.
 fn new_header_in_module(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
-        let course = org.course(org.tower, false).await;
+        let course = org.course(org.tower, true).await;
         Call {
             params: vec![("module_id", org.module(course).await)],
             body: Some(serde_json::json!({ "kind": "header", "title": "Suite header" })),
@@ -1373,7 +1377,7 @@ fn new_header_in_module(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send +
 /// A module of a course in Tower with two items, put in the reverse order.
 fn reverse_items(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
-        let course = org.course(org.tower, false).await;
+        let course = org.course(org.tower, true).await;
         let module = org.module(course).await;
         let first = org.header(module).await;
         let second = org.header(module).await;
@@ -1388,7 +1392,7 @@ fn reverse_items(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
 /// An external link of a course in Tower with a new title and a requirement.
 fn retitle_item(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
-        let course = org.course(org.tower, false).await;
+        let course = org.course(org.tower, true).await;
         let module = org.module(course).await;
         Call {
             params: vec![("item_id", org.link(module).await)],
@@ -1405,7 +1409,7 @@ fn retitle_item(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
 /// An item of a course in Tower moved to the course's second module.
 fn move_item_to_second_module(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
-        let course = org.course(org.tower, false).await;
+        let course = org.course(org.tower, true).await;
         let from = org.module(course).await;
         let to = org.module(course).await;
         Call {
@@ -1419,7 +1423,7 @@ fn move_item_to_second_module(org: &Org) -> Pin<Box<dyn Future<Output = Call> + 
 /// An item of a course in Tower.
 fn item_in_module(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
-        let course = org.course(org.tower, false).await;
+        let course = org.course(org.tower, true).await;
         let module = org.module(course).await;
         Call {
             params: vec![("item_id", org.header(module).await)],
@@ -1429,13 +1433,14 @@ fn item_in_module(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> 
     })
 }
 
-/// A draft course in Tower copied to Ground, inside Tower's subtree, so a grant at Tower covers
-/// the source and the destination.
+/// A published course in Tower copied to Ground, inside Tower's subtree, so a grant at Tower
+/// covers the source and the destination. Published, so the 403 case (every permission but
+/// `course.view_all`) sees the course: a draft would answer 404 to it (M1 spec 02 Q13).
 fn copy_course_to_ground(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
         let hex = new_id().simple().to_string();
         Call {
-            params: vec![("course_id", org.course(org.tower, false).await)],
+            params: vec![("course_id", org.course(org.tower, true).await)],
             body: Some(serde_json::json!({
                 "account_id": org.ground, "code": format!("K{}", &hex[hex.len() - 12..]),
             })),
@@ -1455,10 +1460,13 @@ const FILE_NOT_FOUND: Target = Target::Scoped {
 /// arguments there: the upload's name (M1 spec 06 B3).
 const QUERIES: &[(&str, &str)] = &[("uploadCourseFile", "name=suite.txt")];
 
-/// A draft course in Tower with a file in its top folder, listed.
+/// A published course in Tower with a file in its top folder, listed. The file setups use
+/// published courses: on a draft, the 403 case of a `course.view_all` route (every permission but
+/// that one) and the 2xx case of a `course.content_edit` route (that one alone) would both get
+/// 404 (M1 spec 02 Q13).
 fn files_of_tower_course(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
-        let course = org.course(org.tower, false).await;
+        let course = org.course(org.tower, true).await;
         org.course_file(course, "/").await;
         Call {
             params: vec![("course_id", course)],
@@ -1468,21 +1476,21 @@ fn files_of_tower_course(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send 
     })
 }
 
-/// A draft course in Tower and a file's bytes; [`QUERIES`] names it.
+/// A published course in Tower and a file's bytes; [`QUERIES`] names it.
 fn upload_into_tower_course(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
         Call {
-            params: vec![("course_id", org.course(org.tower, false).await)],
+            params: vec![("course_id", org.course(org.tower, true).await)],
             body: Some(serde_json::json!("A suite file")),
             at: At::Account(org.tower),
         }
     })
 }
 
-/// A file of a draft course in Tower.
+/// A file of a published course in Tower.
 fn course_file_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
-        let course = org.course(org.tower, false).await;
+        let course = org.course(org.tower, true).await;
         Call {
             params: vec![("course_file_id", org.course_file(course, "/").await)],
             body: None,
@@ -1491,10 +1499,10 @@ fn course_file_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send +
     })
 }
 
-/// A file of a draft course in Tower, renamed and moved.
+/// A file of a published course in Tower, renamed and moved.
 fn rename_course_file(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
-        let course = org.course(org.tower, false).await;
+        let course = org.course(org.tower, true).await;
         Call {
             params: vec![("course_file_id", org.course_file(course, "/").await)],
             body: Some(serde_json::json!({ "folder": "/moved", "name": "renamed.txt" })),
@@ -1503,10 +1511,10 @@ fn rename_course_file(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '
     })
 }
 
-/// A draft course in Tower whose folder `/a` holds a file, renamed to `/b`.
+/// A published course in Tower whose folder `/a` holds a file, renamed to `/b`.
 fn rename_tower_folder(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
-        let course = org.course(org.tower, false).await;
+        let course = org.course(org.tower, true).await;
         org.course_file(course, "/a").await;
         Call {
             params: vec![("course_id", course)],

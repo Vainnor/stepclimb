@@ -148,7 +148,9 @@ Schemas: `Module { id, course_id, title, position, published, items: Item[], cre
 updated_at }`; `Item { id, module_id, course_id, kind, title, position, published, ref_id?, url?,
 created_at, updated_at }`. `url` is present only for `external_link`, `ref_id` only for kinds
 that have one. `ModuleTarget` and `ItemTarget` resolve `module_id` and `item_id` to their course
-and then act as `CourseTarget` with codes `module.not_found` and `item.not_found`. `PATCH` with a
+and then act as `CourseTarget` with codes `module.not_found` and `item.not_found`, including `02`
+B24's draft rule: a module or item of a draft course or a template answers that 404 to a caller
+without `perm::CourseViewAll` at the course (`02` Q13, I4). `PATCH` with a
 `url` on an item that is not an external link answers 422 `request.invalid`.
 
 `OrgSettings` gains `embedding.return_origins` (B17), read and written through the existing
@@ -332,7 +334,9 @@ or Q12.
   in those answers, and the catalog descriptions of `course.content_edit` and
   `course.view_all` (`stepclimb_core::perm`, `02` Permissions) say so. A custom role with
   `course.content_edit` and no `course.view_all` sees unpublished content only through its
-  edits, never through I2's read routes.
+  edits, never through I2's read routes, and only in a published or archived course: on a draft
+  or a template it does nothing, since the course, its modules and its items answer 404 to it
+  (`02` B24, Q13).
 - **Each route checks its own permission twice.** The handler repeats its `Require`'s check
   under the course lock with the same permission type (`recheck` takes the route's `Require`),
   so the two checks cannot name different permissions.

@@ -27,6 +27,7 @@ use stepclimb_core::{
     clock::ManualClock,
     courses,
     id::{Uuid, new_id},
+    items::{self, Kind, NewItem},
     modules, organizations,
     role_assignments::{self, NewAssignment, Scope},
     roles::{self, NewRole},
@@ -746,7 +747,9 @@ async fn t7a_an_archived_course_moves_out_and_the_account_is_deleted(pool: PgPoo
     let tower_admin = f
         .holder(t.org, "account_admin", Scope::Account(t.tower))
         .await;
-    let in_tower = f.course(t.org, t.tower, "S2").await;
+    // Published: the viewer below holds no `course.view_all`, so a draft would answer 404
+    // `course.not_found` before the destination is looked at (Q13).
+    let in_tower = f.published(t.org, t.tower, "S2").await;
     f.move_to(t.org, &tower_admin, in_tower, t.enroute)
         .await
         .expect(StatusCode::NOT_FOUND, "account.not_found");
@@ -875,7 +878,8 @@ async fn an_archived_template_needs_view_all_on_get_and_in_the_list(pool: PgPool
 async fn a_move_that_would_widen_the_callers_reach_over_the_course_is_refused(pool: PgPool) {
     let f = Fixture::new(pool).await;
     let t = f.a;
-    let id = f.course(t.org, t.tower, "S1").await;
+    // Published: the caller holds no `course.view_all`, so a draft would answer 404 (Q13).
+    let id = f.published(t.org, t.tower, "S1").await;
     let (cookie, user) = f.user(t.org).await;
     let manage = NewRole {
         key: "tower_course_manager".into(),
@@ -1362,6 +1366,287 @@ async fn a_copy_body_that_breaks_a_rule_writes_nothing(pool: PgPool) {
         .await
         .expect(StatusCode::BAD_REQUEST, "request.malformed");
     assert_eq!(f.rows(t.org).await, before);
+}
+
+// Drafts and templates on every route (B24, Q13).
+
+/// Makes the course `id` a template, archived (a template is never published).
+async fn make_template(f: &Fixture, id: Uuid) {
+    sqlx::query("UPDATE courses SET status = 'archived', template = true WHERE id = $1")
+        .bind(id)
+        .execute(&f.pool)
+        .await
+        .expect("make a template");
+}
+
+/// T19a: a caller holding `course.manage` (and `course.create`, `course.view`) but not
+/// `course.view_all` gets 404 `course.not_found` from `GET`, `PATCH`, the status route, the move
+/// route and the copy route on a draft and on a template, and nothing changes; on a published
+/// course the same caller gets 200 from `GET`, `PATCH`, status and move, and 403 from copy,
+/// which needs `course.view_all`. The 404 comes before the route's permission: a Student and a
+/// holder of `course.view` alone get 404, not 403, from `PATCH`, status, move and copy on a
+/// draft or a template, while a Course designer (`course.view_all`, no `course.manage`) gets
+/// 403 from `PATCH`, status and move.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t19a_a_draft_or_template_is_not_found_without_view_all_on_every_route(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    let manager = f
+        .custom_holder(
+            t.org,
+            &["course.manage", "course.create", "course.view"],
+            &[Scope::Account(t.tower)],
+        )
+        .await;
+    // 404 before 403: callers who could see a published course but hold neither the route's
+    // permission nor `course.view_all` get the same 404, never a 403 that shows the draft exists.
+    let viewer = f
+        .custom_holder(t.org, &["course.view"], &[Scope::Account(t.tower)])
+        .await;
+    let student = f.holder(t.org, "student", Scope::Account(t.tower)).await;
+    // `course.view_all` without `course.manage`: sees the draft, so the route's 403.
+    let designer = f
+        .holder(t.org, "course_designer", Scope::Account(t.tower))
+        .await;
+    let draft = f.course(t.org, t.tower, "D1").await;
+    let template = f.course(t.org, t.tower, "T1").await;
+    make_template(&f, template).await;
+    let before = f.rows(t.org).await;
+
+    for id in [draft, template] {
+        for cookie in [&viewer, &student] {
+            let not_found =
+                |answer: Answer| answer.expect(StatusCode::NOT_FOUND, "course.not_found");
+            not_found(f.patch(t.org, cookie, id, json!({ "title": "Mine" })).await);
+            not_found(f.status(t.org, cookie, id, "published").await);
+            not_found(f.move_to(t.org, cookie, id, t.ground).await);
+            let copy = json!({ "account_id": t.tower, "code": "C1" });
+            not_found(f.copy(t.org, cookie, id, copy).await);
+        }
+        let denied = |answer: Answer| answer.expect(StatusCode::FORBIDDEN, "permission.denied");
+        denied(
+            f.patch(t.org, &designer, id, json!({ "title": "Mine" }))
+                .await,
+        );
+        denied(f.status(t.org, &designer, id, "archived").await);
+        denied(f.move_to(t.org, &designer, id, t.ground).await);
+    }
+    assert_eq!(f.rows(t.org).await, before, "no row and no entry changed");
+
+    for id in [draft, template] {
+        let not_found = |answer: Answer| answer.expect(StatusCode::NOT_FOUND, "course.not_found");
+        not_found(f.get(&one(id), t.org, &manager).await);
+        not_found(
+            f.patch(t.org, &manager, id, json!({ "title": "Mine" }))
+                .await,
+        );
+        not_found(f.status(t.org, &manager, id, "published").await);
+        not_found(f.status(t.org, &manager, id, "archived").await);
+        not_found(f.move_to(t.org, &manager, id, t.ground).await);
+        let copy = json!({ "account_id": t.tower, "code": "C1" });
+        not_found(f.copy(t.org, &manager, id, copy).await);
+    }
+    assert_eq!(f.rows(t.org).await, before, "no row and no entry changed");
+
+    let published = f.published(t.org, t.tower, "P1").await;
+    f.get(&one(published), t.org, &manager)
+        .await
+        .ok(StatusCode::OK);
+    let patched = f
+        .patch(t.org, &manager, published, json!({ "title": "Mine" }))
+        .await;
+    assert_eq!(patched.ok(StatusCode::OK)["title"], "Mine");
+    f.move_to(t.org, &manager, published, t.ground)
+        .await
+        .ok(StatusCode::OK);
+    f.status(t.org, &manager, published, "archived")
+        .await
+        .ok(StatusCode::OK);
+    f.copy(
+        t.org,
+        &manager,
+        published,
+        json!({ "account_id": t.tower, "code": "C2" }),
+    )
+    .await
+    .expect(StatusCode::FORBIDDEN, "permission.denied");
+    // Unpublished again, the course is hidden from the same caller.
+    f.status(t.org, &manager, published, "published")
+        .await
+        .ok(StatusCode::OK);
+    f.status(t.org, &manager, published, "draft")
+        .await
+        .ok(StatusCode::OK);
+    f.patch(t.org, &manager, published, json!({ "title": "Again" }))
+        .await
+        .expect(StatusCode::NOT_FOUND, "course.not_found");
+}
+
+/// A course in Tower with one module holding one header: `(course, module, item)`.
+async fn outline(f: &Fixture, code: &str) -> (Uuid, Uuid, Uuid) {
+    let t = f.a;
+    let course = f.course(t.org, t.tower, code).await;
+    let module = modules::create(&f.pool, scope(t.org), course, "Ground", now())
+        .await
+        .expect("create module")
+        .id;
+    let header = NewItem {
+        kind: Kind::Header,
+        title: "Reading".into(),
+        ref_id: None,
+        url: None,
+        position: None,
+    };
+    let item = items::create(&f.pool, scope(t.org), module, &header, now())
+        .await
+        .expect("create item")
+        .id;
+    (course, module, item)
+}
+
+/// B24 through `ModuleTarget` and `ItemTarget` (spec 03 API: they act as `CourseTarget`): on a
+/// draft course and on a template, module create answers 404 `course.not_found`, module
+/// `PATCH` and item create `module.not_found`, and item `PATCH` `item.not_found`, to a holder of
+/// `course.content_edit` without `course.view_all`, and, before the route's permission, to a
+/// holder of `course.view` alone and to a Student, who would otherwise get 403; nothing
+/// changes. Once the draft is published, the `course.content_edit` holder edits.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_draft_courses_modules_and_items_are_not_found_without_view_all(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    let editor = f
+        .custom_holder(
+            t.org,
+            &["course.content_edit", "course.view"],
+            &[Scope::Account(t.tower)],
+        )
+        .await;
+    let viewer = f
+        .custom_holder(t.org, &["course.view"], &[Scope::Account(t.tower)])
+        .await;
+    let student = f.holder(t.org, "student", Scope::Account(t.tower)).await;
+    let draft = outline(&f, "D1").await;
+    let template = outline(&f, "T1").await;
+    make_template(&f, template.0).await;
+    let before = f.rows(t.org).await;
+    let outline_rows = || async {
+        let rows: Vec<String> = sqlx::query_scalar(
+            "SELECT to_jsonb(m)::text FROM modules m
+             UNION ALL SELECT to_jsonb(i)::text FROM module_items i ORDER BY 1",
+        )
+        .fetch_all(&f.pool)
+        .await
+        .expect("read the outlines");
+        rows
+    };
+    let outlines = outline_rows().await;
+    let title = json!({ "title": "Mine" });
+    let new_item = json!({ "kind": "header", "title": "Mine" });
+
+    for (course, module, item) in [draft, template] {
+        for cookie in [&editor, &viewer, &student] {
+            let send = |method: Method, uri: String, body: &Value| {
+                let body = body.clone();
+                let f = &f;
+                async move { f.send(method, &uri, t.org, cookie, Some(body)).await }
+            };
+            let modules_uri = format!("{}/modules", one(course));
+            send(Method::POST, modules_uri, &title)
+                .await
+                .expect(StatusCode::NOT_FOUND, "course.not_found");
+            send(Method::PATCH, format!("/api/v1/modules/{module}"), &title)
+                .await
+                .expect(StatusCode::NOT_FOUND, "module.not_found");
+            let items_uri = format!("/api/v1/modules/{module}/items");
+            send(Method::POST, items_uri, &new_item)
+                .await
+                .expect(StatusCode::NOT_FOUND, "module.not_found");
+            send(Method::PATCH, format!("/api/v1/items/{item}"), &title)
+                .await
+                .expect(StatusCode::NOT_FOUND, "item.not_found");
+        }
+    }
+    assert_eq!(f.rows(t.org).await, before);
+    assert_eq!(outline_rows().await, outlines, "no module or item changed");
+
+    let (course, module, item) = draft;
+    f.set_status(t.org, course, &[courses::Status::Published])
+        .await;
+    let edit = |uri: String| {
+        let (f, editor, title) = (&f, &editor, title.clone());
+        async move {
+            f.send(Method::PATCH, &uri, t.org, editor, Some(title))
+                .await
+        }
+    };
+    edit(format!("/api/v1/modules/{module}"))
+        .await
+        .ok(StatusCode::OK);
+    edit(format!("/api/v1/items/{item}"))
+        .await
+        .ok(StatusCode::OK);
+}
+
+/// Sends `request` while another transaction has made the course `id` a draft without
+/// committing; the change commits once the request waits on the course row. The request's
+/// extractor saw the published course, so only the handler's check on the locked row can hide
+/// it.
+async fn racing_unpublish(f: &Fixture, id: Uuid, request: Request<Body>) -> Answer {
+    let mut tx = f.pool.begin().await.expect("begin");
+    sqlx::query("UPDATE courses SET status = 'draft' WHERE id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .expect("unpublish");
+    let app = f.app.clone();
+    let pending = tokio::spawn(async move { answer(&app, request).await });
+    until_a_call_waits_on_a_lock(&f.pool).await;
+    tx.commit().await.expect("commit the unpublish");
+    pending.await.expect("the request ran")
+}
+
+/// Q13 under the course lock: a `PATCH` of a course, and of one of its modules, that passed the
+/// extractor while the course was published answers 404 once a concurrent change has made it a
+/// draft, to a caller without `course.view_all`, and changes nothing.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_write_to_a_course_made_a_draft_meanwhile_is_not_found(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    let editor = f
+        .custom_holder(
+            t.org,
+            &["course.manage", "course.content_edit", "course.view"],
+            &[Scope::Account(t.tower)],
+        )
+        .await;
+    let course = f.published(t.org, t.tower, "S1").await;
+    let module = modules::create(&f.pool, scope(t.org), course, "Ground", now())
+        .await
+        .expect("create module")
+        .id;
+    let body = json!({ "title": "Mine" }).to_string();
+
+    let request = f.request(Method::PATCH, &one(course), t.org, &editor, Some(&body));
+    racing_unpublish(&f, course, request)
+        .await
+        .expect(StatusCode::NOT_FOUND, "course.not_found");
+    f.set_status(t.org, course, &[courses::Status::Published])
+        .await;
+    let uri = format!("/api/v1/modules/{module}");
+    let request = f.request(Method::PATCH, &uri, t.org, &editor, Some(&body));
+    racing_unpublish(&f, course, request)
+        .await
+        .expect(StatusCode::NOT_FOUND, "module.not_found");
+
+    let titles: Vec<String> = sqlx::query_scalar(
+        "SELECT title FROM courses WHERE id = $1 UNION ALL SELECT title FROM modules WHERE id = $2",
+    )
+    .bind(course)
+    .bind(module)
+    .fetch_all(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(titles, ["Course S1", "Ground"]);
 }
 
 // The checks under the tree lock.

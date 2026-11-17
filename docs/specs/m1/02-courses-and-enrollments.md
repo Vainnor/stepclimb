@@ -312,8 +312,8 @@ Org admin holds every entry through `perm::ALL`.
 | `perm::CourseView` | `course.view` | organization, account, course | Read a course and its published, unlocked content |
 | `perm::CourseViewAll` | `course.view_all` | organization, account, course | Read drafts, templates, unpublished modules and items, and locked content (specs 03, 04); `course.content_edit` also sees unpublished modules and items in the answers to its edits (`03` Decisions made building I1) |
 | `perm::CourseCreate` | `course.create` | organization, account | Create courses in an account, and copies into it |
-| `perm::CourseManage` | `course.manage` | organization, account, course | Change a course's details and status |
-| `perm::CourseContentEdit` | `course.content_edit` | organization, account, course | Edit modules, items, files and pages (specs 03, 06, 07), seeing unpublished modules and items in the answers to those edits; the plan's example `Require<perm::CourseContentEdit>` |
+| `perm::CourseManage` | `course.manage` | organization, account, course | Change a course's details and status; on a draft or a template, nothing without `course.view_all` at the course (B24, Q13) |
+| `perm::CourseContentEdit` | `course.content_edit` | organization, account, course | Edit modules, items, files and pages (specs 03, 06, 07), seeing unpublished modules and items in the answers to those edits; on a draft or a template, nothing without `course.view_all` at the course (B24, Q13); the plan's example `Require<perm::CourseContentEdit>` |
 | `perm::CourseParticipate` | `course.participate` | course | Take the course as a learner: record progress (spec 05) |
 | `perm::EnrollmentView` | `enrollment.view` | organization, account, course | Read a course's enrollments |
 | `perm::EnrollmentManage` | `enrollment.manage` | organization, account, course | Enroll, conclude and remove users |
@@ -636,6 +636,30 @@ a copy makes no enrollment, so no learner and no `course.participate` comes with
   copied with a `ref_id` into the source course. Each content spec makes its kind copyable when
   it adds its part to `courses::copy` (B13). A stored URL that `items::url_is_valid` refuses
   fails the copy the same way, since every writer of an item's URL checks it (spec 03).
+
+### Decisions made building I4
+
+Coordinator decisions (2026-11-17), pending owner review. They apply the owner's Q13 (b).
+
+- **One check.** `require::check_course` holds B24's draft rule: a draft or a template where the
+  caller does not hold `course.view_all` answers 404 with the target's code before the route's
+  permission is looked at. `CourseTarget` runs it, and so do `ModuleTarget` and `ItemTarget`,
+  which resolve through the course (spec 03 API: they act as `CourseTarget`); every course route
+  gets it, the copy route included. A caller holding `course.view_all` but not the route's
+  permission still gets 403.
+- **Modules and items of a draft are hidden too.** A module or item of a draft course, or of a
+  template, answers 404 `module.not_found` or `item.not_found` to a caller without
+  `course.view_all` at the course, and the course's module routes answer 404
+  `course.not_found`. B24 names "every later route that resolves through `CourseTarget`", and
+  spec 03 says those targets act as `CourseTarget`; a holder of `course.content_edit` alone edits
+  a course's content only once it is published. No built-in role holds `course.content_edit`
+  without `course.view_all`.
+- **Rechecked under the course lock.** The writes that lock the course row (`PATCH`, status and
+  move here; every module and item write in spec 03) run the same check on the locked row, so a
+  course made a draft after the extractor ran is still hidden from a caller without
+  `course.view_all` (404, nothing written). `GET` runs it again on the row it reads, so the body
+  it returns is never a draft or a template the caller cannot see; it locks nothing.
+- **Enrollment routes.** `EnrollmentTarget` arrives with I2 and resolves through the same check.
 
 ## Issues
 

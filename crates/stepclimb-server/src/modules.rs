@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use stepclimb_core::{
     courses,
-    grants::{Denied, Target},
+    grants::Denied,
     id::Uuid,
     items,
     modules::{self, Error},
@@ -38,7 +38,9 @@ use crate::{
     extract::ApiJson,
     openapi::problem_responses,
     organization::present,
-    require::{CourseTarget, ModuleTarget, Require, code::COURSE_NOT_FOUND, not_found_as},
+    require::{
+        CourseTarget, ModuleTarget, Require, check_course, code::COURSE_NOT_FOUND, not_found_as,
+    },
     roles::code::{NAME_EMPTY, NAME_TOO_LONG, TEXT_CONTAINS_NUL},
     timestamp,
 };
@@ -88,8 +90,8 @@ pub mod code {
 }
 
 problem_responses! {
-    ModuleCourseNotFound => "`course.not_found`: no course with this id exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined.",
-    ModuleNotFound => "`module.not_found`: no module with this id exists in the organization, or you cannot see its course. `org.not_found`: the request's organization cannot be determined.",
+    ModuleCourseNotFound => "`course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined.",
+    ModuleNotFound => "`module.not_found`: no module with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined.",
     ContentEditForbidden => "`permission.denied`: you can see the course but do not hold `course.content_edit` at a scope containing it. `auth.csrf_refused`: the request did not come from this site.",
     ModuleCreateConflict => "`course.archived`: the course is archived and takes no content change. `module.limit_reached`: the course holds 200 modules.",
     ModuleOrderConflict => "`course.archived`: the course is archived and takes no content change. `order.stale`: the list is not exactly the current set of ids (one is missing, extra or repeated); reload and try again.",
@@ -579,13 +581,12 @@ pub(crate) async fn recheck<P: Permission, T>(
         .await
         .map_err(|error| ApiError::internal(&error))?
         .ok_or_else(|| not_found_as(Denied::CourseNotFound, not_found))?;
-    let target = Target::Course {
+    let needs_view_all = course.needs_view_all();
+    let target = CourseTarget {
+        id: course_id,
         account_path: course.account_path,
-        course_id,
     };
-    grants
-        .check::<P>(&target)
-        .map_err(|denied| not_found_as(denied, not_found))
+    check_course::<P>(grants, &target, needs_view_all, not_found)
 }
 
 pub(crate) async fn begin(state: &AppState) -> Result<Transaction<'static, Postgres>, ApiError> {

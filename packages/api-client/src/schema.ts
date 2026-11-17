@@ -3699,7 +3699,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it. `account.not_found`: the destination `account_id` does not exist or you do not hold `course.create` at a scope containing it. `org.not_found`: the request's organization cannot be determined. */
+        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `account.not_found`: the destination `account_id` does not exist or you do not hold `course.create` at a scope containing it. `org.not_found`: the request's organization cannot be determined. */
         CourseCopyNotFound: {
             headers: {
                 [name: string]: unknown;
@@ -3789,7 +3789,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it. `account.not_found`: the destination `account_id` does not exist or you do not hold `course.create` at a scope containing it. `org.not_found`: the request's organization cannot be determined. */
+        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `account.not_found`: the destination `account_id` does not exist or you do not hold `course.create` at a scope containing it. `org.not_found`: the request's organization cannot be determined. */
         CourseMoveNotFound: {
             headers: {
                 [name: string]: unknown;
@@ -4068,7 +4068,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `item.not_found`: no item with this id exists in the organization, or you cannot see its course. `module.not_found`: the destination module is not in the item's course. `org.not_found`: the request's organization cannot be determined. */
+        /** @description `item.not_found`: no item with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `module.not_found`: the destination module is not in the item's course. `org.not_found`: the request's organization cannot be determined. */
         ItemMoveNotFound: {
             headers: {
                 [name: string]: unknown;
@@ -4077,7 +4077,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `item.not_found`: no item with this id exists in the organization, or you cannot see its course. `org.not_found`: the request's organization cannot be determined. */
+        /** @description `item.not_found`: no item with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined. */
         ItemNotFound: {
             headers: {
                 [name: string]: unknown;
@@ -4149,7 +4149,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined. */
+        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined. */
         ModuleCourseNotFound: {
             headers: {
                 [name: string]: unknown;
@@ -4176,7 +4176,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `module.not_found`: no module with this id exists in the organization, or you cannot see its course. `org.not_found`: the request's organization cannot be determined. */
+        /** @description `module.not_found`: no module with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined. */
         ModuleNotFound: {
             headers: {
                 [name: string]: unknown;
