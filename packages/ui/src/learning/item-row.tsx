@@ -2,10 +2,11 @@
 // ItemRow: one item of a module on the course home, with its kind's icon, its title, what
 // finishes it, its learning state and when it is due (docs/specs/m1/16-learning-ui-components.md
 // B9). The title is the link to the item view, named by the title alone so each link on the page
-// says which item it opens; the link's hit area covers the whole row, and the kind, requirement,
-// state and due label are its description. A locked item stays a link: the item view says why it
-// is locked (docs/specs/m1/04-unlock-and-completion-rules.md B13). A header item is a heading that
-// groups the items below it (docs/specs/m1/03-modules-and-items.md B8), not a link.
+// says which item it opens; the link's hit area covers the whole row. The kind, requirement, state
+// and due label, listed in one visually hidden text, are its description, and the drawn ones are
+// hidden from screen readers so they are not read twice. A locked item stays a link: the item
+// view says why it is locked (docs/specs/m1/04-unlock-and-completion-rules.md B13). A header item
+// is a heading that groups the items below it (docs/specs/m1/03-modules-and-items.md B8).
 import {
   ArrowSquareOutIcon,
   FileTextIcon,
@@ -18,12 +19,13 @@ import {
 import { useId } from "react";
 import { Link as AriaLink } from "react-aria-components";
 import { tv } from "../lib/tv";
+import { useUnitList } from "../lib/unit-list";
 import { Heading, type HeadingLevel } from "../primitives/heading";
 import { VisuallyHidden } from "../primitives/visually-hidden";
 import { useStepclimbStrings } from "../strings/strings";
 import { Icon } from "../theme/icon";
-import { DueBadge } from "./due-badge";
-import { type Requirement, RequirementLabel } from "./requirement-label";
+import { DueBadge, useDueLabel } from "./due-badge";
+import { type Requirement, RequirementLabel, useRequirementText } from "./requirement-label";
 import { type LearningState, StatusChip } from "./status-chip";
 
 /** The API's `ItemKind`. */
@@ -132,24 +134,16 @@ export function ItemRow({ item, timeZone, now, headingLevel = 3, className }: It
 type OpenableItem = Exclude<ItemRowItem, { kind: "header" }>;
 
 function ItemLink({ item, timeZone, now }: { item: OpenableItem; timeZone: string; now: Date }) {
-  const { t } = useStepclimbStrings();
-  const ids = { kind: useId(), requirement: useId(), state: useId(), due: useId() };
+  const description = useItemDescription(item, timeZone, now);
+  const descriptionId = useId();
   const requirement = item.requirement ?? null;
-  const describedBy = [
-    ids.kind,
-    requirement === null ? null : ids.requirement,
-    ids.state,
-    item.due === undefined ? null : ids.due,
-  ]
-    .filter((id) => id !== null)
-    .join(" ");
   const styles = itemRow({ locked: item.state === "locked" });
   return (
     <>
       <AriaLink
         data-slot="item-row-link"
         href={item.href}
-        aria-describedby={describedBy}
+        aria-describedby={descriptionId}
         className={styles.link()}
       >
         <Icon icon={itemKindIcons[item.kind]} size="md" className={styles.kindIcon()} />
@@ -157,24 +151,31 @@ function ItemLink({ item, timeZone, now }: { item: OpenableItem; timeZone: strin
           {item.title}
         </span>
       </AriaLink>
-      <span data-slot="item-row-meta" className={styles.meta()}>
-        <VisuallyHidden id={ids.kind} data-slot="item-row-kind">
-          {t("itemRow.kind", { kind: item.kind })}
-        </VisuallyHidden>
-        {requirement === null ? null : (
-          <span id={ids.requirement}>
-            <RequirementLabel requirement={requirement} />
-          </span>
-        )}
-        <span id={ids.state}>
-          <StatusChip state={item.state} />
-        </span>
-        {item.due === undefined ? null : (
-          <span id={ids.due}>
-            <DueBadge due={item.due} now={now} timeZone={timeZone} />
-          </span>
-        )}
+      <VisuallyHidden id={descriptionId} data-slot="item-row-description">
+        {description}
+      </VisuallyHidden>
+      {/* The link's description says all of this, so a screen reader does not read it twice. */}
+      <span data-slot="item-row-meta" aria-hidden="true" className={styles.meta()}>
+        {requirement === null ? null : <RequirementLabel requirement={requirement} />}
+        <StatusChip state={item.state} />
+        {item.due === undefined ? null : <DueBadge due={item.due} now={now} timeZone={timeZone} />}
       </span>
     </>
   );
+}
+
+/** The kind, requirement, state and due label as one list ("Page, Mark as done, Available"). */
+function useItemDescription(item: OpenableItem, timeZone: string, now: Date): string {
+  const { t } = useStepclimbStrings();
+  const requirementText = useRequirementText();
+  const list = useUnitList();
+  // Called for every item, so the hooks run in the same order; only an item with a due date uses it.
+  const due = useDueLabel(item.due ?? now, now, timeZone);
+  const requirement = item.requirement ?? null;
+  return list([
+    t("itemRow.kind", { kind: item.kind }),
+    ...(requirement === null ? [] : [requirementText(requirement)]),
+    t("statusChip.state", { state: item.state }),
+    ...(item.due === undefined ? [] : [due.label]),
+  ]);
 }

@@ -43,8 +43,11 @@ export type ModuleRowProps = {
   now: Date;
   /** What shows when the module has no items. */
   emptyState?: ReactNode;
-  /** The module's place in the page outline; 2 by default. Header items take the next level. */
-  headingLevel?: HeadingLevel;
+  /**
+   * The module's place in the page outline; 2 by default. Header items take the next level, so
+   * the module's is at most 5.
+   */
+  headingLevel?: Exclude<HeadingLevel, 6>;
   /** Layout only. */
   className?: string;
 } & (
@@ -67,7 +70,7 @@ export function ModuleRow(props: ModuleRowProps) {
         <Heading level={headingLevel} size="lg" className={styles.heading()}>
           <span data-slot="module-row-number" className={styles.number()}>
             {t("moduleRow.number", { number })}
-          </span>
+          </span>{" "}
           <span data-slot="module-row-title" className={styles.title()}>
             {title}
           </span>
@@ -94,7 +97,7 @@ export function ModuleRow(props: ModuleRowProps) {
               item={item}
               timeZone={timeZone}
               now={now}
-              headingLevel={Math.min(headingLevel + 1, 6) as HeadingLevel}
+              headingLevel={(headingLevel + 1) as HeadingLevel}
             />
           ))}
         </ol>

@@ -55,7 +55,7 @@ export const uiMessages: Catalog = {
     "fileDrop.uploading": "Uploading {name}",
     "fileDrop.wrongType": "{name} is not a type of file this field accepts. Choose another file.",
     "itemRow.kind":
-      "{kind, select, page {Page} file {File} external_link {Link} video {Video} quiz {Quiz} activity {Activity} other {Item}}",
+      "{kind, select, page {Page} file {File} external_link {External link} video {Video} quiz {Quiz} activity {Activity} other {Item}}",
     "link.external": "(external site)",
     "lockReason.moduleLocked": "Unlocks when its module unlocks",
     "lockReason.prerequisites": "Unlocks after {titles}",

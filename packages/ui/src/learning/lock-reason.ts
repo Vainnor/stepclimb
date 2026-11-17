@@ -5,6 +5,7 @@
 // the text never names anything the response did not show (spec 04 B14).
 import { useCallback, useMemo } from "react";
 import { useLocale } from "react-aria-components";
+import { useUnitList } from "../lib/unit-list";
 import { useStepclimbStrings } from "../strings/strings";
 
 /** One of spec 04's lock reasons, with its ids resolved to titles. */
@@ -64,10 +65,5 @@ export function useLockReasonText(timeZone: string): (reason: LockReason) => str
  * control, Opens on Mar 3, 2026, 10:00 AM EST" in English).
  */
 export function useLockReasonList(): (texts: readonly string[]) => string {
-  const { locale } = useLocale();
-  const units = useMemo(
-    () => new Intl.ListFormat(locale, { style: "long", type: "unit" }),
-    [locale],
-  );
-  return useCallback((texts) => units.format(texts), [units]);
+  return useUnitList();
 }

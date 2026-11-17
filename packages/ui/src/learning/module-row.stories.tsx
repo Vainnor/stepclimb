@@ -98,6 +98,10 @@ const states = [
   ["review", "Readback check"],
 ] as const;
 
+/** Done items out of 4, as each state allows: none while available, all once complete, one
+ * waiting for review. */
+const progressFor = { complete: 4, progress: 1, available: 0, overdue: 2, review: 3 } as const;
+
 /** The header of a module in each state but locked, which the Locked story shows. */
 export const AllStates: Story = {
   render: (args) => (
@@ -110,7 +114,7 @@ export const AllStates: Story = {
           title={title}
           state={state}
           lockReasons={undefined}
-          progress={{ completed: state === "complete" ? 4 : i, required: 4 }}
+          progress={{ completed: progressFor[state], required: 4 }}
           items={[]}
         />
       ))}

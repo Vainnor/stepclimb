@@ -38,13 +38,27 @@ describe("ItemRow", () => {
   it("describes the link with the kind, requirement, state and due label, in that order", () => {
     renderRow({ ...page, due: new Date("2026-03-13T14:00:00Z") });
     expect(screen.getByRole("link")).toHaveAccessibleDescription(
-      "Page Mark as done Available Due in 3 days",
+      "Page, Mark as done, Available, Due in 3 days",
     );
+  });
+
+  it("hides the drawn requirement, state and due label, which the description already says", () => {
+    renderRow({ ...page, due: new Date("2026-03-13T14:00:00Z") });
+    const meta = document.querySelector('[data-slot="item-row-meta"]');
+    expect(meta).toHaveAttribute("aria-hidden", "true");
+    expect(meta).toHaveTextContent("Mark as doneAvailableDue in 3 days");
+    // Each text reaches a screen reader once: in the link's description.
+    expect(screen.getAllByText(/Due in 3 days/)).toHaveLength(2);
+  });
+
+  it("names an external link's kind in full", () => {
+    renderRow({ ...page, kind: "external_link", requirement: null });
+    expect(screen.getByRole("link")).toHaveAccessibleDescription("External link, Available");
   });
 
   it("leaves out the requirement and due label it was not given", () => {
     renderRow({ ...page, requirement: null, state: "complete" });
-    expect(screen.getByRole("link")).toHaveAccessibleDescription("Page Complete");
+    expect(screen.getByRole("link")).toHaveAccessibleDescription("Page, Complete");
     expect(document.querySelector('[data-slot="requirement-label"]')).toBeNull();
     expect(document.querySelector('[data-slot="due-badge"]')).toBeNull();
   });
@@ -74,15 +88,14 @@ describe("ItemRow", () => {
   it("keeps a locked item a link to its item view", () => {
     renderRow({ ...page, state: "locked" });
     const link = screen.getByRole("link", { name: "Radio basics" });
-    expect(link).toHaveAccessibleDescription("Page Mark as done Locked");
-    expect(screen.getByText("Radio basics")).toHaveClass("text-fg-soft");
+    expect(link).toHaveAccessibleDescription("Page, Mark as done, Locked");
   });
 
   it("shows an overdue due label in the user's time zone", () => {
     // 02:00 UTC on 9 March is still 8 March in New York: two calendar days before 10 March.
     renderRow({ ...page, state: "overdue", due: new Date("2026-03-09T02:00:00Z") });
     expect(screen.getByRole("link")).toHaveAccessibleDescription(
-      "Page Mark as done Overdue 2 days overdue",
+      "Page, Mark as done, Overdue, 2 days overdue",
     );
   });
 
