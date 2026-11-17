@@ -107,8 +107,13 @@ async function openAction(name: string, action: string) {
   return user;
 }
 
-/** Half a second for focus that lands and is then lost to show it. */
-const settle = () => new Promise((resolve) => setTimeout(resolve, 500));
+/**
+ * The animation frame after the one in which a closed dialog returns focus (React Aria's
+ * FocusScope does it in a requestAnimationFrame scheduled as the dialog unmounts). Frames run in
+ * order, so once this resolves, that return has run: focus that it would move has moved.
+ */
+const afterFocusReturn = () =>
+  new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
 beforeEach(() => stubMatchMedia(true));
 afterEach(() => vi.unstubAllGlobals());
@@ -629,7 +634,7 @@ describe("changing files", () => {
     const [, folderRow] = within(await list()).getAllByRole("row");
     // The row now in its place, or a control in it; never the page's body.
     await waitFor(() => expect(folderRow?.contains(document.activeElement)).toBe(true));
-    await settle();
+    await afterFocusReturn();
     expect(folderRow?.contains(document.activeElement)).toBe(true);
   });
 
@@ -649,7 +654,7 @@ describe("changing files", () => {
     await screen.findByText(/has no files yet/);
     const grid = screen.getByRole("grid", { name: "Files in Top folder" });
     await waitFor(() => expect(grid).toHaveFocus());
-    await settle();
+    await afterFocusReturn();
     expect(grid).toHaveFocus();
   });
 
