@@ -157,7 +157,9 @@ test("Tab moves between table cells; Escape, then Tab, leaves the page text", as
         ...version(1),
         body: {
           type: "doc",
-          content: [{ type: "table", content: [{ type: "tableRow", content: [cell("a"), cell("b")] }] }],
+          content: [
+            { type: "table", content: [{ type: "tableRow", content: [cell("a"), cell("b")] }] },
+          ],
         },
       },
     }),
