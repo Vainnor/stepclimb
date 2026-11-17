@@ -1675,6 +1675,54 @@ async fn changing_the_manager_of_a_user_with_more_permissions_is_refused(pool: P
     assert_eq!(allowed.status, StatusCode::OK, "{allowed:?}");
 }
 
+/// T10a (spec 13 Q10): a session caller holding `user.manage` cannot set, clear or repeat their
+/// own manager (403 `user.manager_self`), not even in a patch that also renames them; their row
+/// and the audit log are unchanged. The same caller sets another user's manager, and renames
+/// themself without naming `manager_id`.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t10a_a_caller_cannot_change_their_own_manager(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (caller, me) = f
+        .holder_with_id(&["user.manage", "user.view"], Scope::Organization)
+        .await;
+    let robin = f.stored_user(f.a, new_user("Robin", Source::Local)).await;
+    let sam = f.stored_user(f.a, new_user("Sam", Source::Local)).await;
+    users::set_manager(&f.pool, scope(f.a), me, Some(robin), now(), Actor::Instance)
+        .await
+        .unwrap();
+    let before = f.stored(me).await;
+    let audit = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM audit_events")
+            .fetch_one(&f.pool)
+            .await
+            .expect("count entries")
+    };
+    let entries = audit().await;
+
+    for manager in [json!(sam), json!(null), json!(robin)] {
+        for body in [
+            json!({ "manager_id": manager }),
+            json!({ "manager_id": manager, "display_name": "Renamed" }),
+        ] {
+            f.patch(&caller, me, body.clone())
+                .await
+                .refused(StatusCode::FORBIDDEN, "user.manager_self");
+            assert_eq!(f.stored(me).await, before, "{body}");
+        }
+    }
+    assert_eq!(audit().await, entries);
+
+    let other = f.patch(&caller, sam, json!({ "manager_id": robin })).await;
+    assert_eq!(other.status, StatusCode::OK, "{other:?}");
+    assert_eq!(other.body["manager_id"], json!(robin));
+    let renamed = f
+        .patch(&caller, me, json!({ "display_name": "Renamed" }))
+        .await;
+    assert_eq!(renamed.status, StatusCode::OK, "{renamed:?}");
+    assert_eq!(renamed.body["display_name"], "Renamed");
+    assert_eq!(renamed.body["manager_id"], json!(robin));
+}
+
 /// Spec 13 B13 and Q9 (open, built as (b)): being made someone's manager grants the manager no
 /// read access. A manager holding no role is refused the users routes before and after, and
 /// their own grants do not change.

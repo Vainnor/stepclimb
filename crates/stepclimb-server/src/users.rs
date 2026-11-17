@@ -29,7 +29,10 @@
 //! (404 `user.not_found`), a suspended one (409 `user.manager_inactive`) and the user themself or
 //! anyone whose chain of managers reaches the user (409 `user.manager_cycle`), and writes the
 //! `user.set_manager` audit entry. Being someone's manager grants no read access to anything of
-//! theirs (spec 13 B13, Q9).
+//! theirs (spec 13 B13, Q9). A `PATCH` of the caller's own user that names `manager_id`, any
+//! value, the current one included, is refused (403 `user.manager_self`, spec 13 Q10) before
+//! anything is read or written, so nobody picks who receives their own escalations; an API key
+//! or app token gets `auth.session_required` instead.
 //!
 //! Changing the `email`, `status` or `manager_id` of a user with an effective permission, at any
 //! scope, that the caller does not hold at organization scope is refused (403
@@ -133,12 +136,14 @@ pub mod code {
     pub const USER_MANAGER_CYCLE: &str = "user.manager_cycle";
     /// The manager is a suspended user (409).
     pub const USER_MANAGER_INACTIVE: &str = "user.manager_inactive";
+    /// The patch names the caller's own `manager_id` (403).
+    pub const USER_MANAGER_SELF: &str = "user.manager_self";
 }
 
 problem_responses! {
     UserNotFound => "`user.not_found`: no user of the organization has this id. `org.not_found`: the request's organization cannot be determined.",
     UserUpdateNotFound => "`user.not_found`: no user of the organization has this id, or, for `manager_id`, the manager's id. `org.not_found`: the request's organization cannot be determined.",
-    UserWriteForbidden => "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email`, `status` or `manager_id` of a user who holds a permission the caller does not hold at organization scope. `auth.session_required`: an API key changes `email`, `status` or `manager_id` of its own owner, or an app token of its own user. `auth.csrf_refused`: the request did not come from this site.",
+    UserWriteForbidden => "`permission.denied`: the caller does not hold `user.manage` at organization scope. `permission.escalation`: the patch changes `email`, `status` or `manager_id` of a user who holds a permission the caller does not hold at organization scope. `auth.session_required`: an API key changes `email`, `status` or `manager_id` of its own owner, or an app token of its own user. `user.manager_self`: a session names `manager_id` on its own user; nobody sets or clears their own manager. `auth.csrf_refused`: the request did not come from this site.",
     UserCreateForbidden => "`permission.denied`: the caller does not hold `user.manage` at organization scope. `entitlement.limit_reached`: the organization's plan allows no more users; `limit` and `max` name the limit and its value. `auth.csrf_refused`: the request did not come from this site.",
     UserCreateConflict => "`user.external_id_taken`: another user of the organization has this external id. `user.email_taken`: another user of the organization has this email, in any letter case. `identity.taken`: one of `identities` is already linked to a user.",
     UserUpdateConflict => "`user.externally_managed`: an identity provider, the sync API, SCIM or a connector owns the user's names and email; change them there. `user.cannot_suspend_self`: you cannot suspend yourself. `user.email_taken`: another user of the organization has this email, in any letter case. `role_assignment.last_org_admin`: the user is the organization's last active Organization admin. `user.manager_cycle`: the manager is the user themself, or someone whose chain of managers reaches the user. `user.manager_inactive`: the manager is suspended.",
@@ -627,6 +632,7 @@ pub async fn update_user(
     let principal = require.principal();
     let scope = principal.scope();
     let now = state.clock.now();
+    refuse_own_manager(&body, principal, user_id)?;
     let guarded = body.email.is_some() || body.status.is_some() || body.manager_id.is_some();
     let mut tx = state.db.begin().await.map_err(|e| ApiError::internal(&e))?;
     if guarded {
@@ -671,6 +677,26 @@ pub async fn update_user(
     }
     tx.commit().await.map_err(|e| ApiError::internal(&e))?;
     Ok(Json(User::from_repo(user)?))
+}
+
+/// 403 when `patch` names `manager_id` and `user_id` is the caller's own user, whatever the value: an API key
+/// or app token gets `auth.session_required` (spec 08 B44), a session `user.manager_self`
+/// (spec 13 Q10). Runs after `Require<UserManage>`, so a caller without it gets
+/// `permission.denied`.
+fn refuse_own_manager(
+    patch: &UserPatch,
+    principal: Authenticated,
+    user_id: Uuid,
+) -> Result<(), ApiError> {
+    if patch.manager_id.is_none() || principal.user_id != user_id {
+        return Ok(());
+    }
+    refuse_key_on_owner(principal, user_id)?;
+    Err(ApiError::new(
+        StatusCode::FORBIDDEN,
+        code::USER_MANAGER_SELF,
+        "You cannot set or clear your own manager. Ask another administrator.",
+    ))
 }
 
 /// The route's own refusals of `patch` on `user` by the caller `caller` (a user id): a change
