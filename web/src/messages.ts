@@ -90,6 +90,9 @@ export const webMessages: Catalog = {
     "enroll.title": "Set up your account",
     "files.actions": "Actions for {name}",
     "files.archived": "This {course} is archived, so its files cannot be changed.",
+    "files.badFolder.description": "Check the address, or go to the top folder of this {course}.",
+    "files.badFolder.title": "This folder path is not valid",
+    "files.badFolder.top": "Go to the top folder",
     "files.cancel": "Cancel",
     "files.column.actions": "Actions",
     "files.column.name": "Name",
@@ -120,7 +123,6 @@ export const webMessages: Catalog = {
     "files.notFound.description":
       "It may have been deleted, or you may not have access to it. Check the address.",
     "files.notFound.title": "This {course} could not be found",
-    "files.problem.archived": "This {course} is archived, so its files cannot be changed.",
     "files.problem.bodyTimeout":
       "The upload of {name} stopped sending. Check your connection, then try again.",
     "files.problem.courseGone":
@@ -132,6 +134,8 @@ export const webMessages: Catalog = {
       "This folder no longer exists. Its files may have been moved in another tab. The list has been refreshed.",
     "files.problem.folderInvalid":
       "That folder path cannot be used. Separate folder names with /, and leave out \\, . and .. as names.",
+    "files.problem.folderNameTaken":
+      "Renaming the folder to {name} would put two files with the same name in one folder. Choose another name.",
     "files.problem.folderRoot": "Choose a name for the folder.",
     "files.problem.folderTooDeep": "Folders can be at most 8 levels deep.",
     "files.problem.folderTooLong": "Each folder name can be at most 100 characters.",
@@ -152,6 +156,8 @@ export const webMessages: Catalog = {
       "{name} is larger than this server accepts. Ask an administrator for the size limit.",
     "files.problem.unknown":
       "Something went wrong. Try again. If it keeps happening, give an administrator this code:",
+    "files.problem.unknownWithCode":
+      "Something went wrong. Try again. If it keeps happening, give an administrator this code: {code}",
     "files.problem.unreachable":
       "Stepclimb could not reach the server. Check your connection, then try again.",
     "files.problem.uploadsBusy": "The server is busy with other uploads. Try again in a moment.",
@@ -164,10 +170,28 @@ export const webMessages: Catalog = {
     "files.size.bytes": "{count, plural, one {# byte} other {# bytes}}",
     "files.title": "Files",
     "files.topFolder": "Top folder",
+    "files.tree.failed": "Some folders could not be loaded.",
+    "files.type.audio": "Audio",
+    "files.type.audioVideo": "Audio or video",
+    "files.type.excel": "Excel spreadsheet",
+    "files.type.extension": "{extension} file",
+    "files.type.image": "Image",
+    "files.type.mime": "MIME type {mime}",
+    "files.type.odfPresentation": "OpenDocument presentation",
+    "files.type.odfSpreadsheet": "OpenDocument spreadsheet",
+    "files.type.odfText": "OpenDocument text",
+    "files.type.other": "File",
+    "files.type.pdf": "PDF",
+    "files.type.powerPoint": "PowerPoint presentation",
+    "files.type.text": "Plain text",
+    "files.type.video": "Video",
+    "files.type.word": "Word document",
+    "files.upload.busy": "{name} is still uploading. Choose more files once it has finished.",
     "files.upload.description": "Files go into {folder}.",
     "files.upload.done": "{name} uploaded",
     "files.upload.notSent":
       "{count, plural, one {The file chosen after it was not uploaded.} other {The # files chosen after it were not uploaded.}}",
+    "files.upload.uploading": "Uploading {name}",
     "home.empty": "You have no {courses} yet.",
     "home.title": "Home",
     "loadError.documentTitle": "Could not load",

@@ -5,7 +5,7 @@
 // answer.
 import type { components } from "@stepclimb/api-client";
 import { queryOptions } from "@tanstack/react-query";
-import { ApiError, api, UnreachableError, unwrap } from "../api";
+import { api, UnreachableError, unwrap } from "../api";
 
 export type Course = components["schemas"]["Course"];
 export type CourseFile = components["schemas"]["CourseFile"];
@@ -102,12 +102,14 @@ export type UploadProgress = (fraction: number) => void;
  * server reads its type from them and counts them against `Content-Length`, which the browser
  * sets from the file. `fetch` reports no upload progress, so the request goes out through
  * `XMLHttpRequest` (`sendWithProgress`), still built and answered through the API client.
+ * Aborting `signal` stops the upload and rejects with an `AbortError`.
  */
 export async function uploadCourseFile(
   courseId: string,
   folder: string,
   file: File,
   onProgress: UploadProgress,
+  signal?: AbortSignal,
 ): Promise<CourseFile> {
   const result = await api.POST("/api/v1/courses/{course_id}/files", {
     params: { path: { course_id: courseId }, query: { folder, name: file.name } },
@@ -115,7 +117,7 @@ export async function uploadCourseFile(
     body: [],
     bodySerializer: () => file,
     headers: { "Content-Type": "application/octet-stream" },
-    fetch: (request: Request) => sendWithProgress(request, file, onProgress),
+    fetch: (request: Request) => sendWithProgress(request, file, onProgress, signal),
   });
   return unwrap(result);
 }
@@ -139,21 +141,32 @@ const NULL_BODY = new Set([204, 205, 304]);
 /**
  * Sends `request` with `body` through `XMLHttpRequest`, reporting the body's progress, and gives
  * back the answer as a `Response`. A request that gets no answer rejects with an
- * `UnreachableError`, as every other API request does (`fetchOrUnreachable`).
+ * `UnreachableError`, as every other API request does (`fetchOrUnreachable`). Aborting `signal`
+ * aborts the request and rejects with an `AbortError`, as `fetch` does.
  */
 export function sendWithProgress(
   request: Request,
   body: Blob,
   onProgress: UploadProgress,
+  signal?: AbortSignal,
 ): Promise<Response> {
   return new Promise((resolve, reject) => {
+    const aborted = () => new DOMException("The upload was aborted.", "AbortError");
+    if (signal?.aborted) {
+      reject(aborted());
+      return;
+    }
     const xhr = new XMLHttpRequest();
+    const onAbort = () => xhr.abort();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    const settle = () => signal?.removeEventListener("abort", onAbort);
     xhr.open(request.method, request.url);
     for (const [key, value] of request.headers) xhr.setRequestHeader(key, value);
     xhr.upload.addEventListener("progress", (event) => {
       if (event.lengthComputable && event.total > 0) onProgress(event.loaded / event.total);
     });
     xhr.addEventListener("load", () => {
+      settle();
       const status = xhr.status;
       resolve(
         new Response(NULL_BODY.has(status) ? null : xhr.responseText, {
@@ -162,13 +175,14 @@ export function sendWithProgress(
         }),
       );
     });
-    xhr.addEventListener("error", () => reject(new UnreachableError(new Error("upload failed"))));
-    xhr.addEventListener("timeout", () => reject(new UnreachableError(new Error("timed out"))));
+    xhr.addEventListener("error", () => {
+      settle();
+      reject(new UnreachableError(new Error("upload failed")));
+    });
+    xhr.addEventListener("abort", () => {
+      settle();
+      reject(aborted());
+    });
     xhr.send(body);
   });
-}
-
-/** The problem `code` of a failed request, if the server sent one. */
-export function problemCode(error: unknown): string | undefined {
-  return error instanceof ApiError ? error.problem?.code : undefined;
 }

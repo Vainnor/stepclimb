@@ -32,15 +32,18 @@ import {
   updateCourseFile,
 } from "./course-files";
 import { childFolder, normalizeTypedFolder, parentOf } from "./folders";
-import { filesProblem, isGone } from "./problems";
+import { filesProblem, isGone, problemSentence, type Subject } from "./problems";
 
 type FileAction = "rename" | "move" | "delete";
 
 /** The actions menu of a file's row and the dialog the chosen action opens. */
-export function FileActions({ file }: { file: CourseFile }) {
+export function FileActions({ file, onClosed }: { file: CourseFile; onClosed: () => void }) {
   const { t } = useStepclimbStrings();
   const [open, setOpen] = useState<FileAction>();
-  const close = () => setOpen(undefined);
+  const close = () => {
+    setOpen(undefined);
+    onClosed();
+  };
   return (
     <>
       <MenuTrigger>
@@ -63,10 +66,12 @@ export function FolderActions({
   courseId,
   path,
   name,
+  onClosed,
 }: {
   courseId: string;
   path: string;
   name: string;
+  onClosed: () => void;
 }) {
   const { t } = useStepclimbStrings();
   const [open, setOpen] = useState(false);
@@ -79,7 +84,15 @@ export function FolderActions({
         </Menu>
       </MenuTrigger>
       {open ? (
-        <RenameFolder courseId={courseId} path={path} name={name} onClose={() => setOpen(false)} />
+        <RenameFolder
+          courseId={courseId}
+          path={path}
+          name={name}
+          onClose={() => {
+            setOpen(false);
+            onClosed();
+          }}
+        />
       ) : null}
     </>
   );
@@ -108,8 +121,10 @@ interface ValueDialogProps {
   description?: string;
   submit: string;
   initial: string;
-  /** The name the server's refusal is about. */
-  subject: string;
+  /** The name a refusal of `value` is about. */
+  subjectOf: (value: string) => string;
+  /** Whether the value is for a file or a folder, which a name clash is worded for. */
+  kind?: Subject;
   courseId: string;
   /** Sends the value; resolves once the server took it. */
   change: (value: string) => Promise<void>;
@@ -122,7 +137,9 @@ function ValueDialog(props: ValueDialogProps) {
   const { onClose } = props;
   const mutation = useFilesChange(props.courseId, props.change);
   const [value, setValue] = useState(props.initial);
-  const problem = mutation.error ? filesProblem(mutation.error, props.subject, t) : undefined;
+  const problem = mutation.error
+    ? filesProblem(mutation.error, props.subjectOf(mutation.variables ?? value), t, props.kind)
+    : undefined;
   return (
     <Dialog title={props.title} isOpen onOpenChange={(isOpen) => (isOpen ? null : onClose())}>
       <Form
@@ -169,7 +186,7 @@ function RenameFile({ file, onClose }: { file: CourseFile; onClose: () => void }
       label={t("files.rename.label")}
       submit={t("files.rename.submit")}
       initial={file.name}
-      subject={file.name}
+      subjectOf={(name) => name.trim()}
       courseId={file.course_id}
       change={change}
       onClose={onClose}
@@ -194,7 +211,7 @@ function MoveFile({ file, onClose }: { file: CourseFile; onClose: () => void }) 
       description={t("files.move.description")}
       submit={t("files.move.submit")}
       initial={file.folder}
-      subject={file.name}
+      subjectOf={() => file.name}
       courseId={file.course_id}
       change={change}
       onClose={onClose}
@@ -223,7 +240,8 @@ function RenameFolder({ courseId, path, name, onClose }: RenameFolderProps) {
       label={t("files.rename.label")}
       submit={t("files.rename.submit")}
       initial={name}
-      subject={name}
+      subjectOf={(typed) => typed.trim()}
+      kind="folder"
       courseId={courseId}
       change={change}
       onClose={onClose}
@@ -242,8 +260,7 @@ function DeleteFile({ file, onClose }: { file: CourseFile; onClose: () => void }
       toasts.add({
         tone: "error",
         title: t("files.delete.failed", { name: file.name }),
-        description:
-          problem.code === undefined ? problem.message : `${problem.message} ${problem.code}`,
+        description: problemSentence(problem, t),
       });
       throw error;
     }

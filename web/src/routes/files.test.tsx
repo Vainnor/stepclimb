@@ -128,7 +128,9 @@ describe("the files area", () => {
     );
     expect(rows[2]).toHaveTextContent("Handbook.pdf");
     expect(rows[2]).toHaveTextContent("2.4 MB");
-    expect(rows[2]).toHaveTextContent("application/pdf · Changed Nov 3, 2026");
+    expect(rows[2]).toHaveTextContent("PDF · Changed Nov 3, 2026");
+    expect(within(rows[2] as HTMLElement).getByTitle("application/pdf")).toBeInTheDocument();
+    expect(rows[2]).toHaveTextContent("MIME type application/pdf");
     expect(screen.getByRole("treegrid", { name: "Folders" })).toBeInTheDocument();
     expect(document.title).toBe("Files · Example Training");
   });
@@ -284,6 +286,58 @@ describe("the files area", () => {
     await user.click(screen.getByRole("button", { name: "Previous" }));
     expect(await screen.findByText("Handbook.pdf")).toBeInTheDocument();
   });
+  it("says a folder path the server refuses is not valid, and links to the top folder", async () => {
+    server(AUTHOR, {
+      [`GET ${LIST}`]: () =>
+        new Response(
+          JSON.stringify({
+            type: "about:blank",
+            title: "Unprocessable Entity",
+            status: 422,
+            detail: "x",
+            code: "request.invalid",
+            errors: [{ field: "/folder", code: "file.folder_invalid" }],
+          }),
+          { status: 422, headers: { "content-type": "application/problem+json" } },
+        ),
+    });
+    renderApp(`${PATH}?folder=%2Fa%2F..`);
+    expect(
+      await screen.findByRole("heading", { level: 2, name: "This folder path is not valid" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Go to the top folder" })).toHaveAttribute(
+      "href",
+      PATH,
+    );
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+  });
+
+  it("mounts no tree and asks for no folders under 768 px", async () => {
+    stubMatchMedia(false);
+    const fetch = server(AUTHOR);
+    renderApp(PATH);
+    await within(await list()).findByText("Handbook.pdf");
+    expect(screen.queryByRole("treegrid")).toBeNull();
+    expect(listQueries(fetch).filter((q) => q.limit !== undefined)).toEqual([]);
+  });
+
+  it("says when the tree's folders could not be loaded, and loads them on Try again", async () => {
+    let up = false;
+    server(AUTHOR, {
+      [`GET ${LIST}`]: (request) => {
+        const limit = new URL(request.url).searchParams.get("limit");
+        if (limit !== null && !up) return problem(500, "internal", "Internal Server Error");
+        return listing({ "/": top })(request);
+      },
+    });
+    renderApp(PATH);
+    expect(await screen.findByText("Some folders could not be loaded.")).toBeInTheDocument();
+    up = true;
+    const tree = screen.getByRole("treegrid", { name: "Folders" });
+    await userEvent.setup().click(screen.getByRole("button", { name: "Try again" }));
+    expect(await within(tree).findByRole("row", { name: "handouts" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Some folders could not be loaded.")).toBeNull());
+  });
 });
 
 describe("uploading", () => {
@@ -385,6 +439,57 @@ describe("uploading", () => {
     await list();
     await userEvent.setup().upload(await fileInput(), new File(["x"], "a.pdf"));
     expect(await screen.findByText(/Stepclimb could not reach the server/)).toBeInTheDocument();
+  });
+  it("keeps focus on Choose files and announces each file politely", async () => {
+    const xhr = stubXhr();
+    xhr.hold = true;
+    server(AUTHOR, { [`POST ${LIST}`]: () => json(fileFixture("a.pdf"), 201) });
+    renderApp(PATH);
+    const user = userEvent.setup();
+    const input = await fileInput();
+    const choose = screen.getByRole("button", { name: "Choose files" });
+    choose.focus();
+    await user.upload(input, new File(["x"], "a.pdf"));
+    choose.focus();
+    await waitFor(() => expect(xhr.sent).toHaveLength(1));
+    const status = document.querySelector('[data-slot="files-upload-status"]');
+    expect(status).toHaveAttribute("role", "status");
+    expect(status).toHaveTextContent("Uploading a.pdf");
+    expect(choose).toBeEnabled();
+    expect(choose).toHaveFocus();
+    await xhr.sent[0]?.finish();
+    await waitFor(() => expect(status).toHaveTextContent("a.pdf uploaded"));
+    expect(choose).toHaveFocus();
+  });
+
+  it("does not send files chosen while a batch runs, and says why", async () => {
+    const xhr = stubXhr();
+    xhr.hold = true;
+    server(AUTHOR, { [`POST ${LIST}`]: () => json(fileFixture("a.pdf"), 201) });
+    renderApp(PATH);
+    const user = userEvent.setup();
+    const input = await fileInput();
+    await user.upload(input, new File(["x"], "a.pdf"));
+    await waitFor(() => expect(xhr.sent).toHaveLength(1));
+    await user.upload(input, new File(["y"], "b.pdf"));
+    expect(
+      await screen.findByText("a.pdf is still uploading. Choose more files once it has finished."),
+    ).toBeInTheDocument();
+    expect(xhr.sent).toHaveLength(1);
+  });
+
+  it("aborts the batch when the folder on screen changes", async () => {
+    const xhr = stubXhr();
+    xhr.hold = true;
+    server(AUTHOR, { [`POST ${LIST}`]: () => json(fileFixture("a.pdf"), 201) });
+    renderApp(PATH);
+    const user = userEvent.setup();
+    await user.upload(await fileInput(), [new File(["x"], "a.pdf"), new File(["y"], "b.pdf")]);
+    await waitFor(() => expect(xhr.sent).toHaveLength(1));
+    await user.click(within(await list()).getByRole("link", { name: "handouts" }));
+    expect(await screen.findByRole("grid", { name: "Files in handouts" })).toBeInTheDocument();
+    expect(xhr.sent[0]?.aborted).toBe(true);
+    expect(xhr.sent).toHaveLength(1);
   });
 });
 
@@ -503,5 +608,70 @@ describe("changing files", () => {
     await user.click(within(dialog).getByRole("button", { name: "Save name" }));
     expect(await screen.findByText("Folder renamed to notes")).toBeInTheDocument();
     expect(await requestsTo(fetch, RENAME)[0]?.json()).toEqual({ from: "/handouts", to: "/notes" });
+  });
+  it("moves focus to the next row once a deleted file leaves the list", async () => {
+    let listed = top;
+    server(AUTHOR, {
+      [`GET ${LIST}`]: () => page(listed),
+      [`DELETE ${FILE}`]: () => {
+        listed = [handouts];
+        return new Response(null, { status: 204 });
+      },
+    });
+    renderApp(PATH);
+    const user = await openAction("Handbook.pdf", "Delete");
+    const confirm = await screen.findByRole("alertdialog", { name: "Delete Handbook.pdf?" });
+    await user.click(within(confirm).getByRole("button", { name: "Delete file" }));
+    await waitFor(() => expect(screen.queryByText("Handbook.pdf")).toBeNull());
+    const [, folderRow] = within(await list()).getAllByRole("row");
+    // The row now in its place, or a control in it; never the page's body.
+    await waitFor(() => expect(folderRow?.contains(document.activeElement)).toBe(true));
+  });
+
+  it("moves focus to the table once the last file leaves it", async () => {
+    let listed: FolderEntry[] = [{ kind: "file", file: handbook }];
+    server(AUTHOR, {
+      [`GET ${LIST}`]: () => page(listed),
+      [`DELETE ${FILE}`]: () => {
+        listed = [];
+        return new Response(null, { status: 204 });
+      },
+    });
+    renderApp(PATH);
+    const user = await openAction("Handbook.pdf", "Delete");
+    const confirm = await screen.findByRole("alertdialog", { name: "Delete Handbook.pdf?" });
+    await user.click(within(confirm).getByRole("button", { name: "Delete file" }));
+    await screen.findByText(/has no files yet/);
+    await waitFor(() =>
+      expect(screen.getByRole("grid", { name: "Files in Top folder" })).toHaveFocus(),
+    );
+  });
+
+  it("puts the code of an unexplained delete refusal in the toast's sentence", async () => {
+    server(AUTHOR, { [`DELETE ${FILE}`]: () => problem(500, "internal", "Internal Server Error") });
+    renderApp(PATH);
+    const user = await openAction("Handbook.pdf", "Delete");
+    const confirm = await screen.findByRole("alertdialog", { name: "Delete Handbook.pdf?" });
+    await user.click(within(confirm).getByRole("button", { name: "Delete file" }));
+    expect(
+      await screen.findByText(
+        "Something went wrong. Try again. If it keeps happening, give an administrator this code: internal",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("says a folder rename would clash, in words about the folder", async () => {
+    const RENAME = `/api/v1/courses/${courseId}/folders/rename`;
+    server(AUTHOR, { [`POST ${RENAME}`]: () => problem(409, "file.name_taken", "Conflict") });
+    renderApp(PATH);
+    const user = await openAction("handouts", "Rename");
+    const dialog = await screen.findByRole("dialog", { name: "Rename folder handouts" });
+    const field = within(dialog).getByRole("textbox", { name: "Name" });
+    await user.clear(field);
+    await user.type(field, "notes");
+    await user.click(within(dialog).getByRole("button", { name: "Save name" }));
+    expect(
+      await within(dialog).findByText(/Renaming the folder to notes would put two files/),
+    ).toBeInTheDocument();
   });
 });

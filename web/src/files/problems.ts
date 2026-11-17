@@ -38,14 +38,24 @@ function ruleMessage(code: string | undefined, t: Strings["t"]): string | undefi
   }
 }
 
+/** What a request was about: a file, or a folder and everything in it. */
+export type Subject = "file" | "folder";
+
 /** The message for a problem `code` the files area explains, or undefined. */
-function codeMessage(error: ApiError, name: string, t: Strings["t"]): string | undefined {
+function codeMessage(
+  error: ApiError,
+  name: string,
+  subject: Subject,
+  t: Strings["t"],
+): string | undefined {
   const problem = error.problem;
   switch (problem?.code) {
     case "storage.not_configured":
       return t("files.problem.storageNotConfigured");
     case "file.name_taken":
-      return t("files.problem.nameTaken", { name });
+      return subject === "folder"
+        ? t("files.problem.folderNameTaken", { name })
+        : t("files.problem.nameTaken", { name });
     case "file.too_large":
       return t("files.problem.tooLarge", { name });
     case "file.uploads_busy":
@@ -59,7 +69,7 @@ function codeMessage(error: ApiError, name: string, t: Strings["t"]): string | u
     case "folder.not_found":
       return t("files.problem.folderGone");
     case "course.archived":
-      return t("files.problem.archived");
+      return t("files.archived");
     case "course.not_found":
       return t("files.problem.courseGone");
     case "permission.denied":
@@ -75,17 +85,36 @@ function codeMessage(error: ApiError, name: string, t: Strings["t"]): string | u
 
 /**
  * What to tell the person about `error`, a failed request about the file or folder `name`
- * (the uploaded file's name, the renamed file's or the folder's).
+ * (the uploaded file's name, the renamed file's, or for a folder the name it was to get).
  */
-export function filesProblem(error: unknown, name: string, t: Strings["t"]): FilesProblem {
+export function filesProblem(
+  error: unknown,
+  name: string,
+  t: Strings["t"],
+  subject: Subject = "file",
+): FilesProblem {
   if (isUnreachable(error)) return { message: t("files.problem.unreachable") };
   if (!(error instanceof ApiError)) return { message: t("files.problem.failed") };
-  const known = codeMessage(error, name, t);
+  const known = codeMessage(error, name, subject, t);
   if (known !== undefined) return { message: known };
   return {
     message: t("files.problem.unknown"),
     code: error.problem?.code ?? `HTTP ${error.status}`,
   };
+}
+
+/** A problem as one sentence, the code included, for text that cannot hold a Code element. */
+export function problemSentence(problem: FilesProblem, t: Strings["t"]): string {
+  return problem.code === undefined
+    ? problem.message
+    : t("files.problem.unknownWithCode", { code: problem.code });
+}
+
+/** True when the request named a folder path the server refuses (422 `request.invalid`). */
+export function isInvalidFolder(error: unknown): boolean {
+  return (
+    error instanceof ApiError && error.status === 422 && error.problem?.code === "request.invalid"
+  );
 }
 
 /** True when the course file or folder a request named is gone, so the list on screen is stale. */

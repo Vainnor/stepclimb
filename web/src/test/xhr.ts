@@ -27,6 +27,8 @@ export interface SentUpload {
   progress: (loaded: number, total: number) => void;
   /** Lets a held send go to the server and answer. */
   finish: () => Promise<void>;
+  /** Whether the page aborted it. */
+  aborted: boolean;
 }
 
 export interface FakeXhrControl {
@@ -54,18 +56,25 @@ export function stubXhr(): FakeXhrControl {
     setRequestHeader(key: string, value: string) {
       this.headers[key] = value;
     }
+    private sent: SentUpload | undefined;
+    abort() {
+      if (this.sent === undefined || this.sent.aborted) return;
+      this.sent.aborted = true;
+      this.emit("abort");
+    }
     getAllResponseHeaders() {
       return this.answerHeaders;
     }
     send(body: unknown) {
       const answer = async () => {
+        if (sent.aborted) return;
         try {
           const request = new Request(this.url, { method: this.method, headers: this.headers });
           const response = await globalThis.fetch(request);
           this.status = response.status;
           this.responseText = await response.text();
           this.answerHeaders = [...response.headers].map(([k, v]) => `${k}: ${v}`).join("\r\n");
-          this.emit("load");
+          if (!sent.aborted) this.emit("load");
         } catch {
           this.emit("error");
         }
@@ -78,7 +87,9 @@ export function stubXhr(): FakeXhrControl {
         progress: (loaded, total) =>
           this.upload.emit("progress", { lengthComputable: true, loaded, total }),
         finish: answer,
+        aborted: false,
       };
+      this.sent = sent;
       control.sent.push(sent);
       if (!control.hold) {
         const size = body instanceof Blob ? body.size : 0;
