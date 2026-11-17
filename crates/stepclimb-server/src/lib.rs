@@ -117,6 +117,7 @@ pub mod storage;
 pub mod timestamp;
 pub mod totp;
 pub mod totp_enrollment;
+pub mod unlock;
 pub mod upload;
 pub mod users;
 pub mod web_origin;

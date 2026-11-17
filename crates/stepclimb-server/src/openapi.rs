@@ -38,7 +38,7 @@ use crate::{
     health, identities, items, local_sign_in, manifest, me, modules, my_passkeys, oauth_authorize,
     oauth_token, organization, passkey_enrollment, passkey_options, passkey_sign_in, password,
     provider_admin, provider_callback, provider_sign_in, role_assignments, roles, service_accounts,
-    totp, totp_enrollment, upload, users,
+    totp, totp_enrollment, unlock, upload, users,
 };
 
 /// The operation extension that marks a handler as changing state (spec 08 B12, T17). Every
@@ -214,6 +214,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             modules::ItemKind,
             modules::CompletionRule,
             modules::Requirement,
+            unlock::LockReason,
             modules::NewModule,
             modules::ModulePatch,
             modules::ModuleOrder,
