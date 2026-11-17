@@ -134,7 +134,8 @@ everything that happened for one person and one assignment. Recurrence and expir
     that names `manager_id`, setting it, clearing it with `null` or naming the current value,
     answers 403 `user.manager_self` with any credential and writes nothing, members other than
     `manager_id` included. An API key or app token still gets `auth.session_required` first.
-    Another user's manager is set as above. Built in I6, after I2 merged.
+    Another user's manager is set as above. A caller without `user.manage` gets
+    `permission.denied` before the self check (Q10). Built in I6.
   - `users::set_manager` locks the organization row `FOR NO KEY UPDATE`, as a suspension does,
     so two concurrent changes cannot close a cycle between them; the lock also keeps the new
     manager from being suspended between the check and the write. The PATCH changes the manager
@@ -431,6 +432,13 @@ owner's; the owner answered them on 2026-11-16.
   Coordinator decision (2026-11-16), pending owner review: the refusal is 403 with the code
   `user.manager_self`, and it applies to any `manager_id` member on the caller's own user, the
   current value included, so the rule has no exception to test.
+  Coordinator decision (overnight, 2026-11-17), pending owner review: the self check runs after
+  the permission check, so a caller without `user.manage` gets 403 `permission.denied` and
+  learns nothing more; and naming the current `manager_id` unchanged counts as a change and is
+  refused, confirming the decision above. Built in I6: `refuse_own_manager` in
+  `crates/stepclimb-server/src/users.rs` runs before the transaction opens, after
+  `auth.session_required` for an API key or app token on its own user; `user.manager_self` is
+  in the OpenAPI document and the client.
 
 ## Issues
 
@@ -454,4 +462,4 @@ owner's; the owner answered them on 2026-11-16.
    B6; T9. Depends on: I1, `../m0/07-admission.md` I7.
 6. **I6. Refuse a user changing their own `manager_id` (#305).** B15's self refusal with 403
    `user.manager_self`, in the OpenAPI document and the client. Covers B15 (Q10); T10a. Depends
-   on: I2.
+   on: I2. Built.
