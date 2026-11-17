@@ -6,6 +6,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./editor": "./src/editor/index.ts",
     "./styles.css": "./src/styles/index.css",
     "./app.css": "./src/styles/app.css",
     "./strings-check": "./src/strings/check.ts",

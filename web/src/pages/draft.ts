@@ -3,7 +3,7 @@
 // (docs/specs/m1/07-pages-and-the-editor.md B4): one draft per page, recorded with the version it
 // was based on, so reopening the page offers it back and a save of it still meets B3's conflict
 // check. Storage that is full or turned off keeps nothing, and the editor works without it.
-import type { PageDoc } from "@stepclimb/ui";
+import type { PageDoc } from "@stepclimb/ui/editor";
 
 export interface PageDraft {
   /** The version the author was editing when they made these changes. */

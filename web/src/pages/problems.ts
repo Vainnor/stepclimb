@@ -2,7 +2,8 @@
 // What the page editor says for each refusal of a save or an image upload
 // (docs/specs/m1/07-pages-and-the-editor.md B3, B7, B10, B10a; 06-files.md B4): the server's
 // code, the message for it, and, for a refusal of the body, the top-level block its pointer names.
-import { blockIndexOf, type EditorProblem, type Strings } from "@stepclimb/ui";
+import type { Strings } from "@stepclimb/ui";
+import { blockIndexOf, type EditorProblem } from "@stepclimb/ui/editor";
 import { ApiError, isUnreachable, type Problem } from "../api";
 
 /** The body's first member the server refused, from a 422's `errors`. */

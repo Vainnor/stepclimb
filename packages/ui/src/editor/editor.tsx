@@ -6,7 +6,16 @@
 // form the server stores (`toPageDoc`), and shows a refusal the server answered with at the
 // top-level block its JSON Pointer names. It saves nothing itself: the screen around it does.
 import type { Editor as TiptapEditor } from "@tiptap/core";
-import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  type ReactNode,
+  type RefObject,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { tv } from "../lib/tv";
 import { FormError } from "../patterns/form-error";
 import { Button } from "../primitives/button";
@@ -22,19 +31,23 @@ import {
 } from "./blocks";
 import { EditorToolbar } from "./editor-toolbar";
 import { ImagePanel, type UploadedImage, VideoPanel } from "./insert-panel";
-import { emptyPageDoc, type PageDoc } from "./page-doc";
+import { emptyPageDoc, type PageDoc, sameDoc } from "./page-doc";
 import { problemKey, problemPlugin } from "./problem-mark";
-import { sameDoc, usePageEditor } from "./use-page-editor";
+import { usePageEditor } from "./use-page-editor";
 
 export const editor = tv({
   slots: {
     root: "flex min-w-0 flex-col rounded-md border border-line bg-raised",
-    chrome: "sticky top-0 z-10 rounded-t-md border-b border-line bg-raised",
+    // The actions and the toolbar stay at the top of the scrolling view at every width. The block
+    // bar below them stays too from 768 px; on a phone it scrolls away, so the sticky part is no
+    // taller than two rows when the software keyboard takes half the screen.
+    chrome: "sticky top-0 z-20 rounded-t-md border-b border-line bg-raised",
+    block: "z-10 border-b border-line bg-raised md:sticky md:top-(--editor-chrome-h)",
     actions:
       "flex flex-wrap items-center justify-end gap-x-3 gap-y-2 border-b border-line-soft px-3 py-2",
     problem: "flex flex-wrap items-center gap-3 border-b border-line-soft px-3 py-2",
     content: "min-h-64 px-4 py-6 sm:px-8",
-    surface: "mx-auto min-h-48 outline-none",
+    surface: "mx-auto min-h-48 rounded-sm px-2 py-1",
   },
 });
 
@@ -100,6 +113,7 @@ export function Editor({
 }: EditorProps) {
   const { t } = useStepclimbStrings();
   const mount = useRef<HTMLDivElement>(null);
+  const chrome = useRef<HTMLDivElement>(null);
   const problemId = useId();
   const [menuOpen, setMenuOpen] = useState(false);
   const [panel, setPanel] = useState<Panel>();
@@ -143,6 +157,7 @@ export function Editor({
   }, [instance, value]);
 
   useMarkProblemBlock(instance, problem?.block);
+  const chromeHeight = useHeight(chrome, instance !== null);
 
   const speaker = t("editor.transcript.speaker");
   const insert = (kind: BlockKind) => {
@@ -170,9 +185,13 @@ export function Editor({
 
   const context = instance ? blockContext(instance) : undefined;
   return (
-    <div data-slot="editor" className={styles.root({ className })}>
+    <div
+      data-slot="editor"
+      className={styles.root({ className })}
+      style={{ "--editor-chrome-h": `${chromeHeight}px` } as CSSProperties}
+    >
       {instance ? (
-        <div data-slot="editor-chrome" className={styles.chrome()}>
+        <div data-slot="editor-chrome" ref={chrome} className={styles.chrome()}>
           {actions === undefined ? null : (
             <div data-slot="editor-actions" className={styles.actions()}>
               {actions}
@@ -185,6 +204,10 @@ export function Editor({
             onInsert={insert}
             disabledBlocks={onUploadImage ? [] : ["image"]}
           />
+        </div>
+      ) : null}
+      {instance && (context || panel) ? (
+        <div data-slot="editor-block" className={styles.block()}>
           {context ? (
             <BlockToolbar
               editor={instance}
@@ -232,4 +255,18 @@ function useMarkProblemBlock(instance: TiptapEditor | null, block: number | unde
       if (!instance.isDestroyed) instance.unregisterPlugin(problemKey);
     };
   }, [instance, block]);
+}
+
+/** The element's height in pixels, followed as it wraps or its content changes. */
+function useHeight(ref: RefObject<HTMLElement | null>, mounted: boolean): number {
+  const [height, setHeight] = useState(0);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const observer = new ResizeObserver(() => setHeight(element.offsetHeight));
+    observer.observe(element);
+    setHeight(element.offsetHeight);
+    return () => observer.disconnect();
+  }, [ref, mounted]);
+  return height;
 }

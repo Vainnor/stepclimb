@@ -37,7 +37,8 @@ import { linkTarget } from "./link-target";
 
 export const editorToolbar = tv({
   slots: {
-    root: "gap-1 px-2 py-1.5",
+    // One row that scrolls sideways under 768 px, so the sticky bar stays two rows high on a phone.
+    root: "flex-nowrap gap-1 overflow-x-auto px-2 py-1.5 md:flex-wrap",
     style: "w-36 justify-between",
     styleValue: "min-w-0 truncate",
     linkForm: "flex w-72 max-w-full flex-col gap-3",

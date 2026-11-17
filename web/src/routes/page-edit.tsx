@@ -8,15 +8,12 @@ import {
   AlertDialog,
   Button,
   DialogTrigger,
-  Editor,
-  type EditorProblem,
   FormError,
-  type PageDoc,
   Skeleton,
-  sameDoc,
   Text,
   useStepclimbStrings,
 } from "@stepclimb/ui";
+import { Editor, type EditorProblem, type PageDoc, sameDoc } from "@stepclimb/ui/editor";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";

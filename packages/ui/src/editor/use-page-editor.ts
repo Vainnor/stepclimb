@@ -2,7 +2,7 @@
 // Mounts a Tiptap editor with the page schema into an element and re-renders the component on
 // every transaction, so the toolbars follow the selection. Tiptap's own React binding is not used:
 // the editor is mounted once, its node views are plain DOM, and this is all the binding it needs.
-import { Editor, type JSONContent } from "@tiptap/core";
+import { Editor } from "@tiptap/core";
 import { type RefObject, useEffect, useReducer, useRef, useState } from "react";
 import { pageExtensions, type Translate } from "./extensions";
 import { type PageDoc, toPageDoc } from "./page-doc";
@@ -18,19 +18,6 @@ export interface PageEditorOptions {
   /** Called on text input before the editor applies it; return true to take it. */
   onTextInput: (editor: Editor, text: string) => boolean;
   isDisabled: boolean;
-}
-
-/** The two bodies are the same document, whatever the order of their members. */
-export function sameDoc(a: JSONContent, b: JSONContent): boolean {
-  return stable(a) === stable(b);
-}
-
-function stable(value: unknown): string {
-  return JSON.stringify(value, (_key, v: unknown) =>
-    v && typeof v === "object" && !Array.isArray(v)
-      ? Object.fromEntries(Object.entries(v).sort(([x], [y]) => (x < y ? -1 : 1)))
-      : v,
-  );
 }
 
 export function usePageEditor(

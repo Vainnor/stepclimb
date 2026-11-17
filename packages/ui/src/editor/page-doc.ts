@@ -139,3 +139,16 @@ export function blockIndexOf(pointer: string, prefix = ""): number | undefined {
   const segment = pointer.slice(prefix.length + "/content/".length).split("/")[0];
   return segment !== undefined && /^\d+$/.test(segment) ? Number(segment) : undefined;
 }
+
+/** The two bodies are the same document, whatever the order of their members. */
+export function sameDoc(a: JSONContent, b: JSONContent): boolean {
+  return stable(a) === stable(b);
+}
+
+function stable(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) =>
+    v && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v).sort(([x], [y]) => (x < y ? -1 : 1)))
+      : v,
+  );
+}

@@ -4,7 +4,7 @@
 // image into the course's `/_page-images` folder (spec 06 B3). The server decides every refusal;
 // these carry its answer.
 import type { components } from "@stepclimb/api-client";
-import type { PageDoc, UploadedImage } from "@stepclimb/ui";
+import type { PageDoc, UploadedImage } from "@stepclimb/ui/editor";
 import { queryOptions } from "@tanstack/react-query";
 import { ApiError, api, type Problem, unwrap } from "../api";
 

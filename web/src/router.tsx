@@ -10,6 +10,7 @@ import {
   createRouter,
   type ErrorComponentProps,
   type HistoryState,
+  lazyRouteComponent,
   type RouterHistory,
   useMatch,
 } from "@tanstack/react-router";
@@ -24,7 +25,6 @@ import { EnrollView } from "./routes/enroll";
 import { FilesView } from "./routes/files";
 import { HomeView } from "./routes/home";
 import { NotFoundView } from "./routes/not-found";
-import { PageEditView } from "./routes/page-edit";
 import { SignInView } from "./routes/sign-in";
 import { SignInPasskeyView } from "./routes/sign-in-passkey";
 import { SignInPasswordView } from "./routes/sign-in-password";
@@ -159,7 +159,8 @@ const pageEditRoute = createRoute({
   getParentRoute: () => signedInRoute,
   path: "c/$course/pages/$page/edit",
   staticData: { view: { title: (t) => t("pageEdit.title") } },
-  component: PageEditView,
+  // Tiptap and ProseMirror load only when an author opens the editor, not with every page.
+  component: lazyRouteComponent(() => import("./routes/page-edit"), "PageEditView"),
 });
 
 export const routeTree = rootRoute.addChildren([

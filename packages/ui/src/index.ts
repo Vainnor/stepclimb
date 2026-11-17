@@ -2,8 +2,8 @@
 // Stepclimb UI: the M0 inventory of docs/specs/m0/13-base-ui-components.md (Foundations, Actions,
 // the M0 forms, Overlays, Navigation and the M0 data components), the M1 components of
 // docs/specs/m1/16-learning-ui-components.md built so far, VideoUploader (08-uploaded-video.md
-// B22), the page editor of docs/specs/m1/07-pages-and-the-editor.md, and the theme and strings
-// providers.
+// B22), and the theme and strings providers. The page editor is `@stepclimb/ui/editor`
+// (src/editor/index.ts), so an app loads Tiptap only where it shows the editor.
 
 export type {
   BoardItem,
@@ -17,25 +17,6 @@ export {
   moduleBoard,
 } from "./authoring/module-board";
 export { moduleBoardRow } from "./authoring/module-board-rows";
-export {
-  Editor,
-  type EditorProblem,
-  type EditorProps,
-  editor,
-} from "./editor/editor";
-export type { UploadedImage } from "./editor/insert-panel";
-export { linkTarget } from "./editor/link-target";
-export {
-  blockIndexOf,
-  codeLanguages,
-  emptyPageDoc,
-  imageTypes,
-  type PageDoc,
-  type PageMark,
-  type PageNode,
-  toPageDoc,
-} from "./editor/page-doc";
-export { sameDoc } from "./editor/use-page-editor";
 export {
   Announcement,
   type AnnouncementProps,
