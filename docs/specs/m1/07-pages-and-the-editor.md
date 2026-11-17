@@ -333,6 +333,62 @@ Coordinator decisions (overnight, 2026-11-17, after the review of #320), pending
   `orderedList`'s `type` where the Tiptap version writes it, before it saves; the server refuses
   them as unknown attributes.
 
+Coordinator decisions (overnight, 2026-11-17, I3), pending owner review:
+
+- Coordinator decision (overnight, 2026-11-17): the authoring screen is
+  `/c/:course/pages/:page/edit`. Until I2 adds `GET /api/v1/pages/{page_id}?format=json`, it loads
+  the newest version from `GET /pages/{page_id}/versions?limit=1` and its body from
+  `GET /pages/{page_id}/versions/{version_id}`: every save and restore makes the version it writes
+  current and numbers it after the others (B3, B5), so the newest version is the current one. The
+  versions routes do not answer the page's title, so the screen is titled "Edit page". I2 may move
+  the load to `?format=json`.
+- Coordinator decision (overnight, 2026-11-17): the editor uses `@tiptap/core` 3.32.2 and the
+  extension packages for B8's nodes and marks, without `@tiptap/react` (the editor mounts the core
+  editor itself and draws its blocks as plain DOM) and without `@tiptap/extension-link` (its own
+  link mark has only `href`, so `linkifyjs` stays out). `toPageDoc` keeps exactly the attributes
+  `page_doc` lists, written out, so Link's `target`, `rel` and `class`, `orderedList`'s `type` and
+  the cells' `align` never reach a save. The editor is the subpath `@stepclimb/ui/editor`, and the
+  web app loads the screen lazily, so Tiptap is in the screen's own chunk.
+- Coordinator decision (overnight, 2026-11-17): `crates/stepclimb-core/tests/fixtures/page_doc/`
+  holds the editor's contract with the server: a document with every node, mark and attribute, the
+  output of inserting every block, the output of a hostile paste, and the link cases. Vitest
+  writes or compares them from the editor and `tests/page_doc_editor.rs` parses them with
+  `PageDoc::parse_new` and requires the stored form to equal the file.
+- Coordinator decision (overnight, 2026-11-17): the slash menu opens for `/` typed at the start of
+  an empty paragraph, and is the same block list as the toolbar's "Insert" (a popover from 768 px,
+  a bottom sheet under it). Escape types the `/`. A block that may be nested (paragraph, lists,
+  code block) goes after the block holding the caret; any other goes after the top-level block
+  holding it. Either takes the place of the empty paragraph the `/` was typed in, where it may
+  stand. A table is inserted with three columns, a header row and two rows; table resizing is
+  off. A new transcript's first speaker is "Speaker" from the strings catalog, and a new line keeps
+  the speaker of the line it was split from.
+- Coordinator decision (overnight, 2026-11-17): the block toolbar is a bar under the main toolbar,
+  not a floating one, so it is reachable from the keyboard and on a phone. The actions (Save and
+  the save state) and the main toolbar stay at the top while the author scrolls at every width; the
+  block bar stays too from 768 px. Under 768 px the main toolbar is one row that scrolls sideways,
+  so the sticky part is two rows high when the software keyboard is open.
+- Coordinator decision (overnight, 2026-11-17): an image is uploaded through spec 06's upload
+  route into `/_page-images` under its own name after a random 8-hex-digit prefix, so two images
+  with the same name do not collide (`file.name_taken`). The editor inserts it only when the type
+  the server sniffed is one of B10a's, and asks for its text alternative or "decorative" first.
+  Spec 06's signed URL route is not built yet, so the editor draws an image as a labelled block
+  with its text alternative, not a preview.
+- Coordinator decision (overnight, 2026-11-17): paste is parsed into the editor's schema, so
+  markup it does not name is left out (a script, event handlers, styles, an `<img>` or an
+  `<iframe>` from elsewhere). `<h1>`, `<h5>` and `<h6>` paste as paragraphs, a code language off
+  the list as none, and an image only when it carries a course file id (copied from a Stepclimb
+  page). Control characters other than tab and newline are taken out of pasted text.
+- Coordinator decision (overnight, 2026-11-17): unsaved work (B4) is one draft per page in local
+  storage, `stepclimb.page-draft.<page_id>`, holding the body and its base version. It is written
+  1 s after the author's last change while the body differs from the saved one, cleared on a save
+  or on "Discard", and offered when the page is opened again with a body that differs from the
+  loaded one. A restored draft keeps its base version, so saving a draft based on an older version
+  meets B3's conflict check. Ctrl or Cmd + S saves from anywhere on the screen.
+- Coordinator decision (overnight, 2026-11-17): on `page.version_conflict` the screen keeps the
+  author's work and offers "Save my changes as the newest version", which saves again with the
+  conflict's `current_version` as the base (the other author's version stays in the history), or
+  "Load version N", which asks first and then drops the author's changes.
+
 ## Permissions
 
 No new catalog entry: reads take `perm::CourseView` with B18's rules or `perm::CourseViewAll`,
