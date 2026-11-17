@@ -67,6 +67,7 @@ export const uiMessages: Catalog = {
     "moduleBoard.editTitle": "Edit {title}",
     "moduleBoard.failed": "The move was not saved. Try again.",
     "moduleBoard.header": "Header",
+    "moduleBoard.inModule": "in {number, number} {title}",
     "moduleBoard.itemName": "{title}, item {position, number} of module {number, number}",
     "moduleBoard.label": "Modules and items",
     "moduleBoard.moduleName": "{number, number} {title}",

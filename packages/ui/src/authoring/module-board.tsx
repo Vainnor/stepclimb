@@ -5,7 +5,7 @@
 // way the board makes one write of docs/specs/m1/03-modules-and-items.md B10 and B11 through the
 // caller and shows the result while the server answers. On 409 `order.stale` it asks the caller to
 // reload and keeps focus on the row that was moved. Item editing opens in a side sheet.
-import { type ReactNode, type RefObject, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useMemo, useRef, useState } from "react";
 import { DropIndicator, GridList, useDragAndDrop } from "react-aria-components";
 import { tv } from "../lib/tv";
 import { FormError } from "../patterns/form-error";
@@ -13,28 +13,17 @@ import type { HeadingLevel } from "../primitives/heading";
 import { Sheet } from "../primitives/sheet";
 import { useStepclimbStrings } from "../strings/strings";
 import {
-  applyMove,
   type BoardItem,
   type BoardModule,
-  type BoardMove,
   type BoardRow,
   boardRows,
   dropMove,
   dropSpot,
-  placeAfter,
-  stepMove,
-  toModuleMove,
 } from "./board-moves";
 import { ModuleBoardRow } from "./module-board-rows";
+import { type MoveOutcome, type Report, useBoardMoves } from "./use-board-moves";
 
-/**
- * What a write gave: `moved` once `modules` holds the server's answer, `stale` for 409
- * `order.stale`, `failed` with the message to show for any other refusal.
- */
-export type MoveOutcome =
-  | { status: "moved" }
-  | { status: "stale" }
-  | { status: "failed"; message: string };
+export type { MoveOutcome };
 
 const ROW_TYPE = "application/x-stepclimb-board-row";
 
@@ -43,8 +32,12 @@ export const moduleBoard = tv({
     root: "flex flex-col gap-3 font-ui",
     status: "min-h-5 text-sm text-fg-sub",
     list: "flex flex-col outline-none",
-    dropIndicator: "h-0.5 rounded-pill data-[drop-target]:bg-brand",
+    dropIndicator: "h-0.5 rounded-xs data-[drop-target]:bg-brand",
     empty: "py-6 text-sm text-fg-sub",
+  },
+  variants: {
+    /** An item's drop line starts where item rows do, so it reads as joining the module above. */
+    draggingItem: { true: { dropIndicator: "ms-6" } },
   },
 });
 
@@ -66,7 +59,10 @@ export interface ModuleBoardProps {
   /** The item open in the sheet at first (uncontrolled). */
   defaultEditingItemId?: string | null;
   onEditingItemIdChange?: (itemId: string | null) => void;
-  /** No moves, as in an archived course, where every write answers 409. */
+  /**
+   * Read-only, as in an archived course, where every write answers 409: no Move or Edit buttons,
+   * and the drag handles are off.
+   */
   isDisabled?: boolean;
   /** The user's IANA time zone (`users.tz`), for unlock dates. */
   timeZone: string;
@@ -80,27 +76,21 @@ export interface ModuleBoardProps {
   className?: string;
 }
 
-type Report =
-  | { kind: "idle" }
-  | { kind: "saving" }
-  | { kind: "moved"; text: string }
-  | { kind: "error"; text: string };
-
 export function ModuleBoard(props: ModuleBoardProps) {
   const { t } = useStepclimbStrings();
   const styles = moduleBoard();
-  const board = useBoardMoves(props);
+  const listRef = useRef<HTMLDivElement>(null);
+  const board = useBoardMoves(props, listRef);
   const { shown } = board;
   const rows = useMemo(() => boardRows(shown), [shown]);
   const names = useRowNames(rows, shown);
-  const listRef = useRef<HTMLDivElement>(null);
-  useRestoreFocus(listRef, board.restoreKey, shown);
   const editing = useEditing(props);
-  const dragAndDropHooks = useBoardDrag(board, rows, props.isDisabled === true);
+  const readOnly = props.isDisabled === true;
+  const dragAndDropHooks = useBoardDrag(board, rows, readOnly);
   const actions = {
-    onMove: (key: string, action: string) => board.menuMove(key, action),
-    onEdit: props.itemEditor === undefined ? undefined : editing.open,
-    movesDisabled: props.isDisabled === true || board.pending,
+    onMove: readOnly ? undefined : (key: string, action: string) => board.menuMove(key, action),
+    onEdit: props.itemEditor === undefined || readOnly ? undefined : editing.open,
+    movesDisabled: readOnly || board.pending,
   };
   const headingLevel = props.headingLevel ?? 2;
   return (
@@ -112,7 +102,7 @@ export function ModuleBoard(props: ModuleBoardProps) {
         aria-label={props["aria-label"] ?? t("moduleBoard.label")}
         data-pending={board.pending || undefined}
         items={rows}
-        dependencies={[names, actions.movesDisabled, props.timeZone, headingLevel]}
+        dependencies={[names, actions.movesDisabled, readOnly, props.timeZone, headingLevel]}
         dragAndDropHooks={dragAndDropHooks}
         renderEmptyState={() => (
           <div data-slot="module-board-empty" className={styles.empty()}>
@@ -132,7 +122,11 @@ export function ModuleBoard(props: ModuleBoardProps) {
           />
         )}
       </GridList>
-      <EditSheet {...editing} modules={shown} itemEditor={props.itemEditor} />
+      <EditSheet
+        {...editing}
+        modules={shown}
+        itemEditor={readOnly ? undefined : props.itemEditor}
+      />
     </div>
   );
 }
@@ -147,22 +141,22 @@ function useBoardDrag(
   isDisabled: boolean,
 ) {
   const { shown } = board;
-  const styles = moduleBoard();
+  const dragging = useRef<string | null>(null);
   const { dragAndDropHooks } = useDragAndDrop<BoardRow>({
     isDisabled: isDisabled || board.pending,
     getItems: (keys) => [...keys].map((key) => ({ [ROW_TYPE]: String(key) })),
     acceptedDragTypes: [ROW_TYPE],
     getDropOperation: (target, _types, _allowed) => {
-      const dragged = board.dragging.current;
+      const dragged = dragging.current;
       if (target.type !== "item" || dragged === null) return "cancel";
       const spot = dropSpot(rows, target);
       return spot !== null && dropMove(shown, dragged, spot) !== null ? "move" : "cancel";
     },
     onDragStart: (e) => {
-      board.dragging.current = String([...e.keys][0]);
+      dragging.current = String([...e.keys][0]);
     },
     onDragEnd: () => {
-      board.dragging.current = null;
+      dragging.current = null;
     },
     onReorder: (e) => {
       const key = String([...e.keys][0]);
@@ -174,86 +168,13 @@ function useBoardDrag(
       <DropIndicator
         target={target}
         data-slot="module-board-drop-indicator"
-        className={styles.dropIndicator()}
+        className={moduleBoard({
+          draggingItem: dragging.current?.startsWith("item:") ?? false,
+        }).dropIndicator()}
       />
     ),
   });
   return dragAndDropHooks;
-}
-
-/**
- * The write in flight, the board shown meanwhile (the move applied to the server's last answer),
- * and the report of the last one.
- */
-function useBoardMoves(props: ModuleBoardProps) {
-  const { t } = useStepclimbStrings();
-  const [optimistic, setOptimistic] = useState<BoardModule[] | null>(null);
-  const [report, setReport] = useState<Report>({ kind: "idle" });
-  const [restoreKey, setRestoreKey] = useState<string | null>(null);
-  const dragging = useRef<string | null>(null);
-  const shown = optimistic ?? props.modules;
-  const pending = optimistic !== null;
-
-  function send(move: BoardMove): Promise<MoveOutcome> {
-    switch (move.kind) {
-      case "modules":
-        return props.onReorderModules(move.moduleIds);
-      case "items":
-        return props.onReorderItems(move.moduleId, move.itemIds);
-      case "move":
-        return props.onMoveItem(move.itemId, { moduleId: move.moduleId, position: move.position });
-    }
-  }
-
-  async function run(key: string, move: BoardMove) {
-    if (pending || props.isDisabled === true) return;
-    const after = applyMove(shown, move);
-    setOptimistic(after);
-    setRestoreKey(key);
-    setReport({ kind: "saving" });
-    let outcome: MoveOutcome;
-    try {
-      outcome = await send(move);
-    } catch {
-      outcome = { status: "failed", message: t("moduleBoard.failed") };
-    }
-    setOptimistic(null);
-    if (outcome.status === "moved") {
-      setReport({ kind: "moved", text: movedText(t, after, key) });
-    } else if (outcome.status === "stale") {
-      setReport({ kind: "error", text: t("moduleBoard.stale") });
-      props.onReload();
-    } else {
-      setReport({ kind: "error", text: outcome.message });
-    }
-  }
-
-  function menuMove(key: string, action: string) {
-    const move =
-      action === "up" || action === "down"
-        ? stepMove(shown, key, action === "up" ? -1 : 1)
-        : action.startsWith("module:")
-          ? toModuleMove(shown, key.replace(/^item:/, ""), action.slice("module:".length))
-          : null;
-    if (move !== null) void run(key, move);
-  }
-
-  return { shown, pending, report, restoreKey, dragging, run, menuMove };
-}
-
-function movedText(
-  t: ReturnType<typeof useStepclimbStrings>["t"],
-  after: BoardModule[],
-  key: string,
-) {
-  const place = placeAfter(after, key);
-  const row = boardRows(after).find((r) => r.key === key);
-  if (place === null || row === undefined) return "";
-  const title = row.type === "module" ? row.module.title : row.item.title;
-  const values = { title, position: place.position, count: place.count };
-  return place.module === null
-    ? t("moduleBoard.movedModule", values)
-    : t("moduleBoard.movedItem", { ...values, module: place.module.title });
 }
 
 /** Saving and moved in a status line; a refusal as an alert. */
@@ -295,26 +216,6 @@ function useRowNames(rows: readonly BoardRow[], modules: readonly BoardModule[])
     }
     return names;
   }, [rows, modules, t]);
-}
-
-/**
- * Keeps the place of the row last moved: when the move, its undoing or a reload re-renders the
- * list and focus falls to the page (its element was moved or replaced), focus goes back to the
- * row's Move button. Focus that is anywhere else stays where it is.
- */
-function useRestoreFocus(
-  listRef: RefObject<HTMLDivElement | null>,
-  key: string | null,
-  shown: readonly BoardModule[],
-) {
-  // biome-ignore lint/correctness/useExhaustiveDependencies: runs after each change to the rows.
-  useLayoutEffect(() => {
-    if (key === null) return;
-    const active = document.activeElement;
-    if (active !== null && active !== document.body) return;
-    const row = listRef.current?.querySelector<HTMLElement>(`[data-key="${CSS.escape(key)}"]`);
-    row?.querySelector<HTMLElement>("[data-slot=module-board-move]")?.focus();
-  }, [key, shown, listRef]);
 }
 
 /** The item open in the sheet, controlled through `editingItemId` or kept here. */

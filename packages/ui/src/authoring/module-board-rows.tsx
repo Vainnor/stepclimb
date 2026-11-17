@@ -3,18 +3,36 @@
 // publish state and unlock rules, or an item's kind, title, requirement and publish state, each
 // with a drag handle and a Move menu, and for an item an Edit button. What a row draws is said
 // again in one visually hidden description, so the drawn copy is hidden from screen readers.
-import { DotsSixVerticalIcon, DotsThreeIcon, PencilSimpleIcon } from "@phosphor-icons/react";
+import {
+  DotsSixVerticalIcon,
+  DotsThreeIcon,
+  EyeSlashIcon,
+  PencilSimpleIcon,
+} from "@phosphor-icons/react";
 import { useMemo } from "react";
-import { Button as AriaButton, GridListItem, Text } from "react-aria-components";
+import {
+  Button as AriaButton,
+  GridListItem,
+  Header,
+  MenuSection,
+  Text,
+} from "react-aria-components";
 import { itemKindIcons } from "../learning/item-row";
 import { useLockReasonText } from "../learning/lock-reason";
 import { RequirementLabel, useRequirementText } from "../learning/requirement-label";
 import { statusPill } from "../learning/status-pill";
 import { tv } from "../lib/tv";
 import { useUnitList } from "../lib/unit-list";
+import { useMediaQuery } from "../lib/use-media-query";
 import { Heading, type HeadingLevel } from "../primitives/heading";
 import { IconButton } from "../primitives/icon-button";
-import { Menu, MenuItem, MenuTrigger, SubmenuTrigger } from "../primitives/menu";
+import {
+  MENU_POPOVER_QUERY,
+  Menu,
+  MenuItem,
+  MenuTrigger,
+  SubmenuTrigger,
+} from "../primitives/menu";
 import { useStepclimbStrings } from "../strings/strings";
 import { Icon } from "../theme/icon";
 import type { BoardModule, BoardRow } from "./board-moves";
@@ -35,14 +53,20 @@ export const moduleBoardRow = tv({
     // The title and the meta share a column between the handle and the buttons, so the meta wraps
     // under the title on a narrow screen and the buttons stay on the first line.
     body: "flex min-w-0 flex-1 flex-wrap items-center gap-x-4",
-    main: "flex min-h-(--sc-control-h) min-w-0 flex-[1_1_12rem] items-center gap-3 py-1.5",
+    // A single line sits in the middle of a control's height, level with the handle and buttons;
+    // the kind icon stays on the first line when the title wraps.
+    main: [
+      "flex min-h-(--sc-control-h) min-w-0 flex-[1_1_12rem] items-start gap-3",
+      "py-[calc((var(--sc-control-h)-1lh)/2)]",
+    ],
     number: "shrink-0 text-fg-sub tabular-nums",
     title: "min-w-0 break-words",
-    kindIcon: "shrink-0 text-fg-sub",
+    kindIcon: "flex h-lh shrink-0 items-center text-fg-sub",
     meta: "flex flex-wrap items-center gap-x-3 gap-y-1 pb-1.5 sm:py-1.5",
     pill: statusPill(),
     rules: "text-caption text-fg-sub break-words",
     actions: "flex shrink-0 items-center",
+    menuName: "px-3 pt-2 pb-1 text-caption font-control text-fg-sub break-words",
   },
   variants: {
     type: {
@@ -50,16 +74,18 @@ export const moduleBoardRow = tv({
       item: { root: "ps-6" },
       header: { root: "ps-6", title: "font-heading text-fg-strong" },
     },
+    // Unpublished reads apart from Published without color: an icon, a dashed edge, a sunken fill.
+    published: { true: {}, false: { pill: "gap-1 border-dashed bg-sunken" } },
   },
 });
 
 /** What the Move menu and the Edit button do; the board turns each into a write or the sheet. */
 export interface RowActions {
-  /** The Move menu: `up`, `down`, or `module:<id>` for "Move to module". */
-  onMove: (key: string, action: string) => void;
+  /** The Move menu: `up`, `down`, or `module:<id>` for "Move to module"; none draws no Move button. */
+  onMove?: (key: string, action: string) => void;
   /** Opens the item in the editing sheet; none draws no Edit button. */
   onEdit?: (itemId: string) => void;
-  /** No move while a move is saving or the board is disabled. */
+  /** No move while a move is saving. */
   movesDisabled: boolean;
 }
 
@@ -105,7 +131,7 @@ export function ModuleBoardRow(props: BoardRowProps) {
         {row.type === "item" && props.onEdit !== undefined ? (
           <EditButton itemId={row.item.id} name={name} onEdit={props.onEdit} />
         ) : null}
-        <MoveMenu {...props} />
+        {props.onMove === undefined ? null : <MoveMenu {...props} onMove={props.onMove} />}
       </span>
     </GridListItem>
   );
@@ -152,7 +178,9 @@ function ItemMain({ row, styles }: { row: Extract<BoardRow, { type: "item" }>; s
   return (
     <span data-slot="module-board-row-main" className={styles.main()}>
       {item.kind === "header" ? null : (
-        <Icon icon={itemKindIcons[item.kind]} size="md" className={styles.kindIcon()} />
+        <span data-slot="module-board-kind" className={styles.kindIcon()}>
+          <Icon icon={itemKindIcons[item.kind]} size="md" />
+        </span>
       )}
       <span data-slot="module-board-title" className={styles.title()}>
         {item.title}
@@ -181,7 +209,12 @@ function RowMeta({
   return (
     <>
       {requirement === null ? null : <RequirementLabel requirement={requirement} />}
-      <span data-slot="module-board-published" data-published={published} className={styles.pill()}>
+      <span
+        data-slot="module-board-published"
+        data-published={published}
+        className={moduleBoardRow({ published }).pill()}
+      >
+        {published ? null : <Icon icon={EyeSlashIcon} size="sm" />}
         {t("moduleBoard.published", { published: published ? "yes" : "no" })}
       </span>
       {rules.length === 0 ? null : (
@@ -237,10 +270,12 @@ function useRowDescription(
     return list([t("moduleBoard.published", { published }), ...rules]);
   }
   const { item } = row;
+  const number = modules.indexOf(row.module) + 1;
   return list([
     item.kind === "header" ? t("moduleBoard.header") : t("itemRow.kind", { kind: item.kind }),
     ...(item.requirement === null ? [] : [requirementText(item.requirement)]),
     t("moduleBoard.published", { published: item.published ? "yes" : "no" }),
+    t("moduleBoard.inModule", { number, title: row.module.title }),
   ]);
 }
 
@@ -265,8 +300,17 @@ function EditButton({
 }
 
 /** Up, down and, for an item, "Move to module": every move without a pointer. */
-function MoveMenu({ row, modules, name, onMove, movesDisabled }: BoardRowProps) {
+function MoveMenu({
+  row,
+  modules,
+  name,
+  onMove,
+  movesDisabled,
+}: BoardRowProps & { onMove: (key: string, action: string) => void }) {
   const { t } = useStepclimbStrings();
+  const styles = moduleBoardRow();
+  // A bottom sheet has no trigger beside it, so it says which row it moves.
+  const sheet = !useMediaQuery(MENU_POPOVER_QUERY);
   const disabled = movesDisabled ? ["up", "down", "module"] : edgeKeys(row, modules);
   const others = row.type === "item" ? modules.filter((m) => m.id !== row.module.id) : [];
   return (
@@ -281,27 +325,34 @@ function MoveMenu({ row, modules, name, onMove, movesDisabled }: BoardRowProps) 
         disabledKeys={disabled}
         onAction={(key) => onMove(row.key, String(key))}
       >
-        <MenuItem id="up">{t("moduleBoard.moveUp")}</MenuItem>
-        <MenuItem id="down">{t("moduleBoard.moveDown")}</MenuItem>
-        {others.length === 0 ? null : (
-          <SubmenuTrigger>
-            <MenuItem id="module">{t("moduleBoard.moveToModule")}</MenuItem>
-            <Menu
-              data-slot="module-board-module-menu"
-              disabledKeys={movesDisabled ? others.map((m) => `module:${m.id}`) : []}
-              onAction={(key) => onMove(row.key, String(key))}
-            >
-              {others.map((m) => (
-                <MenuItem key={m.id} id={`module:${m.id}`}>
-                  {t("moduleBoard.moduleName", {
-                    number: modules.indexOf(m) + 1,
-                    title: m.title,
-                  })}
-                </MenuItem>
-              ))}
-            </Menu>
-          </SubmenuTrigger>
-        )}
+        <MenuSection data-slot="module-board-move-section">
+          {sheet ? (
+            <Header data-slot="module-board-move-name" className={styles.menuName()}>
+              {name}
+            </Header>
+          ) : null}
+          <MenuItem id="up">{t("moduleBoard.moveUp")}</MenuItem>
+          <MenuItem id="down">{t("moduleBoard.moveDown")}</MenuItem>
+          {others.length === 0 ? null : (
+            <SubmenuTrigger>
+              <MenuItem id="module">{t("moduleBoard.moveToModule")}</MenuItem>
+              <Menu
+                data-slot="module-board-module-menu"
+                disabledKeys={movesDisabled ? others.map((m) => `module:${m.id}`) : []}
+                onAction={(key) => onMove(row.key, String(key))}
+              >
+                {others.map((m) => (
+                  <MenuItem key={m.id} id={`module:${m.id}`}>
+                    {t("moduleBoard.moduleName", {
+                      number: modules.indexOf(m) + 1,
+                      title: m.title,
+                    })}
+                  </MenuItem>
+                ))}
+              </Menu>
+            </SubmenuTrigger>
+          )}
+        </MenuSection>
       </Menu>
     </MenuTrigger>
   );

@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { type ReactNode, useRef, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { uiMessages } from "../strings/catalog";
+import { StringsProvider } from "../strings/strings";
 import { stubMatchMedia } from "../test/media";
 import { renderWithStrings } from "../test/strings";
-import type { BoardModule } from "./board-moves";
+import { applyMove, type BoardModule, type BoardMove } from "./board-moves";
 import { ModuleBoard, type ModuleBoardProps, type MoveOutcome } from "./module-board";
+import { useBoardMoves } from "./use-board-moves";
 
 const NY = "America/New_York";
 
@@ -49,20 +53,48 @@ const ground: BoardModule = {
 
 const modules: BoardModule[] = [radio, ground];
 
+/** What a test does to the caller's state: the server's answer arriving, a refetch. */
+interface Caller {
+  apply: (move: BoardMove) => void;
+  set: (modules: BoardModule[]) => void;
+}
+
+/** The caller: keeps `modules` in state, as a page holding the server's last answer does. */
+function CallerPage({ props, caller }: { props: ModuleBoardProps; caller: Caller }) {
+  const [current, setCurrent] = useState(props.modules);
+  caller.apply = (move) => setCurrent((m) => applyMove(m, move));
+  caller.set = setCurrent;
+  return <ModuleBoard {...props} modules={current} />;
+}
+
+/**
+ * Renders the board under a caller whose writes succeed and pass the new modules back, unless a
+ * test gives its own handler.
+ */
 function setup(overrides: Partial<ModuleBoardProps> = {}) {
-  const moved = async (): Promise<MoveOutcome> => ({ status: "moved" });
+  const caller: Caller = { apply: () => {}, set: () => {} };
+  const store = async (move: BoardMove): Promise<MoveOutcome> => {
+    caller.apply(move);
+    return { status: "moved" };
+  };
   const props: ModuleBoardProps = {
     modules,
-    onReorderModules: vi.fn(moved),
-    onReorderItems: vi.fn(moved),
-    onMoveItem: vi.fn(moved),
+    onReorderModules: vi.fn((moduleIds: string[]) => store({ kind: "modules", moduleIds })),
+    onReorderItems: vi.fn((moduleId: string, itemIds: string[]) =>
+      store({ kind: "items", moduleId, itemIds }),
+    ),
+    onMoveItem: vi.fn((itemId: string, to: { moduleId: string; position: number }) =>
+      store({ kind: "move", itemId, ...to }),
+    ),
     onReload: vi.fn(),
     timeZone: NY,
     ...overrides,
   };
-  const view = renderWithStrings(<ModuleBoard {...props} />);
-  return { props, view, user: userEvent.setup() };
+  const view = renderWithStrings(<CallerPage props={props} caller={caller} />);
+  return { props, view, caller, user: userEvent.setup() };
 }
+
+const order = () => screen.getAllByRole("row").map((r) => r.getAttribute("aria-label"));
 
 const row = (name: RegExp) => screen.getByRole("row", { name });
 
@@ -100,9 +132,9 @@ describe("ModuleBoard", () => {
       expect(ids).toHaveLength(2);
       return document.getElementById(ids[1] ?? "")?.textContent;
     };
-    expect(description(row(/^Phraseology/))).toBe("Page, View, Published");
-    expect(description(row(/^Readbacks/))).toBe("Video, Unpublished");
-    expect(description(row(/^Practice/))).toBe("Header, Published");
+    expect(description(row(/^Phraseology/))).toBe("Page, View, Published, in 1 Radio basics");
+    expect(description(row(/^Readbacks/))).toBe("Video, Unpublished, in 1 Radio basics");
+    expect(description(row(/^Practice/))).toBe("Header, Published, in 1 Radio basics");
     expect(description(row(/^2 Ground control/))).toBe(
       "Unpublished, Opens on Mar 3, 2026, 10:00 AM EST, Unlocks after Radio basics, Items in order",
     );
@@ -130,11 +162,20 @@ describe("ModuleBoard", () => {
   });
 
   describe("keyboard drag and drop", () => {
+    // A test that fails mid-drag leaves React Aria's drag session open; end it for the next test.
+    afterEach(() => {
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+      fireEvent.keyUp(document.activeElement ?? document.body, { key: "Escape" });
+    });
+
     /** Starts a keyboard drag from `row`'s handle; returns the drop targets offered, in order. */
     async function drag(user: ReturnType<typeof userEvent.setup>, name: string) {
       // Into the grid, down to the row, then right to its handle, as a keyboard user goes.
       await user.tab();
-      while (label(document.activeElement) !== name) await user.keyboard("{ArrowDown}");
+      for (let i = 0; i < 20 && label(document.activeElement) !== name; i++) {
+        await user.keyboard("{ArrowDown}");
+      }
+      expect(label(document.activeElement)).toBe(name);
       await user.keyboard("{ArrowRight}");
       expect(document.activeElement).toBe(screen.getByRole("button", { name: `Drag ${name}` }));
       await user.keyboard("{Enter}");
@@ -176,6 +217,18 @@ describe("ModuleBoard", () => {
       expect(props.onReorderItems).toHaveBeenCalledWith("m1", ["i2", "i1", "i3"]);
       expect(await screen.findByRole("status")).toHaveTextContent(
         "Moved Phraseology to position 2 of 3 in Radio basics.",
+      );
+    });
+
+    it("puts an item dropped before the next module at the end of its own", async () => {
+      const { props, user } = setup();
+      await drag(user, "Phraseology");
+      await dropAt(user, "Insert between Practice and 2 Ground control");
+      expect(props.onReorderItems).toHaveBeenCalledTimes(1);
+      expect(props.onReorderItems).toHaveBeenCalledWith("m1", ["i2", "i3", "i1"]);
+      expect(props.onMoveItem).not.toHaveBeenCalled();
+      expect(await screen.findByRole("status")).toHaveTextContent(
+        "Moved Phraseology to position 3 of 3 in Radio basics.",
       );
     });
 
@@ -230,7 +283,6 @@ describe("ModuleBoard", () => {
     const { user } = setup({ onReorderItems });
     await choose(user, "Move Phraseology", "Move down");
     expect(screen.getByRole("status")).toHaveTextContent("Saving the new order.");
-    const order = () => screen.getAllByRole("row").map((r) => r.getAttribute("aria-label"));
     expect(order().slice(1, 3)).toEqual(["Readbacks", "Phraseology"]);
     await user.click(screen.getByRole("button", { name: "Move Readbacks" }));
     expect(screen.getByRole("menuitem", { name: "Move down" })).toHaveAttribute(
@@ -243,23 +295,50 @@ describe("ModuleBoard", () => {
   });
 
   it("on 409 order.stale reloads, says so, and keeps focus on the moved row", async () => {
-    const { props, user, view } = setup({
+    const { props, user, caller } = setup({
       onReorderItems: vi.fn(async (): Promise<MoveOutcome> => ({ status: "stale" })),
     });
     await choose(user, "Move Phraseology", "Move down");
     expect(props.onReload).toHaveBeenCalledTimes(1);
     expect(await screen.findByRole("alert")).toHaveTextContent("The latest order is shown");
     // The reload brings another author's order, with the item now last.
-    const [phraseology, ...others] = radio.items;
-    const reloaded = [{ ...radio, items: [...others, ...radio.items.slice(0, 1)] }, ground];
-    expect(phraseology?.title).toBe("Phraseology");
+    const [phraseology, readbacks, practice] = radio.items;
+    if (!phraseology || !readbacks || !practice) throw new Error("fixture");
     (document.activeElement as HTMLElement | null)?.blur();
-    view.rerender(<ModuleBoard {...props} modules={reloaded} />);
+    act(() => caller.set([{ ...radio, items: [readbacks, practice, phraseology] }, ground]));
     await waitFor(() =>
       expect(document.activeElement).toBe(screen.getByRole("button", { name: "Move Phraseology" })),
     );
-    const order = screen.getAllByRole("row").map((r) => r.getAttribute("aria-label"));
-    expect(order.slice(1, 4)).toEqual(["Readbacks", "Practice", "Phraseology"]);
+    expect(order().slice(1, 4)).toEqual(["Readbacks", "Practice", "Phraseology"]);
+  });
+
+  it("leaves focus alone when the modules change after a move is over", async () => {
+    const { user, caller } = setup();
+    await choose(user, "Move Phraseology", "Move down");
+    await screen.findByText("Moved Phraseology to position 2 of 3 in Radio basics.");
+    (document.activeElement as HTMLElement | null)?.blur();
+    // Another author renames a module; the page refetches.
+    act(() => caller.set([radio, { ...ground, title: "Ground" }]));
+    await screen.findByRole("row", { name: /^2 Ground\b/ });
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("keeps the new order until the new modules arrive, and reports the server's", async () => {
+    const answered = vi.fn(async (): Promise<MoveOutcome> => ({ status: "moved" }));
+    const { user, caller } = setup({ onReorderItems: answered });
+    await choose(user, "Move Phraseology", "Move down");
+    await waitFor(() => expect(answered).toHaveBeenCalledTimes(1));
+    await act(async () => {});
+    // Saved, but the caller has not passed the new modules yet: no flash of the old order.
+    expect(order().slice(1, 3)).toEqual(["Readbacks", "Phraseology"]);
+    expect(screen.getByRole("status")).toHaveTextContent("Saving the new order.");
+    // The server's order puts it last: another author moved Practice meanwhile.
+    const [phraseology, readbacks, practice] = radio.items;
+    if (!phraseology || !readbacks || !practice) throw new Error("fixture");
+    act(() => caller.set([{ ...radio, items: [readbacks, practice, phraseology] }, ground]));
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Moved Phraseology to position 3 of 3 in Radio basics.",
+    );
   });
 
   it("puts the order back and shows the server's refusal", async () => {
@@ -282,15 +361,12 @@ describe("ModuleBoard", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("The move was not saved.");
   });
 
-  it("makes no move when disabled", async () => {
-    const { props, user } = setup({ isDisabled: true });
+  it("is read-only when disabled: no Move or Edit buttons, no drag, no sheet", () => {
+    setup({ isDisabled: true, itemEditor: () => <p>Editor</p>, editingItemId: "i1" });
     expect(screen.getByRole("button", { name: "Drag Phraseology" })).toBeDisabled();
-    await user.click(screen.getByRole("button", { name: "Move Phraseology" }));
-    expect(screen.getByRole("menuitem", { name: "Move down" })).toHaveAttribute(
-      "aria-disabled",
-      "true",
-    );
-    expect(props.onReorderItems).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Move Phraseology" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Edit Phraseology" })).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("opens an item's editor in a side sheet, uncontrolled", async () => {
@@ -323,5 +399,35 @@ describe("ModuleBoard", () => {
   it("shows the empty state for a course without modules", () => {
     setup({ modules: [], emptyState: "No modules yet." });
     expect(screen.getByText("No modules yet.")).toBeInTheDocument();
+  });
+
+  it("starts one move when two come in the same tick", () => {
+    const onReorderItems = vi.fn(() => new Promise<MoveOutcome>(() => {}));
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <StringsProvider catalogs={[uiMessages]} isDevelopment>
+        {children}
+      </StringsProvider>
+    );
+    const { result } = renderHook(
+      () => {
+        const listRef = useRef<HTMLDivElement>(null);
+        return useBoardMoves(
+          {
+            modules,
+            onReorderModules: vi.fn(),
+            onReorderItems,
+            onMoveItem: vi.fn(),
+            onReload: vi.fn(),
+          },
+          listRef,
+        );
+      },
+      { wrapper },
+    );
+    act(() => {
+      result.current.menuMove("item:i1", "down");
+      result.current.menuMove("item:i2", "down");
+    });
+    expect(onReorderItems).toHaveBeenCalledTimes(1);
   });
 });

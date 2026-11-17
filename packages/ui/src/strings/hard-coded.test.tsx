@@ -573,10 +573,12 @@ describe("no hard-coded strings", () => {
   // React Aria's own accessibility strings, which it translates and offers no prop to replace
   // (spec 13 B5): the hidden "Dismiss" button at each end of a modal overlay, and a table's
   // "sortable column" description of a sortable header and "sorted by column … in … order"
-  // description of the table, with the column's name taken from the caller, and a drag handle's
-  // description of how to start a drag ("Click to start dragging", or "Press Enter to start
-  // dragging" after a key press). They are the only text a component shows that is not a
-  // Stepclimb message.
+  // description of the table, with the column's name taken from the caller, and ModuleBoard's
+  // drag and drop: the handle's description ("Click to start dragging", or "Press Enter to start
+  // dragging" after a key press), which this test sees, and, only while a drag runs, the drop
+  // indicators' names ("Insert before ...", "Insert between ... and ...", "Insert after ...")
+  // and the live announcements of a drag started, dropped and canceled. They are the only text a
+  // component shows that is not a Stepclimb message.
   const reactAria = [
     /^Dismiss$/,
     /^(Click|PressEnter)tostartdragging$/,
