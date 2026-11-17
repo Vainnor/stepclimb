@@ -15,7 +15,9 @@
 //! the same transaction (`stepclimb_jobs::outbox::emit`, which this crate cannot reach).
 //!
 //! Both functions take the caller's transaction and, before anything else, read the course row
-//! `FOR SHARE`. Every content write (spec 03 B12), status change and enrollment write locks that
+//! `FOR SHARE` (`courses::lock_shared`). Whether the caller may see the course at all (a draft or
+//! a template needs `course.view_all`) is the route's to check, on its own `lock_shared` read in
+//! the same transaction. Every content write (spec 03 B12), status change and enrollment write locks that
 //! row `FOR NO KEY UPDATE`, so while a step runs the course cannot be archived, its rules and
 //! items cannot change, an item cannot be deleted (B16) and the learner's enrollment cannot end.
 //! Under that lock they check, in this order: the course is not archived (`course.archived`),
@@ -32,7 +34,7 @@ use sqlx::{PgConnection, PgExecutor, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::{
-    OrgScope,
+    OrgScope, courses,
     db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
     enrollments,
     items::{self, Kind},
@@ -202,6 +204,9 @@ pub enum Error {
     /// A course's rules or an item could not be read.
     #[error(transparent)]
     Content(#[from] modules::Error),
+    /// The course row could not be read.
+    #[error(transparent)]
+    Course(#[from] courses::Error),
     #[error(transparent)]
     Time(#[from] TimeOutOfRange),
     #[error(transparent)]
@@ -306,15 +311,10 @@ async fn prepare(
     let course_id = items::course_of(&mut **tx, scope, item_id)
         .await?
         .ok_or(Error::ItemNotFound)?;
-    let status = sqlx::query_scalar!(
-        "SELECT status FROM courses WHERE org_id = $1 AND id = $2 FOR SHARE",
-        scope.org_id(),
-        course_id,
-    )
-    .fetch_optional(&mut **tx)
-    .await?
-    .ok_or(Error::ItemNotFound)?;
-    if status == "archived" {
+    let course = courses::lock_shared(tx, scope, course_id)
+        .await?
+        .ok_or(Error::ItemNotFound)?;
+    if course.status == courses::Status::Archived {
         return Err(Error::CourseArchived);
     }
     if !enrollments::is_learner(tx, scope, course_id, user_id).await? {

@@ -653,3 +653,55 @@ async fn t15_another_organizations_item_is_not_found_and_untouched(pool: PgPool)
         .expect(StatusCode::NOT_FOUND, "item.not_found");
     assert_eq!(f.rows(b.id).await, before);
 }
+
+/// The course check runs again on the course row the step's transaction holds `FOR SHARE`: a
+/// course made a draft after the extractor passed answers 404, and nothing is written.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_course_made_a_draft_before_the_transaction_reads_it_answers_404(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let org = f.org("a").await;
+    let item = f.link(org.id, org.module, Some(Requirement::View)).await;
+    let (student, _) = f.student(org.id, org.course).await;
+    let before = f.rows(org.id).await;
+    // Hold the course row as a content write does, so the step's extractor passes on the
+    // published course and its transaction then waits for the row.
+    let mut writer = f.pool.begin().await.expect("begin");
+    sqlx::query("SELECT 1 FROM courses WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(org.course)
+        .execute(&mut *writer)
+        .await
+        .expect("lock the course");
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri(progress_uri(item))
+        .header(TEST_ORG_HEADER, org.id.to_string())
+        .header("sec-fetch-site", "same-origin")
+        .header(header::COOKIE, student)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({ "action": "view" }).to_string()))
+        .expect("a request");
+    let step = tokio::spawn(f.app.clone().oneshot(request));
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!step.is_finished(), "the step waits for the course row");
+    // A status change the API refuses while the course has learners, made by SQL to stand in
+    // for any change that hides the course between the extractor and the transaction.
+    sqlx::query("UPDATE courses SET status = 'draft' WHERE id = $1")
+        .bind(org.course)
+        .execute(&mut *writer)
+        .await
+        .expect("make the course a draft");
+    writer.commit().await.expect("commit");
+    let response = step
+        .await
+        .expect("the task")
+        .expect("the router never fails");
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).expect("a JSON body");
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::NOT_FOUND, Some("item.not_found")),
+        "{body}"
+    );
+    assert_eq!(f.rows(org.id).await, before, "nothing is written");
+}

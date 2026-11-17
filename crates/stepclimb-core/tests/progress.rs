@@ -702,3 +702,62 @@ async fn t13_an_item_with_progress_cannot_be_deleted(pool: PgPool) {
         .await
         .expect("an item without progress is deleted");
 }
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn two_concurrent_mark_dones_of_one_item_complete_it_once(pool: PgPool) {
+    let org = Org::new(&pool, "a").await;
+    let module = org.module(&pool).await;
+    let item = org.item(&pool, module, Some(Requirement::MarkDone)).await;
+    org.item(&pool, module, Some(Requirement::View)).await;
+    let user = org.student(&pool).await;
+    let mut first = pool.begin().await.unwrap();
+    let one = progress::record_step(&mut first, org.scope(), user, item, Action::MarkDone, t0())
+        .await
+        .unwrap();
+    let second = tokio::spawn({
+        let pool = pool.clone();
+        async move {
+            let mut tx = pool.begin().await.unwrap();
+            let two =
+                progress::record_step(&mut tx, org.scope(), user, item, Action::MarkDone, later(1))
+                    .await
+                    .unwrap();
+            tx.commit().await.unwrap();
+            two
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!second.is_finished(), "the second waits for the first");
+    first.commit().await.unwrap();
+    let two = second.await.unwrap();
+    let completed = [&one, &two]
+        .iter()
+        .flat_map(|r| &r.events)
+        .filter(|e| matches!(e, Event::ItemCompleted(_)))
+        .count();
+    assert_eq!(completed, 1);
+    assert!(two.events.is_empty(), "{:?}", two.events);
+    assert_eq!(
+        two.progress.completed_at,
+        Some(t0()),
+        "the first completion stays"
+    );
+    let module_counts: (i32, i32, bool) = sqlx::query_as(
+        "SELECT required_count, completed_count, completed_at IS NOT NULL
+         FROM module_progress WHERE user_id = $1",
+    )
+    .bind(user)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(module_counts, (2, 1, false));
+    let course_counts: (i32, i32) = sqlx::query_as(
+        "SELECT required_count, completed_count FROM course_progress WHERE user_id = $1",
+    )
+    .bind(user)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(course_counts, (1, 0));
+    assert_eq!(rows(&pool, "item_progress", user).await, 1);
+}

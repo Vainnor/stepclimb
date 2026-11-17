@@ -328,8 +328,9 @@ Database tests use `#[sqlx::test]` and a `ManualClock`; route tests use the perm
   `item.has_progress`.
 - **T14** (every route). Four cases: anonymous 401; every permission but the route's at the course
   403 (for `POST /progress`, a user with every grantable permission through an account
-  assignment, which cannot hold `course.participate`, and a concluded Student); every permission at
-  a sibling account 404; only the route's permission 2xx.
+  assignment, which cannot hold `course.participate`); every permission at a sibling account 404;
+  only the route's permission 2xx. For `POST /progress`, a concluded Student holds nothing at the
+  course and answers 404 `item.not_found`.
 - **T14a** (B20, the two staff progress routes). These take `Require<perm::CourseView>` and decide
   in the handler, so the permission suite has one entry per granting permission: an entry for
   `progress.view` (2xx with every learner) and an entry for `progress.view_observed` (2xx with only
@@ -428,8 +429,17 @@ Coordinator decisions (overnight, 2026-11-17), pending owner review.
   then add. T10's outline case moves to 03 I2; I1 tests the course read.
 - **T14's concluded Student answers 404.** A concluded enrollment grants nothing (`02` B16), so
   the course is not visible to that user and `Require` answers 404 `item.not_found` before the
-  permission is looked at (`m0/09` B17 step 4), not 403. A user holding every permission through
-  an account assignment answers 403, as T14 says.
+  permission is looked at (`m0/09` B17 step 4), not 403. T14 now says so. A user holding every
+  permission through an account assignment answers 403.
+- **The course check runs again in the transaction.** The handler reads the course and its
+  account `FOR SHARE` and runs `require::check_course` for `course.participate` on that read
+  (`modules::recheck_shared`, which spec 08's uploads also use), so a course made a draft or moved out of the caller's reach
+  after the extractor ran answers 404 `item.not_found`. It does not use `modules::recheck`,
+  whose `FOR NO KEY UPDATE` would make every learner of a course wait for the others. The
+  repository's own `FOR SHARE` read is the same function.
+- **Two steps of one learner on one item.** The second `mark_done` waits on the learner's
+  `course_progress` row, then finds the item completed and returns it with no event; a test runs
+  the two on two connections.
 
 ## Issues
 

@@ -5,8 +5,9 @@
 //! `POST /api/v1/items/{item_id}/progress` records a learner's step through
 //! `stepclimb_core::progress::record_step`. It takes `Require<perm::CourseParticipate,
 //! ItemTarget>`: the target passes `require::check_course` (a course the caller cannot see, a
-//! draft or a template answers 404 `item.not_found`) before the repository checks the lock
-//! (`item.locked`, spec 04 B13).
+//! draft or a template answers 404 `item.not_found`), and the handler runs it again on the course
+//! row its transaction holds `FOR SHARE` (`modules::recheck_shared`), before the repository checks the lock (`item.locked`,
+//! spec 04 B13).
 //!
 //! The events of what became complete are written to the outbox by [`emit`], in the transaction
 //! that completed it (B10). `stepclimb_core::progress` returns them, since that crate cannot
@@ -34,9 +35,12 @@ use crate::{
     AppState,
     error::{ApiError, FieldError},
     extract::ApiJson,
-    modules::{ItemKind, begin, code::COURSE_ARCHIVED, commit, content_error},
+    modules::{ItemKind, begin, code::COURSE_ARCHIVED, commit, content_error, recheck_shared},
     openapi::problem_responses,
-    require::{ItemTarget, Require, code::PERMISSION_DENIED},
+    require::{
+        ItemTarget, Require,
+        code::{ITEM_NOT_FOUND, PERMISSION_DENIED},
+    },
     timestamp, unlock,
 };
 
@@ -186,10 +190,21 @@ pub async fn record_item_progress(
     State(state): State<AppState>,
     ApiJson(body): ApiJson<ProgressStep>,
 ) -> Result<Json<ItemProgress>, ApiError> {
-    let scope = require.grants().scope();
+    let grants = require.grants();
+    let scope = grants.scope();
     let (user_id, item_id) = (require.principal().user_id, require.target().id);
     let now = state.clock.now();
     let mut tx = begin(&state).await?;
+    // `require`'s course check again, on the course row this transaction holds `FOR SHARE`: a
+    // course made a draft, or out of reach, after the extractor ran answers 404. `FOR SHARE`, so
+    // learners' steps in one course do not wait for each other.
+    recheck_shared(
+        &mut tx,
+        &require,
+        require.target().course.id,
+        ITEM_NOT_FOUND,
+    )
+    .await?;
     let recorded = progress::record_step(&mut tx, scope, user_id, item_id, body.action.into(), now)
         .await
         .map_err(progress_error)?;
@@ -218,6 +233,7 @@ pub(crate) fn progress_error(error: Error) -> ApiError {
             code::PROGRESS_ACTION_INVALID,
         )]),
         Error::Content(error) => content_error(error),
+        Error::Course(error) => ApiError::internal(&error),
         other @ (Error::CompletionMismatch
         | Error::Stored { .. }
         | Error::Time(_)
