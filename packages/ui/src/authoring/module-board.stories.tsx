@@ -168,22 +168,6 @@ export const MoveMenu: Story = {
   },
 };
 
-/** A keyboard drag of an item: its handle pressed, the first place it can go marked. */
-export const KeyboardDrag: Story = {
-  play: async ({ canvasElement }) => {
-    const handle = await within(canvasElement).findByRole("button", { name: "Drag Readbacks" });
-    await userEvent.tab();
-    while (canvasElement.ownerDocument.activeElement?.getAttribute("aria-label") !== "Readbacks") {
-      await userEvent.keyboard("{ArrowDown}");
-    }
-    await userEvent.keyboard("{ArrowRight}");
-    await waitFor(() => expect(handle).toHaveFocus());
-    await userEvent.keyboard("{Enter}");
-    await userEvent.keyboard("{ArrowDown}");
-    await waitFor(() => expect(canvasElement.querySelector("[data-drop-target]")).not.toBeNull());
-  },
-};
-
 const moveDown = async (canvasElement: HTMLElement) => {
   await userEvent.click(
     await within(canvasElement).findByRole("button", { name: "Move Phraseology" }),

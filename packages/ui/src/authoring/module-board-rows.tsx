@@ -22,7 +22,7 @@ import type { BoardModule, BoardRow } from "./board-moves";
 export const moduleBoardRow = tv({
   slots: {
     root: [
-      "flex flex-wrap items-center gap-x-3 gap-y-1 rounded-sm pe-1 font-ui text-sm text-fg-default",
+      "flex items-start gap-x-2 rounded-sm pe-1 font-ui text-sm text-fg-default",
       "outline-none transition-colors duration-fast ease-out-expo",
       "data-[hovered]:bg-sunken data-[pressed]:bg-sunken data-[dragging]:opacity-50",
       "data-[focus-visible]:ring-2 data-[focus-visible]:ring-inset data-[focus-visible]:ring-ring",
@@ -32,15 +32,17 @@ export const moduleBoardRow = tv({
       "text-fg-sub outline-none data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50",
       "data-[focus-visible]:ring-2 data-[focus-visible]:ring-ring",
     ],
+    // The title and the meta share a column between the handle and the buttons, so the meta wraps
+    // under the title on a narrow screen and the buttons stay on the first line.
+    body: "flex min-w-0 flex-1 flex-wrap items-center gap-x-4",
     main: "flex min-h-(--sc-control-h) min-w-0 flex-[1_1_12rem] items-center gap-3 py-1.5",
     number: "shrink-0 text-fg-sub tabular-nums",
     title: "min-w-0 break-words",
     kindIcon: "shrink-0 text-fg-sub",
-    // Indented past the handle, so a wrapped line sits under the title it belongs to.
-    meta: "flex flex-wrap items-center gap-x-3 gap-y-1 ps-(--sc-control-h) sm:ps-0",
+    meta: "flex flex-wrap items-center gap-x-3 gap-y-1 pb-1.5 sm:py-1.5",
     pill: statusPill(),
     rules: "text-caption text-fg-sub break-words",
-    actions: "ms-auto flex shrink-0 items-center",
+    actions: "flex shrink-0 items-center",
   },
   variants: {
     type: {
@@ -86,13 +88,15 @@ export function ModuleBoardRow(props: BoardRowProps) {
       className={styles.root()}
     >
       <DragHandle name={name} className={styles.drag()} />
-      {row.type === "module" ? (
-        <ModuleMain {...props} row={row} styles={styles} />
-      ) : (
-        <ItemMain row={row} styles={styles} />
-      )}
-      <span data-slot="module-board-row-meta" aria-hidden="true" className={styles.meta()}>
-        <RowMeta row={row} modules={props.modules} timeZone={props.timeZone} styles={styles} />
+      <span data-slot="module-board-row-body" className={styles.body()}>
+        {row.type === "module" ? (
+          <ModuleMain {...props} row={row} styles={styles} />
+        ) : (
+          <ItemMain row={row} styles={styles} />
+        )}
+        <span data-slot="module-board-row-meta" aria-hidden="true" className={styles.meta()}>
+          <RowMeta row={row} modules={props.modules} timeZone={props.timeZone} styles={styles} />
+        </span>
       </span>
       <Text slot="description" data-slot="module-board-row-description" className="sr-only">
         {description}
