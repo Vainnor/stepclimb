@@ -173,7 +173,8 @@ image with its SBOMs (Q1 option B, B16).
   binaries and the systemd unit come with 1.0.
 - **B17. DCO** (Q5, decided). Opening a pull request certifies the DCO: `CONTRIBUTING.md` says
   so and the PR template has a certification box. No `Signed-off-by` trailer is required, so
-  `Closes #N` stays the only trailer and the `commit-msg` hook is unchanged.
+  `Closes #N` stays the only trailer and the `commit-msg` hook is unchanged. ADR 0033 adds a CLA
+  alongside the DCO: `CONTRIBUTING.md` explains it and the PR template has a second box.
 
 ## API
 

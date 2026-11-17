@@ -518,7 +518,7 @@ A throwaway Tauri app on a real iPhone must:
 
 ## License and governance
 
-- **AGPL-3.0-or-later** for the server, web app and native apps. **Apache-2.0** for `api-client` and other SDK packages. Contributions under the DCO.
+- **AGPL-3.0-or-later** for the server, web app and native apps. **Apache-2.0** for `api-client` and other SDK packages. Contributions under the DCO and a license-grant CLA that allows relicensing (ADR 0033).
 - `packages/ui` and `packages/tokens` stay in the repo and aren't published as packages.
 - Repo files: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`. Decisions in `docs/adr/`, feature specs in `docs/specs/`.
 - Single maintainer. Outside contributions are welcome through pull requests, but there's no plan to add maintainers.
