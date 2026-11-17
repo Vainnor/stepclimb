@@ -91,7 +91,7 @@ export const uiMessages: Catalog = {
     "editor.problem.show": "Show the block",
     "editor.redo": "Redo",
     "editor.styleCurrent":
-      "Text style: {kind, select, paragraph {Paragraph} heading2 {Heading 2} heading3 {Heading 3} heading4 {Heading 4} other {none}}",
+      "Text style: {kind, select, paragraph {Paragraph} heading2 {Heading 2} heading3 {Heading 3} heading4 {Heading 4} other {Block}}",
     "editor.table.addColumn": "Add column",
     "editor.table.addRow": "Add row",
     "editor.table.deleteColumn": "Delete column",
