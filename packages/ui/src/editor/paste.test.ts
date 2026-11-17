@@ -4,12 +4,28 @@
 // (crates/stepclimb-core/tests/page_doc_editor.rs), so what survives a paste is a body the
 // server stores as it is.
 import { Editor } from "@tiptap/core";
+import document from "../../../../crates/stepclimb-core/tests/fixtures/page_doc/editor-document.json";
 import { pageExtensions } from "./extensions";
-import { emptyPageDoc, type PageDoc, toPageDoc } from "./page-doc";
+import { emptyPageDoc, type PageDoc, type PageNode, toPageDoc } from "./page-doc";
 
 // jsdom has no ClipboardEvent, which ProseMirror's pasteHTML creates to stand for the paste.
 if (!("ClipboardEvent" in globalThis)) {
   Object.assign(globalThis, { ClipboardEvent: class extends Event {} });
+}
+
+/** Every text node's text and every string attribute in `node`. */
+function texts(node: PageNode): string[] {
+  const own = [
+    ...(node.text === undefined ? [] : [node.text]),
+    ...Object.values(node.attrs ?? {}).filter((v): v is string => typeof v === "string"),
+  ];
+  return [...own, ...(node.content ?? []).flatMap(texts)];
+}
+
+/** Every table cell in `node`. */
+function cells(node: PageNode): PageNode[] {
+  const own = node.type === "tableCell" || node.type === "tableHeader" ? [node] : [];
+  return [...own, ...(node.content ?? []).flatMap(cells)];
 }
 
 const PASTED = "../../../../crates/stepclimb-core/tests/fixtures/page_doc/editor-pasted.json";
@@ -42,6 +58,10 @@ const HOSTILE = [
   `<iframe src="https://evil.example"></iframe><style>body{}</style><svg onload="alert(4)"></svg>`,
   `<figure data-course-file-id="not-a-file"></figure>`,
   `<div data-provider="youtube" data-video-id="short">embed</div>`,
+  `<figure data-course-file-id="01900000-0000-7000-8000-0000000000f1" data-alt="a\u0007lt" data-decorative="false" data-src="https://evil.example/x.png" onclick="steal()"></figure>`,
+  `<div data-callout="" data-kind="sparkle"><p>invented kind</p></div>`,
+  `<table><tr><td colspan="two" rowspan="1.5">a</td><td colspan="99">b</td></tr></table>`,
+  `<div data-transcript=""><p data-speaker="${"S".repeat(60)}\u0001">line</p></div>`,
 ].join("");
 
 describe("paste", () => {
@@ -61,10 +81,33 @@ describe("paste", () => {
     ]) {
       expect(text).not.toContain(gone);
     }
-    expect(text).not.toMatch(/\\u00(0|1|7f|9)/i);
+    // JSON.stringify writes U+007F and U+0080 to U+009F as they are, so look at the text itself.
+    const control = (t: string) =>
+      [...t].some((c) => c !== "\t" && c !== "\n" && /\p{Cc}/u.test(c));
+    expect(texts(doc).filter(control)).toEqual([]);
     const types = new Set(text.match(/"type":"[a-zA-Z]+"/g));
-    expect(types).not.toContain('"type":"image"');
+    // Only the figure copied from a page, with its file id, pastes as an image, and only with
+    // the image's own attributes.
+    expect(doc.content.filter((block) => block.type === "image")).toEqual([
+      {
+        type: "image",
+        attrs: {
+          course_file_id: "01900000-0000-7000-8000-0000000000f1",
+          alt: "alt",
+          decorative: false,
+        },
+      },
+    ]);
+    const callouts = doc.content.filter((block) => block.type === "callout");
+    expect(callouts.map((block) => block.attrs)).toEqual([{ kind: "info" }]);
+    const spans = cells(doc).map((cell) => [cell.attrs?.colspan, cell.attrs?.rowspan]);
+    expect(spans.every(([c, r]) => Number.isInteger(c) && Number.isInteger(r))).toBe(true);
+    expect(spans).toContainEqual([1, 1]);
+    expect(spans.flat().every((n) => (n as number) >= 1 && (n as number) <= 20)).toBe(true);
+    const speakers = JSON.stringify(doc).match(/"speaker":"([^"]*)"/g) ?? [];
+    expect(speakers).toEqual([`"speaker":"${"S".repeat(40)}"`]);
     expect(types).not.toContain('"type":"videoEmbed"');
+    expect(text).not.toContain("data-src");
     // An `<h1>` and an `<h5>` are no heading level a body takes: they paste as paragraphs.
     expect(doc.content[0]).toEqual({
       type: "paragraph",
@@ -86,6 +129,18 @@ describe("paste", () => {
       expect(nestedTypes(block)).not.toContain("table");
     }
     await expect(`${JSON.stringify(doc, null, 2)}\n`).toMatchFileSnapshot(PASTED);
+  });
+
+  it("pastes a copy of every block back as it was", () => {
+    const source = new Editor({
+      extensions: pageExtensions({ t: (id) => id }),
+      content: document as PageDoc,
+      injectCSS: false,
+    });
+    const html = source.getHTML();
+    source.destroy();
+    const pasted = withEditor((editor) => editor.view.pasteHTML(html));
+    expect(pasted).toEqual(document);
   });
 
   it("takes control characters out of pasted plain text", () => {

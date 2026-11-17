@@ -95,6 +95,14 @@ describe("the slash menu", () => {
     await waitFor(() => expect(content()).toHaveFocus());
   });
 
+  it("types nothing when the menu closes any other way than Escape", async () => {
+    const { last } = renderEditor();
+    const { user } = await openSlashMenu();
+    await user.click(document.body);
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    expect(last()).toBeUndefined();
+  });
+
   it("asks for an embed's address and title, then inserts it by id", async () => {
     const { last } = renderEditor();
     const { user } = await openSlashMenu();
@@ -135,6 +143,10 @@ describe("images", () => {
     const { user } = await openSlashMenu();
     await user.keyboard(`${"{ArrowDown}".repeat(blockKinds.indexOf("image"))}{Enter}`);
     const panel = await screen.findByRole("form", { name: "Insert an image" });
+    // The panel takes focus from the menu that opened it.
+    await waitFor(() =>
+      expect(within(panel).getByRole("button", { name: "Choose file" })).toHaveFocus(),
+    );
     return { ...view, user, panel };
   }
 
@@ -322,5 +334,19 @@ describe("strings", () => {
     );
     const root = document.querySelector<HTMLElement>('[data-slot="editor"]');
     expect(root && unmarkedText(root)).toEqual([]);
+  });
+});
+
+// Escape, then Tab, out of a table is checked in a browser (web/e2e/page-edit.spec.ts): jsdom
+// does not place ProseMirror's selection in a cell on a click.
+describe("the keyboard", () => {
+  it("names the keys in the page text's description", () => {
+    renderEditor();
+    expect(content()).toHaveAccessibleDescription(/press Escape, then Tab/);
+  });
+
+  it("puts the caret in the page when asked to", async () => {
+    renderEditor({ autoFocus: true });
+    await waitFor(() => expect(content()).toHaveFocus());
   });
 });

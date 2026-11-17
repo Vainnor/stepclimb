@@ -96,7 +96,7 @@ const meta = {
   component: Editor,
   tags: ["experimental"],
   parameters: {
-    status: { missing: ["Themes", "Accessibility", "Responsive and touch"] },
+    status: { missing: ["States", "Themes", "Accessibility", "Responsive and touch"] },
     docs: {
       description: {
         component: `The page editor: a Tiptap editor that holds only the blocks a page may hold (headings 2 to 4, lists, quotes, code, tables, callouts, transcripts, images, video embeds, dividers) and gives the body in the form the server stores. The toolbar sets the text style, marks, links and lists and opens "Insert"; typing \`/\` at the start of an empty paragraph opens the same list. The bar under it holds the settings of the block the caret is in: a callout's kind, an image's text alternative, a transcript line's speaker, a table's rows and columns, and moving or deleting the block.
@@ -142,6 +142,50 @@ export const InsertMenu: Story = {
     const body = within(document.body);
     await userEvent.click(await body.findByRole("button", { name: "Insert" }));
     await expect(await body.findByRole("menuitem", { name: "Callout" })).toBeVisible();
+  },
+};
+
+/** The link popover from the toolbar, refusing an address the server would refuse. */
+export const LinkPopover: Story = {
+  play: async () => {
+    const body = within(document.body);
+    await userEvent.click(await body.findByRole("button", { name: "Link" }));
+    const dialog = await body.findByRole("dialog", { name: "Link" });
+    await userEvent.type(within(dialog).getByRole("textbox", { name: /Address/ }), "javascript:x");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Apply" }));
+    await expect(await within(dialog).findByText(/Enter an address/)).toBeVisible();
+  },
+};
+
+/** The block bar for an image without a text alternative: the field asks for one. */
+export const ImageBlock: Story = {
+  args: {
+    defaultValue: {
+      type: "doc",
+      content: [
+        {
+          type: "image",
+          attrs: {
+            course_file_id: "01900000-0000-7000-8000-0000000000f1",
+            alt: "",
+            decorative: false,
+          },
+        },
+        { type: "paragraph" },
+      ],
+    },
+  },
+};
+
+/** The block bar for a table: rows, columns and the header row. */
+export const TableBlock: Story = {
+  args: {
+    defaultValue: {
+      type: "doc",
+      content: [page.content[5]].filter(
+        (block): block is NonNullable<typeof block> => block !== undefined,
+      ),
+    },
   },
 };
 

@@ -51,8 +51,12 @@ export function ImagePanel({ onUpload, onInsert, onCancel }: ImagePanelProps) {
   const headingId = useId();
   const form = useRef<HTMLFormElement>(null);
   // The panel opens from a menu that has closed: focus goes to its first control, "Choose file".
+  // A frame later, after the menu's own focus restore has run.
   useEffect(() => {
-    form.current?.querySelector<HTMLElement>("button")?.focus();
+    const frame = requestAnimationFrame(() =>
+      form.current?.querySelector<HTMLElement>('[data-slot="file-drop-choose"]')?.focus(),
+    );
+    return () => cancelAnimationFrame(frame);
   }, []);
   const [uploading, setUploading] = useState<{ name: string; fraction: number }>();
   const [file, setFile] = useState<UploadedImage>();

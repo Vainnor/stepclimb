@@ -144,6 +144,34 @@ test("an author writes a page with a callout and an image and saves it", async (
   });
 });
 
+test("Tab moves between table cells; Escape, then Tab, leaves the page text", async ({ page }) => {
+  await servePage(page);
+  const cell = (text: string) => ({
+    type: "tableCell",
+    attrs: { colspan: 1, rowspan: 1, colwidth: null },
+    content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+  });
+  await page.route(`**/api/v1/pages/${PAGE}/versions/${version(1).id}`, (route) =>
+    route.fulfill({
+      json: {
+        ...version(1),
+        body: {
+          type: "doc",
+          content: [{ type: "table", content: [{ type: "tableRow", content: [cell("a"), cell("b")] }] }],
+        },
+      },
+    }),
+  );
+  await page.goto(PATH);
+  await editor(page).getByText("a", { exact: true }).click();
+  await page.keyboard.press("Tab");
+  await expect(editor(page)).toBeFocused();
+  await expect(page.getByRole("button", { name: "Add row" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Tab");
+  await expect(editor(page)).not.toBeFocused();
+});
+
 for (const theme of themes) {
   for (const viewport of widths) {
     test(`the page editor has no axe violations, ${theme} at ${viewport.width} px`, async ({

@@ -344,7 +344,8 @@ const transcriptLine = Node.create({
       },
     };
   },
-  parseHTML: () => [{ tag: "p[data-speaker]" }],
+  // Ahead of the paragraph's `p` rule, which would otherwise take the line and leave its speaker.
+  parseHTML: () => [{ tag: "p[data-speaker]", priority: 60 }],
   renderHTML: ({ node }) => ["p", { "data-speaker": node.attrs.speaker }, 0],
   addNodeView: () =>
     labelledView("div", "editor-transcript-line", (node) => String(node.attrs.speaker), true),
@@ -428,8 +429,9 @@ export const escapeToLeave = Extension.create({
             }
             armed = false;
             const target = focusableBeside(view.dom, event.shiftKey ? -1 : 1);
-            if (!target) return false;
-            target.focus();
+            // Nothing after the text: leave it all the same, and the next Tab starts the page over.
+            if (target) target.focus();
+            else view.dom.blur();
             return true;
           },
         },

@@ -42,8 +42,9 @@ author typed ever reaches a learner's browser unchecked. Readers see pages throu
   and author, and writes nothing (Q1). A body equal to the current one writes nothing and answers
   200. Archived courses refuse writes (`02` B5).
 - **B4.** Saves are explicit (Q1): the editor saves when the author presses Save (or `Ctrl`/`Cmd`
-  + `S`); it keeps unsaved changes in the browser's local storage, keyed by page and base version,
-  and offers to restore them when the page is opened again.
+  + `S`); it keeps one draft of unsaved changes per user and page in the browser's local
+  storage, with the version it was based on, and offers to restore it when the page is opened
+  again. An explicit sign-out clears the user's drafts; an expired session keeps them.
 - **B5.** `GET /api/v1/pages/{page_id}/versions` lists versions newest first, without bodies
   (`m0/02` B3 pagination); `GET /api/v1/pages/{page_id}/versions/{version_id}` returns one with its
   body; `POST /api/v1/pages/{page_id}/versions/{version_id}/restore` saves that version's body as a
@@ -135,7 +136,8 @@ author typed ever reaches a learner's browser unchecked. Readers see pages throu
 - **B21.** The editor is `src/editor` in `packages/ui` (plan UI tab), a wrapper around Tiptap with
   only the extensions B8 lists, configured from the same schema the server enforces: a toolbar, a
   slash menu (`/` inserts a block) and a block toolbar, all React Aria and keyboard-operable. Its
-  strings come from `useStepclimbStrings()`. It loads the body with `?format=json` and saves with
+  strings come from `useStepclimbStrings()`. It loads the body with `?format=json`, which comes
+  with I2 (until then from the versions routes, as the I3 decisions below say), and saves with
   B3.
 - **B22.** The PageReader renders the server's HTML in a reading column of about 66 characters
   (plan UI tab) with "Mark as done" after the last paragraph when the item's requirement is
@@ -347,8 +349,10 @@ Coordinator decisions (overnight, 2026-11-17, I3), pending owner review:
   editor itself and draws its blocks as plain DOM) and without `@tiptap/extension-link` (its own
   link mark has only `href`, so `linkifyjs` stays out). `toPageDoc` keeps exactly the attributes
   `page_doc` lists, written out, so Link's `target`, `rel` and `class`, `orderedList`'s `type` and
-  the cells' `align` never reach a save. The editor is the subpath `@stepclimb/ui/editor`, and the
-  web app loads the screen lazily, so Tiptap is in the screen's own chunk.
+  the cells' `align` never reach a save. The editor is the subpath `@stepclimb/ui/editor`, the
+  web app loads the screen lazily, and `packages/ui` declares that its modules have no side
+  effects (`"sideEffects": ["*.css"]`), so Tiptap and the React Aria parts only the editor uses are
+  in the screen's own chunk rather than pulled into the main bundle through the package's index.
 - Coordinator decision (overnight, 2026-11-17): `crates/stepclimb-core/tests/fixtures/page_doc/`
   holds the editor's contract with the server: a document with every node, mark and attribute, the
   output of inserting every block, the output of a hostile paste, and the link cases. Vitest
@@ -378,16 +382,28 @@ Coordinator decisions (overnight, 2026-11-17, I3), pending owner review:
   `<iframe>` from elsewhere). `<h1>`, `<h5>` and `<h6>` paste as paragraphs, a code language off
   the list as none, and an image only when it carries a course file id (copied from a Stepclimb
   page). Control characters other than tab and newline are taken out of pasted text.
-- Coordinator decision (overnight, 2026-11-17): unsaved work (B4) is one draft per page in local
-  storage, `stepclimb.page-draft.<page_id>`, holding the body and its base version. It is written
-  1 s after the author's last change while the body differs from the saved one, cleared on a save
-  or on "Discard", and offered when the page is opened again with a body that differs from the
-  loaded one. A restored draft keeps its base version, so saving a draft based on an older version
-  meets B3's conflict check. Ctrl or Cmd + S saves from anywhere on the screen.
+- Coordinator decision (overnight, 2026-11-17): unsaved work (B4) is one draft per user and page
+  in local storage, `stepclimb.page-draft.<org_id>.<user_id>.<page_id>` with the ids of `/me`,
+  holding the body and its base version, so another person signed in on the same browser is
+  never offered it. It is written 1 s after the author's last change while the body differs from
+  the saved one, and at once when the screen closes or the browser hides the page (`pagehide`).
+  It is cleared on a save, on "Discard" and on "Load version N". An explicit sign-out clears every
+  draft of the user; a session that expires keeps them, so the work comes back after signing in
+  again. It is offered when the page is opened again with a body that differs from the loaded
+  one; the first edit or a save answers the offer, and the draft writer keeps writing meanwhile.
+  A restored draft keeps its base version, so saving a draft based on an older version meets B3's
+  conflict check. Ctrl or Cmd + S saves from anywhere on the screen.
 - Coordinator decision (overnight, 2026-11-17): on `page.version_conflict` the screen keeps the
   author's work and offers "Save my changes as the newest version", which saves again with the
-  conflict's `current_version` as the base (the other author's version stays in the history), or
-  "Load version N", which asks first and then drops the author's changes.
+  conflict's `current_version` as the base (the other author's version stays in the history) and
+  then moves focus to Save, or "Load version N", which asks first, drops the author's changes,
+  announces "Version N loaded" and puts the caret in the page text.
+- Coordinator decision (overnight, 2026-11-17): in a table Tab moves between cells and in a list
+  it indents, so Escape, then Tab (or Shift+Tab), leaves the page text; the page text's
+  description names these keys. The slash menu types its `/` only when the author leaves it with
+  Escape. Pasted values are checked as well as names: a callout kind off the list pastes as
+  `info`, a cell span that is not an integer from 1 to 20 as 1, and a speaker or video title is
+  cut to its limit.
 
 ## Permissions
 

@@ -128,7 +128,10 @@ function PageEditor({ owner, courseId, pageId, loaded, focusOnMount, onReload }:
   const [offer, setOffer] = useState(() => offeredDraft(owner, pageId, loaded));
   const [conflict, setConflict] = useState<CurrentVersion>();
   const [problem, setProblem] = useState<EditorProblem>();
-  const dirty = !sameDoc(body, saved);
+  // By identity: every edit gives a new body and a save keeps the body it sent, so this costs
+  // nothing per keystroke on a 1 MiB page. Undoing back to the saved text still counts as
+  // unsaved; saving it then writes no version (B3).
+  const dirty = body !== saved;
 
   const discardWork = useDraftWriter({ owner, pageId, base: base.id, body, dirty });
 

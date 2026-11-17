@@ -221,6 +221,96 @@
           "text": "embed"
         }
       ]
+    },
+    {
+      "type": "image",
+      "attrs": {
+        "course_file_id": "01900000-0000-7000-8000-0000000000f1",
+        "alt": "alt",
+        "decorative": false
+      }
+    },
+    {
+      "type": "callout",
+      "attrs": {
+        "kind": "info"
+      },
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "invented kind"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "content": [
+        {
+          "type": "tableRow",
+          "content": [
+            {
+              "type": "tableCell",
+              "attrs": {
+                "colspan": 1,
+                "rowspan": 1,
+                "colwidth": null
+              },
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "a"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "tableCell",
+              "attrs": {
+                "colspan": 1,
+                "rowspan": 1,
+                "colwidth": null
+              },
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "b"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "transcript",
+      "content": [
+        {
+          "type": "transcriptLine",
+          "attrs": {
+            "speaker": "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "line"
+            }
+          ]
+        }
+      ]
     }
   ]
 }
