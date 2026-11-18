@@ -78,6 +78,7 @@ The plan's layout (`docs/plan/technical.md` -> Architecture and stack).
 | `deploy/` | | `Dockerfile`, `compose/` (development: Postgres 16, MinIO, the server; the production example with optional Caddy and nightly dumps), `helm/` (placeholder, 1.0). |
 | `docs-site/` | | Admin, author, API and self-hosting guides. Placeholder (M4). |
 | `docs/` | | `plan/`, `adr/`, `specs/`, `agents.md`. |
+| `assets/readme/` | | The README's images: Storybook captures of Stepclimb UI and the architecture diagram, light and dark. |
 | `references/`, `private/` | | Local-only: reference material; member exports and data sets. Only their READMEs (and `references/INDEX.md`) are committed. |
 | `.claude/`, `.codex/`, `.agents/` | | Agent setup for Claude Code and Codex, one copy of each rule, hook, agent and command (`docs/agents.md`). |
 
