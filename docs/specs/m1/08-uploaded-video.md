@@ -507,6 +507,70 @@ Coordinator decision (overnight, 2026-11-17), after the security review of I1:
   `ON DELETE`, so deleting a user who started an upload still in progress is refused by the
   foreign key; per-user deletion has to end or reassign such uploads first.
 
+### Points I5 settled
+
+Coordinator decision (2026-11-17), pending owner review: the spec left each of these open while
+building I5.
+
+- **D28. A tus client of our own.** tus-js-client 4.3.1 (MIT, released 2025-01-16; the 5.0 line
+  is still pre-release) ships 86,773 bytes minified (22,246 gzip) in its browser build and pulls 7
+  direct and 7 further packages, among them `proper-lockfile` and `graceful-fs` for Node, and
+  `combine-errors`, which declares no license in any version and was republished as 3.0.4 on
+  2026-10-31 after ten years without a release (npm registry, accessed 2026-11-17). The server
+  speaks only creation, `HEAD`, `PATCH` and termination, so `packages/ui/src/video/tus.ts` (270
+  lines) implements those; no dependency is added.
+- **D29. Where the uploader's requests go.** VideoUploader lives in `packages/ui` and takes the
+  caller's `send` (one request, with its progress) and `getVideo`, so the package needs no API
+  client. The web app sends through `XMLHttpRequest`, as file uploads do, since `fetch` reports no
+  upload progress.
+- **D30. Resuming after a reload.** A browser does not hand a page a file again after a reload, so
+  local storage keeps each unfinished upload's address with the file's name, size, type and last
+  change, and the uploader lists them; choosing the same file again resumes it from the offset
+  `HEAD` answers, and an upload the server no longer has starts again. An entry not advanced for
+  24 h is dropped, as B6 deletes the upload. Discard ends one with `DELETE`. Only an address on the
+  creation endpoint's origin under `/api/v1/video-uploads/` is listed or sent to. Coordinator
+  decision (2026-11-18), matching `07` B4's page drafts: the entries are keyed by organization and
+  user (from `/me`), then course, so another person signed in on the same browser never sees or
+  ends them; an explicit sign-out clears the signed-in user's entries, and a session that expires
+  keeps them.
+- **D31. The title.** The uploader sends `filename` and a `title` made of the file name without
+  its extension, cut to 200 characters (D2). Renaming is `PATCH /videos/{id}`, not this issue.
+- **D32. Failures.** A request that got no answer, a 408, a 429 or a 5xx stops the upload
+  resumable: it goes on when the browser fires `online`, or on Resume. A 409
+  `video.upload_offset_mismatch` takes the offset from `HEAD` and goes on, up to three times in a
+  row. Any other refusal fails the upload with its own message; a code without one is shown
+  with the code.
+- **D33. One upload at a time** per uploader; a file chosen while one runs or waits is refused
+  with a message naming the running one.
+- **D34. Cancel** sends `DELETE`, which deletes the upload and its video, and stays available while
+  paused or stopped. Coordinator decision (2026-11-17, amended 2026-11-18): once the server holds
+  any of the upload's bytes (the last stored chunk's offset, or `HEAD`'s, not the bytes of a chunk
+  in flight), Cancel first asks in an AlertDialog, "Cancel this upload?" with "The {size} sent so
+  far will be deleted.", whose destructive action is "Delete upload" and whose dismiss button is
+  "Keep uploading" (AlertDialog gains an optional `cancelLabel`, since "Cancel" would be ambiguous
+  there); an upload the server holds no byte of cancels at once. Paused or stopped, the progress
+  shows what the server holds. When the server answers 409 `video.status_invalid` (the last chunk
+  completed the upload first), the uploader says so and shows the video processing.
+  Coordinator decision (2026-11-18): Discard on an unfinished upload from before a reload asks
+  the same question ("Discard the upload of {name}?", "Delete upload", "Keep it") when its stored
+  offset is above 0, and ends it at once otherwise; a 409 `video.status_invalid` (another tab
+  completed it) takes it off the list, as a 404 does. Discard does not first ask `HEAD` whether
+  another tab has advanced the upload: the size shown is the one this browser last stored.
+- **D35. Announcements.** A polite status region says each phase and the progress in 10% steps;
+  a refusal goes to the upload's alert region.
+- **D36. The video panel.** The course authoring screen (`16` B19, `16` I14) does not exist yet.
+  Until it does, the panel is `/c/:course/videos`, reached by its address like the files area
+  (`16` B20a): VideoUploader for holders of `course.content_edit` in a course that is not
+  archived, then the course's videos with their status and why one failed, read again every 10 s
+  while one is processing. I14 places the same panel in its screen. The page editor's video panel
+  (`07` B12) takes YouTube and Vimeo addresses only, and uploaded videos in pages are out of scope
+  here, so the two do not meet.
+- **D37. T14's Playwright tests.** One test runs against the real tus routes of the e2e stack: the
+  admin uploads a file to processing, then pauses a second one and cancels it, after which `HEAD`
+  answers 404; only the read of the first video, which would need a transcoder (I2) to turn ready,
+  is answered in the browser. The other journeys (pause and resume, a reload, the touch targets,
+  axe in every theme) answer the video routes in the browser, as the files area's tests do, so
+  they can hold a chunk and run without a signed-in session.
 
 ## Issues
 
@@ -527,9 +591,9 @@ Coordinator decision (overnight, 2026-11-17), after the security review of I1:
 4. **I4. Captions and chapters.** `video_captions` migration, WebVTT validation, caption and
    chapter routes, captions in sessions, copy attaching videos. Covers B14 to B16, B1 (copy); T9,
    T10. Depends on: I3, `02-courses-and-enrollments.md` I3.
-5. **I5. VideoUploader.** The component with tus-js-client (pinned after `dependency-researcher`,
-   own commit) or a small client of our own if research finds it too large, and the authoring
-   screen's video panel. Covers B22; T14. Depends on: I1.
+5. **I5. VideoUploader.** The component with a tus client of our own (D28: tus-js-client was
+   ruled out after `dependency-researcher`'s checks), and the authoring screen's video panel
+   (D36). Covers B22; T14. Depends on: I1.
 6. **I6. ffmpeg and ffprobe in the image.** The final image stage of `deploy/Dockerfile` is
    `gcr.io/distroless/cc-debian12` with only the `stepclimb` binary; nothing bundles ffmpeg today.
    This issue adds `ffmpeg` and `ffprobe` (Q7), pinned by version and checksum, at

@@ -32,6 +32,7 @@ import {
 } from "../appearance";
 import { useAppContext } from "../context";
 import { type Me, meQuery, signOut } from "../session";
+import { clearVideoUploads } from "../videos/videos";
 
 function themeLabel(t: Strings["t"], theme: ThemeChoice): string {
   const labels: Record<ThemeChoice, string> = {
@@ -86,11 +87,17 @@ export interface UserMenuProps {
 
 export function UserMenu({ name, appearance, organizationDefault }: UserMenuProps) {
   const { t } = useStepclimbStrings();
-  const { toasts, leaveSession } = useAppContext();
+  const { toasts, leaveSession, queryClient } = useAppContext();
   const change = useAppearanceChange(organizationDefault);
   const signOutMutation = useMutation({
     mutationFn: signOut,
-    onSuccess: () => leaveSession(),
+    onSuccess: () => {
+      // An explicit sign-out takes the user's unfinished video uploads with it (spec 08 D30); a
+      // session that expired keeps them for when they sign in again.
+      const me = queryClient.getQueryData(meQuery.queryKey);
+      if (me) clearVideoUploads(me);
+      return leaveSession();
+    },
     onError: () => {
       toasts.add({
         tone: "error",

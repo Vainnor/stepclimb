@@ -19,6 +19,11 @@ export interface AlertDialogProps
   children: ReactNode;
   /** The confirm button's text, naming the action: "Delete course". Required. */
   confirmLabel: string;
+  /**
+   * The dismiss button's text, when "Cancel" would be ambiguous (a dialog asking whether to
+   * cancel something): "Keep uploading". "Cancel" by default.
+   */
+  cancelLabel?: string;
   /** `danger` for an action that destroys or cannot be undone. */
   intent?: "primary" | "danger";
   /** Called when the confirm button is pressed; the dialog then closes. */
@@ -33,6 +38,7 @@ export function AlertDialog({
   title,
   children,
   confirmLabel,
+  cancelLabel,
   intent = "primary",
   onConfirm,
   ...props
@@ -55,7 +61,7 @@ export function AlertDialog({
           <DialogBody id={bodyId}>{children}</DialogBody>
           <DialogFooter>
             <Button data-slot="alert-dialog-cancel" autoFocus onPress={close}>
-              {t("alertDialog.cancel")}
+              {cancelLabel ?? t("alertDialog.cancel")}
             </Button>
             <Button
               data-slot="alert-dialog-confirm"

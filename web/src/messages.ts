@@ -329,6 +329,17 @@ export const webMessages: Catalog = {
     "userMenu.saving": "{setting}: saving {choice}",
     "userMenu.signOut": "Sign out",
     "userMenu.theme": "Theme",
+    "videos.archived": "This {course} is archived, so its videos cannot be changed.",
+    "videos.details":
+      "{status, select, uploading {Uploading} processing {Processing} ready {Ready} failed {Failed} other {Unknown status}} · Added {created, date, medium}",
+    "videos.empty": "This {course} has no videos.",
+    "videos.empty.edit": "This {course} has no videos yet. Upload the first one above.",
+    "videos.forbidden.description":
+      "Only staff who can see everything in this {course} can open its videos. Learners watch videos through the items of its modules.",
+    "videos.forbidden.title": "You cannot open these videos",
+    "videos.list": "Videos in this {course}",
+    "videos.more": "Show more videos",
+    "videos.title": "Videos",
   },
 };
 

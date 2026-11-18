@@ -119,6 +119,84 @@ export const uiMessages: Catalog = {
     "toast.close": "Dismiss notification",
     "toast.region": "Notifications",
     "tree.toggle": "{expanded, select, yes {Collapse} other {Expand}}",
+    "videoUploader.busy":
+      "{name} is still uploading. Wait for it to finish, or cancel it, before choosing another video.",
+    "videoUploader.bytes": "{share, number, percent} · {sent} of {size}",
+    "videoUploader.cancel": "Cancel upload",
+    "videoUploader.cancelConfirm.body": "The {size} sent so far will be deleted.",
+    "videoUploader.cancelConfirm.confirm": "Delete upload",
+    "videoUploader.cancelConfirm.keep": "Keep uploading",
+    "videoUploader.cancelConfirm.title": "Cancel this upload?",
+    "videoUploader.discardConfirm.keep": "Keep it",
+    "videoUploader.discardConfirm.title": "Discard the upload of {name}?",
+    "videoUploader.dropTarget": "Drop a video here",
+    "videoUploader.pause": "Pause",
+    "videoUploader.pending.description":
+      "To continue an upload, choose the same file again. An unfinished upload is removed after a day without progress.",
+    "videoUploader.pending.discard": "Discard",
+    "videoUploader.pending.discardLabel": "Discard the upload of {name}",
+    "videoUploader.pending.heading": "Unfinished uploads",
+    "videoUploader.pending.item": "{name}: {share, number, percent} uploaded",
+    "videoUploader.phase":
+      "{phase, select, starting {Starting the upload of {name}} uploading {Uploading {name}} paused {{name}: paused} interrupted {{name}: upload stopped} cancelling {Canceling the upload of {name}} processing {{name}: processing} ready {{name} is ready} failed {{name} could not be added} cancelled {Upload of {name} canceled} other {{name}}}",
+    "videoUploader.pollFailing":
+      "The server could not be asked whether the video is ready. Checking again in 10 seconds.",
+    "videoUploader.problem.alreadyComplete":
+      "{name} has finished uploading and is being processed, so its upload can no longer be canceled.",
+    "videoUploader.problem.archived": "This {course} is archived, so its videos cannot be changed.",
+    "videoUploader.problem.bodyTimeout":
+      "The connection stalled. Select Resume to continue from where it stopped.",
+    "videoUploader.problem.courseGone":
+      "This {course} could not be found. It may have been deleted, or you no longer have access to it.",
+    "videoUploader.problem.csrf":
+      "The server refused the request because it did not seem to come from this site. Reload the page and try again.",
+    "videoUploader.problem.forbidden":
+      "You do not have permission to add or change videos in this {course}.",
+    "videoUploader.problem.outOfStep":
+      "The upload of {name} got out of step with the server. Choose the file again to continue.",
+    "videoUploader.problem.planLimit":
+      "{name} could not be prepared: your organization has used the video storage or processing time its plan allows. Ask an administrator about the plan.",
+    "videoUploader.problem.probeFailed":
+      "{name} could not be read as a video. It may be damaged: export it again and upload the new file.",
+    "videoUploader.problem.protocol":
+      "This page sent the upload in a form the server does not accept. Reload the page and choose the file again; if it happens again, report this code:",
+    "videoUploader.problem.serverFailed":
+      "Something went wrong on the server. Try again in a moment.",
+    "videoUploader.problem.signedOut":
+      "You were signed out. Sign in again, then choose {name} again to continue its upload.",
+    "videoUploader.problem.storageFull":
+      "There is no room for {name}: your organization's video storage is full. Delete videos you no longer need, or ask an administrator about the plan.",
+    "videoUploader.problem.storageNotConfigured":
+      "Video storage is not set up on this server. Ask whoever runs Stepclimb for your organization to set it up.",
+    "videoUploader.problem.titleInvalid":
+      "The video's title comes from its file name, and {name} cannot be used as one. Rename the file and choose it again.",
+    "videoUploader.problem.tooLarge":
+      "{name} is larger than this server accepts for a video. Choose a smaller file, or ask whoever runs Stepclimb to raise the limit.",
+    "videoUploader.problem.tooLong":
+      "{name} is longer than this server accepts. Split it into shorter videos, or ask whoever runs Stepclimb to raise the limit.",
+    "videoUploader.problem.transcodeFailed":
+      "{name} could not be prepared for playback. Upload it again; if that fails too, export it in another format first.",
+    "videoUploader.problem.unknown": "The server refused the upload.",
+    "videoUploader.problem.unreachable": "The connection to the server was lost.",
+    "videoUploader.problem.uploadGone":
+      "The upload of {name} no longer exists: it was ended, or removed after a day without progress. Upload the video again.",
+    "videoUploader.problem.uploadsBusy":
+      "The server is receiving as many uploads as it can take. Select Resume in a moment.",
+    "videoUploader.problem.videoFailed": "The video could not be prepared for playback.",
+    "videoUploader.problem.videoGone": "{name} was deleted while it was being processed.",
+    "videoUploader.problem.notAVideo":
+      "{name} is not a video Stepclimb can read. Upload an MP4, MOV, WebM or MKV file.",
+    "videoUploader.processingNote":
+      "The server is preparing the video for playback, which can take several minutes. You can leave this page: the list of videos shows when it is ready.",
+    "videoUploader.progress": "{name}: {share, number, percent} uploaded",
+    "videoUploader.progressLabel": "Upload of {name}",
+    "videoUploader.restarted":
+      "The earlier upload of {name} had ended, so this one started from the beginning.",
+    "videoUploader.resume": "Resume",
+    "videoUploader.resumeNote":
+      "The upload goes on by itself when the connection is back, or select Resume.",
+    "videoUploader.resumed": "Continuing the earlier upload of {name} from where it stopped.",
+    "videoUploader.types": "An MP4, MOV, WebM or MKV video.",
   },
 };
 

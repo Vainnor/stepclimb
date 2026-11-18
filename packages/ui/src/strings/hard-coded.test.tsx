@@ -71,6 +71,7 @@ import { VisuallyHidden } from "../primitives/visually-hidden";
 import { renderWithStrings, unmarkedText } from "../test/strings";
 import { Icon } from "../theme/icon";
 import { ThemeProvider } from "../theme/theme-provider";
+import { VideoUploadCard } from "../video/video-uploader";
 
 const navEntries = [{ id: "a", href: "/a", label: "«caller»", icon: HouseIcon }];
 
@@ -337,6 +338,36 @@ const components: [string, ReactElement][] = [
       description="«caller»"
       upload={{ name: "«caller»", fraction: 0.5 }}
       errorMessage="«caller»"
+    />,
+  ],
+  [
+    "VideoUploadCard (interrupted)",
+    <VideoUploadCard
+      key="vu"
+      state={{
+        phase: "interrupted",
+        name: "«caller»",
+        size: 2_000_000,
+        sent: 1_000_000,
+        stored: 1_000_000,
+        origin: "resumed",
+        problem: { kind: "unreachable" },
+      }}
+    />,
+  ],
+  [
+    "VideoUploadCard (failed, unknown code)",
+    <VideoUploadCard
+      key="vf"
+      state={{
+        phase: "failed",
+        name: "«caller»",
+        size: 2_000_000,
+        sent: 2_000_000,
+        stored: 2_000_000,
+        origin: "new",
+        problem: { kind: "video", code: "«caller»" },
+      }}
     />,
   ],
   ["StatusChip", <StatusChip key="sc" state="complete" />],
