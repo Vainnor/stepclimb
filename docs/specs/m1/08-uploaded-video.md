@@ -662,18 +662,18 @@ open while building I2.
 
 Coordinator decision (2026-11-17), after the security review of I2:
 
-- **D28. Outputs stop at the probed duration.** The HLS, MP4 and sprite runs take `-t` at the
+- **D38. Outputs stop at the probed duration.** The HLS, MP4 and sprite runs take `-t` at the
   duration ffprobe reported, so a file whose container declares less than it holds is cut there:
   `max_video_seconds`, the time budget and the minutes charged all rest on that duration.
-- **D29. Frame sizes.** ffprobe's answer is refused as `video.probe_failed` when a side is over
+- **D39. Frame sizes.** ffprobe's answer is refused as `video.probe_failed` when a side is over
   8192 pixels or one side is more than 16 times the other; the sprite index computes its regions
   with saturating arithmetic.
-- **D30. Stale work directories.** A process that transcodes removes, at startup, every
+- **D40. Stale work directories.** A process that transcodes removes, at startup, every
   `stepclimb-transcode-*` directory in `transcode_dir` last changed before 4 x
   `max_video_seconds` plus 10 minutes, plus ffprobe's 60 s and an hour. ffmpeg runs in the
   server's process group, so a bare-metal systemd unit needs `KillMode=control-group` (the
   default) for a stop to end ffmpeg with the server.
-- **D31. Outputs are regular files.** The upload of the outputs reads the work directory without
+- **D41. Outputs are regular files.** The upload of the outputs reads the work directory without
   following links and fails the video `video.transcode_failed` on anything that is neither a
   directory nor a regular file.
 
