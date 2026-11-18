@@ -213,9 +213,8 @@ pub struct Item {
     /// 0-based, dense within the module.
     pub position: i32,
     pub published: bool,
-    /// What the item points at; only for kinds that point at a row. A read by a caller without
-    /// `course.view_all` leaves it out while the item's module has an unlock date,
-    /// prerequisites or sequential order.
+    /// What the item points at; only for kinds that point at a row. Left out while the item is
+    /// locked for you (`lock` is not null).
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<String>, format = "uuid", required = false, nullable = false)]
     pub ref_id: Option<Uuid>,
@@ -226,6 +225,11 @@ pub struct Item {
     /// What completes the item for a learner.
     #[schema(required = true)]
     pub requirement: Option<Requirement>,
+    /// Why the item is locked for you, on the outline, module and item reads when you do not
+    /// hold `course.view_all` at the course; null when it is open to you, and on every answer to
+    /// a holder of `course.view_all` and every other operation's answer.
+    #[schema(required = true)]
+    pub lock: Option<crate::unlock::Lock>,
     /// Your progress on the item, on the outline, module and item reads when you are a learner
     /// of the course (you hold `course.participate` there): null until your first step on it.
     /// Absent for anyone else, and from every other operation's answer.
@@ -253,6 +257,7 @@ impl Item {
             position: item.position,
             published: item.published,
             requirement: item.requirement.map(Into::into),
+            lock: None,
             progress: None,
             ref_id: item.ref_id,
             url: item.url,
@@ -282,6 +287,10 @@ pub struct Module {
     /// Whether all or one of the module's requirements complete it.
     pub completion_rule: CompletionRule,
     pub items: Vec<Item>,
+    /// Why the module is locked for you, as an item's `lock` is: null when it is open to you.
+    /// A locked module's items are locked too, and leave out what they point at.
+    #[schema(required = true)]
+    pub lock: Option<crate::unlock::Lock>,
     /// Your progress in the module, on the outline and module reads when you are a learner of
     /// the course (you hold `course.participate` there): null until you complete one of its
     /// items. Absent for anyone else, and from every other operation's answer.
@@ -317,6 +326,7 @@ impl Module {
             published: module.published,
             prerequisite_ids: module.prerequisite_ids,
             require_sequential: module.require_sequential,
+            lock: None,
             progress: None,
         })
     }

@@ -12,14 +12,22 @@
 //! in them, only published items; an unpublished module or item, or an item of an unpublished
 //! module, answers 404 as an id that does not exist. A module's `prerequisite_ids` keep only
 //! published modules for them, and every `position` is numbered over the modules or items they
-//! can see. Until spec 04 I3 computes lock state, [`withholds_content`] keeps
-//! the references and URLs of every item of a module with an unlock rule from them.
+//! can see.
+//!
+//! For the same callers, each module and item carries its `lock` (docs/specs/m1/04-unlock-and-
+//! completion-rules.md B5, B12, B14): `stepclimb_core::unlock::evaluate` over the course's
+//! published rules, the items the caller has completed (none for a caller who is not a learner,
+//! such as an Observer, spec 05 B18) and the request clock's time, all read in the read's
+//! snapshot after the course check. A locked item keeps its title, kind, position, requirement
+//! and the caller's own progress, and leaves out `ref_id` and `url`. A holder of
+//! `course.view_all` gets every module and item with `lock: null` and everything they point at.
 //!
 //! A caller who holds `course.participate` at the course gets their own progress on each module
 //! and item of the answer (spec 05 B13), read for their own user id. Progress is looked up by the
 //! ids the answer already holds, so it never names a module or item the caller cannot see.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::time::SystemTime;
 
 use axum::{Json, extract::State};
 use sqlx::{Postgres, Transaction};
@@ -30,7 +38,7 @@ use stepclimb_core::{
     items,
     modules::{self, Error},
     perm::{CourseParticipate, CourseView, CourseViewAll},
-    progress,
+    progress, unlock,
 };
 
 use crate::{
@@ -44,6 +52,7 @@ use crate::{
         code::{COURSE_NOT_FOUND, ITEM_NOT_FOUND},
         not_found_as,
     },
+    unlock::Lock,
 };
 
 problem_responses! {
@@ -84,7 +93,8 @@ pub async fn list_modules(
     let all_items = items::list_for_course(&mut *tx, scope, course_id)
         .await
         .map_err(content_error)?;
-    let reader = Reader::new(&mut tx, &require, viewer, course_id, &all_modules).await?;
+    let now = state.clock.now();
+    let reader = Reader::new(&mut tx, &require, viewer, course_id, &all_modules, now).await?;
     end(tx).await?;
     let mut by_module: HashMap<Uuid, Vec<items::Item>> = HashMap::new();
     for item in all_items {
@@ -134,7 +144,8 @@ pub async fn get_module(
     let items = items::list_for_module(&mut *tx, scope, target.id)
         .await
         .map_err(content_error)?;
-    let reader = Reader::new(&mut tx, &require, viewer, course_id, &all_modules).await?;
+    let now = state.clock.now();
+    let reader = Reader::new(&mut tx, &require, viewer, course_id, &all_modules, now).await?;
     end(tx).await?;
     let module = all_modules
         .into_iter()
@@ -182,12 +193,15 @@ pub async fn get_item(
             .map_err(content_error)?,
         None => Vec::new(),
     };
-    let reader = Reader::new(&mut tx, &require, viewer, course_id, &all_modules).await?;
+    let now = state.clock.now();
+    let reader = Reader::new(&mut tx, &require, viewer, course_id, &all_modules, now).await?;
     end(tx).await?;
-    let module = all_modules
+    if !all_modules
         .iter()
-        .find(|module| Some(module.id) == module_id && reader.sees(module))
-        .ok_or_else(|| content_error(Error::ItemNotFound))?;
+        .any(|module| Some(module.id) == module_id && reader.sees(module))
+    {
+        return Err(content_error(Error::ItemNotFound));
+    }
     let mut visible: Vec<_> = siblings
         .into_iter()
         .filter(|item| reader.sees_item(item))
@@ -196,21 +210,9 @@ pub async fn get_item(
         .iter()
         .position(|item| item.id == target.id)
         .ok_or_else(|| content_error(Error::ItemNotFound))?;
-    let mut answer = reader.item(module, visible.swap_remove(index))?;
+    let mut answer = reader.item(visible.swap_remove(index))?;
     reader.renumber(&mut answer.position, index);
     Ok(Json(answer))
-}
-
-/// Whether a learner's read of `module` withholds its items' `ref_id` and `url`: whenever the
-/// module has any unlock rule (an unlock date, past or future, a prerequisite, or sequential
-/// order). Items carry no unlock rule of their own; a requirement only completes an item.
-///
-/// A stand-in that fails closed. It does not decide whether the module or item is locked, which
-/// needs the learner's progress; spec 04 I3 replaces this function with the lock state of
-/// `stepclimb_core::unlock::evaluate`, which withholds them only from what is locked (spec 04
-/// B12). Callers holding `course.view_all` never reach it.
-fn withholds_content(module: &modules::Module) -> bool {
-    module.unlock_at.is_some() || !module.prerequisite_ids.is_empty() || module.require_sequential
 }
 
 /// `item` without what it points at.
@@ -218,6 +220,12 @@ fn withhold(item: &mut Item) {
     item.ref_id = None;
     item.url = None;
 }
+
+/// A module or item that is visible to the caller but missing from the course's evaluation,
+/// which reads the same snapshot: never expected, and a server error rather than an open lock.
+#[derive(Debug, thiserror::Error)]
+#[error("{0} is visible but not in its course's evaluation")]
+struct NotEvaluated(Uuid);
 
 /// Who reads, as the read's snapshot decides it.
 #[derive(Clone, Copy, Debug)]
@@ -243,19 +251,25 @@ struct Reader {
     published: HashMap<Uuid, usize>,
     /// `Some` for a learner of the course, `None` for anyone else.
     own: Option<Own>,
+    /// The caller's lock state in the course; `None` for a holder of `course.view_all`, who is
+    /// not held to it (spec 04 B5).
+    locks: Option<unlock::Evaluation>,
 }
 
 impl Reader {
-    /// The reader for `viewer`, reading a learner's own progress in `course_id` in `tx`.
+    /// The reader for `viewer`, reading a learner's own progress in `course_id` in `tx` and,
+    /// for a caller without `course.view_all`, their lock state at `now`.
     async fn new<T>(
         tx: &mut Transaction<'static, Postgres>,
         require: &Require<CourseView, T>,
         viewer: Viewer,
         course_id: Uuid,
         all_modules: &[modules::Module],
+        now: SystemTime,
     ) -> Result<Self, ApiError> {
+        let scope = require.grants().scope();
         let own = if viewer.learner {
-            let (scope, user_id) = (require.grants().scope(), require.principal().user_id);
+            let user_id = require.principal().user_id;
             let stored = progress::for_learner_in_course(tx, scope, user_id, course_id)
                 .await
                 .map_err(progress_error)?;
@@ -270,10 +284,23 @@ impl Reader {
         } else {
             None
         };
-        Ok(Self::from_parts(viewer.sees_all, all_modules, own))
+        let locks = if viewer.sees_all {
+            None
+        } else {
+            let rules = unlock::load_course_rules(&mut **tx, scope, course_id)
+                .await
+                .map_err(content_error)?;
+            Some(unlock::evaluate(&rules, &completed(own.as_ref()), now))
+        };
+        Ok(Self::from_parts(viewer.sees_all, all_modules, own, locks))
     }
 
-    fn from_parts(sees_all: bool, all_modules: &[modules::Module], own: Option<Own>) -> Self {
+    fn from_parts(
+        sees_all: bool,
+        all_modules: &[modules::Module],
+        own: Option<Own>,
+        locks: Option<unlock::Evaluation>,
+    ) -> Self {
         let published = all_modules
             .iter()
             .filter(|module| module.published)
@@ -284,6 +311,7 @@ impl Reader {
             sees_all,
             published,
             own,
+            locks,
         }
     }
 
@@ -297,8 +325,8 @@ impl Reader {
 
     /// `module` with `items` as the caller may see them: for a caller without `course.view_all`,
     /// only published items and published prerequisites, positions numbered over what they see
-    /// ([`Self::renumber`]), references and URLs withheld as [`withholds_content`] says; and a
-    /// learner's own progress on the module and each item.
+    /// ([`Self::renumber`]), and the module's and each item's `lock`, a locked item without its
+    /// reference and URL; and a learner's own progress on the module and each item.
     fn module(
         &self,
         mut module: modules::Module,
@@ -314,7 +342,7 @@ impl Reader {
             .filter(|item| self.sees_item(item))
             .enumerate()
             .map(|(index, item)| {
-                let mut answer = self.item(&module, item)?;
+                let mut answer = self.item(item)?;
                 self.renumber(&mut answer.position, index);
                 Ok(answer)
             })
@@ -324,6 +352,10 @@ impl Reader {
         answer.items = items;
         if let Some(index) = index {
             self.renumber(&mut answer.position, index);
+        }
+        if let Some(locks) = &self.locks {
+            let state = locks.module(answer.id).map(|module| &module.state);
+            answer.lock = lock(state, answer.id)?;
         }
         if let Some(own) = &self.own {
             let stored = own.modules.get(&answer.id).cloned();
@@ -342,11 +374,16 @@ impl Reader {
         }
     }
 
-    /// `item` of `module` as the caller may see it, with its stored position.
-    fn item(&self, module: &modules::Module, item: items::Item) -> Result<Item, ApiError> {
+    /// `item` as the caller may see it, with its stored position: for a caller held to the
+    /// lock, its `lock`, and without its reference and URL while it is locked.
+    fn item(&self, item: items::Item) -> Result<Item, ApiError> {
         let mut answer = Item::from_repo(item)?;
-        if !self.sees_all && withholds_content(module) {
-            withhold(&mut answer);
+        if let Some(locks) = &self.locks {
+            let state = locks.item(answer.id).map(|item| &item.state);
+            answer.lock = lock(state, answer.id)?;
+            if answer.lock.is_some() {
+                withhold(&mut answer);
+            }
         }
         if let Some(own) = &self.own {
             let stored = own.items.get(&answer.id).cloned();
@@ -354,6 +391,24 @@ impl Reader {
         }
         Ok(answer)
     }
+}
+
+/// The `lock` member for the evaluated `state` of the module or item `id`. A row the caller can
+/// see is always in the evaluation, which reads the same snapshot; one that is not is a server
+/// error, never an open lock.
+fn lock(state: Option<&unlock::State>, id: Uuid) -> Result<Option<Lock>, ApiError> {
+    let state = state.ok_or_else(|| ApiError::internal(&NotEvaluated(id)))?;
+    Lock::from_state(state)
+}
+
+/// The ids of the items the learner `own` has completed; none for a caller who is not a
+/// learner.
+fn completed(own: Option<&Own>) -> HashSet<Uuid> {
+    own.into_iter()
+        .flat_map(|own| own.items.values())
+        .filter(|item| item.state == progress::State::Completed)
+        .map(|item| item.item_id)
+        .collect()
 }
 
 /// `require`'s check of `course.view` again, on the course as the read's snapshot holds it: 404
@@ -406,6 +461,7 @@ mod tests {
     use stepclimb_core::{items::Kind, rules::CompletionRule};
 
     use super::*;
+    use crate::modules::{ItemKind, Requirement};
 
     fn module(id: u128, published: bool) -> modules::Module {
         modules::Module {
@@ -440,23 +496,33 @@ mod tests {
         }
     }
 
-    #[test]
-    fn any_unlock_rule_withholds_content() {
-        assert!(!withholds_content(&module(1, true)));
-        let dated = modules::Module {
-            unlock_at: Some(UNIX_EPOCH + Duration::from_secs(1)),
-            ..module(1, true)
+    /// `rules` evaluated for a learner who completed `completed`, at `UNIX_EPOCH` + 100 s.
+    fn locks(rules: &[unlock::ModuleRules], completed: &[u128]) -> Option<unlock::Evaluation> {
+        let rules = unlock::CourseRules {
+            modules: rules.to_vec(),
         };
-        let gated = modules::Module {
-            prerequisite_ids: vec![Uuid::from_u128(2)],
-            ..module(1, true)
-        };
-        let sequential = modules::Module {
-            require_sequential: true,
-            ..module(1, true)
-        };
-        for ruled in [dated, gated, sequential] {
-            assert!(withholds_content(&ruled), "{ruled:?}");
+        let completed = completed.iter().map(|&id| Uuid::from_u128(id)).collect();
+        Some(unlock::evaluate(
+            &rules,
+            &completed,
+            UNIX_EPOCH + Duration::from_secs(100),
+        ))
+    }
+
+    fn rules(id: u128, items: &[u128]) -> unlock::ModuleRules {
+        unlock::ModuleRules {
+            id: Uuid::from_u128(id),
+            unlock_at: None,
+            prerequisite_ids: Vec::new(),
+            require_sequential: false,
+            completion_rule: CompletionRule::All,
+            items: items
+                .iter()
+                .map(|&id| unlock::ItemRules {
+                    id: Uuid::from_u128(id),
+                    requirement: None,
+                })
+                .collect(),
         }
     }
 
@@ -468,28 +534,141 @@ mod tests {
         };
         let course = [gated.clone(), module(2, true), module(3, false)];
         let items = vec![link(10, 1, true), link(11, 1, false)];
-        let learner = Reader::from_parts(false, &course, None)
-            .module(gated.clone(), items.clone())
-            .unwrap();
+        // Module 2 has no requirement and is open, so it satisfies module 1's prerequisite.
+        let evaluated = rules(1, &[10]);
+        let evaluated = unlock::ModuleRules {
+            prerequisite_ids: vec![Uuid::from_u128(2)],
+            ..evaluated
+        };
+        let learner = Reader::from_parts(
+            false,
+            &course,
+            None,
+            locks(&[evaluated, rules(2, &[])], &[]),
+        )
+        .module(gated.clone(), items.clone())
+        .unwrap();
         assert_eq!(learner.prerequisite_ids, [Uuid::from_u128(2)]);
+        assert_eq!(learner.lock, None);
         assert_eq!(learner.items.len(), 1);
         assert_eq!(learner.items[0].id, Uuid::from_u128(10));
-        assert_eq!(learner.items[0].url, None, "a gated module withholds URLs");
+        assert_eq!(
+            learner.items[0].url.as_deref(),
+            Some("https://example.com/a"),
+            "a module whose prerequisites are met shows its links"
+        );
 
-        let staff = Reader::from_parts(true, &course, None)
+        let staff = Reader::from_parts(true, &course, None, None)
             .module(gated, items)
             .unwrap();
         assert_eq!(staff.prerequisite_ids.len(), 2);
         assert_eq!(staff.items.len(), 2);
         assert!(staff.items.iter().all(|item| item.url.is_some()));
+        assert!(staff.items.iter().all(|item| item.lock.is_none()));
     }
 
     #[test]
-    fn a_learner_gets_the_urls_of_a_module_without_rules() {
-        let open = Reader::from_parts(false, &[module(1, true)], None)
-            .module(module(1, true), vec![link(10, 1, true)])
-            .unwrap();
+    fn a_locked_item_shows_its_reasons_and_leaves_out_its_link() {
+        let later = UNIX_EPOCH + Duration::from_secs(200);
+        let dated = modules::Module {
+            unlock_at: Some(later),
+            ..module(1, true)
+        };
+        let evaluated = unlock::ModuleRules {
+            unlock_at: Some(later),
+            ..rules(1, &[10])
+        };
+        let mut item = link(10, 1, true);
+        item.requirement = Some(stepclimb_core::rules::Requirement::View);
+        let learner = Reader::from_parts(
+            false,
+            std::slice::from_ref(&dated),
+            None,
+            locks(&[evaluated], &[]),
+        )
+        .module(dated, vec![item])
+        .unwrap();
+        let reasons = |lock: &Option<Lock>| lock.as_ref().map(|lock| lock.reasons.clone());
+        assert_eq!(
+            reasons(&learner.lock),
+            Some(vec![crate::unlock::LockReason::UnlockAt {
+                at: "1970-01-01T00:03:20.000000Z".into()
+            }])
+        );
+        let item = &learner.items[0];
+        assert_eq!(
+            reasons(&item.lock),
+            Some(vec![crate::unlock::LockReason::ModuleLocked])
+        );
+        assert_eq!((&item.url, &item.ref_id), (&None, &None));
+        assert_eq!(
+            (item.title.as_str(), item.kind, item.requirement),
+            ("Link", ItemKind::ExternalLink, Some(Requirement::View)),
+            "the title, kind and requirement stay"
+        );
+    }
+
+    #[test]
+    fn a_learner_gets_the_urls_of_an_open_module() {
+        let open = Reader::from_parts(
+            false,
+            &[module(1, true)],
+            None,
+            locks(&[rules(1, &[10])], &[]),
+        )
+        .module(module(1, true), vec![link(10, 1, true)])
+        .unwrap();
+        assert_eq!(open.lock, None);
+        assert_eq!(open.items[0].lock, None);
         assert_eq!(open.items[0].url.as_deref(), Some("https://example.com/a"));
+    }
+
+    #[test]
+    fn a_visible_row_missing_from_the_evaluation_is_a_server_error() {
+        let reader = Reader::from_parts(false, &[module(1, true)], None, locks(&[], &[]));
+        let error = reader
+            .module(module(1, true), Vec::new())
+            .expect_err("not evaluated");
+        assert_eq!(
+            error.status(),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+        let reader = Reader::from_parts(
+            false,
+            &[module(1, true)],
+            None,
+            locks(&[rules(1, &[])], &[]),
+        );
+        let error = reader
+            .module(module(1, true), vec![link(10, 1, true)])
+            .expect_err("the item is not evaluated");
+        assert_eq!(
+            error.status(),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn only_completed_rows_count_as_completed() {
+        let row = |id: u128, state| progress::ItemProgress {
+            item_id: Uuid::from_u128(id),
+            state,
+            started_at: UNIX_EPOCH,
+            completed_at: (state == progress::State::Completed).then_some(UNIX_EPOCH),
+            updated_at: UNIX_EPOCH,
+        };
+        let own = Own {
+            modules: HashMap::new(),
+            items: [
+                row(1, progress::State::Completed),
+                row(2, progress::State::Started),
+            ]
+            .into_iter()
+            .map(|p| (p.item_id, p))
+            .collect(),
+        };
+        assert_eq!(completed(Some(&own)), HashSet::from([Uuid::from_u128(1)]));
+        assert!(completed(None).is_empty());
     }
 
     #[test]
@@ -506,14 +685,19 @@ mod tests {
             items: HashMap::from([(started.item_id, started)]),
         };
         let items = vec![link(10, 1, true), link(11, 1, true)];
-        let learner = Reader::from_parts(false, &[module(1, true)], Some(own))
-            .module(module(1, true), items.clone())
-            .unwrap();
+        let learner = Reader::from_parts(
+            false,
+            &[module(1, true)],
+            Some(own),
+            locks(&[rules(1, &[10, 11])], &[]),
+        )
+        .module(module(1, true), items.clone())
+        .unwrap();
         assert_eq!(learner.progress, Some(None), "no module row: null");
         assert!(matches!(learner.items[0].progress, Some(Some(_))));
         assert_eq!(learner.items[1].progress, Some(None), "no item row: null");
 
-        let staff = Reader::from_parts(true, &[module(1, true)], None)
+        let staff = Reader::from_parts(true, &[module(1, true)], None, None)
             .module(module(1, true), items)
             .unwrap();
         assert_eq!(staff.progress, None);

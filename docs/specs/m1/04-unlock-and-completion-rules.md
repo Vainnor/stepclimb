@@ -337,6 +337,38 @@ Coordinator decisions (overnight, 2026-11-16), pending owner review.
   server error, never a missing requirement. The cost is availability: one such row makes every
   lock check and learner read of its course answer 500 until the row is fixed.
 
+### Decisions made building I3
+
+Coordinator decisions (2026-11-18), pending owner review.
+
+- **What a locked row keeps.** B12 lists what a locked module or item shows; the only fields
+  it withholds are `ref_id` and `url` ("Neither shows `ref_id` or `url`"). A locked module or
+  item keeps every other field of its schema: ids, `published`, timestamps, the rule fields
+  (which the API section shows to learners) and the learner's own `progress`, which is theirs
+  and names no content. A completed item that a later rule locks again shows its progress and
+  its lock, without its link.
+- **`lock` is always present.** `Module.lock` and `Item.lock` are required and nullable: the
+  reads give the caller's lock state to a caller without `course.view_all`, and null to a
+  holder of it (B5) and in every write route's answer, which only authors receive.
+- **Observers are evaluated with no progress.** An Observer, or any caller with `course.view`
+  but neither `course.view_all` nor `course.participate`, has no progress of their own (`05`
+  B18), so their reads evaluate the locks against an empty set of completed items: modules
+  with unmet prerequisites and later items of a sequential module stay locked to them even
+  when the learners they observe have opened them.
+- **One evaluation per read.** The reads load the rules (`load_course_rules`) and the caller's
+  completed items in the read's `REPEATABLE READ` snapshot, after the course check, and take
+  the time once from the request clock, so every module and item in one answer agrees. A
+  visible module or item missing from that evaluation, which reads the same snapshot, is a 500,
+  never an open lock.
+- **The lock suite's staff routes.** T13's walker matches every path parameter named
+  `item_id`, `page_id`, `file_id` or `video_id`, or ending in `_` and one of them
+  (`course_file_id`). A staff-only route may require `course.view_all` or
+  `course.content_edit`, the two permissions that let an author see an item's content whatever
+  its lock and that neither the built-in Student nor the Observer holds. The suite checks the
+  route's permission suite entry names one of them and that an enrolled Student gets 403
+  `permission.denied`. Today the only lock-checked route is spec 05's progress route; every
+  page, file and video route is staff-only until its learner route arrives.
+
 ## Issues
 
 Order across specs 04 and 05: 04 I1, 04 I2, 05 I1, 04 I3, 05 I2 and on.

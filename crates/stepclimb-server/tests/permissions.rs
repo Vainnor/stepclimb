@@ -45,6 +45,9 @@
 //! A walker test checks that the 403 of an operation documents `entitlement.feature_unavailable`
 //! exactly when its entry names a feature.
 //!
+//! The lock suite (M1 spec 04 T13), which walks the same document for the routes that name an
+//! item or its content, is `tests/lock_suite/mod.rs`.
+//!
 //! Each case builds its own organizations in the test's database, so cases cannot disturb each
 //! other. The request names its organization with the `test-support` header of `request_org`
 //! (the production resolver refuses every request while two organizations exist); the e2e test
@@ -114,6 +117,8 @@ use stepclimb_server::{
 };
 use tower::ServiceExt;
 use webauthn_authenticator_rs::WebauthnAuthenticator;
+
+mod lock_suite;
 
 /// The client address every test request comes from (TEST-NET-1); audit entries record it.
 const CLIENT: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)), 50_000);

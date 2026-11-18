@@ -145,14 +145,17 @@ struct Fixture {
     pool: PgPool,
     app: Router,
     a: Tree,
+    /// The router's clock, which starts at [`now`].
+    clock: ManualClock,
 }
 
 impl Fixture {
     async fn new(pool: PgPool) -> Self {
         roles::sync_builtin(&pool, now()).await.expect("sync roles");
+        let clock = ManualClock::new(now());
         let state = AppState {
             db: pool.clone(),
-            clock: ManualClock::new(now()).clock(),
+            clock: clock.clock(),
             keys: KeyRing::parse("test:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
                 .expect("a valid test key"),
             public_url: WebOrigin::parse("https://lms.example.org").expect("a valid origin"),
@@ -168,6 +171,7 @@ impl Fixture {
             app: router(state).layer(Extension(ConnectInfo(CLIENT))),
             pool,
             a,
+            clock,
         }
     }
 
@@ -1399,12 +1403,14 @@ async fn the_course_status_decides_whether_a_student_reads_the_outline(pool: PgP
     }
 }
 
-/// The stand-in for spec 04 I3: while a module has an unlock date (future or past),
-/// prerequisites or sequential order, every read withholds its items' URLs from a Student and
-/// from an Observer (the raw body does not hold them); a module without rules shows them; a Course designer sees them
-/// all.
+/// Spec 04 B12, B14 in place of the stand-in that withheld the links of every module with an
+/// unlock rule: a module's rules withhold its items' URLs from a Student and from an Observer
+/// only while they lock it. A future unlock date locks it (the raw body does not hold the URL);
+/// a past one, a prerequisite met (a module with no requirement that is itself open, Q4) and
+/// sequential order with nothing before the link do not. A Course designer sees the URL and
+/// `lock: null` throughout.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn reads_withhold_links_of_a_module_with_unlock_rules_from_a_student(pool: PgPool) {
+async fn spec04_rules_withhold_links_only_while_they_lock(pool: PgPool) {
     let f = Fixture::new(pool).await;
     let t = f.a;
     f.set_course_status(t, courses::Status::Published).await;
@@ -1418,22 +1424,34 @@ async fn reads_withhold_links_of_a_module_with_unlock_rules_from_a_student(pool:
         .await;
     let day = Duration::from_secs(86_400);
     let rules = [
-        modules::RulesPatch {
-            unlock_at: Some(Some(now() + day)),
-            ..Default::default()
-        },
-        modules::RulesPatch {
-            unlock_at: Some(Some(now() - day)),
-            ..Default::default()
-        },
-        modules::RulesPatch {
-            prerequisite_ids: Some(vec![plain]),
-            ..Default::default()
-        },
-        modules::RulesPatch {
-            require_sequential: Some(true),
-            ..Default::default()
-        },
+        (
+            modules::RulesPatch {
+                unlock_at: Some(Some(now() + day)),
+                ..Default::default()
+            },
+            true,
+        ),
+        (
+            modules::RulesPatch {
+                unlock_at: Some(Some(now() - day)),
+                ..Default::default()
+            },
+            false,
+        ),
+        (
+            modules::RulesPatch {
+                prerequisite_ids: Some(vec![plain]),
+                ..Default::default()
+            },
+            false,
+        ),
+        (
+            modules::RulesPatch {
+                require_sequential: Some(true),
+                ..Default::default()
+            },
+            false,
+        ),
     ];
     let cleared = modules::RulesPatch {
         unlock_at: Some(None),
@@ -1441,7 +1459,7 @@ async fn reads_withhold_links_of_a_module_with_unlock_rules_from_a_student(pool:
         require_sequential: Some(false),
         completion_rule: None,
     };
-    for rule in rules {
+    for (rule, locks) in rules {
         modules::set_rules(&f.pool, scope(t.org), ruled, &cleared, now())
             .await
             .unwrap();
@@ -1451,25 +1469,48 @@ async fn reads_withhold_links_of_a_module_with_unlock_rules_from_a_student(pool:
         for reader in [&student, &observer] {
             let list = f.get(&course_modules(t.course), t.org, reader).await;
             let body = list.ok(StatusCode::OK);
-            assert!(!body.to_string().contains(gated_url), "{rule:?}: {body}");
-            assert_eq!(ids(&body["modules"][0]["items"]), [gated], "{rule:?}");
-            assert!(
-                body["modules"][0]["items"][0].get("url").is_none(),
-                "{rule:?}"
+            assert_schema("ModuleList", body);
+            assert_eq!(
+                body.to_string().contains(gated_url),
+                !locks,
+                "{rule:?}: {body}"
             );
+            assert_eq!(ids(&body["modules"][0]["items"]), [gated], "{rule:?}");
+            assert_eq!(
+                body["modules"][0]["lock"].is_null(),
+                !locks,
+                "{rule:?}: {body}"
+            );
+            assert_eq!(body["modules"][1]["lock"], Value::Null);
             assert_eq!(
                 body["modules"][1]["items"][0]["url"],
                 "https://open.example/a"
             );
             let module = f.get(&module_path(ruled), t.org, reader).await;
             let body = module.ok(StatusCode::OK);
-            assert!(!body.to_string().contains(gated_url), "{rule:?}: {body}");
+            assert_eq!(
+                body.to_string().contains(gated_url),
+                !locks,
+                "{rule:?}: {body}"
+            );
             assert_eq!(ids(&body["items"]), [gated], "{rule:?}");
             let item = f.get(&item_path(gated), t.org, reader).await;
             let body = item.ok(StatusCode::OK);
             assert_schema("Item", body);
-            assert!(!body.to_string().contains(gated_url), "{rule:?}: {body}");
+            assert_eq!(
+                body.to_string().contains(gated_url),
+                !locks,
+                "{rule:?}: {body}"
+            );
             assert_eq!(body["title"], "Link");
+            if locks {
+                assert_eq!(
+                    body["lock"],
+                    json!({ "reasons": [{ "kind": "module_locked" }] })
+                );
+            } else {
+                assert_eq!(body["lock"], Value::Null, "{rule:?}");
+            }
             let item = f.get(&item_path(open), t.org, reader).await;
             assert_eq!(item.ok(StatusCode::OK)["url"], "https://open.example/a");
         }
@@ -1480,21 +1521,11 @@ async fn reads_withhold_links_of_a_module_with_unlock_rules_from_a_student(pool:
             item_path(gated),
         ] {
             let answer = f.get(&uri, t.org, &designer).await;
-            assert!(
-                answer.ok(StatusCode::OK).to_string().contains(gated_url),
-                "{rule:?}: {uri}"
-            );
+            let body = answer.ok(StatusCode::OK);
+            assert!(body.to_string().contains(gated_url), "{rule:?}: {uri}");
+            assert!(!body.to_string().contains("reasons"), "{rule:?}: {body}");
         }
     }
-    modules::set_rules(&f.pool, scope(t.org), ruled, &cleared, now())
-        .await
-        .unwrap();
-    let item = f.get(&item_path(gated), t.org, &student).await;
-    assert_eq!(
-        item.ok(StatusCode::OK)["url"],
-        gated_url,
-        "no rule, no withholding"
-    );
 }
 
 /// T13 for the read routes: org A's admin naming org B's published course, module and item gets
@@ -1643,7 +1674,8 @@ async fn spec05_t10_the_outline_carries_the_learners_own_progress(pool: PgPool) 
     let item = f.get(&item_path(required), t.org, &designer).await;
     assert!(item.ok(StatusCode::OK).get("progress").is_none());
 
-    // A rule added afterwards: the progress stays, the link is withheld.
+    // Sequential order added afterwards: the first Student completed `required`, so both
+    // links stay open to them; the Observer, who has no progress (spec 05 B18), waits on it.
     let sequential = modules::RulesPatch {
         require_sequential: Some(true),
         ..Default::default()
@@ -1651,14 +1683,43 @@ async fn spec05_t10_the_outline_carries_the_learners_own_progress(pool: PgPool) 
     modules::set_rules(&f.pool, scope(t.org), module, &sequential, now())
         .await
         .unwrap();
+    let item = f.get(&item_path(plain), t.org, &first).await;
+    let item = item.ok(StatusCode::OK);
+    assert_eq!(
+        (&item["url"], &item["lock"]),
+        (&json!("https://example.com/p"), &Value::Null)
+    );
+    let item = f.get(&item_path(required), t.org, &observer).await;
+    let item = item.ok(StatusCode::OK);
+    assert_eq!(
+        item["url"], "https://example.com/r",
+        "nothing comes before it"
+    );
+    assert!(item.get("progress").is_none(), "{item}");
+    let item = f.get(&item_path(plain), t.org, &observer).await;
+    let item = item.ok(StatusCode::OK);
+    assert!(item.get("url").is_none(), "{item}");
+    assert_eq!(
+        item["lock"],
+        json!({ "reasons": [{ "kind": "sequential", "item_id": required }] })
+    );
+
+    // An unlock date added afterwards locks the module: the progress stays, the link goes.
+    let dated = modules::RulesPatch {
+        unlock_at: Some(Some(now() + Duration::from_secs(3_600))),
+        ..Default::default()
+    };
+    modules::set_rules(&f.pool, scope(t.org), module, &dated, now())
+        .await
+        .unwrap();
     let item = f.get(&item_path(required), t.org, &first).await;
     let item = item.ok(StatusCode::OK);
     assert_eq!(item["progress"]["state"], "completed");
     assert!(item.get("url").is_none(), "{item}");
-    let item = f.get(&item_path(required), t.org, &observer).await;
-    let item = item.ok(StatusCode::OK);
-    assert!(item.get("url").is_none(), "{item}");
-    assert!(item.get("progress").is_none(), "{item}");
+    assert_eq!(
+        item["lock"],
+        json!({ "reasons": [{ "kind": "module_locked" }] })
+    );
 
     // Unpublished, the completed item leaves the Student's answer, progress and all.
     let hide = items::ItemPatch {
@@ -1676,4 +1737,385 @@ async fn spec05_t10_the_outline_carries_the_learners_own_progress(pool: PgPool) 
     let watching = watching.ok(StatusCode::OK);
     assert_eq!(ids(&watching["modules"][0]["items"]), [plain]);
     assert!(!watching.to_string().contains("progress"), "{watching}");
+}
+
+// Spec 04 I3: lock state in the learner reads (B5, B12 to B14; T11, T12, T14).
+
+impl Fixture {
+    /// Give `item` the requirement `requirement`.
+    async fn require(&self, t: Tree, item: Uuid, requirement: rules::Requirement) {
+        items::set_requirement(&self.pool, scope(t.org), item, Some(requirement), now())
+            .await
+            .expect("set the requirement");
+    }
+
+    /// A published page item pointing at `page`, last in `module`, with a `view` requirement.
+    /// Written by SQL: no page item can be created through the API yet (spec 03 B5), and the
+    /// test needs a `ref_id` a read could leak.
+    async fn page_item(&self, t: Tree, module: Uuid, page: Uuid) -> Uuid {
+        let id = Uuid::now_v7();
+        sqlx::query(
+            "INSERT INTO module_items
+                 (id, org_id, course_id, module_id, position, kind, ref_id, title, published,
+                  requirement)
+             SELECT $1, $2, $3, $4, count(*), 'page', $5, 'Reading', true, '{\"kind\": \"view\"}'
+             FROM module_items WHERE module_id = $4",
+        )
+        .bind(id)
+        .bind(t.org)
+        .bind(t.course)
+        .bind(module)
+        .bind(page)
+        .execute(&self.pool)
+        .await
+        .expect("insert a page item");
+        id
+    }
+
+    /// The 200 answers of `uris` to `cookie`.
+    async fn read_all(&self, t: Tree, uris: &[String; 3], cookie: &str) -> [Value; 3] {
+        let mut bodies = Vec::new();
+        for uri in uris {
+            bodies.push(
+                self.get(uri, t.org, cookie)
+                    .await
+                    .ok(StatusCode::OK)
+                    .clone(),
+            );
+        }
+        bodies.try_into().expect("three answers")
+    }
+
+    /// `rules` on `module`.
+    async fn rules(&self, t: Tree, module: Uuid, rules: modules::RulesPatch) {
+        modules::set_rules(&self.pool, scope(t.org), module, &rules, now())
+            .await
+            .expect("set the module's rules");
+    }
+
+    /// The learner `cookie` views `item`.
+    async fn view(&self, t: Tree, item: Uuid, cookie: &str) -> Answer {
+        let uri = format!("{}/progress", item_path(item));
+        let step = json!({ "action": "view" });
+        self.send(Method::POST, &uri, t.org, cookie, Some(step))
+            .await
+    }
+}
+
+/// `lock` of a read's module or item: its reasons, or `None` for `lock: null`.
+#[track_caller]
+fn reasons(row: &Value) -> Option<Value> {
+    let lock = row.get("lock").expect("a lock member, null or not");
+    (!lock.is_null()).then(|| lock["reasons"].clone())
+}
+
+/// T11 (B12, B14) and spec 05 B18: a Student reading a course whose second module waits for
+/// the first gets that module's title, its items' titles, kinds and requirements and its
+/// reasons, and the raw bodies of all three reads hold neither the page's `ref_id` nor the
+/// link's URL. A Course designer's hold both and `lock: null`. Once the Student completes the
+/// first module, the second opens for them and only them: another Student, and an Observer, who
+/// has no progress of their own, still read it locked.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn spec04_t11_a_locked_module_shows_titles_requirements_and_reasons_only(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    f.set_course_status(t, courses::Status::Published).await;
+    let (first, second) = (f.published_module(t).await, f.published_module(t).await);
+    let intro = f
+        .published_link(t, first, "https://open.example/intro")
+        .await;
+    f.require(t, intro, rules::Requirement::View).await;
+    let secret_url = "https://locked.example/secret";
+    let link = f.published_link(t, second, secret_url).await;
+    f.require(t, link, rules::Requirement::MarkDone).await;
+    let page = Uuid::now_v7();
+    let reading = f.page_item(t, second, page).await;
+    let prerequisites = modules::RulesPatch {
+        prerequisite_ids: Some(vec![first]),
+        ..Default::default()
+    };
+    f.rules(t, second, prerequisites).await;
+    let (student, other) = (f.student(t).await, f.student(t).await);
+    let observer = f.observer(t).await;
+    let designer = f
+        .holder(t.org, "course_designer", Scope::Account(t.tower))
+        .await;
+    let waits = json!([{ "kind": "prerequisites", "module_ids": [first] }]);
+    let module_locked = json!([{ "kind": "module_locked" }]);
+    let leaks = |body: &Value| {
+        let text = body.to_string();
+        text.contains(secret_url) || text.contains(&page.to_string())
+    };
+
+    for reader in [&student, &other, &observer] {
+        let list = f.get(&course_modules(t.course), t.org, reader).await;
+        let body = list.ok(StatusCode::OK);
+        assert_schema("ModuleList", body);
+        assert!(!leaks(body), "{body}");
+        let (open, locked) = (&body["modules"][0], &body["modules"][1]);
+        assert_eq!(reasons(open), None);
+        assert_eq!(open["items"][0]["url"], "https://open.example/intro");
+        assert_eq!(reasons(locked), Some(waits.clone()));
+        assert_eq!(locked["title"], "Module");
+        assert_eq!(locked["prerequisite_ids"], json!([first]));
+        assert_eq!(ids(&locked["items"]), [link, reading]);
+        let shown: Vec<_> = locked["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| {
+                (
+                    item["kind"].clone(),
+                    item["title"].clone(),
+                    item["requirement"].clone(),
+                    reasons(item),
+                    item.get("url").is_some() || item.get("ref_id").is_some(),
+                )
+            })
+            .collect();
+        let expected = [
+            (
+                json!("external_link"),
+                json!("Link"),
+                json!({ "kind": "mark_done" }),
+            ),
+            (json!("page"), json!("Reading"), json!({ "kind": "view" })),
+        ]
+        .map(|(kind, title, requirement)| {
+            (kind, title, requirement, Some(module_locked.clone()), false)
+        });
+        assert_eq!(shown, expected);
+
+        let module = f.get(&module_path(second), t.org, reader).await;
+        let body = module.ok(StatusCode::OK);
+        assert_schema("Module", body);
+        assert!(!leaks(body), "{body}");
+        assert_eq!(reasons(body), Some(waits.clone()));
+        for item in [link, reading] {
+            // T12: a locked item answers 200 with B12's fields.
+            let answer = f.get(&item_path(item), t.org, reader).await;
+            let body = answer.ok(StatusCode::OK);
+            assert_schema("Item", body);
+            assert!(!leaks(body), "{body}");
+            assert_eq!(reasons(body), Some(module_locked.clone()));
+        }
+    }
+
+    for uri in [
+        course_modules(t.course),
+        module_path(second),
+        item_path(link),
+        item_path(reading),
+    ] {
+        let answer = f.get(&uri, t.org, &designer).await;
+        let body = answer.ok(StatusCode::OK);
+        assert!(!body.to_string().contains("reasons"), "{uri}: {body}");
+    }
+    let list = f.get(&course_modules(t.course), t.org, &designer).await;
+    let body = list.ok(StatusCode::OK);
+    assert!(body.to_string().contains(secret_url), "{body}");
+    assert_eq!(body["modules"][1]["items"][1]["ref_id"], page.to_string());
+    assert_eq!(reasons(&body["modules"][1]), None);
+
+    f.view(t, intro, &student).await.ok(StatusCode::OK);
+    let list = f.get(&course_modules(t.course), t.org, &student).await;
+    let body = list.ok(StatusCode::OK);
+    assert_eq!(reasons(&body["modules"][1]), None);
+    assert_eq!(body["modules"][1]["items"][0]["url"], secret_url);
+    assert_eq!(body["modules"][1]["items"][1]["ref_id"], page.to_string());
+    for reader in [&other, &observer] {
+        let list = f.get(&course_modules(t.course), t.org, reader).await;
+        let body = list.ok(StatusCode::OK);
+        assert!(!leaks(body), "{body}");
+        assert_eq!(reasons(&body["modules"][1]), Some(waits.clone()));
+    }
+}
+
+/// B8, B10 and T1 over the router: a module with an unlock date is locked on all three reads
+/// until the request clock reaches the date, inclusive, and its link appears then; nothing is
+/// written when the date passes.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn spec04_an_unlock_date_opens_the_module_at_the_request_clocks_time(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    f.set_course_status(t, courses::Status::Published).await;
+    let module = f.published_module(t).await;
+    let url = "https://dated.example/a";
+    let item = f.published_link(t, module, url).await;
+    // Whole seconds after `now()`, so the reasons' timestamp is exact.
+    let at = now() + Duration::from_secs(3_600);
+    let dated = modules::RulesPatch {
+        unlock_at: Some(Some(at)),
+        ..Default::default()
+    };
+    f.rules(t, module, dated).await;
+    let student = f.student(t).await;
+    let before = f.rows(t.org).await;
+    let uris = [
+        course_modules(t.course),
+        module_path(module),
+        item_path(item),
+    ];
+    for clock in [now(), at - Duration::from_micros(1)] {
+        f.clock.set(clock);
+        let [list, one, alone] = f.read_all(t, &uris, &student).await;
+        let waits = json!([{ "kind": "unlock_at", "at": "2025-11-13T03:13:20.000000Z" }]);
+        assert_eq!(reasons(&list["modules"][0]), Some(waits.clone()));
+        assert_eq!(reasons(&one), Some(waits));
+        assert_eq!(reasons(&alone), Some(json!([{ "kind": "module_locked" }])));
+        for body in [&list, &one, &alone] {
+            assert!(!body.to_string().contains(url), "{body}");
+        }
+    }
+    f.clock.set(at);
+    let [list, one, alone] = f.read_all(t, &uris, &student).await;
+    assert_eq!(reasons(&list["modules"][0]), None);
+    assert_eq!(reasons(&one), None);
+    assert_eq!((reasons(&alone), &alone["url"]), (None, &json!(url)));
+    assert_eq!(
+        f.rows(t.org).await,
+        before,
+        "nothing is stored when the date passes"
+    );
+}
+
+/// B9, T4 and T12 over the router: in a sequential module [req1, plain, req2], with nothing
+/// done, req1 is open and plain and req2 are locked by `sequential` naming req1, without their
+/// URLs, while the module itself is open (an item lock, not a module lock); viewing plain's
+/// progress or req2's answers 403 `item.locked`. Once req1 is complete, all three are open.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn spec04_sequential_order_locks_items_of_an_open_module(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    f.set_course_status(t, courses::Status::Published).await;
+    let module = f.published_module(t).await;
+    let req1 = f.published_link(t, module, "https://seq.example/1").await;
+    let plain = f.published_link(t, module, "https://seq.example/2").await;
+    let req2 = f.published_link(t, module, "https://seq.example/3").await;
+    for item in [req1, req2] {
+        f.require(t, item, rules::Requirement::View).await;
+    }
+    let sequential = modules::RulesPatch {
+        require_sequential: Some(true),
+        ..Default::default()
+    };
+    f.rules(t, module, sequential).await;
+    let student = f.student(t).await;
+    let waits = json!([{ "kind": "sequential", "item_id": req1 }]);
+
+    let read = f.get(&module_path(module), t.org, &student).await;
+    let body = read.ok(StatusCode::OK);
+    assert_eq!(reasons(body), None, "the module is open");
+    let items = body["items"].as_array().unwrap();
+    assert_eq!(reasons(&items[0]), None);
+    assert_eq!(items[0]["url"], "https://seq.example/1");
+    for locked in &items[1..] {
+        assert_eq!(reasons(locked), Some(waits.clone()));
+        assert!(locked.get("url").is_none(), "{locked}");
+    }
+    assert!(!body.to_string().contains("seq.example/2"), "{body}");
+    let alone = f.get(&item_path(req2), t.org, &student).await;
+    let alone = alone.ok(StatusCode::OK);
+    assert_eq!(reasons(alone), Some(waits.clone()));
+    assert!(alone.get("url").is_none(), "{alone}");
+    for item in [plain, req2] {
+        let refused = f.view(t, item, &student).await;
+        refused.expect(StatusCode::FORBIDDEN, "item.locked");
+        assert_eq!(refused.body["reasons"], waits);
+    }
+
+    f.view(t, req1, &student).await.ok(StatusCode::OK);
+    let read = f.get(&module_path(module), t.org, &student).await;
+    let body = read.ok(StatusCode::OK);
+    for (item, n) in body["items"].as_array().unwrap().iter().zip(1..) {
+        assert_eq!(reasons(item), None, "{item}");
+        assert_eq!(item["url"], format!("https://seq.example/{n}"));
+    }
+}
+
+/// T14 (B5): a user enrolled as a Student who also holds `course.view_all` through a Course
+/// designer assignment at the course's account reads every module and item unlocked, with
+/// every URL, and still gets their own progress.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn spec04_t14_a_student_who_holds_view_all_reads_everything_unlocked(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    f.set_course_status(t, courses::Status::Published).await;
+    let module = f.published_module(t).await;
+    let url = "https://staff.example/a";
+    let item = f.published_link(t, module, url).await;
+    let dated = modules::RulesPatch {
+        unlock_at: Some(Some(now() + Duration::from_secs(86_400))),
+        ..Default::default()
+    };
+    f.rules(t, module, dated).await;
+    let (user, cookie) = f.enrolled(t, "student", Vec::new()).await;
+    let student = f.student(t).await;
+    let assignment = NewAssignment {
+        user_id: user,
+        role_id: f.builtin_role("course_designer").await,
+        scope: Scope::Account(t.tower),
+        source: Source::Local,
+        external_id: None,
+    };
+    role_assignments::create(&f.pool, scope(t.org), &assignment, now(), Actor::Instance)
+        .await
+        .expect("create assignment");
+
+    for uri in [
+        course_modules(t.course),
+        module_path(module),
+        item_path(item),
+    ] {
+        let answer = f.get(&uri, t.org, &cookie).await;
+        let body = answer.ok(StatusCode::OK);
+        assert!(body.to_string().contains(url), "{uri}: {body}");
+        assert!(!body.to_string().contains("reasons"), "{uri}: {body}");
+        assert!(body.to_string().contains("\"progress\""), "{uri}: {body}");
+        let answer = f.get(&uri, t.org, &student).await;
+        assert!(
+            !answer.ok(StatusCode::OK).to_string().contains(url),
+            "{uri}"
+        );
+    }
+}
+
+/// Cross-organization: a Student of org B naming org A's locked item, module and course gets
+/// 404, never `item.locked` or its reasons, so a lock does not tell another organization an id
+/// exists; recording progress on it answers 404 too.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn spec04_another_organizations_locked_item_is_not_found(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (a, b) = (f.a, tree(&f.pool, "org-b").await);
+    for t in [a, b] {
+        f.set_course_status(t, courses::Status::Published).await;
+    }
+    let module = f.published_module(a).await;
+    let item = f.published_link(a, module, "https://theirs.example/").await;
+    f.require(a, item, rules::Requirement::View).await;
+    let dated = modules::RulesPatch {
+        unlock_at: Some(Some(now() + Duration::from_secs(86_400))),
+        ..Default::default()
+    };
+    f.rules(a, module, dated).await;
+    let student = f.student(b).await;
+    let before = f.rows(a.org).await;
+    let calls = [
+        (course_modules(a.course), "course.not_found"),
+        (module_path(module), "module.not_found"),
+        (item_path(item), "item.not_found"),
+    ];
+    for (uri, code) in calls {
+        let answer = f.get(&uri, b.org, &student).await;
+        answer.expect(StatusCode::NOT_FOUND, code);
+        let text = answer.body.to_string();
+        assert!(
+            !text.contains("reasons") && !text.contains("theirs.example"),
+            "{text}"
+        );
+    }
+    let refused = f.view(b, item, &student).await;
+    refused.expect(StatusCode::NOT_FOUND, "item.not_found");
+    assert!(refused.body.get("reasons").is_none(), "{:?}", refused.body);
+    assert_eq!(f.rows(a.org).await, before, "org A is unchanged");
 }
