@@ -8,6 +8,7 @@
 // so a video uploaded before a reload, or by another editor, turns ready on screen.
 import {
   Button,
+  Code,
   ErrorState,
   Heading,
   POLL_MS,
@@ -19,15 +20,18 @@ import {
 } from "@stepclimb/ui";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
+import { useId } from "react";
 import { ApiError } from "../api";
 import { type Course, courseQuery } from "../files/course-files";
 import { LoadError } from "../layouts/load-error";
+import { meQuery } from "../session";
 import {
   courseVideosKey,
   courseVideosQuery,
   readVideoStatus,
   sendTus,
   type Video,
+  videoUploadOwner,
   videoUploadsEndpoint,
 } from "../videos/videos";
 
@@ -98,16 +102,21 @@ interface VideoPanelProps {
 export function VideoPanel({ courseId, course }: VideoPanelProps) {
   const { t } = useStepclimbStrings();
   const queryClient = useQueryClient();
+  // The signed-in layout has loaded `/me`; the uploader waits for it, as its entries are the user's.
+  const me = useQuery(meQuery).data;
+  const owner = me === undefined ? undefined : videoUploadOwner(me);
   const archived = course?.status === "archived";
   const canEdit = (course?.permissions.includes(CONTENT_EDIT) ?? false) && !archived;
   const refresh = () => void queryClient.invalidateQueries({ queryKey: courseVideosKey(courseId) });
   return (
     <div className="flex min-w-0 flex-col gap-6">
       {archived ? <Text elementType="p">{t("videos.archived")}</Text> : null}
-      {canEdit ? (
+      {canEdit && owner !== undefined ? (
         <VideoUploader
+          key={owner}
           endpoint={videoUploadsEndpoint(courseId)}
           storageKey={courseId}
+          owner={owner}
           send={sendTus}
           getVideo={readVideoStatus}
           onChange={refresh}
@@ -124,6 +133,7 @@ function isProcessing(pages: { items: Video[] }[] | undefined): boolean {
 
 function VideoList({ courseId, canEdit }: { courseId: string; canEdit: boolean }) {
   const { t } = useStepclimbStrings();
+  const headingId = useId();
   const list = useInfiniteQuery({
     ...courseVideosQuery(courseId),
     refetchInterval: (query) => (isProcessing(query.state.data?.pages) ? POLL_MS : false),
@@ -135,8 +145,8 @@ function VideoList({ courseId, canEdit }: { courseId: string; canEdit: boolean }
   }
   const videos = list.data?.pages.flatMap((page) => page.items);
   return (
-    <section className="flex min-w-0 flex-col gap-3" aria-labelledby="course-videos">
-      <Heading level={2} size="lg" id="course-videos">
+    <section className="flex min-w-0 flex-col gap-3" aria-labelledby={headingId}>
+      <Heading level={2} size="lg" id={headingId}>
         {t("videos.list")}
       </Heading>
       {videos === undefined ? (
@@ -182,7 +192,12 @@ function VideoRow({ video }: { video: Video }) {
       {failure === undefined ? null : (
         <Text elementType="p" size="sm">
           {failure.message}
-          {failure.code === undefined ? null : ` ${failure.code}`}
+          {failure.code === undefined ? null : (
+            <>
+              {" "}
+              <Code>{failure.code}</Code>
+            </>
+          )}
         </Text>
       )}
     </li>

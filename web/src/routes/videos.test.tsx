@@ -3,6 +3,8 @@
 // server: the list with each video's status, the course's permissions deciding the uploader, an
 // upload through the tus routes that refreshes the list, the list read again while a video
 // processes, and the refused and missing states.
+
+import { resumeKey } from "@stepclimb/ui";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,7 +20,7 @@ import {
   stubServer,
 } from "../test/app";
 import { stubXhr } from "../test/xhr";
-import { readVideoStatus, type Video } from "../videos/videos";
+import { readVideoStatus, type Video, videoUploadOwner } from "../videos/videos";
 
 const courseId = "01900000-0000-7000-8000-0000000000c1";
 const PATH = `/c/${courseId}/videos`;
@@ -58,6 +60,24 @@ function videoFixture(n: number, title: string, status: string, error_code?: str
     chapters: [],
     created_at: "2026-11-02T12:00:00Z",
     updated_at: "2026-11-02T12:00:00Z",
+  };
+}
+
+const ME = meFixture();
+const OWNER = videoUploadOwner(ME);
+const OTHER_OWNER = `${ME.organization.id}.01900000-0000-7000-8000-000000000099`;
+
+/** An unfinished upload of `name` in this course, as VideoUploader keeps it. */
+function resumeEntry(name: string) {
+  return {
+    scope: courseId,
+    fingerprint: "[]",
+    url: `${globalThis.location.origin}/api/v1/video-uploads/${name}`,
+    videoId: `v-${name}`,
+    name,
+    size: 3_000_000,
+    offset: 1_000_000,
+    savedAt: Date.now(),
   };
 }
 
@@ -210,6 +230,55 @@ describe("the video panel", () => {
     expect(requestsTo(fetch, LIST).length).toBe(before + 1);
     await act(() => vi.advanceTimersByTimeAsync(30_000));
     expect(requestsTo(fetch, LIST).length).toBe(before + 1);
+  });
+});
+
+describe("unfinished uploads in this browser (spec 08 D30)", () => {
+  beforeEach(() => {
+    localStorage.setItem(resumeKey(OWNER), JSON.stringify([resumeEntry("Mine.mp4")]));
+    localStorage.setItem(resumeKey(OTHER_OWNER), JSON.stringify([resumeEntry("Theirs.mp4")]));
+  });
+
+  it("lists the signed-in user's only, not another user's in the same course", async () => {
+    server();
+    renderApp(PATH);
+    expect(await screen.findByText("Mine.mp4: 33% uploaded")).toBeInTheDocument();
+    expect(screen.queryByText(/Theirs\.mp4/)).toBeNull();
+  });
+
+  it("are cleared by an explicit sign-out, leaving another user's", async () => {
+    let signedOut = false;
+    server(AUTHOR, () => [], {
+      "GET /api/v1/me": () =>
+        signedOut ? problem(401, "auth.unauthenticated", "Unauthorized") : json(ME),
+      "POST /auth/sign-out": () => {
+        signedOut = true;
+        return new Response(null, { status: 204 });
+      },
+    });
+    renderApp(PATH);
+    await screen.findByText("Mine.mp4: 33% uploaded");
+    await userEvent.click(screen.getByRole("button", { name: "Avery Example, account menu" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Sign out" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Sign in" })).toBeInTheDocument();
+    expect(localStorage.getItem(resumeKey(OWNER))).toBeNull();
+    expect(localStorage.getItem(resumeKey(OTHER_OWNER))).not.toBeNull();
+  });
+
+  it("are kept when the session expires", async () => {
+    let expired = false;
+    server(AUTHOR, () => [], {
+      "GET /api/v1/me": () =>
+        expired ? problem(401, "auth.unauthenticated", "Unauthorized") : json(ME),
+    });
+    const app = renderApp(PATH);
+    await screen.findByText("Mine.mp4: 33% uploaded");
+    expired = true;
+    await act(async () => {
+      await app.context.queryClient.refetchQueries({ queryKey: ["me"] }).catch(() => undefined);
+    });
+    expect(await screen.findByRole("heading", { level: 1, name: "Sign in" })).toBeInTheDocument();
+    expect(localStorage.getItem(resumeKey(OWNER))).not.toBeNull();
   });
 });
 

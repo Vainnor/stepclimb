@@ -3,10 +3,11 @@
 // the course's list a page at a time, one video's status for VideoUploader, and the uploader's
 // tus requests, sent through `XMLHttpRequest` so a chunk reports its progress.
 import type { components } from "@stepclimb/api-client";
-import type { TusSend, VideoStatus } from "@stepclimb/ui";
+import { clearResumeEntries, type TusSend, type VideoStatus } from "@stepclimb/ui";
 import { infiniteQueryOptions } from "@tanstack/react-query";
 import { ApiError, api, unwrap } from "../api";
 import { sendWithProgress } from "../files/course-files";
+import type { Me } from "../session";
 
 export type Video = components["schemas"]["Video"];
 type VideoPage = components["schemas"]["Page_Video"];
@@ -59,6 +60,28 @@ export async function readVideoStatus(
     if (error instanceof ApiError && error.problem?.code === "video.not_found") return null;
     throw error;
   }
+}
+
+/**
+ * Whose unfinished uploads local storage keeps: the signed-in user in their organization
+ * (spec 08 D30), so another person on the same browser never sees or ends them.
+ */
+export function videoUploadOwner(me: Me): string {
+  return `${me.organization.id}.${me.user.id}`;
+}
+
+/**
+ * Forgets the signed-in user's unfinished uploads in this browser, on an explicit sign-out (D30).
+ * Storage the browser refuses to the page holds nothing to forget.
+ */
+export function clearVideoUploads(me: Me): void {
+  let storage: Storage;
+  try {
+    storage = globalThis.localStorage;
+  } catch {
+    return;
+  }
+  clearResumeEntries(storage, videoUploadOwner(me));
 }
 
 /** VideoUploader's `send`: one tus request through `XMLHttpRequest`, with the body's progress. */
