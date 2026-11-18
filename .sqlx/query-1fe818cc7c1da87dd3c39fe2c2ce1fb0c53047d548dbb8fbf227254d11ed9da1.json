@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT v.id FROM videos v\n           WHERE v.org_id = $1 AND v.status = 'processing'\n             AND NOT EXISTS (SELECT 1 FROM jobs j\n                             WHERE j.org_id = $1 AND j.kind = 'video.transcode'\n                               AND j.payload->>'video_id' = v.id::text AND j.dead_at IS NULL)\n             AND (EXISTS (SELECT 1 FROM jobs j\n                          WHERE j.org_id = $1 AND j.kind = 'video.transcode'\n                            AND j.payload->>'video_id' = v.id::text)\n                  OR v.updated_at <= timestamptz 'epoch' + $2::bigint * interval '1 microsecond')\n           ORDER BY v.id\n           FOR UPDATE OF v SKIP LOCKED",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "videos",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1fe818cc7c1da87dd3c39fe2c2ce1fb0c53047d548dbb8fbf227254d11ed9da1"
+}

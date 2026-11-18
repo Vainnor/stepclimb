@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE videos\n         SET status = 'failed', error_code = $4, failed_by_server = $5,\n             charged_minutes = NULL, charged_at = NULL,\n             updated_at = timestamptz 'epoch' + $6::bigint * interval '1 microsecond'\n         WHERE org_id = $1 AND id = $2 AND output_run = $3 AND status = 'processing'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4",
+        "Text",
+        "Bool",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d6b28dae8a5fa32f12ba95d42ebf195fefbce43864800db6e057442e865cd320"
+}

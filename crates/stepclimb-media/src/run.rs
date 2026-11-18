@@ -81,10 +81,30 @@ pub enum RunError {
 
 impl RunError {
     /// Whether the input is the likely cause: the program ran and failed, or broke a limit. A
-    /// spawn or watch failure is the host's.
+    /// spawn or watch failure is the host's, and so is a program killed by `SIGKILL` that this
+    /// runner did not kill (the kernel's out-of-memory killer, an operator): its input may well
+    /// transcode on another attempt.
     #[must_use]
     pub fn is_input_fault(&self) -> bool {
-        !matches!(self, Self::Spawn { .. } | Self::Io(_))
+        match self {
+            Self::Spawn { .. } | Self::Io(_) => false,
+            Self::Failed { status, .. } => !killed_by_sigkill(*status),
+            _ => true,
+        }
+    }
+}
+
+/// Whether `status` is a run killed by `SIGKILL` (Unix only).
+fn killed_by_sigkill(status: ExitStatus) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt as _;
+        status.signal() == Some(9)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = status;
+        false
     }
 }
 
@@ -367,6 +387,31 @@ mod tests {
             !error.to_string().contains("END"),
             "Display holds no stderr"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_run_killed_by_sigkill_is_the_hosts_fault_and_another_failure_the_inputs() {
+        let dir = scratch();
+        let killed = go(
+            "sh",
+            &["-c", "kill -KILL $$"],
+            dir.path(),
+            limits(Duration::from_secs(30)),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(killed, RunError::Failed { .. }), "{killed:?}");
+        assert!(!killed.is_input_fault(), "the OOM killer's SIGKILL");
+        let failed = go(
+            "sh",
+            &["-c", "exit 1"],
+            dir.path(),
+            limits(Duration::from_secs(30)),
+        )
+        .await
+        .unwrap_err();
+        assert!(failed.is_input_fault());
     }
 
     #[tokio::test]

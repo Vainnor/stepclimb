@@ -390,6 +390,29 @@ code (`docs/specs/m0/06-oauth2-and-vatsim-preset.md` Q3).
 - On a fresh instance there is no organization to add them to: `serve` logs a warning and starts
   without them. Restart it after `admin create`.
 
+## Video transcoding
+
+An uploaded video is transcoded by a process that serves the `transcode` queue: `all`, the
+default, or a dedicated `--role transcoder` (docs/specs/m1/08-uploaded-video.md B8). Such a
+process needs object storage (`STEPCLIMB_STORAGE_URL`), ffmpeg and ffprobe, and a
+`transcode_dir` with room for the largest upload and its outputs.
+
+The release image does not bundle ffmpeg yet; it gets it in #240. Until then, an `all` server
+started from the image logs a warning that ffmpeg is not on `PATH` and does not serve the
+`transcode` queue. Uploaded videos stay `processing`: their transcode jobs wait in the queue,
+using none of their attempts, and run as soon as a process that can transcode starts (an `all` or
+`transcoder` with ffmpeg and ffprobe on `PATH` or at `ffmpeg_path` and `ffprobe_path`). A
+`transcoder` without ffmpeg or without storage refuses to start and names the setting.
+
+`videos.cleanup` fails a `processing` video only when no live job will finish it: its job is
+dead, having used its attempts, or it has none and has not changed for 24 hours. A failure on the
+server's side refunds the video's transcode minutes and does not count toward its 3 retries.
+
+On a bare-metal install run by systemd, keep the unit's `KillMode=control-group` (systemd's
+default): ffmpeg runs in the server's process group, and this ends a running ffmpeg with the
+server. A transcode's work directory (`stepclimb-transcode-*` in `transcode_dir`) left by a killed
+process is removed at the next start.
+
 ## Commands
 
 The image's entry point is the `stepclimb` binary, so Compose runs a command by naming it after

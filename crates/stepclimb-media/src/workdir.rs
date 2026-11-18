@@ -42,9 +42,16 @@ pub fn sweep(base: &Path, cutoff: std::time::SystemTime) -> std::io::Result<usiz
     let mut removed = 0;
     for entry in std::fs::read_dir(base)? {
         let entry = entry?;
-        let named = entry.file_name().to_string_lossy().starts_with(PREFIX);
-        let meta = entry.metadata()?;
-        if !(named && meta.is_dir()) || meta.modified()? >= cutoff {
+        if !entry.file_name().to_string_lossy().starts_with(PREFIX) {
+            continue;
+        }
+        // Another process may remove an entry between the listing and this read.
+        let meta = match entry.metadata() {
+            Ok(meta) => meta,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        if !meta.is_dir() || meta.modified()? >= cutoff {
             continue;
         }
         match std::fs::remove_dir_all(entry.path()) {

@@ -27,7 +27,8 @@
 //! The job holds its lease through steps 2 to 6, retrying a failed extension until little of
 //! the lease is left. Every way a run ends goes through `Job::end`: a failure of the database,
 //! the store or the host, a lost lease, a panic, or a process that cannot transcode is the
-//! server's side, which refunds the minutes charged and is retried with the kind's backoff; on
+//! server's side, which refunds the charge recorded on the video row and is retried with the
+//! kind's backoff; on
 //! the last attempt it fails the video `video.transcode_failed`, which an author can retry
 //! (B2). A failure the input causes keeps the charge. A job whose lease lapses on its last
 //! attempt never reaches its handler; `videos.cleanup` fails its video
@@ -36,7 +37,7 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use object_store::path::Path;
 use sqlx::PgPool;
@@ -46,7 +47,7 @@ use stepclimb_core::{
     id::Uuid,
     org_plans::{self, Room},
     sniff,
-    transcodes::{self, Ready, Start},
+    transcodes::{self, Fault, Ready, Start},
     videos::{self, Terminating, Upload},
 };
 use stepclimb_jobs::{JobContext, Kind, Lease, Outcome, Registry, RegistryError, Retry};
@@ -139,22 +140,22 @@ async fn handle(
     else {
         return Outcome::fail("the payload names no video_id");
     };
-    let charged = Arc::new(Mutex::new(None));
+    let taken = Arc::new(Mutex::new(None));
     let owned = (
         ctx.clone(),
         storage.clone(),
         transcoder.clone(),
-        Arc::clone(&charged),
+        Arc::clone(&taken),
     );
     let run = async move {
-        let (ctx, storage, transcoder, charged) = owned;
+        let (ctx, storage, transcoder, taken) = owned;
         let job = Job {
             ctx: &ctx,
             storage: storage.as_ref(),
             transcoder: transcoder.as_ref(),
             scope,
             video_id,
-            charged: &charged,
+            taken: &taken,
         };
         job.run().await
     };
@@ -166,9 +167,10 @@ async fn handle(
             transcoder: transcoder.as_ref(),
             scope,
             video_id,
-            charged: &charged,
+            taken: &taken,
         };
-        job.end(None, Stop::Transient(format!("the transcode task {panic}")))
+        let run = *taken.lock().unwrap_or_else(PoisonError::into_inner);
+        job.end(run, Stop::Transient(format!("the transcode task {panic}")))
             .await
     })
     .await
@@ -190,13 +192,6 @@ where
     }
 }
 
-/// Minutes charged to the organization by this run, and when (B13).
-#[derive(Clone, Copy, Debug)]
-struct Charge {
-    minutes: u64,
-    at: SystemTime,
-}
-
 /// One claimed transcode. `storage` and `transcoder` are `None` in a process that cannot
 /// transcode, whose job only settles.
 struct Job<'a> {
@@ -205,8 +200,9 @@ struct Job<'a> {
     transcoder: Option<&'a Transcoder>,
     scope: OrgScope,
     video_id: Uuid,
-    /// Set once the run's minutes are charged; shared with [`handle`], which settles a panic.
-    charged: &'a Mutex<Option<Charge>>,
+    /// The run this job took, once [`transcodes::start`] gave it one; shared with [`handle`],
+    /// which settles a panic at that run.
+    taken: &'a Mutex<Option<i32>>,
 }
 
 impl Job<'_> {
@@ -234,12 +230,17 @@ impl Job<'_> {
             }
             Err(stop) => return self.end(None, stop).await,
         };
+        *self.taken.lock().unwrap_or_else(PoisonError::into_inner) = Some(run);
         let transcoded = tokio::select! {
             transcoded = self.transcode(storage, transcoder, run, &upload) => transcoded,
             stop = self.hold_lease() => Err(stop),
         };
         match transcoded {
-            Ok(()) => Outcome::Done,
+            Ok(()) => {
+                // After the commit, outside the lease's race, so a lost lease cannot cut it off.
+                self.clean_up(storage, run, &upload).await;
+                Outcome::Done
+            }
             Err(stop) => self.end(Some(run), stop).await,
         }
     }
@@ -253,62 +254,65 @@ impl Job<'_> {
     }
 
     /// Settle a run that stopped short. A stop on the server's side (transient, superseded)
-    /// refunds the run's minutes, then is retried or, on the last attempt, fails the video; a
-    /// stop the input caused fails the video and keeps the charge. `run` is `None` when the job
-    /// stopped before it took a run.
+    /// refunds the run's charge recorded on the video row, then is retried or, on the last
+    /// attempt, fails the video as [`Fault::Server`]; a stop the input caused fails the video as
+    /// [`Fault::Input`] and keeps the charge. `run` is `None` when the job stopped before it took
+    /// a run.
     async fn end(&self, run: Option<i32>, stop: Stop) -> Outcome {
-        if matches!(stop, Stop::Transient(_) | Stop::Superseded) {
-            self.refund().await;
-        }
         let job = self.ctx.job();
-        let (code, outcome) = match stop {
-            Stop::Superseded => return Outcome::Done,
-            Stop::Video(code) => (code, Outcome::Done),
+        let (code, fault, outcome) = match stop {
+            Stop::Superseded => {
+                self.refund(run).await;
+                return Outcome::Done;
+            }
+            Stop::Video(code) => (code, Fault::Input, Outcome::Done),
             Stop::Transient(error) if job.attempt < job.max_attempts => {
                 tracing::warn!(video_id = %self.video_id, %error, "a transcode will be retried");
+                self.refund(run).await;
                 return Outcome::Retry(error);
             }
-            Stop::Transient(error) => (transcodes::TRANSCODE_FAILED, Outcome::Fail(error)),
+            Stop::Transient(error) => (
+                transcodes::TRANSCODE_FAILED,
+                Fault::Server,
+                Outcome::Fail(error),
+            ),
         };
-        match self.fail(run, code).await {
+        match self.fail(run, (code, fault)).await {
             Ok(()) => outcome,
             Err(error) => Outcome::retry(format_args!("could not fail the video: {error:?}")),
         }
     }
 
-    /// Take back the minutes this run charged, if any. A failure is logged: the charge stays,
-    /// at most one run's minutes.
-    async fn refund(&self) {
-        let charge = self
-            .charged
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        let Some(charge) = charge else { return };
+    /// Give back the charge recorded for run `run` (any run when `None`), if any. A failure is
+    /// logged: the record stays, and the next run's start or `videos.cleanup` refunds it.
+    async fn refund(&self, run: Option<i32>) {
         let refunded = async {
             let mut tx = self.pool().begin().await?;
-            transcodes::refund(&mut tx, self.scope, charge.minutes, charge.at).await?;
+            transcodes::refund_open(&mut tx, self.scope, self.video_id, run).await?;
             tx.commit().await?;
             Ok::<(), Stop>(())
         };
         if let Err(error) = refunded.await {
-            tracing::error!(video_id = %self.video_id, ?error, minutes = charge.minutes, "could not refund a failed transcode's minutes");
+            tracing::error!(video_id = %self.video_id, ?error, "could not refund a failed transcode's minutes");
         }
     }
 
-    /// Fail the video with `code` at run `run` (at any run when `None`), deleting the run's
-    /// outputs first; a video that is not a video has its upload's parts deleted too (D7).
-    async fn fail(&self, run: Option<i32>, code: &'static str) -> Result<(), Stop> {
-        tracing::info!(video_id = %self.video_id, code, "a transcode failed the video");
-        if let (Some(storage), Some(run)) = (self.storage, run) {
-            video_parts::delete_tree(storage, &self.run_prefix(storage, run)).await?;
-        }
+    /// Fail the video with `code` at run `run` (at any run when `None`), as `fault` caused it.
+    /// Only once the row has changed are the run's outputs deleted, so a video that is no longer
+    /// at this run (a newer run made it ready) keeps them; a video that is not a video has its
+    /// upload's parts deleted too (D7).
+    async fn fail(
+        &self,
+        run: Option<i32>,
+        (code, fault): (&'static str, Fault),
+    ) -> Result<(), Stop> {
+        tracing::info!(video_id = %self.video_id, code, ?fault, "a transcode failed the video");
         let mut tx = self.pool().begin().await?;
         let now = self.now();
         let (scope, video) = (self.scope, self.video_id);
         let failed = match run {
-            Some(run) => transcodes::fail(&mut tx, scope, (video, run), code, now).await?,
-            None => transcodes::fail_any_run(&mut tx, scope, video, code, now).await?,
+            Some(run) => transcodes::fail(&mut tx, scope, (video, run), (code, fault), now).await?,
+            None => transcodes::fail_any_run(&mut tx, scope, video, (code, fault), now).await?,
         };
         let mut discard = None;
         if failed && code == videos::NOT_A_VIDEO {
@@ -320,7 +324,13 @@ impl Job<'_> {
             }
         }
         tx.commit().await?;
-        if let (Some(upload_id), Some(storage)) = (discard, self.storage)
+        let Some(storage) = self.storage else {
+            return Ok(());
+        };
+        if let (true, Some(run)) = (failed, run) {
+            video_parts::delete_tree(storage, &self.run_prefix(storage, run)).await?;
+        }
+        if let Some(upload_id) = discard
             && let Err(error) = video_parts::finish(self.pool(), storage, scope, upload_id).await
         {
             tracing::warn!(%error, %upload_id, "could not delete the parts of a video that is not a video; videos.cleanup will");
@@ -361,7 +371,7 @@ impl Job<'_> {
         let plan = self
             .probe(transcoder, container, &input, work.path())
             .await?;
-        self.charge(&plan).await?;
+        self.charge(run, &plan).await?;
         let out = work.path().join("out");
         std::fs::create_dir(&out)?;
         self.render(transcoder, &plan, &input, &out).await?;
@@ -374,7 +384,6 @@ impl Job<'_> {
             other => other?,
         };
         self.finish(storage, (run, upload), &plan, bytes).await?;
-        self.clean_up(storage, run, upload).await;
         Ok(())
     }
 
@@ -406,19 +415,24 @@ impl Job<'_> {
 
     /// B9, B13, Q4: check the video's minutes against `transcode_minutes` and charge them, in
     /// one transaction under the plan row's lock, so two transcodes of one organization take
-    /// turns and cannot both pass at the limit (owner decision, 2026-11-17).
-    async fn charge(&self, plan: &Plan) -> Result<(), Stop> {
+    /// turns and cannot both pass at the limit (owner decision, 2026-11-17). The charge is
+    /// recorded on the video row in the same transaction, so a run that never ends is refunded
+    /// by the next run's start.
+    async fn charge(&self, run: i32, plan: &Plan) -> Result<(), Stop> {
         let (minutes, now) = (transcodes::minutes(plan.source.duration_s), self.now());
         let mut tx = self.pool().begin().await?;
         if let Room::Full { .. } = self.room(&mut tx, Limit::TranscodeMinutes, minutes).await? {
             tx.rollback().await?;
             return Err(Stop::Video(transcodes::LIMIT_REACHED));
         }
-        transcodes::record_minutes(&mut tx, self.scope, minutes, now).await?;
+        let charged =
+            transcodes::charge(&mut tx, self.scope, (self.video_id, run), minutes, now).await?;
         tx.commit().await?;
-        *self.charged.lock().unwrap_or_else(PoisonError::into_inner) =
-            Some(Charge { minutes, at: now });
-        Ok(())
+        if charged {
+            Ok(())
+        } else {
+            Err(Stop::Superseded)
+        }
     }
 
     async fn room(

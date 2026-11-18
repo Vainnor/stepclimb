@@ -39,8 +39,10 @@ player and watch tracking are spec 09; this spec makes a video ready to play.
   (`video.probe_failed`, `video.not_a_video`, `video.too_long`, `video.transcode_failed`,
   `entitlement.limit_reached`). A failed video can be deleted or uploaded again as a new video;
   `POST /api/v1/videos/{video_id}/retry` re-enqueues a `video.transcode_failed` one when its
-  original is still stored, at most 3 times per video (409 `video.retry_limit_reached` after;
-  owner decision, 2026-11-17).
+  original is still stored. Retries after a failure the input caused count, at most 3 per video
+  (409 `video.retry_limit_reached` after; owner decision, 2026-11-17); a retry after a failure
+  on the server's side (a lost lease, the host, the store, the stranded-video sweep) counts
+  toward none of them (coordinator decision, 2026-11-18, pending owner review).
 - **B3.** `video` items become creatable (`03` B5) for a video attached to the item's course in
   any status; learners see a non-ready video as "processing" with nothing to play.
 
@@ -109,7 +111,12 @@ player and watch tracking are spec 09; this spec makes a video ready to play.
   fails, the job's lease is lost, a bug) refunds them to the month they were charged in; a run the
   input fails (ffmpeg fails or breaks a B10 limit, the outputs do not fit `video_storage`) keeps
   them. Each retry (B2) charges again. Owner decision, 2026-11-17; it replaces charging only on
-  success, which let a failing input be transcoded again and again for free.
+  success, which let a failing input be transcoded again and again for free. The charge is
+  recorded on the video row (`charged_minutes`, `charged_at`) in the same transaction and
+  cleared when the run ends; a run that never ended (a crash, a lost lease) leaves it, and the
+  next run's start refunds it in the transaction that takes the new run, as `videos.cleanup`
+  does for a video it fails (D20), so a restart never charges a video twice (coordinator
+  decision, 2026-11-18, after the security re-check).
 
 ### Captions and chapters
 
@@ -589,12 +596,11 @@ open while building I2.
   refuses to start when ffmpeg or ffprobe does not run (T13), and so does an `all` process whose
   `transcode_dir`, `ffmpeg_path` or `ffprobe_path` is set and fails. An `all` process that relies
   on `PATH` and finds no program there starts without serving the `transcode` queue, with one
-  warning naming the setting; its uploads stay `processing` until a process that can transcode
-  takes them, and `videos.cleanup` fails them `video.transcode_failed` once their job is dead
-  (D20). An `all` process without object storage does not serve the queue either; a
+  warning naming the setting; its uploads stay `processing`, their transcode jobs waiting in the
+  queue without using their attempts, and run once a process that can transcode starts. An `all` process without object storage does not serve the queue either; a
   `transcoder` without it refuses to start naming `STEPCLIMB_STORAGE_URL`. The self-hosting
   reference (`deploy/compose/README.md`, "Video transcoding") says that, until I6 (#240), an
-  image without ffmpeg leaves videos processing. The release notes are built from commit
+  image without ffmpeg leaves videos processing until such a process runs. The release notes are built from commit
   subjects (`cliff.toml`), so the release that ships this needs that sentence added to its
   `CHANGELOG.md` section by hand. Once I6 ships ffmpeg in the image, an issue against
   this spec can make `all` refuse too. Kept by the owner after the security review
@@ -627,9 +633,16 @@ open while building I2.
   run stops. Every such failure on the last attempt fails the video `video.transcode_failed`.
   A job whose lease lapses on its last attempt is made dead by the claim without running its
   handler, so `videos.cleanup` fails every `processing` video whose transcode job is dead, or
-  that has no job and has not changed for 24 hours. ffprobe finding no video stream fails it
-  `video.not_a_video` and deletes its parts, as B7's discard does (D7). Amended after the
-  security review (2026-11-17).
+  that has no job and has not changed for 24 hours, and refunds its open charge (B13). ffprobe
+  finding no video stream fails it `video.not_a_video` and deletes its parts, as B7's discard
+  does (D7). Amended after the security review (2026-11-17). After the re-check (coordinator
+  decision, 2026-11-18): an ffmpeg run killed by `SIGKILL` that the runner did not send (the
+  kernel's out-of-memory killer) is the host's fault, refunded and retried by the queue, not
+  the input's; the deletion of the upload's parts and of older runs' outputs runs after the
+  commit that makes the video ready, outside the race with the lease, so a lost lease cannot cut
+  it off; and a failing run deletes its outputs only once its `UPDATE` has changed the row, so a
+  video a newer run made ready keeps them. These failures mark the video `failed_by_server`,
+  whose retry counts toward none of its 3 (B2).
 - **D21. `renditions`.** The stored object is `{ run, heights, bitrates, master, playlists,
   mp4, mp4_height, sprites }`, each key a store key under `v<n>/`. `Video` shows
   `renditions: { heights }` once the video is `ready`, and omits it before.
@@ -645,8 +658,10 @@ open while building I2.
   needs a video failed as `video.transcode_failed` whose upload is complete and not being deleted
   (409 `video.status_invalid` otherwise), and answers 409 `course.archived` when every course
   through which the caller may edit the video is archived, as D9's rename does. A fourth retry of
-  one video answers 409 `video.retry_limit_reached` (`videos.transcode_retries`, owner decision,
-  2026-11-17), since each retry charges its minutes again.
+  one video after failures its input caused answers 409 `video.retry_limit_reached`
+  (`videos.transcode_retries`, owner decision, 2026-11-17), since each retry charges its minutes
+  again. A video failed on the server's side (`videos.failed_by_server`, D20) is retried without
+  counting (coordinator decision, 2026-11-18, pending owner review).
 - **D24. Setting ranges.** `max_video_seconds` 1 to 86,400; `transcode_threads` 0 to 64;
   `transcode_dir`, `ffmpeg_path` and `ffprobe_path` must be absolute paths. The startup check
   makes and removes a work directory in `transcode_dir`, so a missing or read-only directory stops
