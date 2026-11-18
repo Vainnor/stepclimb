@@ -349,6 +349,7 @@ const components: [string, ReactElement][] = [
         name: "«caller»",
         size: 2_000_000,
         sent: 1_000_000,
+        stored: 1_000_000,
         origin: "resumed",
         problem: { kind: "unreachable" },
       }}
@@ -363,6 +364,7 @@ const components: [string, ReactElement][] = [
         name: "«caller»",
         size: 2_000_000,
         sent: 2_000_000,
+        stored: 2_000_000,
         origin: "new",
         problem: { kind: "video", code: "«caller»" },
       }}

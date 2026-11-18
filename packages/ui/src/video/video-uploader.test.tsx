@@ -7,12 +7,37 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
 import { renderWithStrings, unmarkedText } from "../test/strings";
 import { ENDPOINT, MockTusServer, memoryStorage } from "../test/tus-server";
-import { RESUME_KEY, type ResumeEntry } from "./resume-store";
-import { MIN_CHUNK_BYTES } from "./tus";
+import { clearResumeEntries, type ResumeEntry, resumeKey } from "./resume-store";
+import { createUpload, MIN_CHUNK_BYTES } from "./tus";
 import { type GetVideo, POLL_MS } from "./use-video-upload";
 import { VideoUploader, type VideoUploaderProps } from "./video-uploader";
 
 const MIB = MIN_CHUNK_BYTES;
+const OWNER = "o1.u1";
+
+/** Holds every chunk from the `n`th on (1-based) until the test releases it. */
+function holdFromChunk(server: MockTusServer, n: number) {
+  let patches = 0;
+  server.overrides.push((request) => {
+    if (request.method === "PATCH") patches += 1;
+    server.hold = patches >= n;
+    return undefined;
+  });
+}
+
+/** An unfinished upload of `name` in course `scope`, saved now. */
+function entry(name: string, url: string, offset: number, scope = "c1"): ResumeEntry {
+  return {
+    scope,
+    fingerprint: "[]",
+    url,
+    videoId: `v-${name}`,
+    name,
+    size: 3 * MIN_CHUNK_BYTES,
+    offset,
+    savedAt: Date.now(),
+  };
+}
 
 function video(size = 3 * MIB, name = "Week 1.mp4"): File {
   return new File([new Uint8Array(size)], name, { type: "video/mp4", lastModified: 1_000 });
@@ -36,6 +61,7 @@ function renderUploader(s: Setup, props: Partial<VideoUploaderProps> = {}) {
     <VideoUploader
       endpoint={ENDPOINT}
       storageKey="c1"
+      owner={OWNER}
       send={s.server.send}
       getVideo={s.getVideo}
       onChange={s.onChange}
@@ -62,8 +88,19 @@ const phase = () => card()?.getAttribute("data-phase");
 const status = () => document.querySelector('[data-slot="video-uploader-status"]')?.textContent;
 const alertText = () => within(card() as HTMLElement).getByRole("alert").textContent;
 
+/** Starts an upload of `name` on the server and gives its address. */
+async function createdUpload(s: Setup, name: string): Promise<string> {
+  const created = await createUpload(
+    s.server.send,
+    ENDPOINT,
+    video(3 * MIB, name),
+    new AbortController().signal,
+  );
+  return created.url;
+}
+
 function stored(storage: Storage): ResumeEntry[] {
-  return JSON.parse(storage.getItem(RESUME_KEY) ?? "[]") as ResumeEntry[];
+  return JSON.parse(storage.getItem(resumeKey(OWNER)) ?? "[]") as ResumeEntry[];
 }
 
 afterEach(() => {
@@ -159,7 +196,7 @@ describe("VideoUploader", () => {
     const s = setup();
     const file = video();
     s.storage.setItem(
-      RESUME_KEY,
+      resumeKey(OWNER),
       JSON.stringify([
         {
           scope: "c1",
@@ -191,7 +228,7 @@ describe("VideoUploader", () => {
   it("forgets stored uploads older than a day", () => {
     const s = setup();
     s.storage.setItem(
-      RESUME_KEY,
+      resumeKey(OWNER),
       JSON.stringify([
         {
           scope: "c1",
@@ -244,58 +281,90 @@ describe("VideoUploader", () => {
     expect(s.server.uploads.get("u1")?.offset).toBe(3 * MIB);
   });
 
-  it("cancels: the server ends the upload and nothing is kept", async () => {
+  it("cancels after asking once the server holds bytes; focus goes to the upload's name", async () => {
     const s = setup();
     renderUploader(s);
-    s.server.hold = true;
+    holdFromChunk(s.server, 2);
     await choose(video());
     await waitFor(() => expect(s.server.held).toBe(1));
     await userEvent.click(screen.getByRole("button", { name: "Cancel upload" }));
-    // Half of the first 1 MiB chunk is out: Cancel asks first, saying what would be deleted.
+    // The server holds the first 1 MiB chunk: Cancel asks first, saying what would be deleted.
     const dialog = screen.getByRole("alertdialog", { name: "Cancel this upload?" });
-    expect(dialog).toHaveAccessibleDescription("The 524.3 kB sent so far will be deleted.");
+    expect(dialog).toHaveAccessibleDescription("The 1 MB sent so far will be deleted.");
     expect(s.server.received.some((r) => r.method === "DELETE")).toBe(false);
     await userEvent.click(within(dialog).getByRole("button", { name: "Delete upload" }));
     await waitFor(() => expect(phase()).toBe("cancelled"));
     expect(s.server.received.at(-1)?.method).toBe("DELETE");
     expect(s.server.uploads.size).toBe(0);
     expect(stored(s.storage)).toEqual([]);
-    expect(inCard().getByText("Upload of Week 1.mp4 canceled")).toBeInTheDocument();
+    expect(inCard().getByText("Upload of Week 1.mp4 canceled")).toHaveFocus();
     expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
   });
 
-  it("keeps uploading when the confirmation is dismissed", async () => {
+  it("keeps uploading when the confirmation is dismissed; focus returns to Cancel", async () => {
     const s = setup();
     renderUploader(s);
-    s.server.hold = true;
+    holdFromChunk(s.server, 2);
     await choose(video());
     await waitFor(() => expect(s.server.held).toBe(1));
-    await userEvent.click(screen.getByRole("button", { name: "Cancel upload" }));
+    const cancel = screen.getByRole("button", { name: "Cancel upload" });
+    await userEvent.click(cancel);
     await userEvent.click(screen.getByRole("button", { name: "Keep uploading" }));
     expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() => expect(cancel).toHaveFocus());
+    s.server.overrides = [];
     s.server.hold = false;
     s.server.release();
     await waitFor(() => expect(phase()).toBe("processing"));
     expect(s.server.received.some((r) => r.method === "DELETE")).toBe(false);
   });
 
-  it("cancels at once, without asking, when no byte has been sent", async () => {
+  it("cancels at once, without asking, while the server holds no byte", async () => {
     const s = setup();
     renderUploader(s);
-    // The first chunk's connection drops before any of it is reported sent.
-    s.server.overrides.push((request) => (request.method === "PATCH" ? "drop" : undefined));
+    // Half of the first chunk is reported sent, but none of it is stored yet.
+    s.server.hold = true;
     await choose(video());
-    await waitFor(() => expect(phase()).toBe("interrupted"));
+    await waitFor(() => expect(s.server.held).toBe(1));
     await userEvent.click(screen.getByRole("button", { name: "Cancel upload" }));
     expect(screen.queryByRole("alertdialog")).toBeNull();
     await waitFor(() => expect(phase()).toBe("cancelled"));
     expect(s.server.received.at(-1)?.method).toBe("DELETE");
   });
 
+  it("closes the confirmation when the upload completes first; focus goes to the name", async () => {
+    const s = setup();
+    renderUploader(s);
+    holdFromChunk(s.server, 3);
+    await choose(video());
+    await waitFor(() => expect(s.server.held).toBe(1));
+    await userEvent.click(screen.getByRole("button", { name: "Cancel upload" }));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    s.server.overrides = [];
+    s.server.hold = false;
+    s.server.release();
+    await waitFor(() => expect(phase()).toBe("processing"));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() => expect(inCard().getByText("Week 1.mp4: processing")).toHaveFocus());
+    expect(s.server.received.some((r) => r.method === "DELETE")).toBe(false);
+  });
+
+  it("shows what the server holds once paused, not the chunk that was in flight", async () => {
+    const s = setup();
+    renderUploader(s);
+    holdFromChunk(s.server, 2);
+    await choose(video());
+    await waitFor(() => expect(s.server.held).toBe(1));
+    // 1 MiB stored plus half of the second chunk in flight.
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "50");
+    await userEvent.click(screen.getByRole("button", { name: "Pause" }));
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", String((1 / 3) * 100));
+  });
+
   it("says when the upload finished before the cancel reached the server", async () => {
     const s = setup();
     renderUploader(s);
-    s.server.hold = true;
+    holdFromChunk(s.server, 2);
     s.server.overrides.push((request) =>
       request.method === "DELETE"
         ? new Response(JSON.stringify({ code: "video.status_invalid", title: "x" }), {
@@ -452,29 +521,88 @@ describe("VideoUploader", () => {
     expect(status()).toBe("Week 1.mp4: 10% uploaded");
   });
 
-  it("discards an unfinished upload from before a reload", async () => {
+  it("discards an unfinished upload after asking; the other stays and takes focus", async () => {
     const s = setup();
-    const file = video();
-    const first = renderUploader(s);
-    s.server.hold = true;
-    let patches = 0;
-    s.server.overrides.push((request) => {
-      if (request.method === "PATCH") patches += 1;
-      s.server.hold = patches >= 2;
-      return undefined;
-    });
-    await choose(file);
-    await waitFor(() => expect(s.server.held).toBe(1));
-    first.unmount();
-    cleanup();
+    const first = await createdUpload(s, "Week 1.mp4");
+    const second = await createdUpload(s, "Week 2.mp4");
+    s.storage.setItem(
+      resumeKey(OWNER),
+      JSON.stringify([entry("Week 1.mp4", first, MIB), entry("Week 2.mp4", second, 2 * MIB)]),
+    );
     renderUploader(s);
     await userEvent.click(screen.getByRole("button", { name: "Discard the upload of Week 1.mp4" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Discard the upload of Week 1.mp4?" });
+    expect(dialog).toHaveAccessibleDescription("The 1 MB sent so far will be deleted.");
+    expect(s.server.received.some((r) => r.method === "DELETE")).toBe(false);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete upload" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Discard the upload of Week 1.mp4" })).toBeNull(),
+    );
+    const deletes = s.server.received.filter((r) => r.method === "DELETE");
+    expect(deletes.map((r) => r.path)).toEqual([new URL(first).pathname]);
+    expect(s.server.uploads.has(new URL(second).pathname.split("/").at(-1) ?? "")).toBe(true);
+    expect(stored(s.storage).map((e) => e.name)).toEqual(["Week 2.mp4"]);
+    expect(screen.getByRole("button", { name: "Discard the upload of Week 2.mp4" })).toHaveFocus();
+
+    // The last one: nothing was stored, so no question; focus goes to "Choose file".
+    s.storage.setItem(resumeKey(OWNER), JSON.stringify([entry("Week 2.mp4", second, 0)]));
+    cleanup();
+    renderUploader(s);
+    await userEvent.click(screen.getByRole("button", { name: "Discard the upload of Week 2.mp4" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Unfinished uploads" })).toBeNull(),
+    );
+    expect(screen.getByRole("button", { name: "Choose file" })).toHaveFocus();
+    expect(stored(s.storage)).toEqual([]);
+  });
+
+  it("drops an unfinished upload another tab completed when it is discarded", async () => {
+    const s = setup();
+    const url = await createdUpload(s, "Week 1.mp4");
+    const id = new URL(url).pathname.split("/").at(-1) ?? "";
+    const upload = s.server.uploads.get(id);
+    if (upload) upload.offset = upload.length;
+    s.storage.setItem(resumeKey(OWNER), JSON.stringify([entry("Week 1.mp4", url, MIB)]));
+    renderUploader(s);
+    await userEvent.click(screen.getByRole("button", { name: "Discard the upload of Week 1.mp4" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete upload" }));
     await waitFor(() =>
       expect(screen.queryByRole("heading", { name: "Unfinished uploads" })).toBeNull(),
     );
     expect(s.server.received.at(-1)?.method).toBe("DELETE");
-    expect(s.server.uploads.size).toBe(0);
     expect(stored(s.storage)).toEqual([]);
+  });
+
+  it("lists only its owner's entries, on its own server's upload addresses", () => {
+    const s = setup();
+    const own = "http://localhost/api/v1/video-uploads/mine";
+    s.storage.setItem(
+      resumeKey(OWNER),
+      JSON.stringify([
+        entry("Mine.mp4", own, MIB),
+        entry("Elsewhere.mp4", "https://attacker.example/api/v1/video-uploads/x", MIB),
+        entry("Other route.mp4", "http://localhost/api/v1/me", MIB),
+        entry("Climbs out.mp4", "http://localhost/api/v1/video-uploads/../me", MIB),
+        entry("Other course.mp4", "http://localhost/api/v1/video-uploads/c2", MIB, "c2"),
+      ]),
+    );
+    s.storage.setItem(
+      resumeKey("o1.u2"),
+      JSON.stringify([entry("Theirs.mp4", "http://localhost/api/v1/video-uploads/theirs", MIB)]),
+    );
+    renderUploader(s);
+    const items = document.querySelectorAll('[data-slot="video-upload-pending-item"]');
+    expect([...items].map((item) => item.textContent)).toEqual(["Mine.mp4: 33% uploadedDiscard"]);
+  });
+
+  it("clears an owner's entries and no one else's", () => {
+    const storage = memoryStorage();
+    storage.setItem(resumeKey(OWNER), "[]");
+    storage.setItem(resumeKey("o1.u2"), "[]");
+    clearResumeEntries(storage, OWNER);
+    expect(storage.getItem(resumeKey(OWNER))).toBeNull();
+    expect(storage.getItem(resumeKey("o1.u2"))).toBe("[]");
   });
 
   it("renders only catalog text", async () => {
@@ -484,6 +612,7 @@ describe("VideoUploader", () => {
       <VideoUploader
         endpoint={ENDPOINT}
         storageKey="c1"
+        owner={OWNER}
         send={s.server.send}
         getVideo={s.getVideo}
         storage={s.storage}

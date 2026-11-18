@@ -127,6 +127,8 @@ export const uiMessages: Catalog = {
     "videoUploader.cancelConfirm.confirm": "Delete upload",
     "videoUploader.cancelConfirm.keep": "Keep uploading",
     "videoUploader.cancelConfirm.title": "Cancel this upload?",
+    "videoUploader.discardConfirm.keep": "Keep it",
+    "videoUploader.discardConfirm.title": "Discard the upload of {name}?",
     "videoUploader.dropTarget": "Drop a video here",
     "videoUploader.pause": "Pause",
     "videoUploader.pending.description":

@@ -302,6 +302,7 @@ export {
   themes,
   useAppearance,
 } from "./theme/theme-provider";
+export { clearResumeEntries, RESUME_KEY_PREFIX, resumeKey } from "./video/resume-store";
 export {
   CHUNK_BYTES,
   MIN_CHUNK_BYTES,

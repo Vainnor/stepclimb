@@ -105,12 +105,20 @@ function StateIcon({ phase }: { phase: UploadPhase }) {
   return null;
 }
 
-function Alert({ problem, name }: { problem: UploadProblem | undefined; name: string }) {
+function Alert({
+  problem,
+  name,
+  className,
+}: {
+  problem: UploadProblem | undefined;
+  name: string;
+  className?: string;
+}) {
   const { t } = useStepclimbStrings();
   const text = problem === undefined ? undefined : problemText(problem, name, t);
   return (
     // In the page from the first render, so a refusal is announced when it appears.
-    <div data-slot="video-upload-alert" role="alert" className={styles.alert()}>
+    <div data-slot="video-upload-alert" role="alert" className={styles.alert({ className })}>
       {text === undefined ? null : (
         <p className={styles.alertLine()}>
           <Icon icon={WarningCircleIcon} className={styles.alertIcon()} />
@@ -129,22 +137,69 @@ function Alert({ problem, name }: { problem: UploadProblem | undefined; name: st
   );
 }
 
+/** Phases with Pause or Resume and Cancel. */
+const CANCELABLE: ReadonlySet<UploadPhase> = new Set([
+  "uploading",
+  "cancelling",
+  "paused",
+  "interrupted",
+]);
+
+/** Asks before deleting an upload's `stored` bytes (D34). */
+function DeleteConfirm({
+  isOpen,
+  onOpenChange,
+  title,
+  keepLabel,
+  stored,
+  onConfirm,
+}: {
+  isOpen: boolean;
+  onOpenChange: (open: boolean) => void;
+  title: string;
+  keepLabel: string;
+  stored: number;
+  onConfirm: () => void;
+}) {
+  const { t } = useStepclimbStrings();
+  return (
+    <AlertDialog
+      isOpen={isOpen}
+      onOpenChange={onOpenChange}
+      title={title}
+      confirmLabel={t("videoUploader.cancelConfirm.confirm")}
+      cancelLabel={keepLabel}
+      intent="danger"
+      onConfirm={onConfirm}
+    >
+      {t("videoUploader.cancelConfirm.body", { size: bytes(t, stored) })}
+    </AlertDialog>
+  );
+}
+
 /**
  * One upload: its name and phase, its progress while bytes are going, and Pause or Resume (one
- * button, so focus stays on it) and Cancel while it can be stopped. When those buttons go, focus
- * that was on them moves to the upload's name.
+ * button, so focus stays on it) and Cancel while it can be stopped. Cancel deletes the upload and
+ * its video, so once the server holds any of its bytes it asks first, saying how much (D34). When
+ * the buttons go, focus that was on them, or in the open confirmation, moves to the upload's name;
+ * a confirmation still open when the upload can no longer be canceled closes.
  */
 export function VideoUploadCard({ state, onPause, onResume, onCancel }: VideoUploadCardProps) {
   const { t } = useStepclimbStrings();
   const titleRef = useRef<HTMLSpanElement>(null);
   const { phase, name, size, sent, problem } = state;
-  const stopped = STOPPED.has(phase);
-  const controls = phase === "uploading" || phase === "cancelling" || stopped;
+  const controls = CANCELABLE.has(phase);
+  const [confirming, setConfirming] = useState(false);
   const hadFocus = useRef(false);
   useEffect(() => {
-    if (!controls && hadFocus.current) titleRef.current?.focus();
+    if (controls) return;
+    if (confirming) {
+      setConfirming(false);
+      hadFocus.current = true;
+    }
+    if (hadFocus.current) titleRef.current?.focus();
     hadFocus.current = false;
-  }, [controls]);
+  }, [controls, confirming]);
   return (
     <section data-slot="video-upload" data-phase={phase} className={styles.card()}>
       <Heading level={3} size="base" className={styles.title()}>
@@ -186,42 +241,39 @@ export function VideoUploadCard({ state, onPause, onResume, onCancel }: VideoUpl
       {controls ? (
         <CardActions
           phase={phase}
-          sent={sent}
           onPause={onPause}
           onResume={onResume}
-          onCancel={onCancel}
+          onCancel={() => (state.stored > 0 ? setConfirming(true) : onCancel?.())}
           onUnmountWithFocus={() => {
             hadFocus.current = true;
           }}
         />
       ) : null}
+      <DeleteConfirm
+        isOpen={confirming && controls}
+        onOpenChange={setConfirming}
+        title={t("videoUploader.cancelConfirm.title")}
+        keepLabel={t("videoUploader.cancelConfirm.keep")}
+        stored={state.stored}
+        onConfirm={() => {
+          // The buttons go once the upload is canceled; focus then goes to its name.
+          hadFocus.current = true;
+          onCancel?.();
+        }}
+      />
     </section>
   );
 }
 
 interface CardActionsProps extends Omit<VideoUploadCardProps, "state"> {
   phase: UploadPhase;
-  /** Bytes sent so far; with any, Cancel asks first. */
-  sent: number;
   /** Called as the buttons leave the page while one of them has focus. */
   onUnmountWithFocus: () => void;
 }
 
-/**
- * Pause or Resume, and Cancel. Cancel deletes the upload and its video on the server, so once any
- * bytes are sent it asks first, saying how much would be deleted; with none sent it cancels at
- * once.
- */
-function CardActions({
-  phase,
-  sent,
-  onPause,
-  onResume,
-  onCancel,
-  onUnmountWithFocus,
-}: CardActionsProps) {
+/** Pause or Resume, and Cancel. */
+function CardActions({ phase, onPause, onResume, onCancel, onUnmountWithFocus }: CardActionsProps) {
   const { t } = useStepclimbStrings();
-  const [confirming, setConfirming] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const stopped = STOPPED.has(phase);
   const lostFocus = useRef(onUnmountWithFocus);
@@ -247,58 +299,56 @@ function CardActions({
         data-slot="video-upload-cancel"
         intent="danger"
         isPending={phase === "cancelling"}
-        onPress={() => (sent > 0 ? setConfirming(true) : onCancel?.())}
+        onPress={onCancel}
       >
         <Icon icon={XIcon} />
         {t("videoUploader.cancel")}
       </Button>
-      <AlertDialog
-        isOpen={confirming}
-        onOpenChange={setConfirming}
-        title={t("videoUploader.cancelConfirm.title")}
-        confirmLabel={t("videoUploader.cancelConfirm.confirm")}
-        cancelLabel={t("videoUploader.cancelConfirm.keep")}
-        intent="danger"
-        onConfirm={() => onCancel?.()}
-      >
-        {t("videoUploader.cancelConfirm.body", { size: bytes(t, sent) })}
-      </AlertDialog>
     </div>
   );
 }
 
-function PendingItem({
-  entry,
-  onDiscard,
-}: {
-  entry: ResumeEntry;
-  onDiscard: (entry: ResumeEntry) => Promise<UploadProblem | undefined>;
-}) {
+type Discard = (entry: ResumeEntry) => Promise<UploadProblem | undefined>;
+
+/**
+ * An unfinished upload from before a reload, with Discard. Discard deletes the upload and its
+ * video, so when the server held any of its bytes it asks first, saying how much (D34).
+ */
+function PendingItem({ entry, onDiscard }: { entry: ResumeEntry; onDiscard: Discard }) {
   const { t } = useStepclimbStrings();
   const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [problem, setProblem] = useState<UploadProblem>();
   const share = entry.size === 0 ? 0 : entry.offset / entry.size;
+  const discard = async () => {
+    setBusy(true);
+    const refused = await onDiscard(entry);
+    setBusy(false);
+    setProblem(refused);
+  };
   return (
     <li data-slot="video-upload-pending-item" className={styles.pendingItem()}>
       <Text size="sm" className="min-w-0 wrap-anywhere">
         {t("videoUploader.pending.item", { name: entry.name, share })}
       </Text>
       <Button
+        data-slot="video-upload-discard"
         size="sm"
         aria-label={t("videoUploader.pending.discardLabel", { name: entry.name })}
         isPending={busy}
-        onPress={async () => {
-          setBusy(true);
-          const refused = await onDiscard(entry);
-          setBusy(false);
-          setProblem(refused);
-        }}
+        onPress={() => (entry.offset > 0 ? setConfirming(true) : void discard())}
       >
         {t("videoUploader.pending.discard")}
       </Button>
-      <div className="basis-full empty:hidden">
-        <Alert problem={problem} name={entry.name} />
-      </div>
+      <Alert problem={problem} name={entry.name} className="basis-full" />
+      <DeleteConfirm
+        isOpen={confirming}
+        onOpenChange={setConfirming}
+        title={t("videoUploader.discardConfirm.title", { name: entry.name })}
+        keepLabel={t("videoUploader.discardConfirm.keep")}
+        stored={entry.offset}
+        onConfirm={() => void discard()}
+      />
     </li>
   );
 }
@@ -306,8 +356,13 @@ function PendingItem({
 export interface VideoUploaderProps {
   /** The creation address, such as `/api/v1/courses/<id>/video-uploads`. */
   endpoint: string;
-  /** Whose unfinished uploads local storage keeps together: the course's id. */
+  /** The course the uploads go to; local storage keeps each course's entries apart. */
   storageKey: string;
+  /**
+   * Whose unfinished uploads these are: the signed-in organization and user, such as
+   * `<org>.<user>`. Another owner's are never listed; give the uploader a `key` of it too.
+   */
+  owner: string;
   /** Sends one request; the web app sends through `XMLHttpRequest` for progress. */
   send: Send;
   /** Reads a video's status; `null` when it no longer exists. */
@@ -323,18 +378,51 @@ export interface VideoUploaderProps {
   className?: string;
 }
 
+/**
+ * After a discard, focus goes to the Discard button now where the discarded one was, or the one
+ * before it, or with none left to "Choose file".
+ */
+function useFocusAfterDiscard(
+  root: { current: HTMLDivElement | null },
+  pending: readonly ResumeEntry[],
+) {
+  const discardedAt = useRef<number>(undefined);
+  useEffect(() => {
+    const at = discardedAt.current;
+    if (at === undefined) return;
+    discardedAt.current = undefined;
+    const buttons = root.current?.querySelectorAll<HTMLElement>(
+      '[data-slot="video-upload-discard"]',
+    );
+    const next = buttons?.[Math.min(at, pending.length - 1)];
+    const choose = root.current?.querySelector<HTMLElement>('[data-slot="file-drop-choose"]');
+    (next ?? choose)?.focus();
+  }, [pending, root]);
+  return (index: number) => {
+    discardedAt.current = index;
+  };
+}
+
 /** Chooses a video and uploads it; see the file's header. */
 export function VideoUploader({ isDisabled, className, ...options }: VideoUploaderProps) {
   const { t } = useStepclimbStrings();
   const upload = useVideoUpload(options);
+  const root = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState<string>();
   const { state, pending } = upload;
+  const discarded = useFocusAfterDiscard(root, pending);
+  const discard: Discard = async (entry) => {
+    const index = pending.findIndex((e) => e.url === entry.url);
+    const refused = await upload.discard(entry);
+    if (refused === undefined) discarded(index);
+    return refused;
+  };
   const choose = ([file]: File[]) => {
     if (file === undefined) return;
     setBusy(upload.start(file) ? undefined : t("videoUploader.busy", { name: state?.name ?? "" }));
   };
   return (
-    <div data-slot="video-uploader" className={styles.root({ className })}>
+    <div ref={root} data-slot="video-uploader" className={styles.root({ className })}>
       <FileDrop
         aria-label={t("videoUploader.dropTarget")}
         acceptedFileTypes={VIDEO_FILE_TYPES}
@@ -343,7 +431,7 @@ export function VideoUploader({ isDisabled, className, ...options }: VideoUpload
         isDisabled={isDisabled}
         errorMessage={busy}
       />
-      {pending.length === 0 ? null : <PendingList entries={pending} onDiscard={upload.discard} />}
+      {pending.length === 0 ? null : <PendingList entries={pending} onDiscard={discard} />}
       {state === undefined ? null : (
         <VideoUploadCard
           state={state}
@@ -364,7 +452,7 @@ function PendingList({
   onDiscard,
 }: {
   entries: ResumeEntry[];
-  onDiscard: (entry: ResumeEntry) => Promise<UploadProblem | undefined>;
+  onDiscard: Discard;
 }): ReactNode {
   const { t } = useStepclimbStrings();
   return (

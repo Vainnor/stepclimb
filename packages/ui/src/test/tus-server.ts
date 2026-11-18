@@ -4,7 +4,8 @@
 // `Tus-Resumable`, answers creation with `Location` and the video, `HEAD` with the offset, takes a
 // `PATCH` only at the stored offset (409 `video.upload_offset_mismatch` otherwise), refuses a chunk
 // under 1 MiB that does not complete the upload (400 `video.chunk_too_small`) and one past the
-// length (413), and ends an upload with `DELETE`. A test can hold chunks, drop the connection
+// length (413), and ends an upload with `DELETE` unless it is complete (409
+// `video.status_invalid`, D8). A test can hold chunks, drop the connection
 // before or after a chunk is stored, or answer a request itself.
 import { MIN_CHUNK_BYTES, type Send, TUS_VERSION } from "../video/tus";
 import type { VideoStatus } from "../video/use-video-upload";
@@ -106,6 +107,8 @@ export class MockTusServer {
       });
     }
     if (request.method === "DELETE") {
+      // A complete upload's video is processing: the server refuses to end it (D8).
+      if (upload.offset === upload.length) return problem(409, "video.status_invalid");
       this.uploads.delete(path.slice(UPLOADS.length));
       this.videos.delete(upload.videoId);
       return tus(204);

@@ -12,3 +12,8 @@ message. Requests go through the caller's `send`, so the package needs no API cl
 `AlertDialog` takes an optional `cancelLabel` for its dismiss button, for a dialog where "Cancel"
 would be ambiguous. VideoUploader uses it: once any bytes are sent, Cancel asks "Cancel this
 upload?" with "Delete upload" and "Keep uploading".
+
+Unfinished uploads are kept per owner (the caller's organization and user) and course, and only
+addresses on the creation endpoint's origin under `/api/v1/video-uploads/` are listed; an explicit
+sign-out clears an owner's with `clearResumeEntries`. Discard asks the same question as Cancel
+when the server held any of the upload's bytes.

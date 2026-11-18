@@ -4,16 +4,9 @@
 // sent in chunks, paused, resumed and canceled; once complete, the video is read every 10 s until
 // it is ready or failed. An upload stopped by a lost connection resumes by itself when the browser
 // is back online. Unmounting aborts the chunk in flight and stops the reads; the upload stays in
-// local storage, to resume after a reload.
-import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  entryFor,
-  fingerprint,
-  type ResumeEntry,
-  removeEntry,
-  resumeEntries,
-  saveEntry,
-} from "./resume-store";
+// local storage, to resume after a reload; the entries are the owner's (D30).
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { fingerprint, isUploadAddress, type ResumeEntry, resumeStore } from "./resume-store";
 import {
   type CreatedUpload,
   checkedLength,
@@ -60,6 +53,8 @@ export interface UploadState {
   size: number;
   /** Bytes the server holds, plus those of the chunk in flight. */
   sent: number;
+  /** Bytes the server answered it holds: the last stored chunk's offset, or `HEAD`'s. */
+  stored: number;
   /** Why the upload stopped or the video failed; also a refused cancel, beside `paused`. */
   problem?: UploadProblem;
   /** True when the reads of a processing video are failing; they go on. */
@@ -71,8 +66,10 @@ export interface UploadState {
 export interface UseVideoUploadOptions {
   /** The creation address: `POST` starts an upload there. */
   endpoint: string;
-  /** Whose uploads local storage keeps together, such as the course's id. */
+  /** The course the uploads go to; local storage keeps each course's entries apart. */
   storageKey: string;
+  /** Whose entries these are: the signed-in organization and user, such as `<org>.<user>` (D30). */
+  owner: string;
   send: Send;
   getVideo: GetVideo;
   /** Called when a video is created, completes, settles or is deleted. */
@@ -100,6 +97,11 @@ function isGone(error: unknown): boolean {
   return error instanceof TusProblem && error.status === 404;
 }
 
+/** The upload is complete and its video is processing, so it can no longer be ended (D8). */
+function isStatusInvalid(error: unknown): boolean {
+  return error instanceof TusProblem && error.code === "video.status_invalid";
+}
+
 /** The address and video of the upload on screen, and its file while this page holds it. */
 interface Current {
   file: File;
@@ -108,8 +110,12 @@ interface Current {
 }
 
 export function useVideoUpload(options: UseVideoUploadOptions) {
-  const { endpoint, storageKey, send, getVideo, chunkBytes } = options;
+  const { endpoint, storageKey, owner, send, getVideo, chunkBytes } = options;
   const storage = options.storage ?? globalThis.localStorage;
+  const store = useMemo(
+    () => resumeStore(storage, owner, (url) => isUploadAddress(url, endpoint)),
+    [storage, owner, endpoint],
+  );
   const onChange = useRef(options.onChange);
   onChange.current = options.onChange;
   // The latest callbacks, so a caller's inline function does not restart the 10 s reads.
@@ -117,7 +123,7 @@ export function useVideoUpload(options: UseVideoUploadOptions) {
   getVideoRef.current = getVideo;
   const [state, setState] = useState<UploadState>();
   const [pending, setPending] = useState<ResumeEntry[]>(() =>
-    resumeEntries(storage, storageKey, Date.now()),
+    store.entries(storageKey, Date.now()),
   );
   const current = useRef<Current>(undefined);
   const controller = useRef<AbortController>(undefined);
@@ -125,8 +131,8 @@ export function useVideoUpload(options: UseVideoUploadOptions) {
 
   const refreshPending = useCallback(() => {
     const url = current.current?.url;
-    setPending(resumeEntries(storage, storageKey, Date.now()).filter((e) => e.url !== url));
-  }, [storage, storageKey]);
+    setPending(store.entries(storageKey, Date.now()).filter((e) => e.url !== url));
+  }, [store, storageKey]);
 
   /** A fresh controller for the next requests; aborting it stops them. */
   const nextSignal = () => {
@@ -139,30 +145,36 @@ export function useVideoUpload(options: UseVideoUploadOptions) {
   const update = (change: Partial<UploadState>) =>
     setState((previous) => (previous === undefined ? previous : { ...previous, ...change }));
 
+  /** Records that the server holds `offset` bytes, on screen and in local storage. */
   const save = (offset: number) => {
     const upload = current.current;
     if (upload === undefined) return;
+    update({ stored: offset });
     const { file, url, videoId } = upload;
     const entry = { scope: storageKey, fingerprint: fingerprint(file), url, videoId };
-    saveEntry(storage, { ...entry, name: file.name, size: file.size, offset, savedAt: Date.now() });
+    store.save({ ...entry, name: file.name, size: file.size, offset, savedAt: Date.now() });
   };
+
+  /** Stops showing the chunk in flight: what is on screen is what the server holds. */
+  const settleSent = (change: Partial<UploadState>) =>
+    setState((p) => (p === undefined ? p : { ...p, ...change, sent: p.stored }));
 
   /** Stops where a failure left it: resumable ones wait for Resume or the network. */
   const stop = (error: unknown) => {
     const problem = asProblem(error);
     const upload = current.current;
     if (isGone(error) && upload !== undefined) {
-      removeEntry(storage, upload.url, Date.now());
+      store.remove(upload.url, Date.now());
       onChange.current?.();
     }
-    update({ phase: isResumable(problem) ? "interrupted" : "failed", problem });
+    settleSent({ phase: isResumable(problem) ? "interrupted" : "failed", problem });
   };
 
   /** Sends the file from `offset`, then reads the video until it settles. */
   const run = async (offset: number, signal: AbortSignal) => {
     const upload = current.current;
     if (upload === undefined) return;
-    update({ phase: "uploading", sent: offset, problem: undefined });
+    update({ phase: "uploading", sent: offset, stored: offset, problem: undefined });
     try {
       await sendFile(send, upload.url, upload.file, {
         offset,
@@ -175,8 +187,8 @@ export function useVideoUpload(options: UseVideoUploadOptions) {
       if (!isAbort(error)) stop(error);
       return;
     }
-    removeEntry(storage, upload.url, Date.now());
-    update({ phase: "processing", sent: upload.file.size });
+    store.remove(upload.url, Date.now());
+    update({ phase: "processing", sent: upload.file.size, stored: upload.file.size });
     onChange.current?.();
   };
 
@@ -185,7 +197,7 @@ export function useVideoUpload(options: UseVideoUploadOptions) {
     try {
       const stored = checkedLength(await readOffset(send, entry.url, signal), file.size);
       current.current = { file, url: entry.url, videoId: entry.videoId };
-      update({ origin: "resumed", sent: stored.offset });
+      update({ origin: "resumed", sent: stored.offset, stored: stored.offset });
       refreshPending();
       await run(stored.offset, signal);
       return;
@@ -197,7 +209,7 @@ export function useVideoUpload(options: UseVideoUploadOptions) {
         return;
       }
     }
-    removeEntry(storage, entry.url, Date.now());
+    store.remove(entry.url, Date.now());
     update({ origin: "restarted" });
     await create(file, signal);
   };
@@ -222,8 +234,15 @@ export function useVideoUpload(options: UseVideoUploadOptions) {
     if (phase !== undefined && (ACTIVE.has(phase) || STOPPED.has(phase))) return false;
     current.current = undefined;
     const signal = nextSignal();
-    setState({ phase: "starting", name: file.name, size: file.size, sent: 0, origin: "new" });
-    const entry = entryFor(storage, storageKey, file, Date.now());
+    setState({
+      phase: "starting",
+      name: file.name,
+      size: file.size,
+      sent: 0,
+      stored: 0,
+      origin: "new",
+    });
+    const entry = store.entryFor(storageKey, file, Date.now());
     void (entry === undefined ? create(file, signal) : resumeStored(file, entry, signal));
     return true;
   };
@@ -231,7 +250,7 @@ export function useVideoUpload(options: UseVideoUploadOptions) {
   const pause = () => {
     if (phase !== "uploading") return;
     controller.current?.abort();
-    update({ phase: "paused" });
+    settleSent({ phase: "paused" });
   };
 
   const resume = () => {
@@ -261,26 +280,30 @@ export function useVideoUpload(options: UseVideoUploadOptions) {
       } catch (error) {
         if (isAbort(error)) return;
         if (!isGone(error)) {
-          const completed = error instanceof TusProblem && error.code === "video.status_invalid";
-          update({ phase: completed ? "processing" : "paused", problem: asProblem(error) });
-          if (completed) removeEntry(storage, upload.url, Date.now());
+          const completed = isStatusInvalid(error);
+          settleSent({ phase: completed ? "processing" : "paused", problem: asProblem(error) });
+          if (completed) store.remove(upload.url, Date.now());
           return;
         }
       }
-      removeEntry(storage, upload.url, Date.now());
+      store.remove(upload.url, Date.now());
       update({ phase: "cancelled" });
       onChange.current?.();
     })();
   };
 
-  /** Ends an unfinished upload this browser started before a reload. */
+  /**
+   * Ends an unfinished upload this browser started before a reload. One the server no longer has,
+   * or one already complete (409 `video.status_invalid`: another tab finished it), leaves the
+   * list as well.
+   */
   const discard = async (entry: ResumeEntry): Promise<UploadProblem | undefined> => {
     try {
       await endUpload(send, entry.url, new AbortController().signal);
     } catch (error) {
-      if (!isGone(error)) return asProblem(error);
+      if (!isGone(error) && !isStatusInvalid(error)) return asProblem(error);
     }
-    removeEntry(storage, entry.url, Date.now());
+    store.remove(entry.url, Date.now());
     refreshPending();
     onChange.current?.();
     return undefined;
