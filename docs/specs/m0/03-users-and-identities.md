@@ -431,7 +431,7 @@ Repository modules (every function takes `OrgScope`): `stepclimb_core::users` (`
 
 | Permission | Key | Grantable at | Built-in roles in M0 |
 | --- | --- | --- | --- |
-| `perm::UserView` | `user.view` | organization, account (`09` Q2) | Organization admin, Account admin |
+| `perm::UserView` | `user.view` | organization, account (`09` Q2) | Organization admin, Account admin; Instructor from M1 (`../m1/02-courses-and-enrollments.md` -> Permissions) |
 | `perm::UserManage` | `user.manage` | organization (`09` Q2) | Organization admin |
 
 `/me` and `/me/identities` need authentication only. Entitlements: user creation checks the

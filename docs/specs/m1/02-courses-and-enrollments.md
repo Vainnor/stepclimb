@@ -332,7 +332,7 @@ an Organization admin holds the key but, assigned at the organization, does not 
 | Organization admin | every entry (`perm::ALL`) |
 | Account admin | M0 list plus `course.view`, `course.view_all`, `course.create`, `course.manage`, `course.content_edit`, `enrollment.view`, `enrollment.manage` |
 | Course designer | `course.view`, `course.view_all`, `course.content_edit` |
-| Instructor | Course designer's, plus `enrollment.view`, `enrollment.manage` |
+| Instructor | Course designer's, plus `user.view`, `enrollment.view`, `enrollment.manage` (owner decision of 2026-11-17: `user.view` takes effect where the role is assigned, at the organization or an account, and not through an enrollment, B16) |
 | Grader | none until M2 |
 | Student | `course.view`, `course.participate` |
 | Observer | `course.view`, and `progress.view_observed` from `05-progress-and-events.md` I3, which also makes it enrollable (Q9) |
@@ -392,6 +392,17 @@ each have the tree root, Tower, Enroute.
 - **T12** (B17). An Instructor of a course cannot enroll someone with a custom role holding
   `course.manage` (403 `permission.escalation`), and can enroll another Instructor (201) when it
   also holds `user.view` over them (B17, owner decision of 2026-11-17).
+- **T12b** (B16, B17, owner decisions of 2026-11-17 and 2026-11-18). An Instructor assigned at Tower lists and
+  enrolls a user active in a Tower course (201), another Instructor included, and gets 404
+  `user.not_found` for a user only in Enroute and for a user of org B. An Instructor through an
+  enrollment alone gets 404 `user.not_found` enrolling a learner of their course and 403 on
+  `GET /api/v1/users`, concludes a Student enrollment, and gets 403 `permission.escalation`
+  concluding another Instructor's.
+  Granting Instructor at Tower without `user.view` there answers 403 `permission.escalation`.
+  An Instructor assigned at the organization gets 200 on `GET /api/v1/users/{id}` and its
+  identities, and one assigned at Tower gets 403 on both. A `user.manage` holder without
+  `user.view` at the organization gets 403 `permission.escalation` changing the email of an
+  Instructor of Tower, and 200 with it.
 - **T13** (B16, B23). An active Student enrollment gives `course.view` at that course and not at
   another course in the same account; after concluding it, `GET` the course answers 404 and the
   enrollment row remains.
@@ -641,8 +652,18 @@ owner's answers of 2026-11-16 and are built as answered.
   review). The coverage is the users list's: `user.view` at the organization, or at an account
   the user is "in" (an account-scope role assignment or an active enrollment in its subtree),
   checked by `users::covers` through the list's own query. A user outside it answers 404
-  `user.not_found`, as one that does not exist. An Instructor, whose role holds no `user.view`,
-  enrolls only with `user.view` from another grant.
+  `user.not_found`, as one that does not exist. The built-in Instructor holds `user.view`
+  (owner decision, 2026-11-17), so an Instructor assigned at an account enrolls the users that
+  account covers. `user.view` is not grantable at course scope, so an Instructor through an
+  enrollment alone enrolls no one without `user.view` from another grant, and, by B17's
+  escalation rule, cannot enroll, conclude or remove another Instructor without `user.view` at
+  the course. Owner decision (2026-11-18): B17's escalation rule stays strict, so a course-only
+  Instructor no longer manages other Instructors' enrollments; an Account admin or an
+  account-scope Instructor does. Leaving `user.view` out of the check would not let a course-only
+  Instructor hand it out, since an enrollment grants only course-grantable permissions (B16); the
+  check stays because, if `user.view` ever became grantable at course scope, every existing
+  Instructor enrollment would start granting it. The same decision lets an organization-scope
+  Instructor read every user, their identities and provider attributes (`m0/03`).
 - **What reactivation may do.** Concluding and reactivating are allowed on an archived course:
   B5 refuses new enrollments only, and reactivating restores a grant the course already gave.
   Reactivating in a template is refused as creating is (409 `course.template` when the role holds
