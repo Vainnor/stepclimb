@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use sqlx::PgPool;
 use stepclimb_core::{
-    OrgScope, OrgSettings, OrgSettingsPatch,
+    EmbeddingPatch, MAX_RETURN_ORIGINS, OrgScope, OrgSettings, OrgSettingsPatch,
     audit::Actor,
     id::{Uuid, new_id},
     organizations::{self, Error, MAX_NAME_CHARS, Organization},
@@ -321,6 +321,98 @@ async fn update_settings_turns_email_matching_on_and_off(pool: PgPool) {
         assert_eq!(read.email_matching, on);
     }
     assert_eq!(entries().await, 2, "one entry per change");
+}
+
+/// M1 spec 03 B17: return origins are stored in their canonical form, each once, merged into a
+/// stored `embedding` object member by member so a member this release does not know stays;
+/// org B is untouched.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn update_settings_stores_return_origins_and_keeps_unknown_embedding_members(pool: PgPool) {
+    let a = insert_org(&pool, "org-a", "Org A").await;
+    let b = insert_org(&pool, "org-b", "Org B").await;
+    store_settings(
+        &pool,
+        a,
+        r#"{"embedding": {"newer": 1, "return_origins": ["https://old.example"]}}"#,
+    )
+    .await;
+    let b_before = stored(&pool, b).await;
+
+    let patch = OrgSettingsPatch {
+        embedding: Some(EmbeddingPatch {
+            return_origins: vec![
+                "https://LMS.example:8443".into(),
+                "https://host.example".into(),
+                "https://lms.example:8443".into(),
+            ],
+        }),
+        ..OrgSettingsPatch::default()
+    };
+    let settings =
+        organizations::update_settings(&pool, scope(a), &patch, request_time(), Actor::Instance)
+            .await
+            .unwrap();
+
+    let expected = ["https://lms.example:8443", "https://host.example"];
+    assert_eq!(settings.embedding.return_origins, expected);
+    let raw: String = sqlx::query_scalar("SELECT settings::text FROM organizations WHERE id = $1")
+        .bind(a)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let raw: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(
+        raw,
+        serde_json::json!({ "embedding": { "newer": 1, "return_origins": expected } })
+    );
+    assert_eq!(stored(&pool, b).await, b_before, "org B is unchanged");
+}
+
+/// M1 spec 03 B17, T11: an entry that is not `https://host[:port]` is refused by index, and more
+/// than 20 entries are refused, before anything is written.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn update_settings_refuses_bad_return_origins(pool: PgPool) {
+    let a = insert_org(&pool, "org-a", "Org A").await;
+    let before = stored(&pool, a).await;
+    let patch = |origins: Vec<String>| OrgSettingsPatch {
+        embedding: Some(EmbeddingPatch {
+            return_origins: origins,
+        }),
+        ..OrgSettingsPatch::default()
+    };
+    let update = |patch: OrgSettingsPatch| {
+        let pool = pool.clone();
+        async move {
+            organizations::update_settings(&pool, scope(a), &patch, request_time(), Actor::Instance)
+                .await
+        }
+    };
+
+    let bad = [
+        "http://host.example",
+        "https://ok.example",
+        "https://host.example/path",
+    ];
+    let result = update(patch(bad.map(String::from).to_vec())).await;
+    assert!(
+        matches!(&result, Err(Error::ReturnOriginsInvalid(indexes)) if indexes == &[0, 2]),
+        "{result:?}"
+    );
+    let many = (0..=MAX_RETURN_ORIGINS)
+        .map(|i| format!("https://h{i}.example"))
+        .collect();
+    let result = update(patch(many)).await;
+    assert!(
+        matches!(result, Err(Error::ReturnOriginsTooMany)),
+        "{result:?}"
+    );
+    assert_eq!(stored(&pool, a).await, before);
+
+    let most = (0..MAX_RETURN_ORIGINS)
+        .map(|i| format!("https://h{i}.example"))
+        .collect();
+    let settings = update(patch(most)).await.unwrap();
+    assert_eq!(settings.embedding.return_origins.len(), MAX_RETURN_ORIGINS);
 }
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]

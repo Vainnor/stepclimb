@@ -10,12 +10,15 @@
 //! every `Require` of the request checks (spec 09 B16). `features` are the catalog features the
 //! organization's plan includes, from the same per-request load every `Require<Feature>` checks
 //! (spec 10 B12). The web app reads both only to show or hide UI; every route checks its own
-//! permission and feature on the server.
+//! permission and feature on the server. `embedding` is the organization's setting of that
+//! name, read by every signed-in user and not only by holders of `organization.manage`, because
+//! the web app shows a learner's "Back to" link only for a return URL whose origin it lists
+//! (docs/specs/m1/03-modules-and-items.md B17).
 
 use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
 use stepclimb_core::{
-    Source, appearance, feature,
+    Embedding, Source, appearance, feature,
     grants::{Grants, ScopeId},
     id::Uuid,
     organizations,
@@ -54,6 +57,10 @@ pub struct Me {
     /// The organization's default appearance: the theme the user's pages take while
     /// `appearance.theme` is `null`.
     pub default_appearance: ThemeChoice,
+    /// The organization's `embedding` setting: the origins a deep link's return URL may point
+    /// at for a "Back to" link to show.
+    #[schema(value_type = crate::organization::Embedding)]
+    pub embedding: Embedding,
 }
 
 /// The signed-in user.
@@ -190,7 +197,11 @@ pub async fn get_me(
         .await
         .map_err(|error| ApiError::internal(&error))?;
     let default_appearance = branding::default_appearance(&state, scope).await;
+    let settings = organizations::settings(&state.db, scope)
+        .await
+        .map_err(|error| ApiError::internal(&error))?;
     Ok(Json(Me {
+        embedding: settings.embedding,
         appearance: appearance.into(),
         default_appearance: default_appearance.into(),
         user: user.into(),

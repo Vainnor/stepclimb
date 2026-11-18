@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE organizations\n           SET settings = settings || COALESCE(\n                   (SELECT jsonb_object_agg(patched.key, CASE\n                               WHEN jsonb_typeof(patched.value) = 'object'\n                                    AND jsonb_typeof(settings -> patched.key) = 'object'\n                               THEN (settings -> patched.key) || patched.value\n                               ELSE patched.value\n                           END)\n                    FROM jsonb_each($2::text::jsonb) AS patched),\n                   '{}'::jsonb),\n               updated_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond'\n           WHERE id = $1\n           RETURNING settings::text AS \"settings!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "settings!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b02a3c75a8e9c9c8fbdf68b1963305daea222526abeb5e75fa67a0da126e01dd"
+}
