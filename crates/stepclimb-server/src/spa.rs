@@ -44,6 +44,11 @@ use crate::{
 #[allow_missing = true]
 struct WebDist;
 
+/// Whether `web/dist` existed when this crate compiled (`build.rs`). Reading it makes the
+/// folder's existence an input of the compile, so a caching rustc wrapper cannot reuse a compile
+/// whose `WebDist` was resolved without the folder.
+const _: &str = env!("STEPCLIMB_WEB_DIST");
+
 /// Vite fingerprints everything under `assets/`, so those files never change at a given name.
 const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 const REVALIDATE: &str = "no-cache";
