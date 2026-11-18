@@ -20,7 +20,7 @@ import {
   stubServer,
 } from "../test/app";
 import { stubXhr } from "../test/xhr";
-import { readVideoStatus, type Video, videoUploadOwner } from "../videos/videos";
+import { readVideoStatus, type Video } from "../videos/videos";
 
 const courseId = "01900000-0000-7000-8000-0000000000c1";
 const PATH = `/c/${courseId}/videos`;
@@ -64,7 +64,8 @@ function videoFixture(n: number, title: string, status: string, error_code?: str
 }
 
 const ME = meFixture();
-const OWNER = videoUploadOwner(ME);
+// Written out, not through videoUploadOwner, so the test checks what the panel keys entries by.
+const OWNER = `${ME.organization.id}.${ME.user.id}`;
 const OTHER_OWNER = `${ME.organization.id}.01900000-0000-7000-8000-000000000099`;
 
 /** An unfinished upload of `name` in this course, as VideoUploader keeps it. */
