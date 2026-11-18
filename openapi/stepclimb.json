@@ -9147,6 +9147,39 @@
           }
         }
       },
+      "Embedding": {
+        "type": "object",
+        "description": "How host sites link into the organization's courses.",
+        "required": [
+          "return_origins"
+        ],
+        "properties": {
+          "return_origins": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The origins a deep link's `return` URL may point at for the web app to show a \"Back to\"\nlink, each `https://host[:port]` in lowercase without a path; empty unless set."
+          }
+        }
+      },
+      "EmbeddingPatch": {
+        "type": "object",
+        "description": "The whole new `embedding`: each member is required.",
+        "required": [
+          "return_origins"
+        ],
+        "properties": {
+          "return_origins": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "At most 20 entries, each `https://host[:port]` without a path, in any letter case; a\nhost outside ASCII is written in its `xn--` form. Stored in lowercase, each once."
+          }
+        },
+        "additionalProperties": false
+      },
       "EnrollMethod": {
         "type": "string",
         "description": "A local method an enrollment link can set up.",
@@ -10165,7 +10198,8 @@
           "grants",
           "features",
           "appearance",
-          "default_appearance"
+          "default_appearance",
+          "embedding"
         ],
         "properties": {
           "appearance": {
@@ -10175,6 +10209,10 @@
           "default_appearance": {
             "$ref": "#/components/schemas/ThemeChoice",
             "description": "The organization's default appearance: the theme the user's pages take while\n`appearance.theme` is `null`."
+          },
+          "embedding": {
+            "$ref": "#/components/schemas/Embedding",
+            "description": "The organization's `embedding` setting: the origins a deep link's return URL may point\nat for a \"Back to\" link to show."
           },
           "features": {
             "type": "array",
@@ -11218,7 +11256,8 @@
           "default_tz",
           "email_matching",
           "local_sign_in",
-          "admission"
+          "admission",
+          "embedding"
         ],
         "properties": {
           "admission": {
@@ -11232,6 +11271,9 @@
           "email_matching": {
             "type": "boolean",
             "description": "Whether a sign-in through an identity the organization does not know yet may be linked\nto the existing user with the same email address: only through a provider whose config\nsets `trusted_for_email_matching`, only when that provider marked the address verified,\nand only to a local or just-in-time user whose stored email is recorded as verified.\n`false` unless set."
+          },
+          "embedding": {
+            "$ref": "#/components/schemas/Embedding"
           },
           "local_sign_in": {
             "$ref": "#/components/schemas/LocalMethods",
@@ -11250,6 +11292,10 @@
           "email_matching": {
             "type": "boolean",
             "description": "`true` needs `provider.manage` and every catalog permission at organization scope, as\nwell as `organization.manage`."
+          },
+          "embedding": {
+            "$ref": "#/components/schemas/EmbeddingPatch",
+            "description": "Replaces the return origins."
           }
         },
         "additionalProperties": false
@@ -16457,7 +16503,7 @@
         }
       },
       "SettingsInvalid": {
-        "description": "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting this route does not change (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`; `admission`: `PUT /api/v1/admin/admission`); `tz.unknown` a `default_tz` that is no IANA time zone.",
+        "description": "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting this route does not change (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`; `admission`: `PUT /api/v1/admin/admission`); `tz.unknown` a `default_tz` that is no IANA time zone; `settings.return_origin_invalid` an entry of `embedding.return_origins` that is not written `https://host[:port]`; `settings.return_origins_too_many` more than 20 of them.",
         "content": {
           "application/problem+json": {
             "schema": {
