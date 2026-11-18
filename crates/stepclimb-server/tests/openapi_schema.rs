@@ -30,6 +30,7 @@ fn good() -> Value {
         "features": ["custom_roles"],
         "appearance": { "theme": "dark", "density": "compact" },
         "default_appearance": "system",
+        "embedding": { "return_origins": ["https://host.example"] },
     })
 }
 
@@ -54,6 +55,7 @@ fn a_wrong_type_enum_value_or_uuid_is_an_error() {
         ("/grants/0/permissions/0", json!(7)),
         ("/appearance/theme", json!("sepia")),
         ("/default_appearance", Value::Null),
+        ("/embedding/return_origins", json!("https://host.example")),
     ];
     for (pointer, replacement) in broken {
         let mut value = good();
