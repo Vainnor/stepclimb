@@ -172,6 +172,15 @@ async function serveVideos(page: Page, uploads: Uploads, theme = "light") {
         });
       }
       if (method === "DELETE") {
+        // As the server: a complete upload's video is processing and cannot be ended (D8).
+        if (uploads.offset === SIZE) {
+          return route.fulfill({
+            status: 409,
+            headers: TUS,
+            contentType: "application/problem+json",
+            body: JSON.stringify({ title: "Conflict", status: 409, code: "video.status_invalid" }),
+          });
+        }
         uploads.created = false;
         return route.fulfill({ status: 204, headers: TUS });
       }
@@ -250,12 +259,25 @@ test.describe("on a touch screen at 375 px", () => {
     await page.goto(`/c/${courseId}/videos`);
     await fileInput(page).setInputFiles(videoFile(info.outputPath("Week 1.mp4")));
     await expect.poll(() => uploads.held).toBe(1);
-    for (const name of ["Choose file", "Pause", "Cancel upload"]) {
+    const atLeast44 = async (name: string) => {
       const box = await page.getByRole("button", { name }).boundingBox();
       expect(box?.height, name).toBeGreaterThanOrEqual(44);
       expect(box?.width, name).toBeGreaterThanOrEqual(44);
-    }
+    };
+    for (const name of ["Choose file", "Pause", "Cancel upload"]) await atLeast44(name);
+    await page.getByRole("button", { name: "Pause" }).click();
+    await atLeast44("Resume");
+    // The server holds the first 16 MiB, so Cancel asks first.
+    await page.getByRole("button", { name: "Cancel upload" }).click();
+    for (const name of ["Keep uploading", "Delete upload"]) await atLeast44(name);
+    await page.getByRole("button", { name: "Keep uploading" }).click();
     uploads.release(false);
+
+    // After a reload the upload is listed as unfinished, with Discard and its question.
+    await page.reload();
+    await atLeast44("Discard the upload of Week 1.mp4");
+    await page.getByRole("button", { name: "Discard the upload of Week 1.mp4" }).click();
+    for (const name of ["Keep it", "Delete upload"]) await atLeast44(name);
   });
 });
 

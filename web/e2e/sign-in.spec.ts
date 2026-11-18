@@ -5,6 +5,7 @@
 // with `stepclimb admin create` and hands this file the printed setup link. Chromium's virtual
 // authenticator (DevTools protocol, WebAuthn domain) stands in for a device with a screen lock.
 import { createHmac } from "node:crypto";
+import { writeFileSync } from "node:fs";
 import AxeBuilder from "@axe-core/playwright";
 import { type Browser, expect, type Page, test } from "@playwright/test";
 
@@ -798,6 +799,125 @@ test.describe
         const restored = await signupAllowed(false);
         expect([restored.status, restored.signup_allowed]).toEqual([200, false]);
       }
+    });
+
+    // VideoUploader against the real tus routes (08 B4 to B7, B22, T14, D37): the admin makes a
+    // course, uploads a short file to processing, then pauses a 20 MiB one and cancels it, after
+    // which the server answers HEAD with 404. Only the video read that would turn the first one
+    // ready is answered in the browser: the stack has no transcoder.
+    test("upload a video through the tus routes, then pause and cancel another (08 T14)", async ({
+      page,
+    }, info) => {
+      expect(passkey, "an earlier test left the admin a passkey").toBeDefined();
+      const authenticator = await addVirtualAuthenticator(page, passkey);
+      await page.goto("/sign-in");
+      await page.getByRole("textbox", { name: "Email" }).fill(EMAIL);
+      await page.getByRole("button", { name: "Continue" }).click();
+      await page.getByRole("button", { name: "Sign in with a passkey" }).click();
+      await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
+      [passkey] = await authenticator.credentials();
+
+      const course = await page.evaluate(async () => {
+        const accounts = (await (await fetch("/api/v1/accounts?limit=200")).json()) as {
+          items: { id: string; parent_id: string | null }[];
+        };
+        const root = accounts.items.find((account) => account.parent_id === null);
+        const created = await fetch("/api/v1/courses", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ account_id: root?.id, title: "Video uploads", code: "VID-E2E" }),
+        });
+        return { status: created.status, id: ((await created.json()) as { id: string }).id };
+      });
+      expect(course.status).toBe(201);
+
+      // The second file's second chunk waits here and is then dropped, as a lost connection.
+      let dropHeld: () => void = () => {};
+      const held = new Promise<void>((resolve) => {
+        dropHeld = resolve;
+      });
+      let holding = false;
+      await page.route("**/api/v1/video-uploads/*", async (route) => {
+        const request = route.request();
+        if (request.method() === "PATCH" && request.headers()["upload-offset"] !== "0") {
+          holding = true;
+          await held;
+          await route.abort().catch(() => undefined);
+          return;
+        }
+        await route.fallback();
+      });
+      await page.clock.install();
+      await page.goto(`/c/${course.id}/videos`);
+      await expect(page.getByRole("heading", { level: 1, name: "Videos" })).toBeVisible();
+      const input = page.locator('[data-slot="file-drop"] input[type="file"]');
+      const card = page.locator('[data-slot="video-upload"]');
+
+      // A QuickTime `mdat` atom first: the server's sniff takes it for a video (D10).
+      const clip = info.outputPath("Clip.mov");
+      const head = Buffer.alloc(2 * 1024 * 1024);
+      head.write("mdat", 4, "latin1");
+      writeFileSync(clip, head);
+      const created = page.waitForResponse(
+        (r) => r.url().endsWith(`/courses/${course.id}/video-uploads`) && r.status() === 201,
+      );
+      await input.setInputFiles(clip);
+      const videoId = ((await (await created).json()) as { video: { id: string } }).video.id;
+      await expect(card).toHaveAttribute("data-phase", "processing");
+      await expect(page.locator('[data-slot="video-row"]')).toContainText("Processing");
+      await page.route(`**/api/v1/videos/${videoId}`, (route) =>
+        route.fulfill({
+          json: {
+            id: videoId,
+            source: "upload",
+            title: "Clip",
+            status: "ready",
+            error_code: null,
+            duration_s: 3,
+            chapters: [],
+            created_at: "2026-11-18T12:00:00Z",
+            updated_at: "2026-11-18T12:00:00Z",
+          },
+        }),
+      );
+      await page.clock.runFor(10_000);
+      await expect(card).toHaveAttribute("data-phase", "ready");
+
+      const long = info.outputPath("Lecture.mov");
+      const body = Buffer.alloc(20 * 1024 * 1024);
+      body.write("mdat", 4, "latin1");
+      writeFileSync(long, body);
+      const second = page.waitForResponse(
+        (r) => r.url().endsWith(`/courses/${course.id}/video-uploads`) && r.status() === 201,
+      );
+      await input.setInputFiles(long);
+      const location = (await second).headers().location ?? "";
+      expect(location).toMatch(/^\/api\/v1\/video-uploads\/[0-9a-f-]{36}$/);
+      await expect.poll(() => holding).toBe(true);
+      await page.getByRole("button", { name: "Pause" }).click();
+      await expect(card).toHaveAttribute("data-phase", "paused");
+      dropHeld();
+      const offset = await page.evaluate(
+        async (url) =>
+          (await fetch(url, { method: "HEAD", headers: { "Tus-Resumable": "1.0.0" } })).headers.get(
+            "upload-offset",
+          ),
+        location,
+      );
+      expect(offset).toBe(String(16 * 1024 * 1024));
+
+      await page.getByRole("button", { name: "Cancel upload" }).click();
+      const dialog = page.getByRole("alertdialog", { name: "Cancel this upload?" });
+      await expect(dialog).toContainText("The 16.8 MB sent so far will be deleted.");
+      await dialog.getByRole("button", { name: "Delete upload" }).click();
+      await expect(card).toHaveAttribute("data-phase", "cancelled");
+      const gone = await page.evaluate(
+        async (url) =>
+          (await fetch(url, { method: "HEAD", headers: { "Tus-Resumable": "1.0.0" } })).status,
+        location,
+      );
+      expect(gone).toBe(404);
+      await expect(page.locator('[data-slot="video-row"]')).toHaveCount(1);
     });
   });
 
