@@ -882,11 +882,13 @@ async fn b7_a_complete_upload_that_is_not_a_video_fails(pool: PgPool) {
 /// `videos.cleanup`; one touched 23 hours ago is kept, and so is a complete one.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn t3_cleanup_deletes_uploads_untouched_for_a_day(pool: PgPool) {
+    // Once, before both backends: each complete upload's transcode job must stay, or
+    // `videos.cleanup` fails its video as stranded (step 4).
+    sqlx::query("DELETE FROM jobs")
+        .execute(&pool)
+        .await
+        .unwrap();
     for backend in [Backend::Minio, Backend::Local] {
-        sqlx::query("DELETE FROM jobs")
-            .execute(&pool)
-            .await
-            .unwrap();
         let f = Fixture::new(pool.clone(), backend).await;
         let t = f.a;
         let chunk = mp4(to_usize(MIB));
