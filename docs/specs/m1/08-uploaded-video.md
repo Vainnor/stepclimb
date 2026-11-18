@@ -593,8 +593,10 @@ open while building I2.
   takes them, and `videos.cleanup` fails them `video.transcode_failed` once their job is dead
   (D20). An `all` process without object storage does not serve the queue either; a
   `transcoder` without it refuses to start naming `STEPCLIMB_STORAGE_URL`. The self-hosting
-  reference (`deploy/compose/README.md`) and the release notes say that, until I6 (#240), an image
-  without ffmpeg leaves videos processing. Once I6 ships ffmpeg in the image, an issue against
+  reference (`deploy/compose/README.md`, "Video transcoding") says that, until I6 (#240), an
+  image without ffmpeg leaves videos processing. The release notes are built from commit
+  subjects (`cliff.toml`), so the release that ships this needs that sentence added to its
+  `CHANGELOG.md` section by hand. Once I6 ships ffmpeg in the image, an issue against
   this spec can make `all` refuse too. Kept by the owner after the security review
   (2026-11-17).
 - **D18. Workers per role.** `all` runs two job loops: the general one (every queue but
