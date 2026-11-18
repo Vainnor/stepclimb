@@ -81,7 +81,8 @@ pub struct EmbeddingPatch {
 /// that origin, lowercase.
 pub fn return_origin(entry: &str) -> Option<String> {
     let parsed = url::Url::parse(entry).ok()?;
-    if parsed.scheme() != "https" || parsed.host_str().is_none_or(str::is_empty) {
+    // An `https` URL always has a host, so its origin is a tuple origin, never opaque.
+    if parsed.scheme() != "https" {
         return None;
     }
     let origin = parsed.origin().ascii_serialization();

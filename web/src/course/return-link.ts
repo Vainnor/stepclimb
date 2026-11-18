@@ -43,7 +43,8 @@ export function returnLink(value: unknown, origins: readonly string[]): ReturnLi
   } catch {
     return undefined;
   }
-  if (url.protocol !== "https:" || url.username !== "" || url.password !== "") return undefined;
+  // The `https://` prefix fixes the scheme the parser reads.
+  if (url.username !== "" || url.password !== "") return undefined;
   if (!origins.includes(url.origin)) return undefined;
   return { href: url.href, host: url.host };
 }
