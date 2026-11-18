@@ -919,6 +919,127 @@ test.describe
       expect(gone).toBe(404);
       await expect(page.locator('[data-slot="video-row"]')).toHaveCount(1);
     });
+
+    // The course authoring screen against the real module, item and rule routes (16 I14, T7's
+    // authoring part): the admin makes a course through the API, then on the screen adds two
+    // modules, an external link and a header, moves the header above the link, makes the second
+    // module wait for the first with its items in order, and publishes the first module and the
+    // link with a requirement. The server's outline is read back at the end.
+    test("build a course on the authoring screen (16 I14)", async ({ page }) => {
+      expect(passkey, "an earlier test left the admin a passkey").toBeDefined();
+      const authenticator = await addVirtualAuthenticator(page, passkey);
+      await page.goto("/sign-in");
+      await page.getByRole("textbox", { name: "Email" }).fill(EMAIL);
+      await page.getByRole("button", { name: "Continue" }).click();
+      await page.getByRole("button", { name: "Sign in with a passkey" }).click();
+      await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
+      [passkey] = await authenticator.credentials();
+
+      const course = await page.evaluate(async () => {
+        const accounts = (await (await fetch("/api/v1/accounts?limit=200")).json()) as {
+          items: { id: string; parent_id: string | null }[];
+        };
+        const root = accounts.items.find((account) => account.parent_id === null);
+        const created = await fetch("/api/v1/courses", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ account_id: root?.id, title: "Radio school", code: "RAD-E2E" }),
+        });
+        return { status: created.status, id: ((await created.json()) as { id: string }).id };
+      });
+      expect(course.status).toBe(201);
+
+      await page.goto(`/c/${course.id}/edit`);
+      await expect(page.getByRole("heading", { level: 1, name: "Edit course" })).toBeVisible();
+      await expect(page.getByText("This course has no modules yet.")).toBeVisible();
+      const sheet = page.locator('[data-slot="sheet"]');
+      const rows = page.getByRole("grid", { name: "Modules and items" }).getByRole("row");
+
+      for (const title of ["Radio basics", "Ground control"]) {
+        await page.getByRole("button", { name: "Add module" }).click();
+        await sheet.getByRole("textbox", { name: "Title" }).fill(title);
+        await sheet.getByRole("button", { name: "Add module" }).click();
+        await expect(sheet).toHaveCount(0);
+      }
+      await expect(rows).toHaveCount(2);
+
+      const addItem = async (kind: "External link" | "Header", title: string, url?: string) => {
+        await page.getByRole("button", { name: "Add item" }).click();
+        await sheet.getByRole("button", { name: /Module$/ }).click();
+        await page.getByRole("option", { name: "1 Radio basics" }).click();
+        // React Aria's inputs are visually hidden: a person presses the label.
+        await sheet.getByText(kind, { exact: true }).click();
+        await expect(sheet.getByRole("radio", { name: kind })).toBeChecked();
+        await sheet.getByRole("textbox", { name: "Title" }).fill(title);
+        if (url !== undefined) await sheet.getByRole("textbox", { name: "Address" }).fill(url);
+        await sheet.getByRole("button", { name: "Add item" }).click();
+        await expect(sheet).toHaveCount(0);
+      };
+      await addItem("External link", "Frequency list", "https://example.com/frequencies");
+      await addItem("Header", "Practice");
+      await expect(rows).toHaveCount(4);
+
+      // The header moves above the link through the items' order route.
+      const ordered = page.waitForResponse(
+        (r) => r.url().endsWith("/items/order") && r.request().method() === "PUT",
+      );
+      await page.getByRole("button", { name: "Move Practice" }).click();
+      await page.getByRole("menuitem", { name: "Move up" }).click();
+      expect((await ordered).status()).toBe(200);
+      await expect(
+        page.getByText("Moved Practice to position 1 of 2 in Radio basics."),
+      ).toBeVisible();
+
+      await page.getByRole("button", { name: "Edit 2 Ground control" }).click();
+      await sheet.getByText("1 Radio basics", { exact: true }).click();
+      await expect(sheet.getByRole("checkbox", { name: "1 Radio basics" })).toBeChecked();
+      await sheet.getByText("Items in order", { exact: true }).click();
+      await expect(sheet.getByRole("switch", { name: "Items in order" })).toBeChecked();
+      await sheet.getByRole("button", { name: "Save" }).click();
+      await expect(sheet).toHaveCount(0);
+      await expect(rows.nth(3)).toContainText("Unlocks after Radio basics");
+
+      const publish = async () => {
+        await sheet.getByText("Published, so learners see it", { exact: true }).click();
+        await expect(
+          sheet.getByRole("switch", { name: "Published, so learners see it" }),
+        ).toBeChecked();
+      };
+      await page.getByRole("button", { name: "Edit 1 Radio basics" }).click();
+      await publish();
+      await sheet.getByRole("button", { name: "Save" }).click();
+      await expect(sheet).toHaveCount(0);
+      await page.getByRole("button", { name: "Edit Frequency list" }).click();
+      await publish();
+      await sheet.getByText("Open it", { exact: true }).click();
+      await expect(sheet.getByRole("radio", { name: "Open it" })).toBeChecked();
+      await sheet.getByRole("button", { name: "Save" }).click();
+      await expect(sheet).toHaveCount(0);
+
+      const outline = await page.evaluate(async (id) => {
+        const answer = await fetch(`/api/v1/courses/${id}/modules`);
+        return (await answer.json()) as {
+          modules: {
+            id: string;
+            title: string;
+            published: boolean;
+            prerequisite_ids: string[];
+            require_sequential: boolean;
+            items: { title: string; kind: string; published: boolean; requirement: unknown }[];
+          }[];
+        };
+      }, course.id);
+      const [radio, ground] = outline.modules;
+      expect(radio?.title).toBe("Radio basics");
+      expect(radio?.published).toBe(true);
+      expect(radio?.items.map((i) => [i.title, i.kind, i.published, i.requirement])).toEqual([
+        ["Practice", "header", false, null],
+        ["Frequency list", "external_link", true, { kind: "view" }],
+      ]);
+      expect(ground?.published).toBe(false);
+      expect(ground?.prerequisite_ids).toEqual([radio?.id]);
+      expect(ground?.require_sequential).toBe(true);
+    });
   });
 
 /** Signs the password test's user in from the sign-in screen as far as the password takes them. */
