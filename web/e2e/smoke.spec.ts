@@ -15,13 +15,16 @@ test("an anonymous browser is sent to sign in", async ({ page }) => {
   expect(url.searchParams.get("return_to")).toBe("/?tab=2");
 });
 
-// Spec 11 T18: the M1 deep link is served the SPA, which renders the not-found view.
-test("a deep link is served the SPA and renders not found", async ({ page }) => {
-  const response = await page.goto("/c/example/m/1/i/1");
+// Spec 11 T18, M1 spec 03 B16: the deep link is served the SPA, which sends an anonymous browser
+// to sign in with the deep link, its query included, as the return target.
+test("a deep link is served the SPA and sends an anonymous browser to sign in", async ({ page }) => {
+  const response = await page.goto("/c/example/m/1/i/1?return=https%3A%2F%2Fhost.example%2Fx");
   expect(response?.status()).toBe(200);
-  await expect(
-    page.getByRole("heading", { level: 1, name: "There is no page at /c/example/m/1/i/1" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Sign in" })).toBeVisible();
+  const returnTo = new URL(page.url()).searchParams.get("return_to") ?? "";
+  const target = new URL(returnTo, page.url());
+  expect(target.pathname).toBe("/c/example/m/1/i/1");
+  expect(target.searchParams.get("return")).toBe("https://host.example/x");
 });
 
 test("the probes answer", async ({ request }) => {

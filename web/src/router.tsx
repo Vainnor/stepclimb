@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The route tree (docs/specs/m0/11-app-shell.md B2, B7, B16): a signed-out layout for the sign-in
 // steps and the enrollment page, and a signed-in layout for everything else that exists: home, the
-// account page, a course's authoring screen (docs/specs/m1/16-learning-ui-components.md B19), its
-// files area, its video panel and the page editor (docs/specs/m1/07-pages-and-the-editor.md B21). Any other path, the M1 deep link included,
-// renders the not-found view. A route that fails to load renders its error inside its layout (B28).
+// account page, the course layout with the course home, a module and the deep link to an item
+// (docs/specs/m1/03-modules-and-items.md B16), a course's authoring screen
+// (docs/specs/m1/16-learning-ui-components.md B19), its files area, its video panel and the page
+// editor (docs/specs/m1/07-pages-and-the-editor.md B21). Any other path renders the not-found
+// view. A route that fails to load renders its error inside its layout (B28).
 import {
   createRootRouteWithContext,
   createRoute,
@@ -15,6 +17,7 @@ import {
   useMatch,
 } from "@tanstack/react-router";
 import type { AppContext } from "./context";
+import { CourseLayout, validateCourseSearch } from "./course/course-layout";
 import { folderFromSearch } from "./files/folders";
 import { Root } from "./layouts/root";
 import { type ErrorPlace, RouteError } from "./layouts/route-error";
@@ -22,6 +25,8 @@ import { SignedInLayout } from "./layouts/signed-in";
 import { SignedOutLayout } from "./layouts/signed-out";
 import { AccountView } from "./routes/account";
 import { CourseEditView, validateCourseEditSearch } from "./routes/course-edit";
+import { CourseItemView } from "./routes/course-item";
+import { CourseHomeView, CourseModuleView } from "./routes/course-outline";
 import { EnrollView } from "./routes/enroll";
 import { FilesView } from "./routes/files";
 import { HomeView } from "./routes/home";
@@ -127,6 +132,36 @@ const accountRoute = createRoute({
   component: AccountView,
 });
 
+/**
+ * The course layout: the course home, a module and an item, under the "Back to" link of a deep
+ * link's `return` URL (spec 03 B16, B17).
+ */
+const courseRoute = createRoute({
+  getParentRoute: () => signedInRoute,
+  path: "c/$courseId",
+  validateSearch: validateCourseSearch,
+  staticData: { view: { title: (t) => t("course.title") } },
+  component: CourseLayout,
+});
+
+const courseHomeRoute = createRoute({
+  getParentRoute: () => courseRoute,
+  path: "/",
+  component: CourseHomeView,
+});
+
+const courseModuleRoute = createRoute({
+  getParentRoute: () => courseRoute,
+  path: "m/$moduleId",
+  component: CourseModuleView,
+});
+
+const courseItemRoute = createRoute({
+  getParentRoute: () => courseRoute,
+  path: "m/$moduleId/i/$itemId",
+  component: CourseItemView,
+});
+
 export interface FilesSearch {
   /** The folder on screen; the course's top folder when absent. */
   folder?: string;
@@ -186,6 +221,7 @@ export const routeTree = rootRoute.addChildren([
     homeRoute,
     accountRoute,
     courseEditRoute,
+    courseRoute.addChildren([courseHomeRoute, courseModuleRoute, courseItemRoute]),
     courseFilesRoute,
     courseVideosRoute,
     pageEditRoute,

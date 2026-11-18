@@ -346,17 +346,17 @@ describe("sign-out (B12, T5)", () => {
 });
 
 describe("not found (B7, B27, T18)", () => {
-  it("draws the deep link as not found inside AppShell when signed in", async () => {
+  it("draws an unknown path as not found inside AppShell when signed in", async () => {
     stubServer({ "GET /api/v1/me": signedIn });
-    const app = renderApp("/c/example/m/1/i/1");
+    const app = renderApp("/c/example/x/1");
     expect(
       await screen.findByRole("heading", { level: 1, name: "Page not found" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { level: 2, name: "There is no page at /c/example/m/1/i/1" }),
+      screen.getByRole("heading", { level: 2, name: "There is no page at /c/example/x/1" }),
     ).toBeInTheDocument();
     expect(document.querySelector('[data-slot="side-nav"]')).toBeInTheDocument();
-    expect(app.router.state.location.pathname).toBe("/c/example/m/1/i/1");
+    expect(app.router.state.location.pathname).toBe("/c/example/x/1");
     await waitFor(() => expect(document.title).toBe("Page not found · Example Training"));
   });
 

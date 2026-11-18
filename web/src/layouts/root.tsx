@@ -3,12 +3,19 @@
 // sends every Stepclimb UI link through TanStack Router; after a client-side navigation to another
 // path, focus moves to the new view's `h1`, or to the failure the view opened on; the toast region and the service worker's update offer sit once at the root. A link with
 // `routerOptions={{ reloadDocument: true }}` leaves the app instead and loads its address as a page.
+// An absolute or protocol-relative `href` is no route: it keeps its address, and React Aria lets
+// the browser follow a link to another origin.
 import { type ToastQueue, ToastRegion } from "@stepclimb/ui";
 import { Outlet, useRouter } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { RouterProvider } from "react-aria-components";
 import { openDocument } from "../document-navigation";
 import { AppUpdate } from "./app-update";
+
+/** True when `href` names its scheme (`https:`, `mailto:`) or starts with `//`. */
+function isAbsoluteHref(href: string): boolean {
+  return /^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(href);
+}
 
 /**
  * Focuses the page's `h1`, so a screen reader announces the new view. The heading becomes
@@ -48,7 +55,7 @@ export function Root({ toasts }: { toasts: ToastQueue }) {
       navigate={(to, options) =>
         options?.reloadDocument ? openDocument(to) : router.navigate({ to, state: options?.state })
       }
-      useHref={(to) => router.buildLocation({ to }).href}
+      useHref={(to) => (isAbsoluteHref(to) ? to : router.buildLocation({ to }).href)}
     >
       <Outlet />
       <ToastRegion queue={toasts} />
