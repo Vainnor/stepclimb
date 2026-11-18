@@ -189,23 +189,28 @@ impl Fixture {
 
     /// A signed-in user enrolled in `t`'s course with the built-in role Student.
     async fn student(&self, t: Tree) -> String {
-        self.enrolled(t, "student").await
+        self.enrolled(t, "student", Vec::new()).await.1
     }
 
-    /// A signed-in user enrolled in `t`'s course with the built-in role Observer, which holds
-    /// `course.view` alone: neither `course.view_all` nor `course.participate`.
+    /// A signed-in user enrolled in `t`'s course with the built-in role Observer, observing a
+    /// new Student of the course. The role holds `course.view` and `progress.view_observed`:
+    /// neither `course.view_all` nor `course.participate`.
     async fn observer(&self, t: Tree) -> String {
-        self.enrolled(t, "observer").await
+        let (learner, _) = self.enrolled(t, "student", Vec::new()).await;
+        self.enrolled(t, "observer", vec![learner]).await.1
     }
 
-    /// A signed-in user enrolled in `t`'s course with the built-in role `key`.
-    async fn enrolled(&self, t: Tree, key: &str) -> String {
+    /// A signed-in user enrolled in `t`'s course with the built-in role `key`, observing
+    /// `observed` (spec 05 B17: only for a role holding `progress.view_observed`): their id and
+    /// session cookie.
+    async fn enrolled(&self, t: Tree, key: &str, observed: Vec<Uuid>) -> (Uuid, String) {
         let (user, cookie) = self.user(t.org).await;
         let new = enrollments::NewEnrollment {
             user_id: user,
             role_id: self.builtin_role(key).await,
             source: Source::Local,
             external_id: None,
+            observed_user_ids: observed,
         };
         enrollments::create(
             &self.pool,
@@ -217,7 +222,7 @@ impl Fixture {
         )
         .await
         .expect("enroll");
-        cookie
+        (user, cookie)
     }
 
     async fn builtin_role(&self, key: &str) -> Uuid {
@@ -1522,7 +1527,8 @@ async fn t13_every_read_route_refuses_another_organizations_ids(pool: PgPool) {
 /// Spec 05 T10 (B13) on the outline, module and item reads: a Student's answer carries their own
 /// module and item progress; another Student of the course gets null; a Course designer, who
 /// does not hold `course.participate`, gets no `progress` member, and neither does an Observer
-/// (`course.view` alone), who sees only published content and no link of a module with rules.
+/// (`course.view` without `course.view_all` or `course.participate`), who sees only published
+/// content and no link of a module with rules.
 /// Progress shows only on what the Student can see, and the stand-in for spec 04 I3 still
 /// withholds the link.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
@@ -1589,7 +1595,8 @@ async fn spec05_t10_the_outline_carries_the_learners_own_progress(pool: PgPool) 
         assert!(item.get("progress").is_some_and(Value::is_null), "{item}");
     }
 
-    // An Observer holds `course.view` alone: published content, no `progress` member.
+    // An Observer holds neither `course.view_all` nor `course.participate`: published content,
+    // no `progress` member.
     let watching = f.get(&course_modules(t.course), t.org, &observer).await;
     let watching = &watching.ok(StatusCode::OK)["modules"][0];
     assert!(watching.get("progress").is_none(), "{watching}");

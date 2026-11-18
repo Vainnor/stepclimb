@@ -387,9 +387,10 @@ Coordinator decisions (overnight, 2026-11-17), pending owner review.
   written. An item unpublished afterwards still counts in them until `05` I2 recomputes the
   roll-ups on such a change; the read does not recompute them. The counts show no item's id,
   title or content.
-- **Observers.** A user who holds `course.view` alone (the built-in Observer) reads as a
-  learner does, published content only, with links withheld under the stand-in above, and
-  gets no `progress` member, since they hold no `course.participate`.
+- **Observers.** A user with `course.view` but neither `course.view_all` nor
+  `course.participate` (the built-in Observer) reads as a learner does: published content only,
+  with links withheld under the stand-in above, and no `progress` member. Their observed
+  learners' progress is `05` B17's staff read, not these routes.
 - **Templates.** A template's outline, modules and items answer 404 to a caller without
   `course.view_all`, as a draft's do (`02` B24, Q13), even to a Student with an active
   enrollment in it.
