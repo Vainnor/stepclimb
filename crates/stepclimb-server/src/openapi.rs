@@ -38,10 +38,10 @@ use crate::{
     branding, course_enrollments, course_files, courses, discovery, enrollment,
     error::{CurrentVersion, FieldError, PROBLEM_JSON, Problem},
     health, identities, items, local_sign_in, manifest, me, modules, my_passkeys, oauth_authorize,
-    oauth_token, organization, page_doc_schema, pages, passkey_enrollment, passkey_options,
-    passkey_sign_in, password, progress, provider_admin, provider_callback, provider_sign_in,
-    role_assignments, roles, service_accounts, totp, totp_enrollment, unlock, upload, users,
-    video_uploads, videos,
+    oauth_token, organization, outline, page_doc_schema, pages, passkey_enrollment,
+    passkey_options, passkey_sign_in, password, progress, provider_admin, provider_callback,
+    provider_sign_in, role_assignments, roles, service_accounts, totp, totp_enrollment, unlock,
+    upload, users, video_uploads, videos,
 };
 
 /// The operation extension that marks a handler as changing state (spec 08 B12, T17). Every
@@ -101,6 +101,9 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         courses::update_course,
         courses::set_course_status,
         courses::move_course,
+        outline::list_modules,
+        outline::get_module,
+        outline::get_item,
         modules::create_module,
         modules::reorder_modules,
         modules::update_module,
@@ -458,6 +461,8 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             modules::ModulePatchInvalid,
             modules::ModuleDeleteConflict,
             items::ItemNotFound,
+            outline::ModuleReadNotFound,
+            outline::ItemReadNotFound,
             items::ItemMoveNotFound,
             items::ItemCreateConflict,
             items::ItemOrderConflict,

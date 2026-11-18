@@ -343,6 +343,58 @@ or Q12.
 - **No `items::referencing` yet.** The spec lists it for the content specs' deletion checks;
   nothing calls it until spec 06, which adds it.
 
+### Decisions made building I2
+
+Coordinator decisions (overnight, 2026-11-17), pending owner review.
+
+- **Links are withheld from learners until spec 04 I3, failing closed.** Spec 04's unlock
+  rules can already be written, but the lock state that withholds a locked item's `ref_id` and
+  `url` (`04` B12) needs the learner's progress (`05` I1) and arrives with `04` I3. Until then,
+  a read by a caller without `course.view_all` leaves out `ref_id` and `url` on every item of a
+  module that has any unlock rule: an unlock date (future or past), a prerequisite, or
+  sequential order. Items have no unlock rule of their own. Titles, kinds and requirements stay,
+  as `04` B12 shows them. The check is one function, `outline::withholds_content` in the
+  server, which `04` I3 replaces with the evaluator's lock state; until then a learner does not
+  see the link of a module whose date has passed or whose prerequisites are met. Today only
+  external links carry content in a read (no creatable kind has a `ref_id`).
+- **Learners see only published prerequisites.** For a caller without `course.view_all`, a
+  module's `prerequisite_ids` leave out unpublished modules, which `04` B6 counts as met, so no
+  read names a module the learner cannot see.
+- **One snapshot per read.** Each read route runs in a `REPEATABLE READ, READ ONLY`
+  transaction and checks `course.view` again, with `02` B24's draft rule, on the course as that
+  snapshot holds it, so the visibility check and the outline agree. Reads take no course lock.
+- **An archived course's outline reads as a published one's** (T2's "reads still answer
+  200").
+- **Operation ids** are `listModules`, `getModule` and `getItem`; the 403 is the shared
+  `permission.denied`.
+- **The learner's own progress (`05` B13, T10).** A caller who holds `course.participate` at
+  the course gets `progress` on each module and item of the three reads, read for their own
+  user id from `progress::for_learner_in_course` in the read's snapshot: null where they have
+  no row, absent for anyone else (staff without `course.participate`) and on every write
+  response, as on the course read. Progress is attached by id to the modules and items the
+  answer already holds, so it follows the published filter and never names what the caller
+  cannot see; the stand-in above still withholds the links of a module with an unlock rule. A
+  module's `progress` is `ModuleProgress` (`module_id`, `required_count`, `completed_count`,
+  `completed_at`, `05`'s Schemas), an item's the existing `ItemProgress`.
+- **Positions are numbered over what the caller sees.** For a caller without
+  `course.view_all`, a module's `position` is its place among the course's published modules
+  and an item's its place among the published items of its module, 0-based and dense, on all
+  three reads. The stored positions count unpublished rows too, so a gap in them would tell a
+  learner how many unpublished modules or items sit before one. Staff get the stored positions,
+  which number every row.
+- **Known gap until `05` I2: a module's counts can include unpublished items.** A module's
+  `required_count` and `completed_count` are the roll-up stored when the learner's progress was
+  written. An item unpublished afterwards still counts in them until `05` I2 recomputes the
+  roll-ups on such a change; the read does not recompute them. The counts show no item's id,
+  title or content.
+- **Observers.** A user with `course.view` but neither `course.view_all` nor
+  `course.participate` (the built-in Observer) reads as a learner does: published content only,
+  with links withheld under the stand-in above, and no `progress` member. Their observed
+  learners' progress is `05` B17's staff read, not these routes.
+- **Templates.** A template's outline, modules and items answer 404 to a caller without
+  `course.view_all`, as a draft's do (`02` B24, Q13), even to a Student with an active
+  enrollment in it.
+
 ## Issues
 
 1. **I1. Modules and items tables and authoring routes.** Migration, repositories,

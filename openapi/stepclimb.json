@@ -2953,6 +2953,55 @@
       }
     },
     "/api/v1/courses/{course_id}/modules": {
+      "get": {
+        "tags": [
+          "modules"
+        ],
+        "summary": "The course's modules in order, each with its items in order. A caller without\n`course.view_all` gets only published modules and published items; a learner of the course\nalso gets their progress on each.",
+        "operationId": "listModules",
+        "parameters": [
+          {
+            "name": "course_id",
+            "in": "path",
+            "description": "The course's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The course's outline",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModuleList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/PermissionDenied"
+          },
+          "404": {
+            "$ref": "#/components/responses/ModuleCourseNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
       "post": {
         "tags": [
           "modules"
@@ -3838,6 +3887,55 @@
       }
     },
     "/api/v1/items/{item_id}": {
+      "get": {
+        "tags": [
+          "modules"
+        ],
+        "summary": "One item. An unpublished item, or an item of an unpublished module, answers 404 to a caller\nwithout `course.view_all`; a learner of the course also gets their progress on it.",
+        "operationId": "getItem",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "description": "The item's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The item",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Item"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/PermissionDenied"
+          },
+          "404": {
+            "$ref": "#/components/responses/ItemReadNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
       "delete": {
         "tags": [
           "modules"
@@ -4773,6 +4871,55 @@
       }
     },
     "/api/v1/modules/{module_id}": {
+      "get": {
+        "tags": [
+          "modules"
+        ],
+        "summary": "One module with its items in order. An unpublished module answers 404 to a caller without\n`course.view_all`, who also gets only its published items; a learner of the course also gets\ntheir progress.",
+        "operationId": "getModule",
+        "parameters": [
+          {
+            "name": "module_id",
+            "in": "path",
+            "description": "The module's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The module",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Module"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/PermissionDenied"
+          },
+          "404": {
+            "$ref": "#/components/responses/ModuleReadNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
       "delete": {
         "tags": [
           "modules"
@@ -9489,13 +9636,24 @@
             "format": "int32",
             "description": "0-based, dense within the module."
           },
+          "progress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ItemProgress",
+                "description": "Your progress on the item, on the outline, module and item reads when you are a learner\nof the course (you hold `course.participate` there): null until your first step on it.\nAbsent for anyone else, and from every other operation's answer."
+              }
+            ]
+          },
           "published": {
             "type": "boolean"
           },
           "ref_id": {
             "type": "string",
             "format": "uuid",
-            "description": "What the item points at; only for kinds that point at a row."
+            "description": "What the item points at; only for kinds that point at a row. A read by a caller without\n`course.view_all` leaves it out while the item's module has an unlock date,\nprerequisites or sequential order."
           },
           "requirement": {
             "oneOf": [
@@ -9518,7 +9676,7 @@
           },
           "url": {
             "type": "string",
-            "description": "Only for `external_link`."
+            "description": "Only for `external_link`, and left out as `ref_id` is."
           }
         }
       },
@@ -10137,6 +10295,17 @@
               "type": "string"
             },
             "description": "The modules of the course this one waits for, in course order."
+          },
+          "progress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ModuleProgress",
+                "description": "Your progress in the module, on the outline and module reads when you are a learner of\nthe course (you hold `course.participate` there): null until you complete one of its\nitems. Absent for anyone else, and from every other operation's answer."
+              }
+            ]
           },
           "published": {
             "type": "boolean"
@@ -15390,6 +15559,16 @@
           }
         }
       },
+      "ItemReadNotFound": {
+        "description": "`item.not_found`: no item with this id exists in the organization, or you cannot see it: its course is out of your reach, a draft course or a template, or the item or its module is unpublished, and you do not hold `course.view_all` at the course. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "ItemWriteConflict": {
         "description": "`course.archived`: the course is archived and takes no content change.",
         "content": {
@@ -15552,6 +15731,16 @@
       },
       "ModulePatchNotFound": {
         "description": "`module.not_found`: no module with this id exists in the organization, or you cannot see its course, or a `prerequisite_ids` entry is not a module of the same course. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ModuleReadNotFound": {
+        "description": "`module.not_found`: no module with this id exists in the organization, or you cannot see it: its course is out of your reach, a draft course or a template, or the module is unpublished, and you do not hold `course.view_all` at the course. `org.not_found`: the request's organization cannot be determined.",
         "content": {
           "application/problem+json": {
             "schema": {

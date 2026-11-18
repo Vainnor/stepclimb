@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The module and item authoring routes over the router
-//! (docs/specs/m1/03-modules-and-items.md B1 to B12; T1 to T7 and T13 for the write routes), and
+//! The module and item routes over the router: authoring
+//! (docs/specs/m1/03-modules-and-items.md B1 to B12; T1 to T7 and T13 for the write routes),
+//! reading (B13 to B15; T9 and T13 for the read routes, and the references and URLs a read
+//! withholds from a learner until spec 04 I3; spec 05 T10's outline case for the learner's own
+//! progress), and
 //! the rule fields those routes write (docs/specs/m1/04-unlock-and-completion-rules.md B1 to B3;
 //! T9, T10 and T15's cross-organization ids).
 //! The permission suite's generated cases for each route (T12) are in `tests/permissions.rs`;
@@ -26,11 +29,11 @@ use stepclimb_core::{
     OrgScope, Source, accounts,
     audit::Actor,
     clock::ManualClock,
-    courses,
+    courses, enrollments,
     id::Uuid,
     items, modules, organizations,
     role_assignments::{self, NewAssignment, Scope},
-    roles,
+    roles, rules,
     users::{self, NewUser},
 };
 use stepclimb_server::{
@@ -170,6 +173,68 @@ impl Fixture {
 
     /// A signed-in user holding the built-in role `key` at `at`.
     async fn holder(&self, org: Uuid, key: &str, at: Scope) -> String {
+        let (user, cookie) = self.user(org).await;
+        let assignment = NewAssignment {
+            user_id: user,
+            role_id: self.builtin_role(key).await,
+            scope: at,
+            source: Source::Local,
+            external_id: None,
+        };
+        role_assignments::create(&self.pool, scope(org), &assignment, now(), Actor::Instance)
+            .await
+            .expect("create assignment");
+        cookie
+    }
+
+    /// A signed-in user enrolled in `t`'s course with the built-in role Student.
+    async fn student(&self, t: Tree) -> String {
+        self.enrolled(t, "student", Vec::new()).await.1
+    }
+
+    /// A signed-in user enrolled in `t`'s course with the built-in role Observer, observing a
+    /// new Student of the course. The role holds `course.view` and `progress.view_observed`:
+    /// neither `course.view_all` nor `course.participate`.
+    async fn observer(&self, t: Tree) -> String {
+        let (learner, _) = self.enrolled(t, "student", Vec::new()).await;
+        self.enrolled(t, "observer", vec![learner]).await.1
+    }
+
+    /// A signed-in user enrolled in `t`'s course with the built-in role `key`, observing
+    /// `observed` (spec 05 B17: only for a role holding `progress.view_observed`): their id and
+    /// session cookie.
+    async fn enrolled(&self, t: Tree, key: &str, observed: Vec<Uuid>) -> (Uuid, String) {
+        let (user, cookie) = self.user(t.org).await;
+        let new = enrollments::NewEnrollment {
+            user_id: user,
+            role_id: self.builtin_role(key).await,
+            source: Source::Local,
+            external_id: None,
+            observed_user_ids: observed,
+        };
+        enrollments::create(
+            &self.pool,
+            scope(t.org),
+            t.course,
+            &new,
+            now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("enroll");
+        (user, cookie)
+    }
+
+    async fn builtin_role(&self, key: &str) -> Uuid {
+        sqlx::query_scalar("SELECT id FROM roles WHERE org_id IS NULL AND key = $1")
+            .bind(key)
+            .fetch_one(&self.pool)
+            .await
+            .expect("a built-in role")
+    }
+
+    /// A signed-in user of `org` with no role: their id and session cookie.
+    async fn user(&self, org: Uuid) -> (Uuid, String) {
         let new_user = NewUser {
             display_name: "Pat Example".into(),
             given_name: String::new(),
@@ -184,26 +249,72 @@ impl Fixture {
             .await
             .expect("create user")
             .id;
-        let role = sqlx::query_scalar("SELECT id FROM roles WHERE org_id IS NULL AND key = $1")
-            .bind(key)
-            .fetch_one(&self.pool)
-            .await
-            .expect("a built-in role");
-        let assignment = NewAssignment {
-            user_id: user,
-            role_id: role,
-            scope: at,
-            source: Source::Local,
-            external_id: None,
-        };
-        role_assignments::create(&self.pool, scope(org), &assignment, now(), Actor::Instance)
-            .await
-            .expect("create assignment");
         let started = session::start(&self.pool, scope(org), user, &HeaderMap::new(), now())
             .await
             .expect("start a session");
         let cookie = started.set_cookie.to_str().expect("ASCII");
-        cookie.split(';').next().expect("a pair").to_owned()
+        (user, cookie.split(';').next().expect("a pair").to_owned())
+    }
+
+    async fn set_course_status(&self, t: Tree, to: courses::Status) {
+        courses::set_status(
+            &self.pool,
+            scope(t.org),
+            t.course,
+            to,
+            now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("set the course status");
+    }
+
+    async fn publish_module(&self, t: Tree, module: Uuid) {
+        let patch = modules::ModulePatch {
+            published: Some(true),
+            ..Default::default()
+        };
+        modules::update(&self.pool, scope(t.org), module, &patch, now())
+            .await
+            .expect("publish the module");
+    }
+
+    async fn publish_item(&self, t: Tree, item: Uuid) {
+        let patch = items::ItemPatch {
+            published: Some(true),
+            ..Default::default()
+        };
+        items::update(&self.pool, scope(t.org), item, &patch, now())
+            .await
+            .expect("publish the item");
+    }
+
+    /// A published module of `t`'s course.
+    async fn published_module(&self, t: Tree) -> Uuid {
+        let module = self.module(t).await;
+        self.publish_module(t, module).await;
+        module
+    }
+
+    /// A published external link to `url`, last in `module`.
+    async fn published_link(&self, t: Tree, module: Uuid, url: &str) -> Uuid {
+        let new = items::NewItem {
+            kind: items::Kind::ExternalLink,
+            title: "Link".into(),
+            ref_id: None,
+            url: Some(url.into()),
+            position: None,
+        };
+        let item = items::create(&self.pool, scope(t.org), module, &new, now())
+            .await
+            .expect("create item")
+            .id;
+        self.publish_item(t, item).await;
+        item
+    }
+
+    async fn get(&self, uri: &str, org: Uuid, cookie: &str) -> Answer {
+        self.send(Method::GET, uri, org, cookie, None).await
     }
 
     async fn org_admin(&self, org: Uuid) -> String {
@@ -1124,4 +1235,445 @@ async fn spec04_t15_rule_writes_refuse_another_organizations_ids(pool: PgPool) {
     )
     .await
     .expect(StatusCode::CONFLICT, "course.archived");
+}
+
+/// The ids of a list of modules or items in a response.
+fn ids(list: &Value) -> Vec<Uuid> {
+    list.as_array()
+        .expect("a list")
+        .iter()
+        .map(|v| v["id"].as_str().expect("an id").parse().expect("a UUID"))
+        .collect()
+}
+
+/// T9 (B13, B14): an enrolled Student sees only published modules, their published items and
+/// published prerequisites; an unpublished module or item, or an item of an unpublished module,
+/// answers 404 to the Student and 200 to a Course designer.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t9_a_student_reads_only_published_content(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    f.set_course_status(t, courses::Status::Published).await;
+    let open = f.published_module(t).await;
+    let hidden = f.module(t).await;
+    let later = f.published_module(t).await;
+    let shown = f.published_link(t, open, "https://example.com/a").await;
+    let unpublished = f.header(t, open).await;
+    let inner = f.published_link(t, hidden, "https://example.com/b").await;
+    // An unpublished header sits before `after`, as `hidden` sits before `later`.
+    f.header(t, later).await;
+    let after = f.published_link(t, later, "https://example.com/c").await;
+    let rules = modules::RulesPatch {
+        prerequisite_ids: Some(vec![open, hidden]),
+        ..Default::default()
+    };
+    modules::set_rules(&f.pool, scope(t.org), later, &rules, now())
+        .await
+        .unwrap();
+    let student = f.student(t).await;
+    let designer = f
+        .holder(t.org, "course_designer", Scope::Account(t.tower))
+        .await;
+
+    let list = f.get(&course_modules(t.course), t.org, &student).await;
+    let body = list.ok(StatusCode::OK);
+    assert_schema("ModuleList", body);
+    assert_eq!(ids(&body["modules"]), [open, later]);
+    assert_eq!(ids(&body["modules"][0]["items"]), [shown]);
+    assert_eq!(body["modules"][1]["prerequisite_ids"], json!([open]));
+    // Positions are numbered over what the Student sees, so they say nothing of hidden rows.
+    let positions = |list: &Value| -> Vec<i64> {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["position"].as_i64().unwrap())
+            .collect()
+    };
+    assert_eq!(positions(&body["modules"]), [0, 1]);
+    assert_eq!(ids(&body["modules"][1]["items"]), [after]);
+    assert_eq!(positions(&body["modules"][1]["items"]), [0]);
+    let module = f.get(&module_path(later), t.org, &student).await;
+    let module = module.ok(StatusCode::OK);
+    assert_eq!(
+        (&module["position"], &module["items"][0]["position"]),
+        (&json!(1), &json!(0))
+    );
+    let item = f.get(&item_path(after), t.org, &student).await;
+    assert_eq!(item.ok(StatusCode::OK)["position"], 0);
+    let list = f.get(&course_modules(t.course), t.org, &designer).await;
+    let body = list.ok(StatusCode::OK);
+    assert_eq!(ids(&body["modules"]), [open, hidden, later]);
+    assert_eq!(positions(&body["modules"]), [0, 1, 2]);
+    assert_eq!(positions(&body["modules"][2]["items"]), [0, 1]);
+    let item = f.get(&item_path(after), t.org, &designer).await;
+    assert_eq!(item.ok(StatusCode::OK)["position"], 1);
+    assert_eq!(ids(&body["modules"][0]["items"]), [shown, unpublished]);
+    assert_eq!(
+        body["modules"][2]["prerequisite_ids"],
+        json!([open, hidden])
+    );
+
+    let module = f.get(&module_path(open), t.org, &student).await;
+    let body = module.ok(StatusCode::OK);
+    assert_schema("Module", body);
+    assert_eq!(ids(&body["items"]), [shown]);
+    let module = f.get(&module_path(later), t.org, &student).await;
+    assert_eq!(module.ok(StatusCode::OK)["prerequisite_ids"], json!([open]));
+    f.get(&module_path(hidden), t.org, &student)
+        .await
+        .expect(StatusCode::NOT_FOUND, "module.not_found");
+    f.get(&module_path(hidden), t.org, &designer)
+        .await
+        .ok(StatusCode::OK);
+
+    let item = f.get(&item_path(shown), t.org, &student).await;
+    let body = item.ok(StatusCode::OK);
+    assert_schema("Item", body);
+    assert_eq!(body["url"], "https://example.com/a");
+    assert_eq!(
+        (body["module_id"].as_str(), body["course_id"].as_str()),
+        (
+            Some(open.to_string().as_str()),
+            Some(t.course.to_string().as_str())
+        )
+    );
+    for hidden_item in [unpublished, inner] {
+        f.get(&item_path(hidden_item), t.org, &student)
+            .await
+            .expect(StatusCode::NOT_FOUND, "item.not_found");
+        f.get(&item_path(hidden_item), t.org, &designer)
+            .await
+            .ok(StatusCode::OK);
+    }
+}
+
+/// B13, B14 and spec 02 B24: a draft course's outline, modules and items answer 404 to a
+/// Student enrolled in it and 200 to a Course designer; an archived course's answer 200 to both
+/// (T2: reads still answer in an archived course); an archived template's answer 404 to the
+/// Student and 200 to the designer again.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_course_status_decides_whether_a_student_reads_the_outline(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    let module = f.published_module(t).await;
+    let item = f.published_link(t, module, "https://example.com/a").await;
+    let student = f.student(t).await;
+    let designer = f
+        .holder(t.org, "course_designer", Scope::Account(t.tower))
+        .await;
+    let reads = [
+        (course_modules(t.course), "course.not_found"),
+        (module_path(module), "module.not_found"),
+        (item_path(item), "item.not_found"),
+    ];
+    for (uri, code) in &reads {
+        let answer = f.get(uri, t.org, &student).await;
+        answer.expect(StatusCode::NOT_FOUND, code);
+        assert!(
+            !answer.body.to_string().contains("example.com"),
+            "{answer:?}"
+        );
+        f.get(uri, t.org, &designer).await.ok(StatusCode::OK);
+    }
+    f.set_course_status(t, courses::Status::Published).await;
+    f.set_course_status(t, courses::Status::Archived).await;
+    for (uri, _) in &reads {
+        f.get(uri, t.org, &student).await.ok(StatusCode::OK);
+        f.get(uri, t.org, &designer).await.ok(StatusCode::OK);
+    }
+    // Made a template in the database, so the course is archived, not a draft: only the
+    // template flag hides it. The Student's enrollment, made before, stays active.
+    sqlx::query("UPDATE courses SET template = true WHERE id = $1")
+        .bind(t.course)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    for (uri, code) in &reads {
+        let answer = f.get(uri, t.org, &student).await;
+        answer.expect(StatusCode::NOT_FOUND, code);
+        assert!(
+            !answer.body.to_string().contains("example.com"),
+            "{answer:?}"
+        );
+        f.get(uri, t.org, &designer).await.ok(StatusCode::OK);
+    }
+}
+
+/// The stand-in for spec 04 I3: while a module has an unlock date (future or past),
+/// prerequisites or sequential order, every read withholds its items' URLs from a Student and
+/// from an Observer (the raw body does not hold them); a module without rules shows them; a Course designer sees them
+/// all.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn reads_withhold_links_of_a_module_with_unlock_rules_from_a_student(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    f.set_course_status(t, courses::Status::Published).await;
+    let (ruled, plain) = (f.published_module(t).await, f.published_module(t).await);
+    let gated_url = "https://gated.example/secret";
+    let gated = f.published_link(t, ruled, gated_url).await;
+    let open = f.published_link(t, plain, "https://open.example/a").await;
+    let (student, observer) = (f.student(t).await, f.observer(t).await);
+    let designer = f
+        .holder(t.org, "course_designer", Scope::Account(t.tower))
+        .await;
+    let day = Duration::from_secs(86_400);
+    let rules = [
+        modules::RulesPatch {
+            unlock_at: Some(Some(now() + day)),
+            ..Default::default()
+        },
+        modules::RulesPatch {
+            unlock_at: Some(Some(now() - day)),
+            ..Default::default()
+        },
+        modules::RulesPatch {
+            prerequisite_ids: Some(vec![plain]),
+            ..Default::default()
+        },
+        modules::RulesPatch {
+            require_sequential: Some(true),
+            ..Default::default()
+        },
+    ];
+    let cleared = modules::RulesPatch {
+        unlock_at: Some(None),
+        prerequisite_ids: Some(Vec::new()),
+        require_sequential: Some(false),
+        completion_rule: None,
+    };
+    for rule in rules {
+        modules::set_rules(&f.pool, scope(t.org), ruled, &cleared, now())
+            .await
+            .unwrap();
+        modules::set_rules(&f.pool, scope(t.org), ruled, &rule, now())
+            .await
+            .unwrap();
+        for reader in [&student, &observer] {
+            let list = f.get(&course_modules(t.course), t.org, reader).await;
+            let body = list.ok(StatusCode::OK);
+            assert!(!body.to_string().contains(gated_url), "{rule:?}: {body}");
+            assert_eq!(ids(&body["modules"][0]["items"]), [gated], "{rule:?}");
+            assert!(
+                body["modules"][0]["items"][0].get("url").is_none(),
+                "{rule:?}"
+            );
+            assert_eq!(
+                body["modules"][1]["items"][0]["url"],
+                "https://open.example/a"
+            );
+            let module = f.get(&module_path(ruled), t.org, reader).await;
+            let body = module.ok(StatusCode::OK);
+            assert!(!body.to_string().contains(gated_url), "{rule:?}: {body}");
+            assert_eq!(ids(&body["items"]), [gated], "{rule:?}");
+            let item = f.get(&item_path(gated), t.org, reader).await;
+            let body = item.ok(StatusCode::OK);
+            assert_schema("Item", body);
+            assert!(!body.to_string().contains(gated_url), "{rule:?}: {body}");
+            assert_eq!(body["title"], "Link");
+            let item = f.get(&item_path(open), t.org, reader).await;
+            assert_eq!(item.ok(StatusCode::OK)["url"], "https://open.example/a");
+        }
+
+        for uri in [
+            course_modules(t.course),
+            module_path(ruled),
+            item_path(gated),
+        ] {
+            let answer = f.get(&uri, t.org, &designer).await;
+            assert!(
+                answer.ok(StatusCode::OK).to_string().contains(gated_url),
+                "{rule:?}: {uri}"
+            );
+        }
+    }
+    modules::set_rules(&f.pool, scope(t.org), ruled, &cleared, now())
+        .await
+        .unwrap();
+    let item = f.get(&item_path(gated), t.org, &student).await;
+    assert_eq!(
+        item.ok(StatusCode::OK)["url"],
+        gated_url,
+        "no rule, no withholding"
+    );
+}
+
+/// T13 for the read routes: org A's admin naming org B's published course, module and item gets
+/// 404, and nothing of org B's in the body.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t13_every_read_route_refuses_another_organizations_ids(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (a, b) = (f.a, tree(&f.pool, "org-b").await);
+    let admin = f.org_admin(a.org).await;
+    f.set_course_status(b, courses::Status::Published).await;
+    let module = f.published_module(b).await;
+    let item = f.published_link(b, module, "https://theirs.example/").await;
+    let before = f.rows(b.org).await;
+    let calls = [
+        (course_modules(b.course), "course.not_found"),
+        (module_path(module), "module.not_found"),
+        (item_path(item), "item.not_found"),
+    ];
+    let theirs = [b.course, module, item].map(|id| id.to_string());
+    for (uri, code) in calls {
+        let answer = f.get(&uri, a.org, &admin).await;
+        answer.expect(StatusCode::NOT_FOUND, code);
+        let text = answer.body.to_string();
+        assert!(!theirs.iter().any(|id| text.contains(id)), "{text}");
+        assert!(!text.contains("theirs.example"), "{text}");
+    }
+    assert_eq!(f.rows(b.org).await, before, "org B is unchanged");
+}
+
+/// Spec 05 T10 (B13) on the outline, module and item reads: a Student's answer carries their own
+/// module and item progress; another Student of the course gets null; a Course designer, who
+/// does not hold `course.participate`, gets no `progress` member, and neither does an Observer
+/// (`course.view` without `course.view_all` or `course.participate`), who sees only published
+/// content and no link of a module with rules.
+/// Progress shows only on what the Student can see, and the stand-in for spec 04 I3 still
+/// withholds the link.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn spec05_t10_the_outline_carries_the_learners_own_progress(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    f.set_course_status(t, courses::Status::Published).await;
+    let module = f.published_module(t).await;
+    let required = f.published_link(t, module, "https://example.com/r").await;
+    let plain = f.published_link(t, module, "https://example.com/p").await;
+    items::set_requirement(
+        &f.pool,
+        scope(t.org),
+        required,
+        Some(rules::Requirement::View),
+        now(),
+    )
+    .await
+    .unwrap();
+    let (first, second) = (f.student(t).await, f.student(t).await);
+    let observer = f.observer(t).await;
+    // An unpublished header, which no learner or Observer sees.
+    let draft = f.header(t, module).await;
+    let designer = f
+        .holder(t.org, "course_designer", Scope::Account(t.tower))
+        .await;
+    let step = json!({ "action": "view" });
+    let uri = format!("{}/progress", item_path(required));
+    f.send(Method::POST, &uri, t.org, &first, Some(step))
+        .await
+        .ok(StatusCode::OK);
+
+    let list = f.get(&course_modules(t.course), t.org, &first).await;
+    let body = list.ok(StatusCode::OK);
+    assert_schema("ModuleList", body);
+    let mine = &body["modules"][0];
+    assert_eq!(mine["progress"]["module_id"], module.to_string());
+    assert_eq!(
+        (
+            &mine["progress"]["required_count"],
+            &mine["progress"]["completed_count"]
+        ),
+        (&json!(1), &json!(1))
+    );
+    assert!(mine["progress"]["completed_at"].is_string(), "{mine}");
+    assert_eq!(mine["items"][0]["progress"]["state"], "completed");
+    assert_eq!(
+        mine["items"][0]["progress"]["item_id"],
+        required.to_string()
+    );
+    assert_eq!(mine["items"][1]["progress"], Value::Null);
+    assert!(
+        mine["items"][1].get("progress").is_some(),
+        "null, not absent"
+    );
+
+    let theirs = f.get(&course_modules(t.course), t.org, &second).await;
+    let theirs = &theirs.ok(StatusCode::OK)["modules"][0];
+    assert!(
+        theirs.get("progress").is_some_and(Value::is_null),
+        "{theirs}"
+    );
+    for item in theirs["items"].as_array().unwrap() {
+        assert!(item.get("progress").is_some_and(Value::is_null), "{item}");
+    }
+
+    // An Observer holds neither `course.view_all` nor `course.participate`: published content,
+    // no `progress` member.
+    let watching = f.get(&course_modules(t.course), t.org, &observer).await;
+    let watching = &watching.ok(StatusCode::OK)["modules"][0];
+    assert!(watching.get("progress").is_none(), "{watching}");
+    assert_eq!(ids(&watching["items"]), [required, plain]);
+    assert!(
+        watching["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i.get("progress").is_none())
+    );
+    let item = f.get(&item_path(required), t.org, &observer).await;
+    assert!(item.ok(StatusCode::OK).get("progress").is_none());
+    f.get(&item_path(draft), t.org, &observer)
+        .await
+        .expect(StatusCode::NOT_FOUND, "item.not_found");
+
+    let staff = f.get(&course_modules(t.course), t.org, &designer).await;
+    let staff = &staff.ok(StatusCode::OK)["modules"][0];
+    assert!(staff.get("progress").is_none(), "{staff}");
+    assert!(
+        staff["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i.get("progress").is_none())
+    );
+
+    let one = f.get(&module_path(module), t.org, &first).await;
+    let one = one.ok(StatusCode::OK);
+    assert_schema("Module", one);
+    assert_eq!(one["progress"]["completed_count"], 1);
+    assert_eq!(one["items"][0]["progress"]["state"], "completed");
+    let item = f.get(&item_path(required), t.org, &first).await;
+    let item = item.ok(StatusCode::OK);
+    assert_schema("Item", item);
+    assert_eq!(item["progress"]["state"], "completed");
+    let item = f.get(&item_path(required), t.org, &second).await;
+    assert!(
+        item.ok(StatusCode::OK)
+            .get("progress")
+            .is_some_and(Value::is_null)
+    );
+    let item = f.get(&item_path(required), t.org, &designer).await;
+    assert!(item.ok(StatusCode::OK).get("progress").is_none());
+
+    // A rule added afterwards: the progress stays, the link is withheld.
+    let sequential = modules::RulesPatch {
+        require_sequential: Some(true),
+        ..Default::default()
+    };
+    modules::set_rules(&f.pool, scope(t.org), module, &sequential, now())
+        .await
+        .unwrap();
+    let item = f.get(&item_path(required), t.org, &first).await;
+    let item = item.ok(StatusCode::OK);
+    assert_eq!(item["progress"]["state"], "completed");
+    assert!(item.get("url").is_none(), "{item}");
+    let item = f.get(&item_path(required), t.org, &observer).await;
+    let item = item.ok(StatusCode::OK);
+    assert!(item.get("url").is_none(), "{item}");
+    assert!(item.get("progress").is_none(), "{item}");
+
+    // Unpublished, the completed item leaves the Student's answer, progress and all.
+    let hide = items::ItemPatch {
+        published: Some(false),
+        ..Default::default()
+    };
+    items::update(&f.pool, scope(t.org), required, &hide, now())
+        .await
+        .unwrap();
+    let list = f.get(&course_modules(t.course), t.org, &first).await;
+    let body = list.ok(StatusCode::OK);
+    assert!(!body.to_string().contains(&required.to_string()), "{body}");
+    assert_eq!(ids(&body["modules"][0]["items"]), [plain]);
+    let watching = f.get(&course_modules(t.course), t.org, &observer).await;
+    let watching = watching.ok(StatusCode::OK);
+    assert_eq!(ids(&watching["modules"][0]["items"]), [plain]);
+    assert!(!watching.to_string().contains("progress"), "{watching}");
 }

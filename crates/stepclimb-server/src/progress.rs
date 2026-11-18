@@ -248,7 +248,7 @@ pub struct ModuleProgress {
 }
 
 impl ModuleProgress {
-    fn from_core(progress: progress::ModuleProgress) -> Result<Self, ApiError> {
+    pub(crate) fn from_core(progress: progress::ModuleProgress) -> Result<Self, ApiError> {
         Ok(Self {
             module_id: progress.module_id,
             required_count: progress.required_count,

@@ -248,6 +248,18 @@ const TABLE: &[Entry] = &[
         },
     },
     Entry {
+        operation_id: "listModules",
+        access: permission(CourseView::KEY, COURSE_NOT_FOUND, published_outline),
+    },
+    Entry {
+        operation_id: "getModule",
+        access: permission(CourseView::KEY, MODULE_NOT_FOUND, published_module),
+    },
+    Entry {
+        operation_id: "getItem",
+        access: permission(CourseView::KEY, ITEM_NOT_FOUND, published_item),
+    },
+    Entry {
         operation_id: "createModule",
         access: permission(
             CourseContentEdit::KEY,
@@ -1544,6 +1556,50 @@ const ITEM_NOT_FOUND: Target = Target::Scoped {
     not_found: "item.not_found",
     cross_org: "item.not_found",
 };
+
+/// A published course in Tower with a published module holding a published link. The read
+/// setups publish everything: the 2xx case holds `course.view` alone, without
+/// `course.view_all`, and unpublished content answers 404 to it (M1 spec 03 B13, B14).
+async fn outline(org: &Org) -> (Uuid, Uuid, Uuid) {
+    let course = org.course(org.tower, true).await;
+    let module = org.module(course).await;
+    let item = org.link(module).await;
+    org.publish(module, item).await;
+    (course, module, item)
+}
+
+/// [`outline`]'s course.
+fn published_outline(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: vec![("course_id", outline(org).await.0)],
+            body: None,
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// [`outline`]'s module.
+fn published_module(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: vec![("module_id", outline(org).await.1)],
+            body: None,
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// [`outline`]'s item.
+fn published_item(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            params: vec![("item_id", outline(org).await.2)],
+            body: None,
+            at: At::Account(org.tower),
+        }
+    })
+}
 
 /// A published course in Tower and a new module's title. The content setups below use published
 /// courses: a draft's modules and items answer 404 to a caller without `course.view_all` (M1 spec
@@ -4046,6 +4102,24 @@ impl Org {
             .await
             .expect("create item")
             .id
+    }
+
+    /// Publish `module` and its item `item`.
+    async fn publish(&self, module: Uuid, item: Uuid) {
+        let patch = modules::ModulePatch {
+            published: Some(true),
+            ..Default::default()
+        };
+        modules::update(&self.pool, scope(self.id), module, &patch, now())
+            .await
+            .expect("publish module");
+        let patch = items::ItemPatch {
+            published: Some(true),
+            ..Default::default()
+        };
+        items::update(&self.pool, scope(self.id), item, &patch, now())
+            .await
+            .expect("publish item");
     }
 
     /// A new external link, last in `module`: its id.

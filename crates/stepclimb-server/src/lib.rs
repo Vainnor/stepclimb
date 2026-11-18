@@ -91,6 +91,7 @@ mod oauth_page;
 pub mod oauth_token;
 pub mod openapi;
 pub mod organization;
+pub mod outline;
 pub mod page_doc_schema;
 pub mod pages;
 pub mod pagination;
