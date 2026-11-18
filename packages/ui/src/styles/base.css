@@ -210,6 +210,106 @@
   }
 }
 
+/* The page editor's content (docs/specs/m1/07-pages-and-the-editor.md B21): ProseMirror's own
+   rules (Tiptap's injected stylesheet is off) and the blocks a reader's HTML draws differently:
+   callouts, transcripts, images and embeds as labelled blocks, the selected block, the drop and
+   gap cursors, and the block a refusal names. */
+@layer base {
+  .ProseMirror {
+    position: relative;
+    word-wrap: break-word;
+    white-space: break-spaces;
+    font-variant-ligatures: none;
+  }
+  .ProseMirror [contenteditable="false"] {
+    white-space: normal;
+  }
+  .ProseMirror pre {
+    white-space: pre-wrap;
+  }
+  .ProseMirror-hideselection *::selection {
+    background: transparent;
+  }
+  .ProseMirror-separator,
+  .ProseMirror-trailingBreak {
+    display: inline;
+  }
+  .ProseMirror-gapcursor {
+    display: none;
+    pointer-events: none;
+    position: absolute;
+  }
+  .ProseMirror-gapcursor::after {
+    content: "";
+    display: block;
+    position: absolute;
+    inset-block-start: -2px;
+    inline-size: 20px;
+    border-block-start: 2px solid var(--sc-fg-strong);
+  }
+  .ProseMirror-focused .ProseMirror-gapcursor {
+    display: block;
+  }
+  .ProseMirror-selectednode,
+  .ProseMirror .selectedCell {
+    outline: 2px solid var(--sc-ring);
+    outline-offset: 2px;
+  }
+  .ProseMirror [data-invalid] {
+    outline: 2px solid var(--sc-danger);
+    outline-offset: 4px;
+  }
+  .ProseMirror :is(th, td) {
+    position: relative;
+    min-inline-size: 4em;
+  }
+  :is(
+    [data-slot="editor-callout"],
+    [data-slot="editor-image"],
+    [data-slot="editor-video"],
+    [data-slot="editor-transcript"]
+  ) {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5em;
+    padding: 1em;
+    border: 1px solid var(--sc-line);
+    border-radius: var(--sc-radius-md);
+    background: var(--sc-bg-sunken);
+  }
+  [data-slot="editor-callout"][data-kind="info"] {
+    background: var(--sc-info-soft);
+  }
+  [data-slot="editor-callout"][data-kind="tip"] {
+    background: var(--sc-success-soft);
+  }
+  [data-slot="editor-callout"][data-kind="warning"] {
+    background: var(--sc-warning-soft);
+  }
+  [data-slot="editor-callout"][data-kind="danger"] {
+    background: var(--sc-danger-soft);
+  }
+  [data-slot="editor-callout-content"] > * + *,
+  [data-slot="editor-transcript-line-content"] > * + * {
+    margin-block-start: 1em;
+  }
+  :is(
+    [data-slot="editor-callout-label"],
+    [data-slot="editor-image-label"],
+    [data-slot="editor-video-label"],
+    [data-slot="editor-transcript-line-label"]
+  ) {
+    font-family: var(--sc-font-ui);
+    font-size: var(--sc-text-sm);
+    font-weight: var(--sc-weight-heading);
+    color: var(--sc-fg-strong);
+    user-select: none;
+  }
+  [data-slot="editor-transcript"] {
+    gap: 0.75em;
+  }
+}
+
 /* Touch (B9): targets at least `--sc-control-touch` (44 px) and text inputs at 16 px, so iOS
    does not zoom on focus. This and the next two blocks are unlayered: an unlayered declaration
    outranks every layered one, so no component utility undoes them. */

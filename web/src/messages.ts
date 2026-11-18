@@ -208,6 +208,52 @@ export const webMessages: Catalog = {
     "notFound.title": "Page not found",
     "offline.notice":
       "The server could not be reached, so this page may be out of date. Check your connection, then try again.",
+    "pageEdit.conflict.label": "Newer version saved",
+    "pageEdit.conflict.message":
+      "Someone saved version {number} of this page while you were editing. Your changes are still here and in this browser.",
+    "pageEdit.conflict.overwrite": "Save my changes as the newest version",
+    "pageEdit.conflict.reload": "Load version {number}",
+    "pageEdit.conflict.reloadConfirm": "Discard my changes",
+    "pageEdit.conflict.reloadDescription":
+      "Your unsaved changes will be lost. Version {number} stays in the page's history either way.",
+    "pageEdit.conflict.reloadTitle": "Load version {number} and discard your changes?",
+    "pageEdit.draft.discard": "Discard",
+    "pageEdit.draft.found":
+      "You have unsaved changes to this page from {when, date, medium} at {when, time, short}.",
+    "pageEdit.draft.label": "Unsaved changes",
+    "pageEdit.draft.restore": "Restore my changes",
+    "pageEdit.loaded": "Version {number} loaded",
+    "pageEdit.problem.archived": "This {course} is archived, so its pages cannot be changed.",
+    "pageEdit.problem.bodyInvalid":
+      "The outlined block holds something a page cannot hold. Change or delete it, then save again.",
+    "pageEdit.problem.denied": "You do not have permission to edit this page.",
+    "pageEdit.problem.failed":
+      "The page could not be saved. Try again; your changes are kept in this browser.",
+    "pageEdit.problem.fileNotFound":
+      "An image on this page is not a file of this {course}. Delete it or insert it again, then save.",
+    "pageEdit.problem.imageType":
+      "The outlined image is not a PNG, JPEG, GIF or WebP file. Replace it, then save again.",
+    "pageEdit.problem.pageGone":
+      "This page no longer exists. Copy any text you want to keep before you leave.",
+    "pageEdit.problem.tooLarge":
+      "This page is too large to save: a page holds at most 1 MiB of content and 20,000 parts. Move some of it to another page.",
+    "pageEdit.problem.unreachable":
+      "Stepclimb could not reach the server. Your changes are kept in this browser; save again when you are back online.",
+    "pageEdit.save": "Save",
+    "pageEdit.saved": "Saved as version {number}",
+    "pageEdit.state.saved": "Version {number}, all changes saved",
+    "pageEdit.state.saving": "Saving",
+    "pageEdit.state.unsaved": "Unsaved changes",
+    "pageEdit.title": "Edit page",
+    "pageEdit.upload.failed": "The image could not be uploaded. Try again.",
+    "pageEdit.upload.noStorage":
+      "File uploads are not set up on this server. Ask an administrator to configure storage.",
+    "pageEdit.upload.storageFull":
+      "Your organization has used all its file storage. Delete files you no longer need, or ask an administrator.",
+    "pageEdit.upload.tooLarge":
+      "This image is larger than this server accepts. Choose a smaller file.",
+    "pageEdit.upload.unreachable":
+      "Stepclimb could not reach the server. Check your connection, then try again.",
     "problem.orgNone.description":
       "An administrator has to create the organization on the server. Try again once that is done.",
     "problem.orgNone.title": "This server has no organization yet",

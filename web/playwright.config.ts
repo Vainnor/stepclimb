@@ -20,13 +20,13 @@ export default defineConfig({
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
-      testIgnore: [/sign-in\.spec\.ts$/, /installed\.spec\.ts$/],
+      testIgnore: [/sign-in\.spec\.ts$/, /installed\.spec\.ts$/, /page-edit-ios\.spec\.ts$/],
     },
-    // Spec 15 T11: the installed-mode layout in WebKit at 375 px.
+    // Spec 15 T11: the installed-mode layout in WebKit at 375 px; the page editor on a phone.
     {
       name: "webkit",
       use: { ...devices["iPhone 13"], viewport: { width: 375, height: 740 } },
-      testMatch: /installed\.spec\.ts$/,
+      testMatch: /(installed|page-edit-ios)\.spec\.ts$/,
     },
     {
       name: "sign-in",
