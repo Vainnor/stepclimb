@@ -17,7 +17,9 @@ test("an anonymous browser is sent to sign in", async ({ page }) => {
 
 // Spec 11 T18, M1 spec 03 B16: the deep link is served the SPA, which sends an anonymous browser
 // to sign in with the deep link, its query included, as the return target.
-test("a deep link is served the SPA and sends an anonymous browser to sign in", async ({ page }) => {
+test("a deep link is served the SPA and sends an anonymous browser to sign in", async ({
+  page,
+}) => {
   const response = await page.goto("/c/example/m/1/i/1?return=https%3A%2F%2Fhost.example%2Fx");
   expect(response?.status()).toBe(200);
   await expect(page.getByRole("heading", { level: 1, name: "Sign in" })).toBeVisible();

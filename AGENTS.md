@@ -39,7 +39,9 @@ signed-out layout (`/sign-in`, which cannot sign in yet: spec 11 I5) and a signe
 (Home) that loads `GET /api/v1/me` through `packages/api-client`, sends a 401 to `/sign-in` with
 its return target, and signs out (spec 11 I3, I4). Its signed-in pages so far are Home, the account page, a course's authoring screen
 (`/c/:course/edit`, M1 spec 16 I14), its files area (`/c/:course/files`, I15), its video panel
-(`/c/:course/videos`) and the page editor (`/c/:course/pages/:page/edit`). `packages/tokens` builds the default and vZDC example
+(`/c/:course/videos`), the page editor (`/c/:course/pages/:page/edit`), and the course home, a
+module and an item's deep link (`/c/:course/m/:module/i/:item`) with its return link (M1 spec 03
+I3). `packages/tokens` builds the default and vZDC example
 themes with Terrazzo; `packages/ui` has `Button` and `useStepclimbStrings()`, the ICU message
 lookup every `web/` string goes through (spec 11 I1). `apps/app` is a Tauri 2 shell that loads
 `web/`. `stepclimb-core` has UUID v7 ids, the permission catalog, the entitlement catalogs, the

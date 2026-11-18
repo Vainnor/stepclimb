@@ -391,6 +391,51 @@ Coordinator decisions (overnight, 2026-11-17), pending owner review.
   `course.view_all`, as a draft's do (`02` B24, Q13), even to a Student with an active
   enrollment in it.
 
+### Decisions made building I3
+
+Coordinator decisions (2026-11-18), pending owner review.
+
+- **The web app reads the list from `GET /api/v1/me`.** The settings routes need
+  `organization.manage`, which a learner does not hold, so `/me` gains `embedding` (the same
+  object the settings show) for every signed-in user. The origins are the host sites the
+  organization links from; the "Back to" link shows one of them anyway.
+- **An origin is written exactly as one.** An entry is accepted when it equals, in any ASCII
+  letter case, the origin the URL parser reads from it: `https`, a host, an optional port that is
+  not the default, nothing else. So `https://host.example/` (a lone `/`), `https://host.example:443`,
+  a user name, white space and a host outside ASCII written other than in its `xn--` form are
+  refused, not cleaned. The repository stores each in lowercase, the first of equal entries only.
+  Every refused entry is listed at its index with `settings.return_origin_invalid`; more than 20
+  entries answer `settings.return_origins_too_many` at `/embedding/return_origins`, a code of its
+  own because no single entry is wrong. The check is `stepclimb_core::settings::return_origin`, in
+  the repository, so every writer applies it.
+- **A patch names the whole `embedding` object** (`{ "embedding": { "return_origins": [...] } }`,
+  every member required), and the settings merge goes one level into object values, so a stored
+  `embedding` member a newer release wrote stays.
+- **What makes a link.** The web app shows the link only for a value of at most 2,048 characters
+  written as an absolute `https://` URL, with no user name or password and no white space, control
+  or format character, whose origin as the browser's URL parser reads it is on the list. The
+  link's `href` is the parser's serialization and its label the parser's host (the `xn--` form for
+  a host outside ASCII), so the label names where the link goes. It opens in the same tab: it is
+  a way back. `return` is read on every course layout route (`/c/:course`, its modules and
+  items). A `return` in the address replaces the kept value, and one that makes no link removes
+  it; a page whose address has none checks the kept value against the list again, so an origin
+  the organization removes takes its link away.
+- **Where the link sits.** At the top of the course layout's content, at every width. SideNav's
+  footer, built for an organization's back link, is not shown under 768 px, where a phone
+  arriving from a host site would lose it.
+- **What a deep link answers.** The not-found view (B16) shows for a 403 as for a 404, for an item
+  whose module or course is not the path's, and, without a request, for a path segment that is
+  no UUID. Ids are compared in lowercase, as the server writes them. The view is drawn inside the
+  course layout, so the TopBar reads "Course" (the organization's term) rather than "Page not
+  found", the same for every one of those cases. A locked item's deep link shows what `GET
+  /api/v1/items/{id}` answers for it: its title, as the outline does (`04` B12), never its link or
+  content.
+- **The views are minimal until `16` I11.** The course home lists the modules with their items as
+  links, a module its items, and the item view its title. `16` I11 replaces them with the course
+  home screen, ModuleRows and the item's content view.
+- **React Aria's `useHref`** passes an absolute `href` through unchanged. It resolved every
+  `href` as a route, which turned `https://host.example/x` into a path under the current page.
+
 ## Issues
 
 1. **I1. Modules and items tables and authoring routes.** Migration, repositories,

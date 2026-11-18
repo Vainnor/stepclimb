@@ -801,6 +801,149 @@ test.describe
       }
     });
 
+    // A deep link from a host site (M1 spec 03 B16 to B18, T10, T11). The admin makes a published
+    // course with a published module holding one external link, a second module, enrolls the
+    // learner the mock signed in as above, and lists https://host.example as a return origin. An
+    // anonymous visit to the deep link goes to sign-in, and the mock's sign-in lands on the item
+    // with its "Back to" link; a path naming the wrong module, and a return URL on another
+    // origin, show what the spec says.
+    test("a deep link signs in, opens its item and offers the return link (03 T10, T11)", async ({
+      page,
+      browser,
+    }) => {
+      expect(passkey, "an earlier test left the admin a passkey").toBeDefined();
+      const authenticator = await addVirtualAuthenticator(page, passkey);
+      await page.goto("/sign-in");
+      await page.getByRole("textbox", { name: "Email" }).fill(EMAIL);
+      await page.getByRole("button", { name: "Continue" }).click();
+      await page.getByRole("button", { name: "Sign in with a passkey" }).click();
+      await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
+      [passkey] = await authenticator.credentials();
+
+      /** A call of the public API as the admin: its status and JSON body. */
+      const call = (method: string, path: string, body?: unknown) =>
+        page.evaluate(
+          async ({ method, path, body }) => {
+            const answer = await fetch(path, {
+              method,
+              headers: body === undefined ? {} : { "content-type": "application/json" },
+              body: body === undefined ? undefined : JSON.stringify(body),
+            });
+            const text = await answer.text();
+            return { status: answer.status, body: text === "" ? null : JSON.parse(text) };
+          },
+          { method, path, body },
+        );
+      const accounts = await call("GET", "/api/v1/accounts?limit=200");
+      const root = accounts.body.items.find((a: { parent_id: string | null }) => !a.parent_id);
+      const course = await call("POST", "/api/v1/courses", {
+        account_id: root.id,
+        title: "Deep links",
+        code: "DL-E2E",
+      });
+      expect(course.status).toBe(201);
+      const courseId: string = course.body.id;
+      const moduleOf = async (title: string) => {
+        const made = await call("POST", `/api/v1/courses/${courseId}/modules`, { title });
+        expect(made.status).toBe(201);
+        expect(
+          (await call("PATCH", `/api/v1/modules/${made.body.id}`, { published: true })).status,
+        ).toBe(200);
+        return made.body.id as string;
+      };
+      const moduleId = await moduleOf("Getting started");
+      const otherModuleId = await moduleOf("Later");
+      const item = await call("POST", `/api/v1/modules/${moduleId}/items`, {
+        kind: "external_link",
+        title: "Radio phraseology",
+        url: "https://example.org/phraseology",
+      });
+      expect(item.status).toBe(201);
+      const itemId: string = item.body.id;
+      expect((await call("PATCH", `/api/v1/items/${itemId}`, { published: true })).status).toBe(
+        200,
+      );
+      const published = await call("POST", `/api/v1/courses/${courseId}/status`, {
+        status: "published",
+      });
+      expect(published.status).toBe(200);
+      const roles = await call("GET", "/api/v1/admin/roles");
+      const student = roles.body.items.find((role: { key: string }) => role.key === "student");
+      const users = await call("GET", "/api/v1/users?limit=200");
+      const learnerUser = users.body.items.find(
+        (user: { email: string | null }) => user.email === "test.student@example.test",
+      );
+      expect(learnerUser, "the mock sign-in test made the learner").toBeDefined();
+      const enrolled = await call("POST", `/api/v1/courses/${courseId}/enrollments`, {
+        user_id: learnerUser.id,
+        role_id: student.id,
+      });
+      expect(enrolled.status).toBe(201);
+
+      const origins = (list: string[]) =>
+        call("PATCH", "/api/v1/organization/settings", { embedding: { return_origins: list } });
+      for (const refused of ["http://host.example", "https://host.example/path"]) {
+        const answer = await origins([refused]);
+        expect([answer.status, answer.body.errors]).toEqual([
+          422,
+          [{ field: "/embedding/return_origins/0", code: "settings.return_origin_invalid" }],
+        ]);
+      }
+      const set = await origins(["https://host.example"]);
+      expect([set.status, set.body.embedding]).toEqual([
+        200,
+        { return_origins: ["https://host.example"] },
+      ]);
+
+      const deepLink = `/c/${courseId}/m/${moduleId}/i/${itemId}`;
+      const context = await browser.newContext();
+      const learner = await context.newPage();
+      try {
+        await learner.goto(`${deepLink}?return=${encodeURIComponent("https://host.example/x")}`);
+        await expect(learner.getByRole("heading", { level: 1, name: "Sign in" })).toBeVisible();
+        await learner.getByRole("link", { name: "Sign in with Mock ID" }).click();
+
+        // Back from the mock signed in, on the item, with the return link.
+        const title = learner.getByRole("heading", { level: 2, name: "Radio phraseology" });
+        await expect(title).toBeVisible();
+        expect(new URL(learner.url()).pathname).toBe(deepLink);
+        const back = learner.getByRole("link", { name: /^Back to host\.example/ });
+        await expect(back).toHaveAttribute("href", "https://host.example/x");
+        expect(await violations(learner)).toEqual([]);
+
+        // The module page keeps the link for the tab.
+        await learner.goto(`/c/${courseId}/m/${moduleId}`);
+        await expect(
+          learner.getByRole("heading", { level: 2, name: "Getting started" }),
+        ).toBeVisible();
+        await expect(back).toBeVisible();
+
+        // A path whose module does not hold the item names nothing.
+        const wrong = `/c/${courseId}/m/${otherModuleId}/i/${itemId}`;
+        await learner.goto(wrong);
+        await expect(
+          learner.getByRole("heading", { level: 2, name: `There is no page at ${wrong}` }),
+        ).toBeVisible();
+        await expect(learner.getByText("Radio phraseology")).toHaveCount(0);
+
+        // Another origin shows no link, drops the kept one, and the page stays where it is.
+        const other = `${deepLink}?return=${encodeURIComponent("https://other.example/")}`;
+        await learner.goto(other);
+        await expect(title).toBeVisible();
+        await expect(learner.getByRole("link", { name: /^Back to/ })).toHaveCount(0);
+        expect(new URL(learner.url()).pathname).toBe(deepLink);
+        await learner.goto(`/c/${courseId}/m/${moduleId}`);
+        await expect(
+          learner.getByRole("heading", { level: 2, name: "Getting started" }),
+        ).toBeVisible();
+        await expect(learner.getByRole("link", { name: /^Back to/ })).toHaveCount(0);
+      } finally {
+        await context.close();
+        const cleared = await origins([]);
+        expect(cleared.status).toBe(200);
+      }
+    });
+
     // VideoUploader against the real tus routes (08 B4 to B7, B22, T14, D37): the admin makes a
     // course, uploads a short file to processing, then pauses a 20 MiB one and cancels it, after
     // which the server answers HEAD with 404. Only the video read that would turn the first one
