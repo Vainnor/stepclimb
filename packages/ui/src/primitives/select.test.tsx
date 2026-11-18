@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WIDE_QUERY } from "../lib/breakpoints";
 import { stubMatchMedia } from "../test/media";
 import { renderWithStrings } from "../test/strings";
+import { Button } from "./button";
+import { DialogTrigger } from "./dialog";
 import { Select, SelectItem } from "./select";
+import { Sheet } from "./sheet";
 
 function wide(isWide: boolean) {
   stubMatchMedia((query) => (query === WIDE_QUERY ? isWide : false));
@@ -82,6 +85,28 @@ describe("Select", () => {
     await user.click(screen.getByRole("option", { name: "S2 Tower" }));
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(trigger()).toHaveTextContent("S2 Tower");
+  });
+
+  it("opens its bottom sheet only when asked, inside a Sheet under 768 px", async () => {
+    wide(false);
+    const user = userEvent.setup();
+    renderWithStrings(
+      <DialogTrigger>
+        <Button>Add an item</Button>
+        <Sheet title="Add an item">
+          <Example defaultValue="s1" />
+        </Sheet>
+      </DialogTrigger>,
+    );
+    await user.click(screen.getByRole("button", { name: "Add an item" }));
+    // Closed: no options are drawn and the Sheet is not made inert under a second modal.
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(document.querySelector('[data-slot="list-box-sheet-overlay"]')).toBeNull();
+    await user.click(trigger());
+    await user.click(await screen.findByRole("option", { name: "S2 Tower" }));
+    await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+    expect(trigger()).toHaveTextContent("S2 Tower");
+    expect(screen.getByRole("dialog", { name: "Add an item" })).toBeInTheDocument();
   });
 
   it("marks the selected option with a check", async () => {
