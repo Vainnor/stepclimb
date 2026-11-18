@@ -108,12 +108,16 @@ static COURSE_DESIGNER: BuiltinRole = BuiltinRole {
     ]),
 };
 
+/// `user.view` lets an Instructor enroll the users their assignment's scope covers (M1 spec 02
+/// B17, owner decision of 2026-11-17); it is not grantable at course scope, so an Instructor
+/// enrollment does not give it.
 static INSTRUCTOR: BuiltinRole = BuiltinRole {
     key: "instructor",
     name: "Instructor",
     permissions: RolePermissions::Extends {
         base: &COURSE_DESIGNER,
         own: &[
+            perm::UserView::KEY,
             perm::EnrollmentView::KEY,
             perm::EnrollmentManage::KEY,
             perm::ProgressView::KEY,
@@ -903,7 +907,8 @@ mod tests {
         );
     }
 
-    /// The M1 lists of M1 spec 02 -> Permissions, with spec 05's progress keys (Q2, B18).
+    /// The M1 lists of M1 spec 02 -> Permissions, with spec 05's progress keys (Q2, B18) and
+    /// Instructor's `user.view` (spec 02 B17).
     #[test]
     fn the_course_roles_hold_their_m1_lists() {
         let cases: [(&str, &[&str]); 6] = [
@@ -917,6 +922,7 @@ mod tests {
                     "course.view",
                     "course.view_all",
                     "course.content_edit",
+                    "user.view",
                     "enrollment.view",
                     "enrollment.manage",
                     "progress.view",

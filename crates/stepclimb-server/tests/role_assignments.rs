@@ -600,6 +600,43 @@ async fn escalation_covers_every_permission_of_the_role(pool: PgPool) {
     assert_eq!(at_org.code(), "permission.denied");
 }
 
+/// Granting the built-in Instructor needs `user.view` at the scope, since the role holds it (M1
+/// spec 02 B17, owner decision of 2026-11-17): a caller holding every other key of the role
+/// and `role.assign` at Tower is refused, and the same caller with `user.view` grants it.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn granting_instructor_needs_user_view(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let tower = At::Account(f.a.tower);
+    let mut keys = vec![
+        "role.assign",
+        "course.view",
+        "course.view_all",
+        "course.content_edit",
+        "enrollment.view",
+        "enrollment.manage",
+        "progress.view",
+    ];
+    let without = f.custom_role(&keys).await;
+    keys.push("user.view");
+    let with = f.custom_role(&keys).await;
+    let (lacking, lacking_id) = f.user().await;
+    f.assign(lacking_id, without, tower).await;
+    let (holding, holding_id) = f.user().await;
+    f.assign(holding_id, with, tower).await;
+    let (_, pat) = f.user().await;
+    let instructor = f.builtin("instructor").await;
+
+    let refused = f
+        .create(&lacking, pat, instructor, tower.json(f.a.id))
+        .await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN, "{refused:?}");
+    assert_eq!(refused.code(), "permission.escalation");
+    let granted = f
+        .create(&holding, pat, instructor, tower.json(f.a.id))
+        .await;
+    assert_eq!(granted.status, StatusCode::CREATED, "{granted:?}");
+}
+
 // Removing (B14).
 
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]

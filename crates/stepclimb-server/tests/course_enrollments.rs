@@ -984,6 +984,86 @@ async fn enrolling_needs_user_view_covering_the_user(pool: PgPool) {
         .ok(StatusCode::CREATED);
 }
 
+/// B17 (owner decision of 2026-11-17): the built-in Instructor holds `user.view` at the scope it
+/// is assigned. An Instructor assigned at Tower lists and enrolls a user active in a Tower
+/// course (201), another Instructor included, and gets 404 `user.not_found` for a user only in
+/// Enroute, writing nothing.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_account_instructor_enrolls_the_users_of_their_account(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    let instructor = f.builtin("instructor").await;
+    let (cookie, _) = f.holder(t.org, instructor, Scope::Account(t.tower)).await;
+    let course = f.course(t.org, t.tower, &[Published]).await;
+    let student = f.builtin("student").await;
+    let in_tower = f.in_tower(t).await;
+    let enroute_course = f.course(t.org, t.enroute, &[Published]).await;
+    let (_, in_enroute) = f.user(t.org, "In Enroute").await;
+    f.enroll(t.org, enroute_course, in_enroute, student).await;
+
+    let listed = f
+        .send(Method::GET, "/api/v1/users", t.org, &cookie, None)
+        .await;
+    let ids = listed.ids("");
+    assert!(ids.contains(&in_tower), "{listed:?}");
+    assert!(!ids.contains(&in_enroute), "{listed:?}");
+    let before = f.rows(t.org).await;
+    f.post_enrollment(t.org, &cookie, course, in_enroute, student)
+        .await
+        .expect(StatusCode::NOT_FOUND, "user.not_found");
+    assert_eq!(
+        f.rows(t.org).await,
+        before,
+        "a refused enrollment writes nothing"
+    );
+    f.post_enrollment(t.org, &cookie, course, in_tower, student)
+        .await
+        .ok(StatusCode::CREATED);
+    f.post_enrollment(t.org, &cookie, course, in_tower, instructor)
+        .await
+        .ok(StatusCode::CREATED);
+}
+
+/// B16, B17, B18: `user.view` is not grantable at course scope, so an Instructor through an
+/// enrollment alone holds none. They get 404 `user.not_found` enrolling a learner of their own
+/// course and 403 on the users list; they conclude a Student enrollment, and are refused 403
+/// `permission.escalation` concluding another Instructor's, whose role holds `user.view` they
+/// do not hold at the course.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_course_instructor_holds_no_user_view(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    let instructor = f.builtin("instructor").await;
+    let student = f.builtin("student").await;
+    let course = f.course(t.org, t.tower, &[Published]).await;
+    let (cookie, kim) = f.user(t.org, "Kim").await;
+    f.enroll(t.org, course, kim, instructor).await;
+    let (_, pat) = f.user(t.org, "Pat").await;
+    let pat_student = f.enroll(t.org, course, pat, student).await;
+    let (_, lee) = f.user(t.org, "Lee").await;
+    let lee_instructor = f.enroll(t.org, course, lee, instructor).await;
+    let no_permissions = f.custom_role(t.org, &[]).await;
+    let before = f.rows(t.org).await;
+
+    f.post_enrollment(t.org, &cookie, course, pat, no_permissions)
+        .await
+        .expect(StatusCode::NOT_FOUND, "user.not_found");
+    f.send(Method::GET, "/api/v1/users", t.org, &cookie, None)
+        .await
+        .expect(StatusCode::FORBIDDEN, "permission.denied");
+    f.set_enrollment(t.org, &cookie, lee_instructor, "concluded")
+        .await
+        .expect(StatusCode::FORBIDDEN, "permission.escalation");
+    assert_eq!(
+        f.rows(t.org).await,
+        before,
+        "a refused change writes nothing"
+    );
+    f.set_enrollment(t.org, &cookie, pat_student, "concluded")
+        .await
+        .ok(StatusCode::OK);
+}
+
 // B24a across the M0 checks (T19b).
 
 /// T19b: with `course.participate` in the catalog, an Organization admin still defines a custom
