@@ -987,7 +987,7 @@ async fn enrolling_needs_user_view_covering_the_user(pool: PgPool) {
 /// B17 (owner decision of 2026-11-17): the built-in Instructor holds `user.view` at the scope it
 /// is assigned. An Instructor assigned at Tower lists and enrolls a user active in a Tower
 /// course (201), another Instructor included, and gets 404 `user.not_found` for a user only in
-/// Enroute, writing nothing.
+/// Enroute and for another organization's user, writing nothing.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn an_account_instructor_enrolls_the_users_of_their_account(pool: PgPool) {
     let f = Fixture::new(pool).await;
@@ -1009,6 +1009,10 @@ async fn an_account_instructor_enrolls_the_users_of_their_account(pool: PgPool) 
     assert!(!ids.contains(&in_enroute), "{listed:?}");
     let before = f.rows(t.org).await;
     f.post_enrollment(t.org, &cookie, course, in_enroute, student)
+        .await
+        .expect(StatusCode::NOT_FOUND, "user.not_found");
+    let (_, b_user) = f.user(f.b.org, "Bo").await;
+    f.post_enrollment(t.org, &cookie, course, b_user, student)
         .await
         .expect(StatusCode::NOT_FOUND, "user.not_found");
     assert_eq!(
@@ -1060,6 +1064,68 @@ async fn a_course_instructor_holds_no_user_view(pool: PgPool) {
         "a refused change writes nothing"
     );
     f.set_enrollment(t.org, &cookie, pat_student, "concluded")
+        .await
+        .ok(StatusCode::OK);
+}
+
+/// Owner decision of 2026-11-18: an Instructor assigned at the organization reads any user and
+/// their identities, as `user.view` at organization scope allows (`m0/03`); one assigned at an
+/// account gets 403 on both, which take an organization target.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_organization_instructor_reads_users_and_identities(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    let instructor = f.builtin("instructor").await;
+    let (at_org, _) = f.holder(t.org, instructor, Scope::Organization).await;
+    let (at_tower, _) = f.holder(t.org, instructor, Scope::Account(t.tower)).await;
+    let (_, pat) = f.user(t.org, "Pat").await;
+    let uris = [
+        format!("/api/v1/users/{pat}"),
+        format!("/api/v1/users/{pat}/identities"),
+    ];
+
+    for uri in &uris {
+        f.send(Method::GET, uri, t.org, &at_org, None)
+            .await
+            .ok(StatusCode::OK);
+        f.send(Method::GET, uri, t.org, &at_tower, None)
+            .await
+            .expect(StatusCode::FORBIDDEN, "permission.denied");
+    }
+}
+
+/// `m0/03` B6 with Instructor's `user.view`: a `user.manage` holder with every other Instructor
+/// key at the organization cannot change an account-scope Instructor's email, and can once it
+/// also holds `user.view` there.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn editing_an_account_instructor_needs_user_view(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let t = f.a;
+    let mut keys = vec![
+        "user.manage",
+        "course.view",
+        "course.view_all",
+        "course.content_edit",
+        "enrollment.view",
+        "enrollment.manage",
+        "progress.view",
+    ];
+    let lacking_role = f.custom_role(t.org, &keys).await;
+    keys.push("user.view");
+    let holding_role = f.custom_role(t.org, &keys).await;
+    let (lacking, _) = f.holder(t.org, lacking_role, Scope::Organization).await;
+    let (holding, _) = f.holder(t.org, holding_role, Scope::Organization).await;
+    let (_, kim) = f.user(t.org, "Kim").await;
+    let instructor = f.builtin("instructor").await;
+    f.assign(t.org, kim, instructor, Scope::Account(t.tower))
+        .await;
+    let uri = format!("/api/v1/users/{kim}");
+    let body = || Some(json!({ "email": "kim@example.test" }));
+
+    f.send(Method::PATCH, &uri, t.org, &lacking, body())
+        .await
+        .expect(StatusCode::FORBIDDEN, "permission.escalation");
+    f.send(Method::PATCH, &uri, t.org, &holding, body())
         .await
         .ok(StatusCode::OK);
 }
