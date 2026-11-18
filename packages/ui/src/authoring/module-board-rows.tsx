@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // ModuleBoard's rows (docs/specs/m1/16-learning-ui-components.md B13): a module's number, title,
 // publish state and unlock rules, or an item's kind, title, requirement and publish state, each
-// with a drag handle and a Move menu, and for an item an Edit button. What a row draws is said
+// with a drag handle, a Move menu and, when the caller gives an editor for its kind, an Edit
+// button. What a row draws is said
 // again in one visually hidden description, so the drawn copy is hidden from screen readers.
 import {
   DotsSixVerticalIcon,
@@ -84,12 +85,14 @@ export const moduleBoardRow = tv({
   },
 });
 
-/** What the Move menu and the Edit button do; the board turns each into a write or the sheet. */
+/** What the Move menu and the Edit buttons do; the board turns each into a write or the sheet. */
 export interface RowActions {
   /** The Move menu: `up`, `down`, or `module:<id>` for "Move to module"; none draws no Move button. */
   onMove?: (key: string, action: string) => void;
-  /** Opens the item in the editing sheet; none draws no Edit button. */
-  onEdit?: (itemId: string) => void;
+  /** Opens the row in the editing sheet, by its key; none draws no Edit button on items. */
+  onEditItem?: (key: string) => void;
+  /** As `onEditItem`, for module rows. */
+  onEditModule?: (key: string) => void;
   /** No move while a move is saving. */
   movesDisabled: boolean;
   /** No drag handle: the board is read-only. */
@@ -111,6 +114,7 @@ export function ModuleBoardRow(props: BoardRowProps) {
   const type = row.type === "module" ? "module" : row.item.kind === "header" ? "header" : "item";
   const styles = moduleBoardRow({ type });
   const description = useRowDescription(row, props.modules, props.timeZone);
+  const onEdit = row.type === "module" ? props.onEditModule : props.onEditItem;
   return (
     <GridListItem
       id={row.key}
@@ -140,9 +144,7 @@ export function ModuleBoardRow(props: BoardRowProps) {
         {description}
       </Text>
       <span data-slot="module-board-row-actions" className={styles.actions()}>
-        {row.type === "item" && props.onEdit !== undefined ? (
-          <EditButton itemId={row.item.id} name={name} onEdit={props.onEdit} />
-        ) : null}
+        {onEdit === undefined ? null : <EditButton rowKey={row.key} name={name} onEdit={onEdit} />}
         {props.onMove === undefined ? null : <MoveMenu {...props} onMove={props.onMove} />}
       </span>
     </GridListItem>
@@ -292,13 +294,13 @@ function useRowDescription(
 }
 
 function EditButton({
-  itemId,
+  rowKey,
   name,
   onEdit,
 }: {
-  itemId: string;
+  rowKey: string;
   name: string;
-  onEdit: (itemId: string) => void;
+  onEdit: (key: string) => void;
 }) {
   const { t } = useStepclimbStrings();
   return (
@@ -306,7 +308,7 @@ function EditButton({
       data-slot="module-board-edit"
       icon={PencilSimpleIcon}
       label={t("moduleBoard.edit", { name })}
-      onPress={() => onEdit(itemId)}
+      onPress={() => onEdit(rowKey)}
     />
   );
 }
