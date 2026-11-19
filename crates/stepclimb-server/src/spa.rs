@@ -75,8 +75,10 @@ const STYLE_HASHES: &str = include_str!("../csp-style-hashes.txt");
 /// icons, the API, the manifest and the service worker. No inline script and no `eval`: the build
 /// has none, and `index.html` draws its theme from attributes the server writes (spec m0/11
 /// B21). The only inline styles are the `<style>` elements of [`STYLE_HASHES`], allowed by their
-/// hash; styles React sets through the DOM are not inline style attributes and are allowed. No
-/// frame source, `<object>` or `<base>`; forms submit only here; no other site may frame the app.
+/// hash; styles React sets through the DOM are not inline style attributes and are allowed.
+/// Frames load only from here: a file item previews a PDF in a frame of its signed `/files/`
+/// URL, which carries its own policy (`file_delivery`). No `<object>` or `<base>`; forms submit only
+/// here; no other site may frame the app.
 pub static CONTENT_SECURITY_POLICY: LazyLock<String> = LazyLock::new(|| {
     let hashes: String = STYLE_HASHES
         .lines()
@@ -87,7 +89,7 @@ pub static CONTENT_SECURITY_POLICY: LazyLock<String> = LazyLock::new(|| {
     format!(
         "default-src 'none'; script-src 'self'; style-src 'self'{hashes}; img-src 'self'; \
          font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; \
-         base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+         frame-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
     )
 });
 
@@ -491,7 +493,7 @@ mod tests {
     #[test]
     fn the_policy_loads_only_this_origin_and_no_inline_code() {
         let directives = directives();
-        assert_eq!(directives.len(), 11, "each directive once: {directives:?}");
+        assert_eq!(directives.len(), 12, "each directive once: {directives:?}");
         assert_eq!(directives["default-src"], ["'none'"]);
         let style = &directives["style-src"];
         assert_eq!(style.first(), Some(&"'self'"));
@@ -515,6 +517,7 @@ mod tests {
             "connect-src",
             "manifest-src",
             "worker-src",
+            "frame-src",
             "form-action",
         ] {
             assert_eq!(directives[name], ["'self'"], "{name}");

@@ -15,7 +15,7 @@
 // saved as screenshots in the default and vZDC brands, light and dark, at 1280 and 375 px.
 import { readFileSync } from "node:fs";
 import AxeBuilder from "@axe-core/playwright";
-import { expect, type Page, type Route, test } from "@playwright/test";
+import { expect, type Page, type Route, test } from "./csp";
 
 const WCAG = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"];
 
