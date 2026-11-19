@@ -860,6 +860,41 @@ async fn an_app_token_is_refused_wherever_a_session_is_required(pool: PgPool) {
     assert_eq!(me.status, StatusCode::OK, "{me:?}");
 }
 
+/// Spec 13 Q10 with spec 08 B44: an app token naming `manager_id` on its own user gets
+/// `auth.session_required`, not `user.manager_self`, whatever its user's permissions, and the
+/// user keeps no manager. The walk above reaches the same refusal with an email change only.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_app_token_cannot_change_its_own_users_manager(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let sam = f.user("sam@example.test").await;
+    let robin = f.user("robin@example.test").await;
+    f.make_admin(sam).await;
+    let tokens = f.tokens(sam).await;
+    let bearer = format!("Bearer {}", tokens.access);
+    let headers = [
+        ("authorization", bearer.as_str()),
+        ("content-type", "application/json"),
+    ];
+    let uri = format!("/api/v1/users/{sam}");
+    for manager in [json!(robin), json!(null)] {
+        let body = json!({ "manager_id": manager }).to_string();
+        let answer = f
+            .send(Method::PATCH, &uri, f.org, &headers, Body::from(body))
+            .await;
+        assert_eq!(
+            (answer.status, answer.error().as_str()),
+            (StatusCode::FORBIDDEN, "auth.session_required"),
+            "{manager}: {answer:?}"
+        );
+    }
+    let manager: Option<Uuid> = sqlx::query_scalar("SELECT manager_id FROM users WHERE id = $1")
+        .bind(sam)
+        .fetch_one(&f.pool)
+        .await
+        .expect("read the user");
+    assert_eq!(manager, None);
+}
+
 /// The description of a response, following a `$ref` to the components.
 fn response_description(doc: &Value, response: &Value) -> String {
     let resolved = match response["$ref"].as_str() {

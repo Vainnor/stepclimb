@@ -1723,6 +1723,20 @@ async fn t10a_a_caller_cannot_change_their_own_manager(pool: PgPool) {
     assert_eq!(renamed.body["manager_id"], json!(robin));
 }
 
+/// T10a (spec 13 Q10): a session caller without `user.manage` naming `manager_id` on itself
+/// gets `permission.denied` from `Require<UserManage>`, before the route's own-manager check.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t10a_a_caller_without_user_manage_is_denied_before_the_self_check(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (caller, me) = f.holder_with_id(&["user.view"], Scope::Organization).await;
+    let robin = f.stored_user(f.a, new_user("Robin", Source::Local)).await;
+    let before = f.stored(me).await;
+    f.patch(&caller, me, json!({ "manager_id": robin }))
+        .await
+        .refused(StatusCode::FORBIDDEN, "permission.denied");
+    assert_eq!(f.stored(me).await, before);
+}
+
 /// Spec 13 B13 and Q9 (open, built as (b)): being made someone's manager grants the manager no
 /// read access. A manager holding no role is refused the users routes before and after, and
 /// their own grants do not change.
