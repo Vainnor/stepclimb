@@ -5,7 +5,7 @@
 // move and its 409 `order.stale` reload; the rules a module's editor sends; the pages and videos
 // panels; and the loading, empty, error, offline, refused, archived and read-only states.
 import { screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Item, Module, PageSummary } from "../authoring/course-content";
 import type { Course } from "../files/course-files";
@@ -144,6 +144,16 @@ function invalid(field: string, code: string): Response {
 }
 
 /** Waits until no side sheet is open (a toast is a dialog too, so the role cannot say). */
+/**
+ * Enters `text` into an empty `field` as one paste. These tests check what reaches the server, not
+ * each keystroke, and a keystroke per character of an address made a test outlast its time on a
+ * loaded machine; its unfinished typing then went on into the next test's field.
+ */
+async function enter(user: UserEvent, field: HTMLElement, text: string) {
+  await user.click(field);
+  await user.paste(text);
+}
+
 const sheetClosed = () =>
   waitFor(() => expect(document.querySelector('[data-slot="sheet"]')).toBeNull());
 
@@ -188,7 +198,7 @@ describe("the course authoring screen", () => {
     await boardRows();
     await user.click(screen.getByRole("button", { name: "Add module" }));
     const sheet = await screen.findByRole("dialog", { name: "Add a module" });
-    await user.type(within(sheet).getByRole("textbox", { name: "Title" }), "Clearance delivery");
+    await enter(user, within(sheet).getByRole("textbox", { name: "Title" }), "Clearance delivery");
     await user.click(within(sheet).getByRole("button", { name: "Add module" }));
     await sheetClosed();
     expect(await bodyOf(fetch, "POST", MODULES)).toEqual({ title: "Clearance delivery" });
@@ -235,16 +245,16 @@ describe("the course authoring screen", () => {
     // The last module is chosen at first.
     await user.click(within(sheet).getByRole("button", { name: /Module/ }));
     await user.click(await screen.findByRole("option", { name: "1 Radio basics" }));
-    await user.type(within(sheet).getByRole("textbox", { name: "Title" }), "Chart supplement");
+    await enter(user, within(sheet).getByRole("textbox", { name: "Title" }), "Chart supplement");
     const address = within(sheet).getByRole("textbox", { name: "Address" });
-    await user.type(address, "https://user:pw@example.com/");
+    await enter(user, address, "https://user:pw@example.com/");
     await user.click(within(sheet).getByRole("button", { name: "Add item" }));
     expect(
       await within(sheet).findByText(/Enter a full address starting with https:\/\//),
     ).toBeInTheDocument();
     expect(address).toHaveAttribute("aria-invalid", "true");
     await user.clear(address);
-    await user.type(address, "https://example.com/chart");
+    await enter(user, address, "https://example.com/chart");
     await user.click(within(sheet).getByRole("button", { name: "Add item" }));
     await sheetClosed();
     expect(await bodyOf(fetch, "POST", "/api/v1/modules/m1/items")).toEqual({
