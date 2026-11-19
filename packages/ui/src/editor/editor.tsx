@@ -93,13 +93,15 @@ export interface EditorProps {
 
 type Panel = "image" | "videoEmbed" | undefined;
 
-/** Opens the slash menu for `/` typed at the start of an empty paragraph. */
-function isSlash(editor: TiptapEditor, text: string): boolean {
-  const { selection } = editor.state;
-  const parent = selection.$from.parent;
-  return (
-    text === "/" && selection.empty && parent.type.name === "paragraph" && parent.content.size === 0
-  );
+/**
+ * Opens the slash menu for `/` typed into an empty paragraph. It reads where the text goes, not
+ * the editor's selection: ProseMirror reads a caret the browser moved on the next
+ * `selectionchange`, so text typed before that event arrives with the old selection.
+ */
+function isSlash(editor: TiptapEditor, text: string, from: number, to: number): boolean {
+  if (text !== "/" || from !== to) return false;
+  const parent = editor.state.doc.resolve(from).parent;
+  return parent.type.name === "paragraph" && parent.content.size === 0;
 }
 
 export function Editor({
@@ -149,8 +151,10 @@ export function Editor({
       emitted.current = doc;
       onChange?.(doc);
     },
-    onTextInput: (current, text) => {
-      if (!isSlash(current, text)) return false;
+    onTextInput: (current, text, from, to) => {
+      if (!isSlash(current, text, from, to)) return false;
+      // The block the menu inserts, or the `/` Escape types, goes where the author typed.
+      current.commands.setTextSelection(from);
       slash.current = "open";
       setMenuOpen(true);
       return true;
