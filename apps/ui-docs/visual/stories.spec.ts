@@ -8,6 +8,7 @@ import { readdirSync } from "node:fs";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
 import {
+  expectNoPageErrors,
   isMatrix,
   markStoryRoots,
   openStory,
@@ -68,6 +69,7 @@ for (const [story, theme, name] of runs) {
     // The story's own box: the decorator draws it only as tall as its content.
     await expect(page.locator("#storybook-root")).toHaveScreenshot(`${story.id}--${name}.png`);
     expect(await axeViolations(page)).toEqual([]);
+    expectNoPageErrors(page, story);
   });
 }
 

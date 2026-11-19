@@ -37,15 +37,17 @@ export function stories(): Story[] {
 export const isMatrix = (story: Story) => story.tags.includes(MATRIX_TAG);
 
 /**
- * Records, on `window.__scVisualFailures`, every render phase Storybook reports as `errored` and the
- * error it carries. `storybook/test` sets `throwPlayFunctionExceptions: false`, so a failed `expect`
- * in a play function only logs: the story still reaches `finished` and shows no error display. The
- * phase and the exception arrive on Storybook's channel, which this hooks as Storybook installs it,
- * before any story code runs.
+ * Records, on `window.__scVisualFailures`, what Storybook's channel reports of a failed play step:
+ * an `errored` render phase, the play function's exception and errors left unhandled while it
+ * played. `storybook/test` sets `throwPlayFunctionExceptions: false`, so a failed `expect` in a play
+ * function only logs: the story still reaches `finished` and shows no error display, and the
+ * channel is the only place it shows. A render error shows Storybook's error display, which
+ * `openStory` reads. The channel is hooked as Storybook installs it, before any story code runs, and
+ * `window.__scVisualHooked` says it was.
  */
 function recordFailures(): void {
   type Channel = { on(event: string, listener: (payload: unknown) => void): void };
-  const w = window as unknown as { __scVisualFailures?: string[] };
+  const w = window as unknown as { __scVisualFailures?: string[]; __scVisualHooked?: boolean };
   if (w.__scVisualFailures !== undefined) return;
   const failures: string[] = [];
   w.__scVisualFailures = failures;
@@ -61,6 +63,7 @@ function recordFailures(): void {
   const hook = (channel: Channel) => {
     if (hooked.has(channel)) return;
     hooked.add(channel);
+    w.__scVisualHooked = true;
     channel.on("storyRenderPhaseChanged", (payload) => {
       if ((payload as { newPhase?: string }).newPhase === "errored") failures.push("errored");
     });
@@ -84,13 +87,16 @@ function recordFailures(): void {
  * Opens `story` in `theme`: the Storybook theme global for stories in the toolbar's theme, and the
  * matching OS setting (dark, more contrast) for stories that follow it. Resolves once the story
  * has rendered, its play function has run and its fonts have loaded; fails if rendering errored,
- * the play function threw (a failed `expect`) or an error went unhandled while it played.
+ * the play function threw (a failed `expect`), an error went unhandled in the page, or the
+ * failure hooks never reached Storybook's channel. `expectNoPageErrors` checks the page again
+ * after the screenshot.
  */
 export async function openStory(page: Page, story: Story, theme: Theme): Promise<void> {
   await page.emulateMedia({
     colorScheme: theme === "dark" ? "dark" : "light",
     contrast: theme === "high-contrast" ? "more" : "no-preference",
   });
+  watchPageErrors(page);
   await page.addInitScript(recordFailures);
   await page.goto(`/iframe.html?id=${story.id}&viewMode=story&globals=theme:${theme}`);
   // Storybook's last render phase is `finished`, after the play function, whether or not the
@@ -101,7 +107,9 @@ export async function openStory(page: Page, story: Story, theme: Theme): Promise
     return preview?.currentRender?.phase === "finished";
   });
   const failed = await page.evaluate(() => {
-    const failures = (window as { __scVisualFailures?: string[] }).__scVisualFailures ?? [];
+    const w = window as { __scVisualFailures?: string[]; __scVisualHooked?: boolean };
+    if (w.__scVisualHooked !== true) return "Storybook channel not hooked";
+    const failures = w.__scVisualFailures ?? [];
     if (document.body.classList.contains("sb-show-errordisplay")) {
       failures.push(document.querySelector("#error-message")?.textContent ?? "an error");
     }
@@ -110,6 +118,25 @@ export async function openStory(page: Page, story: Story, theme: Theme): Promise
   });
   if (failed !== null) throw new Error(`story ${story.id} failed: ${failed}`);
   await page.evaluate(() => document.fonts.ready.then(() => undefined));
+  expectNoPageErrors(page, story);
+}
+
+/** Every error the page left unhandled, from the first `openStory` on it. */
+const pageErrors = new WeakMap<Page, string[]>();
+
+function watchPageErrors(page: Page): void {
+  if (pageErrors.has(page)) return;
+  const errors: string[] = [];
+  pageErrors.set(page, errors);
+  page.on("pageerror", (error) => errors.push(error.message.split("\n").slice(0, 12).join("\n")));
+}
+
+/** Fails if the page left an error unhandled: while rendering, playing, or after the play step. */
+export function expectNoPageErrors(page: Page, story: Story): void {
+  const errors = pageErrors.get(page) ?? [];
+  if (errors.length > 0) {
+    throw new Error(`story ${story.id} failed: unhandled in the page: ${errors.join("; ")}`);
+  }
 }
 
 /** The attribute `markStoryRoots` sets on everything the story drew. */
