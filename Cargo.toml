@@ -105,6 +105,8 @@ unicode-normalization = { version = "=0.1.26", default-features = false }
 # The database URL's query parameters, read with the parser sqlx itself uses, so the loader can
 # refuse one sqlx would ignore (docs/specs/m0/14-compose-deploy.md B10). The version sqlx brings.
 url = { version = "=2.5.8", default-features = false, features = ["std"] }
+# The allowlist sanitizer page HTML passes through (docs/specs/m1/07-pages-and-the-editor.md B14).
+ammonia = { version = "=4.2.4", default-features = false }
 # Outbound HTTP to identity providers and the admission webhook (docs/specs/m0/05-oidc.md I1,
 # Q4): `stepclimb_auth::outbound`. reqwest with rustls and no built-in crypto provider: the
 # client hands reqwest a rustls config whose crypto is ring (a C compiler only; aws-lc-rs,

@@ -19,7 +19,13 @@ unmaintained = "workspace"
 #   (docs/adr/0027-mock-identity-provider.md).
 # A further dependent of `rsa` must be judged on its own before it lands. Remove this entry when
 # `cargo tree --target all -e all -i rsa` shows only rsa 0.10.0 or later (issue #164).
+# RUSTSEC-2026-0533 is a mutation XSS in ammonia before 4.2.5 that needs MathML and SVG elements
+# enabled together; page rendering's allowlist (`stepclimb_core::page_doc::render`) enables
+# neither, and a test there refuses both. 4.2.5 fixes it but was published on 2026-11-13, under
+# the 14 days this project waits for a release. Remove this entry when ammonia is bumped to 4.2.5
+# or later, on or after 2026-11-27.
 ignore = [
+    { id = "RUSTSEC-2026-0533", reason = "ammonia 4.2.4: needs MathML and SVG in the allowlist, which page rendering never enables; bump to 4.2.5 on or after 2026-11-27" },
     { id = "RUSTSEC-2023-0071", reason = "rsa 0.9 (openidconnect, mock IdP) and 0.10.0-rc.19 (webauthn-rs): shipped code only verifies; private keys only in the test-only mock (ADR 0026, 0027, issue #164)" },
 ]
 

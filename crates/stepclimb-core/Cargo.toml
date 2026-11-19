@@ -30,6 +30,8 @@ regex-syntax.workspace = true
 url.workspace = true
 # NFC normalization of course file names and folders (docs/specs/m1/06-files.md B9).
 unicode-normalization.workspace = true
+# The allowlist a rendered page passes through (docs/specs/m1/07-pages-and-the-editor.md B14).
+ammonia.workspace = true
 
 [dev-dependencies]
 stepclimb-core = { path = ".", features = ["test-support"] }
