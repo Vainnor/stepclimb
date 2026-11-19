@@ -17,7 +17,7 @@
 //! `/oauth/token`, `/oauth/revoke`), service
 //! accounts and their API keys, course file uploads and the files area, a course's pages and
 //! their versions, video uploads (tus) and the videos of a course, a learner's progress steps,
-//! the staff progress reads and the progress event bodies, and the shared error
+//! the staff progress reads and the progress event bodies, the completion history, and the shared error
 //! schemas and responses below. The other M0 specs add their endpoints under `/api/v1`.
 //!
 //! Every `/api/v1` operation lists its errors in `#[utoipa::path]` (spec 02 B6). The errors
@@ -35,7 +35,7 @@ use utoipa::{
 
 use crate::{
     accounts, admission_settings, admission_webhook, admission_webhook_call, appearance, auth,
-    branding, course_enrollments, course_files, courses, discovery, enrollment,
+    branding, completions, course_enrollments, course_files, courses, discovery, enrollment,
     error::{CurrentVersion, FieldError, PROBLEM_JSON, Problem},
     health, identities, items, local_sign_in, manifest, me, modules, my_passkeys, oauth_authorize,
     oauth_token, organization, outline, page_doc_schema, pages, passkey_enrollment,
@@ -116,6 +116,8 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
         progress::record_item_progress,
         progress::list_course_progress,
         progress::get_learner_progress,
+        completions::list_course_completions,
+        completions::list_my_completions,
         courses::copy_course,
         course_enrollments::list_enrollments,
         course_enrollments::create_enrollment,
@@ -264,6 +266,9 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             progress::ProgressUser,
             progress::LearnerProgress,
             progress::LearnerProgressDetail,
+            completions::Completion,
+            completions::CompletionTarget,
+            completions::CompletionTargetType,
             progress::ItemCompletedEvent,
             progress::ItemCompletedType,
             progress::ItemCompletedData,

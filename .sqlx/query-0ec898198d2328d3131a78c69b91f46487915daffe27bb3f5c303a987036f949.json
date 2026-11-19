@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO courses (id, org_id, account_id, code, title, status, template, start_at,\n                              end_at, settings, completion_valid_months, created_at, updated_at)\n         SELECT $1, org_id, $3, $4, COALESCE($5, title), 'draft', $6, start_at, end_at, settings,\n                completion_valid_months,\n                timestamptz 'epoch' + $7::bigint * interval '1 microsecond',\n                timestamptz 'epoch' + $7::bigint * interval '1 microsecond'\n         FROM courses\n         WHERE org_id = $2 AND id = $8",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Bool",
+        "Int8",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0ec898198d2328d3131a78c69b91f46487915daffe27bb3f5c303a987036f949"
+}

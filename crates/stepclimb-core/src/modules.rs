@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 pub use crate::rules::CompletionRule;
 use crate::{
-    OrgScope,
+    OrgScope, completions,
     db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
     id::new_id,
     name,
@@ -45,6 +45,9 @@ pub struct Module {
     /// Whether its items go in order (spec 04 B9).
     pub require_sequential: bool,
     pub completion_rule: CompletionRule,
+    /// How many months a completion of the module stays valid, 1 to 120; `None` for ever
+    /// (spec 14 B3).
+    pub completion_valid_months: Option<i16>,
     pub created_at: SystemTime,
     pub updated_at: SystemTime,
 }
@@ -54,6 +57,8 @@ pub struct Module {
 pub struct ModulePatch {
     pub title: Option<String>,
     pub published: Option<bool>,
+    /// `Some(None)` clears the validity (spec 14 B3).
+    pub completion_valid_months: Option<Option<i16>>,
 }
 
 /// A change to a module's rules (spec 04 B1); `None` leaves a member as it is.
@@ -139,6 +144,9 @@ pub enum Error {
     /// The prerequisites would close a cycle in the course's graph (spec 04 B2, Q2).
     #[error("the prerequisites would form a cycle")]
     PrerequisiteCycle,
+    /// A `completion_valid_months` outside 1 to 120 (spec 14 B3).
+    #[error("a completion validity must be from 1 to 120 months")]
+    ValidityOutOfRange,
     /// An `unlock_at` before 1970 or from 2200 on.
     #[error("an unlock date must be from 1970 up to 2200")]
     UnlockAtOutOfRange,
@@ -171,6 +179,7 @@ struct Row {
     prerequisite_ids: Vec<Uuid>,
     require_sequential: bool,
     completion_rule: String,
+    completion_valid_months: Option<i16>,
     created_at_us: i64,
     updated_at_us: i64,
 }
@@ -194,6 +203,7 @@ impl TryFrom<Row> for Module {
             published: row.published,
             prerequisite_ids: row.prerequisite_ids,
             require_sequential: row.require_sequential,
+            completion_valid_months: row.completion_valid_months,
         })
     }
 }
@@ -246,7 +256,7 @@ pub async fn get(
                         JOIN modules r ON r.org_id = p.org_id AND r.id = p.requires_id
                         WHERE p.org_id = m.org_id AND p.module_id = m.id
                         ORDER BY r.position) AS "prerequisite_ids!",
-                  m.require_sequential, m.completion_rule,
+                  m.require_sequential, m.completion_rule, m.completion_valid_months,
                   (extract(epoch FROM m.created_at) * 1000000)::bigint AS "created_at_us!",
                   (extract(epoch FROM m.updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM modules m WHERE m.org_id = $1 AND m.id = $2"#,
@@ -290,7 +300,7 @@ pub async fn list_for_course(
                         JOIN modules r ON r.org_id = p.org_id AND r.id = p.requires_id
                         WHERE p.org_id = m.org_id AND p.module_id = m.id
                         ORDER BY r.position) AS "prerequisite_ids!",
-                  m.require_sequential, m.completion_rule,
+                  m.require_sequential, m.completion_rule, m.completion_valid_months,
                   (extract(epoch FROM m.created_at) * 1000000)::bigint AS "created_at_us!",
                   (extract(epoch FROM m.updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM modules m WHERE m.org_id = $1 AND m.course_id = $2
@@ -351,7 +361,9 @@ pub async fn create<'c>(
 }
 
 /// Apply `patch` to the module `id` of the scope's organization and set `updated_at` to `now`.
-/// A patch that changes nothing writes nothing and returns the module as it is.
+/// A patch that changes nothing writes nothing and returns the module as it is. A validity
+/// outside 1 to 120 months is [`Error::ValidityOutOfRange`]; a new one applies to completions
+/// recorded afterwards (spec 14 B3, Q3).
 ///
 /// Runs in one transaction (a savepoint when `db` is already one) under the course lock.
 pub async fn update<'c>(
@@ -362,17 +374,28 @@ pub async fn update<'c>(
     now: SystemTime,
 ) -> Result<Module, Error> {
     let title = patch.title.as_deref().map(valid_title).transpose()?;
+    if let Some(Some(months)) = patch.completion_valid_months
+        && !completions::valid_months(months)
+    {
+        return Err(Error::ValidityOutOfRange);
+    }
     let now = epoch_micros(now)?;
     let mut tx = db.begin().await?;
     let module = locked(&mut tx, scope, id).await?;
     let title = title.unwrap_or(&module.title);
     let published = patch.published.unwrap_or(module.published);
-    if title == module.title && published == module.published {
+    let validity = patch
+        .completion_valid_months
+        .unwrap_or(module.completion_valid_months);
+    if title == module.title
+        && published == module.published
+        && validity == module.completion_valid_months
+    {
         return Ok(module);
     }
     sqlx::query!(
         "UPDATE modules
-         SET title = $3, published = $4,
+         SET title = $3, published = $4, completion_valid_months = $6,
              updated_at = timestamptz 'epoch' + $5::bigint * interval '1 microsecond'
          WHERE org_id = $1 AND id = $2",
         scope.org_id(),
@@ -380,6 +403,7 @@ pub async fn update<'c>(
         title,
         published,
         now,
+        validity,
     )
     .execute(&mut *tx)
     .await?;

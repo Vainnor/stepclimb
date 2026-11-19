@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT c.id, c.account_id, a.path::text AS \"account_path!\", c.code, c.title, c.status,\n                  c.template,\n                  (extract(epoch FROM c.start_at) * 1000000)::bigint AS start_at_us,\n                  (extract(epoch FROM c.end_at) * 1000000)::bigint AS end_at_us,\n                  c.settings::text AS \"settings!\",\n                  (extract(epoch FROM c.created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM c.updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM courses c JOIN accounts a ON a.org_id = c.org_id AND a.id = c.account_id\n           WHERE c.org_id = $1 AND c.id = $2\n           FOR SHARE OF c FOR SHARE OF a",
+  "query": "SELECT c.id, c.account_id, a.path::text AS \"account_path!\", c.code, c.title, c.status,\n                  c.template,\n                  (extract(epoch FROM c.start_at) * 1000000)::bigint AS start_at_us,\n                  (extract(epoch FROM c.end_at) * 1000000)::bigint AS end_at_us,\n                  c.settings::text AS \"settings!\", c.completion_valid_months,\n                  (extract(epoch FROM c.created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM c.updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM courses c JOIN accounts a ON a.org_id = c.org_id AND a.id = c.account_id\n           WHERE c.org_id = $1\n             AND ($2::bool OR c.id = ANY($12::uuid[]) OR EXISTS (\n                     SELECT 1 FROM accounts v\n                     WHERE v.org_id = $1 AND v.id = ANY($3::uuid[]) AND a.path <@ v.path))\n             AND ((c.status <> 'draft' AND NOT c.template) OR $4::bool\n                  OR c.id = ANY($13::uuid[]) OR EXISTS (\n                     SELECT 1 FROM accounts v\n                     WHERE v.org_id = $1 AND v.id = ANY($5::uuid[]) AND a.path <@ v.path))\n             AND ($6::uuid IS NULL OR a.path <@ (\n                     SELECT s.path FROM accounts s WHERE s.org_id = $1 AND s.id = $6))\n             AND ($7::text IS NULL OR c.status = $7)\n             AND ($8::bool IS NULL OR c.template = $8)\n             AND ($9::text IS NULL OR (c.title, c.id) > ($9, $10::uuid))\n           ORDER BY c.title, c.id\n           LIMIT $11",
   "describe": {
     "columns": [
       {
@@ -95,12 +95,23 @@
       },
       {
         "ordinal": 10,
+        "name": "completion_valid_months",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "courses",
+            "name": "completion_valid_months"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
         "name": "created_at_us!",
         "type_info": "Int8",
         "origin": "Expression"
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "updated_at_us!",
         "type_info": "Int8",
         "origin": "Expression"
@@ -109,7 +120,18 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Uuid"
+        "Bool",
+        "UuidArray",
+        "Bool",
+        "UuidArray",
+        "Uuid",
+        "Text",
+        "Bool",
+        "Text",
+        "Uuid",
+        "Int8",
+        "UuidArray",
+        "UuidArray"
       ]
     },
     "nullable": [
@@ -123,9 +145,10 @@
       null,
       null,
       null,
+      true,
       null,
       null
     ]
   },
-  "hash": "bf2de727aebd6ecd0b0732d2a53f6fc4a831455c9e078d7ae858fbfe57076180"
+  "hash": "ff4bf1f90caf6dbb82887086f0ae2bf9fd3d6a6808286fca1ed8b6c2ce2092f3"
 }

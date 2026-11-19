@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT user_id, required_count, completed_count,\n                  (extract(epoch FROM completed_at) * 1000000)::bigint AS completed_at_us\n           FROM course_progress\n           WHERE org_id = $1 AND course_id = $2 AND user_id = ANY($3)",
+  "query": "SELECT p.user_id, p.required_count, p.completed_count,\n                  (extract(epoch FROM p.completed_at) * 1000000)::bigint AS completed_at_us,\n                  (extract(epoch FROM k.expires_at) * 1000000)::bigint AS expires_at_us\n           FROM course_progress p\n           LEFT JOIN LATERAL (\n               SELECT expires_at FROM completions\n               WHERE org_id = p.org_id AND user_id = p.user_id AND target_type = 'course'\n                 AND target_id = p.course_id\n               ORDER BY cycle DESC LIMIT 1) k ON p.completed_at IS NOT NULL\n           WHERE p.org_id = $1 AND p.course_id = $2 AND p.user_id = ANY($3)",
   "describe": {
     "columns": [
       {
@@ -41,6 +41,12 @@
         "name": "completed_at_us",
         "type_info": "Int8",
         "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "expires_at_us",
+        "type_info": "Int8",
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -54,8 +60,9 @@
       false,
       false,
       false,
+      null,
       null
     ]
   },
-  "hash": "ad953f677242ed667abc5f0f1f9c08d637e7b6dd88f732b0c73d581f930eca6e"
+  "hash": "5afe149c13976e28e2f28bfa05ef60994287497842ddbc961ca376923bffbe89"
 }

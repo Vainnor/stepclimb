@@ -59,6 +59,7 @@ pub mod audit;
 pub mod auth;
 pub mod branding;
 pub mod client_ip;
+pub mod completions;
 pub mod config;
 pub mod config_providers;
 mod cookie;

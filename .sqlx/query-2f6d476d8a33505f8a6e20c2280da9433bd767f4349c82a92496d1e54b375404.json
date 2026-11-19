@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT p.user_id, p.module_id, p.required_count, p.completed_count,\n                  (extract(epoch FROM p.completed_at) * 1000000)::bigint AS completed_at_us\n           FROM module_progress p\n           JOIN modules m ON m.org_id = p.org_id AND m.id = p.module_id\n           WHERE p.org_id = $1 AND p.course_id = $2 AND p.user_id = ANY($3)\n             AND ($4 OR m.published)\n           ORDER BY m.position",
+  "query": "SELECT p.user_id, p.module_id, p.required_count, p.completed_count,\n                  (extract(epoch FROM p.completed_at) * 1000000)::bigint AS completed_at_us,\n                  (extract(epoch FROM k.expires_at) * 1000000)::bigint AS expires_at_us\n           FROM module_progress p\n           JOIN modules m ON m.org_id = p.org_id AND m.id = p.module_id\n           LEFT JOIN LATERAL (\n               SELECT expires_at FROM completions\n               WHERE org_id = p.org_id AND user_id = p.user_id AND target_type = 'module'\n                 AND target_id = p.module_id\n               ORDER BY cycle DESC LIMIT 1) k ON p.completed_at IS NOT NULL\n           WHERE p.org_id = $1 AND p.course_id = $2 AND p.user_id = ANY($3)\n             AND ($4 OR m.published)\n           ORDER BY m.position",
   "describe": {
     "columns": [
       {
@@ -52,6 +52,12 @@
         "name": "completed_at_us",
         "type_info": "Int8",
         "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "expires_at_us",
+        "type_info": "Int8",
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -67,8 +73,9 @@
       false,
       false,
       false,
+      null,
       null
     ]
   },
-  "hash": "5f2510f70d59a45578aa445d592a4fa5612285ec67421aa6ecb9096043a2fe9e"
+  "hash": "2f6d476d8a33505f8a6e20c2280da9433bd767f4349c82a92496d1e54b375404"
 }

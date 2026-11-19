@@ -371,6 +371,36 @@ const TABLE: &[Entry] = &[
             setup: observed_learner_of_tower_course,
         },
     },
+    // The course's completion history decides in the handler as the staff progress reads do
+    // (M1 spec 14 B13, T10a): one entry per granting permission.
+    Entry {
+        operation_id: "listCourseCompletions",
+        access: Access::Permission {
+            key: ProgressView::KEY,
+            target: COURSE_NOT_FOUND,
+            extra: &[CourseView::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[],
+            setup: completion_of_tower_learner,
+        },
+    },
+    Entry {
+        operation_id: "listCourseCompletions",
+        access: Access::Permission {
+            key: ProgressViewObserved::KEY,
+            target: COURSE_NOT_FOUND,
+            extra: &[CourseView::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[ProgressView::KEY],
+            setup: observed_completion_of_tower_learner,
+        },
+    },
+    Entry {
+        operation_id: "listMyCompletions",
+        access: Access::AuthOnly(at_org),
+    },
     Entry {
         operation_id: "copyCourse",
         // The source needs `course.view_all` and the destination `course.create` (B12).
@@ -1456,14 +1486,17 @@ fn new_course_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + 
     })
 }
 
-/// A published course in Tower with a new title in the body: a draft would answer 404 to a
-/// caller without `course.view_all` (M1 spec 02 Q13), and the 2xx case holds `course.manage`
-/// alone.
+/// A published course in Tower with a new title and a completion validity (M1 spec 14 B3) in
+/// the body: a draft would answer 404 to a caller without `course.view_all` (M1 spec 02 Q13),
+/// and the 2xx case holds `course.manage` alone.
 fn retitle_course_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
         Call {
             params: vec![("course_id", org.course(org.tower, true).await)],
-            body: Some(serde_json::json!({ "title": "Retitled course" })),
+            body: Some(serde_json::json!({
+                "title": "Retitled course",
+                "completion_valid_months": 12,
+            })),
             at: At::Account(org.tower),
         }
     })
@@ -1642,7 +1675,8 @@ fn reverse_modules(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>>
 }
 
 /// A module of a course in Tower with a new title and rules, requiring the course's first
-/// module.
+/// module. Its completion validity's cases are in `tests/completions.rs`: one more member would
+/// pass [`MAX_MEMBERS`].
 fn retitle_module(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
         let course = org.course(org.tower, true).await;
@@ -1803,6 +1837,43 @@ fn learner_of_tower_course(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Sen
 fn observed_learner_of_tower_course(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
         let call = learner_of_tower_course(org).await;
+        let (course, learner) = (call.params[0].1, call.params[1].1);
+        Call {
+            at: At::Observing { course, learner },
+            ..call
+        }
+    })
+}
+
+/// [`learner_of_tower_course`] with a completion of the course by the learner, written by SQL
+/// as the roll-up writes it (M1 spec 14 B1), so the 2xx and cross-organization cases list a row.
+fn completion_of_tower_learner(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let call = learner_of_tower_course(org).await;
+        let (course, learner) = (call.params[0].1, call.params[1].1);
+        sqlx::query(
+            "INSERT INTO completions (id, org_id, user_id, course_id, target_type, target_id,
+                                      cycle, completed_at)
+             VALUES ($1, $2, $3, $4, 'course', $4, 1, now())",
+        )
+        .bind(new_id())
+        .bind(org.id)
+        .bind(learner)
+        .bind(course)
+        .execute(&org.pool)
+        .await
+        .expect("record a completion");
+        call
+    })
+}
+
+/// [`completion_of_tower_learner`], held through an enrollment in the course that observes the
+/// learner.
+fn observed_completion_of_tower_learner(
+    org: &Org,
+) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let call = completion_of_tower_learner(org).await;
         let (course, learner) = (call.params[0].1, call.params[1].1);
         Call {
             at: At::Observing { course, learner },
@@ -2390,8 +2461,12 @@ fn table_ids() -> Vec<&'static str> {
 }
 
 /// The operations whose handler grants them on more than one permission, each with one entry
-/// per granting permission (M1 spec 05 B20, T14a).
-const PER_GRANT: &[&str] = &["listCourseProgress", "getLearnerProgress"];
+/// per granting permission (M1 spec 05 B20, T14a; spec 14 T10a).
+const PER_GRANT: &[&str] = &[
+    "listCourseProgress",
+    "getLearnerProgress",
+    "listCourseCompletions",
+];
 
 /// An operation has several entries only when it is in [`PER_GRANT`], and then each is a
 /// permission entry naming a different permission.

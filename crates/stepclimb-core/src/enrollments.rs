@@ -542,7 +542,8 @@ pub async fn update<'c>(
 /// so deleting a staff or Observer enrollment of a former learner is refused the same way.
 ///
 /// Otherwise it deletes the enrollment's own observer links and, when the user keeps no
-/// learner enrollment in the course, the links that name them there. Locks the enrollment's
+/// learner enrollment in the course, the links that name them there. The user's `completions`
+/// in the course are history and stay in every case (spec 05 B15, spec 14 B16). Locks the enrollment's
 /// course row `FOR NO KEY UPDATE` first (B19), which every progress write's `FOR SHARE` read
 /// waits for, so no progress appears between the check and the delete. Runs in one transaction
 /// (a savepoint when `db` is already one).

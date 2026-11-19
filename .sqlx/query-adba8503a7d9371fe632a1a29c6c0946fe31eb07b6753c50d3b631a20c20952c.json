@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT completion_valid_months FROM courses WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "completion_valid_months",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "courses",
+            "name": "completion_valid_months"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "adba8503a7d9371fe632a1a29c6c0946fe31eb07b6753c50d3b631a20c20952c"
+}

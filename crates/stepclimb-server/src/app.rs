@@ -16,7 +16,7 @@ use tower_http::trace::TraceLayer;
 use utoipa_scalar::{Scalar, Servable};
 
 use crate::{
-    accounts, admission_settings, admission_webhook, appearance, auth, branding,
+    accounts, admission_settings, admission_webhook, appearance, auth, branding, completions,
     course_enrollments, course_files, courses,
     csrf::{self, OriginAllowlist},
     discovery, enrollment,
@@ -322,6 +322,14 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         (
             "/api/v1/courses/{course_id}/progress/{user_id}",
             get(progress::get_learner_progress),
+        ),
+        (
+            "/api/v1/courses/{course_id}/completions",
+            get(completions::list_course_completions),
+        ),
+        (
+            "/api/v1/me/completions",
+            get(completions::list_my_completions),
         ),
         (
             "/api/v1/courses/{course_id}/copy",

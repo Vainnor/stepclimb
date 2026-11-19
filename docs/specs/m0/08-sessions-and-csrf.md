@@ -272,8 +272,11 @@ endpoints, and `/.well-known/stepclimb`. The Tauri client side of app sign-in is
     (403 `service_account.scope_exceeds_owner`). Holding a scope only at an account is enough:
     the intersection of B27 keeps the key's right at that account. An empty list is allowed;
     such a key can call `GET /api/v1/me`, `GET /api/v1/organization`, `PUT
-    /api/v1/me/appearance` and `GET /api/v1/me/identities` and nothing else under `/api/v1`, which
-    a router walk with such a key checks (`tests/service_accounts.rs`). A key with
+    /api/v1/me/appearance`, `GET /api/v1/me/identities` and `GET /api/v1/me/completions` and
+    nothing else under `/api/v1`, which a router walk with such a key checks
+    (`tests/service_accounts.rs`). Coordinator decision (2026-11-19): `GET /api/v1/me/completions`
+    (M1 spec 14 B13) joins the list, since it reads only the owner's own rows and changes
+    nothing about how they sign in. A key with
     `service_account.manage` may list and delete service accounts, its own included.
   - `kind` has one value, `api_key`. `name` is trimmed, 1 to 200 characters, no NUL, as other
     names. `last_used_at` is written at most once a minute, like a session's `last_seen_at`

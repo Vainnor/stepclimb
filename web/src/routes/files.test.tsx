@@ -35,6 +35,7 @@ function courseFixture(permissions: string[], status: Course["status"] = "draft"
     template: false,
     permissions,
     settings: { home: { kind: "modules" } },
+    completion_valid_months: null,
     start_at: null,
     end_at: null,
     created_at: "2026-11-01T12:00:00Z",

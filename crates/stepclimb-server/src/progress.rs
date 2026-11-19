@@ -156,6 +156,10 @@ pub struct CourseProgress {
     /// RFC 3339, UTC: when you completed the course; null until then. Never cleared.
     #[schema(format = DateTime, required = true)]
     pub completed_at: Option<String>,
+    /// RFC 3339, UTC: when that completion stops being valid; null while the course is not
+    /// complete or when its completion does not expire.
+    #[schema(format = DateTime, required = true)]
+    pub expires_at: Option<String>,
 }
 
 impl CourseProgress {
@@ -164,6 +168,7 @@ impl CourseProgress {
             required_count: progress.required_count,
             completed_count: progress.completed_count,
             completed_at: progress.completed_at.map(time).transpose()?,
+            expires_at: progress.expires_at.map(time).transpose()?,
         })
     }
 }
@@ -245,6 +250,10 @@ pub struct ModuleProgress {
     /// RFC 3339, UTC: when the learner completed the module; null until then. Never cleared.
     #[schema(format = DateTime, required = true)]
     pub completed_at: Option<String>,
+    /// RFC 3339, UTC: when that completion stops being valid; null while the module is not
+    /// complete or when its completion does not expire.
+    #[schema(format = DateTime, required = true)]
+    pub expires_at: Option<String>,
 }
 
 impl ModuleProgress {
@@ -254,6 +263,7 @@ impl ModuleProgress {
             required_count: progress.required_count,
             completed_count: progress.completed_count,
             completed_at: progress.completed_at.map(time).transpose()?,
+            expires_at: progress.expires_at.map(time).transpose()?,
         })
     }
 }
@@ -325,18 +335,19 @@ problem_responses! {
     LearnerProgressNotFound => "`course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `progress.not_found`: the user is not a learner of the course (no enrollment there, active or concluded, whose role holds `course.participate`), or you read only the learners you observe and do not observe them. `org.not_found`: the request's organization cannot be determined.",
 }
 
-/// Whose progress the caller reads in the course, and which content (B20).
-struct Reach {
+/// Whose progress the caller reads in the course, and which content (B20). The completion
+/// history reads the same way (spec 14 B13).
+pub(crate) struct Reach {
     /// `None`: every learner. `Some`: only these, the learners the caller observes.
-    only: Option<Vec<Uuid>>,
-    shown: progress::Shown,
+    pub(crate) only: Option<Vec<Uuid>>,
+    pub(crate) shown: progress::Shown,
 }
 
 /// B20: `progress.view` at the course reads every learner; otherwise `progress.view_observed`,
 /// which only an active enrollment gives, reads the learners the caller's active Observer
 /// enrollments in the course name; anyone else gets 403 `permission.denied`. Content the caller
 /// cannot read without `course.view_all` stays out of the answer.
-async fn reach(
+pub(crate) async fn reach(
     conn: &mut PgConnection,
     require: &Require<CourseView, CourseTarget>,
 ) -> Result<Reach, ApiError> {
@@ -486,7 +497,7 @@ fn progress_not_found() -> ApiError {
     )
 }
 
-async fn acquire(state: &AppState) -> Result<PoolConnection<Postgres>, ApiError> {
+pub(crate) async fn acquire(state: &AppState) -> Result<PoolConnection<Postgres>, ApiError> {
     state
         .db
         .acquire()
@@ -515,6 +526,7 @@ pub(crate) fn progress_error(error: Error) -> ApiError {
         )]),
         Error::Content(error) => content_error(error),
         Error::Course(error) => ApiError::internal(&error),
+        Error::Completion(error) => ApiError::internal(&error),
         other @ (Error::CompletionMismatch
         | Error::InvalidCursor
         | Error::Stored { .. }

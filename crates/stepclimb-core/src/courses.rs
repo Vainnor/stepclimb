@@ -16,9 +16,9 @@
 //! changes are allowed (B4, Q4, Q5).
 //!
 //! [`copy`] (B12 to B14) copies the course row and its outline: the new course's account, code,
-//! title and `template` flag come from the caller, and its dates and `settings` from the source;
-//! every module and item is copied with a new id, its position and its `published` flag (spec
-//! 03). It copies no enrollment, progress or other learner data. The content specs add their
+//! title and `template` flag come from the caller, and its dates, `settings` and completion
+//! validity (spec 14 B3) from the source; every module and item is copied with a new id, its
+//! position and its `published` flag (spec 03), each module with its validity. It copies no enrollment, progress or other learner data. The content specs add their
 //! parts to it, in its transaction.
 
 use std::{
@@ -35,6 +35,7 @@ use crate::{
     OrgScope,
     accounts::{self, Reach},
     audit::{self, Action, Actor},
+    completions,
     db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
     enrollments,
     id::new_id,
@@ -129,6 +130,9 @@ pub struct Course {
     pub start_at: Option<SystemTime>,
     pub end_at: Option<SystemTime>,
     pub settings: CourseSettings,
+    /// How many months a completion of the course stays valid, 1 to 120; `None` for ever
+    /// (spec 14 B3).
+    pub completion_valid_months: Option<i16>,
     pub created_at: SystemTime,
     pub updated_at: SystemTime,
 }
@@ -176,6 +180,8 @@ pub struct CoursePatch {
     /// `Some(None)` clears the date.
     pub end_at: Option<Option<SystemTime>>,
     pub home: Option<Home>,
+    /// `Some(None)` clears the validity (spec 14 B3).
+    pub completion_valid_months: Option<Option<i16>>,
 }
 
 /// The filters of [`list_visible`]; `None` filters nothing.
@@ -237,6 +243,9 @@ pub enum Error {
     /// `end_at` would be before `start_at` (B3).
     #[error("a course cannot end before it starts")]
     DatesInverted,
+    /// A `completion_valid_months` outside 1 to 120 (spec 14 B3).
+    #[error("a completion validity must be from 1 to 120 months")]
+    ValidityOutOfRange,
     /// A date before 1970 or from [`DATES_END_SECS`] on.
     #[error("a course date must be from 1970 up to 2200")]
     DateOutOfRange { field: DateField },
@@ -296,6 +305,7 @@ struct Row {
     start_at_us: Option<i64>,
     end_at_us: Option<i64>,
     settings: String,
+    completion_valid_months: Option<i16>,
     created_at_us: i64,
     updated_at_us: i64,
 }
@@ -319,6 +329,7 @@ impl TryFrom<Row> for Course {
             code: row.code,
             title: row.title,
             template: row.template,
+            completion_valid_months: row.completion_valid_months,
         })
     }
 }
@@ -335,7 +346,7 @@ pub async fn get(
                   c.template,
                   (extract(epoch FROM c.start_at) * 1000000)::bigint AS start_at_us,
                   (extract(epoch FROM c.end_at) * 1000000)::bigint AS end_at_us,
-                  c.settings::text AS "settings!",
+                  c.settings::text AS "settings!", c.completion_valid_months,
                   (extract(epoch FROM c.created_at) * 1000000)::bigint AS "created_at_us!",
                   (extract(epoch FROM c.updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM courses c JOIN accounts a ON a.org_id = c.org_id AND a.id = c.account_id
@@ -364,7 +375,7 @@ pub async fn lock(
                   c.template,
                   (extract(epoch FROM c.start_at) * 1000000)::bigint AS start_at_us,
                   (extract(epoch FROM c.end_at) * 1000000)::bigint AS end_at_us,
-                  c.settings::text AS "settings!",
+                  c.settings::text AS "settings!", c.completion_valid_months,
                   (extract(epoch FROM c.created_at) * 1000000)::bigint AS "created_at_us!",
                   (extract(epoch FROM c.updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM courses c JOIN accounts a ON a.org_id = c.org_id AND a.id = c.account_id
@@ -393,7 +404,7 @@ pub async fn lock_shared(
                   c.template,
                   (extract(epoch FROM c.start_at) * 1000000)::bigint AS start_at_us,
                   (extract(epoch FROM c.end_at) * 1000000)::bigint AS end_at_us,
-                  c.settings::text AS "settings!",
+                  c.settings::text AS "settings!", c.completion_valid_months,
                   (extract(epoch FROM c.created_at) * 1000000)::bigint AS "created_at_us!",
                   (extract(epoch FROM c.updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM courses c JOIN accounts a ON a.org_id = c.org_id AND a.id = c.account_id
@@ -514,7 +525,7 @@ pub async fn list_visible(
                   c.template,
                   (extract(epoch FROM c.start_at) * 1000000)::bigint AS start_at_us,
                   (extract(epoch FROM c.end_at) * 1000000)::bigint AS end_at_us,
-                  c.settings::text AS "settings!",
+                  c.settings::text AS "settings!", c.completion_valid_months,
                   (extract(epoch FROM c.created_at) * 1000000)::bigint AS "created_at_us!",
                   (extract(epoch FROM c.updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM courses c JOIN accounts a ON a.org_id = c.org_id AND a.id = c.account_id
@@ -610,11 +621,12 @@ pub async fn create<'c>(
 /// says, with `created_at` and `updated_at` set to `now`, and write the `course.copy` audit entry
 /// on the new course by `actor`, naming the source, the account and `template` (B12, B27).
 ///
-/// The new course takes the source's dates and `settings`, and its title unless `copy` names
-/// one; it is a draft whatever the source's status, and a template exactly when
-/// `copy.template` is. Every module and item of the source is copied with a new id, its
-/// position, title and `published` flag, and an item's kind and URL, with the unlock and
-/// completion rules, requirements and prerequisites of spec 04 ([`copy_outline`]). Nothing
+/// The new course takes the source's dates, `settings` and `completion_valid_months`, and its
+/// title unless `copy` names one; it is a draft whatever the source's status, and a template
+/// exactly when `copy.template` is. Every module and item of the source is copied with a new
+/// id, its position, title and `published` flag, and an item's kind and URL, with the unlock and
+/// completion rules, requirements and prerequisites of spec 04 and each module's validity
+/// ([`copy_outline`]). Nothing
 /// of the source's learners is copied: no enrollment, progress, attempt or other learner data
 /// (B13).
 ///
@@ -652,8 +664,9 @@ pub async fn copy<'c>(
     let id = new_id();
     let inserted = sqlx::query!(
         "INSERT INTO courses (id, org_id, account_id, code, title, status, template, start_at,
-                              end_at, settings, created_at, updated_at)
+                              end_at, settings, completion_valid_months, created_at, updated_at)
          SELECT $1, org_id, $3, $4, COALESCE($5, title), 'draft', $6, start_at, end_at, settings,
+                completion_valid_months,
                 timestamptz 'epoch' + $7::bigint * interval '1 microsecond',
                 timestamptz 'epoch' + $7::bigint * interval '1 microsecond'
          FROM courses
@@ -709,9 +722,10 @@ async fn copy_outline(
     let copies: Vec<Uuid> = sources.iter().map(|_| new_id()).collect();
     sqlx::query!(
         "INSERT INTO modules (id, org_id, course_id, position, title, published, unlock_at,
-                              require_sequential, completion_rule, created_at, updated_at)
+                              require_sequential, completion_rule, completion_valid_months,
+                              created_at, updated_at)
          SELECT map.new_id, $1, $2, m.position, m.title, m.published, m.unlock_at,
-                m.require_sequential, m.completion_rule,
+                m.require_sequential, m.completion_rule, m.completion_valid_months,
                 timestamptz 'epoch' + $6::bigint * interval '1 microsecond',
                 timestamptz 'epoch' + $6::bigint * interval '1 microsecond'
          FROM UNNEST($3::uuid[], $4::uuid[]) AS map (old_id, new_id)
@@ -872,6 +886,7 @@ struct Details {
     start_at: Option<SystemTime>,
     end_at: Option<SystemTime>,
     settings: CourseSettings,
+    completion_valid_months: Option<i16>,
 }
 
 impl Details {
@@ -882,6 +897,7 @@ impl Details {
             start_at: course.start_at,
             end_at: course.end_at,
             settings: course.settings,
+            completion_valid_months: course.completion_valid_months,
         }
     }
 
@@ -905,6 +921,13 @@ impl Details {
             end_at: date(DateField::EndAt, patch.end_at, self.end_at)?,
             settings: CourseSettings {
                 home: patch.home.unwrap_or(self.settings.home),
+            },
+            completion_valid_months: match patch.completion_valid_months {
+                Some(Some(months)) if !completions::valid_months(months) => {
+                    return Err(Error::ValidityOutOfRange);
+                }
+                Some(months) => months,
+                None => self.completion_valid_months,
             },
         };
         if let (Some(start), Some(end)) = (after.start_at, after.end_at)
@@ -937,6 +960,11 @@ impl Details {
             audit_time(after.end_at)?,
         );
         put("settings", json!(self.settings), json!(after.settings));
+        put(
+            "completion_valid_months",
+            json!(self.completion_valid_months),
+            json!(after.completion_valid_months),
+        );
         Ok(json!({ "before": old, "after": new }))
     }
 }
@@ -974,7 +1002,8 @@ pub async fn update<'c>(
              start_at = timestamptz 'epoch' + $5::bigint * interval '1 microsecond',
              end_at = timestamptz 'epoch' + $6::bigint * interval '1 microsecond',
              settings = $7::text::jsonb,
-             updated_at = timestamptz 'epoch' + $8::bigint * interval '1 microsecond'
+             updated_at = timestamptz 'epoch' + $8::bigint * interval '1 microsecond',
+             completion_valid_months = $9
          WHERE org_id = $1 AND id = $2",
         scope.org_id(),
         id,
@@ -984,6 +1013,7 @@ pub async fn update<'c>(
         after.end_at.map(epoch_micros).transpose()?,
         settings,
         now,
+        after.completion_valid_months,
     )
     .execute(&mut *tx)
     .await?;
@@ -1249,7 +1279,46 @@ mod tests {
             start_at: None,
             end_at: None,
             settings: CourseSettings::default(),
+            completion_valid_months: None,
         }
+    }
+
+    #[test]
+    fn a_validity_of_1_to_120_months_is_set_and_null_clears_it() {
+        let before = details();
+        for months in [1, 12, 120] {
+            let patch = CoursePatch {
+                completion_valid_months: Some(Some(months)),
+                ..CoursePatch::default()
+            };
+            let after = before.patched(&patch).unwrap();
+            assert_eq!(after.completion_valid_months, Some(months));
+            let clear = CoursePatch {
+                completion_valid_months: Some(None),
+                ..CoursePatch::default()
+            };
+            assert_eq!(after.patched(&clear).unwrap(), before);
+            assert_eq!(after.patched(&CoursePatch::default()).unwrap(), after);
+        }
+        for months in [-1, 0, 121] {
+            let patch = CoursePatch {
+                completion_valid_months: Some(Some(months)),
+                ..CoursePatch::default()
+            };
+            assert!(
+                matches!(before.patched(&patch), Err(Error::ValidityOutOfRange)),
+                "{months}"
+            );
+        }
+        let mut after = before.clone();
+        after.completion_valid_months = Some(12);
+        assert_eq!(
+            before.changes(&after).unwrap(),
+            json!({
+                "before": { "completion_valid_months": null },
+                "after": { "completion_valid_months": 12 },
+            })
+        );
     }
 
     #[test]

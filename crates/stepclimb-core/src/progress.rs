@@ -12,7 +12,10 @@
 //! course take turns, and in the same transaction rolls the change up to the item's module and
 //! the course (B6, B7) with `stepclimb_core::unlock`'s definitions (spec 04 B11). It returns the
 //! events of what became complete ([`Event`], B10, B11); the caller writes them to the outbox in
-//! the same transaction (`stepclimb_jobs::outbox::emit`, which this crate cannot reach).
+//! the same transaction (`stepclimb_jobs::outbox::emit`, which this crate cannot reach). A module
+//! or course that becomes complete is also recorded in the completion history in the same
+//! transaction (`crate::completions`, spec 14 B1), and the roll-up reads carry the expiry of that
+//! completion.
 //!
 //! Both functions take the caller's transaction and, before anything else, read the course row
 //! `FOR SHARE` (`courses::lock_shared`). Whether the caller may see the course at all (a draft or
@@ -40,7 +43,9 @@ use sqlx::{PgConnection, PgExecutor, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::{
-    OrgScope, courses,
+    OrgScope,
+    completions::{self, TargetType},
+    courses,
     db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
     enrollments,
     items::{self, Kind},
@@ -97,6 +102,9 @@ pub struct ModuleProgress {
     pub completed_count: i32,
     /// When the module became complete; final once set (Q1).
     pub completed_at: Option<SystemTime>,
+    /// When the completion recorded for `completed_at` expires (spec 14 B13); `None` while the
+    /// module is not complete or when its completion does not expire.
+    pub expires_at: Option<SystemTime>,
 }
 
 /// A learner's roll-up for a course (B6, B7): its counted modules (spec 04 B11: published, with
@@ -107,6 +115,9 @@ pub struct CourseProgress {
     pub completed_count: i32,
     /// When the course became complete; final once set (Q1).
     pub completed_at: Option<SystemTime>,
+    /// When the completion recorded for `completed_at` expires (spec 14 B13); `None` while the
+    /// course is not complete or when its completion does not expire.
+    pub expires_at: Option<SystemTime>,
 }
 
 /// Everything stored of one learner's progress in one course (B13).
@@ -215,6 +226,9 @@ pub enum Error {
     /// The course row could not be read.
     #[error(transparent)]
     Course(#[from] courses::Error),
+    /// A completion could not be recorded.
+    #[error(transparent)]
+    Completion(#[from] completions::Error),
     /// A list cursor whose display name holds NUL, which no stored name can.
     #[error("the cursor is not one this list wrote")]
     InvalidCursor,
@@ -453,6 +467,18 @@ impl RollUp {
         )
         .execute(&mut **tx)
         .await?;
+        if newly {
+            let target = (TargetType::Module, module.id);
+            completions::record(
+                tx,
+                self.scope,
+                self.user_id,
+                self.course_id,
+                target,
+                self.now,
+            )
+            .await?;
+        }
         Ok(newly.then_some(Event::ModuleCompleted(ModuleCompleted {
             user_id: self.user_id,
             course_id: self.course_id,
@@ -499,6 +525,18 @@ impl RollUp {
         )
         .execute(&mut **tx)
         .await?;
+        if newly {
+            let target = (TargetType::Course, self.course_id);
+            completions::record(
+                tx,
+                self.scope,
+                self.user_id,
+                self.course_id,
+                target,
+                self.now,
+            )
+            .await?;
+        }
         Ok(newly.then_some(Event::CourseCompleted(CourseCompleted {
             user_id: self.user_id,
             course_id: self.course_id,
@@ -691,9 +729,16 @@ pub async fn for_learner_in_course(
     course_id: Uuid,
 ) -> Result<LearnerProgress, Error> {
     let course = sqlx::query!(
-        r#"SELECT required_count, completed_count,
-                  (extract(epoch FROM completed_at) * 1000000)::bigint AS completed_at_us
-           FROM course_progress WHERE org_id = $1 AND user_id = $2 AND course_id = $3"#,
+        r#"SELECT p.required_count, p.completed_count,
+                  (extract(epoch FROM p.completed_at) * 1000000)::bigint AS completed_at_us,
+                  (extract(epoch FROM k.expires_at) * 1000000)::bigint AS expires_at_us
+           FROM course_progress p
+           LEFT JOIN LATERAL (
+               SELECT expires_at FROM completions
+               WHERE org_id = p.org_id AND user_id = p.user_id AND target_type = 'course'
+                 AND target_id = p.course_id
+               ORDER BY cycle DESC LIMIT 1) k ON p.completed_at IS NOT NULL
+           WHERE p.org_id = $1 AND p.user_id = $2 AND p.course_id = $3"#,
         scope.org_id(),
         user_id,
         course_id,
@@ -705,14 +750,21 @@ pub async fn for_learner_in_course(
             required_count: row.required_count,
             completed_count: row.completed_count,
             completed_at: row.completed_at_us.map(from_epoch_micros).transpose()?,
+            expires_at: row.expires_at_us.map(from_epoch_micros).transpose()?,
         })
     })
     .transpose()?;
     let modules = sqlx::query!(
         r#"SELECT p.module_id, p.required_count, p.completed_count,
-                  (extract(epoch FROM p.completed_at) * 1000000)::bigint AS completed_at_us
+                  (extract(epoch FROM p.completed_at) * 1000000)::bigint AS completed_at_us,
+                  (extract(epoch FROM k.expires_at) * 1000000)::bigint AS expires_at_us
            FROM module_progress p
            JOIN modules m ON m.org_id = p.org_id AND m.id = p.module_id
+           LEFT JOIN LATERAL (
+               SELECT expires_at FROM completions
+               WHERE org_id = p.org_id AND user_id = p.user_id AND target_type = 'module'
+                 AND target_id = p.module_id
+               ORDER BY cycle DESC LIMIT 1) k ON p.completed_at IS NOT NULL
            WHERE p.org_id = $1 AND p.user_id = $2 AND p.course_id = $3
            ORDER BY m.position"#,
         scope.org_id(),
@@ -728,6 +780,7 @@ pub async fn for_learner_in_course(
             required_count: row.required_count,
             completed_count: row.completed_count,
             completed_at: row.completed_at_us.map(from_epoch_micros).transpose()?,
+            expires_at: row.expires_at_us.map(from_epoch_micros).transpose()?,
         })
     })
     .collect::<Result<_, Error>>()?;
@@ -914,10 +967,16 @@ async fn course_rows(
     users: &[Uuid],
 ) -> Result<HashMap<Uuid, CourseProgress>, Error> {
     let rows = sqlx::query!(
-        r#"SELECT user_id, required_count, completed_count,
-                  (extract(epoch FROM completed_at) * 1000000)::bigint AS completed_at_us
-           FROM course_progress
-           WHERE org_id = $1 AND course_id = $2 AND user_id = ANY($3)"#,
+        r#"SELECT p.user_id, p.required_count, p.completed_count,
+                  (extract(epoch FROM p.completed_at) * 1000000)::bigint AS completed_at_us,
+                  (extract(epoch FROM k.expires_at) * 1000000)::bigint AS expires_at_us
+           FROM course_progress p
+           LEFT JOIN LATERAL (
+               SELECT expires_at FROM completions
+               WHERE org_id = p.org_id AND user_id = p.user_id AND target_type = 'course'
+                 AND target_id = p.course_id
+               ORDER BY cycle DESC LIMIT 1) k ON p.completed_at IS NOT NULL
+           WHERE p.org_id = $1 AND p.course_id = $2 AND p.user_id = ANY($3)"#,
         scope.org_id(),
         course_id,
         users,
@@ -930,6 +989,7 @@ async fn course_rows(
                 required_count: row.required_count,
                 completed_count: row.completed_count,
                 completed_at: row.completed_at_us.map(from_epoch_micros).transpose()?,
+                expires_at: row.expires_at_us.map(from_epoch_micros).transpose()?,
             };
             Ok((row.user_id, progress))
         })
@@ -947,9 +1007,15 @@ async fn module_rows(
 ) -> Result<HashMap<Uuid, Vec<ModuleProgress>>, Error> {
     let rows = sqlx::query!(
         r#"SELECT p.user_id, p.module_id, p.required_count, p.completed_count,
-                  (extract(epoch FROM p.completed_at) * 1000000)::bigint AS completed_at_us
+                  (extract(epoch FROM p.completed_at) * 1000000)::bigint AS completed_at_us,
+                  (extract(epoch FROM k.expires_at) * 1000000)::bigint AS expires_at_us
            FROM module_progress p
            JOIN modules m ON m.org_id = p.org_id AND m.id = p.module_id
+           LEFT JOIN LATERAL (
+               SELECT expires_at FROM completions
+               WHERE org_id = p.org_id AND user_id = p.user_id AND target_type = 'module'
+                 AND target_id = p.module_id
+               ORDER BY cycle DESC LIMIT 1) k ON p.completed_at IS NOT NULL
            WHERE p.org_id = $1 AND p.course_id = $2 AND p.user_id = ANY($3)
              AND ($4 OR m.published)
            ORDER BY m.position"#,
@@ -970,6 +1036,7 @@ async fn module_rows(
                 required_count: row.required_count,
                 completed_count: row.completed_count,
                 completed_at: row.completed_at_us.map(from_epoch_micros).transpose()?,
+                expires_at: row.expires_at_us.map(from_epoch_micros).transpose()?,
             });
     }
     Ok(by_user)

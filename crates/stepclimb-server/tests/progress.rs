@@ -382,12 +382,13 @@ impl Fixture {
             .expect("read the outbox")
     }
 
-    /// Every progress row and outbox row of `org`, as text.
+    /// Every progress, completion and outbox row of `org`, as text.
     async fn rows(&self, org: Uuid) -> Vec<String> {
         sqlx::query_scalar(
             "SELECT to_jsonb(p)::text FROM item_progress p WHERE org_id = $1
              UNION ALL SELECT to_jsonb(m)::text FROM module_progress m WHERE org_id = $1
              UNION ALL SELECT to_jsonb(c)::text FROM course_progress c WHERE org_id = $1
+             UNION ALL SELECT to_jsonb(k)::text FROM completions k WHERE org_id = $1
              UNION ALL SELECT to_jsonb(o)::text FROM outbox o WHERE org_id = $1
              ORDER BY 1",
         )
@@ -576,7 +577,12 @@ async fn t10_the_course_read_carries_only_the_learners_own_progress(pool: PgPool
     let read = f.send(Method::GET, &course_uri, org.id, &one, None).await;
     assert_eq!(
         read.ok()["progress"],
-        json!({ "required_count": 1, "completed_count": 1, "completed_at": NOW_RFC3339 })
+        json!({
+            "required_count": 1,
+            "completed_count": 1,
+            "completed_at": NOW_RFC3339,
+            "expires_at": null,
+        })
     );
     assert_schema("Course", read.ok());
     let other = f.send(Method::GET, &course_uri, org.id, &two, None).await;
@@ -1320,7 +1326,9 @@ async fn staff_reads_show_unpublished_content_only_to_view_all(pool: PgPool) {
 /// progress in the course answers 409 `enrollment.has_progress` and changes nothing, whatever
 /// the deleted enrollment's role. A learner without progress is deleted with the Observer
 /// links naming them, and leaves the Observer's list; a second participating enrollment keeps
-/// the links; an Observer enrollment takes its own links.
+/// the links; an Observer enrollment takes its own links. The `completions` rows are part of
+/// what stays unchanged on a refusal (spec 14 I1); `tests/completions.rs` has the case of a
+/// delete that goes ahead.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn t12_t18_deleting_an_enrollment_keeps_learner_history(pool: PgPool) {
     let f = Fixture::new(pool).await;
