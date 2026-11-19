@@ -867,7 +867,8 @@ export interface paths {
         };
         /**
          * List your own completion history, newest first: one row per course or module completion per
-         *     cycle, across your courses.
+         *     cycle, across your courses. Without `course.view_all` at a course, the title of a draft or
+         *     template course and of an unpublished or deleted module is null.
          */
         get: operations["listMyCompletions"];
         put?: never;
@@ -2094,7 +2095,11 @@ export interface components {
         CompletionTarget: {
             /** Format: uuid */
             id: string;
-            /** @description The course's or module's title now; null for a module deleted since. */
+            /**
+             * @description The course's or module's title now; null for a module deleted since, and on your own
+             *     history where you cannot read it now without `course.view_all` (a draft or template
+             *     course, an unpublished module).
+             */
             title: string | null;
             type: components["schemas"]["CompletionTargetType"];
         };

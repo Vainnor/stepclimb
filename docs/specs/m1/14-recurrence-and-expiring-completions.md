@@ -500,20 +500,31 @@ owner answered them on 2026-11-16.
     person's latest completion, exists for them (B10).
   - A configurable retention policy is out of scope; nothing is pruned until one exists.
 
-Coordinator decisions (2026-11-19, I1), pending owner review, for points the spec leaves open:
+Coordinator decisions (2026-11-19, I1), pending owner review, for points the spec leaves open
+(numbered as in PR #379):
 
-- `expires_at` (B13) is on module and course progress, the roll-ups whose completions are
-  recorded. Item progress gains none: an item has no completion of its own (B4, Q5).
-- `Completion.target.title` is the course's or module's title now, and null for a module deleted
-  since; a module's title at completion time is not stored (archives store titles, B15).
-- `GET /courses/{course_id}/completions` leaves out completions of unpublished or deleted modules
-  for a caller without `course.view_all`, as `05` B14's staff reads leave out unpublished
-  content. It lists every user with a completion in the course, enrolled or not, suspended or
-  not, since it is history (B16). `GET /me/completions` lists all of the caller's own.
-- Both lists run newest first by `completed_at`, then id.
-- A copy (`02` B12) takes the source's course and module `completion_valid_months`.
-- A validity outside 1 to 120 answers 422 `request.invalid` with the field code
-  `completion.validity_out_of_range` at `/completion_valid_months`, on courses and modules.
+1. `expires_at` (B13) is on module and course progress, the roll-ups whose completions are
+   recorded. Item progress gains none: an item has no completion of its own (B4, Q5).
+2. `Completion.target.title` is the course's or module's title now, and null for a module deleted
+   since; a module's title at completion time is not stored (archives store titles, B15).
+3. Coordinator decision (2026-11-19), after the security review of PR #379.
+   `GET /courses/{course_id}/completions` leaves out completions of unpublished or deleted
+   modules for a caller without `course.view_all`, as `05` B14's staff reads leave out
+   unpublished content. It lists every user with a completion in the course, enrolled or not,
+   suspended or not. This differs on purpose from `05` B14's progress list, which leaves out
+   suspended users and non-learners: completions are history (B16), kept after enrollment
+   deletion. `GET /me/completions` lists all of the caller's own rows, but answers
+   `target.title` null where the caller does not hold `course.view_all` at the completion's
+   course and either the target is a module that is unpublished or deleted, or the course is a
+   draft or a template (for a module target too, since such a course is hidden whole, `02`
+   B10). `05` B14 and `02` B10 hide those titles from learners.
+4. Both lists run newest first by `completed_at`, then id.
+5. A copy (`02` B12) takes the source's course and module `completion_valid_months`.
+6. A validity outside 1 to 120 answers 422 `request.invalid` with the field code
+   `completion.validity_out_of_range` at `/completion_valid_months`, on courses and modules.
+7. Coordinator decision (2026-11-19): an API key with no scopes may call `GET /me/completions`,
+   as it may call `GET /me`: it reads only the owner's own rows and changes nothing about how
+   they sign in (`m0/08` B44 lists it).
 
 ## Issues
 

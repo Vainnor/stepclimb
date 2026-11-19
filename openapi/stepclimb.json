@@ -4388,7 +4388,7 @@
         "tags": [
           "me"
         ],
-        "summary": "List your own completion history, newest first: one row per course or module completion per\ncycle, across your courses.",
+        "summary": "List your own completion history, newest first: one row per course or module completion per\ncycle, across your courses. Without `course.view_all` at a course, the title of a draft or\ntemplate course and of an unpublished or deleted module is null.",
         "operationId": "listMyCompletions",
         "parameters": [
           {
@@ -8767,7 +8767,7 @@
               "string",
               "null"
             ],
-            "description": "The course's or module's title now; null for a module deleted since."
+            "description": "The course's or module's title now; null for a module deleted since, and on your own\nhistory where you cannot read it now without `course.view_all` (a draft or template\ncourse, an unpublished module)."
           },
           "type": {
             "$ref": "#/components/schemas/CompletionTargetType"

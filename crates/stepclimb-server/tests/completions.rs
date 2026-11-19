@@ -343,6 +343,12 @@ impl Fixture {
     /// A new user holding a custom role of exactly `keys` at `at`.
     async fn holder_at(&self, org: Uuid, keys: &[&str], at: Scope) -> String {
         let (cookie, user) = self.user(org).await;
+        self.grant(org, user, keys, at).await;
+        cookie
+    }
+
+    /// Give `user` a custom role of exactly `keys` at `at`.
+    async fn grant(&self, org: Uuid, user: Uuid, keys: &[&str], at: Scope) {
         let role = NewRole {
             key: format!("r{}", new_id().simple()),
             name: "Custom role".into(),
@@ -368,7 +374,22 @@ impl Fixture {
         )
         .await
         .expect("assign");
-        cookie
+    }
+
+    /// The `(target type, title)` of each row of the caller's own history, sorted by type.
+    async fn my_titles(&self, org: Uuid, cookie: &str) -> Vec<(String, Value)> {
+        let page = self.get(org, cookie, MINE).await;
+        let mut titles: Vec<(String, Value)> = page.ok()["items"]
+            .as_array()
+            .expect("a page")
+            .iter()
+            .map(|c| {
+                let kind = c["target"]["type"].as_str().expect("a type").to_owned();
+                (kind, c["target"]["title"].clone())
+            })
+            .collect();
+        titles.sort_by(|a, b| a.0.cmp(&b.0));
+        titles
     }
 
     async fn send(
@@ -919,4 +940,88 @@ async fn t11_the_module_validity_takes_course_content_edit(pool: PgPool) {
     let answer = f.send(Method::PATCH, &uri, org.id, &editor, body()).await;
     assert_eq!(answer.ok()["completion_valid_months"], 6);
     assert_eq!(stored().await, Some(6));
+}
+
+/// Decision 3 (2026-11-19): the caller's own history answers a null title where they cannot
+/// read it now. A module unpublished and renamed after the learner completed it has a null
+/// title, the published course keeps its title, and with `course.view_all` at the course the
+/// learner reads the module's new title.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn my_history_hides_an_unpublished_modules_title_without_view_all(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let org = f.org("a").await;
+    let (learner, learner_id, _) = f.enrolled(org.id, org.course, "student").await;
+    f.view(org.id, &learner, org.item).await;
+    let hide = ModulePatch {
+        title: Some("Renamed secret module".into()),
+        published: Some(false),
+        ..ModulePatch::default()
+    };
+    modules::update(&f.pool, scope(org.id), org.module, &hide, start())
+        .await
+        .expect("rename and unpublish");
+    assert_eq!(
+        f.my_titles(org.id, &learner).await,
+        [
+            ("course".to_owned(), json!("Course title")),
+            ("module".to_owned(), Value::Null),
+        ]
+    );
+    let page = f.get(org.id, &learner, MINE).await;
+    for item in page.ok()["items"].as_array().expect("a page") {
+        assert_schema("Completion", item);
+    }
+    let view_all = [perm::CourseViewAll::KEY];
+    f.grant(org.id, learner_id, &view_all, Scope::Account(org.tower))
+        .await;
+    assert_eq!(
+        f.my_titles(org.id, &learner).await,
+        [
+            ("course".to_owned(), json!("Course title")),
+            ("module".to_owned(), json!("Renamed secret module")),
+        ]
+    );
+}
+
+/// Decision 3 (2026-11-19): a course put back to draft after the learner's enrollment was
+/// deleted hides its title and its module's title from the learner's own history; with
+/// `course.view_all` the learner reads both.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn my_history_hides_a_draft_courses_titles_without_view_all(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let org = f.org("a").await;
+    let admin = f.assigned(org.id, "org_admin", Scope::Organization).await;
+    let (learner, learner_id, enrollment) = f.enrolled(org.id, org.course, "student").await;
+    f.view(org.id, &learner, org.item).await;
+    f.reset(learner_id, org.course).await;
+    let delete = format!("/api/v1/enrollments/{enrollment}");
+    let answer = f.send(Method::DELETE, &delete, org.id, &admin, None).await;
+    assert_eq!(answer.status, StatusCode::NO_CONTENT, "{answer:?}");
+    courses::set_status(
+        &f.pool,
+        scope(org.id),
+        org.course,
+        courses::Status::Draft,
+        start(),
+        Actor::Instance,
+    )
+    .await
+    .expect("back to draft");
+    assert_eq!(
+        f.my_titles(org.id, &learner).await,
+        [
+            ("course".to_owned(), Value::Null),
+            ("module".to_owned(), Value::Null),
+        ]
+    );
+    let view_all = [perm::CourseViewAll::KEY];
+    f.grant(org.id, learner_id, &view_all, Scope::Organization)
+        .await;
+    assert_eq!(
+        f.my_titles(org.id, &learner).await,
+        [
+            ("course".to_owned(), json!("Course title")),
+            ("module".to_owned(), json!("Module title")),
+        ]
+    );
 }

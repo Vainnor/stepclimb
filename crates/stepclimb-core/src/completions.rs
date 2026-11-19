@@ -80,6 +80,10 @@ pub struct Completion {
     pub target_id: Uuid,
     /// The course's or module's current title; `None` for a module deleted since.
     pub target_title: Option<String>,
+    /// Whether a learner without `course.view_all` at the course may not see the title: the
+    /// course is a draft or a template, or the target is a module that is unpublished or
+    /// deleted (spec 02 B10, spec 05 B14).
+    pub title_hidden: bool,
     /// 1 for the user's first completion of the target, then 2, and so on.
     pub cycle: i32,
     pub completed_at: SystemTime,
@@ -291,6 +295,7 @@ struct Row {
     target_type: String,
     target_id: Uuid,
     target_title: Option<String>,
+    title_hidden: bool,
     cycle: i32,
     completed_at_us: i64,
     expires_at_us: Option<i64>,
@@ -315,6 +320,7 @@ impl TryFrom<Row> for Completion {
             course_id: row.course_id,
             target_id: row.target_id,
             target_title: row.target_title,
+            title_hidden: row.title_hidden,
             cycle: row.cycle,
         })
     }
@@ -334,6 +340,8 @@ async fn list(
         Row,
         r#"SELECT c.id, c.user_id, u.display_name, c.course_id, c.target_type, c.target_id,
                   CASE c.target_type WHEN 'course' THEN co.title ELSE m.title END AS target_title,
+                  (co.status = 'draft' OR co.template
+                   OR (c.target_type = 'module' AND m.published IS NOT TRUE)) AS "title_hidden!",
                   c.cycle,
                   (extract(epoch FROM c.completed_at) * 1000000)::bigint AS "completed_at_us!",
                   (extract(epoch FROM c.expires_at) * 1000000)::bigint AS expires_at_us,

@@ -10,14 +10,22 @@
 //! `course.view_all` at the course, completions of unpublished or deleted modules are left out.
 //!
 //! `GET /api/v1/me/completions` lists the caller's own history in their organization, across
-//! courses, and needs no permission: the rows are the caller's.
+//! courses, and needs no permission: the rows are the caller's. A title the caller could not
+//! read now answers null ([`hide_titles`]): without `course.view_all` at the course, the title of
+//! a draft or template course and of an unpublished or deleted module (spec 02 B10, spec 05
+//! B14).
 
 use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
 use stepclimb_core::{
+    OrgScope,
     completions::{self, Completion as CoreCompletion, Error, TargetType},
+    courses,
+    grants::{Grants, Target},
     id::Uuid,
-    perm::CourseView,
+    perm::{CourseView, CourseViewAll},
     progress::Shown,
 };
 use utoipa::{IntoParams, ToSchema};
@@ -67,7 +75,9 @@ pub struct CompletionTarget {
     pub target_type: CompletionTargetType,
     #[schema(value_type = String, format = "uuid")]
     pub id: Uuid,
-    /// The course's or module's title now; null for a module deleted since.
+    /// The course's or module's title now; null for a module deleted since, and on your own
+    /// history where you cannot read it now without `course.view_all` (a draft or template
+    /// course, an unpublished module).
     #[schema(required = true)]
     pub title: Option<String>,
 }
@@ -195,7 +205,8 @@ pub async fn list_course_completions(
 }
 
 /// List your own completion history, newest first: one row per course or module completion per
-/// cycle, across your courses.
+/// cycle, across your courses. Without `course.view_all` at a course, the title of a draft or
+/// template course and of an unpublished or deleted module is null.
 #[utoipa::path(
     get,
     path = "/api/v1/me/completions",
@@ -229,7 +240,51 @@ pub async fn list_my_completions(
     )
     .await
     .map_err(completion_error)?;
+    let rows = hide_titles(&state, auth.grants(), principal.scope(), rows).await?;
     answer(&page, rows)
+}
+
+/// `rows` with `target_title` cleared where the caller may not read it: the row's title is
+/// hidden from learners and `grants` hold no `course.view_all` at its course.
+async fn hide_titles(
+    state: &AppState,
+    grants: &Grants,
+    scope: OrgScope,
+    mut rows: Vec<CoreCompletion>,
+) -> Result<Vec<CoreCompletion>, ApiError> {
+    let mut view_all: HashMap<Uuid, bool> = HashMap::new();
+    for row in rows.iter_mut().filter(|row| row.title_hidden) {
+        let holds = match view_all.get(&row.course_id) {
+            Some(holds) => *holds,
+            None => {
+                let holds = holds_view_all(state, grants, scope, row.course_id).await?;
+                view_all.insert(row.course_id, holds);
+                holds
+            }
+        };
+        if !holds {
+            row.target_title = None;
+        }
+    }
+    Ok(rows)
+}
+
+/// Whether `grants` hold `course.view_all` at the course `course_id`, through its account path.
+async fn holds_view_all(
+    state: &AppState,
+    grants: &Grants,
+    scope: OrgScope,
+    course_id: Uuid,
+) -> Result<bool, ApiError> {
+    let path = courses::path(&state.db, scope, course_id)
+        .await
+        .map_err(|error| ApiError::internal(&error))?;
+    Ok(path.is_some_and(|account_path| {
+        grants.holds::<CourseViewAll>(&Target::Course {
+            account_path,
+            course_id,
+        })
+    }))
 }
 
 /// The page of `rows`, which the repository fetched after the request's cursor.

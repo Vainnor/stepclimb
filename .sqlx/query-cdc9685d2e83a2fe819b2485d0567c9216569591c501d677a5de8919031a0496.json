@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT c.id, c.user_id, u.display_name, c.course_id, c.target_type, c.target_id,\n                  CASE c.target_type WHEN 'course' THEN co.title ELSE m.title END AS target_title,\n                  c.cycle,\n                  (extract(epoch FROM c.completed_at) * 1000000)::bigint AS \"completed_at_us!\",\n                  (extract(epoch FROM c.expires_at) * 1000000)::bigint AS expires_at_us,\n                  (extract(epoch FROM c.expired_at) * 1000000)::bigint AS expired_at_us\n           FROM completions c\n           JOIN users u ON u.org_id = c.org_id AND u.id = c.user_id\n           JOIN courses co ON co.org_id = c.org_id AND co.id = c.course_id\n           LEFT JOIN modules m ON c.target_type = 'module'\n                AND m.org_id = c.org_id AND m.course_id = c.course_id AND m.id = c.target_id\n           WHERE c.org_id = $1\n             AND ($2::uuid IS NULL OR c.course_id = $2)\n             AND ($3::uuid IS NULL OR c.user_id = $3)\n             AND ($4::text IS NULL OR c.target_type = $4)\n             AND ($5::uuid[] IS NULL OR c.user_id = ANY($5))\n             AND (NOT $6 OR c.target_type = 'course' OR m.published)\n             AND ($7::bigint IS NULL\n                  OR (c.completed_at, c.id)\n                     < (timestamptz 'epoch' + $7::bigint * interval '1 microsecond', $8::uuid))\n           ORDER BY c.completed_at DESC, c.id DESC\n           LIMIT $9",
+  "query": "SELECT c.id, c.user_id, u.display_name, c.course_id, c.target_type, c.target_id,\n                  CASE c.target_type WHEN 'course' THEN co.title ELSE m.title END AS target_title,\n                  (co.status = 'draft' OR co.template\n                   OR (c.target_type = 'module' AND m.published IS NOT TRUE)) AS \"title_hidden!\",\n                  c.cycle,\n                  (extract(epoch FROM c.completed_at) * 1000000)::bigint AS \"completed_at_us!\",\n                  (extract(epoch FROM c.expires_at) * 1000000)::bigint AS expires_at_us,\n                  (extract(epoch FROM c.expired_at) * 1000000)::bigint AS expired_at_us\n           FROM completions c\n           JOIN users u ON u.org_id = c.org_id AND u.id = c.user_id\n           JOIN courses co ON co.org_id = c.org_id AND co.id = c.course_id\n           LEFT JOIN modules m ON c.target_type = 'module'\n                AND m.org_id = c.org_id AND m.course_id = c.course_id AND m.id = c.target_id\n           WHERE c.org_id = $1\n             AND ($2::uuid IS NULL OR c.course_id = $2)\n             AND ($3::uuid IS NULL OR c.user_id = $3)\n             AND ($4::text IS NULL OR c.target_type = $4)\n             AND ($5::uuid[] IS NULL OR c.user_id = ANY($5))\n             AND (NOT $6 OR c.target_type = 'course' OR m.published)\n             AND ($7::bigint IS NULL\n                  OR (c.completed_at, c.id)\n                     < (timestamptz 'epoch' + $7::bigint * interval '1 microsecond', $8::uuid))\n           ORDER BY c.completed_at DESC, c.id DESC\n           LIMIT $9",
   "describe": {
     "columns": [
       {
@@ -77,6 +77,12 @@
       },
       {
         "ordinal": 7,
+        "name": "title_hidden!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
         "name": "cycle",
         "type_info": "Int4",
         "origin": {
@@ -87,19 +93,19 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "completed_at_us!",
         "type_info": "Int8",
         "origin": "Expression"
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "expires_at_us",
         "type_info": "Int8",
         "origin": "Expression"
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "expired_at_us",
         "type_info": "Int8",
         "origin": "Expression"
@@ -126,11 +132,12 @@
       false,
       false,
       null,
+      null,
       false,
       null,
       null,
       null
     ]
   },
-  "hash": "b07589eca656632030c43bba2ffcb631ec22d0b3d050bac0ebb098e15eb7928c"
+  "hash": "cdc9685d2e83a2fe819b2485d0567c9216569591c501d677a5de8919031a0496"
 }
