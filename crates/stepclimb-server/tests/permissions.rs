@@ -2883,13 +2883,18 @@ async fn passkey_sign_in_request(world: &World, org: &Org) -> (Option<Value>, Op
 /// longer rather than one test long.
 const SHARDS: usize = 8;
 
+/// The entries of shard `shard`, each with its index in [`TABLE`].
+fn shard_entries(shard: usize) -> impl Iterator<Item = (usize, &'static Entry)> {
+    TABLE.iter().enumerate().skip(shard).step_by(SHARDS)
+}
+
 /// Runs every entry of shard `shard` and fails naming each failing case.
 async fn b20_shard(pool: PgPool, shard: usize) {
     let world = World::new(pool).await;
     let app = router(world.state()).layer(Extension(ConnectInfo(CLIENT)));
     let operations = operations(&document()).expect("named operations");
     let mut failures = Vec::new();
-    for entry in TABLE.iter().skip(shard).step_by(SHARDS) {
+    for (_, entry) in shard_entries(shard) {
         let op = operations
             .iter()
             .find(|op| op.id == entry.operation_id)
@@ -2923,10 +2928,15 @@ b20_shards!(
     b20_table_entries_pass_their_cases_shard_7 = 7,
 );
 
-/// The shard tests run every shard once, so every entry of [`TABLE`] runs.
+/// The shard tests run every entry of [`TABLE`] exactly once.
 #[test]
 fn b20_the_shards_cover_every_table_entry() {
-    assert_eq!(B20_SHARDS, (0..SHARDS).collect::<Vec<_>>());
+    let mut run: Vec<usize> = B20_SHARDS
+        .iter()
+        .flat_map(|&shard| shard_entries(shard).map(|(i, _)| i))
+        .collect();
+    run.sort_unstable();
+    assert_eq!(run, (0..TABLE.len()).collect::<Vec<_>>());
 }
 
 // Bodies sent as arrays (`ApiJson` reads every struct from an object only).
