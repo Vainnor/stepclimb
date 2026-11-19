@@ -2,6 +2,7 @@
 // packages/ui's base.css in a real browser (docs/specs/m0/13-base-ui-components.md B9, B13 to
 // B17; T4 to T6): touch targets, reduced motion, the OS color scheme, forced colors, overscroll and
 // unselectable controls, over the stories of the static Storybook build.
+import { writeFileSync } from "node:fs";
 import { expect, type Locator, type Page, test } from "@playwright/test";
 import { markStoryRoots, openStory, STORY_ROOT, type Story, stories } from "./storybook";
 
@@ -376,6 +377,44 @@ test.describe("at 1280 px @desktop", () => {
       expect(new Set(rows.map((r) => r.drawing)).size).toBe(6);
       expect(new Set(rows.map((r) => r.label)).size).toBe(6);
     }
+  });
+
+  test("a file dragged over a hovered FileDrop draws the drop target's border", async ({
+    page,
+  }, info) => {
+    await openStory(page, story("forms-filedrop--default"), "light");
+    const zone = page.locator("[data-slot=file-drop]");
+    const box = await zone.boundingBox();
+    if (box === null) throw new Error("the zone is drawn");
+    const at = { x: Math.round(box.x + 20), y: Math.round(box.y + 20) };
+    await page.mouse.move(at.x, at.y);
+    await expect(zone).toHaveAttribute("data-hovered", "true");
+    // A file dragged in from outside the page, through Chromium's own drag events.
+    const file = info.outputPath("handout.pdf");
+    writeFileSync(file, "%PDF-1.4");
+    const cdp = await page.context().newCDPSession(page);
+    const data = {
+      items: [{ mimeType: "application/pdf", data: "" }],
+      files: [file],
+      dragOperationsMask: 1,
+    };
+    await cdp.send("Input.dispatchDragEvent", { type: "dragEnter", ...at, data });
+    await cdp.send("Input.dispatchDragEvent", { type: "dragOver", ...at, data });
+    await expect(zone).toHaveAttribute("data-drop-target", "true");
+    // React Aria keeps the hover the pointer had: no pointer event leaves the zone during a drag.
+    await expect(zone).toHaveAttribute("data-hovered", "true");
+    const brand = await page.evaluate(() => {
+      const value = getComputedStyle(document.documentElement).getPropertyValue("--sc-brand");
+      const el = document.createElement("div");
+      el.style.border = `1px solid ${value.trim()}`;
+      document.body.append(el);
+      const color = getComputedStyle(el).borderTopColor;
+      el.remove();
+      return color;
+    });
+    // Polled: the border's color change is a short transition.
+    await expect.poll(() => zone.evaluate((el) => getComputedStyle(el).borderTopColor)).toBe(brand);
+    await cdp.send("Input.dispatchDragEvent", { type: "dragCancel", ...at, data });
   });
 
   test("a mouse press that opens a Menu's sheet at 375 px runs no item on its release", async ({

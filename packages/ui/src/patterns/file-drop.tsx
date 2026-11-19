@@ -29,7 +29,10 @@ export const fileDrop = tv({
       "group flex flex-col items-center gap-3 rounded-md border border-dashed border-line-strong bg-raised",
       "px-6 py-8 text-center font-ui text-sm text-fg-default outline-none",
       "transition-colors duration-fast ease-out-expo",
-      "data-[hovered]:border-fg-sub",
+      // React Aria keeps the zone hovered while a file is dragged over it (no pointer event
+      // leaves it during a drag), and Tailwind orders hover after the drop target, so hover leaves
+      // a drop target's border alone instead of relying on that order.
+      "data-[hovered]:not-data-[drop-target]:border-fg-sub",
       "data-[drop-target]:border-solid data-[drop-target]:border-brand data-[drop-target]:bg-brand-soft",
       "data-[focus-visible]:ring-2 data-[focus-visible]:ring-ring data-[focus-visible]:ring-offset-2 ring-offset-canvas",
       "data-[disabled]:cursor-not-allowed data-[disabled]:border-line data-[disabled]:text-fg-disabled",
