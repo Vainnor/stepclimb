@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT c.id, c.account_id, a.path::text AS \"account_path!\", c.code, c.title, c.status,\n                  c.template,\n                  (extract(epoch FROM c.start_at) * 1000000)::bigint AS start_at_us,\n                  (extract(epoch FROM c.end_at) * 1000000)::bigint AS end_at_us,\n                  c.settings::text AS \"settings!\",\n                  (extract(epoch FROM c.created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM c.updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM courses c JOIN accounts a ON a.org_id = c.org_id AND a.id = c.account_id\n           WHERE c.org_id = $1 AND c.id = $2",
+  "query": "SELECT c.id, c.account_id, a.path::text AS \"account_path!\", c.code, c.title, c.status,\n                  c.template,\n                  (extract(epoch FROM c.start_at) * 1000000)::bigint AS start_at_us,\n                  (extract(epoch FROM c.end_at) * 1000000)::bigint AS end_at_us,\n                  c.settings::text AS \"settings!\", c.completion_valid_months,\n                  (extract(epoch FROM c.created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM c.updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM courses c JOIN accounts a ON a.org_id = c.org_id AND a.id = c.account_id\n           WHERE c.org_id = $1 AND c.id = $2\n           FOR NO KEY UPDATE OF c FOR SHARE OF a",
   "describe": {
     "columns": [
       {
@@ -95,12 +95,23 @@
       },
       {
         "ordinal": 10,
+        "name": "completion_valid_months",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "courses",
+            "name": "completion_valid_months"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
         "name": "created_at_us!",
         "type_info": "Int8",
         "origin": "Expression"
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "updated_at_us!",
         "type_info": "Int8",
         "origin": "Expression"
@@ -123,9 +134,10 @@
       null,
       null,
       null,
+      true,
       null,
       null
     ]
   },
-  "hash": "20be9e6d745467ed9c543ba00647cf0b7ef0c833e262f15a781f4c766864ecef"
+  "hash": "72565a289138a1f3047304df3ef468236add67b0ca9320dd4b970b35aee6774f"
 }

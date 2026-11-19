@@ -474,6 +474,7 @@ mod tests {
             prerequisite_ids: Vec::new(),
             require_sequential: false,
             completion_rule: CompletionRule::All,
+            completion_valid_months: None,
             created_at: UNIX_EPOCH,
             updated_at: UNIX_EPOCH,
         }

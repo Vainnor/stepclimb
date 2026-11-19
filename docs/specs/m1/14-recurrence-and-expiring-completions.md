@@ -500,6 +500,21 @@ owner answered them on 2026-11-16.
     person's latest completion, exists for them (B10).
   - A configurable retention policy is out of scope; nothing is pruned until one exists.
 
+Coordinator decisions (2026-11-19, I1), pending owner review, for points the spec leaves open:
+
+- `expires_at` (B13) is on module and course progress, the roll-ups whose completions are
+  recorded. Item progress gains none: an item has no completion of its own (B4, Q5).
+- `Completion.target.title` is the course's or module's title now, and null for a module deleted
+  since; a module's title at completion time is not stored (archives store titles, B15).
+- `GET /courses/{course_id}/completions` leaves out completions of unpublished or deleted modules
+  for a caller without `course.view_all`, as `05` B14's staff reads leave out unpublished
+  content. It lists every user with a completion in the course, enrolled or not, suspended or
+  not, since it is history (B16). `GET /me/completions` lists all of the caller's own.
+- Both lists run newest first by `completed_at`, then id.
+- A copy (`02` B12) takes the source's course and module `completion_valid_months`.
+- A validity outside 1 to 120 answers 422 `request.invalid` with the field code
+  `completion.validity_out_of_range` at `/completion_valid_months`, on courses and modules.
+
 ## Issues
 
 1. **I1. Completion history and validity.** Migration, recording completions in spec 05's roll-up

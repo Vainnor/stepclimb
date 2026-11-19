@@ -1063,6 +1063,7 @@ const EMPTY_SCOPE_ALLOWED: &[&str] = &[
     "getOrganization",
     "updateMyAppearance",
     "listMyIdentities",
+    "listMyCompletions",
 ];
 
 /// B27, B44: a key with no scopes, whose owner holds every catalog permission at the

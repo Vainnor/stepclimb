@@ -1,0 +1,56 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT p.required_count, p.completed_count,\n                  (extract(epoch FROM p.completed_at) * 1000000)::bigint AS completed_at_us,\n                  (extract(epoch FROM k.expires_at) * 1000000)::bigint AS expires_at_us\n           FROM course_progress p\n           LEFT JOIN LATERAL (\n               SELECT expires_at FROM completions\n               WHERE org_id = p.org_id AND user_id = p.user_id AND target_type = 'course'\n                 AND target_id = p.course_id\n               ORDER BY cycle DESC LIMIT 1) k ON p.completed_at IS NOT NULL\n           WHERE p.org_id = $1 AND p.user_id = $2 AND p.course_id = $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "required_count",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "course_progress",
+            "name": "required_count"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "completed_count",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "course_progress",
+            "name": "completed_count"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "completed_at_us",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "expires_at_us",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "50e3c91887d7d85fa8540fc33701396533f829a1ab3e10db8c0817055ca6bc42"
+}

@@ -31,7 +31,8 @@
 //! organization, once per SHA-256, with [`course_files`], which places them in a course's folders,
 //! and [`sniff`], which reads an upload's type from its first bytes; and [`unlock`], which decides
 //! for a learner which modules and items are locked and which are complete, with [`progress`],
-//! which records each learner's steps and completions and rolls them up; and [`pages`], a
+//! which records each learner's steps and completions and rolls them up, and [`completions`],
+//! the history of course and module completions with their expiry dates; and [`pages`], a
 //! course's pages and their immutable versions, whose bodies [`page_doc`] parses and checks;
 //! and [`videos`], an organization's videos, the courses they are attached to and their tus
 //! uploads. The other repositories arrive with the M0 specs in `docs/specs/m0/`.
@@ -45,6 +46,7 @@ pub mod audit;
 pub mod auth_flows;
 pub mod branding;
 pub mod clock;
+pub mod completions;
 pub mod course_files;
 pub mod courses;
 pub mod db;

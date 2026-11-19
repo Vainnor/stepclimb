@@ -446,10 +446,31 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Change a course's title, code, dates or home. A patch naming only current values changes
-         *     nothing.
+         * Change a course's title, code, dates, home or completion validity. A patch naming only
+         *     current values changes nothing.
          */
         patch: operations["updateCourse"];
+        trace?: never;
+    };
+    "/api/v1/courses/{course_id}/completions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the completion history of a course and its modules, newest first: one row per
+         *     completion per cycle. With `progress.view` you read every learner's; with only
+         *     `progress.view_observed`, the learners your active Observer enrollments in the course name.
+         */
+        get: operations["listCourseCompletions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/courses/{course_id}/copy": {
@@ -837,6 +858,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/completions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List your own completion history, newest first: one row per course or module completion per
+         *     cycle, across your courses.
+         */
+        get: operations["listMyCompletions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/identities": {
         parameters: {
             query?: never;
@@ -1012,8 +1053,9 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Rename, publish or unpublish a module, or change its rules: unlock date, prerequisites,
-         *     sequential order and completion rule. A patch naming only current values changes nothing.
+         * Rename, publish or unpublish a module, change its rules (unlock date, prerequisites,
+         *     sequential order and completion rule) or its completion validity. A patch naming only current
+         *     values changes nothing.
          */
         patch: operations["updateModule"];
         trace?: never;
@@ -2016,11 +2058,51 @@ export interface components {
             /** @description Send the code to `POST /auth/local/totp` in this browser within 10 minutes. */
             next: components["schemas"]["NextStep"];
         };
+        /** @description One completion of a course or a module, in one cycle. */
+        Completion: {
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            completed_at: string;
+            /**
+             * Format: int32
+             * @description 1 for the user's first completion of the target, then 2, and so on.
+             */
+            cycle: number;
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC: when the completion expired; null while it is valid.
+             */
+            expired_at: string | null;
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC: when the completion stops being valid; null when it does not expire.
+             */
+            expires_at: string | null;
+            /** Format: uuid */
+            id: string;
+            target: components["schemas"]["CompletionTarget"];
+            user: components["schemas"]["ProgressUser"];
+        };
         /**
          * @description Whether all or one of a module's requirements complete it.
          * @enum {string}
          */
         CompletionRule: "all" | "one";
+        /** @description The course or module a completion is of. */
+        CompletionTarget: {
+            /** Format: uuid */
+            id: string;
+            /** @description The course's or module's title now; null for a module deleted since. */
+            title: string | null;
+            type: components["schemas"]["CompletionTargetType"];
+        };
+        /**
+         * @description What a completion is of.
+         * @enum {string}
+         */
+        CompletionTargetType: "course" | "module";
         /** @description One measured pair: `foreground` on `background`. */
         ContrastPair: {
             /** @description A color token, such as `bg-canvas`. */
@@ -2065,6 +2147,12 @@ export interface components {
             /** Format: uuid */
             account_id: string;
             code: string;
+            /**
+             * Format: int32
+             * @description How many months a completion of the course stays valid; null for ever. A change applies
+             *     to completions recorded afterwards.
+             */
+            completion_valid_months: number | null;
             /**
              * Format: date-time
              * @description RFC 3339, UTC.
@@ -2197,12 +2285,19 @@ export interface components {
             account_id: string;
         };
         /**
-         * @description A change to a course; an omitted member is left as it is. `null` clears `start_at` or
-         *     `end_at` and is malformed for every other member.
+         * @description A change to a course; an omitted member is left as it is. `null` clears `start_at`, `end_at`
+         *     or `completion_valid_months` and is malformed for every other member.
          */
         CoursePatch: {
             /** @description Trimmed; 1 to 50 characters; unique in the organization, ignoring ASCII case. */
             code?: string;
+            /**
+             * Format: int64
+             * @description How many months a completion of the course stays valid, 1 to 120; `null` for ever. Needs
+             *     `course.manage`, as every member here does. Completions recorded before the change keep
+             *     their expiry date.
+             */
+            completion_valid_months?: number | null;
             /**
              * Format: date-time
              * @description RFC 3339 with an offset, from 1970 up to 2200, not before `start_at`; `null` clears it.
@@ -2229,6 +2324,12 @@ export interface components {
             completed_at: string | null;
             /** Format: int32 */
             completed_count: number;
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC: when that completion stops being valid; null while the course is not
+             *     complete or when its completion does not expire.
+             */
+            expires_at: string | null;
             /** Format: int32 */
             required_count: number;
         };
@@ -2843,6 +2944,12 @@ export interface components {
         Module: {
             /** @description Whether all or one of the module's requirements complete it. */
             completion_rule: components["schemas"]["CompletionRule"];
+            /**
+             * Format: int32
+             * @description How many months a completion of the module stays valid; null for ever. A change applies
+             *     to completions recorded afterwards.
+             */
+            completion_valid_months: number | null;
             /** Format: uuid */
             course_id: string;
             /**
@@ -2918,6 +3025,12 @@ export interface components {
         ModulePatch: {
             completion_rule?: components["schemas"]["CompletionRule"];
             /**
+             * Format: int64
+             * @description How many months a completion of the module stays valid, 1 to 120; `null` for ever.
+             *     Completions recorded before the change keep their expiry date.
+             */
+            completion_valid_months?: number | null;
+            /**
              * @description The whole new set of modules of the same course this one waits for: not itself, each
              *     once, at most 20, and closing no cycle.
              */
@@ -2946,6 +3059,12 @@ export interface components {
             completed_at: string | null;
             /** Format: int32 */
             completed_count: number;
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC: when that completion stops being valid; null while the module is not
+             *     complete or when its completion does not expire.
+             */
+            expires_at: string | null;
             /** Format: uuid */
             module_id: string;
             /** Format: int32 */
@@ -3672,12 +3791,50 @@ export interface components {
             next_cursor: string | null;
         };
         /** @description One page of a list. */
+        Page_Completion: {
+            /** @description The items, in the list's sort order. */
+            items: {
+                /**
+                 * Format: date-time
+                 * @description RFC 3339, UTC.
+                 */
+                completed_at: string;
+                /**
+                 * Format: int32
+                 * @description 1 for the user's first completion of the target, then 2, and so on.
+                 */
+                cycle: number;
+                /**
+                 * Format: date-time
+                 * @description RFC 3339, UTC: when the completion expired; null while it is valid.
+                 */
+                expired_at: string | null;
+                /**
+                 * Format: date-time
+                 * @description RFC 3339, UTC: when the completion stops being valid; null when it does not expire.
+                 */
+                expires_at: string | null;
+                /** Format: uuid */
+                id: string;
+                target: components["schemas"]["CompletionTarget"];
+                user: components["schemas"]["ProgressUser"];
+            }[];
+            /** @description Pass this as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
+        };
+        /** @description One page of a list. */
         Page_Course: {
             /** @description The items, in the list's sort order. */
             items: {
                 /** Format: uuid */
                 account_id: string;
                 code: string;
+                /**
+                 * Format: int32
+                 * @description How many months a completion of the course stays valid; null for ever. A change applies
+                 *     to completions recorded afterwards.
+                 */
+                completion_valid_months: number | null;
                 /**
                  * Format: date-time
                  * @description RFC 3339, UTC.
@@ -5592,7 +5749,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/unlock_at` with `module.date_out_of_range` (before 1970 or from 2200 on), or `/prerequisite_ids` with `module.prerequisite_self` (the module itself), `module.prerequisite_duplicate` (an id named twice) or `module.prerequisites_too_many` (more than 20). */
+        /** @description `request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/unlock_at` with `module.date_out_of_range` (before 1970 or from 2200 on), or `/prerequisite_ids` with `module.prerequisite_self` (the module itself), `module.prerequisite_duplicate` (an id named twice) or `module.prerequisites_too_many` (more than 20), or `/completion_valid_months` with `completion.validity_out_of_range` (outside 1 to 120). */
         ModulePatchInvalid: {
             headers: {
                 [name: string]: unknown;
@@ -7982,6 +8139,44 @@ export interface operations {
             503: components["responses"]["NoOrganization"];
         };
     };
+    listCourseCompletions: {
+        parameters: {
+            query?: {
+                /** @description Only this user's completions. */
+                user_id?: string;
+                /** @description Only completions of courses or only of modules. */
+                target_type?: components["schemas"]["CompletionTargetType"];
+                /** @description The `next_cursor` of the previous page; omit it for the first page. */
+                cursor?: string;
+                /** @description How many items to return, 1 to 200; 50 when omitted. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The course's id. */
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of completions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_Completion"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["LearnerProgressForbidden"];
+            404: components["responses"]["LearnerProgressListNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
     copyCourse: {
         parameters: {
             query?: never;
@@ -8894,6 +9089,38 @@ export interface operations {
             404: components["responses"]["OrganizationNotFound"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    listMyCompletions: {
+        parameters: {
+            query?: {
+                /** @description Only completions of this course and its modules. */
+                course_id?: string;
+                /** @description The `next_cursor` of the previous page; omit it for the first page. */
+                cursor?: string;
+                /** @description How many items to return, 1 to 200; 50 when omitted. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of your completions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_Completion"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["OrganizationNotFound"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };

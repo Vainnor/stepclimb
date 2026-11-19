@@ -180,6 +180,7 @@ async fn a_module_patch_renames_and_publishes_and_a_same_value_patch_writes_noth
     let same = ModulePatch {
         title: Some(" Week 1 ".into()),
         published: Some(false),
+        completion_valid_months: Some(None),
     };
     let unchanged = modules::update(&pool, a.scope(), id, &same, later())
         .await
@@ -188,6 +189,7 @@ async fn a_module_patch_renames_and_publishes_and_a_same_value_patch_writes_noth
     let patch = ModulePatch {
         title: Some("Week one".into()),
         published: Some(true),
+        completion_valid_months: None,
     };
     let changed = modules::update(&pool, a.scope(), id, &patch, later())
         .await
@@ -200,6 +202,7 @@ async fn a_module_patch_renames_and_publishes_and_a_same_value_patch_writes_noth
     let blank = ModulePatch {
         title: Some(" ".into()),
         published: None,
+        completion_valid_months: None,
     };
     let refused = modules::update(&pool, a.scope(), id, &blank, later()).await;
     assert!(matches!(refused, Err(Error::TitleEmpty)), "{refused:?}");

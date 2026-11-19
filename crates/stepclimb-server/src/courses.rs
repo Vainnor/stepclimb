@@ -88,6 +88,8 @@ pub mod code {
     pub const COURSE_DATES_INVERTED: &str = "course.dates_inverted";
     /// A date before 1970 or from 2200 on (a 422 field code).
     pub const COURSE_DATE_OUT_OF_RANGE: &str = "course.date_out_of_range";
+    /// A `completion_valid_months` outside 1 to 120 (a 422 field code, on courses and modules).
+    pub const COMPLETION_VALIDITY_OUT_OF_RANGE: &str = "completion.validity_out_of_range";
 }
 
 problem_responses! {
@@ -192,6 +194,10 @@ pub struct Course {
     #[schema(format = DateTime, required = true)]
     pub end_at: Option<String>,
     pub settings: CourseSettings,
+    /// How many months a completion of the course stays valid; null for ever. A change applies
+    /// to completions recorded afterwards.
+    #[schema(required = true)]
+    pub completion_valid_months: Option<i16>,
     /// The catalog keys grantable at course scope that you hold at this course, sorted: what
     /// the app may offer you here. The server checks every request itself.
     pub permissions: Vec<String>,
@@ -228,6 +234,7 @@ impl Course {
                 home: course.settings.home.into(),
             },
             status: course.status.into(),
+            completion_valid_months: course.completion_valid_months,
             id: course.id,
             account_id: course.account_id,
             title: course.title,
@@ -302,8 +309,8 @@ pub struct CourseSettingsPatch {
     pub home: Option<CourseHome>,
 }
 
-/// A change to a course; an omitted member is left as it is. `null` clears `start_at` or
-/// `end_at` and is malformed for every other member.
+/// A change to a course; an omitted member is left as it is. `null` clears `start_at`, `end_at`
+/// or `completion_valid_months` and is malformed for every other member.
 #[derive(Clone, Debug, Default, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CoursePatch {
@@ -326,6 +333,18 @@ pub struct CoursePatch {
     #[serde(default, deserialize_with = "present")]
     #[schema(value_type = CourseSettingsPatch)]
     pub settings: Option<CourseSettingsPatch>,
+    /// How many months a completion of the course stays valid, 1 to 120; `null` for ever. Needs
+    /// `course.manage`, as every member here does. Completions recorded before the change keep
+    /// their expiry date.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schema(value_type = Option<i64>, minimum = 1, maximum = 120)]
+    pub completion_valid_months: Option<Option<i64>>,
+}
+
+/// A validity from a request as the repositories take it. A number outside `i16` becomes 0,
+/// which they refuse as they refuse every value outside 1 to 120.
+pub(crate) fn validity(months: Option<Option<i64>>) -> Option<Option<i16>> {
+    months.map(|months| months.map(|m| i16::try_from(m).unwrap_or(0)))
 }
 
 impl CoursePatch {
@@ -337,6 +356,7 @@ impl CoursePatch {
             start_at: date(self.start_at),
             end_at: date(self.end_at),
             home: self.settings.and_then(|s| s.home).map(Into::into),
+            completion_valid_months: validity(self.completion_valid_months),
         }
     }
 }
@@ -609,8 +629,8 @@ pub async fn create_course(
         .into_response())
 }
 
-/// Change a course's title, code, dates or home. A patch naming only current values changes
-/// nothing.
+/// Change a course's title, code, dates, home or completion validity. A patch naming only
+/// current values changes nothing.
 #[utoipa::path(
     patch,
     path = "/api/v1/courses/{course_id}",
@@ -940,6 +960,10 @@ fn course_error(error: courses::Error) -> ApiError {
         E::ContainsNul { field } => invalid(field, TEXT_CONTAINS_NUL),
         E::DatesInverted => invalid("end_at", code::COURSE_DATES_INVERTED),
         E::DateOutOfRange { field } => invalid(date_field(field), code::COURSE_DATE_OUT_OF_RANGE),
+        E::ValidityOutOfRange => invalid(
+            "completion_valid_months",
+            code::COMPLETION_VALIDITY_OUT_OF_RANGE,
+        ),
         E::CodeTaken => conflict(
             code::COURSE_CODE_TAKEN,
             "Another course of the organization has this code.",
@@ -1100,6 +1124,15 @@ mod tests {
                 "request.invalid",
                 Some(("/code", "text.contains_nul")),
             ),
+            (
+                E::ValidityOutOfRange,
+                422,
+                "request.invalid",
+                Some((
+                    "/completion_valid_months",
+                    "completion.validity_out_of_range",
+                )),
+            ),
         ];
         for (error, status, code, field) in cases {
             let problem = course_error(error).problem();
@@ -1114,7 +1147,20 @@ mod tests {
     }
 
     #[test]
-    fn a_patch_takes_null_only_for_dates() {
+    fn a_validity_outside_i16_reaches_the_repository_as_one_it_refuses() {
+        assert_eq!(validity(None), None);
+        assert_eq!(validity(Some(None)), Some(None));
+        assert_eq!(validity(Some(Some(12))), Some(Some(12)));
+        for huge in [i64::from(i16::MAX) + 1, i64::MIN, i64::MAX] {
+            let Some(Some(months)) = validity(Some(Some(huge))) else {
+                panic!("a number stays a number")
+            };
+            assert!(!stepclimb_core::completions::valid_months(months), "{huge}");
+        }
+    }
+
+    #[test]
+    fn a_patch_takes_null_only_for_dates_and_the_validity() {
         for refused in [
             json!({ "title": null }),
             json!({ "code": null }),
@@ -1141,5 +1187,12 @@ mod tests {
         .unwrap();
         assert!(matches!(set.repo().end_at, Some(Some(_))));
         assert_eq!(set.repo().home, Some(courses::Home::Modules));
+        let validity: CoursePatch =
+            serde_json::from_value(json!({ "completion_valid_months": null })).unwrap();
+        assert_eq!(validity.repo().completion_valid_months, Some(None));
+        let validity: CoursePatch =
+            serde_json::from_value(json!({ "completion_valid_months": 12 })).unwrap();
+        assert_eq!(validity.repo().completion_valid_months, Some(Some(12)));
+        assert_eq!(cleared.repo().completion_valid_months, None);
     }
 }

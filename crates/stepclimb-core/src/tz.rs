@@ -9,7 +9,7 @@
 
 use std::sync::LazyLock;
 
-use jiff::tz::TimeZoneDatabase;
+use jiff::tz::{TimeZone, TimeZoneDatabase};
 
 /// The time zone of an organization that has not set one, and so of its users (Q4).
 pub const DEFAULT: &str = "UTC";
@@ -23,6 +23,13 @@ static DATABASE: LazyLock<TimeZoneDatabase> = LazyLock::new(TimeZoneDatabase::bu
 pub fn canonical(name: &str) -> Option<String> {
     let zone = DATABASE.get(name).ok()?;
     zone.iana_name().map(str::to_owned)
+}
+
+/// The time zone `name` from the bundled database, or `None` when it has no such zone. A stored
+/// name was checked with [`canonical`] when it was written.
+#[must_use]
+pub fn zone(name: &str) -> Option<TimeZone> {
+    DATABASE.get(name).ok()
 }
 
 #[cfg(test)]
@@ -61,6 +68,16 @@ mod tests {
         ] {
             assert_eq!(canonical(name), None, "{name:?}");
         }
+    }
+
+    #[test]
+    fn a_zone_is_found_by_its_name_only() {
+        assert_eq!(
+            zone("Europe/Dublin").and_then(|z| z.iana_name().map(str::to_owned)),
+            Some("Europe/Dublin".to_owned())
+        );
+        assert!(zone("Mars/Olympus_Mons").is_none());
+        assert!(zone("../../etc/passwd").is_none());
     }
 
     #[test]

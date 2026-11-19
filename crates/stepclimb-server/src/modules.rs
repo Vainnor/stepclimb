@@ -33,7 +33,7 @@ use utoipa::ToSchema;
 
 use crate::{
     AppState,
-    courses::{ApiTimestamp, nullable},
+    courses::{ApiTimestamp, code::COMPLETION_VALIDITY_OUT_OF_RANGE, nullable, validity},
     error::{ApiError, FieldError},
     extract::ApiJson,
     openapi::problem_responses,
@@ -100,7 +100,7 @@ problem_responses! {
     ModuleWriteConflict => "`course.archived`: the course is archived and takes no content change.",
     ModulePatchNotFound => "`module.not_found`: no module with this id exists in the organization, or you cannot see its course, or a `prerequisite_ids` entry is not a module of the same course. `org.not_found`: the request's organization cannot be determined.",
     ModulePatchConflict => "`course.archived`: the course is archived and takes no content change. `module.prerequisite_cycle`: the prerequisites would form a cycle in the course's modules.",
-    ModulePatchInvalid => "`request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/unlock_at` with `module.date_out_of_range` (before 1970 or from 2200 on), or `/prerequisite_ids` with `module.prerequisite_self` (the module itself), `module.prerequisite_duplicate` (an id named twice) or `module.prerequisites_too_many` (more than 20).",
+    ModulePatchInvalid => "`request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/unlock_at` with `module.date_out_of_range` (before 1970 or from 2200 on), or `/prerequisite_ids` with `module.prerequisite_self` (the module itself), `module.prerequisite_duplicate` (an id named twice) or `module.prerequisites_too_many` (more than 20), or `/completion_valid_months` with `completion.validity_out_of_range` (outside 1 to 120).",
     ModuleDeleteConflict => "`course.archived`: the course is archived and takes no content change. `module.not_empty`: the module has items; delete or move them first.",
 }
 
@@ -286,6 +286,10 @@ pub struct Module {
     pub require_sequential: bool,
     /// Whether all or one of the module's requirements complete it.
     pub completion_rule: CompletionRule,
+    /// How many months a completion of the module stays valid; null for ever. A change applies
+    /// to completions recorded afterwards.
+    #[schema(required = true)]
+    pub completion_valid_months: Option<i16>,
     pub items: Vec<Item>,
     /// Why the module is locked for you, as an item's `lock` is: null when it is open to you.
     /// A locked module's items are locked too, and leave out what they point at.
@@ -327,6 +331,7 @@ impl Module {
             prerequisite_ids: module.prerequisite_ids,
             require_sequential: module.require_sequential,
             lock: None,
+            completion_valid_months: module.completion_valid_months,
             progress: None,
         })
     }
@@ -378,6 +383,11 @@ pub struct ModulePatch {
     #[serde(default, deserialize_with = "present")]
     #[schema(value_type = CompletionRule)]
     pub completion_rule: Option<CompletionRule>,
+    /// How many months a completion of the module stays valid, 1 to 120; `null` for ever.
+    /// Completions recorded before the change keep their expiry date.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schema(value_type = Option<i64>, minimum = 1, maximum = 120)]
+    pub completion_valid_months: Option<Option<i64>>,
 }
 
 impl ModulePatch {
@@ -508,8 +518,9 @@ pub async fn reorder_modules(
     Ok(Json(ModuleList { modules }))
 }
 
-/// Rename, publish or unpublish a module, or change its rules: unlock date, prerequisites,
-/// sequential order and completion rule. A patch naming only current values changes nothing.
+/// Rename, publish or unpublish a module, change its rules (unlock date, prerequisites,
+/// sequential order and completion rule) or its completion validity. A patch naming only current
+/// values changes nothing.
 #[utoipa::path(
     patch,
     path = "/api/v1/modules/{module_id}",
@@ -543,6 +554,7 @@ pub async fn update_module(
     let patch = modules::ModulePatch {
         title: body.title.clone(),
         published: body.published,
+        completion_valid_months: validity(body.completion_valid_months),
     };
     let (scope, now) = (grants.scope(), state.clock.now());
     modules::update(&mut *tx, scope, target.id, &patch, now)
@@ -710,6 +722,9 @@ pub(crate) fn content_error(error: Error) -> ApiError {
             invalid("prerequisite_ids", code::MODULE_PREREQUISITES_TOO_MANY)
         }
         Error::UnlockAtOutOfRange => invalid("unlock_at", code::MODULE_DATE_OUT_OF_RANGE),
+        Error::ValidityOutOfRange => {
+            invalid("completion_valid_months", COMPLETION_VALIDITY_OUT_OF_RANGE)
+        }
         Error::RequirementInvalid => invalid("requirement", code::REQUIREMENT_INVALID),
         Error::RequirementUnavailable => invalid("requirement", code::REQUIREMENT_UNAVAILABLE),
         other @ (Error::Stored { .. }
@@ -748,6 +763,15 @@ mod tests {
                 422,
                 "request.invalid",
                 Some(("/title", "name.too_long")),
+            ),
+            (
+                Error::ValidityOutOfRange,
+                422,
+                "request.invalid",
+                Some((
+                    "/completion_valid_months",
+                    "completion.validity_out_of_range",
+                )),
             ),
             (
                 Error::KindUnavailable,
@@ -848,7 +872,7 @@ mod tests {
     }
 
     #[test]
-    fn a_module_patch_refuses_null() {
+    fn a_module_patch_refuses_null_but_for_dates_and_the_validity() {
         for refused in [
             json!({ "title": null }),
             json!({ "published": null }),
@@ -869,5 +893,12 @@ mod tests {
         assert_eq!((empty.title, empty.published), (None, None));
         let cleared: ModulePatch = serde_json::from_value(json!({ "unlock_at": null })).unwrap();
         assert_eq!(cleared.rules().unlock_at, Some(None));
+        assert_eq!(cleared.completion_valid_months, None);
+        let forever: ModulePatch =
+            serde_json::from_value(json!({ "completion_valid_months": null })).unwrap();
+        assert_eq!(validity(forever.completion_valid_months), Some(None));
+        let six: ModulePatch =
+            serde_json::from_value(json!({ "completion_valid_months": 6 })).unwrap();
+        assert_eq!(validity(six.completion_valid_months), Some(Some(6)));
     }
 }

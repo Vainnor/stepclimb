@@ -2358,7 +2358,7 @@
         "tags": [
           "courses"
         ],
-        "summary": "Change a course's title, code, dates or home. A patch naming only current values changes\nnothing.",
+        "summary": "Change a course's title, code, dates, home or completion validity. A patch naming only\ncurrent values changes nothing.",
         "operationId": "updateCourse",
         "parameters": [
           {
@@ -2425,6 +2425,97 @@
           }
         },
         "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/courses/{course_id}/completions": {
+      "get": {
+        "tags": [
+          "progress"
+        ],
+        "summary": "List the completion history of a course and its modules, newest first: one row per\ncompletion per cycle. With `progress.view` you read every learner's; with only\n`progress.view_observed`, the learners your active Observer enrollments in the course name.",
+        "operationId": "listCourseCompletions",
+        "parameters": [
+          {
+            "name": "course_id",
+            "in": "path",
+            "description": "The course's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "query",
+            "description": "Only this user's completions.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "target_type",
+            "in": "query",
+            "description": "Only completions of courses or only of modules.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/CompletionTargetType"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page; omit it for the first page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many items to return, 1 to 200; 50 when omitted.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 200,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of completions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Completion"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/LearnerProgressForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/LearnerProgressListNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
       }
     },
     "/api/v1/courses/{course_id}/copy": {
@@ -4292,6 +4383,75 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/api/v1/me/completions": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "List your own completion history, newest first: one row per course or module completion per\ncycle, across your courses.",
+        "operationId": "listMyCompletions",
+        "parameters": [
+          {
+            "name": "course_id",
+            "in": "query",
+            "description": "Only completions of this course and its modules.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page; omit it for the first page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many items to return, 1 to 200; 50 when omitted.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 200,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of your completions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Completion"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "404": {
+            "$ref": "#/components/responses/OrganizationNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      }
+    },
     "/api/v1/me/identities": {
       "get": {
         "tags": [
@@ -4970,7 +5130,7 @@
         "tags": [
           "modules"
         ],
-        "summary": "Rename, publish or unpublish a module, or change its rules: unlock date, prerequisites,\nsequential order and completion rule. A patch naming only current values changes nothing.",
+        "summary": "Rename, publish or unpublish a module, change its rules (unlock date, prerequisites,\nsequential order and completion rule) or its completion validity. A patch naming only current\nvalues changes nothing.",
         "operationId": "updateModule",
         "parameters": [
           {
@@ -8530,12 +8690,96 @@
           }
         }
       },
+      "Completion": {
+        "type": "object",
+        "description": "One completion of a course or a module, in one cycle.",
+        "required": [
+          "id",
+          "user",
+          "target",
+          "cycle",
+          "completed_at",
+          "expires_at",
+          "expired_at"
+        ],
+        "properties": {
+          "completed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          },
+          "cycle": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1 for the user's first completion of the target, then 2, and so on."
+          },
+          "expired_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "RFC 3339, UTC: when the completion expired; null while it is valid."
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "RFC 3339, UTC: when the completion stops being valid; null when it does not expire."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "target": {
+            "$ref": "#/components/schemas/CompletionTarget"
+          },
+          "user": {
+            "$ref": "#/components/schemas/ProgressUser"
+          }
+        }
+      },
       "CompletionRule": {
         "type": "string",
         "description": "Whether all or one of a module's requirements complete it.",
         "enum": [
           "all",
           "one"
+        ]
+      },
+      "CompletionTarget": {
+        "type": "object",
+        "description": "The course or module a completion is of.",
+        "required": [
+          "type",
+          "id",
+          "title"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The course's or module's title now; null for a module deleted since."
+          },
+          "type": {
+            "$ref": "#/components/schemas/CompletionTargetType"
+          }
+        }
+      },
+      "CompletionTargetType": {
+        "type": "string",
+        "description": "What a completion is of.",
+        "enum": [
+          "course",
+          "module"
         ]
       },
       "ContrastPair": {
@@ -8641,6 +8885,7 @@
           "start_at",
           "end_at",
           "settings",
+          "completion_valid_months",
           "permissions",
           "created_at",
           "updated_at"
@@ -8652,6 +8897,14 @@
           },
           "code": {
             "type": "string"
+          },
+          "completion_valid_months": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How many months a completion of the course stays valid; null for ever. A change applies\nto completions recorded afterwards."
           },
           "created_at": {
             "type": "string",
@@ -8899,11 +9152,21 @@
       },
       "CoursePatch": {
         "type": "object",
-        "description": "A change to a course; an omitted member is left as it is. `null` clears `start_at` or\n`end_at` and is malformed for every other member.",
+        "description": "A change to a course; an omitted member is left as it is. `null` clears `start_at`, `end_at`\nor `completion_valid_months` and is malformed for every other member.",
         "properties": {
           "code": {
             "type": "string",
             "description": "Trimmed; 1 to 50 characters; unique in the organization, ignoring ASCII case."
+          },
+          "completion_valid_months": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How many months a completion of the course stays valid, 1 to 120; `null` for ever. Needs\n`course.manage`, as every member here does. Completions recorded before the change keep\ntheir expiry date.",
+            "maximum": 120,
+            "minimum": 1
           },
           "end_at": {
             "type": [
@@ -8937,7 +9200,8 @@
         "required": [
           "required_count",
           "completed_count",
-          "completed_at"
+          "completed_at",
+          "expires_at"
         ],
         "properties": {
           "completed_at": {
@@ -8951,6 +9215,14 @@
           "completed_count": {
             "type": "integer",
             "format": "int32"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "RFC 3339, UTC: when that completion stops being valid; null while the course is not\ncomplete or when its completion does not expire."
           },
           "required_count": {
             "type": "integer",
@@ -10392,6 +10664,7 @@
           "prerequisite_ids",
           "require_sequential",
           "completion_rule",
+          "completion_valid_months",
           "items",
           "lock",
           "created_at",
@@ -10401,6 +10674,14 @@
           "completion_rule": {
             "$ref": "#/components/schemas/CompletionRule",
             "description": "Whether all or one of the module's requirements complete it."
+          },
+          "completion_valid_months": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How many months a completion of the module stays valid; null for ever. A change applies\nto completions recorded afterwards."
           },
           "course_id": {
             "type": "string",
@@ -10576,6 +10857,16 @@
           "completion_rule": {
             "$ref": "#/components/schemas/CompletionRule"
           },
+          "completion_valid_months": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How many months a completion of the module stays valid, 1 to 120; `null` for ever.\nCompletions recorded before the change keep their expiry date.",
+            "maximum": 120,
+            "minimum": 1
+          },
           "prerequisite_ids": {
             "type": "array",
             "items": {
@@ -10613,7 +10904,8 @@
           "module_id",
           "required_count",
           "completed_count",
-          "completed_at"
+          "completed_at",
+          "expires_at"
         ],
         "properties": {
           "completed_at": {
@@ -10627,6 +10919,14 @@
           "completed_count": {
             "type": "integer",
             "format": "int32"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "RFC 3339, UTC: when that completion stops being valid; null while the module is not\ncomplete or when its completion does not expire."
           },
           "module_id": {
             "type": "string",
@@ -12474,6 +12774,78 @@
           }
         }
       },
+      "Page_Completion": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One completion of a course or a module, in one cycle.",
+              "required": [
+                "id",
+                "user",
+                "target",
+                "cycle",
+                "completed_at",
+                "expires_at",
+                "expired_at"
+              ],
+              "properties": {
+                "completed_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "RFC 3339, UTC."
+                },
+                "cycle": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "1 for the user's first completion of the target, then 2, and so on."
+                },
+                "expired_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time",
+                  "description": "RFC 3339, UTC: when the completion expired; null while it is valid."
+                },
+                "expires_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time",
+                  "description": "RFC 3339, UTC: when the completion stops being valid; null when it does not expire."
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "target": {
+                  "$ref": "#/components/schemas/CompletionTarget"
+                },
+                "user": {
+                  "$ref": "#/components/schemas/ProgressUser"
+                }
+              }
+            },
+            "description": "The items, in the list's sort order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass this as `cursor` to get the next page; `null` on the last page."
+          }
+        }
+      },
       "Page_Course": {
         "type": "object",
         "description": "One page of a list.",
@@ -12497,6 +12869,7 @@
                 "start_at",
                 "end_at",
                 "settings",
+                "completion_valid_months",
                 "permissions",
                 "created_at",
                 "updated_at"
@@ -12508,6 +12881,14 @@
                 },
                 "code": {
                   "type": "string"
+                },
+                "completion_valid_months": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32",
+                  "description": "How many months a completion of the course stays valid; null for ever. A change applies\nto completions recorded afterwards."
                 },
                 "created_at": {
                   "type": "string",
@@ -15916,7 +16297,7 @@
         }
       },
       "ModulePatchInvalid": {
-        "description": "`request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/unlock_at` with `module.date_out_of_range` (before 1970 or from 2200 on), or `/prerequisite_ids` with `module.prerequisite_self` (the module itself), `module.prerequisite_duplicate` (an id named twice) or `module.prerequisites_too_many` (more than 20).",
+        "description": "`request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/unlock_at` with `module.date_out_of_range` (before 1970 or from 2200 on), or `/prerequisite_ids` with `module.prerequisite_self` (the module itself), `module.prerequisite_duplicate` (an id named twice) or `module.prerequisites_too_many` (more than 20), or `/completion_valid_months` with `completion.validity_out_of_range` (outside 1 to 120).",
         "content": {
           "application/problem+json": {
             "schema": {

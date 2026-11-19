@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT m.id, m.course_id, m.title, m.position, m.published,\n                  (extract(epoch FROM m.unlock_at) * 1000000)::bigint AS unlock_at_us,\n                  ARRAY(SELECT p.requires_id\n                        FROM module_prerequisites p\n                        JOIN modules r ON r.org_id = p.org_id AND r.id = p.requires_id\n                        WHERE p.org_id = m.org_id AND p.module_id = m.id\n                        ORDER BY r.position) AS \"prerequisite_ids!\",\n                  m.require_sequential, m.completion_rule,\n                  (extract(epoch FROM m.created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM m.updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM modules m WHERE m.org_id = $1 AND m.id = $2",
+  "query": "SELECT m.id, m.course_id, m.title, m.position, m.published,\n                  (extract(epoch FROM m.unlock_at) * 1000000)::bigint AS unlock_at_us,\n                  ARRAY(SELECT p.requires_id\n                        FROM module_prerequisites p\n                        JOIN modules r ON r.org_id = p.org_id AND r.id = p.requires_id\n                        WHERE p.org_id = m.org_id AND p.module_id = m.id\n                        ORDER BY r.position) AS \"prerequisite_ids!\",\n                  m.require_sequential, m.completion_rule, m.completion_valid_months,\n                  (extract(epoch FROM m.created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM m.updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM modules m WHERE m.org_id = $1 AND m.course_id = $2\n           ORDER BY m.position",
   "describe": {
     "columns": [
       {
@@ -94,12 +94,23 @@
       },
       {
         "ordinal": 9,
+        "name": "completion_valid_months",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "modules",
+            "name": "completion_valid_months"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
         "name": "created_at_us!",
         "type_info": "Int8",
         "origin": "Expression"
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "updated_at_us!",
         "type_info": "Int8",
         "origin": "Expression"
@@ -121,9 +132,10 @@
       null,
       false,
       false,
+      true,
       null,
       null
     ]
   },
-  "hash": "132c7049fcbf91812a1d1b1bb96f1fa210120cb686d06785cfa2e4458647e833"
+  "hash": "a5a895180950b13585f253ef6a610624ea2e34480f06a5b093c1a9489bc947ca"
 }
