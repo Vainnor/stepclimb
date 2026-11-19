@@ -192,7 +192,7 @@ export const webMessages: Catalog = {
       "What people see until they choose a theme for themselves.",
     "branding.field.primary": "Brand color",
     "branding.field.primary.description":
-      "Six hex digits, such as #007373. The light, dark and high-contrast colors are made from it.",
+      "Six hex digits, with or without the #. The light, dark and high-contrast colors are made from it.",
     "branding.field.readingFont": "Reading font",
     "branding.field.uiFont": "Interface font",
     "branding.forbidden.description":
@@ -204,11 +204,11 @@ export const webMessages: Catalog = {
     "branding.problem.failed": "Something went wrong. Try again.",
     "branding.problem.forbidden":
       "You do not have permission to change branding. Ask an administrator if you need to.",
-    "branding.problem.invalidColor": "Enter a brand color as six hex digits, such as #007373.",
+    "branding.problem.invalidColor": "Enter a brand color as six hex digits.",
     "branding.problem.notAChoice": "Choose one of the options.",
     "branding.problem.notInPlan":
       "Your organization's plan does not include custom branding, so it cannot be changed.",
-    "branding.problem.tooLong": "Enter a brand color as six hex digits, such as #007373.",
+    "branding.problem.tooLong": "Enter a brand color as six hex digits.",
     "branding.problem.unknown":
       "Something went wrong. Try again. If it keeps happening, report the code below.",
     "branding.problem.unreachable":

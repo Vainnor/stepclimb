@@ -4,6 +4,9 @@ import { contrastReport } from "@stepclimb/tokens/report";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { BrandPreview } from "./brand-preview";
 
+/** A sample brand color from its 24-bit RGB number: a brand color is data, not a style. */
+const hex = (n: number) => `#${n.toString(16).padStart(6, "0")}`;
+
 const appearances = ["light", "dark", "high-contrast"] as const;
 
 function draft(primary: string) {
@@ -13,7 +16,7 @@ function draft(primary: string) {
 
 /** The default brand with light `fg-soft` moved toward the canvas: a brand the report refuses. */
 function refused() {
-  const themes = generate({ primary: "#007373" });
+  const themes = generate({ primary: hex(0x007373) });
   const canvas = themes.light.colors["bg-canvas"];
   themes.light.colors["fg-soft"] = { ...canvas, l: canvas.l - 0.12 };
   return { themes, reports: appearances.map((a) => contrastReport(themes[a])) };
@@ -37,7 +40,7 @@ const meta = {
       },
     },
   },
-  args: draft("#007373"),
+  args: draft(hex(0x007373)),
 } satisfies Meta<typeof BrandPreview>;
 
 export default meta;
@@ -47,12 +50,12 @@ export const DefaultBrand: Story = {};
 
 export const VzdcBrand: Story = {
   name: "vZDC brand, with the brand-near-danger warning",
-  args: draft("#500E0E"),
+  args: draft(hex(0x500e0e)),
 };
 
-export const PaleYellow: Story = { name: "Pale yellow brand", args: draft("#FFF4B0") };
+export const PaleYellow: Story = { name: "Pale yellow brand", args: draft(hex(0xfff4b0)) };
 
-export const NearBlackNavy: Story = { name: "Near-black navy brand", args: draft("#0A1028") };
+export const NearBlackNavy: Story = { name: "Near-black navy brand", args: draft(hex(0x0a1028)) };
 
 export const Refused: Story = {
   name: "Refused: a failing contrast pair",

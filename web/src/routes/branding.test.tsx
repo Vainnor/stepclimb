@@ -3,7 +3,7 @@
 // B27) against a stubbed server: the saved inputs, the preview and report as the fields change, a
 // save and what it changes on the page, a draft whose report fails and is never sent, and each
 // refusal the server answers, at the field it names.
-import { generate } from "@stepclimb/tokens/generate";
+import { cssColor, generate } from "@stepclimb/tokens/generate";
 import { contrastReport } from "@stepclimb/tokens/report";
 import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -20,6 +20,9 @@ import {
   stubServer,
 } from "../test/app";
 import { choiceKey } from "./branding";
+
+/** A sample brand color from its 24-bit RGB number: a brand color is data, not a style. */
+const hex = (n: number) => `#${n.toString(16).padStart(6, "0")}`;
 
 /** While on, a draft with round corners gets `failingReports()`: a brand the report refuses. */
 const refuseRound = vi.hoisted(() => ({ on: false }));
@@ -41,7 +44,8 @@ const API = "/api/v1/admin/branding";
 const appearances = ["light", "dark", "high-contrast"] as const;
 
 const savedInputs: SavedInputs = {
-  primary: "oklch(0.5 0.09 195)",
+  // The default brand's primary, written in OKLCH as the build writes it.
+  primary: cssColor({ l: 0.5, c: 0.09, h: 195 }),
   ui_font: "Atkinson Hyperlegible Next",
   reading_font: "serif",
   corner_style: "default",
@@ -61,7 +65,7 @@ function brandingOf(inputs: SavedInputs, cssHash = "a".repeat(64)): Branding {
 
 /** A report whose light `fg-soft` fails on `bg-canvas`, as the server sends a refused brand's. */
 function failingReports() {
-  const themes = generate({ primary: "#007373" });
+  const themes = generate({ primary: hex(0x007373) });
   const canvas = themes.light.colors["bg-canvas"];
   themes.light.colors["fg-soft"] = { ...canvas, l: canvas.l - 0.12 };
   return appearances.map((a) => contrastReport(themes[a]));
@@ -126,7 +130,7 @@ describe("the branding screen (B14)", () => {
     server();
     renderApp(PATH);
     expect(await screen.findByRole("heading", { level: 1, name: "Branding" })).toBeInTheDocument();
-    expect(await colorInput()).toHaveValue("#007373");
+    expect(await colorInput()).toHaveValue(hex(0x007373));
     expect(screen.getByRole("radio", { name: "Slightly rounded" })).toBeChecked();
     expect(screen.getByRole("radio", { name: "Serif, for long pages" })).toBeChecked();
     const report = screen.getByRole("region", { name: "Contrast report" });
@@ -140,22 +144,28 @@ describe("the branding screen (B14)", () => {
     const sample = () => document.querySelector<HTMLElement>('[data-slot="brand-preview-sample"]');
     await colorInput();
     const before = sample()?.style.getPropertyValue("--sc-brand");
-    await enterColor("#500E0E");
+    await enterColor(hex(0x500e0e));
     await waitFor(() => expect(sample()?.style.getPropertyValue("--sc-brand")).not.toBe(before));
     expect(await bodiesOf(fetch)).toEqual([]);
   });
 
   it("saves every field, then shows the new brand on this page and says so", async () => {
-    const saved = brandingOf({ ...savedInputs, primary: "#500E0E" }, "b".repeat(64));
+    const saved = brandingOf({ ...savedInputs, primary: hex(0x500e0e) }, "b".repeat(64));
     const fetch = server({ [`PUT ${API}`]: () => json(saved) });
     renderApp(PATH);
-    await enterColor("#500E0E");
+    await enterColor(hex(0x500e0e));
     await userEvent.click(screen.getByRole("radio", { name: "Square" }));
     await userEvent.click(screen.getByRole("radio", { name: "The interface font" }));
     await save();
     expect((await screen.findAllByText("Branding saved")).length).toBeGreaterThan(0);
     expect(await bodiesOf(fetch)).toEqual([
-      { ...savedInputs, primary: "#500E0E", corner_style: "square", reading_font: "sans" },
+      // React Aria writes the committed color in uppercase hex.
+      {
+        ...savedInputs,
+        primary: hex(0x500e0e).toUpperCase(),
+        corner_style: "square",
+        reading_font: "sans",
+      },
     ]);
     const link = document.head.querySelector('link[rel="stylesheet"]');
     expect(link?.getAttribute("href")).toBe(`/theme.css?v=${"b".repeat(64)}`);

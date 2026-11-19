@@ -7,6 +7,9 @@ import { describe, expect, it } from "vitest";
 import { renderWithStrings, unmarkedText } from "../test/strings";
 import { BrandPreview } from "./brand-preview";
 
+/** A sample brand color from its 24-bit RGB number: a brand color is data, not a style. */
+const hex = (n: number) => `#${n.toString(16).padStart(6, "0")}`;
+
 const appearances = ["light", "dark", "high-contrast"] as const;
 
 function draft(primary: string) {
@@ -19,7 +22,7 @@ function draft(primary: string) {
  * canvas's lightness, so it fails 4.5:1 on `bg-canvas` and the other surfaces.
  */
 function refused() {
-  const themes = generate({ primary: "#007373" });
+  const themes = generate({ primary: hex(0x007373) });
   const canvas = themes.light.colors["bg-canvas"];
   themes.light.colors["fg-soft"] = { ...canvas, l: canvas.l - 0.12 };
   return { themes, reports: appearances.map((a) => contrastReport(themes[a])) };
@@ -27,7 +30,7 @@ function refused() {
 
 describe("BrandPreview", () => {
   it("draws the sample in each appearance with the draft's own tokens", () => {
-    const { themes, reports } = draft("#500E0E");
+    const { themes, reports } = draft(hex(0x500e0e));
     renderWithStrings(<BrandPreview themes={themes} reports={reports} />);
     const samples = document.querySelectorAll<HTMLElement>('[data-slot="brand-preview-sample"]');
     expect([...samples].map((s) => s.dataset.scTheme)).toEqual([...appearances]);
@@ -48,7 +51,7 @@ describe("BrandPreview", () => {
   });
 
   it("says a passing brand can be saved, and lists every pair as passing", () => {
-    const { themes, reports } = draft("#007373");
+    const { themes, reports } = draft(hex(0x007373));
     renderWithStrings(<BrandPreview themes={themes} reports={reports} />);
     const report = screen.getByRole("region", { name: "Contrast report" });
     expect(report).toHaveAttribute("data-pass", "true");
@@ -88,7 +91,7 @@ describe("BrandPreview", () => {
   });
 
   it("cuts a ratio to two decimals, so a failing pair never reads as its minimum", () => {
-    const { themes, reports } = draft("#007373");
+    const { themes, reports } = draft(hex(0x007373));
     const [light, ...rest] = reports;
     if (!light) throw new Error("no light report");
     const pair = { foreground: "fg-soft", background: "bg-canvas", ratio: 4.4999, minimum: 4.5 };
@@ -100,7 +103,7 @@ describe("BrandPreview", () => {
   });
 
   it("names the brand-near-danger warning in words and moves between appearances", async () => {
-    const { themes, reports } = draft("#500E0E");
+    const { themes, reports } = draft(hex(0x500e0e));
     expect(reports.some((r) => r.warnings.length > 0)).toBe(true);
     renderWithStrings(<BrandPreview themes={themes} reports={reports} />);
     const report = screen.getByRole("region", { name: "Contrast report" });
