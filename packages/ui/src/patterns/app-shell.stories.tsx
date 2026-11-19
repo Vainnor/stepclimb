@@ -42,7 +42,9 @@ const entries: NavEntry[] = [
 /** The SideNav at 1280 px, the BottomTabs at 375 px. */
 export const Default: Story = {
   render: () => (
+    // The screen's height less the story padding, so the story fits the viewport it is drawn in.
     <AppShell
+      className="min-h-[calc(100dvh-3rem)]"
       sideNav={
         <SideNav
           entries={entries}

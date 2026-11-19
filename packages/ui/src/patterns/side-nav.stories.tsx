@@ -40,20 +40,30 @@ const entries: NavEntry[] = [
 const logo = <span className="text-lg font-heading text-fg-strong">Example Training</span>;
 const back = <Link href="https://example.org/">Back to Example</Link>;
 
+/** The screen's height less the story padding, so the story fits the viewport it is drawn in. */
+const fit = "h-[calc(100dvh-3rem)]";
+
 export const Default: Story = {
   render: () => (
-    <SideNav entries={entries} current="courses" logo={logo} footer={back} collapsed={false} />
+    <SideNav
+      entries={entries}
+      current="courses"
+      logo={logo}
+      footer={back}
+      collapsed={false}
+      className={fit}
+    />
   ),
 };
 
 /** Icons only, as from 768 to 1023 px. */
 export const Collapsed: Story = {
-  render: () => <SideNav entries={entries} current="courses" collapsed />,
+  render: () => <SideNav entries={entries} current="courses" collapsed className={fit} />,
 };
 
 /** A collapsed entry shows its label as a tooltip on keyboard focus. */
 export const CollapsedFocus: Story = {
-  render: () => <SideNav entries={entries} current="courses" collapsed />,
+  render: () => <SideNav entries={entries} current="courses" collapsed className={fit} />,
   play: async ({ canvasElement }) => {
     await userEvent.tab();
     await expect(within(canvasElement).getByRole("link", { name: "Home" })).toHaveFocus();
@@ -78,6 +88,7 @@ export const LongContent: Story = {
       logo={logo}
       footer={back}
       collapsed={false}
+      className={fit}
     />
   ),
 };

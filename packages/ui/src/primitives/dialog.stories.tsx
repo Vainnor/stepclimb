@@ -29,9 +29,18 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-function Rename({ defaultOpen, long }: { defaultOpen?: boolean; long?: boolean }) {
+function Rename({
+  defaultOpen,
+  long,
+  fill = true,
+}: {
+  defaultOpen?: boolean;
+  long?: boolean;
+  /** As tall as the screen, for an overlay to open over; a matrix cell leaves it closed. */
+  fill?: boolean;
+}) {
   return (
-    <div className="min-h-[calc(100dvh-3rem)]">
+    <div className={fill ? "min-h-[calc(100dvh-3rem)]" : undefined}>
       <DialogTrigger defaultOpen={defaultOpen}>
         <Button>Rename module</Button>
         <Dialog
@@ -81,7 +90,7 @@ export const Matrix: Story = {
   parameters: { themeWrapper: false },
   render: () => (
     <ThemeMatrix>
-      <Rename />
+      <Rename fill={false} />
     </ThemeMatrix>
   ),
 };
