@@ -197,6 +197,20 @@ describe("the branding screen (B14)", () => {
     expect(await bodiesOf(fetch)).toEqual([]);
   });
 
+  it("does not send an empty brand color, and asks for one at the field", async () => {
+    const fetch = server({ [`PUT ${API}`]: () => json(brandingOf(savedInputs)) });
+    renderApp(PATH);
+    const input = await colorInput();
+    await userEvent.clear(input);
+    await userEvent.tab();
+    await save();
+    await waitFor(() => expect(input).toHaveAttribute("aria-invalid", "true"));
+    expect(input).toHaveAccessibleDescription(/Enter a brand color as six hex digits/);
+    // The preview keeps the last brand it could draw.
+    expect(document.querySelectorAll('[data-slot="brand-preview-sample"]')).toHaveLength(3);
+    expect(await bodiesOf(fetch)).toEqual([]);
+  });
+
   it("shows the server's contrast refusal at the brand color, with its report", async () => {
     server({
       [`PUT ${API}`]: () =>
