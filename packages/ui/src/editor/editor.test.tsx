@@ -3,7 +3,8 @@
 // slash menu inserts each block with the keyboard only, the toolbars change the selection's
 // marks and block, links are checked as the server checks them, images and embeds ask for their
 // details first, and a refusal from the server is shown at its block.
-import { screen, waitFor, within } from "@testing-library/react";
+import type { Editor as TiptapEditor } from "@tiptap/core";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { stubMatchMedia } from "../test/media";
 import { renderWithStrings, unmarkedText } from "../test/strings";
@@ -81,6 +82,36 @@ describe("the slash menu", () => {
     }
     // The caret is back in the page, inside or after the new block.
     await waitFor(() => expect(content()).toHaveFocus());
+  });
+
+  it("opens where the author typed before the editor read the moved caret", async () => {
+    const heading = {
+      type: "heading",
+      attrs: { level: 2 },
+      content: [{ type: "text", text: "Before you taxi" }],
+    };
+    const { last } = renderEditor({
+      defaultValue: { type: "doc", content: [heading, { type: "paragraph" }] },
+    });
+    const editor = (content() as HTMLElement & { editor: TiptapEditor }).editor;
+    // The selection is still in the heading; the browser put the `/` into the empty paragraph
+    // after it, and ProseMirror asks about that range, as on a DOM change read before the
+    // `selectionchange` event.
+    const at = editor.state.doc.child(0).nodeSize + 1;
+    expect(editor.state.selection.$from.parent.type.name).toBe("heading");
+    act(() => {
+      const view = editor.view;
+      const deflt = () => view.state.tr.insertText("/", at, at);
+      const taken = view.someProp("handleTextInput", (f) => f(view, at, at, "/", deflt));
+      if (!taken) view.dispatch(deflt());
+    });
+    const menu = await screen.findByRole("menu", { name: "Insert" });
+    await waitFor(() => expect(within(menu).getAllByRole("menuitem")[0]).toHaveFocus());
+    const user = userEvent.setup();
+    await user.keyboard(`${"{ArrowDown}".repeat(blockKinds.indexOf("callout"))}{Enter}`);
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    expect(last()?.content.map((block) => block.type)).toEqual(["heading", "callout"]);
+    expect(last()?.content[0]).toEqual(heading);
   });
 
   it("types / when the author leaves the menu with Escape", async () => {

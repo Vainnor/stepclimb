@@ -15,8 +15,11 @@ export interface PageEditorOptions {
   attributes: Record<string, string>;
   /** Called with the body after every change the author makes. */
   onChange: (doc: PageDoc) => void;
-  /** Called on text input before the editor applies it; return true to take it. */
-  onTextInput: (editor: Editor, text: string) => boolean;
+  /**
+   * Called on text input before the editor applies it, with the range the text replaces; return
+   * true to take it.
+   */
+  onTextInput: (editor: Editor, text: string, from: number, to: number) => boolean;
   isDisabled: boolean;
 }
 
@@ -42,8 +45,8 @@ export function usePageEditor(
       editable: !current.current.isDisabled,
       editorProps: {
         attributes: current.current.attributes,
-        handleTextInput: (view, _from, _to, text): boolean =>
-          !view.composing && current.current.onTextInput(created, text),
+        handleTextInput: (view, from, to, text): boolean =>
+          !view.composing && current.current.onTextInput(created, text, from, to),
       },
     });
     created.on("transaction", rerender);
