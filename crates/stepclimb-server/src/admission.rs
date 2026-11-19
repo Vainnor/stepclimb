@@ -907,7 +907,7 @@ async fn just_in_time(
     }
     let entitlements = Entitlements::load(&mut **sp, scope).await?;
     let plan = &entitlements.plan().entitlements;
-    let room = org_plans::check_room(sp, scope, plan, Limit::Users, 1)
+    let room = org_plans::check_room(sp, scope, plan, Limit::Users, 1, context.now)
         .await
         .map_err(|e| ApiError::internal(&e))?;
     if let Room::Full { max } = room {

@@ -90,7 +90,7 @@ catalog! {
 
 /// A limit a plan sets on what an organization can add.
 ///
-/// Each later limit (transcode minutes, API rate, connectors) is added by the spec that builds
+/// Each later limit (API rate, connectors) is added by the spec that builds
 /// what it counts (B2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Limit {
@@ -102,11 +102,20 @@ pub enum Limit {
     /// How many bytes of video the organization can store: its videos' renditions and its
     /// uploads' lengths (docs/specs/m1/08-uploaded-video.md B21).
     VideoStorage,
+    /// How many minutes of video the organization can transcode in a calendar month (UTC), each
+    /// successful transcode counting its duration rounded up to whole minutes
+    /// (docs/specs/m1/08-uploaded-video.md B13, B21, Q4).
+    TranscodeMinutes,
 }
 
 impl Limit {
     /// Every limit, in definition order.
-    pub const ALL: [Self; 3] = [Self::Users, Self::Storage, Self::VideoStorage];
+    pub const ALL: [Self; 4] = [
+        Self::Users,
+        Self::Storage,
+        Self::VideoStorage,
+        Self::TranscodeMinutes,
+    ];
 
     /// The stored and API name, one lowercase snake case word.
     #[must_use]
@@ -115,6 +124,7 @@ impl Limit {
             Self::Users => "users",
             Self::Storage => "storage",
             Self::VideoStorage => "video_storage",
+            Self::TranscodeMinutes => "transcode_minutes",
         }
     }
 }
@@ -176,8 +186,11 @@ mod tests {
     }
 
     #[test]
-    fn the_limits_are_users_storage_and_video_storage() {
+    fn the_limits_are_users_storage_video_storage_and_transcode_minutes() {
         let keys: Vec<_> = Limit::ALL.iter().map(|l| l.key()).collect();
-        assert_eq!(keys, ["users", "storage", "video_storage"]);
+        assert_eq!(
+            keys,
+            ["users", "storage", "video_storage", "transcode_minutes"]
+        );
     }
 }

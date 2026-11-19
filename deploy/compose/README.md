@@ -211,6 +211,7 @@ and `compose.production.yaml` disagree on a name or a default.
 | `SC_SECRETS_DIR` | `./secrets` | The directory holding the secret files: an absolute path, or one relative to `deploy/compose/` |
 | `SC_HTTP_ADDRESS` | `127.0.0.1` | The host address the server is published on |
 | `SC_HTTP_PORT` | `8080` | The host port the server is published on |
+| `SC_SERVER_MEMORY` | `6g` | The server container's memory limit (`mem_limit`), ffmpeg's transcodes included |
 | `SC_PROXY_ADDRESS` | `0.0.0.0` | The host address Caddy is published on |
 | `SC_PROXY_HTTP_PORT` | `80` | Caddy's HTTP port on the host |
 | `SC_PROXY_HTTPS_PORT` | `443` | Caddy's HTTPS port on the host |
@@ -281,10 +282,16 @@ default or secrecy is wrong.
 | `STEPCLIMB_TOKEN_RATE_LIMIT` | `token_rate_limit` | whole number, 1 or more | `60` | no | `/oauth/token` and `/oauth/revoke` requests per minute from one client address |
 | `STEPCLIMB_FAILED_SIGN_IN_LIMIT` | `failed_sign_in_limit` | whole number, 1 or more | `10` | no | Failed password or TOTP checks per account per 15 minutes |
 | `STEPCLIMB_ALLOW_INSECURE_PROVIDERS` | `allow_insecure_providers` | `true` or `false` | `false` | no | Lets the server fetch `http` and loopback URLs for identity providers and the admission webhook. For tests and local development only: it lets an organization admin make the server call services on its own host |
-| `STEPCLIMB_ROLE` | `role` | `all`, `web` or `worker` | `all` | no | What `stepclimb serve` runs: `all` the HTTP application and the job worker, `web` the HTTP application only, `worker` the job worker with only `/healthz` and `/readyz` on the bind address. `serve --role` overrides it |
-| `STEPCLIMB_WORKER_CONCURRENCY` | `worker_concurrency` | whole number, 1 to 64 | `4` | no | Jobs one `all` or `worker` process runs at once |
+| `STEPCLIMB_ROLE` | `role` | `all`, `web`, `worker` or `transcoder` | `all` | no | What `stepclimb serve` runs: `all` the HTTP application and the job worker of every queue, `web` the HTTP application only, `worker` the job worker of every queue but `transcode`, `transcoder` the worker of the `transcode` queue only; `worker` and `transcoder` answer only `/healthz` and `/readyz` on the bind address. `serve --role` overrides it |
+| `STEPCLIMB_WORKER_CONCURRENCY` | `worker_concurrency` | whole number, 1 to 64 | `4` | no | Jobs one `all` or `worker` process runs at once, transcodes aside |
 | `STEPCLIMB_MAX_FILE_BYTES` | `max_file_bytes` | whole number of bytes, 1048576 (1 MiB) to 5368709120 (5 GiB) | `104857600` | no | The largest file one upload may send (100 MiB unless set). A larger `Content-Length` answers 413 `file.too_large` before the body is read |
 | `STEPCLIMB_MAX_VIDEO_BYTES` | `max_video_bytes` | whole number of bytes, 1048576 (1 MiB) to 53687091200 (50 GiB) | `5368709120` | no | The largest video one tus upload may declare (5 GiB unless set). A larger `Upload-Length` answers 413 `file.too_large` before anything is created |
+| `STEPCLIMB_MAX_VIDEO_SECONDS` | `max_video_seconds` | whole number, 1 to 86400 | `14400` | no | The longest video a transcode accepts (4 hours unless set); a longer one fails `video.too_long` |
+| `STEPCLIMB_TRANSCODE_CONCURRENCY` | `transcode_concurrency` | whole number, 1 to 16 | `1` | no | Transcodes one `all` or `transcoder` process runs at once, besides `worker_concurrency` |
+| `STEPCLIMB_TRANSCODE_THREADS` | `transcode_threads` | whole number, 0 to 64 | `0` | no | ffmpeg's `-threads` for each transcode; `0` leaves the choice to ffmpeg |
+| `STEPCLIMB_TRANSCODE_DIR` | `transcode_dir` | absolute path | the OS temporary directory | no | Where each transcode's private work directory is made and removed; it holds the whole upload and its outputs while the transcode runs. Checked at startup by a process that transcodes |
+| `STEPCLIMB_FFMPEG_PATH` | `ffmpeg_path` | absolute path | found on `PATH` | no | ffmpeg for the transcoder. A `transcoder` process, or an `all` process with this set, refuses to start when it does not run `-version`; an `all` process that finds no ffmpeg on `PATH` starts without transcoding and logs a warning |
+| `STEPCLIMB_FFPROBE_PATH` | `ffprobe_path` | absolute path | found on `PATH` | no | ffprobe, as `ffmpeg_path` |
 | `STEPCLIMB_STORAGE_URL` | `storage_url` | URL | none | no | Where course files are stored: `file:///<absolute directory>` (the directory must exist) or `s3://<bucket>[/<prefix>]`. Unset, the server starts, logs a warning, and uploads and file downloads answer 503 `storage.not_configured`. When set, `serve` writes, reads and deletes an object under `<prefix>/.probe/` before it listens and stops if any step fails |
 | `STEPCLIMB_STORAGE_S3_ENDPOINT` | `storage_s3_endpoint` | origin | none | no | The origin of an S3-compatible store, such as `http://minio:9000`; unset for AWS S3. The `STEPCLIMB_STORAGE_S3_*` settings are refused without an `s3://` storage URL |
 | `STEPCLIMB_STORAGE_S3_REGION` | `storage_s3_region` | region name | `us-east-1` | no | The bucket's region |
@@ -382,6 +389,30 @@ code (`docs/specs/m0/06-oauth2-and-vatsim-preset.md` Q3).
   instance with several, is found only once `serve` has connected; it also exits 2.
 - On a fresh instance there is no organization to add them to: `serve` logs a warning and starts
   without them. Restart it after `admin create`.
+
+## Video transcoding
+
+An uploaded video is transcoded by a process that serves the `transcode` queue: `all`, the
+default, or a dedicated `--role transcoder` (docs/specs/m1/08-uploaded-video.md B8). Such a
+process needs object storage (`STEPCLIMB_STORAGE_URL`), ffmpeg and ffprobe, and a
+`transcode_dir` with room for the largest upload and its outputs.
+
+The release image does not bundle ffmpeg yet; it gets it in #240. Until then, an `all` server
+started from the image logs a warning that ffmpeg is not on `PATH` and does not serve the
+`transcode` queue. Uploaded videos stay `processing`: their transcode jobs wait in the queue,
+using none of their attempts, and run as soon as a process that can transcode starts (an `all` or
+`transcoder` with ffmpeg and ffprobe on `PATH` or at `ffmpeg_path` and `ffprobe_path`). A
+`transcoder` without ffmpeg or without storage refuses to start and names the setting.
+
+`videos.cleanup` fails a `processing` video only when no live job will finish it: its job is
+dead, having used its attempts, or it has none and has not changed for 24 hours. A failure on the
+server's side refunds the video's transcode minutes; every retry an author makes counts toward
+the video's 3, whatever caused the failure.
+
+On a bare-metal install run by systemd, keep the unit's `KillMode=control-group` (systemd's
+default): ffmpeg runs in the server's process group, and this ends a running ffmpeg with the
+server. A transcode's work directory (`stepclimb-transcode-*` in `transcode_dir`) left by a killed
+process is removed at the next start.
 
 ## Commands
 

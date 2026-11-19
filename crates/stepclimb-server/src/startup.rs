@@ -10,6 +10,7 @@
 
 use std::future::Future;
 use std::net::SocketAddr;
+use std::num::NonZeroU32;
 use std::time::{Duration, SystemTime};
 
 use axum::Router;
@@ -46,6 +47,8 @@ use crate::{
     rate_limit::RateLimiter,
     router,
     storage::{Storage, StorageError},
+    transcode_startup::{self, TranscodeStartupError},
+    video_transcode::Transcoder,
 };
 
 /// How long a request waits for a database connection from the pool.
@@ -112,6 +115,8 @@ pub enum StartupError {
     ConfigProviders(#[from] config_providers::ApplyError),
     #[error(transparent)]
     Storage(#[from] StorageError),
+    #[error(transparent)]
+    Transcode(#[from] TranscodeStartupError),
 }
 
 impl StartupError {
@@ -413,6 +418,10 @@ pub fn log_configuration(config: &Config) {
         worker_concurrency = %config.worker_concurrency,
         max_file_bytes = %config.max_file_bytes,
         max_video_bytes = %config.max_video_bytes,
+        max_video_seconds = %config.transcode.max_video_seconds,
+        transcode_concurrency = %config.transcode.concurrency,
+        transcode_threads = %config.transcode.threads,
+        transcode_dir = %config.transcode.dir.display(),
         providers = %config.providers_or_none(),
         storage = %config.storage,
         "configuration loaded"
@@ -470,8 +479,15 @@ pub async fn serve(config: Config) -> Result<(), StartupError> {
         (config.max_file_bytes, config.max_video_bytes),
     )
     .await?;
-    let pool = connect(&config.database_url).await?;
     let clock = Clock::system();
+    let transcoder = transcode_startup::prepare(
+        config.role,
+        &config.transcode,
+        storage.is_some(),
+        clock.now(),
+    )
+    .await?;
+    let pool = connect(&config.database_url).await?;
     prepare(&pool, &clock).await?;
     let config_secrets = config_providers::apply(
         &pool,
@@ -482,7 +498,7 @@ pub async fn serve(config: Config) -> Result<(), StartupError> {
     .await?;
     // Built before the listener exists, so `/readyz` never answers before it (B16).
     let worker = if config.role.runs_jobs() {
-        Some(job_worker(&config, clock.clone(), storage.clone()).await?)
+        Some(job_worker(&config, clock.clone(), storage.clone(), transcoder).await?)
     } else {
         None
     };
@@ -521,77 +537,111 @@ async fn listen(config: &Config) -> Result<TcpListener, StartupError> {
     Ok(listener)
 }
 
-/// What an `all` or `worker` process runs besides HTTP: the job worker, the scheduler of
-/// periodic jobs and the outbox dispatcher (spec m1/01 B14, B17, B21), on the job pool
-/// ([`connect_jobs`]).
+/// What a process that runs jobs runs besides HTTP (spec m1/01 B14, B17, B21;
+/// docs/specs/m1/08-uploaded-video.md B8), on the job pool ([`connect_jobs`]): the worker of
+/// every queue but `transcode` with the scheduler of periodic jobs and the outbox dispatcher
+/// (`all`, `worker`), and the worker of the `transcode` queue (`all` and `transcoder`, when the
+/// process can transcode).
 struct JobRunner {
-    worker: Worker,
-    options: RunOptions,
+    general: Option<(Worker, RunOptions)>,
+    transcode: Option<(Worker, RunOptions)>,
     pool: PgPool,
     registry: Registry,
     clock: Clock,
 }
 
 impl JobRunner {
-    /// Run the worker, the scheduler and the dispatcher until `stop`, then let each finish
-    /// (B15).
+    /// Run each worker, and with the general one the scheduler and the dispatcher, until
+    /// `stop`, then let each finish (B15).
     async fn run(self, stop: &Stop) {
-        let dispatcher = outbox::dispatch::run(
-            self.pool.clone(),
-            self.registry.clone(),
-            self.clock.clone(),
-            POLL_INTERVAL,
-            stop.wait(),
-        );
-        let scheduler = schedule::run(
-            self.pool,
-            self.registry,
-            self.clock,
-            schedule::TICK,
-            stop.wait(),
-        );
-        tokio::join!(
-            self.worker.run(self.options, stop.wait()),
-            scheduler,
-            dispatcher
-        );
+        let transcodes = async {
+            if let Some((worker, options)) = &self.transcode {
+                worker.run(*options, stop.wait()).await;
+            }
+        };
+        let general = async {
+            let Some((worker, options)) = &self.general else {
+                return;
+            };
+            let dispatcher = outbox::dispatch::run(
+                self.pool.clone(),
+                self.registry.clone(),
+                self.clock.clone(),
+                POLL_INTERVAL,
+                stop.wait(),
+            );
+            let scheduler = schedule::run(
+                self.pool.clone(),
+                self.registry.clone(),
+                self.clock.clone(),
+                schedule::TICK,
+                stop.wait(),
+            );
+            tokio::join!(worker.run(*options, stop.wait()), scheduler, dispatcher);
+        };
+        tokio::join!(general, transcodes);
     }
 }
 
-/// The job runner of an `all` or `worker` process, with this binary's registry, serving every
-/// queue in it, its options from `config`, and the schedule rows of its periodic kinds written
-/// (spec m1/01 B17).
+/// The concurrency of each worker `role` runs: the general one's `worker_concurrency`, the
+/// transcode one's `transcode_concurrency` when `transcodes` (it can transcode).
+fn concurrencies(config: &Config, transcodes: bool) -> (Option<NonZeroU32>, Option<NonZeroU32>) {
+    let general = config
+        .role
+        .runs_general_jobs()
+        .then_some(config.worker_concurrency);
+    let transcode =
+        (transcodes && config.role.runs_transcodes()).then_some(config.transcode.concurrency);
+    (general, transcode)
+}
+
+/// The job runner of a process whose role runs jobs, with this binary's registry, its options
+/// from `config`, and, for the general worker, the schedule rows of its periodic kinds written
+/// (spec m1/01 B17). `transcoder` is `None` when the process does not serve the `transcode`
+/// queue.
 async fn job_worker(
     config: &Config,
     clock: Clock,
     storage: Option<Storage>,
+    transcoder: Option<Transcoder>,
 ) -> Result<JobRunner, StartupError> {
-    let pool = connect_jobs(&config.database_url, config.worker_concurrency).await?;
-    let registry = jobs::registry(storage).map_err(StartupError::Registry)?;
-    schedule::sync(&pool, &registry, clock.now())
-        .await
-        .map_err(StartupError::Schedules)?;
-    outbox::warn_unknown_topics(&pool, &registry)
-        .await
-        .map_err(StartupError::UnknownTopics)?;
-    let queues = registry.queues();
+    let (general, transcode) = concurrencies(config, transcoder.is_some());
+    let total = [general, transcode]
+        .into_iter()
+        .flatten()
+        .fold(0u32, |sum, n| sum.saturating_add(n.get()));
+    let pool_size = NonZeroU32::new(total).unwrap_or(NonZeroU32::MIN);
+    let pool = connect_jobs(&config.database_url, pool_size).await?;
+    let registry = jobs::registry(storage, transcoder).map_err(StartupError::Registry)?;
+    if general.is_some() {
+        schedule::sync(&pool, &registry, clock.now())
+            .await
+            .map_err(StartupError::Schedules)?;
+        outbox::warn_unknown_topics(&pool, &registry)
+            .await
+            .map_err(StartupError::UnknownTopics)?;
+    }
+    let worker = |queues: Vec<&'static str>, concurrency: NonZeroU32| {
+        let worker = Worker::new(
+            pool.clone(),
+            registry.clone(),
+            clock.clone(),
+            Random::system(),
+            queues,
+        );
+        (worker, RunOptions::new(concurrency))
+    };
+    let general_queues = jobs::general_queues(&registry);
     tracing::info!(
-        concurrency = %config.worker_concurrency,
-        queues = ?queues,
+        concurrency = %general.or(transcode).map_or(0, NonZeroU32::get),
+        queues = ?general.map(|_| general_queues.clone()).unwrap_or_default(),
+        transcode_concurrency = %transcode.map_or(0, NonZeroU32::get),
         periodic = ?registry.periodic().iter().map(|(name, _)| *name).collect::<Vec<_>>(),
         "job worker started"
     );
-    let worker = Worker::new(
-        pool.clone(),
-        registry.clone(),
-        clock.clone(),
-        Random::system(),
-        queues,
-    );
-    let options = RunOptions::new(config.worker_concurrency);
     Ok(JobRunner {
-        worker,
-        options,
+        general: general.map(|n| worker(general_queues, n)),
+        transcode: transcode.map(|n| worker(vec![jobs::TRANSCODE_QUEUE], n)),
         pool,
         registry,
         clock,

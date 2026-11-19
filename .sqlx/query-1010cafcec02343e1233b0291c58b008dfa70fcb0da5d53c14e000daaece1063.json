@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE videos\n         SET status = 'processing', error_code = NULL,\n             transcode_retries = transcode_retries + 1,\n             updated_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond'\n         WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1010cafcec02343e1233b0291c58b008dfa70fcb0da5d53c14e000daaece1063"
+}

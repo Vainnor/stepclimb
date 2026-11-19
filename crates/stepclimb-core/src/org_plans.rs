@@ -29,7 +29,7 @@ use crate::{
     feature::Limit,
     files,
     plans::{self, PlanEntitlements, UNLIMITED},
-    users, videos,
+    transcodes, users, videos,
 };
 
 /// How an organization got its plan. The stored spellings are [`PlanSource::as_str`]; the
@@ -177,7 +177,7 @@ pub enum Room {
 
 /// Whether `adding` more units of `limit` fit `plan`, the scope's organization's plan as the
 /// request loaded it (B10). Called inside the transaction that inserts the units, before the
-/// insert.
+/// insert. `now` is the caller's clock: a limit per calendar month counts the month holding it.
 ///
 /// A limit with no value (`null`, and every limit of `unlimited`) fits without a query. Otherwise
 /// it locks the organization's `org_plans` row for the rest of `tx`, then counts with the
@@ -194,6 +194,7 @@ pub async fn check_room(
     plan: &PlanEntitlements,
     limit: Limit,
     adding: u64,
+    now: SystemTime,
 ) -> Result<Room, Error> {
     let Some(max) = plan.limit(limit) else {
         return Ok(Room::Fits);
@@ -217,6 +218,9 @@ pub async fn check_room(
             .await
             .map_err(|e| Error::Count(e.into()))?,
         Limit::VideoStorage => videos::count_for_limit(&mut **tx, scope)
+            .await
+            .map_err(|e| Error::Count(e.into()))?,
+        Limit::TranscodeMinutes => transcodes::minutes_for_limit(&mut **tx, scope, now)
             .await
             .map_err(|e| Error::Count(e.into()))?,
     };

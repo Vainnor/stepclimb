@@ -39,7 +39,10 @@ player and watch tracking are spec 09; this spec makes a video ready to play.
   (`video.probe_failed`, `video.not_a_video`, `video.too_long`, `video.transcode_failed`,
   `entitlement.limit_reached`). A failed video can be deleted or uploaded again as a new video;
   `POST /api/v1/videos/{video_id}/retry` re-enqueues a `video.transcode_failed` one when its
-  original is still stored.
+  original is still stored, at most 3 times per video (409 `video.retry_limit_reached` after;
+  owner decision, 2026-11-17). Every retry counts, whatever caused the failure: coordinator
+  decision (2026-11-19), the owner's rule as written. It replaces the 2026-11-18 exemption for
+  failures on the server's side, which an input could provoke on purpose (D20).
 - **B3.** `video` items become creatable (`03` B5) for a video attached to the item's course in
   any status; learners see a non-ready video as "processing" with nothing to play.
 
@@ -80,9 +83,10 @@ player and watch tracking are spec 09; this spec makes a video ready to play.
 - **B9.** The job concatenates the parts into a temporary file in `transcode_dir` (default the
   OS temporary directory), runs ffprobe on it, and fails the video when ffprobe finds no video
   stream (`video.not_a_video`) or cannot read it (`video.probe_failed`). Duration above
-  `max_video_seconds` (default 4 h) fails it with `video.too_long`. It then calls
-  `Entitlements::check_room(Limit::TranscodeMinutes, ceil(duration / 60))` (Q4) and fails it with
-  `entitlement.limit_reached` when that does not fit.
+  `max_video_seconds` (default 4 h) fails it with `video.too_long`. It then checks
+  `Limit::TranscodeMinutes` for `ceil(duration / 60)` (Q4) and fails it with
+  `entitlement.limit_reached` when that does not fit; otherwise it charges them (B13) in the same
+  transaction, under the plan row's lock.
 - **B10.** ffmpeg runs as a child process with: input read only from the local file with
   `-protocol_whitelist file` and no network protocol, a fixed argument list built by the job (no
   author string reaches the command line; the title is never passed), a wall-clock limit of 4 x
@@ -101,8 +105,18 @@ player and watch tracking are spec 09; this spec makes a video ready to play.
   `ready`, and deletes the upload parts and the temporary directory (Q3). It re-checks
   `Limit::VideoStorage` with the real output size and fails the video when it does not fit,
   deleting the outputs. Run twice (`01` B12), the second run finds `ready` and does nothing.
-- **B13.** Transcode minutes are recorded per organization and calendar month (UTC) in
-  `transcode_usage` when a transcode succeeds, by the job's clock.
+- **B13.** Transcode minutes are charged per organization and calendar month (UTC) in
+  `transcode_usage` when the render starts, by the job's clock, in the transaction that checks
+  the limit (B9). A run that fails on the server's side (the store, the database or the host
+  fails, the job's lease is lost, a bug) refunds them to the month they were charged in; a run the
+  input fails (ffmpeg fails or breaks a B10 limit, the outputs do not fit `video_storage`) keeps
+  them. Each retry (B2) charges again. Owner decision, 2026-11-17; it replaces charging only on
+  success, which let a failing input be transcoded again and again for free. The charge is
+  recorded on the video row (`charged_minutes`, `charged_at`) in the same transaction and
+  cleared when the run ends; a run that never ended (a crash, a lost lease) leaves it, and the
+  next run's start refunds it in the transaction that takes the new run, as `videos.cleanup`
+  does for a video it fails (D20), so a restart never charges a video twice (coordinator
+  decision, 2026-11-18, after the security re-check).
 
 ### Captions and chapters
 
@@ -182,7 +196,7 @@ answer 503 `storage.not_configured` (B19).
 | `GET /api/v1/courses/{course_id}/videos` | `?cursor&limit` | 200 `Page<Video>` | 404 | `perm::CourseViewAll` (course) |
 | `GET /api/v1/videos/{video_id}` | | 200 `Video` | 404 `video.not_found` | `perm::CourseViewAll` (a course it is attached to) |
 | `PATCH /api/v1/videos/{video_id}` | `{ title? }` | 200 `Video` | 404, 422 | `perm::CourseContentEdit` |
-| `POST /api/v1/videos/{video_id}/retry` | | 202 `Video` | 404, 409 `video.status_invalid` | `perm::CourseContentEdit` |
+| `POST /api/v1/videos/{video_id}/retry` | | 202 `Video` | 404, 409 `video.status_invalid`, `video.retry_limit_reached`, `course.archived` | `perm::CourseContentEdit` |
 | `DELETE /api/v1/videos/{video_id}` | | 204 | 404, 409 `video.in_use` | `perm::CourseContentEdit` (every course it is attached to) |
 | `DELETE /api/v1/courses/{course_id}/videos/{video_id}` | | 204 | 404, 409 `video.in_use` | `perm::CourseContentEdit` (course) |
 | `PUT /api/v1/videos/{video_id}/captions/{lang}` | `text/vtt` body | 200 `Caption` | 404, 413, 422 `video.captions_invalid` | `perm::CourseContentEdit` |
@@ -571,6 +585,122 @@ building I5.
   is answered in the browser. The other journeys (pause and resume, a reload, the touch targets,
   axe in every theme) answer the video routes in the browser, as the files area's tests do, so
   they can hold a chunk and run without a signed-in session.
+
+### Points I2 settled
+
+Coordinator decision (overnight, 2026-11-17), pending owner review: the spec left each of these
+open while building I2.
+
+- **D17. ffmpeg missing from an `all` process.** The release image gets ffmpeg in I6, so a
+  default `all` install would not start if B8 applied to it as written. A `transcoder` process
+  refuses to start when ffmpeg or ffprobe does not run (T13), and so does an `all` process whose
+  `transcode_dir`, `ffmpeg_path` or `ffprobe_path` is set and fails. An `all` process that relies
+  on `PATH` and finds no program there starts without serving the `transcode` queue, with one
+  warning naming the setting; its uploads stay `processing`, their transcode jobs waiting in the
+  queue without using their attempts, and run once a process that can transcode starts. An `all` process without object storage does not serve the queue either; a
+  `transcoder` without it refuses to start naming `STEPCLIMB_STORAGE_URL`. The self-hosting
+  reference (`deploy/compose/README.md`, "Video transcoding") says that, until I6 (#240), an
+  image without ffmpeg leaves videos processing until such a process runs. The release notes are built from commit
+  subjects (`cliff.toml`), so the release that ships this needs that sentence added to its
+  `CHANGELOG.md` section by hand. Once I6 ships ffmpeg in the image, an issue against
+  this spec can make `all` refuse too. Kept by the owner after the security review
+  (2026-11-17).
+- **D18. Workers per role.** `all` runs two job loops: the general one (every queue but
+  `transcode`, `worker_concurrency`, with the scheduler and the outbox dispatcher) and the
+  transcode one (`transcode` only, `transcode_concurrency`), so a long transcode never takes a
+  general slot. `transcoder` runs only the transcode loop and answers only `/healthz` and
+  `/readyz`. The job pool has one connection per job of both loops, plus 3.
+- **D19. B10's limits.** The wall-clock limit of 4 x the duration plus 10 minutes covers the
+  four ffmpeg runs of one transcode together (HLS, MP4, poster, sprites). The output directory may
+  hold at most 64 MiB plus 3 MB per second of video, about twice what the ladder, the MP4 and their
+  sound add up to. Each run may hold 4 GiB of resident memory, read from `/proc` every 250 ms on
+  Linux, and ffmpeg's `-max_alloc` caps any single allocation at 256 MiB. ffprobe gets 60 s and
+  1 GiB. Every child runs with an empty environment, stdin closed, no shell, and drops the
+  source's metadata and chapters (`-map_metadata -1`, `-map_chapters -1`).
+  Owner decision on the memory cap (2026-11-17), after the security review: keep the 250 ms
+  poll, add `-max_pixels 35389440` (an 8192 x 4320 frame) as an input option of every ffmpeg run,
+  so a decoder refuses a forged frame size before it allocates for it, and give the server in
+  the production Compose example a memory limit (`SC_SERVER_MEMORY`, 6 GiB by default). I6
+  (#240) runs ffmpeg and ffprobe under util-linux `prlimit` in the image, which sets the address
+  space limit before the program starts.
+- **D20. Failures and retries.** A run ffmpeg fails, or one that breaks a limit, fails the video
+  `video.transcode_failed` at once; an author retries it (B2). A failure of the database, the
+  store or the host (ffmpeg missing at run time, a full disk), a process without storage or
+  ffmpeg that claims the job, and a panic of the job's task are retried by the queue:
+  `video.transcode` has a 10-minute lease, held from the start of the transcode to its commit
+  and extended every 2 minutes, and 5 attempts from 1 to 30 minutes apart. A failed extension
+  is tried again every 15 s while at least a minute of the lease would be left; after that the
+  run stops. Every such failure on the last attempt fails the video `video.transcode_failed`.
+  A job whose lease lapses on its last attempt is made dead by the claim without running its
+  handler, so `videos.cleanup` fails every `processing` video whose transcode job is dead, or
+  that has no job and has not changed for 24 hours, and refunds its open charge (B13). ffprobe
+  finding no video stream fails it `video.not_a_video` and deletes its parts, as B7's discard
+  does (D7). Amended after the security review (2026-11-17). After the re-check (coordinator
+  decision, 2026-11-18): an ffmpeg run killed by `SIGKILL` that the runner did not send (the
+  kernel's out-of-memory killer) is the host's fault, refunded and retried by the queue, not
+  the input's; the deletion of the upload's parts and of older runs' outputs runs after the
+  commit that makes the video ready, outside the race with the lease, so a lost lease cannot cut
+  it off; and a failing run deletes its outputs only once its `UPDATE` has changed the row, so a
+  video a newer run made ready keeps them. Coordinator decision (2026-11-19), the owner's rule
+  as written: a retry after any of these failures counts toward the video's 3 (B2). A failure on
+  the server's side is still refunded, but no longer uncounted, because an input can provoke one:
+  a file whose decode makes the kernel kill ffmpeg for its memory below the runner's 4 GiB cap
+  would otherwise buy unlimited free runs and could fill the `transcode` queue.
+- **D21. `renditions`.** The stored object is `{ run, heights, bitrates, master, playlists,
+  mp4, mp4_height, sprites }`, each key a store key under `v<n>/`. `Video` shows
+  `renditions: { heights }` once the video is `ready`, and omits it before.
+- **D22. `video_storage` after a transcode.** The upload of a `ready` video no longer counts: its
+  parts are being deleted and its renditions count instead. The transaction that sets `ready`
+  marks the upload's parts for deletion (`terminating = 'parts'`, so `videos.cleanup` finishes a
+  delete that fails) and re-checks the limit with nothing added. The minutes are no longer
+  recorded there: B13 charges them when the render starts, in the transaction that checks
+  `transcode_minutes` under the plan row's lock, so two transcodes of one organization take
+  turns at that check and cannot both pass it at the limit.
+- **D23. The retry route.** `POST /api/v1/videos/{video_id}/retry` answers 202 with the
+  `processing` video and enqueues the job in the same transaction (dedupe key: the video id). It
+  needs a video failed as `video.transcode_failed` whose upload is complete and not being deleted
+  (409 `video.status_invalid` otherwise), and answers 409 `course.archived` when every course
+  through which the caller may edit the video is archived, as D9's rename does. A fourth retry of
+  one video answers 409 `video.retry_limit_reached` (`videos.transcode_retries`, owner decision,
+  2026-11-17), whatever caused its failures (coordinator decision, 2026-11-19, D20).
+- **D24. Setting ranges.** `max_video_seconds` 1 to 86,400; `transcode_threads` 0 to 64;
+  `transcode_dir`, `ffmpeg_path` and `ffprobe_path` must be absolute paths. The startup check
+  makes and removes a work directory in `transcode_dir`, so a missing or read-only directory stops
+  a process that transcodes.
+- **D25. Thumbnails.** The sprite run uses `fps=1/10:eof_action=pass`, so a video shorter than
+  10 s still gets its one thumbnail; a video of `d` seconds gets `ceil(d / 10)`.
+- **D26. The limit check takes the clock.** `org_plans::check_room` and
+  `Entitlements::check_room` take the caller's `now`, which picks the month `transcode_minutes`
+  counts.
+- **D27. ffmpeg in the dev shell.** `flake.nix` adds `ffmpeg-headless` from the flake's pinned
+  nixpkgs (ffmpeg 9.0.2 with libx264 at the time of writing), so the tests run the same ffmpeg on
+  every machine with the dev shell; `flake.lock` does not change.
+
+Coordinator decision (2026-11-17), after the security review of I2:
+
+- **D38. Outputs stop at the probed duration.** The HLS, MP4 and sprite runs take `-t` at the
+  duration ffprobe reported, so a file whose container declares less than it holds is cut there:
+  `max_video_seconds`, the time budget and the minutes charged all rest on that duration.
+- **D39. Frame sizes.** ffprobe's answer is refused as `video.probe_failed` when a side is over
+  8192 pixels or one side is more than 16 times the other; the sprite index computes its regions
+  with saturating arithmetic.
+- **D40. Stale work directories.** A process that transcodes removes, at startup, every
+  `stepclimb-transcode-*` directory in `transcode_dir` last changed before 4 x
+  `max_video_seconds` plus 10 minutes, plus ffprobe's 60 s and an hour. ffmpeg runs in the
+  server's process group, so a bare-metal systemd unit needs `KillMode=control-group` (the
+  default) for a stop to end ffmpeg with the server.
+- **D41. Outputs are regular files.** The upload of the outputs reads the work directory without
+  following links and stops the run on anything that is neither a directory nor a regular file.
+  That, and an upload whose parts no longer make it up after `start` found it complete, is the
+  server's side (coordinator decision, 2026-11-19): refunded and retried by the queue, failing
+  the video `video.transcode_failed` on the last attempt. Coordinator decision (2026-11-19), the
+  owner's rule as written: every retry counts toward the video's 3, whatever caused the failure
+  (B2, D20). Accepted rare edge (coordinator decision, 2026-11-19): when a failure the input
+  caused happens on the last attempt and its `fail` then hits a database error, the job dies with
+  the video still `processing` and its charge open; `videos.cleanup` later fails the video as the
+  server's and refunds a charge the input had earned. It takes a database error at that one
+  point, and the video still ends failed.
+
 
 ## Issues
 

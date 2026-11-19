@@ -31,6 +31,7 @@
 //! removes or hides what an organization already has (B11).
 
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use axum::{
     extract::FromRequestParts,
@@ -126,14 +127,16 @@ impl Entitlements {
     /// that inserts the units, before the insert, and commit that transaction after it: a limit
     /// with a value locks the organization's plan row until `tx` ends, so concurrent creations
     /// take turns and the second counts the first one's rows. A limit with no value runs no
-    /// query.
+    /// query. `now` is the caller's clock, which picks the month of a monthly limit.
     pub async fn check_room(
         &self,
         tx: &mut Transaction<'_, Postgres>,
         limit: Limit,
         adding: u64,
+        now: SystemTime,
     ) -> Result<(), ApiError> {
-        let room = org_plans::check_room(tx, self.scope, &self.plan.entitlements, limit, adding)
+        let plan = &self.plan.entitlements;
+        let room = org_plans::check_room(tx, self.scope, plan, limit, adding, now)
             .await
             .map_err(|error| ApiError::internal(&error))?;
         match room {

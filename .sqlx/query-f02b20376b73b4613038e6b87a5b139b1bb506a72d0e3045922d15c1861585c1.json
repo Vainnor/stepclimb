@@ -1,0 +1,54 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT status, error_code, transcode_retries FROM videos v\n         WHERE org_id = $1 AND id = $2\n           AND EXISTS (SELECT 1 FROM course_videos cv\n                       WHERE cv.org_id = $1 AND cv.video_id = $2 AND cv.course_id = ANY($3))\n         FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "videos",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "error_code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "videos",
+            "name": "error_code"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "transcode_retries",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "videos",
+            "name": "transcode_retries"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "f02b20376b73b4613038e6b87a5b139b1bb506a72d0e3045922d15c1861585c1"
+}

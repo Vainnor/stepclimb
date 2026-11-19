@@ -21,6 +21,7 @@
 mod file;
 pub mod providers;
 mod storage;
+mod transcode;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -37,6 +38,11 @@ pub use providers::ConfigProvider;
 pub use storage::{
     DEFAULT_REGION, S3Config, STORAGE_S3_ACCESS_KEY_ID, STORAGE_S3_ALLOW_HTTP, STORAGE_S3_ENDPOINT,
     STORAGE_S3_REGION, STORAGE_S3_SECRET_ACCESS_KEY, STORAGE_URL, StorageConfig,
+};
+pub use transcode::{
+    DEFAULT_MAX_VIDEO_SECONDS, FFMPEG_PATH, FFPROBE_PATH, MAX_MAX_VIDEO_SECONDS,
+    MAX_TRANSCODE_CONCURRENCY, MAX_TRANSCODE_THREADS, MAX_VIDEO_SECONDS, TRANSCODE_CONCURRENCY,
+    TRANSCODE_DIR, TRANSCODE_THREADS, TranscodeConfig,
 };
 
 use crate::client_ip::TrustedProxies;
@@ -130,8 +136,8 @@ pub const ROLE: Setting = Setting {
     var: "STEPCLIMB_ROLE",
     key: "role",
     secret: false,
-    example: "all (HTTP and the job worker), web (HTTP only) or worker (the job worker and the \
-              probes only)",
+    example: "all (HTTP and the job worker), web (HTTP only), worker (the job worker and the \
+              probes only) or transcoder (the transcode queue and the probes only)",
 };
 pub const WORKER_CONCURRENCY: Setting = Setting {
     var: "STEPCLIMB_WORKER_CONCURRENCY",
@@ -170,6 +176,12 @@ pub const SETTINGS: &[Setting] = &[
     WORKER_CONCURRENCY,
     MAX_FILE_BYTES,
     MAX_VIDEO_BYTES,
+    MAX_VIDEO_SECONDS,
+    TRANSCODE_CONCURRENCY,
+    TRANSCODE_THREADS,
+    TRANSCODE_DIR,
+    FFMPEG_PATH,
+    FFPROBE_PATH,
     STORAGE_URL,
     STORAGE_S3_ENDPOINT,
     STORAGE_S3_REGION,
@@ -221,8 +233,12 @@ pub enum Role {
     All,
     /// The HTTP application only.
     Web,
-    /// The job worker, with `/healthz` and `/readyz` the only HTTP routes.
+    /// The job worker of every queue but `transcode`, with `/healthz` and `/readyz` the only
+    /// HTTP routes.
     Worker,
+    /// The job worker of the `transcode` queue only, with `/healthz` and `/readyz` the only HTTP
+    /// routes (docs/specs/m1/08-uploaded-video.md B8).
+    Transcoder,
 }
 
 impl Role {
@@ -233,6 +249,7 @@ impl Role {
             Self::All => "all",
             Self::Web => "web",
             Self::Worker => "worker",
+            Self::Transcoder => "transcoder",
         }
     }
 
@@ -242,10 +259,23 @@ impl Role {
         matches!(self, Self::All | Self::Web)
     }
 
-    /// Whether the process runs the job worker.
+    /// Whether the process runs a job worker of any queue.
     #[must_use]
     pub fn runs_jobs(self) -> bool {
+        !matches!(self, Self::Web)
+    }
+
+    /// Whether the process runs the worker of every queue but `transcode`, with the scheduler of
+    /// periodic jobs and the outbox dispatcher.
+    #[must_use]
+    pub fn runs_general_jobs(self) -> bool {
         matches!(self, Self::All | Self::Worker)
+    }
+
+    /// Whether the process serves the `transcode` queue (docs/specs/m1/08-uploaded-video.md B8).
+    #[must_use]
+    pub fn runs_transcodes(self) -> bool {
+        matches!(self, Self::All | Self::Transcoder)
     }
 }
 
@@ -314,6 +344,8 @@ pub struct Config {
     /// [`MIN_MAX_VIDEO_BYTES`] to [`MAX_MAX_VIDEO_BYTES`]; [`DEFAULT_MAX_VIDEO_BYTES`] when unset
     /// (docs/specs/m1/08-uploaded-video.md B4).
     pub max_video_bytes: u64,
+    /// The transcoder's settings (docs/specs/m1/08-uploaded-video.md B8, B9).
+    pub transcode: TranscodeConfig,
     /// `[[providers]]`: the identity providers the file declares, checked, each with its
     /// client secret (spec 06 B11). `stepclimb serve` writes them to their organizations.
     pub providers: Vec<ConfigProvider>,
@@ -342,6 +374,7 @@ impl fmt::Debug for Config {
             .field("worker_concurrency", &self.worker_concurrency)
             .field("max_file_bytes", &self.max_file_bytes)
             .field("max_video_bytes", &self.max_video_bytes)
+            .field("transcode", &self.transcode)
             .field("providers", &self.providers)
             .field("storage", &self.storage)
             .finish()
@@ -555,6 +588,7 @@ impl Config {
         let worker_concurrency = worker_concurrency(&sources)?;
         let max_file_bytes = max_file_bytes(&sources)?;
         let max_video_bytes = max_video_bytes(&sources)?;
+        let transcode = transcode::load(&sources)?;
         let providers = match file {
             Some(file) => file_providers(file, allow_insecure_providers)?,
             None => Vec::new(),
@@ -578,6 +612,7 @@ impl Config {
             worker_concurrency,
             max_file_bytes,
             max_video_bytes,
+            transcode,
             providers,
             storage,
         })
@@ -598,7 +633,7 @@ impl Config {
     /// settings, which [`StorageConfig::report`] lists. `stepclimb check-config` prints these;
     /// the secret settings never appear.
     pub fn non_secret_values(&self) -> Vec<(&'static str, String)> {
-        vec![
+        let mut values = vec![
             (BIND.key, self.bind.to_string()),
             (LOG.key, self.log.clone()),
             (PUBLIC_URL.key, self.public_url.to_string()),
@@ -618,7 +653,9 @@ impl Config {
             (WORKER_CONCURRENCY.key, self.worker_concurrency.to_string()),
             (MAX_FILE_BYTES.key, self.max_file_bytes.to_string()),
             (MAX_VIDEO_BYTES.key, self.max_video_bytes.to_string()),
-        ]
+        ];
+        values.extend(self.transcode.report());
+        values
     }
 
     /// The declared providers as `key (kind)`, `, disabled` added for one that is off, and

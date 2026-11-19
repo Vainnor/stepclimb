@@ -423,7 +423,7 @@ async fn the_cleanup_job_deletes_an_expired_flow(pool: PgPool) {
     let started = fixture.start(Kind::Oidc, None).await;
     fixture.clock.advance(LIFETIME);
     let now = fixture.clock.clock().now();
-    let registry = stepclimb_server::jobs::registry(None).expect("the registry builds");
+    let registry = stepclimb_server::jobs::registry(None, None).expect("the registry builds");
     schedule::sync(&fixture.pool, &registry, now).await.unwrap();
     let tick = schedule::tick(&fixture.pool, &registry, now).await.unwrap();
     assert!(

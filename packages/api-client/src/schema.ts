@@ -1333,6 +1333,27 @@ export interface paths {
         patch: operations["updateVideo"];
         trace?: never;
     };
+    "/api/v1/videos/{video_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Transcode again a video whose transcode failed (`video.transcode_failed`), from its upload,
+         *     which the server keeps until a transcode succeeds. A video can be retried 3 times, each retry
+         *     charging its transcode minutes again.
+         */
+        post: operations["retryVideo"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/local/enrollment/passkey": {
         parameters: {
             query?: never;
@@ -3983,6 +4004,7 @@ export interface components {
                 error_code?: string | null;
                 /** Format: uuid */
                 id: string;
+                renditions?: null | components["schemas"]["Renditions"];
                 /** @description `upload` for an uploaded video. */
                 source: string;
                 /** @description `uploading`, `processing`, `ready` or `failed`. */
@@ -4255,6 +4277,11 @@ export interface components {
             id: string;
             /** @description The organization's name. */
             name: string;
+        };
+        /** @description The HLS renditions of a ready video. */
+        Renditions: {
+            /** @description Their heights in pixels, shortest first (360, 720, 1080, or one below 360). */
+            heights: number[];
         };
         /**
          * @description What completes an item for a learner: `view` (open it) and `mark_done` (mark it done) on a
@@ -4609,6 +4636,7 @@ export interface components {
             error_code?: string | null;
             /** Format: uuid */
             id: string;
+            renditions?: null | components["schemas"]["Renditions"];
             /** @description `upload` for an uploaded video. */
             source: string;
             /** @description `uploading`, `processing`, `ready` or `failed`. */
@@ -6486,6 +6514,15 @@ export interface components {
         };
         /** @description `course.archived`: every course through which you may edit the video is archived. */
         VideoRenameConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `video.status_invalid`: the video did not fail as `video.transcode_failed`, or its upload is no longer stored; upload it again as a new video. `video.retry_limit_reached`: the video has been retried 3 times, each charging transcode minutes; upload it again as a new video. `course.archived`: every course through which you may edit the video is archived. */
+        VideoRetryConflict: {
             headers: {
                 [name: string]: unknown;
             };
@@ -10120,6 +10157,36 @@ export interface operations {
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             422: components["responses"]["VideoInvalid"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    retryVideo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The video's id. */
+                video_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The video, processing again */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Video"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["VideoEditForbidden"];
+            404: components["responses"]["VideoNotFound"];
+            409: components["responses"]["VideoRetryConflict"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
         };

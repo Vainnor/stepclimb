@@ -527,6 +527,14 @@ const TABLE: &[Entry] = &[
         ),
     },
     Entry {
+        operation_id: "retryVideo",
+        access: permission(
+            CourseContentEdit::KEY,
+            VIDEO_NOT_FOUND,
+            failed_video_in_tower,
+        ),
+    },
+    Entry {
         operation_id: "listPermissions",
         access: permission(RoleView::KEY, Target::AnyScope, at_org),
     },
@@ -2099,6 +2107,33 @@ fn rename_video_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send 
         Call {
             params: vec![("video_id", org.video_upload(course).await.1)],
             body: Some(serde_json::json!({ "title": "Renamed" })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// The video of a complete upload in a published course in Tower whose transcode failed, so it
+/// can be retried (M1 spec 08 B2).
+fn failed_video_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        let (upload, video) = org.video_upload(course).await;
+        sqlx::query("UPDATE video_uploads SET received = length WHERE id = $1")
+            .bind(upload)
+            .execute(&org.pool)
+            .await
+            .expect("complete the upload");
+        sqlx::query(
+            "UPDATE videos SET status = 'failed', error_code = 'video.transcode_failed'
+             WHERE id = $1",
+        )
+        .bind(video)
+        .execute(&org.pool)
+        .await
+        .expect("fail the video");
+        Call {
+            params: vec![("video_id", video)],
+            body: None,
             at: At::Account(org.tower),
         }
     })

@@ -213,7 +213,7 @@ async fn storage_room(pool: &PgPool, org: Uuid, adding: u64) -> Room {
         .expect("read the plan")
         .entitlements;
     let mut tx = pool.begin().await.expect("begin");
-    let room = org_plans::check_room(&mut tx, scope(org), &plan, Limit::Storage, adding)
+    let room = org_plans::check_room(&mut tx, scope(org), &plan, Limit::Storage, adding, now())
         .await
         .expect("check_room");
     tx.rollback().await.expect("roll back");

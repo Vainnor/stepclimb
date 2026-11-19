@@ -9,7 +9,12 @@
 //!    one created before a mark existed. A video that failed for any other reason keeps its
 //!    original for a retry (B2) and is left alone;
 //! 3. finish every terminating upload ([`crate::video_parts::finish`]): its parts, then its row or
-//!    its video. This also finishes a termination or a discard whose delete failed.
+//!    its video. This also finishes a termination or a discard whose delete failed;
+//! 4. fail as `video.transcode_failed` every `processing` video no live `video.transcode` job
+//!    will finish: its job is dead, or it has none and has not changed for 24 hours
+//!    (`stepclimb_core::transcodes::fail_stranded`). A job whose lease lapsed on its last
+//!    attempt, or a process that could not transcode, leaves such a video; the author can then
+//!    retry it (B2).
 //!
 //! Steps 1 and 2 mark each upload in a transaction that holds its row `FOR UPDATE`, the lock a
 //! chunk takes ([`crate::video_uploads`]), and check again that it still applies; step 3 deletes
@@ -23,7 +28,7 @@ use sqlx::PgPool;
 use stepclimb_core::{
     OrgScope,
     id::Uuid,
-    organizations,
+    organizations, transcodes,
     videos::{self, Status, Terminating, Upload},
 };
 use stepclimb_jobs::{JobContext, Kind, Outcome, Registry, RegistryError};
@@ -70,6 +75,8 @@ pub struct Report {
     pub not_a_video_marked: u64,
     /// Terminating uploads whose parts and rows were deleted (step 3).
     pub finished: u64,
+    /// `processing` videos failed because no live job will finish them (step 4).
+    pub stranded: u64,
     /// Uploads or organizations that failed, each logged.
     pub failed: usize,
 }
@@ -95,7 +102,7 @@ pub async fn run(
         };
         cleaner.run(&mut report).await;
     }
-    if report.stale_marked + report.not_a_video_marked + report.finished > 0 {
+    if report.stale_marked + report.not_a_video_marked + report.finished + report.stranded > 0 {
         tracing::info!(?report, "cleaned up video uploads");
     }
     Ok(report)
@@ -144,6 +151,22 @@ impl Cleaner<'_> {
                 Err(error) => self.failed(report, &error, "could not delete a video upload"),
             }
         }
+        match self.fail_stranded().await {
+            Ok(failed) => report.stranded += failed,
+            Err(error) => self.failed(report, &error, "could not fail stranded videos"),
+        }
+    }
+
+    /// Step 4 in its own transaction.
+    async fn fail_stranded(&self) -> Result<u64, Error> {
+        let mut tx = self.pool.begin().await?;
+        let failed = transcodes::fail_stranded(&mut tx, self.scope, self.cutoff, self.now).await?;
+        tx.commit().await?;
+        for video_id in &failed {
+            let org_id = self.scope.org_id();
+            tracing::warn!(%org_id, %video_id, "failed a processing video no transcode job will finish");
+        }
+        Ok(u64::try_from(failed.len()).unwrap_or(u64::MAX))
     }
 
     fn failed(&self, report: &mut Report, error: &dyn std::error::Error, what: &str) {

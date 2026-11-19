@@ -85,6 +85,7 @@ mod settings;
 pub mod sniff;
 mod source;
 pub mod theme;
+pub mod transcodes;
 pub mod tz;
 pub mod unlock;
 pub mod users;

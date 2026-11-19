@@ -270,6 +270,7 @@ async fn the_openapi_document_is_3_1_and_lists_every_route() {
             "/api/v1/users/{user_id}/identities/{identity_id}",
             "/api/v1/video-uploads/{upload_id}",
             "/api/v1/videos/{video_id}",
+            "/api/v1/videos/{video_id}/retry",
             "/auth/local/enrollment/passkey",
             "/auth/local/enrollment/password",
             "/auth/local/enrollment/start",

@@ -95,7 +95,7 @@ async fn add_users(pool: &PgPool, org: Uuid, count: usize) {
 async fn room_for(pool: &PgPool, org: Uuid, adding: u64) -> Result<Room, Error> {
     let plan = plan_of(pool, org).await;
     let mut tx = pool.begin().await.expect("begin");
-    let room = org_plans::check_room(&mut tx, scope(org), &plan, Limit::Users, adding).await;
+    let room = org_plans::check_room(&mut tx, scope(org), &plan, Limit::Users, adding, now()).await;
     tx.rollback().await.expect("roll back");
     room
 }
@@ -112,7 +112,8 @@ async fn a_limit_without_a_value_fits_without_a_query(pool: PgPool) {
         .await
         .unwrap();
     let mut tx = pool.begin().await.unwrap();
-    let room = org_plans::check_room(&mut tx, scope(a), &unlimited, Limit::Users, u64::MAX).await;
+    let room =
+        org_plans::check_room(&mut tx, scope(a), &unlimited, Limit::Users, u64::MAX, now()).await;
     assert_eq!(room.unwrap(), Room::Fits);
 }
 
@@ -159,7 +160,7 @@ async fn an_organization_without_a_plan_row_has_no_room(pool: PgPool) {
         .await
         .unwrap();
     let mut tx = pool.begin().await.unwrap();
-    let room = org_plans::check_room(&mut tx, scope(a), &plan, Limit::Users, 1).await;
+    let room = org_plans::check_room(&mut tx, scope(a), &plan, Limit::Users, 1, now()).await;
     assert!(matches!(room, Err(Error::NotFound)), "{room:?}");
 }
 
@@ -173,7 +174,7 @@ async fn concurrent_creations_take_turns(pool: PgPool) {
     let plan = plan_of(&pool, a).await;
 
     let mut first = pool.begin().await.unwrap();
-    let room = org_plans::check_room(&mut first, scope(a), &plan, Limit::Users, 1).await;
+    let room = org_plans::check_room(&mut first, scope(a), &plan, Limit::Users, 1, now()).await;
     assert_eq!(room.unwrap(), Room::Fits);
     add_user(&mut first, a, "First").await;
 
@@ -181,7 +182,8 @@ async fn concurrent_creations_take_turns(pool: PgPool) {
         let (pool, plan) = (pool.clone(), plan.clone());
         async move {
             let mut tx = pool.begin().await.unwrap();
-            let room = org_plans::check_room(&mut tx, scope(a), &plan, Limit::Users, 1).await;
+            let room =
+                org_plans::check_room(&mut tx, scope(a), &plan, Limit::Users, 1, now()).await;
             if matches!(room, Ok(Room::Fits)) {
                 add_user(&mut tx, a, "Second").await;
                 tx.commit().await.unwrap();
@@ -211,7 +213,7 @@ async fn an_open_creation_does_not_block_another_organization(pool: PgPool) {
     let plan_a = plan_of(&pool, a).await;
 
     let mut open = pool.begin().await.unwrap();
-    let room = org_plans::check_room(&mut open, scope(a), &plan_a, Limit::Users, 1).await;
+    let room = org_plans::check_room(&mut open, scope(a), &plan_a, Limit::Users, 1, now()).await;
     assert_eq!(room.unwrap(), Room::Fits);
 
     let other = tokio::time::timeout(Duration::from_secs(5), room_for(&pool, b, 1)).await;
@@ -241,7 +243,7 @@ async fn a_transaction_above_read_committed_is_refused(pool: PgPool) {
     ] {
         let mut tx = pool.begin().await.unwrap();
         sqlx::raw_sql(set_level).execute(&mut *tx).await.unwrap();
-        let checked = org_plans::check_room(&mut tx, scope(a), &plan, Limit::Users, 1).await;
+        let checked = org_plans::check_room(&mut tx, scope(a), &plan, Limit::Users, 1, now()).await;
         assert!(
             matches!(&checked, Err(Error::IsolationLevel { found }) if found == level),
             "{level}: {checked:?}"
@@ -255,7 +257,8 @@ async fn a_transaction_above_read_committed_is_refused(pool: PgPool) {
         .execute(&mut *tx)
         .await
         .unwrap();
-    let checked = org_plans::check_room(&mut tx, scope(a), &unlimited, Limit::Users, 1).await;
+    let checked =
+        org_plans::check_room(&mut tx, scope(a), &unlimited, Limit::Users, 1, now()).await;
     assert_eq!(checked.unwrap(), Room::Fits);
 }
 

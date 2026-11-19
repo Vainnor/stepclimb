@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE videos\n         SET charged_minutes = $4,\n             charged_at = timestamptz 'epoch' + $5::bigint * interval '1 microsecond'\n         WHERE org_id = $1 AND id = $2 AND output_run = $3 AND status = 'processing'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4",
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "56bee85d5c52841590d7cabf9c05e13a7c8b0e43e405010a506cdd937b4c5c29"
+}

@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(sum(minutes), 0)::bigint AS \"minutes!\"\n           FROM transcode_usage\n           WHERE org_id = $1\n             AND month = date_trunc('month', (timestamptz 'epoch' + $2::bigint\n                                              * interval '1 microsecond') AT TIME ZONE 'UTC')::date",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "minutes!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "2615d8bef39dfe95964ee7f2c1fd6077bf14b22ccf0155905b7b07f76aa2ae3b"
+}
