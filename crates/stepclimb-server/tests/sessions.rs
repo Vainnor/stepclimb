@@ -401,19 +401,34 @@ async fn t6_twelve_idle_hours_answer_session_expired_and_clear_the_cookie(pool: 
     assert_eq!(fixture.session_count().await, 0, "the row is gone");
 }
 
+/// Each use comes a minute inside the idle limit, so only the uses keep the session alive; it
+/// stays valid to the last second before `created_at + 30 days` and ends at that instant.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn t7_a_session_used_hourly_ends_at_thirty_days(pool: PgPool) {
+async fn t7_a_session_in_steady_use_ends_at_thirty_days(pool: PgPool) {
     let fixture = Fixture::new(pool).await;
     let cookie = cookie_pair(&fixture.sign_in().await);
+    let end = sign_in_time() + 30 * DAY;
+    let step = 12 * HOUR - MINUTE;
 
-    for hour in 1..30 * 24 {
-        fixture.clock.advance(HOUR);
+    let mut uses = 0;
+    while fixture.clock.clock().now() + step < end {
+        fixture.clock.advance(step);
+        uses += 1;
         let answer = fixture.whoami(Some(&cookie)).await;
-        assert_eq!(answer.status, StatusCode::OK, "hour {hour}");
+        assert_eq!(answer.status, StatusCode::OK, "use {uses}");
     }
-    fixture.clock.advance(HOUR);
-    assert_eq!(fixture.clock.clock().now(), sign_in_time() + 30 * DAY);
+    assert_eq!(uses, 60, "the uses span the 30 days");
+    let last_second = end - Duration::from_secs(1);
+    fixture.clock.advance(
+        last_second
+            .duration_since(fixture.clock.clock().now())
+            .unwrap(),
+    );
+    let answer = fixture.whoami(Some(&cookie)).await;
+    assert_eq!(answer.status, StatusCode::OK, "a second before 30 days");
 
+    fixture.clock.advance(Duration::from_secs(1));
+    assert_eq!(fixture.clock.clock().now(), end);
     let answer = fixture.whoami(Some(&cookie)).await;
     assert_eq!(answer.status, StatusCode::UNAUTHORIZED);
     assert_eq!(answer.code(), "auth.session_expired");
