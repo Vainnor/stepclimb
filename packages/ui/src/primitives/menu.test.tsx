@@ -60,6 +60,26 @@ describe("Menu", () => {
     expect(menu.closest('[data-slot="menu-popover"]')).toBeNull();
   });
 
+  it("runs no sheet item on the release of the mouse press that opened it", async () => {
+    wide(false);
+    const user = userEvent.setup();
+    const onAction = vi.fn();
+    render(<Example onAction={onAction} />);
+    // The menu opens on the press, so the sheet can sit where the button was. While that press is
+    // held, no item takes the pointer, so its release lands on the sheet, not on an item. jsdom
+    // does no hit testing; apps/ui-docs/visual/base.spec.ts releases a real mouse over an item.
+    await user.pointer({ keys: "[MouseLeft>]", target: screen.getByRole("button") });
+    const edit = screen.getByRole("menuitem", { name: "Edit" });
+    const body = edit.closest('[data-slot="menu-sheet-body"]');
+    expect(body).toHaveStyle({ pointerEvents: "none" });
+    const sheet = edit.closest<HTMLElement>('[data-slot="menu-sheet"]');
+    if (sheet === null) throw new Error("the sheet");
+    await user.pointer({ keys: "[/MouseLeft]", target: sheet });
+    expect(body).not.toHaveStyle({ pointerEvents: "none" });
+    expect(onAction).not.toHaveBeenCalled();
+    expect(screen.getByRole("menu", { name: "Course actions" })).toBeInTheDocument();
+  });
+
   it.each([
     ["Popover", true],
     ["sheet", false],

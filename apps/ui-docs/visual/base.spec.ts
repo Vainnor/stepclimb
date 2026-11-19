@@ -322,6 +322,33 @@ test.describe("at 1280 px @desktop", () => {
     }
   });
 
+  test("a mouse press that opens a Menu's sheet at 375 px runs no item on its release", async ({
+    page,
+  }) => {
+    // A mouse on a narrow window: the sheet opens on the press and covers the trigger, so the
+    // release lands where an item now is.
+    await page.setViewportSize({ width: 375, height: 740 });
+    await openStory(page, story("actions-menu--at-the-foot"), "light");
+    const trigger = page.getByRole("button", { name: "Course actions" });
+    const box = await trigger.boundingBox();
+    if (box === null) throw new Error("the trigger is drawn");
+    const at = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    await page.mouse.move(at.x, at.y);
+    await page.mouse.down();
+    await expect(page.locator("[data-slot=menu-sheet]")).toBeVisible();
+    const under = await page.evaluate(
+      ({ x, y }) => document.elementFromPoint(x, y)?.closest("[data-slot=menu-sheet]") !== null,
+      at,
+    );
+    expect(under, "the sheet covers the trigger, so the release is over the sheet").toBe(true);
+    await page.mouse.up();
+    await expect(page.getByRole("status")).toHaveText("No item ran.");
+    await expect(page.getByRole("menu", { name: "Course actions" })).toBeVisible();
+    // A press that starts on an item runs it.
+    await page.getByRole("menuitem", { name: "Duplicate" }).click();
+    await expect(page.getByRole("status")).toHaveText("Ran duplicate.");
+  });
+
   test("T5: dragging a ModuleBoard row with the pointer makes the move and announces it", async ({
     page,
   }) => {
