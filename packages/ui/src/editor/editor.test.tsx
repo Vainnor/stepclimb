@@ -3,9 +3,10 @@
 // slash menu inserts each block with the keyboard only, the toolbars change the selection's
 // marks and block, links are checked as the server checks them, images and embeds ask for their
 // details first, and a refusal from the server is shown at its block.
-import type { Editor as TiptapEditor } from "@tiptap/core";
+
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { Editor as TiptapEditor } from "@tiptap/core";
 import { stubMatchMedia } from "../test/media";
 import { renderWithStrings, unmarkedText } from "../test/strings";
 import { type BlockKind, blockKinds, blocksWithDetails } from "./blocks";
