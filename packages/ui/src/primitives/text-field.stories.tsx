@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 import { ThemeMatrix } from "../storybook/theme-matrix";
 import { TextField } from "./text-field";
 
@@ -44,6 +44,34 @@ export const FocusVisible: Story = {
   play: async ({ canvasElement }) => {
     await userEvent.tab();
     await expect(within(canvasElement).getByRole("textbox")).toHaveFocus();
+  },
+};
+
+/**
+ * Hovers `target` until React Aria marks it hovered. It waits for the fonts and for the page to
+ * settle first: after a layout change, Chromium sends a pointer event for wherever its own cursor
+ * rests, which ends React Aria's hover. A screen without hover (a phone) shows the field focused
+ * only.
+ */
+async function hover(target: HTMLElement) {
+  if (window.matchMedia("(hover: none)").matches) return;
+  await document.fonts.ready;
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  await waitFor(async () => {
+    await userEvent.unhover(target);
+    await userEvent.hover(target);
+    await expect(target).toHaveAttribute("data-hovered");
+  });
+}
+
+/** Clicked into, with the pointer still over it: the focus border shows, not the hover one. */
+export const FocusedHovered: Story = {
+  args: { defaultValue: "Ada Lovelace" },
+  play: async ({ canvasElement }) => {
+    const input = within(canvasElement).getByRole("textbox");
+    await userEvent.click(input);
+    await hover(input);
+    await expect(input).toHaveAttribute("data-focused");
   },
 };
 
