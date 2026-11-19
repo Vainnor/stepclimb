@@ -5,7 +5,7 @@
 // account.spec.ts, `/api/v1/me`, the course and the file routes are answered in the browser with
 // synthetic data; the rest is the built binary serving the built SPA.
 import AxeBuilder from "@axe-core/playwright";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page, test } from "./csp";
 
 const WCAG = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"];
 

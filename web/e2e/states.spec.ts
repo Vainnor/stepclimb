@@ -5,7 +5,7 @@
 // shell.spec.ts, `/api/v1/me` is answered in the browser with a synthetic user; the rest is the
 // built binary serving the built SPA.
 import AxeBuilder from "@axe-core/playwright";
-import { type Browser, expect, type Page, type Route, test } from "@playwright/test";
+import { type Browser, expect, type Page, type Route, test } from "./csp";
 
 const WCAG = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"];
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Smoke test of the Compose stack: the binary serves the built SPA, which asks /api/v1/me through
 // the API client; the probes and the API docs answer.
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./csp";
 
 // A browser without a session cookie gets 401 from /me, and the app sends it to the sign-in
 // screen with the path it asked for as the return target (spec 11 B10).
@@ -27,6 +27,24 @@ test("a deep link is served the SPA and sends an anonymous browser to sign in", 
   const target = new URL(returnTo, page.url());
   expect(target.pathname).toBe("/c/example/m/1/i/1");
   expect(target.searchParams.get("return")).toBe("https://host.example/x");
+});
+
+// Issue #325: the release image sends the web app's Content-Security-Policy with the page and its
+// built files, and the page runs under it (the `test` of ./csp fails on any violation).
+test("the page and its files carry the Content-Security-Policy", async ({ page, request }) => {
+  const response = await page.goto("/");
+  const policy = response?.headers()["content-security-policy"] ?? "";
+  expect(policy).toContain("default-src 'none'");
+  expect(policy).toContain("script-src 'self'");
+  expect(policy).not.toContain("unsafe-inline");
+  await expect(page.getByRole("heading", { level: 1, name: "Sign in" })).toBeVisible();
+  const script = await page.locator("script[src]").first().getAttribute("src");
+  expect(script).toMatch(/^\/assets\//);
+  for (const path of [script ?? "", "/sw.js"]) {
+    const file = await request.get(path);
+    expect(file.status(), path).toBe(200);
+    expect(file.headers()["content-security-policy"], path).toBe(policy);
+  }
 });
 
 test("the probes answer", async ({ request }) => {

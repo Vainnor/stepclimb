@@ -3,7 +3,7 @@
 // (docs/specs/m1/15-installable-web-app-and-offline-reading.md T1 to T3). Every other file runs
 // with service workers blocked (playwright.config.ts); this one allows them. Each test has its
 // own browser context, so its worker and caches start empty.
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page, test } from "./csp";
 import { type StaticBuild, serveBuild } from "./static-build";
 
 test.use({ serviceWorkers: "allow" });

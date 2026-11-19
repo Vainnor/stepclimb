@@ -18,6 +18,14 @@
 //! and varies by cookie. Its `theme-color` meta carries the organization's light theme `brand`
 //! color, as the web app manifest does (docs/specs/m1/15-installable-web-app-and-offline-reading.md
 //! B1, B2).
+//!
+//! Every answer here, `index.html` and each file of the build, carries [`CONTENT_SECURITY_POLICY`].
+//! On the page it stops any script, style, frame or form target the build does not ship from this
+//! origin, so HTML the app injects (a page body, an announcement) cannot run script even if the
+//! server's sanitizer let some through. On a file it governs the file when a browser opens it as
+//! a document, and it is the policy the service worker (`/sw.js`) runs under.
+
+use std::sync::LazyLock;
 
 use axum::{
     body::Body,
@@ -56,6 +64,39 @@ const REVALIDATE: &str = "no-cache";
 const PAGE_CACHE: &str = "private, no-cache";
 
 const INDEX: &str = "index.html";
+
+/// The `<style>` elements the web app's dependencies add at run time, one `sha256-<base64>` per
+/// line, `#` starting a comment: React Aria's `usePress` and `usePreventScroll`. The web app's
+/// `src/csp-styles.test.ts` checks the list against the installed React Aria.
+const STYLE_HASHES: &str = include_str!("../csp-style-hashes.txt");
+
+/// The web app's `Content-Security-Policy`. Nothing loads unless a directive names it, and each
+/// names only this origin: the built scripts, stylesheets (`/theme.css` included), fonts and
+/// icons, the API, the manifest and the service worker. No inline script and no `eval`: the build
+/// has none, and `index.html` draws its theme from attributes the server writes (spec m0/11
+/// B21). The only inline styles are the `<style>` elements of [`STYLE_HASHES`], allowed by their
+/// hash; styles React sets through the DOM are not inline style attributes and are allowed. No
+/// frame source, `<object>` or `<base>`; forms submit only here; no other site may frame the app.
+pub static CONTENT_SECURITY_POLICY: LazyLock<String> = LazyLock::new(|| {
+    let hashes: String = STYLE_HASHES
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|hash| format!(" '{hash}'"))
+        .collect();
+    format!(
+        "default-src 'none'; script-src 'self'; style-src 'self'{hashes}; img-src 'self'; \
+         font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; \
+         base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+    )
+});
+
+/// [`CONTENT_SECURITY_POLICY`] as a header value, checked once.
+static POLICY_HEADER: LazyLock<HeaderValue> = LazyLock::new(|| {
+    // Invariant: the policy is ASCII text without control characters, which a test checks, and
+    // the hashes file holds base64 only.
+    HeaderValue::from_str(&CONTENT_SECURITY_POLICY).expect("the policy is a valid header value")
+});
 
 /// The fallback handler: a file from the web build, or `index.html` for a client route.
 pub async fn serve(State(state): State<AppState>, request: Request) -> Response {
@@ -226,11 +267,17 @@ fn page_response(html: String) -> Response {
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(PAGE_CACHE));
     headers.insert(header::VARY, HeaderValue::from_static("Cookie"));
+    secure(headers);
+    response
+}
+
+/// The headers every answer of the web build carries: `nosniff` and the policy.
+fn secure(headers: &mut axum::http::HeaderMap) {
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
-    response
+    headers.insert(header::CONTENT_SECURITY_POLICY, POLICY_HEADER.clone());
 }
 
 fn file(path: &str) -> Option<Response> {
@@ -247,10 +294,7 @@ fn file(path: &str) -> Option<Response> {
         headers.insert(header::CONTENT_TYPE, value);
     }
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
-    headers.insert(
-        header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff"),
-    );
+    secure(headers);
     Some(response)
 }
 
@@ -430,6 +474,75 @@ mod tests {
         let default = light_colors(&stepclimb_core::theme::Brand::stepclimb_default())
             .expect("the default brand renders");
         assert_eq!(&template[start..start + 7], default.brand);
+    }
+
+    /// The policy's directives, by name.
+    fn directives() -> std::collections::HashMap<&'static str, Vec<&'static str>> {
+        CONTENT_SECURITY_POLICY
+            .as_str()
+            .split(';')
+            .map(|directive| {
+                let mut words = directive.split_whitespace();
+                (words.next().expect("a name"), words.collect())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_policy_loads_only_this_origin_and_no_inline_code() {
+        let directives = directives();
+        assert_eq!(directives.len(), 11, "each directive once: {directives:?}");
+        assert_eq!(directives["default-src"], ["'none'"]);
+        let style = &directives["style-src"];
+        assert_eq!(style.first(), Some(&"'self'"));
+        assert_eq!(
+            style.len(),
+            3,
+            "self and the two React Aria hashes: {style:?}"
+        );
+        for hash in &style[1..] {
+            let digest = hash
+                .strip_prefix("'sha256-")
+                .and_then(|h| h.strip_suffix('\''))
+                .expect("a quoted SHA-256 source");
+            assert_eq!(digest.len(), 44, "{hash}");
+            assert!(digest.ends_with('='), "{hash}");
+        }
+        for name in [
+            "script-src",
+            "img-src",
+            "font-src",
+            "connect-src",
+            "manifest-src",
+            "worker-src",
+            "form-action",
+        ] {
+            assert_eq!(directives[name], ["'self'"], "{name}");
+        }
+        for name in ["base-uri", "frame-ancestors"] {
+            assert_eq!(directives[name], ["'none'"], "{name}");
+        }
+        for loose in [
+            "unsafe-inline",
+            "unsafe-eval",
+            "unsafe-hashes",
+            "data:",
+            "blob:",
+            "*",
+        ] {
+            assert!(!CONTENT_SECURITY_POLICY.contains(loose), "{loose}");
+        }
+        assert!(HeaderValue::from_str(&CONTENT_SECURITY_POLICY).is_ok());
+    }
+
+    #[test]
+    fn the_page_and_its_files_carry_the_policy() {
+        let page = page_response(String::new());
+        assert_eq!(
+            page.headers()[header::CONTENT_SECURITY_POLICY],
+            CONTENT_SECURITY_POLICY.as_str()
+        );
+        assert_eq!(page.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
     }
 
     #[test]

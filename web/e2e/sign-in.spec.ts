@@ -7,7 +7,7 @@
 import { createHmac } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import AxeBuilder from "@axe-core/playwright";
-import { type Browser, expect, type Page, test } from "@playwright/test";
+import { type Browser, expect, type Page, test } from "./csp";
 
 const WCAG = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"];
 const EMAIL = "avery@example.test";

@@ -4,7 +4,7 @@
 // written and every field are at least 16 px, so focusing them does not zoom the page, and Save
 // sits in the editor's sticky bar, in view at the end of a long page. WebKit here has
 // no software keyboard; the iPhone test (spec 17) checks that part on a device.
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page, test } from "./csp";
 
 const COURSE = "01900000-0000-7000-8000-0000000000c0";
 const PAGE = "01900000-0000-7000-8000-0000000000c1";

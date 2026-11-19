@@ -5,7 +5,7 @@
 // account.spec.ts, the API is answered in the browser with synthetic data; the reader's side of
 // T13 comes with PageReader (I4).
 import AxeBuilder from "@axe-core/playwright";
-import { expect, type Page, type Request, test } from "@playwright/test";
+import { expect, type Page, type Request, test } from "./csp";
 
 const WCAG = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"];
 
