@@ -20,6 +20,14 @@
   body {
     overscroll-behavior-y: none;
   }
+  /* Under 768 px the BottomTabs are fixed over the foot of the page. A focused control scrolls
+     into view clear of them, never under them (WCAG 2.2 SC 2.4.11): the bar's 3.5 rem, its 1 px
+     top border, the bottom safe area and 0.5 rem more, so the 4 px focus ring stays in view too. */
+  @media (width < 48rem) {
+    html:has([data-slot="bottom-tabs"]) {
+      scroll-padding-block-end: calc(4rem + 1px + env(safe-area-inset-bottom));
+    }
+  }
   [data-sc-theme="dark"] {
     color-scheme: dark;
   }
