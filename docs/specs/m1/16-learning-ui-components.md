@@ -321,6 +321,34 @@ listed here with a pointer so the inventory is complete in one place.
   a draft brand in light, dark and high contrast side by side, with the contrast report of the
   generator (`m0/12`). The branding screen gains it and ColorField, replacing M0's minimal screen
   (`m0/12` Q14 (b)).
+  Coordinator decisions (2026-11-19), pending owner review:
+  - No M0 branding screen was built (no `m0/12` issue carried Q14 (b)), so I10 builds the screen
+    whole at `/admin/branding`, with a "Branding" navigation entry shown to holders of
+    `branding.manage`. It edits every input of `m0/12` B12 and B27: brand color (ColorField),
+    interface font, reading font, corners and default appearance.
+  - BrandPreview takes the generated themes and the reports to show; the screen builds them in the
+    browser with the generator and report of `@stepclimb/tokens` (`/generate`, `/report`), which
+    the server's port is held equal to (`m0/12` B24). The samples take the draft's tokens as
+    custom properties on their own element (`themeDeclarations`), so they show the draft whatever
+    brand the page is in. They are inert pictures; the report says in words what they show.
+  - The report has a summary that says whether the colors can be saved, a tab per appearance
+    (opening on the first that fails, its label counting the failures) and every pair in a table,
+    failing pairs first. A ratio is cut, not rounded, to two decimals, so a failing pair never
+    reads as its minimum. The `brand-near-danger` warning is shown in the catalog's words; an
+    unknown warning shows the generator's message.
+  - Save is not disabled. Pressing it with a draft whose report fails, or with no valid color,
+    shows the reason at the brand color and sends nothing (T6). The server's refusals are shown
+    where they belong: `branding.contrast_failed` at the brand color, with the server's report in
+    the preview; each `branding.invalid_input` entry at its field; a 403 (plan or permission) as
+    a form error.
+  - A saved primary written in OKLCH (the default brand's) shows in the color field as the hex of
+    the sRGB color it maps to, and is sent unchanged unless the field is edited.
+  - After a save the page's `/theme.css` link points at the new hash and `/me` is read again, so
+    the new brand and default appearance show without a reload. A record whose stored inputs the
+    generator refused (`fallback`, `m0/12` B28) shows a warning that the saved brand is not in
+    use.
+  - The sample's course row is a title, a StatusChip and a ProgressBar: no course row component
+    exists yet (B15's course list is I11's).
 
 ### Screens
 
