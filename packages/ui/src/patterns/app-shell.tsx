@@ -29,7 +29,7 @@ export const appShell = tv({
   },
   variants: {
     /** Room under the content for the BottomTabs and the bottom safe area, under 768 px. */
-    hasBottomTabs: { true: { main: "pb-[calc(3.5rem+env(safe-area-inset-bottom))] md:pb-0" } },
+    hasBottomTabs: { true: { main: "pb-(--sc-bottom-tabs-inset) md:pb-0" } },
   },
 });
 

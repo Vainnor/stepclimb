@@ -20,6 +20,25 @@
   body {
     overscroll-behavior-y: none;
   }
+  /* How much of the screen's edges the app shell's bars cover under 768 px. BottomTabs draw at
+     the bottom inset's height, and AppShell leaves it free under its content: a 3.5 rem row, a
+     1 px border and the bottom safe area. The sticky TopBar covers its 3.5 rem row, its 1 px
+     border and the top safe area. */
+  :root {
+    --sc-bottom-tabs-inset: calc(3.5rem + 1px + env(safe-area-inset-bottom));
+    --sc-top-bar-inset: calc(3.5rem + 1px + env(safe-area-inset-top));
+  }
+  /* Under 768 px the BottomTabs are fixed over the foot of the page and the TopBar sticks to its
+     top. A control reached with Tab or Shift+Tab scrolls into view clear of both, never under them
+     (WCAG 2.2 SC 2.4.11), with 0.5 rem more so its 4 px focus ring stays in view too. */
+  @media (width < 48rem) {
+    html:has([data-slot="bottom-tabs"]) {
+      scroll-padding-block-end: calc(var(--sc-bottom-tabs-inset) + 0.5rem);
+    }
+    html:has([data-slot="top-bar"]) {
+      scroll-padding-block-start: calc(var(--sc-top-bar-inset) + 0.5rem);
+    }
+  }
   [data-sc-theme="dark"] {
     color-scheme: dark;
   }

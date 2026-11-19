@@ -2,6 +2,7 @@
 import { BookOpenIcon, HouseIcon, UserCircleIcon } from "@phosphor-icons/react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { Avatar } from "../primitives/avatar";
+import { Button } from "../primitives/button";
 import { Link } from "../primitives/link";
 import { Text } from "../primitives/text";
 import { AppShell } from "./app-shell";
@@ -38,6 +39,39 @@ const entries: NavEntry[] = [
   { id: "courses", href: "/courses", label: "Courses", icon: BookOpenIcon },
   { id: "account", href: "/me", label: "Account", icon: UserCircleIcon },
 ];
+
+const moduleNumbers = Array.from({ length: 48 }, (_, i) => i + 1);
+
+/**
+ * A page longer than the screen with a button below the first screenful. Under 768 px, tabbing to
+ * the button scrolls it into view above the BottomTabs, not under them.
+ */
+export const LongPage: Story = {
+  render: () => (
+    <AppShell
+      className="min-h-[calc(100dvh-3rem)]"
+      sideNav={
+        <SideNav
+          entries={entries}
+          current="home"
+          logo={<span className="text-lg font-heading text-fg-strong">Example Training</span>}
+        />
+      }
+      bottomTabs={<BottomTabs entries={entries} current="home" />}
+      topBar={<TopBar title="Home" />}
+    >
+      <div className="flex flex-col gap-3 p-6">
+        {moduleNumbers.slice(0, 24).map((n) => (
+          <Text key={n}>{`Module ${n}: an outline line that makes the page long.`}</Text>
+        ))}
+        <Button className="self-start">Save</Button>
+        {moduleNumbers.slice(24).map((n) => (
+          <Text key={n}>{`Module ${n}: an outline line below the button.`}</Text>
+        ))}
+      </div>
+    </AppShell>
+  ),
+};
 
 /** The SideNav at 1280 px, the BottomTabs at 375 px. */
 export const Default: Story = {

@@ -34,7 +34,7 @@ describe("AppShell", () => {
     const main = screen.getByRole("main");
     expect(main).toHaveAttribute("id", "main");
     expect(main).toHaveClass(
-      "pb-[calc(3.5rem+env(safe-area-inset-bottom))]",
+      "pb-(--sc-bottom-tabs-inset)",
       "md:pb-0",
       "pe-[env(safe-area-inset-right)]",
       "rtl:pe-[env(safe-area-inset-left)]",
@@ -50,9 +50,7 @@ describe("AppShell", () => {
   it("leaves room for BottomTabs only when it has them", () => {
     stubMatchMedia(() => true);
     renderWithStrings(<AppShell topBar={<TopBar title="Home" />}>Content</AppShell>);
-    expect(screen.getByRole("main")).not.toHaveClass(
-      "pb-[calc(3.5rem+env(safe-area-inset-bottom))]",
-    );
+    expect(screen.getByRole("main")).not.toHaveClass("pb-(--sc-bottom-tabs-inset)");
   });
 
   it("starts with a skip link that moves focus to main (spec 11 B6)", async () => {

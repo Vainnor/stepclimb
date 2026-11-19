@@ -13,7 +13,8 @@ import type { NavEntry } from "./side-nav";
 export const bottomTabs = tv({
   slots: {
     root: [
-      "fixed inset-x-0 bottom-0 z-40 border-t border-line bg-raised font-ui",
+      // As tall as `--sc-bottom-tabs-inset` (base.css), which AppShell and the scroll padding read.
+      "fixed inset-x-0 bottom-0 z-40 h-(--sc-bottom-tabs-inset) border-t border-line bg-raised font-ui",
       "overscroll-none touch-manipulation",
       "pb-[env(safe-area-inset-bottom)] ps-[env(safe-area-inset-left)] pe-[env(safe-area-inset-right)]",
       "rtl:ps-[env(safe-area-inset-right)] rtl:pe-[env(safe-area-inset-left)]",

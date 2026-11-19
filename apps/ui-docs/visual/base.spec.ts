@@ -94,6 +94,62 @@ test.describe("on a phone (375 px, coarse pointer) @phone", () => {
     });
   }
 
+  test("a control focused low on the screen of a long page is not under the BottomTabs (2.4.11)", async ({
+    page,
+  }) => {
+    await openStory(page, story("navigation-appshell--long-page"), "light");
+    const save = page.getByRole("button", { name: "Save" });
+    // The button sits in the band the tab bar covers, so the browser counts it as in view and
+    // does not scroll for it unless the page's scroll padding leaves that band out.
+    await save.evaluate((el) => {
+      const bottom = el.getBoundingClientRect().bottom;
+      window.scrollBy(0, bottom - (window.innerHeight - 20));
+      document.querySelector<HTMLElement>("[data-slot=app-shell-skip]")?.focus({
+        preventScroll: true,
+      });
+    });
+    await page.keyboard.press("Tab");
+    await expect(save).toBeFocused();
+    const bar = await page.locator("[data-slot=bottom-tabs]").boundingBox();
+    const box = await save.boundingBox();
+    if (bar === null || box === null) throw new Error("both are drawn");
+    // The focus ring is 4 px outside the button (a 2 px gap and the 2 px ring).
+    expect(
+      box.y + box.height + 4,
+      "the button and its focus ring end above the tab bar",
+    ).toBeLessThanOrEqual(bar.y);
+    expect(box.y, "and is on screen").toBeGreaterThanOrEqual(0);
+  });
+
+  test("a control reached with Shift+Tab high on the screen of a long page is not under the TopBar (2.4.11)", async ({
+    page,
+  }) => {
+    await openStory(page, story("navigation-appshell--long-page"), "light");
+    const save = page.getByRole("button", { name: "Save" });
+    // The button's top sits in the band the sticky top bar covers, so the browser counts it as in
+    // view and does not scroll for it unless the page's scroll padding leaves that band out.
+    await save.evaluate((el) => {
+      const top = el.getBoundingClientRect().top;
+      window.scrollBy(0, top - 20);
+      document.querySelector<HTMLElement>("[data-slot=bottom-tabs] a")?.focus({
+        preventScroll: true,
+      });
+    });
+    await page.keyboard.press("Shift+Tab");
+    await expect(save).toBeFocused();
+    const bar = await page.locator("[data-slot=top-bar]").boundingBox();
+    const box = await save.boundingBox();
+    if (bar === null || box === null) throw new Error("both are drawn");
+    // The focus ring is 4 px outside the button (a 2 px gap and the 2 px ring).
+    expect(
+      box.y - 4,
+      "the button and its focus ring start below the top bar",
+    ).toBeGreaterThanOrEqual(bar.y + bar.height);
+    expect(box.y + box.height, "and is on screen").toBeLessThanOrEqual(
+      page.viewportSize()?.height ?? 0,
+    );
+  });
+
   test("text inputs are at least 16 px, so iOS does not zoom on focus", async ({ page }) => {
     await openStory(page, story("primitives-button--primary"), "light");
     const size = await page.evaluate(() => {
