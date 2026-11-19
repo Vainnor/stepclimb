@@ -3,7 +3,7 @@
 // field beside it for an exact value (docs/specs/m1/16-learning-ui-components.md B6). Built on
 // React Aria's Slider and NumberField, which share one value, so both always show the same
 // number. The arrow keys step either one. The label names both by `aria-labelledby`.
-import { type ReactNode, useId, useState } from "react";
+import { type ReactNode, useId, useRef, useState } from "react";
 import {
   Slider as AriaSlider,
   type SliderProps as AriaSliderProps,
@@ -91,21 +91,29 @@ export function Slider(props: SliderProps) {
     isDisabled,
     "aria-label": ariaLabel,
     "aria-labelledby": ariaLabelledBy,
+    "aria-describedby": ariaDescribedBy,
     ...rest
   } = props;
   const styles = slider();
   const [current, setCurrent] = useSliderValue(props);
   const labelId = useId();
-  const inputId = useId();
+  const thumbInput = useRef<HTMLInputElement>(null);
+  // As React Aria's useLabel joins them: the visible label first, then the caller's.
+  const labelledBy =
+    [label === undefined ? undefined : labelId, ariaLabelledBy].filter(Boolean).join(" ") ||
+    undefined;
   const named = {
     "aria-label": label === undefined ? ariaLabel : undefined,
-    "aria-labelledby": label === undefined ? ariaLabelledBy : labelId,
+    "aria-labelledby": labelledBy,
+    "aria-describedby": ariaDescribedBy,
   };
   const range = { minValue, maxValue, step, formatOptions, isDisabled };
   return (
     <div data-slot="slider" className={styles.root({ className })}>
       {label === undefined ? null : (
-        <FieldLabel id={labelId} htmlFor={inputId}>
+        // Pressing the label focuses the thumb, as React Aria's own slider label does, rather than
+        // the number field, which would open the on-screen keyboard.
+        <FieldLabel id={labelId} onClick={() => thumbInput.current?.focus()}>
           {label}
         </FieldLabel>
       )}
@@ -136,13 +144,13 @@ export function Slider(props: SliderProps) {
             <SliderThumb
               data-slot="slider-thumb"
               aria-labelledby={named["aria-labelledby"]}
+              inputRef={thumbInput}
               className={styles.thumb()}
             />
           </SliderTrack>
         </AriaSlider>
         <NumberField
           data-slot="slider-number"
-          id={inputId}
           {...named}
           {...range}
           value={current}

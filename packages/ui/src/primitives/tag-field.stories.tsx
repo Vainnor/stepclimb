@@ -46,6 +46,19 @@ export const FocusVisible: Story = {
   },
 };
 
+/** A tag already in the list, typed again: it stays in the input with a note. */
+export const Repeated: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.type(canvas.getByRole("textbox"), "tower{Enter}");
+    await expect(canvas.getByRole("textbox")).toHaveValue("tower");
+    // The note under the input; the live region repeats it out of sight.
+    await expect(
+      canvas.getByText("Already added", { selector: '[data-slot="tag-field-note"]' }),
+    ).toBeVisible();
+  },
+};
+
 export const Invalid: Story = {
   args: { isInvalid: true, errorMessage: "Use at most 2 keywords." },
 };

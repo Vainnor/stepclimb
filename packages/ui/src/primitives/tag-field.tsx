@@ -56,8 +56,9 @@ export const tagField = tv({
 
 export interface TagFieldProps extends Omit<FieldPartsProps, "errorMessage"> {
   /**
-   * Controlled: the tags, in the order they were added. Each tag is listed once: a repeat is
-   * shown once and left out of the list `onChange` gives next.
+   * Controlled: the tags, in the order they were added. Each tag is listed once, compared without
+   * regard to case: a repeat is shown once, as first given, and left out of the list `onChange`
+   * gives next.
    */
   value?: readonly string[];
   /** Uncontrolled: the tags it starts with, each once. */
@@ -77,10 +78,21 @@ export interface TagFieldProps extends Omit<FieldPartsProps, "errorMessage"> {
   className?: string;
 }
 
+/** `tags` with each listed once, compared without regard to case as `newTag` does; the first stays. */
+export function uniqueTags(tags: readonly string[]): string[] {
+  const seen = new Set<string>();
+  return tags.filter((tag) => {
+    const lower = tag.toLocaleLowerCase();
+    if (seen.has(lower)) return false;
+    seen.add(lower);
+    return true;
+  });
+}
+
 /** Tags held here unless `value` controls them, each once. */
 function useTags({ value, defaultValue = [], onChange }: TagFieldProps) {
   const [own, setOwn] = useState<readonly string[]>(defaultValue);
-  const tags = [...new Set(value ?? own)];
+  const tags = uniqueTags(value ?? own);
   const setTags = (next: string[]) => {
     if (value === undefined) setOwn(next);
     onChange?.(next);
@@ -112,9 +124,11 @@ function useEntry(tags: readonly string[], setTags: (next: string[]) => void) {
   const [repeated, setRepeated] = useState(false);
   const [status, setStatus] = useState<Status>({ text: "", count: 0 });
   const say = (text: string) => setStatus((s) => ({ text, count: s.count + 1 }));
+  const quiet = () => setStatus((s) => ({ text: "", count: s.count }));
   const setDraft = (text: string) => {
     setDraftState(text);
     setRepeated(false);
+    quiet();
   };
   const add = () => {
     if (draft.trim() === "") return;
@@ -129,7 +143,7 @@ function useEntry(tags: readonly string[], setTags: (next: string[]) => void) {
     setTags([...tags, tag]);
     say(t("tagField.added", { tag }));
   };
-  return { draft, setDraft, repeated, status, add };
+  return { draft, setDraft, repeated, status, add, quiet };
 }
 
 /**
@@ -142,7 +156,7 @@ export function TagField(props: TagFieldProps) {
   const { t } = useStepclimbStrings();
   const styles = tagField();
   const [tags, setTags] = useTags(props);
-  const { draft, setDraft, repeated, status, add } = useEntry(tags, setTags);
+  const { draft, setDraft, repeated, status, add, quiet } = useEntry(tags, setTags);
   const inputRef = useRef<HTMLInputElement>(null);
   const labelId = useId();
   const inputId = useId();
@@ -157,6 +171,7 @@ export function TagField(props: TagFieldProps) {
   const remove = (keys: Set<Key>) => {
     const next = tags.filter((tag) => !keys.has(tag));
     setTags(next);
+    quiet();
     // The last tag's removal takes the list away; focus goes back to the input.
     if (next.length === 0) inputRef.current?.focus();
   };

@@ -119,6 +119,64 @@ describe("Slider", () => {
     expect(screen.getByRole("textbox", { name: "Volume" })).toBeInTheDocument();
   });
 
+  it("follows a controlled value the caller changes", () => {
+    const { rerender } = renderWithStrings(<Slider label="Pass mark" value={80} />);
+    rerender(<Slider label="Pass mark" value={60} />);
+    expect(screen.getByRole("slider")).toHaveValue("60");
+    expect(screen.getByRole("textbox")).toHaveValue("60");
+  });
+
+  it("ends a typed change once, on Enter, not again on the Tab after it", async () => {
+    const user = userEvent.setup();
+    const onChangeEnd = vi.fn();
+    renderWithStrings(<Slider label="Pass mark" defaultValue={80} onChangeEnd={onChangeEnd} />);
+    const input = screen.getByRole("textbox");
+    await user.clear(input);
+    await user.type(input, "70{Enter}");
+    await user.tab();
+    expect(onChangeEnd).toHaveBeenCalledTimes(1);
+    expect(onChangeEnd).toHaveBeenCalledWith(70);
+  });
+
+  it("steps from the number field with ArrowUp, and the thumb follows", async () => {
+    const user = userEvent.setup();
+    const onChangeEnd = vi.fn();
+    renderWithStrings(
+      <Slider label="Pass mark" defaultValue={80} step={5} onChangeEnd={onChangeEnd} />,
+    );
+    await user.click(screen.getByRole("textbox"));
+    await user.keyboard("{ArrowUp}");
+    expect(screen.getByRole("textbox")).toHaveValue("85");
+    expect(screen.getByRole("slider")).toHaveValue("85");
+    expect(onChangeEnd).toHaveBeenLastCalledWith(85);
+  });
+
+  it("focuses the thumb, not the number field, when the label is pressed", async () => {
+    const user = userEvent.setup();
+    renderWithStrings(<Slider label="Pass mark" defaultValue={80} />);
+    await user.click(screen.getByText("Pass mark"));
+    expect(screen.getByRole("slider")).toHaveFocus();
+  });
+
+  it("joins the caller's aria-labelledby after its label, and passes aria-describedby on", () => {
+    renderWithStrings(
+      <>
+        <p id="unit">percent</p>
+        <p id="help">Learners below it retake the exam.</p>
+        <Slider
+          label="Pass mark"
+          aria-labelledby="unit"
+          aria-describedby="help"
+          defaultValue={80}
+        />
+      </>,
+    );
+    for (const control of [screen.getByRole("slider"), screen.getByRole("textbox")]) {
+      expect(control).toHaveAccessibleName("Pass mark percent");
+      expect(control).toHaveAccessibleDescription("Learners below it retake the exam.");
+    }
+  });
+
   it("disables the thumb and the number field together", () => {
     renderWithStrings(<Slider label="Pass mark" defaultValue={80} isDisabled />);
     expect(screen.getByRole("slider")).toBeDisabled();

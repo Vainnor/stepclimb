@@ -3,7 +3,7 @@ import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { renderWithStrings, unmarkedText } from "../test/strings";
-import { newTag, TagField } from "./tag-field";
+import { newTag, TagField, uniqueTags } from "./tag-field";
 
 const status = (container: HTMLElement) =>
   container.querySelector('[data-slot="tag-field-status"]') as HTMLElement;
@@ -19,6 +19,12 @@ describe("newTag", () => {
     expect(newTag(["IFR"], "ifr")).toBeNull();
     expect(newTag(["IFR"], "   ")).toBeNull();
     expect(newTag(["IFR"], "VFR")).toBe("VFR");
+  });
+});
+
+describe("uniqueTags", () => {
+  it("keeps the first of tags that differ only in case", () => {
+    expect(uniqueTags(["IFR", "VFR", "ifr", "Ifr"])).toEqual(["IFR", "VFR"]);
   });
 });
 
@@ -109,6 +115,27 @@ describe("TagField", () => {
     expect(onChange).toHaveBeenLastCalledWith(["Ground"]);
     await user.type(screen.getByRole("textbox"), "Approach{Enter}");
     expect(onChange).toHaveBeenLastCalledWith(["Tower", "Ground", "Approach"]);
+  });
+
+  it("shows a controlled repeat that differs only in case once, as first given", () => {
+    renderWithStrings(<TagField label="Keywords" value={["Tower", "tower", "Ground", "TOWER"]} />);
+    expect(tagNames()).toEqual(["Tower", "Ground"]);
+  });
+
+  it("empties the live region when the draft changes or a tag is removed", async () => {
+    const user = userEvent.setup();
+    const { container } = renderWithStrings(<TagField label="Keywords" />);
+    const region = status(container);
+    const input = screen.getByRole("textbox");
+    await user.type(input, "Tower{Enter}");
+    expect(region).toHaveTextContent("Added Tower");
+    await user.type(input, "G");
+    expect(region).toHaveTextContent("");
+    await user.clear(input);
+    await user.type(input, "Ground{Enter}");
+    expect(region).toHaveTextContent("Added Ground");
+    await user.click(screen.getByRole("button", { name: "Remove Tower" }));
+    expect(region).toHaveTextContent("");
   });
 
   it("removes a tag with its button, named from the catalog and the tag", async () => {
