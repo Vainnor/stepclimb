@@ -181,6 +181,8 @@ export const uiMessages: Catalog = {
       "{state, select, locked {Locked} available {Available} progress {In progress} complete {Complete} overdue {Overdue} review {Needs review} other {Unknown}}",
     "table.selectAll": "Select all",
     "table.selectRow": "Select",
+    "tagField.add": "Add",
+    "tagField.remove": "Remove",
     "toast.close": "Dismiss notification",
     "toast.region": "Notifications",
     "tree.toggle": "{expanded, select, yes {Collapse} other {Expand}}",

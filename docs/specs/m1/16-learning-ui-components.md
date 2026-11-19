@@ -77,6 +77,19 @@ listed here with a pointer so the inventory is complete in one place.
   that carries no file is refused while it is over the zone; the caller reports upload progress
   (`upload`) and the server's refusal (`errorMessage`); under a coarse pointer the drag prompt is
   visually hidden, leaving the button.
+  Coordinator decisions for TagField, Slider and ColorField (overnight, 2026-11-19), pending
+  owner review: TagField is React Aria's TagGroup under a TextField, not its contenteditable
+  TokenField, whose tokens have no remove button; its value is a list of strings; Enter or an
+  "Add" button adds the trimmed text, and a blank tag or one already in the list (compared
+  without case) is not added; Enter on an empty input is left to the form; removing the last tag
+  returns focus to the input; validity is the caller's (`isInvalid`, `errorMessage`). Slider takes
+  one number; its number field is bound to the slider's state, a typed value is kept in range and
+  on a step and calls `onChangeEnd` as a released thumb does; it has no error state, since React
+  Aria's Slider has no validation and its value is always in range. ColorField takes and gives
+  React Aria's `Color` (a hex string going in), hex only; its swatch shows the committed color,
+  stays in its color in forced-colors mode and is hidden from assistive technology, because the
+  input already says the color and React Aria's swatch names it in words outside the strings
+  catalog.
 - **B7.** Tree (React Aria `Tree`) shows the account tree and course file folders, with keyboard
   expansion. StatusChip shows one learning state (B3) as a chip with icon and label.
   Coordinator decision (overnight, 2026-11-16), pending owner review: StatusChip's label can be
