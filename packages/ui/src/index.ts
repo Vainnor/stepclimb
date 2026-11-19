@@ -23,6 +23,17 @@ export {
   announcement,
 } from "./learning/announcement";
 export {
+  AssignmentList,
+  type AssignmentListEntry,
+  type AssignmentListProps,
+  type AssignmentStatus,
+  type AssignmentTargetType,
+  assignmentList,
+  assignmentStatuses,
+  assignmentStatusStates,
+  sortAssignments,
+} from "./learning/assignment-list";
+export {
   Callout,
   type CalloutKind,
   type CalloutProps,
@@ -36,6 +47,13 @@ export {
   type CourseStatus,
   courseHeader,
 } from "./learning/course-header";
+export {
+  DownloadButton,
+  type DownloadButtonProps,
+  type DownloadProblem,
+  type DownloadState,
+  downloadButton,
+} from "./learning/download-button";
 export { DueBadge, type DueBadgeProps, dueBadge, dueDays } from "./learning/due-badge";
 export {
   type ItemKind,

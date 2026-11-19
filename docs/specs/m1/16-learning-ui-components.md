@@ -227,6 +227,38 @@ listed here with a pointer so the inventory is complete in one place.
 - **B12.** AssignmentList lists the caller's assignments (`13` B18) with DueBadge and StatusChip,
   overdue first; DownloadButton (`15` B8) shows a course's download state (not downloaded,
   downloading with progress, downloaded with date and size, update available) and its actions.
+- **B12a.** Coordinator decisions for B12 (overnight, 2026-11-19), pending owner review:
+  - Both components take props: `me/assignments` (`13` I4) and the offline package (`15`) are not
+    built yet. A row is `{ id, target: { type, title }, courseTitle?, href, due, status }`.
+  - Coordinator decision (2026-11-19): AssignmentList draws the learner's own rows, those of
+    `GET /api/v1/me/assignments` and the dashboard's `deadlines` (`10`, `13` B19), which have the
+    same shape. A learner's row carries `course: { id, title }` and, for an item target, the
+    module id (`13` B18), so the caller maps `courseTitle` from `course.title` for a module or
+    item target and `href` to the course home for a course or module target and to
+    `/c/:course/m/:module/i/:item` (`03` B16) for an item. I16's list of an assignment's people
+    is the manager's screen and does not use it.
+  - AssignmentList draws `not_started` as available, `in_progress` as in progress, `completed` as
+    complete and `overdue` as overdue (B3), and sorts by `13` B18's rule (overdue, then by due
+    date, then without one), stably, so a list in any order reads the same. Each row is a link
+    named by the target's title, with the course's title under it for a module or item; what was
+    assigned (with the organization's term for a course), the course, the state and the due label
+    are the link's description, as ItemRow's are (B9a). A completed row shows no DueBadge. An
+    overdue row's DueBadge leaves out its icon, as the StatusChip beside it already draws the
+    warning (coordinator decision, 2026-11-19). An empty list says "Nothing is assigned to you."
+  - DownloadButton draws the state its caller reports and does no fetching or storing: the
+    caller (`15` I3) measures progress and decides the refusals of `15` B8, passed as `problem`
+    (too large, no room, failed) and announced in a live region; a refusal names the download's
+    size, not the limit. The actions: Download when not downloaded, Cancel while downloading,
+    Remove when downloaded, Update and Remove when an update is available. Every action is a
+    secondary or ghost button, leaving the page's one primary action to NextUp. The help text
+    `15` B13 asks for (not encrypted) is the Download button's description, with the size when
+    the caller knows it. Sizes use FileDrop's decimal units; the date is the user's zone's day.
+  - Coordinator decisions (2026-11-19): `isDisabled`, set while the app is offline (`15` B9),
+    turns off Download and Update, which need the server, and leaves Remove and Cancel. Until the
+    caller has read IndexedDB and knows the state, it draws a Skeleton in the button's place.
+    The too-large refusal ends with the way forward ("Read it online instead."), and while it
+    shows, Download is disabled, since the same package would be refused again; after a no-room
+    or failed download it stays offered.
 
 ### Authoring
 

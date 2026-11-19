@@ -8,8 +8,10 @@ import type { ReactElement } from "react";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { ModuleBoard } from "../authoring/module-board";
 import { Announcement } from "../learning/announcement";
+import { AssignmentList } from "../learning/assignment-list";
 import { Callout } from "../learning/callout";
 import { CourseHeader } from "../learning/course-header";
+import { DownloadButton } from "../learning/download-button";
 import { DueBadge } from "../learning/due-badge";
 import { ItemRow } from "../learning/item-row";
 import { ModuleRow } from "../learning/module-row";
@@ -550,6 +552,37 @@ const components: [string, ReactElement][] = [
   [
     "NextUp (waiting)",
     <NextUp key="nw" timeZone="UTC" status={{ kind: "waiting", until: new Date(0) }} />,
+  ],
+  [
+    "AssignmentList",
+    <AssignmentList
+      key="al"
+      timeZone="UTC"
+      now={new Date("2026-03-10T14:00:00Z")}
+      assignments={[
+        {
+          id: "a",
+          target: { type: "item", title: "«caller»" },
+          courseTitle: "«caller»",
+          href: "/a",
+          due: new Date("2026-03-07T14:00:00Z"),
+          status: "overdue",
+        },
+      ]}
+    />,
+  ],
+  [
+    "DownloadButton (update, with a problem)",
+    <DownloadButton
+      key="dl"
+      state={{ kind: "update", downloadedAt: new Date(0), sizeBytes: 1_000_000 }}
+      problem={{ kind: "noRoom", sizeBytes: 1_000_000 }}
+      timeZone="UTC"
+      onDownload={() => {}}
+      onCancel={() => {}}
+      onRemove={() => {}}
+      onUpdate={() => {}}
+    />,
   ],
   [
     "Callout",

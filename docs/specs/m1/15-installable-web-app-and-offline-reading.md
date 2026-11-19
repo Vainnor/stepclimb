@@ -70,6 +70,8 @@ locked is ever downloaded, and signing out removes every download.
   rewritten to its synthetic URL. Package metadata and HTML go to IndexedDB. A download larger
   than 500 MiB, or larger than the browser's reported free quota, is refused before any byte is
   fetched with a message naming the size. A failed download removes what it stored.
+  Coordinator decision (2026-11-19): the DownloadButton only draws (`16` B12a); I3's screen code
+  asks for persistent storage, fetches, stores, and makes both refusals, passing them to it.
 - **B9.** While offline (or when a request to the API fails with a network error), the course
   routes read the downloaded package: the outline, page items in PageReader, file items through
   their synthetic URLs (PDF preview and images, `06` B18), with a banner "Offline: showing your
