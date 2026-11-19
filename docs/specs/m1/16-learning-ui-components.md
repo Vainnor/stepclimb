@@ -370,8 +370,13 @@ listed here with a pointer so the inventory is complete in one place.
     files and videos cannot be added to modules yet; no disabled option stands in for them.
   - Coordinator decision (2026-11-18): Save sends one `PATCH` of the members that changed, and
     closes the sheet with a toast once the board shows the server's answer; focus goes back to
-    the button that opened it. A refusal keeps the sheet open, shown at the field a 422 names or
-    above the form, and editing the field clears it. Delete asks first; `module.not_empty` and
+    the button that opened it. A refusal keeps the sheet open, shown at the field a 422 names
+    when the sheet draws that field, and otherwise above the form with its code (a 422 on
+    `/kind` or `/position`, a nested pointer), so no refusal goes unshown; editing a field clears
+    it. A rule's words follow the member and the code together (`text.contains_nul` on `/url`
+    speaks of the address). On the Videos tab of an archived course the screen's own notice is
+    the only one: the embedded video panel leaves its notice out (coordinator decision,
+    2026-11-19, from the review of #375). Delete asks first; `module.not_empty` and
     `item.has_progress` are said in the sheet (unpublish instead, `03` Q3). A row deleted from its
     sheet hands focus to the row now in its place (React Aria's collection does this).
   - Coordinator decision (2026-11-18): every write is followed by a read of the modules, so the

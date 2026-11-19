@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WIDE_QUERY } from "../lib/breakpoints";
 import { stubMatchMedia } from "../test/media";
 import { renderWithStrings } from "../test/strings";
+import { Button } from "./button";
 import { ComboBox, ComboBoxItem } from "./combo-box";
+import { DialogTrigger } from "./dialog";
+import { Sheet } from "./sheet";
 
 function wide(isWide: boolean) {
   stubMatchMedia((query) => (query === WIDE_QUERY ? isWide : false));
@@ -102,6 +105,33 @@ describe("ComboBox", () => {
     expect(onChange).toHaveBeenCalledWith("approach");
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(trigger).toHaveAccessibleName("Position Approach control");
+  });
+
+  it("opens its bottom sheet only when asked, inside a Sheet under 768 px", async () => {
+    wide(false);
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderWithStrings(
+      <DialogTrigger>
+        <Button>Add a session</Button>
+        <Sheet title="Add a session">
+          <Example onChange={onChange} />
+        </Sheet>
+      </DialogTrigger>,
+    );
+    await user.click(screen.getByRole("button", { name: "Add a session" }));
+    // Closed: no options are drawn and the Sheet is not made inert under a second modal.
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(document.querySelector('[data-slot="list-box-sheet-overlay"]')).toBeNull();
+    const trigger = screen.getByRole("button", { name: "Position Type a position" });
+    await user.click(trigger);
+    expect(screen.getByRole("combobox", { name: "Position" })).toHaveFocus();
+    await user.keyboard("appr");
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(onChange).toHaveBeenCalledWith("approach");
+    await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+    expect(trigger).toHaveAccessibleName("Position Approach control");
+    expect(screen.getByRole("dialog", { name: "Add a session" })).toBeInTheDocument();
   });
 
   it("works controlled", async () => {

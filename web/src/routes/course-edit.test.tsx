@@ -126,6 +126,21 @@ const bodyOf = async (fetch: ReturnType<typeof stubServer>, method: string, path
     ?.clone()
     .json();
 
+/** A 422 naming one member and the rule it broke. */
+function invalid(field: string, code: string): Response {
+  return new Response(
+    JSON.stringify({
+      type: "about:blank",
+      title: "Unprocessable Content",
+      status: 422,
+      detail: "x",
+      code: "request.invalid",
+      errors: [{ field, code }],
+    }),
+    { status: 422, headers: { "content-type": "application/problem+json" } },
+  );
+}
+
 /** Waits until no side sheet is open (a toast is a dialog too, so the role cannot say). */
 const sheetClosed = () =>
   waitFor(() => expect(document.querySelector('[data-slot="sheet"]')).toBeNull());
@@ -490,6 +505,52 @@ describe("the course authoring screen", () => {
     );
   });
 
+  it("shows a refusal of a member the sheet does not draw above the form", async () => {
+    server(
+      AUTHOR,
+      { modules: course() },
+      {
+        "POST /api/v1/modules/m2/items": () => invalid("/position", "item.position_out_of_range"),
+      },
+    );
+    const user = userEvent.setup();
+    renderApp(PATH);
+    await boardRows();
+    await user.click(screen.getByRole("button", { name: "Add item" }));
+    const sheet = await screen.findByRole("dialog", { name: "Add an item" });
+    await user.click(within(sheet).getByRole("radio", { name: /Header/ }));
+    await user.type(within(sheet).getByRole("textbox", { name: "Title" }), "Review");
+    await user.click(within(sheet).getByRole("button", { name: "Add item" }));
+    const alert = await within(sheet).findByRole("alert");
+    expect(alert).toHaveTextContent("The change was not saved.");
+    expect(alert).toHaveTextContent("item.position_out_of_range");
+  });
+
+  it("says a control character in an item's address at the address", async () => {
+    server(
+      AUTHOR,
+      { modules: course() },
+      {
+        "PATCH /api/v1/items/i3": () => invalid("/url", "text.contains_nul"),
+      },
+    );
+    const user = userEvent.setup();
+    renderApp(PATH);
+    await boardRows();
+    await user.click(screen.getByRole("button", { name: "Edit Taxi charts" }));
+    const sheet = await screen.findByRole("dialog", { name: "Edit Taxi charts" });
+    const address = within(sheet).getByRole("textbox", { name: "Address" });
+    await user.type(address, "x");
+    await user.click(within(sheet).getByRole("button", { name: "Save" }));
+    expect(
+      await within(sheet).findByText("This address holds a character that cannot be used."),
+    ).toBeInTheDocument();
+    expect(address).toHaveAttribute("aria-invalid", "true");
+    expect(within(sheet).getByRole("textbox", { name: "Title" })).not.toHaveAttribute(
+      "aria-invalid",
+    );
+  });
+
   it("says an empty course has no modules yet and offers Add module", async () => {
     server(AUTHOR, { modules: [] });
     renderApp(PATH);
@@ -671,6 +732,22 @@ describe("the pages and videos panels", () => {
     await user.click(within(sheet).getByRole("button", { name: "Create and edit" }));
     expect(await within(sheet).findByText(/already has a page with an address/)).toBeVisible();
     expect(title).toHaveAttribute("aria-invalid", "true");
+  });
+
+  it("says once that an archived course's videos cannot be changed", async () => {
+    stubServer({
+      "GET /api/v1/me": () => json(meFixture()),
+      [`GET ${COURSE}`]: () => json(courseFixture(AUTHOR, "archived")),
+      [`GET ${MODULES}`]: () => json({ modules: course() }),
+      [`GET ${COURSE}/videos`]: () => json({ items: [], next_cursor: null }),
+    });
+    renderApp(`${PATH}?panel=videos`);
+    expect(
+      await screen.findByText("This course is archived, so its content cannot be changed."),
+    ).toBeInTheDocument();
+    await screen.findByText("This course has no videos.");
+    expect(screen.queryByText(/so its videos cannot be changed/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Choose file" })).toBeNull();
   });
 
   it("holds the video panel", async () => {

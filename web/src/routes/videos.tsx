@@ -96,10 +96,15 @@ export function VideosView() {
 interface VideoPanelProps {
   courseId: string;
   course: Course | undefined;
+  /**
+   * The panel sits in a page that already says the course is archived (the course authoring
+   * screen), so it leaves its own notice out.
+   */
+  embedded?: boolean;
 }
 
 /** The uploader and the list; the uploader stays mounted while the list loads and refreshes. */
-export function VideoPanel({ courseId, course }: VideoPanelProps) {
+export function VideoPanel({ courseId, course, embedded = false }: VideoPanelProps) {
   const { t } = useStepclimbStrings();
   const queryClient = useQueryClient();
   // The signed-in layout has loaded `/me`; the uploader waits for it, as its entries are the user's.
@@ -110,7 +115,7 @@ export function VideoPanel({ courseId, course }: VideoPanelProps) {
   const refresh = () => void queryClient.invalidateQueries({ queryKey: courseVideosKey(courseId) });
   return (
     <div className="flex min-w-0 flex-col gap-6">
-      {archived ? <Text elementType="p">{t("videos.archived")}</Text> : null}
+      {archived && !embedded ? <Text elementType="p">{t("videos.archived")}</Text> : null}
       {canEdit && owner !== undefined ? (
         <VideoUploader
           key={owner}

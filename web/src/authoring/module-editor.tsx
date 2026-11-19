@@ -101,8 +101,10 @@ export function ModuleEditor({ courseId, module, modules, timeZone, close }: Mod
     save.reset();
     setDraft((d) => ({ ...d, ...change }));
   };
-  const problem = save.error ? authoringProblem(save.error, t) : undefined;
   const others = modules.filter((m) => m.id !== module.id);
+  // The prerequisites field is drawn only when the course has another module.
+  const drawn = ["title", "unlock_at", ...(others.length === 0 ? [] : ["prerequisite_ids"])];
+  const problem = save.error ? authoringProblem(save.error, t, drawn) : undefined;
   const submit = () => {
     const patch = modulePatch(module, draft);
     if (Object.keys(patch).length === 0) return close();

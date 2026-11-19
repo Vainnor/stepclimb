@@ -171,6 +171,7 @@ export const webMessages: Catalog = {
     "authoring.problem.unknown": "The change was not saved.",
     "authoring.problem.unreachable":
       "The server could not be reached, so the change was not saved. Check your connection and try again.",
+    "authoring.problem.urlCharacter": "This address holds a character that cannot be used.",
     "authoring.problem.urlInvalid":
       "Enter a full address starting with https:// or http://, without a user name, password or spaces.",
     "authoring.problem.urlRequired": "Enter the address the link opens.",

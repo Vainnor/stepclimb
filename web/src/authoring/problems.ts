@@ -16,15 +16,22 @@ export interface AuthoringProblem {
   field?: string;
 }
 
-/** The message for a rule a field broke, from a 422's first `errors` entry. */
-function fieldMessage(code: string, t: Strings["t"]): string | undefined {
+/** The message for a rule the member `field` broke, from a 422's first `errors` entry. */
+function fieldMessage(
+  code: string,
+  field: string | undefined,
+  t: Strings["t"],
+): string | undefined {
+  if (code === "text.contains_nul") {
+    if (field === "title") return t("authoring.problem.titleInvalid");
+    if (field === "url") return t("authoring.problem.urlCharacter");
+    return undefined;
+  }
   switch (code) {
     case "name.empty":
       return t("authoring.problem.titleEmpty");
     case "name.too_long":
       return t("authoring.problem.titleTooLong");
-    case "text.contains_nul":
-      return t("authoring.problem.titleInvalid");
     case "item.url_invalid":
       return t("authoring.problem.urlInvalid");
     case "item.url_required":
@@ -76,15 +83,24 @@ function codeMessage(code: string | undefined, t: Strings["t"]): string | undefi
   }
 }
 
-/** What to tell the person about `error`, a failed write of the authoring screen. */
-export function authoringProblem(error: unknown, t: Strings["t"]): AuthoringProblem {
+/**
+ * What to tell the person about `error`, a failed write of the authoring screen. `drawn` names the
+ * request members the form has a field for; a 422 on any other member (`/kind`, `/position`, a
+ * nested pointer) is a problem of the whole form, shown above it, so no refusal goes unshown.
+ */
+export function authoringProblem(
+  error: unknown,
+  t: Strings["t"],
+  drawn: readonly string[] = [],
+): AuthoringProblem {
   if (isUnreachable(error)) return { message: t("authoring.problem.unreachable") };
   if (!(error instanceof ApiError)) return { message: t("authoring.problem.failed") };
   const problem = error.problem;
   const first = problem?.errors?.[0];
   if (first !== undefined) {
-    const message = fieldMessage(first.code, t);
-    const field = first.field.split("/")[1];
+    const member = first.field.split("/")[1];
+    const message = fieldMessage(first.code, member, t);
+    const field = member !== undefined && drawn.includes(member) ? member : undefined;
     if (message !== undefined) return { message, field };
     return { message: t("authoring.problem.unknown"), code: first.code, field };
   }
