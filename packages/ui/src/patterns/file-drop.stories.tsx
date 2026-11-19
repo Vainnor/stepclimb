@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { useState } from "react";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 import { ThemeMatrix } from "../storybook/theme-matrix";
 import { FileDrop } from "./file-drop";
 
@@ -56,6 +57,31 @@ export const FocusVisible: Story = {
 };
 
 export const Disabled: Story = { args: { isDisabled: true } };
+
+/**
+ * Busy with the file just chosen: "Choose file" says it is in progress and takes no press, and
+ * keeps the focus it had when the file picker closed.
+ */
+export const Busy: Story = {
+  render: function Busy(args) {
+    const [busy, setBusy] = useState(false);
+    return <FileDrop {...args} isBusy={busy} onSelect={() => setBusy(true)} />;
+  },
+  play: async ({ canvasElement }) => {
+    const choose = within(canvasElement).getByRole("button", { name: "Choose file" });
+    await userEvent.tab();
+    await userEvent.tab();
+    await expect(choose).toHaveFocus();
+    const input = canvasElement.querySelector<HTMLInputElement>('input[type="file"]');
+    if (input === null) throw new Error("the file input");
+    await userEvent.upload(input, new File(["%PDF"], "handout.pdf", { type: "application/pdf" }));
+    await waitFor(() =>
+      expect(choose.querySelector("[data-slot=button-pending]")).toHaveAttribute("data-shown"),
+    );
+    await expect(choose).toHaveAttribute("aria-disabled", "true");
+    await expect(choose).toHaveFocus();
+  },
+};
 
 export const LongContent: Story = {
   args: {

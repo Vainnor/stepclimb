@@ -29,7 +29,10 @@ export const fileDrop = tv({
       "group flex flex-col items-center gap-3 rounded-md border border-dashed border-line-strong bg-raised",
       "px-6 py-8 text-center font-ui text-sm text-fg-default outline-none",
       "transition-colors duration-fast ease-out-expo",
-      "data-[hovered]:border-fg-sub",
+      // React Aria keeps the zone hovered while a file is dragged over it (no pointer event
+      // leaves it during a drag), and Tailwind orders hover after the drop target, so hover leaves
+      // a drop target's border alone instead of relying on that order.
+      "data-[hovered]:not-data-[drop-target]:border-fg-sub",
       "data-[drop-target]:border-solid data-[drop-target]:border-brand data-[drop-target]:bg-brand-soft",
       "data-[focus-visible]:ring-2 data-[focus-visible]:ring-ring data-[focus-visible]:ring-offset-2 ring-offset-canvas",
       "data-[disabled]:cursor-not-allowed data-[disabled]:border-line data-[disabled]:text-fg-disabled",
@@ -78,6 +81,13 @@ export interface FileDropProps
   maxFileSize?: number;
   /** Accept several files at once; by default one. */
   allowsMultiple?: boolean;
+  /**
+   * The caller is working on files it took, such as an upload batch. The zone takes no files
+   * meanwhile: "Choose file" stays focusable but takes no press and says it is in progress, and
+   * a drop is refused. Unlike `isDisabled`, focus stays on the button, which has it once the file
+   * picker closes.
+   */
+  isBusy?: boolean;
   /** Which types are accepted, in words ("PDF, Word or an image"). */
   description?: ReactNode;
   /** The upload in progress, if any. */
@@ -138,6 +148,7 @@ export function FileDrop({
   upload,
   errorMessage,
   isDisabled,
+  isBusy = false,
   className,
   ...props
 }: FileDropProps) {
@@ -150,7 +161,7 @@ export function FileDrop({
   const multiple = allowsMultiple ? "yes" : "no";
 
   function receive(files: File[]) {
-    if (files.length === 0) return;
+    if (files.length === 0 || isBusy) return;
     if (!allowsMultiple && files.length > 1) {
       show([t("fileDrop.tooMany")]);
       return;
@@ -186,7 +197,7 @@ export function FileDrop({
         aria-label={t("fileDrop.dropTarget")}
         {...props}
         isDisabled={isDisabled}
-        getDropOperation={() => (carriesFiles.current ? "copy" : "cancel")}
+        getDropOperation={() => (carriesFiles.current && !isBusy ? "copy" : "cancel")}
         onDrop={async (event) => {
           const items = event.items.filter(isFileDropItem);
           receive(await Promise.all(items.map((item) => item.getFile())));
@@ -202,7 +213,7 @@ export function FileDrop({
           allowsMultiple={allowsMultiple}
           onSelect={(list) => receive(list === null ? [] : [...list])}
         >
-          <Button data-slot="file-drop-choose" isDisabled={isDisabled}>
+          <Button data-slot="file-drop-choose" isDisabled={isDisabled} isPending={isBusy}>
             {t("fileDrop.choose", { multiple })}
           </Button>
         </FileTrigger>

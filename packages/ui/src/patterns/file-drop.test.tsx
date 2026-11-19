@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { renderWithStrings, unmarkedText } from "../test/strings";
 import { acceptsType, checkFiles, dragCarriesFiles, FileDrop, sizeValues } from "./file-drop";
@@ -30,6 +31,20 @@ async function dropFiles(target: Element, files: File[]) {
     fireEvent.dragOver(target, { dataTransfer, clientX: 1, clientY: 1 });
     fireEvent.drop(target, { dataTransfer, clientX: 1, clientY: 1 });
   });
+}
+
+/** A caller that goes busy once it takes files, as an upload batch does. */
+function BusyAfterChoice({ onSelect }: { onSelect: (files: File[]) => void }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <FileDrop
+      isBusy={busy}
+      onSelect={(files) => {
+        onSelect(files);
+        setBusy(true);
+      }}
+    />
+  );
 }
 
 describe("acceptsType", () => {
@@ -233,6 +248,25 @@ describe("FileDrop", () => {
   it("shows an error from outside, such as the server's refusal", () => {
     renderWithStrings(<FileDrop onSelect={() => {}} errorMessage="The upload failed." />);
     expect(screen.getByRole("alert")).toHaveTextContent("The upload failed.");
+  });
+
+  it("keeps focus on its button while busy, and takes no files then", async () => {
+    const user = userEvent.setup({ applyAccept: false });
+    const onSelect = vi.fn();
+    const { container } = renderWithStrings(<BusyAfterChoice onSelect={onSelect} />);
+    const choose = screen.getByRole("button", { name: "Choose file" });
+    // Focus is on the button when the file picker closes, as after a person chose a file.
+    act(() => choose.focus());
+    await user.upload(fileInput(container), pdf());
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(choose).toHaveFocus();
+    expect(choose).not.toBeDisabled();
+    expect(choose).toHaveAttribute("aria-disabled", "true");
+    // A file chosen or dropped while busy is not handed on.
+    await user.upload(fileInput(container), pdf("second.pdf"));
+    await dropFiles(container.querySelector('[data-slot="file-drop"]') as Element, [png()]);
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(choose).toHaveFocus();
   });
 
   it("disables its button while disabled", () => {
