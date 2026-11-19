@@ -262,13 +262,19 @@ impl Job<'_> {
         let job = self.ctx.job();
         let (code, fault, outcome) = match stop {
             Stop::Superseded => {
-                self.refund(run).await;
+                if let Some(run) = run {
+                    self.refund(run).await;
+                }
                 return Outcome::Done;
             }
             Stop::Video(code) => (code, Fault::Input, Outcome::Done),
             Stop::Transient(error) if job.attempt < job.max_attempts => {
                 tracing::warn!(video_id = %self.video_id, %error, "a transcode will be retried");
-                self.refund(run).await;
+                // Without a run, the charge on the row may be a newer run's: the next start
+                // refunds a dead run's instead.
+                if let Some(run) = run {
+                    self.refund(run).await;
+                }
                 return Outcome::Retry(error);
             }
             Stop::Transient(error) => (
@@ -283,12 +289,12 @@ impl Job<'_> {
         }
     }
 
-    /// Give back the charge recorded for run `run` (any run when `None`), if any. A failure is
-    /// logged: the record stays, and the next run's start or `videos.cleanup` refunds it.
-    async fn refund(&self, run: Option<i32>) {
+    /// Give back the charge recorded for run `run`, if any. A failure is logged: the record stays,
+    /// and the next run's start or `videos.cleanup` refunds it.
+    async fn refund(&self, run: i32) {
         let refunded = async {
             let mut tx = self.pool().begin().await?;
-            transcodes::refund_open(&mut tx, self.scope, self.video_id, run).await?;
+            transcodes::refund_open(&mut tx, self.scope, self.video_id, Some(run)).await?;
             tx.commit().await?;
             Ok::<(), Stop>(())
         };
@@ -359,8 +365,11 @@ impl Job<'_> {
         let work = WorkDir::create(&transcoder.dir)?;
         let input = work.path().join("input");
         match video_files::concatenate(storage, self.scope, upload, &input).await {
+            // `start` found the upload complete, so missing parts are the store's fault.
             Err(video_files::Error::Incomplete) => {
-                return Err(Stop::Video(transcodes::TRANSCODE_FAILED));
+                return Err(Stop::Transient(
+                    "the stored parts no longer make up the upload".into(),
+                ));
             }
             other => other?,
         }
@@ -379,7 +388,9 @@ impl Job<'_> {
         let bytes = match video_files::upload_outputs(storage, &out, &prefix).await {
             Err(video_files::Error::NotAFile(name)) => {
                 tracing::warn!(video_id = %self.video_id, %name, "ffmpeg left something other than a file among the outputs");
-                return Err(Stop::Video(transcodes::TRANSCODE_FAILED));
+                return Err(Stop::Transient(format!(
+                    "the output {name} is not a regular file"
+                )));
             }
             other => other?,
         };

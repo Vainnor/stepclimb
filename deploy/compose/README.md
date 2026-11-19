@@ -406,7 +406,8 @@ using none of their attempts, and run as soon as a process that can transcode st
 
 `videos.cleanup` fails a `processing` video only when no live job will finish it: its job is
 dead, having used its attempts, or it has none and has not changed for 24 hours. A failure on the
-server's side refunds the video's transcode minutes and does not count toward its 3 retries.
+server's side refunds the video's transcode minutes; every retry an author makes counts toward
+the video's 3, whatever caused the failure.
 
 On a bare-metal install run by systemd, keep the unit's `KillMode=control-group` (systemd's
 default): ffmpeg runs in the server's process group, and this ends a running ffmpeg with the

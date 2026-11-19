@@ -39,10 +39,10 @@ player and watch tracking are spec 09; this spec makes a video ready to play.
   (`video.probe_failed`, `video.not_a_video`, `video.too_long`, `video.transcode_failed`,
   `entitlement.limit_reached`). A failed video can be deleted or uploaded again as a new video;
   `POST /api/v1/videos/{video_id}/retry` re-enqueues a `video.transcode_failed` one when its
-  original is still stored. Retries after a failure the input caused count, at most 3 per video
-  (409 `video.retry_limit_reached` after; owner decision, 2026-11-17); a retry after a failure
-  on the server's side (a lost lease, the host, the store, the stranded-video sweep) counts
-  toward none of them (coordinator decision, 2026-11-18, pending owner review).
+  original is still stored, at most 3 times per video (409 `video.retry_limit_reached` after;
+  owner decision, 2026-11-17). Every retry counts, whatever caused the failure: coordinator
+  decision (2026-11-19), the owner's rule as written. It replaces the 2026-11-18 exemption for
+  failures on the server's side, which an input could provoke on purpose (D20).
 - **B3.** `video` items become creatable (`03` B5) for a video attached to the item's course in
   any status; learners see a non-ready video as "processing" with nothing to play.
 
@@ -641,8 +641,11 @@ open while building I2.
   the input's; the deletion of the upload's parts and of older runs' outputs runs after the
   commit that makes the video ready, outside the race with the lease, so a lost lease cannot cut
   it off; and a failing run deletes its outputs only once its `UPDATE` has changed the row, so a
-  video a newer run made ready keeps them. These failures mark the video `failed_by_server`,
-  whose retry counts toward none of its 3 (B2).
+  video a newer run made ready keeps them. Coordinator decision (2026-11-19), the owner's rule
+  as written: a retry after any of these failures counts toward the video's 3 (B2). A failure on
+  the server's side is still refunded, but no longer uncounted, because an input can provoke one:
+  a file whose decode makes the kernel kill ffmpeg for its memory below the runner's 4 GiB cap
+  would otherwise buy unlimited free runs and could fill the `transcode` queue.
 - **D21. `renditions`.** The stored object is `{ run, heights, bitrates, master, playlists,
   mp4, mp4_height, sprites }`, each key a store key under `v<n>/`. `Video` shows
   `renditions: { heights }` once the video is `ready`, and omits it before.
@@ -658,10 +661,8 @@ open while building I2.
   needs a video failed as `video.transcode_failed` whose upload is complete and not being deleted
   (409 `video.status_invalid` otherwise), and answers 409 `course.archived` when every course
   through which the caller may edit the video is archived, as D9's rename does. A fourth retry of
-  one video after failures its input caused answers 409 `video.retry_limit_reached`
-  (`videos.transcode_retries`, owner decision, 2026-11-17), since each retry charges its minutes
-  again. A video failed on the server's side (`videos.failed_by_server`, D20) is retried without
-  counting (coordinator decision, 2026-11-18, pending owner review).
+  one video answers 409 `video.retry_limit_reached` (`videos.transcode_retries`, owner decision,
+  2026-11-17), whatever caused its failures (coordinator decision, 2026-11-19, D20).
 - **D24. Setting ranges.** `max_video_seconds` 1 to 86,400; `transcode_threads` 0 to 64;
   `transcode_dir`, `ffmpeg_path` and `ffprobe_path` must be absolute paths. The startup check
   makes and removes a work directory in `transcode_dir`, so a missing or read-only directory stops
@@ -689,8 +690,16 @@ Coordinator decision (2026-11-17), after the security review of I2:
   server's process group, so a bare-metal systemd unit needs `KillMode=control-group` (the
   default) for a stop to end ffmpeg with the server.
 - **D41. Outputs are regular files.** The upload of the outputs reads the work directory without
-  following links and fails the video `video.transcode_failed` on anything that is neither a
-  directory nor a regular file.
+  following links and stops the run on anything that is neither a directory nor a regular file.
+  That, and an upload whose parts no longer make it up after `start` found it complete, is the
+  server's side (coordinator decision, 2026-11-19): refunded and retried by the queue, failing
+  the video `video.transcode_failed` on the last attempt. Coordinator decision (2026-11-19), the
+  owner's rule as written: every retry counts toward the video's 3, whatever caused the failure
+  (B2, D20). Accepted rare edge (coordinator decision, 2026-11-19): when a failure the input
+  caused happens on the last attempt and its `fail` then hits a database error, the job dies with
+  the video still `processing` and its charge open; `videos.cleanup` later fails the video as the
+  server's and refunds a charge the input had earned. It takes a database error at that one
+  point, and the video still ends failed.
 
 
 ## Issues

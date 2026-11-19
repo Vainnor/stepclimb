@@ -1344,10 +1344,8 @@ export interface paths {
         put?: never;
         /**
          * Transcode again a video whose transcode failed (`video.transcode_failed`), from its upload,
-         *     which the server keeps until a transcode succeeds. A video can be retried 3 times after
-         *     failures its file caused, each retry charging its transcode minutes again; a retry after a
-         *     failure on the server's side does not count. The video is `processing` again when this
-         *     answers; read it to follow the new transcode.
+         *     which the server keeps until a transcode succeeds. A video can be retried 3 times, each retry
+         *     charging its transcode minutes again.
          */
         post: operations["retryVideo"];
         delete?: never;
@@ -6523,7 +6521,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `video.status_invalid`: the video did not fail as `video.transcode_failed`, or its upload is no longer stored; upload it again as a new video. `video.retry_limit_reached`: the video has been retried 3 times after failures its file caused, each charging transcode minutes; upload it again as a new video. A retry after a failure on the server's side does not count. `course.archived`: every course through which you may edit the video is archived. */
+        /** @description `video.status_invalid`: the video did not fail as `video.transcode_failed`, or its upload is no longer stored; upload it again as a new video. `video.retry_limit_reached`: the video has been retried 3 times, each charging transcode minutes; upload it again as a new video. `course.archived`: every course through which you may edit the video is archived. */
         VideoRetryConflict: {
             headers: {
                 [name: string]: unknown;

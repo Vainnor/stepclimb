@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT status, error_code, transcode_retries, failed_by_server FROM videos v\n         WHERE org_id = $1 AND id = $2\n           AND EXISTS (SELECT 1 FROM course_videos cv\n                       WHERE cv.org_id = $1 AND cv.video_id = $2 AND cv.course_id = ANY($3))\n         FOR UPDATE",
+  "query": "SELECT status, error_code, transcode_retries FROM videos v\n         WHERE org_id = $1 AND id = $2\n           AND EXISTS (SELECT 1 FROM course_videos cv\n                       WHERE cv.org_id = $1 AND cv.video_id = $2 AND cv.course_id = ANY($3))\n         FOR UPDATE",
   "describe": {
     "columns": [
       {
@@ -35,17 +35,6 @@
             "name": "transcode_retries"
           }
         }
-      },
-      {
-        "ordinal": 3,
-        "name": "failed_by_server",
-        "type_info": "Bool",
-        "origin": {
-          "Table": {
-            "table": "videos",
-            "name": "failed_by_server"
-          }
-        }
       }
     ],
     "parameters": {
@@ -58,9 +47,8 @@
     "nullable": [
       false,
       true,
-      false,
       false
     ]
   },
-  "hash": "79ea217e4b3ad8495843174fd7cdfc24a7b9688f5933114920a43ef6356e463e"
+  "hash": "f02b20376b73b4613038e6b87a5b139b1bb506a72d0e3045922d15c1861585c1"
 }

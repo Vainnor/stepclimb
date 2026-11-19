@@ -22,8 +22,7 @@
 //! run on, so a restart never charges a video twice.
 //!
 //! [`retry`] moves a video that failed as `video.transcode_failed`, with its original still
-//! stored, back to `processing` for a new job; only retries after a failure the input caused
-//! count toward [`MAX_RETRIES`]. [`fail_stranded`] fails, and refunds, the `processing` videos no
+//! stored, back to `processing` for a new job, at most [`MAX_RETRIES`] times. [`fail_stranded`] fails, and refunds, the `processing` videos no
 //! live job will finish. Every query filters by `org_id = scope.org_id()`.
 
 use std::time::SystemTime;
@@ -56,13 +55,13 @@ pub const RETRY_LIMIT_REACHED: &str = "video.retry_limit_reached";
 /// How many times an author may retry one video's transcode (owner decision, 2026-11-17).
 pub const MAX_RETRIES: i32 = 3;
 
-/// Who caused a failure (B2, B13).
+/// Who caused a failure (B13): whether the run's charge is kept or refunded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fault {
-    /// The input: ffmpeg failed on it or it broke a limit. The charge is kept and a retry counts.
+    /// The input: ffmpeg failed on it or it broke a limit. The charge is kept.
     Input,
     /// The server: the store, the database or the host failed, or the job was lost. The charge is
-    /// refunded and a retry does not count.
+    /// refunded.
     Server,
 }
 
@@ -134,15 +133,13 @@ pub async fn fail(
     }
     let changed = sqlx::query!(
         "UPDATE videos
-         SET status = 'failed', error_code = $4, failed_by_server = $5,
-             charged_minutes = NULL, charged_at = NULL,
-             updated_at = timestamptz 'epoch' + $6::bigint * interval '1 microsecond'
+         SET status = 'failed', error_code = $4, charged_minutes = NULL, charged_at = NULL,
+             updated_at = timestamptz 'epoch' + $5::bigint * interval '1 microsecond'
          WHERE org_id = $1 AND id = $2 AND output_run = $3 AND status = 'processing'",
         scope.org_id(),
         video_id,
         run,
         error_code,
-        fault == Fault::Server,
         epoch_micros(now)?,
     )
     .execute(conn)
@@ -166,14 +163,12 @@ pub async fn fail_any_run(
     }
     let changed = sqlx::query!(
         "UPDATE videos
-         SET status = 'failed', error_code = $3, failed_by_server = $4,
-             charged_minutes = NULL, charged_at = NULL,
-             updated_at = timestamptz 'epoch' + $5::bigint * interval '1 microsecond'
+         SET status = 'failed', error_code = $3, charged_minutes = NULL, charged_at = NULL,
+             updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond'
          WHERE org_id = $1 AND id = $2 AND status = 'processing'",
         scope.org_id(),
         video_id,
         error_code,
-        fault == Fault::Server,
         epoch_micros(now)?,
     )
     .execute(conn)
@@ -397,7 +392,7 @@ pub enum Retried {
     /// The video did not fail as `video.transcode_failed`, or its original is no longer stored
     /// whole.
     StatusInvalid,
-    /// The video has been retried [`MAX_RETRIES`] times after failures its input caused.
+    /// The video has been retried [`MAX_RETRIES`] times.
     LimitReached,
     /// No such video attached to any of the courses.
     NotFound,
@@ -405,9 +400,10 @@ pub enum Retried {
 
 /// B2's retry: under the video's lock, move the video `video_id`, attached to one of `courses`,
 /// from `failed` with [`TRANSCODE_FAILED`] back to `processing`, stamped `now`, when its upload
-/// is complete and not being deleted. A video that failed on the server's side is retried freely;
-/// one its input failed only fewer than [`MAX_RETRIES`] times, and the retry is counted
-/// (coordinator decision, 2026-11-18).
+/// is complete and not being deleted, and it has been retried fewer than [`MAX_RETRIES`] times;
+/// count the retry. Every retry counts, whatever caused the failure: the owner's rule as written
+/// (coordinator decision, 2026-11-19), since a failure on the server's side can be provoked by
+/// the input, such as a file that makes the kernel kill ffmpeg for its memory.
 pub async fn retry(
     conn: &mut PgConnection,
     scope: OrgScope,
@@ -415,7 +411,7 @@ pub async fn retry(
     now: SystemTime,
 ) -> Result<Retried, Error> {
     let row = sqlx::query!(
-        "SELECT status, error_code, transcode_retries, failed_by_server FROM videos v
+        "SELECT status, error_code, transcode_retries FROM videos v
          WHERE org_id = $1 AND id = $2
            AND EXISTS (SELECT 1 FROM course_videos cv
                        WHERE cv.org_id = $1 AND cv.video_id = $2 AND cv.course_id = ANY($3))
@@ -435,19 +431,17 @@ pub async fn retry(
     if !(failed && stored) {
         return Ok(Retried::StatusInvalid);
     }
-    let counted = !row.failed_by_server;
-    if counted && row.transcode_retries >= MAX_RETRIES {
+    if row.transcode_retries >= MAX_RETRIES {
         return Ok(Retried::LimitReached);
     }
     sqlx::query!(
         "UPDATE videos
-         SET status = 'processing', error_code = NULL, failed_by_server = false,
-             transcode_retries = transcode_retries + $3::int,
-             updated_at = timestamptz 'epoch' + $4::bigint * interval '1 microsecond'
+         SET status = 'processing', error_code = NULL,
+             transcode_retries = transcode_retries + 1,
+             updated_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond'
          WHERE org_id = $1 AND id = $2",
         scope.org_id(),
         video_id,
-        i32::from(counted),
         epoch_micros(now)?,
     )
     .execute(conn)
