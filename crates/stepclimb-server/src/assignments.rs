@@ -6,9 +6,8 @@
 //! An assignment says who must finish a course, or a module or item of it, and by when. Every
 //! route needs `assignment.manage` at the course, which the caller may hold at the
 //! organization, an account containing the course, or through an enrollment in it (Q8).
-//! Listing a course's assignments and creating one also need `enrollment.view` there (403
-//! `permission.denied`): an assignment names its assignee, so `assignment.manage` alone would
-//! show who is in the course.
+//! Every route also needs `enrollment.view` there (403 `permission.denied`): an assignment
+//! names its assignee, so `assignment.manage` alone would show who is in the course.
 //!
 //! `POST` assigns one user (group assignees are spec 13 I5). In the write's transaction, after
 //! `courses::lock` and the `assignment.manage` check again on the path it read, an archived
@@ -106,7 +105,8 @@ problem_responses! {
     AssignmentCreateForbidden => "`permission.denied`: you can see the course but do not hold both `assignment.manage` and `enrollment.view` at scopes containing it, or the user is not a learner of the course, so assigning them enrolls them as Student, and you do not hold `enrollment.manage` there. `permission.escalation`: enrolling the user as Student needs every Student permission grantable at organization or account scope, held at the course. `auth.csrf_refused`: the request did not come from this site.",
     AssignmentCreateConflict => "`course.archived`: an archived course takes no assignment. `course.template`: a template takes no assignment. `enrollment.externally_managed`: the user's concluded Student enrollment in the course is owned by an identity provider, the sync API, SCIM or a connector, so the assignment cannot reactivate it.",
     AssignmentNotFound => "`assignment.not_found`: no assignment with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined.",
-    AssignmentWriteForbidden => "`permission.denied`: you can see the assignment's course but do not hold `assignment.manage` at a scope containing it. `auth.csrf_refused`: the request did not come from this site.",
+    AssignmentReadForbidden => "`permission.denied`: you can see the assignment's course but do not hold both `assignment.manage` and `enrollment.view` at scopes containing it.",
+    AssignmentWriteForbidden => "`permission.denied`: you can see the assignment's course but do not hold both `assignment.manage` and `enrollment.view` at scopes containing it. `auth.csrf_refused`: the request did not come from this site.",
     AssignmentUpdateConflict => "`assignment.ended`: the assignment has ended and takes no change.",
 }
 
@@ -471,7 +471,7 @@ pub async fn create_assignment(
         (status = 200, description = "The assignment", body = Assignment),
         (status = 400, response = crate::openapi::BadRequest),
         (status = 401, response = crate::openapi::Unauthenticated),
-        (status = 403, response = crate::openapi::PermissionDenied),
+        (status = 403, response = AssignmentReadForbidden),
         (status = 404, response = AssignmentNotFound),
         (status = 500, response = crate::openapi::InternalError),
         (status = 503, response = crate::openapi::NoOrganization),
@@ -481,6 +481,7 @@ pub async fn get_assignment(
     require: Require<AssignmentManage, AssignmentTarget>,
     State(state): State<AppState>,
 ) -> Result<Json<Assignment>, ApiError> {
+    refuse_without_roster(require.grants(), &require.target().course.target())?;
     let scope = require.grants().scope();
     let mut conn = acquire(&state).await?;
     let found = repo::get(&mut conn, scope, require.target().id, state.clock.now())
@@ -526,7 +527,8 @@ pub async fn update_assignment(
         .map(|due| due.as_ref().map(AssignmentDue::rule).transpose())
         .transpose()?;
     let mut tx = begin(&state).await?;
-    recheck_manage(&mut tx, grants, target.course.id, ASSIGNMENT_NOT_FOUND).await?;
+    let course = recheck_manage(&mut tx, grants, target.course.id, ASSIGNMENT_NOT_FOUND).await?;
+    refuse_without_roster(grants, &course)?;
     let now = state.clock.now();
     let changed = match due {
         Some(due) => repo::set_due(&mut *tx, grants.scope(), target.id, due, now).await,
@@ -565,7 +567,8 @@ pub async fn end_assignment(
     let grants = require.grants();
     let target = require.target();
     let mut tx = begin(&state).await?;
-    recheck_manage(&mut tx, grants, target.course.id, ASSIGNMENT_NOT_FOUND).await?;
+    let course = recheck_manage(&mut tx, grants, target.course.id, ASSIGNMENT_NOT_FOUND).await?;
+    refuse_without_roster(grants, &course)?;
     let ended = repo::end(&mut *tx, grants.scope(), target.id, state.clock.now())
         .await
         .map_err(assignment_error)?;
@@ -601,10 +604,10 @@ fn new_assignment(
     })
 }
 
-/// 403 `permission.denied` unless the caller holds `enrollment.view` at the course. An
-/// assignment names its assignee, so listing a course's assignments, or assigning someone and
-/// learning from the answer whether they are a learner of the course, would show its roster to
-/// a holder of `assignment.manage` alone.
+/// 403 `permission.denied` unless the caller holds `enrollment.view` at the course, on every
+/// assignment route. An assignment names its assignee, so reading one, listing a course's, or
+/// assigning someone and learning from the answer whether they are a learner of the course,
+/// would show its roster to a holder of `assignment.manage` alone.
 fn refuse_without_roster(grants: &Grants, course: &Target) -> Result<(), ApiError> {
     if grants.holds::<EnrollmentView>(course) {
         return Ok(());

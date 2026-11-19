@@ -489,6 +489,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             assignments::AssignmentCreateForbidden,
             assignments::AssignmentCreateConflict,
             assignments::AssignmentNotFound,
+            assignments::AssignmentReadForbidden,
             assignments::AssignmentWriteForbidden,
             assignments::AssignmentUpdateConflict,
             modules::ModuleCourseNotFound,

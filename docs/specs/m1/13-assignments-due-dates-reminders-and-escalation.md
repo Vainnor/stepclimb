@@ -76,10 +76,11 @@ everything that happened for one person and one assignment. Recurrence and expir
   the timeline; the status is `completed`.
 
   Coordinator decisions (2026-11-19), for I1, pending owner review:
-  - Listing a course's assignments and creating one also need `enrollment.view` at the course
-    (403 `permission.denied`), since an assignment names its assignee and `assignment.manage`
-    alone would otherwise show the roster. Creating needs it whether or not the assignee is a
-    learner, so the answer cannot tell a caller without it who is in the course.
+  - Every assignment route (list, create, read, change, end) also needs `enrollment.view` at
+    the course (403 `permission.denied`), since an assignment names its assignee and
+    `assignment.manage` alone would otherwise show the roster. Creating needs it whether or not
+    the assignee is a learner, so the answer cannot tell a caller without it who is in the
+    course.
   - Enrolling through an assignment (B3) needs what `POST /api/v1/courses/{course_id}/enrollments`
     needs for the Student role: the user within the caller's `user.view` (404 `user.not_found`
     otherwise, `02-courses-and-enrollments.md` B17), `enrollment.manage` at the course

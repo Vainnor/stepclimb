@@ -452,9 +452,9 @@ const TABLE: &[Entry] = &[
             enrollment_in_path,
         ),
     },
-    // Listing and creating assignments also need `enrollment.view` at the course, since an
-    // assignment names its assignee (M1 spec 13, coordinator decision of 2026-11-19): one entry
-    // per required permission, each holding the other as its extra, so each has its own 403.
+    // Every assignment route also needs `enrollment.view` at the course, since an assignment
+    // names its assignee (M1 spec 13, coordinator decision of 2026-11-19): one entry per
+    // required permission, each holding the other as its extra, so each has its own 403.
     Entry {
         operation_id: "listAssignments",
         access: Access::Permission {
@@ -507,27 +507,75 @@ const TABLE: &[Entry] = &[
     },
     Entry {
         operation_id: "getAssignment",
-        access: permission(
-            AssignmentManage::KEY,
-            ASSIGNMENT_NOT_FOUND,
-            assignment_in_path,
-        ),
+        access: Access::Permission {
+            key: AssignmentManage::KEY,
+            target: ASSIGNMENT_NOT_FOUND,
+            extra: &[EnrollmentView::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[],
+            setup: assignment_in_path,
+        },
+    },
+    Entry {
+        operation_id: "getAssignment",
+        access: Access::Permission {
+            key: EnrollmentView::KEY,
+            target: ASSIGNMENT_NOT_FOUND,
+            extra: &[AssignmentManage::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[],
+            setup: assignment_in_path,
+        },
     },
     Entry {
         operation_id: "updateAssignment",
-        access: permission(
-            AssignmentManage::KEY,
-            ASSIGNMENT_NOT_FOUND,
-            move_assignment_due,
-        ),
+        access: Access::Permission {
+            key: AssignmentManage::KEY,
+            target: ASSIGNMENT_NOT_FOUND,
+            extra: &[EnrollmentView::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[],
+            setup: move_assignment_due,
+        },
+    },
+    Entry {
+        operation_id: "updateAssignment",
+        access: Access::Permission {
+            key: EnrollmentView::KEY,
+            target: ASSIGNMENT_NOT_FOUND,
+            extra: &[AssignmentManage::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[],
+            setup: move_assignment_due,
+        },
     },
     Entry {
         operation_id: "endAssignment",
-        access: permission(
-            AssignmentManage::KEY,
-            ASSIGNMENT_NOT_FOUND,
-            assignment_in_path,
-        ),
+        access: Access::Permission {
+            key: AssignmentManage::KEY,
+            target: ASSIGNMENT_NOT_FOUND,
+            extra: &[EnrollmentView::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[],
+            setup: assignment_in_path,
+        },
+    },
+    Entry {
+        operation_id: "endAssignment",
+        access: Access::Permission {
+            key: EnrollmentView::KEY,
+            target: ASSIGNMENT_NOT_FOUND,
+            extra: &[AssignmentManage::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[],
+            setup: assignment_in_path,
+        },
     },
     Entry {
         operation_id: "listCourseFiles",
@@ -2656,8 +2704,14 @@ const PER_GRANT: &[&str] = &[
 
 /// The operations that need two permissions at once, each with one entry per permission that
 /// holds the other as its extra, so each permission has its own 403 case (M1 spec 13,
-/// coordinator decision of 2026-11-19: assignments also need `enrollment.view`).
-const ALL_OF: &[&str] = &["listAssignments", "createAssignment"];
+/// coordinator decision of 2026-11-19: every assignment route also needs `enrollment.view`).
+const ALL_OF: &[&str] = &[
+    "listAssignments",
+    "createAssignment",
+    "getAssignment",
+    "updateAssignment",
+    "endAssignment",
+];
 
 /// An operation has several entries only when it is in [`PER_GRANT`] or [`ALL_OF`], and then
 /// each is a permission entry naming a different permission.

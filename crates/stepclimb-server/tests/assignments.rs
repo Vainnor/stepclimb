@@ -887,9 +887,10 @@ async fn an_assigned_item_or_module_cannot_be_deleted(pool: PgPool) {
     .expect(StatusCode::CONFLICT, "module.assigned");
 }
 
-/// Coordinator decision (2026-11-19): `assignment.manage` alone neither lists a course's
-/// assignments nor assigns, so the answers cannot show who is in the course; with
-/// `enrollment.view` beside it both work. The permission suite has the four cases of each.
+/// Coordinator decision (2026-11-19): `assignment.manage` alone neither lists, creates, reads,
+/// changes nor ends an assignment, so no answer shows who is in the course; with
+/// `enrollment.view` beside it every route works. The permission suite has the four cases of
+/// each.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn assignments_need_enrollment_view_too(pool: PgPool) {
     let f = Fixture::new(pool).await;
@@ -916,11 +917,35 @@ async fn assignments_need_enrollment_view_too(pool: PgPool) {
         .custom_role(&["assignment.manage", "enrollment.view"])
         .await;
     let (both, _) = f.holder(both, tower).await;
-    f.assign_course(&both, course, student)
+    let id = f.assign_course(&both, course, student).await.id();
+    let uri = assignment_uri(id);
+    let end_uri = format!("{uri}/end");
+    let patch = || Some(json!({ "due": { "relative_days": 7 } }));
+    f.send(Method::GET, &uri, &alone, None)
         .await
-        .ok(StatusCode::CREATED);
+        .expect(StatusCode::FORBIDDEN, "permission.denied");
+    f.send(Method::PATCH, &uri, &alone, patch())
+        .await
+        .expect(StatusCode::FORBIDDEN, "permission.denied");
+    f.send(Method::POST, &end_uri, &alone, None)
+        .await
+        .expect(StatusCode::FORBIDDEN, "permission.denied");
+    f.send(Method::GET, &uri, &both, None)
+        .await
+        .ok(StatusCode::OK);
+    f.send(Method::PATCH, &uri, &both, patch())
+        .await
+        .ok(StatusCode::OK);
+    f.send(Method::POST, &end_uri, &both, None)
+        .await
+        .ok(StatusCode::OK);
     let list = f
-        .send(Method::GET, &assignments_uri(course), &both, None)
+        .send(
+            Method::GET,
+            &format!("{}?include_ended=true", assignments_uri(course)),
+            &both,
+            None,
+        )
         .await;
     assert_eq!(
         list.ok(StatusCode::OK)["items"].as_array().map(Vec::len),
