@@ -77,6 +77,30 @@ listed here with a pointer so the inventory is complete in one place.
   that carries no file is refused while it is over the zone; the caller reports upload progress
   (`upload`) and the server's refusal (`errorMessage`); under a coarse pointer the drag prompt is
   visually hidden, leaving the button.
+  Coordinator decisions for TagField, Slider and ColorField (overnight, 2026-11-19), pending
+  owner review: TagField is React Aria's TagGroup under a TextField, not its contenteditable
+  TokenField, whose tokens have no remove button; its value is a list of strings, each listed
+  once compared without case (a repeat in a controlled value is shown once, as first given, and
+  left out of the next `onChange`);
+  removing the last tag returns focus to the input; validity is the caller's (`isInvalid`,
+  `errorMessage`), and the error shows after the tags and describes both the input and the tag
+  list. Slider takes one number; its number field shares the slider's value, a typed value is
+  kept in range and on a step and calls `onChangeEnd` as a released thumb does, and the label, the
+  caller's `aria-labelledby` after it, or `aria-label` names both the thumb and the number field,
+  which also takes the caller's `aria-describedby`; it has no error state,
+  since React Aria's Slider has no validation and its value is always in range. ColorField takes
+  and gives React Aria's `Color` (a hex string going in), hex only; its swatch shows the
+  committed color, stays in its color in forced-colors mode, is not drawn while the field is
+  empty, and is hidden from assistive technology, because the input already says the color and
+  React Aria's swatch names it in words outside the strings catalog.
+  Coordinator decision (2026-11-19), pending owner review: Enter or an "Add" button adds the
+  trimmed text and announces it ("Added {tag}") in a live region; a blank tag is not added, and
+  Enter on an empty input is left to the form; a tag already in the list (compared without case)
+  is not added, stays in the input, and shows "Already added" under it, which describes the input
+  and is announced; the live region empties when the draft changes or a tag is removed.
+  Coordinator decision (2026-11-19), pending owner review: pressing the Slider's label focuses
+  the thumb, as React Aria's own slider label does, not the number field, so a tap on a phone
+  does not open the on-screen keyboard.
 - **B7.** Tree (React Aria `Tree`) shows the account tree and course file folders, with keyboard
   expansion. StatusChip shows one learning state (B3) as a chip with icon and label.
   Coordinator decision (overnight, 2026-11-16), pending owner review: StatusChip's label can be

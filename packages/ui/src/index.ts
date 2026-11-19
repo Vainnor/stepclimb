@@ -126,6 +126,7 @@ export {
   checkbox,
 } from "./primitives/checkbox";
 export { Code, type CodeProps, code } from "./primitives/code";
+export { ColorField, type ColorFieldProps, colorField } from "./primitives/color-field";
 export {
   ComboBox,
   ComboBoxItem,
@@ -225,6 +226,7 @@ export { Select, SelectItem, type SelectProps, select } from "./primitives/selec
 export { Separator, type SeparatorProps, separator } from "./primitives/separator";
 export { Sheet, type SheetPlacement, type SheetProps, sheet } from "./primitives/sheet";
 export { SKELETON_DELAY_MS, Skeleton, type SkeletonProps, skeleton } from "./primitives/skeleton";
+export { Slider, type SliderProps, slider } from "./primitives/slider";
 export { Switch, type SwitchProps, switchField } from "./primitives/switch";
 export {
   Cell,
@@ -252,6 +254,7 @@ export {
   type TabsProps,
   tabs,
 } from "./primitives/tabs";
+export { TagField, type TagFieldProps, tagField } from "./primitives/tag-field";
 export { Text, type TextProps, text } from "./primitives/text";
 export { TextArea, type TextAreaProps, textArea } from "./primitives/text-area";
 export { TextField, type TextFieldProps, textField } from "./primitives/text-field";

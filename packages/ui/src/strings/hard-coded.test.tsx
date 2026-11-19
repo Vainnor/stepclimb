@@ -34,6 +34,7 @@ import { Breadcrumb, Breadcrumbs } from "../primitives/breadcrumbs";
 import { Button } from "../primitives/button";
 import { ButtonGroup } from "../primitives/button-group";
 import { Checkbox, CheckboxGroup } from "../primitives/checkbox";
+import { ColorField } from "../primitives/color-field";
 import { ComboBox, ComboBoxItem } from "../primitives/combo-box";
 import { CopyButton } from "../primitives/copy-button";
 import { DataList, DataListItem } from "../primitives/data-list";
@@ -56,8 +57,10 @@ import { SearchField } from "../primitives/search-field";
 import { Select, SelectItem } from "../primitives/select";
 import { Separator } from "../primitives/separator";
 import { Sheet } from "../primitives/sheet";
+import { Slider } from "../primitives/slider";
 import { Switch } from "../primitives/switch";
 import { Tab, TabList, TabPanel, Tabs } from "../primitives/tabs";
+import { TagField } from "../primitives/tag-field";
 import { Text } from "../primitives/text";
 import { TextArea } from "../primitives/text-area";
 import { TextField } from "../primitives/text-field";
@@ -280,6 +283,23 @@ const components: [string, ReactElement][] = [
   ],
   ["Meter", <Meter key="me" label="«caller»" value={40} />],
   ["NumberField", <NumberField key="nf" label="«caller»" description="«caller»" />],
+  [
+    "ColorField",
+    <ColorField key="cf" label="«caller»" description="«caller»" placeholder="«caller»" />,
+  ],
+  ["Slider", <Slider key="sl" label="«caller»" defaultValue={0} />],
+  [
+    "TagField (with tags, invalid)",
+    <TagField
+      key="tgf"
+      label="«caller»"
+      description="«caller»"
+      placeholder="«caller»"
+      defaultValue={["«caller»", "«second»"]}
+      isInvalid
+      errorMessage="«caller»"
+    />,
+  ],
   [
     "Popover (open)",
     <PopoverTrigger key="po" defaultOpen>
@@ -608,13 +628,15 @@ describe("no hard-coded strings", () => {
   // drag and drop: the handle's description ("Click to start dragging", or "Press Enter to start
   // dragging" after a key press), which this test sees, and, only while a drag runs, the drop
   // indicators' names ("Insert before ...", "Insert between ... and ...", "Insert after ...")
-  // and the live announcements of a drag started, dropped and canceled. They are the only text a
+  // and the live announcements of a drag started, dropped and canceled, and a removable tag's
+  // "Press Delete to remove tag" description (TagField). They are the only text a
   // component shows that is not a Stepclimb message.
   const reactAria = [
     /^Dismiss$/,
     /^(Click|PressEnter)tostartdragging$/,
     /^sortablecolumn$/,
     /^sortedbycolumnin(ascending|descending)order$/,
+    /^PressDeletetoremovetag$/,
   ];
   const notReactAria = (text: string) => !reactAria.some((pattern) => pattern.test(text));
 
