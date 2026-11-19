@@ -430,11 +430,15 @@ server every sign-in test and the Playwright stack use instead of a real provide
     file's comment says.
   - PKCE (Q3, issue #38's note): the preset keeps `pkce = true`. VATSIM's Connect API
     documentation (vatsim.dev, `/oauth/authorize` and `/oauth/token`, accessed 2026-11-16) does
-    not mention PKCE either way; no real sign-in against Connect has run (it needs the owner's
-    client). Its token page documents the client secret in the form body, while the `oauth2`
-    flow sends it with HTTP Basic (B10's decision); whether Connect accepts Basic is unverified
-    too. An organization whose sign-ins fail at the token step can override `pkce = false`,
-    with the risk Q3 states.
+    not mention PKCE either way, and its token page documents the client secret in the form
+    body, while the `oauth2` flow sends it with HTTP Basic (B8's decision above).
+  - Connect accepts both, verified against the sandbox (issue #339). On 2026-11-17 the owner
+    signed in through a preview server built from `next` at c907eea8, with a sandbox client on
+    `https://auth-dev.vatsim.net`. The callback reached admission, which refused at
+    `just_in_time` with `auth.signup_closed` as configured, so the token exchange (S256 PKCE
+    verifier, client secret by HTTP Basic) and the userinfo read had succeeded. The check ran
+    against the sandbox only; production `https://auth.vatsim.net` has not been tried. No
+    organization needs `pkce = false` for Connect; turning it off carries the risk Q3 states.
 
 ## API
 
@@ -594,7 +598,9 @@ overrule one, which then updates this spec.
   Whether VATSIM Connect accepts or requires PKCE must be checked against VATSIM's
   documentation before the preset's value is set. Recommendation: (b), with the preset's value
   set from that check.
-  **Decided:** the recommendation (owner, 13 Nov 2026).
+  **Decided:** the recommendation (owner, 13 Nov 2026). The documentation is silent; a sandbox
+  sign-in on 2026-11-17 showed that Connect accepts S256 PKCE and HTTP Basic client
+  authentication (Decisions, the preset's PKCE note), so the preset keeps `pkce = true`.
   Turning `pkce` off removes the protection PKCE gives against an injected or stolen
   authorization code (RFC 9700 2.1.1): an attacker who obtains a code issued to this client for
   someone else can start their own sign-in, put that code in their own callback, and be signed
