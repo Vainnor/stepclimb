@@ -59,6 +59,30 @@ export const Pending: Story = {
   play: spinnersShown,
 };
 
+/**
+ * A mouse press held on the button. A scripted press focuses it as a keyboard would, and the
+ * browser then draws its focus ring; a real mouse press draws none, so the play blurs it.
+ */
+const press: Story["play"] = async ({ canvasElement }) => {
+  const button = await within(canvasElement).findByRole("button");
+  await userEvent.pointer({ keys: "[MouseLeft>]", target: button });
+  await waitFor(() => expect(button).toHaveAttribute("data-pressed"));
+  button.blur();
+  await expect(button).toHaveAttribute("data-pressed");
+};
+
+/** Pressed: one step past hover in each intent. */
+export const PressedPrimary: Story = {
+  args: { intent: "primary", children: "Start quiz" },
+  play: press,
+};
+export const PressedSecondary: Story = { args: { children: "Preview" }, play: press };
+export const PressedGhost: Story = { args: { intent: "ghost", children: "Skip" }, play: press };
+export const PressedDanger: Story = {
+  args: { intent: "danger", children: "Delete attempt" },
+  play: press,
+};
+
 export const FocusVisible: Story = {
   args: { children: "Preview" },
   play: async ({ canvasElement }) => {
