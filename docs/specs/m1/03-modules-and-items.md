@@ -429,7 +429,8 @@ Coordinator decisions (2026-11-18), pending owner review.
   course layout, so the TopBar reads "Course" (the organization's term) rather than "Page not
   found", the same for every one of those cases. A locked item's deep link shows what `GET
   /api/v1/items/{id}` answers for it: its title, as the outline does (`04` B12), never its link or
-  content.
+  content. Coordinator decision (2026-11-19): the title stays, since the learner already sees
+  locked titles in the outline and the deep link shows nothing new.
 - **The views are minimal until `16` I11.** The course home lists the modules with their items as
   links, a module its items, and the item view its title. `16` I11 replaces them with the course
   home screen, ModuleRows and the item's content view.
