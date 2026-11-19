@@ -253,6 +253,12 @@ impl Storage {
         self.path(&format!("orgs/{}/files", scope.org_id()))
     }
 
+    /// Where the scope's organization's video objects are, `orgs/<org_id>/videos`.
+    #[must_use]
+    pub fn videos_prefix(&self, scope: OrgScope) -> Path {
+        self.path(&format!("orgs/{}/videos", scope.org_id()))
+    }
+
     /// Where every object of the scope's organization's video `video_id` is,
     /// `orgs/<org_id>/videos/<video_id>` (docs/specs/m1/08-uploaded-video.md B6, B12).
     #[must_use]

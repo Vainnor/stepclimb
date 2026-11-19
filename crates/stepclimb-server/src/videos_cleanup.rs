@@ -14,7 +14,10 @@
 //!    will finish: its job is dead, or it has none and has not changed for 24 hours
 //!    (`stepclimb_core::transcodes::fail_stranded`). A job whose lease lapsed on its last
 //!    attempt, or a process that could not transcode, leaves such a video; the author can then
-//!    retry it (B2).
+//!    retry it (B2);
+//! 5. delete the upload parts no upload row owns, last written [`ORPHAN_AGE`] ago or more
+//!    ([`crate::video_parts::delete_orphaned_parts`], D45): a chunk's copy that landed after a
+//!    termination had listed the parts leaves one, which no quota counts.
 //!
 //! Steps 1 and 2 mark each upload in a transaction that holds its row `FOR UPDATE`, the lock a
 //! chunk takes ([`crate::video_uploads`]), and check again that it still applies; step 3 deletes
@@ -43,6 +46,10 @@ pub const INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 /// How long an incomplete upload may go untouched before the job deletes it (B6).
 pub const RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// How old an upload part no upload row owns must be before step 5 deletes it, by the job's
+/// clock against the store's write time (D45). A copy still landing is seconds to minutes old.
+pub const ORPHAN_AGE: Duration = Duration::from_secs(60 * 60);
 
 /// Register `videos.cleanup` in `registry`, with the process's `storage`.
 pub fn register(registry: &mut Registry, storage: Option<Storage>) -> Result<(), RegistryError> {
@@ -77,6 +84,8 @@ pub struct Report {
     pub finished: u64,
     /// `processing` videos failed because no live job will finish them (step 4).
     pub stranded: u64,
+    /// Upload parts no upload row owns, deleted (step 5).
+    pub orphaned_parts: u64,
     /// Uploads or organizations that failed, each logged.
     pub failed: usize,
 }
@@ -89,7 +98,9 @@ pub async fn run(
     now: SystemTime,
 ) -> Result<Report, organizations::Error> {
     let mut report = Report::default();
-    let Some(cutoff) = now.checked_sub(RETENTION) else {
+    let (Some(cutoff), Some(orphan_cutoff)) =
+        (now.checked_sub(RETENTION), now.checked_sub(ORPHAN_AGE))
+    else {
         return Ok(report);
     };
     for org_id in organizations::ids(pool).await? {
@@ -98,11 +109,17 @@ pub async fn run(
             storage,
             scope: job_scope(org_id),
             cutoff,
+            orphan_cutoff,
             now,
         };
         cleaner.run(&mut report).await;
     }
-    if report.stale_marked + report.not_a_video_marked + report.finished + report.stranded > 0 {
+    let changed = report.stale_marked
+        + report.not_a_video_marked
+        + report.finished
+        + report.stranded
+        + report.orphaned_parts;
+    if changed > 0 {
         tracing::info!(?report, "cleaned up video uploads");
     }
     Ok(report)
@@ -129,6 +146,7 @@ struct Cleaner<'a> {
     storage: &'a Storage,
     scope: OrgScope,
     cutoff: SystemTime,
+    orphan_cutoff: SystemTime,
     now: SystemTime,
 }
 
@@ -154,6 +172,16 @@ impl Cleaner<'_> {
         match self.fail_stranded().await {
             Ok(failed) => report.stranded += failed,
             Err(error) => self.failed(report, &error, "could not fail stranded videos"),
+        }
+        let orphaned = video_parts::delete_orphaned_parts(
+            self.pool,
+            self.storage,
+            self.scope,
+            self.orphan_cutoff,
+        );
+        match orphaned.await {
+            Ok(deleted) => report.orphaned_parts += u64::try_from(deleted).unwrap_or(u64::MAX),
+            Err(error) => self.failed(report, &error, "could not delete orphaned upload parts"),
         }
     }
 

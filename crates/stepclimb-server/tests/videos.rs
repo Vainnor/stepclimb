@@ -911,6 +911,7 @@ async fn t3_cleanup_deletes_uploads_untouched_for_a_day(pool: PgPool) {
                 not_a_video_marked: 0,
                 finished: 1,
                 stranded: 0,
+                orphaned_parts: 0,
                 failed: 0,
             },
             "{backend:?}"
@@ -925,6 +926,82 @@ async fn t3_cleanup_deletes_uploads_untouched_for_a_day(pool: PgPool) {
         assert_eq!(parts.len(), 2, "{backend:?}: {parts:?}");
         let again = videos_cleanup::run(&f.pool, &f.storage, at).await.unwrap();
         assert_eq!(again, videos_cleanup::Report::default());
+    }
+}
+
+/// D13, D45: `videos.cleanup` deletes an upload part no upload row owns once it is an hour old,
+/// as a chunk's copy that lands after a termination leaves one: under a video whose upload was
+/// terminated (the video gone), under a failed video whose upload was discarded, and under
+/// another organization's prefix for a video whose upload row is this organization's. The part
+/// of an upload in progress stays at any age, and an orphan younger than an hour stays.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn cleanup_deletes_old_upload_parts_no_upload_owns(pool: PgPool) {
+    for backend in [Backend::Minio, Backend::Local] {
+        let f = Fixture::new(pool.clone(), backend).await;
+        let t = f.a;
+        let slug = format!("org-b-{}", &new_id().simple().to_string()[24..]);
+        let b = tree(&f.pool, &slug, f.now()).await;
+        let chunk = mp4(to_usize(MIB));
+        let in_progress = f.started(t.course, 2 * MIB).await;
+        f.patch(&in_progress, 0, &chunk)
+            .await
+            .ok(StatusCode::NO_CONTENT);
+        let kept = f.objects(t.org).await;
+        let terminated = f.started(t.course, 2 * MIB).await;
+        let gone = f.video_of(&terminated).await;
+        f.send(Method::DELETE, &terminated, None)
+            .await
+            .ok(StatusCode::NO_CONTENT);
+        let discarded = f.started(t.course, u64::try_from(PNG.len()).unwrap()).await;
+        let failed = f.video_of(&discarded).await;
+        f.patch(&discarded, 0, PNG).await.ok(StatusCode::NO_CONTENT);
+        assert_eq!(f.count("video_uploads", t.org).await, 1);
+        let in_progress_video = f.video_of(&in_progress).await;
+        let late = [
+            (scope(t.org), gone),
+            (scope(t.org), failed),
+            (scope(b.org), in_progress_video),
+        ];
+        for (at, video) in late {
+            f.storage
+                .store()
+                .put(
+                    &f.storage.video_part_path(at, video, MIB),
+                    chunk.clone().into(),
+                )
+                .await
+                .unwrap();
+        }
+        let soon = SystemTime::now() + Duration::from_secs(30 * 60);
+        let report = videos_cleanup::run(&f.pool, &f.storage, soon)
+            .await
+            .unwrap();
+        assert_eq!(
+            report.orphaned_parts, 0,
+            "{backend:?}: younger than an hour"
+        );
+        assert_eq!(f.objects(t.org).await.len(), 3, "{backend:?}");
+        assert_eq!(f.objects(b.org).await.len(), 1, "{backend:?}");
+        let later = SystemTime::now() + HOUR + Duration::from_secs(60);
+        let report = videos_cleanup::run(&f.pool, &f.storage, later)
+            .await
+            .unwrap();
+        assert_eq!(
+            (report.orphaned_parts, report.failed),
+            (3, 0),
+            "{backend:?}"
+        );
+        assert_eq!(
+            f.objects(t.org).await,
+            kept,
+            "{backend:?}: the upload in progress"
+        );
+        assert!(f.objects(b.org).await.is_empty(), "{backend:?}");
+        assert_eq!(f.send(Method::HEAD, &in_progress, None).await.offset(), MIB);
+        let again = videos_cleanup::run(&f.pool, &f.storage, later)
+            .await
+            .unwrap();
+        assert_eq!(again.orphaned_parts, 0, "{backend:?}");
     }
 }
 

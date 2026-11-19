@@ -345,6 +345,24 @@ pub async fn lock_upload(
     .transpose()
 }
 
+/// Whether the video `video_id` of the scope's organization has a `video_uploads` row.
+/// `videos.cleanup` deletes the stored parts of a video without one: a chunk stores a part only
+/// under its upload row's lock, and a video's upload row is never created again once deleted.
+pub async fn has_upload(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    video_id: Uuid,
+) -> Result<bool, Error> {
+    Ok(sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM video_uploads WHERE org_id = $1 AND video_id = $2)
+           AS "exists!""#,
+        scope.org_id(),
+        video_id,
+    )
+    .fetch_one(db)
+    .await?)
+}
+
 /// The upload of the video `video_id` locked `FOR UPDATE` in the transaction `conn` belongs to,
 /// or `None` when it has none: a transcode reads the original it concatenates from it.
 pub async fn lock_upload_of_video(

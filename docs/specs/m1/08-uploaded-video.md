@@ -496,8 +496,7 @@ Coordinator decision (overnight, 2026-11-17), after the security review of I1:
   Known limit, coordinator decision (overnight, 2026-11-17): a chunk whose `CopyObject` to its
   part is still running in the store when its client disconnects can land that part after a
   termination has listed the parts, leaving an object under `upload/` that no row names and that
-  no quota counts. A cleanup sweep for such orphaned `upload/` objects is tracked in a follow-up
-  issue.
+  no quota counts. `videos.cleanup` sweeps such orphaned `upload/` objects (D45).
 - **D14. The course lock of a chunk.** A chunk reads its course row `FOR SHARE`: an archive or
   move, which updates the row, waits for chunks in flight, and chunks of different uploads of one
   course do not wait for each other. Creation, termination and rename keep `FOR NO KEY UPDATE`.
@@ -700,6 +699,20 @@ Coordinator decision (2026-11-17), after the security review of I2:
   the video still `processing` and its charge open; `videos.cleanup` later fails the video as the
   server's and refunds a charge the input had earned. It takes a database error at that one
   point, and the video still ends failed.
+
+### Orphaned upload parts
+
+Coordinator decision (2026-11-19), pending owner review, for the sweep D13's known limit needs:
+
+- **D45. Orphaned upload parts.** `videos.cleanup` lists each organization's
+  `orgs/<org>/videos/` and, for each video directory whose `upload/` holds objects and whose video
+  has no `video_uploads` row in that organization, deletes the `upload/` objects the store last
+  wrote an hour or more before the job's clock (`ORPHAN_AGE`). Only `create_upload` inserts an
+  upload row, with a new video, and a chunk stores a part only under that row's lock, so a part
+  without a row can belong to no upload in progress; the hour leaves alone a copy still landing,
+  and leaves room for a store clock behind the server's. The parts of an upload that still has its
+  row (in progress, terminating, or kept for a retry) are never touched. Each run lists every
+  video directory once, so a store with many videos pays one listing per video each hour.
 
 
 ## Issues
