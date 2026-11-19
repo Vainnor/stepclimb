@@ -69,6 +69,14 @@ export const Invalid: Story = {
 
 export const Disabled: Story = { args: { defaultValue: due, isDisabled: true } };
 
+/**
+ * In a container as narrow as a sheet on a phone: the time moves to its own line whole, with its
+ * zone, instead of breaking between the time and AM.
+ */
+export const Narrow: Story = {
+  args: { label: "Opens on", defaultValue: due, className: "max-w-72" },
+};
+
 /** A long label, and a value in a zone with a long short name, at a narrow width. */
 export const LongContent: Story = {
   args: {

@@ -4,6 +4,7 @@ import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WIDE_QUERY } from "../lib/breakpoints";
+import { shownText } from "../test/date-text";
 import { stubMatchMedia } from "../test/media";
 import { renderWithStrings } from "../test/strings";
 import { DateRangePicker } from "./date-range-picker";
@@ -20,7 +21,7 @@ function wide(isWide: boolean) {
 }
 
 const group = () => screen.getByRole("group", { name: "Open window" });
-const shown = () => (group().textContent ?? "").replace(/[⁦-⁩]/g, "");
+const shown = () => shownText(group());
 
 describe("DateRangePicker", () => {
   afterEach(() => vi.unstubAllGlobals());

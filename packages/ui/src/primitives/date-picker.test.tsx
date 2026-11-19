@@ -4,8 +4,10 @@ import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WIDE_QUERY } from "../lib/breakpoints";
+import { shownText } from "../test/date-text";
 import { stubMatchMedia } from "../test/media";
 import { renderWithStrings } from "../test/strings";
+import { breaksAfter, type DateSegmentValue } from "./date-input";
 import { DatePicker } from "./date-picker";
 
 const NY = "America/New_York";
@@ -16,8 +18,8 @@ function wide(isWide: boolean) {
 }
 
 const group = () => screen.getByRole("group", { name: "Due date" });
-/** What the field shows, without the bidirectional isolation marks Intl puts around the time. */
-const shown = () => (group().textContent ?? "").replace(/[\u2066-\u2069]/g, "");
+/** What the field shows. */
+const shown = () => shownText(group());
 const segment = (name: RegExp) => within(group()).getByRole("spinbutton", { name });
 
 describe("DatePicker", () => {
@@ -39,6 +41,25 @@ describe("DatePicker", () => {
       "data-slot",
       "date-picker-button",
     );
+  });
+
+  it("lets a narrow field wrap only between the date, the time and the zone", () => {
+    wide(true);
+    const { container } = renderWithStrings(
+      <DatePicker
+        label="Due date"
+        timeZone={NY}
+        defaultValue={zoned("2026-03-07T09:00[America/New_York]")}
+      />,
+    );
+    const visible = (el: Element | null) => (el?.textContent ?? "").replace(/[\u2066-\u2069]/g, "");
+    // The text of each break literal and of the next segment with any text.
+    const breaks = [...container.querySelectorAll('[data-slot="date-break"]')].map((el) => {
+      let next = el.nextElementSibling;
+      while (next !== null && visible(next) === "") next = next.nextElementSibling;
+      return `${visible(el.previousElementSibling)}|${visible(next)}`;
+    });
+    expect(breaks).toEqual([", |09", " |EST"]);
   });
 
   it("gives the right instant across the daylight-saving change and says EDT (T3)", async () => {
@@ -192,5 +213,45 @@ describe("DatePicker", () => {
       />,
     );
     expect(screen.getByText("Choose a date after the start date.")).toBeInTheDocument();
+  });
+});
+
+describe("breaksAfter", () => {
+  const seg = (type: string, text = type) => ({ type, text }) as DateSegmentValue;
+  const lit = (text: string) => seg("literal", text);
+
+  it("breaks between the date and the time and before the zone, not inside the time", () => {
+    const segments = [
+      seg("month"),
+      lit("/"),
+      seg("day"),
+      lit("/"),
+      seg("year"),
+      lit(", "),
+      seg("hour"),
+      lit(":"),
+      seg("minute"),
+      lit(" "),
+      seg("dayPeriod"),
+      lit(" "),
+      seg("timeZoneName"),
+    ];
+    const at = segments.flatMap((_, i) => (breaksAfter(segments, i) ? [i] : []));
+    expect(at).toEqual([5, 11]);
+  });
+
+  it("breaks where a locale puts the time first, and never in a date alone", () => {
+    const timeFirst = [
+      seg("dayPeriod"),
+      lit(" "),
+      seg("hour"),
+      lit(" "),
+      seg("year"),
+      lit("."),
+      seg("month"),
+    ];
+    expect(timeFirst.flatMap((_, i) => (breaksAfter(timeFirst, i) ? [i] : []))).toEqual([3]);
+    const dateOnly = [seg("month"), lit("/"), seg("day"), lit("/"), seg("year")];
+    expect(dateOnly.some((_, i) => breaksAfter(dateOnly, i))).toBe(false);
   });
 });

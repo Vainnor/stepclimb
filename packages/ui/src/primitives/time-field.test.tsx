@@ -3,12 +3,13 @@ import { parseZonedDateTime } from "@internationalized/date";
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { shownText } from "../test/date-text";
 import { renderWithStrings } from "../test/strings";
 import { TimeField } from "./time-field";
 
 const zoned = (text: string) => parseZonedDateTime(text);
 const group = () => screen.getByRole("group", { name: "Reminder time" });
-const shown = () => (group().textContent ?? "").replace(/[⁦-⁩]/g, "");
+const shown = () => shownText(group());
 
 describe("TimeField", () => {
   it("shows the time with its zone's short name, with its data-slots", () => {
