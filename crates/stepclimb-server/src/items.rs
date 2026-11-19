@@ -38,23 +38,26 @@ pub const ITEMS_PATH: &str = "/api/v1/items";
 problem_responses! {
     ItemNotFound => "`item.not_found`: no item with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined.",
     ItemMoveNotFound => "`item.not_found`: no item with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `module.not_found`: the destination module is not in the item's course. `org.not_found`: the request's organization cannot be determined.",
+    ItemCreateNotFound => "`module.not_found`: no module with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `file.not_found`: a `file` item's `ref_id` is not a course file of the module's course. `org.not_found`: the request's organization cannot be determined.",
     ItemCreateConflict => "`course.archived`: the course is archived and takes no content change. `item.limit_reached`: the module holds 200 items.",
     ItemOrderConflict => "`course.archived`: the course is archived and takes no content change. `order.stale`: the list is not exactly the current set of ids (one is missing, extra or repeated); reload and try again.",
     ItemWriteConflict => "`course.archived`: the course is archived and takes no content change.",
     ItemDeleteConflict => "`course.archived`: the course is archived and takes no content change. `item.has_progress`: learners have progress on the item; unpublish it instead.",
     ItemMoveConflict => "`course.archived`: the course is archived and takes no content change. `item.limit_reached`: the destination module holds 200 items.",
-    ItemInvalid => "`request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space, control or Unicode format character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none), `/position` with `item.position_out_of_range` (outside 0 to the module's item count), or, on a patch, `/requirement` with `requirement.invalid` (an unknown shape or member, `min_percent` outside 1 to 100, or a requirement the item's kind does not take, such as any on a header) or `requirement.unavailable` (`submit`, `score` or `mastery`, reserved for quizzes and activities).",
+    ItemInvalid => "`request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space, control or Unicode format character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none) or `item.ref_id_required` (a `file` item without its course file), `/position` with `item.position_out_of_range` (outside 0 to the module's item count), or, on a patch, `/requirement` with `requirement.invalid` (an unknown shape or member, `min_percent` outside 1 to 100, or a requirement the item's kind does not take, such as any on a header) or `requirement.unavailable` (`submit`, `score` or `mastery`, reserved for quizzes and activities).",
 }
 
 /// An item to create, unpublished.
 #[derive(Clone, Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NewItem {
-    /// `header` and `external_link` can be created; the other kinds arrive with their specs.
+    /// `header`, `external_link` and `file` can be created; the other kinds arrive with their
+    /// specs.
     pub kind: ItemKind,
     /// Trimmed; 1 to 200 characters.
     pub title: String,
-    /// What the item points at, for a kind that points at a row.
+    /// What the item points at, for a kind that points at a row: for `file`, required, a course
+    /// file of the module's course.
     #[serde(default)]
     #[schema(value_type = Option<String>, format = "uuid")]
     pub ref_id: Option<Uuid>,
@@ -130,7 +133,7 @@ pub struct ItemMove {
         (status = 400, response = crate::openapi::BadRequest),
         (status = 401, response = crate::openapi::Unauthenticated),
         (status = 403, response = ContentEditForbidden),
-        (status = 404, response = ModuleNotFound),
+        (status = 404, response = ItemCreateNotFound),
         (status = 409, response = ItemCreateConflict),
         (status = 413, response = crate::openapi::PayloadTooLarge),
         (status = 415, response = crate::openapi::UnsupportedMediaType),

@@ -20,7 +20,8 @@
 //!   organization's rows are unchanged;
 //! - **read** (a route that answers a learner modules or items): a Student and an Observer get
 //!   200 in which every module and item is locked and no item has `url` or `ref_id`, and the
-//!   raw body holds neither the locked link's URL nor any stored `ref_id` (a page item's);
+//!   raw body holds neither the locked link's URL nor any stored `ref_id` (a page item's or a
+//!   file item's);
 //! - **staff** (a route only staff call): its permission suite entry requires a permission in
 //!   [`STAFF`], which neither the built-in Student nor the Observer holds, and a Student and an
 //!   Observer enrolled in the target's course each get 403 `permission.denied`.
@@ -41,8 +42,8 @@ enum Lock {
     /// Student, and the request; the Student is enrolled at the call's `at`.
     Checked(Setup),
     /// It answers a learner modules or items: locked ones with B12's fields only. The setup
-    /// builds a course whose only module is locked, holding a link and a page item, and names
-    /// the course, the module and the page item.
+    /// builds a course whose only module is locked, holding a link, a page item and a file item,
+    /// and names the course, the module and the page item.
     Read(Setup),
     /// Only staff may call it; the permission suite's entry has its setup.
     Staff,
@@ -57,6 +58,14 @@ const LOCK_TABLE: &[LockEntry] = &[
     LockEntry {
         operation_id: "recordItemProgress",
         lock: Lock::Checked(view_locked_link),
+    },
+    LockEntry {
+        operation_id: "createItemFileUrl",
+        lock: Lock::Checked(file_url_of_locked_file_item),
+    },
+    LockEntry {
+        operation_id: "createCourseFileUrl",
+        lock: Lock::Staff,
     },
     LockEntry {
         operation_id: "listModules",
@@ -182,12 +191,47 @@ fn view_locked_link(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>
     })
 }
 
-/// [`locked_module`] with a published page item after the link, pointing at a new id: the
-/// course, the module and the page item, for whichever the read's path names.
+/// [`locked_module`] with a published `file` item after the link; the request asks for its
+/// signed URL (M1 spec 06 B14).
+fn file_url_of_locked_file_item(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let (course, module, _) = locked_module(org).await;
+        let item = org
+            .file_item(module, org.course_file(course, "/").await)
+            .await;
+        let publish = items::ItemPatch {
+            published: Some(true),
+            ..items::ItemPatch::default()
+        };
+        items::update(&org.pool, scope(org.id), item, &publish, now())
+            .await
+            .expect("publish the file item");
+        Call {
+            params: vec![("item_id", item)],
+            body: Some(serde_json::json!({ "disposition": "inline" })),
+            at: At::Course(course),
+        }
+    })
+}
+
+/// [`locked_module`] with a published page item after the link, pointing at a new id, and a
+/// published `file` item: the course, the module and the page item, for whichever the read's
+/// path names.
 fn locked_outline(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
         let (course, module, _) = locked_module(org).await;
         let page_item = page_item(org, course, module).await;
+        // A `file` item too, whose `ref_id` is a course file (M1 spec 06 B13).
+        let file_item = org
+            .file_item(module, org.course_file(course, "/").await)
+            .await;
+        let publish = items::ItemPatch {
+            published: Some(true),
+            ..items::ItemPatch::default()
+        };
+        items::update(&org.pool, scope(org.id), file_item, &publish, now())
+            .await
+            .expect("publish the file item");
         Call {
             params: vec![
                 ("course_id", course),

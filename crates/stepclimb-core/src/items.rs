@@ -7,9 +7,10 @@
 //! write first locks the course row (`modules::lock_course`, B12) and refuses an archived
 //! course, as [`crate::modules`] does. Errors are [`crate::modules::Error`].
 //!
-//! Which kinds can be created is [`Kind::creatable`]: `header` and `external_link` in this
+//! Which kinds can be created is [`Kind::creatable`]: `header`, `external_link` and `file` in this
 //! release. Each content spec makes its kind creatable together with the check of its `ref_id`
-//! (B5, B6). Every query filters by `org_id = scope.org_id()`.
+//! (B5, B6): a `file` item's is a course file of the item's course (spec 06 B13). Every query
+//! filters by `org_id = scope.org_id()`.
 
 use std::time::SystemTime;
 
@@ -81,10 +82,10 @@ impl Kind {
     }
 
     /// Whether this release creates items of the kind (B5). A kind whose spec is not built yet
-    /// is refused, and so is any `ref_id`: no creatable kind has one.
+    /// is refused.
     #[must_use]
     pub fn creatable(self) -> bool {
-        matches!(self, Self::Header | Self::ExternalLink)
+        matches!(self, Self::Header | Self::ExternalLink | Self::File)
     }
 
     /// Whether `courses::copy` copies items of the kind (spec 02 B13). A kind whose `ref_id`
@@ -94,8 +95,9 @@ impl Kind {
     #[must_use]
     pub fn copyable(self) -> bool {
         match self {
-            Self::Header | Self::ExternalLink => true,
-            Self::File | Self::Page | Self::Video | Self::Quiz | Self::Activity => false,
+            // A `file` item's course file is copied with it (spec 06 B20).
+            Self::Header | Self::ExternalLink | Self::File => true,
+            Self::Page | Self::Video | Self::Quiz | Self::Activity => false,
         }
     }
 
@@ -103,6 +105,13 @@ impl Kind {
     #[must_use]
     pub fn has_url(self) -> bool {
         self == Self::ExternalLink
+    }
+
+    /// Whether items of the kind that this release creates carry a `ref_id` (B5): a `file`
+    /// item names its course file (spec 06 B13).
+    #[must_use]
+    pub fn has_ref(self) -> bool {
+        self == Self::File
     }
 }
 
@@ -291,6 +300,7 @@ pub async fn create<'c>(
     let now = epoch_micros(now)?;
     let mut tx = db.begin().await?;
     let course_id = lock_module_course(&mut tx, scope, module_id).await?;
+    check_ref(&mut tx, scope, course_id, new).await?;
     let count = count_in(&mut tx, scope, module_id).await?;
     if count >= MAX_PER_MODULE {
         return Err(Error::ItemLimitReached);
@@ -588,6 +598,35 @@ async fn lock_module_course(
         .ok_or(Error::ModuleNotFound)
 }
 
+/// The `ref_id` of a new item names content of its course `course_id`: for a `file` item, a
+/// course file of that course ([`Error::FileNotFound`] otherwise, spec 06 B13). Called under the
+/// course lock, which a course file's delete also takes, so the course file cannot go before
+/// the item that names it is committed.
+async fn check_ref(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    course_id: Uuid,
+    new: &NewItem,
+) -> Result<(), Error> {
+    let (Kind::File, Some(ref_id)) = (new.kind, new.ref_id) else {
+        return Ok(());
+    };
+    let found = sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM course_files
+                          WHERE org_id = $1 AND course_id = $2 AND id = $3) AS "found!""#,
+        scope.org_id(),
+        course_id,
+        ref_id,
+    )
+    .fetch_one(conn)
+    .await?;
+    if found {
+        Ok(())
+    } else {
+        Err(Error::FileNotFound)
+    }
+}
+
 /// The item `id`, read after locking its course.
 async fn locked(conn: &mut PgConnection, scope: OrgScope, id: Uuid) -> Result<Item, Error> {
     let course_id = course_of(&mut *conn, scope, id)
@@ -631,14 +670,17 @@ async fn shift(
     Ok(())
 }
 
-/// The kind's rules for a new item: creatable (B5), a URL exactly for an external link, and no
-/// `ref_id`, which no creatable kind has.
+/// The kind's rules for a new item: creatable (B5), a URL exactly for an external link, and a
+/// `ref_id` exactly for a kind that names content ([`Kind::has_ref`]). Whether the `ref_id` names
+/// content of the item's course is [`check_ref`]'s, under the course lock.
 fn check_kind(new: &NewItem) -> Result<(), Error> {
     if !new.kind.creatable() {
         return Err(Error::KindUnavailable);
     }
-    if new.ref_id.is_some() {
-        return Err(Error::RefIdUnavailable);
+    match (new.ref_id.is_some(), new.kind.has_ref()) {
+        (true, false) => return Err(Error::RefIdUnavailable),
+        (false, true) => return Err(Error::RefIdRequired),
+        _ => {}
     }
     match (&new.url, new.kind.has_url()) {
         (Some(url), true) => check_url(url),
@@ -743,15 +785,10 @@ mod tests {
     }
 
     #[test]
-    fn only_headers_and_external_links_are_creatable() {
+    fn only_headers_external_links_and_files_are_creatable() {
         assert!(check_kind(&new(Kind::Header)).is_ok());
-        for kind in [
-            Kind::File,
-            Kind::Page,
-            Kind::Video,
-            Kind::Quiz,
-            Kind::Activity,
-        ] {
+        assert!(Kind::File.creatable());
+        for kind in [Kind::Page, Kind::Video, Kind::Quiz, Kind::Activity] {
             assert!(
                 matches!(check_kind(&new(kind)), Err(Error::KindUnavailable)),
                 "{kind:?}"
@@ -779,7 +816,7 @@ mod tests {
             }
         }
         let copyable: Vec<_> = all.into_iter().filter(|k| k.copyable()).collect();
-        assert_eq!(copyable, [Kind::Header, Kind::ExternalLink]);
+        assert_eq!(copyable, [Kind::Header, Kind::ExternalLink, Kind::File]);
     }
 
     #[test]
@@ -805,6 +842,23 @@ mod tests {
         assert!(matches!(
             check_kind(&header_with_ref),
             Err(Error::RefIdUnavailable)
+        ));
+        assert!(matches!(
+            check_kind(&new(Kind::File)),
+            Err(Error::RefIdRequired)
+        ));
+        let file = NewItem {
+            ref_id: Some(new_id()),
+            ..new(Kind::File)
+        };
+        assert!(check_kind(&file).is_ok());
+        let file_with_url = NewItem {
+            url: Some("https://example.com/".into()),
+            ..file
+        };
+        assert!(matches!(
+            check_kind(&file_with_url),
+            Err(Error::UrlUnavailable)
         ));
         assert!(matches!(
             check_kind(&link(Some("https://a\0b"))),

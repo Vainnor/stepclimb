@@ -122,6 +122,46 @@ describe("the deep link (B16)", () => {
     expect(document.body.textContent).not.toContain("example.org");
   });
 
+  it("opens a file item's file from a signed URL (06 B18)", async () => {
+    vi.stubGlobal("navigator", { ...globalThis.navigator, pdfViewerEnabled: true });
+    const file = itemFixture({
+      kind: "file",
+      title: "Ground school handbook",
+      url: undefined,
+      ref_id: "01900000-0000-7000-8000-0000000000f1",
+    });
+    const fetch = server({
+      [`GET ${ITEM}`]: () => json(file),
+      [`POST ${ITEM}/file-url`]: () =>
+        json({
+          url: "https://lms.example.org/files/token",
+          expires_at: "2026-11-01T12:10:00Z",
+          disposition: "inline",
+          name: "Handbook.pdf",
+          mime: "application/pdf",
+          size: 2_400_000,
+        }),
+    });
+    renderApp(DEEP_LINK);
+    const frame = await screen.findByTitle("Ground school handbook (PDF preview)");
+    expect(frame.getAttribute("src")).toBe("https://lms.example.org/files/token");
+    expect(requestsTo(fetch, `${ITEM}/file-url`)).toHaveLength(1);
+  });
+
+  it("asks no file URL for a locked file item", async () => {
+    const locked = itemFixture({
+      kind: "file",
+      url: undefined,
+      lock: { reasons: [{ kind: "module_locked" }] },
+    });
+    const fetch = server({ [`GET ${ITEM}`]: () => json(locked) });
+    renderApp(DEEP_LINK);
+    expect(
+      await screen.findByRole("heading", { level: 2, name: "Radio phraseology" }),
+    ).toBeInTheDocument();
+    expect(requestsTo(fetch, `${ITEM}/file-url`)).toEqual([]);
+  });
+
   it("shows the not-found view for a locked item in another module, as for an open one", async () => {
     const locked = itemFixture({
       module_id: otherModuleId,

@@ -21,9 +21,9 @@ use crate::{
     csrf::{self, OriginAllowlist},
     discovery, enrollment,
     error::ApiError,
-    health, identities, items, local_sign_in, manifest, me, modules, my_passkeys, oauth_authorize,
-    oauth_token, openapi, organization, outline, pages, passkey_enrollment, passkey_sign_in,
-    password,
+    file_delivery, file_urls, health, identities, items, local_sign_in, manifest, me, modules,
+    my_passkeys, oauth_authorize, oauth_token, openapi, organization, outline, pages,
+    passkey_enrollment, passkey_sign_in, password,
     password_hasher::PasswordHasher,
     progress, provider_admin, provider_callback, provider_sign_in,
     providers::Providers,
@@ -122,15 +122,26 @@ pub fn probes_router(state: AppState) -> Router {
 const PROBE_PATHS: [&str; 2] = ["/healthz", "/readyz"];
 
 /// The span every request is traced in: its method, path and HTTP version. The query is left
-/// out, since a provider's callback carries its authorization `code` and `state` there and no
-/// credential may reach a log line (spec 08 B4).
+/// out, since a provider's callback carries its authorization `code` and `state` there, and a
+/// signed file URL's token is replaced ([`logged_path`]): no credential may reach a log line
+/// (spec 08 B4).
 fn request_span(request: &axum::http::Request<axum::body::Body>) -> tracing::Span {
     tracing::debug_span!(
         "request",
         method = %request.method(),
-        path = %request.uri().path(),
+        path = %logged_path(request.uri().path()),
         version = ?request.version(),
     )
+}
+
+/// `path` as a log line may hold it: a signed file URL (`/files/<token>`, docs/specs/m1/06-files.md
+/// B16) without its token, which is the credential that fetches the file.
+fn logged_path(path: &str) -> &str {
+    if path.starts_with("/files/") {
+        "/files/{token}"
+    } else {
+        path
+    }
 }
 
 /// The path of the API document, which is not an operation in itself.
@@ -353,6 +364,15 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
             post(course_files::rename_course_folder),
         ),
         (
+            "/api/v1/course-files/{course_file_id}/url",
+            post(file_urls::create_course_file_url),
+        ),
+        (
+            "/api/v1/items/{item_id}/file-url",
+            post(file_urls::create_item_file_url),
+        ),
+        ("/files/{token}", get(file_delivery::get_signed_file)),
+        (
             "/api/v1/course-files/{course_file_id}",
             get(course_files::get_course_file)
                 .patch(course_files::update_course_file)
@@ -524,4 +544,20 @@ async fn openapi_json() -> impl IntoResponse {
         [(header::CONTENT_TYPE, "application/json")],
         openapi::document_json(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_signed_file_urls_token_never_reaches_a_log_line() {
+        assert_eq!(logged_path("/files/c2VjcmV0LXRva2Vu"), "/files/{token}");
+        assert_eq!(logged_path("/files/"), "/files/{token}");
+        assert_eq!(
+            logged_path("/api/v1/items/1/file-url"),
+            "/api/v1/items/1/file-url"
+        );
+        assert_eq!(logged_path("/c/1/files"), "/c/1/files");
+    }
 }

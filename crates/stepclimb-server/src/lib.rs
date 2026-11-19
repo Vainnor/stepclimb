@@ -73,6 +73,8 @@ pub mod enrollment;
 pub mod entitlements;
 pub mod error;
 pub mod extract;
+pub mod file_delivery;
+pub mod file_urls;
 pub mod files_cleanup;
 pub mod flow;
 pub mod health;

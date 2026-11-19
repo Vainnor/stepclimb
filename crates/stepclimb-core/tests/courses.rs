@@ -11,10 +11,12 @@ use stepclimb_core::{
     OrgScope, accounts,
     accounts::Reach,
     audit::{self, Actor},
+    course_files,
     courses::{
         self, Course, CourseCopy, CoursePatch, Error, Home, ListFilter, NewCourse, Status,
         Visibility,
     },
+    files,
     id::Uuid,
     items::{self, Item, Kind, NewItem},
     modules::{self, Module, ModulePatch, RulesPatch},
@@ -1065,6 +1067,94 @@ async fn a_copy_carries_the_rules_with_prerequisites_remapped(pool: PgPool) {
             "a copied module"
         );
     }
+}
+
+/// Spec 06 B20 (T17's file part): a copy holds a course file of its own for each of the
+/// source's, naming the same stored file, and its `file` items name those copies; no `files` row
+/// is added, so the storage count is unchanged.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_copy_copies_course_files_and_points_its_file_items_at_them(pool: PgPool) {
+    let a = Org::new(&pool, "org-a").await;
+    let source = create(&pool, a, a.tower, "S1").await.unwrap().id;
+    let first = module(&pool, a, source, "Ground", true).await;
+    let mut hasher = files::Sha256Hasher::new();
+    hasher.update(b"%PDF-1.7 handout");
+    let new = files::NewFile {
+        hashed: hasher.finish(),
+        mime: "application/pdf".into(),
+    };
+    let file = files::insert(&pool, a.scope(), &new, request_time())
+        .await
+        .unwrap()
+        .id;
+    let place = (
+        &course_files::Folder::parse("/week-1").unwrap(),
+        &course_files::Name::parse("handout.pdf").unwrap(),
+    );
+    let mut conn = pool.acquire().await.unwrap();
+    let course_file =
+        course_files::create(&mut conn, a.scope(), source, file, place, request_time())
+            .await
+            .unwrap()
+            .id;
+    drop(conn);
+    let handout = NewItem {
+        kind: Kind::File,
+        title: "Handout".into(),
+        ref_id: Some(course_file),
+        url: None,
+        position: None,
+    };
+    items::create(&pool, a.scope(), first, &handout, request_time())
+        .await
+        .unwrap();
+    let stored: i64 = sqlx::query_scalar("SELECT count(*) FROM files WHERE org_id = $1")
+        .bind(a.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let copy = courses::copy(
+        &pool,
+        a.scope(),
+        source,
+        &copy_to(a.tower, "S1-B"),
+        later_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+
+    let copied: Vec<(Uuid, Uuid, String, String)> = sqlx::query_as(
+        "SELECT id, file_id, folder, name FROM course_files WHERE org_id = $1 AND course_id = $2",
+    )
+    .bind(a.id)
+    .bind(copy.id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(copied.len(), 1);
+    let (copied_id, copied_file, folder, name) = copied[0].clone();
+    assert_ne!(copied_id, course_file);
+    assert_eq!(
+        (copied_file, folder.as_str(), name.as_str()),
+        (file, "/week-1", "handout.pdf")
+    );
+    let refs: Vec<Option<Uuid>> = sqlx::query_scalar(
+        "SELECT ref_id FROM module_items WHERE org_id = $1 AND course_id = $2 AND kind = 'file'",
+    )
+    .bind(a.id)
+    .bind(copy.id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(refs, [Some(copied_id)]);
+    let after: i64 = sqlx::query_scalar("SELECT count(*) FROM files WHERE org_id = $1")
+        .bind(a.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(after, stored, "no byte is added");
 }
 
 /// An item whose kind this release cannot copy (its content spec is not built) refuses the

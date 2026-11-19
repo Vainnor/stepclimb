@@ -625,10 +625,10 @@ pub async fn create<'c>(
 /// title unless `copy` names one; it is a draft whatever the source's status, and a template
 /// exactly when `copy.template` is. Every module and item of the source is copied with a new
 /// id, its position, title and `published` flag, and an item's kind and URL, with the unlock and
-/// completion rules, requirements and prerequisites of spec 04 and each module's validity
-/// ([`copy_outline`]). Nothing
-/// of the source's learners is copied: no enrollment, progress, attempt or other learner data
-/// (B13).
+/// completion rules, requirements and prerequisites of spec 04 and each module's validity, and
+/// the course files with the `file` items naming their copies (spec 06 B20) ([`copy_outline`]).
+/// Nothing of the source's learners is copied: no enrollment, progress, attempt or other learner
+/// data (B13).
 ///
 /// The source course row is read `FOR SHARE`, which every outline write's `FOR NO KEY UPDATE`
 /// (spec 03 B12) waits for, so the outline cannot change while it is copied.
@@ -700,7 +700,8 @@ pub async fn copy<'c>(
 /// organization, with new ids and the same positions, titles and `published` flags; each item
 /// keeps its kind and URL and goes into the copy of its module. Each module keeps its unlock and
 /// completion rules and each item its requirement (spec 04 B1, B3), and the prerequisites are
-/// copied between the copies of their modules ([`copy_prerequisites`]). `created_at` and
+/// copied between the copies of their modules ([`copy_prerequisites`]). The course files are
+/// copied ([`copy_course_files`]) and each `file` item names its course file's copy. `created_at` and
 /// `updated_at` are `now_us`. An item of a kind this release does not copy ([`items::Kind::copyable`]) is
 /// [`Error::ContentNotCopyable`]: its `ref_id` names content no copy of this release copies. A
 /// stored URL [`items::url_is_valid`] refuses is [`Error::CopiedUrlInvalid`], as every writer of
@@ -745,7 +746,47 @@ async fn copy_outline(
         .zip(copies.iter().copied())
         .collect();
     copy_prerequisites(conn, scope, from, to, (&sources, &copies), now_us).await?;
-    copy_items(conn, scope, from, to, &new_ids, now_us).await
+    let files = copy_course_files(conn, scope, from, to, now_us).await?;
+    copy_items(conn, scope, from, to, (&new_ids, &files), now_us).await
+}
+
+/// [`copy_outline`]'s course files (spec 06 B20): each course file of `from` as one of `to` in
+/// the same folder under the same name, pointing at the same stored file, so no byte is added
+/// and the storage limit is not charged again. Returns each source course file's id mapped to
+/// its copy's.
+async fn copy_course_files(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    from: Uuid,
+    to: Uuid,
+    now_us: i64,
+) -> Result<HashMap<Uuid, Uuid>, Error> {
+    let sources = sqlx::query_scalar!(
+        "SELECT id FROM course_files WHERE org_id = $1 AND course_id = $2",
+        scope.org_id(),
+        from,
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    let copies: Vec<Uuid> = sources.iter().map(|_| new_id()).collect();
+    sqlx::query!(
+        "INSERT INTO course_files (id, org_id, course_id, file_id, folder, name, created_at,
+                                   updated_at)
+         SELECT map.new_id, $1, $2, cf.file_id, cf.folder, cf.name,
+                timestamptz 'epoch' + $6::bigint * interval '1 microsecond',
+                timestamptz 'epoch' + $6::bigint * interval '1 microsecond'
+         FROM UNNEST($3::uuid[], $4::uuid[]) AS map (old_id, new_id)
+         JOIN course_files cf ON cf.org_id = $1 AND cf.course_id = $5 AND cf.id = map.old_id",
+        scope.org_id(),
+        to,
+        &sources,
+        &copies,
+        from,
+        now_us,
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(sources.into_iter().zip(copies).collect())
 }
 
 /// [`copy_outline`]'s prerequisites: each row of `from` as a row between the copies of its two
@@ -798,17 +839,18 @@ async fn copy_prerequisites(
 }
 
 /// [`copy_outline`]'s items: each into the copy of its module, `modules` mapping a source
-/// module's id to its copy's.
+/// module's id to its copy's; a `file` item names the copy of its course file, `files` mapping a
+/// source course file's id to its copy's.
 async fn copy_items(
     conn: &mut PgConnection,
     scope: OrgScope,
     from: Uuid,
     to: Uuid,
-    modules: &HashMap<Uuid, Uuid>,
+    (modules, files): (&HashMap<Uuid, Uuid>, &HashMap<Uuid, Uuid>),
     now_us: i64,
 ) -> Result<(), Error> {
     let rows = sqlx::query!(
-        "SELECT id, module_id, position, kind, url, title, published,
+        "SELECT id, module_id, position, kind, ref_id, url, title, published,
                 requirement::text AS requirement
          FROM module_items
          WHERE org_id = $1 AND course_id = $2 ORDER BY module_id, position",
@@ -845,16 +887,29 @@ async fn copy_items(
             })
         })
         .collect::<Result<Vec<Uuid>, Error>>()?;
+    // A `file` item's course file is one of `from` (checked when the item was made, and a
+    // course file an item names cannot be deleted), copied above in this transaction; a miss is
+    // a stored row this function cannot place. Copyable kinds name nothing else.
+    let ref_ids = rows
+        .iter()
+        .map(|r| match r.ref_id {
+            None => Ok(None),
+            Some(ref_id) => files.get(&ref_id).copied().map(Some).ok_or(Error::Stored {
+                id: r.id,
+                column: "ref_id",
+            }),
+        })
+        .collect::<Result<Vec<Option<Uuid>>, Error>>()?;
     sqlx::query!(
-        "INSERT INTO module_items (id, org_id, course_id, module_id, position, kind, url, title,
-                                   published, requirement, created_at, updated_at)
-         SELECT i.id, $1, $2, i.module_id, i.position, i.kind, i.url, i.title, i.published,
-                i.requirement::jsonb,
+        "INSERT INTO module_items (id, org_id, course_id, module_id, position, kind, ref_id, url,
+                                   title, published, requirement, created_at, updated_at)
+         SELECT i.id, $1, $2, i.module_id, i.position, i.kind, i.ref_id, i.url, i.title,
+                i.published, i.requirement::jsonb,
                 timestamptz 'epoch' + $10::bigint * interval '1 microsecond',
                 timestamptz 'epoch' + $10::bigint * interval '1 microsecond'
          FROM UNNEST($3::uuid[], $4::uuid[], $5::int4[], $6::text[], $7::text[], $8::text[],
-                     $9::bool[], $11::text[])
-              AS i (id, module_id, position, kind, url, title, published, requirement)",
+                     $9::bool[], $11::text[], $12::uuid[])
+              AS i (id, module_id, position, kind, url, title, published, requirement, ref_id)",
         scope.org_id(),
         to,
         &rows.iter().map(|_| new_id()).collect::<Vec<_>>(),
@@ -872,6 +927,7 @@ async fn copy_items(
             .iter()
             .map(|r| r.requirement.clone())
             .collect::<Vec<Option<String>>>() as &[Option<String>],
+        &ref_ids as &[Option<Uuid>],
     )
     .execute(&mut *conn)
     .await?;
