@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stubMatchMedia } from "../test/media";
@@ -58,6 +58,76 @@ describe("Menu", () => {
     expect(menu.closest('[data-slot="menu-sheet"]')).not.toBeNull();
     expect(menu.closest('[data-slot="menu-sheet-overlay"]')).toHaveClass("bg-overlay");
     expect(menu.closest('[data-slot="menu-popover"]')).toBeNull();
+  });
+
+  it("runs no sheet item on the release of the mouse press that opened it", async () => {
+    wide(false);
+    const user = userEvent.setup();
+    const onAction = vi.fn();
+    render(<Example onAction={onAction} />);
+    // The menu opens on the press, so the sheet can sit where the button was. While that press is
+    // held, no item takes the pointer, so its release lands on the sheet, not on an item. jsdom
+    // does no hit testing; apps/ui-docs/visual/base.spec.ts releases a real mouse over an item.
+    await user.pointer({ keys: "[MouseLeft>]", target: screen.getByRole("button") });
+    const edit = screen.getByRole("menuitem", { name: "Edit" });
+    const body = edit.closest('[data-slot="menu-sheet-body"]');
+    expect(body).toHaveStyle({ pointerEvents: "none" });
+    const sheet = edit.closest<HTMLElement>('[data-slot="menu-sheet"]');
+    if (sheet === null) throw new Error("the sheet");
+    await user.pointer({ keys: "[/MouseLeft]", target: sheet });
+    expect(body).not.toHaveStyle({ pointerEvents: "none" });
+    expect(onAction).not.toHaveBeenCalled();
+    expect(screen.getByRole("menu", { name: "Course actions" })).toBeInTheDocument();
+  });
+
+  it("lets a sheet item run after a right-button press that never came back up", async () => {
+    wide(false);
+    const user = userEvent.setup();
+    const onAction = vi.fn();
+    render(<Example onAction={onAction} />);
+    const trigger = screen.getByRole("button", { name: "Course actions" });
+    // A right-button press opens no menu, and its release can be lost to the context menu. It is
+    // dispatched alone, with no release, which user-event's own pointer state would add later.
+    fireEvent.pointerDown(trigger, { button: 2, pointerType: "mouse" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    trigger.focus();
+    await user.keyboard("{Enter}");
+    // user-event refuses to click an element with `pointer-events: none`, so a held-press block
+    // left on the items would fail this click.
+    await user.click(screen.getByRole("menuitem", { name: "Duplicate" }));
+    expect(onAction.mock.calls[0]?.[0]).toBe("duplicate");
+  });
+
+  it("holds no press for a right button, so a menu opened by its caller still runs items", async () => {
+    wide(false);
+    const user = userEvent.setup();
+    const onAction = vi.fn();
+    const { rerender } = render(<Example isOpen={false} onAction={onAction} />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Course actions" }), {
+      button: 2,
+      pointerType: "mouse",
+    });
+    // Opened without a key on the trigger, so only the button check keeps the items pressable.
+    rerender(<Example isOpen onAction={onAction} />);
+    await user.click(screen.getByRole("menuitem", { name: "Duplicate" }));
+    expect(onAction.mock.calls[0]?.[0]).toBe("duplicate");
+  });
+
+  it("lets a sheet item run when the menu opens from the keyboard after a lost release", async () => {
+    wide(false);
+    const user = userEvent.setup();
+    const onAction = vi.fn();
+    render(<Example onAction={onAction} />);
+    const trigger = screen.getByRole("button", { name: "Course actions" });
+    // A primary-button press opens the menu; its release never arrives.
+    fireEvent.pointerDown(trigger, { button: 0, pointerType: "mouse" });
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    trigger.focus();
+    await user.keyboard("{Enter}");
+    await user.click(screen.getByRole("menuitem", { name: "Duplicate" }));
+    expect(onAction.mock.calls[0]?.[0]).toBe("duplicate");
   });
 
   it.each([

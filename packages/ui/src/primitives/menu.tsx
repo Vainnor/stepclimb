@@ -4,7 +4,15 @@
 // (docs/specs/m0/13-base-ui-components.md M0 inventory, Q10). A submenu always opens in a Popover,
 // beside its item, or above it under 768 px. Arrow keys move between items; typing jumps to an item.
 import { CaretRightIcon, CheckIcon } from "@phosphor-icons/react";
-import { use } from "react";
+import {
+  createContext,
+  type ReactNode,
+  type RefObject,
+  use,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   Menu as AriaMenu,
   MenuItem as AriaMenuItem,
@@ -55,9 +63,40 @@ export const menu = tv({
 
 const styles = menu();
 
+/**
+ * Whether a primary-button mouse or pen press on the trigger is still held: a pressed mouse opens
+ * the menu at once, so its release comes after the menu is drawn. A key pressed on the trigger
+ * clears it, so a menu opened from the keyboard never inherits a press whose release was lost.
+ */
+const HeldPressContext = createContext<RefObject<boolean> | null>(null);
+
 /** Opens its Menu when its first child, a Button or IconButton, is pressed. */
-export function MenuTrigger(props: AriaMenuTriggerProps) {
-  return <AriaMenuTrigger {...props} />;
+export function MenuTrigger({ children, ...props }: AriaMenuTriggerProps) {
+  const held = useRef(false);
+  return (
+    <HeldPressContext value={held}>
+      <span
+        data-slot="menu-trigger"
+        className="contents"
+        onPointerDownCapture={(event) => {
+          // Only the primary button opens the menu; another button's release may never come.
+          if (event.pointerType === "touch" || event.button !== 0) return;
+          held.current = true;
+          const release = () => {
+            held.current = false;
+          };
+          const doc = event.currentTarget.ownerDocument;
+          doc.addEventListener("pointerup", release, { capture: true, once: true });
+          doc.addEventListener("pointercancel", release, { capture: true, once: true });
+        }}
+        onKeyDownCapture={() => {
+          held.current = false;
+        }}
+      >
+        <AriaMenuTrigger {...props}>{children}</AriaMenuTrigger>
+      </span>
+    </HeldPressContext>
+  );
 }
 
 export interface MenuProps<T> extends Omit<AriaMenuProps<T>, "className"> {
@@ -95,9 +134,41 @@ export function Menu<T extends object>({ placement, className, ...props }: MenuP
       className={styles.overlay()}
     >
       <Modal data-slot="menu-sheet" className={styles.sheet()}>
-        {list}
+        <SheetBody>{list}</SheetBody>
       </Modal>
     </ModalOverlay>
+  );
+}
+
+/**
+ * The sheet's items. A mouse opens the menu on the press, so the sheet can appear under the
+ * pointer, and the release of that same press would run the item it lands on. While that press is
+ * held the items take no pointer events, so its release lands on the sheet itself. Touch opens the
+ * menu on the release, so it is not held.
+ */
+function SheetBody({ children }: { children: ReactNode }) {
+  const held = use(HeldPressContext);
+  const [pressing, setPressing] = useState(() => held?.current === true);
+  useEffect(() => {
+    if (!pressing) return;
+    const release = () => setPressing(false);
+    document.addEventListener("pointerup", release, true);
+    document.addEventListener("pointercancel", release, true);
+    return () => {
+      document.removeEventListener("pointerup", release, true);
+      document.removeEventListener("pointercancel", release, true);
+    };
+  }, [pressing]);
+  return (
+    <div
+      data-slot="menu-sheet-body"
+      data-pressing={pressing || undefined}
+      className="contents"
+      // Inherited by every item; inline, so it holds before any stylesheet loads.
+      style={pressing ? { pointerEvents: "none" } : undefined}
+    >
+      {children}
+    </div>
   );
 }
 

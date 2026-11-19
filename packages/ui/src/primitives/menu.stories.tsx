@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { DotsThreeIcon } from "@phosphor-icons/react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import { useState } from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { ThemeMatrix } from "../storybook/theme-matrix";
 import { Button } from "./button";
@@ -62,6 +63,28 @@ export const Open: Story = {
       </MenuTrigger>
     </div>
   ),
+};
+
+/**
+ * The trigger at the foot of the page, as an actions button in a table's last row is. Under 768 px
+ * the sheet then covers the trigger, so a mouse press that opens it ends over an item; that
+ * release runs nothing. The line under the button says which item ran.
+ */
+export const AtTheFoot: Story = {
+  render: function AtTheFoot() {
+    const [ran, setRan] = useState<string>();
+    return (
+      <div className="flex min-h-[calc(100dvh-3rem)] flex-col justify-end gap-2">
+        <p data-slot="menu-story-ran" role="status">
+          {ran === undefined ? "No item ran." : `Ran ${ran}.`}
+        </p>
+        <MenuTrigger>
+          <Button>Course actions</Button>
+          <Menu onAction={(key) => setRan(String(key))}>{items}</Menu>
+        </MenuTrigger>
+      </div>
+    );
+  },
 };
 
 /** Checkable items: a check marks the selected one. */
