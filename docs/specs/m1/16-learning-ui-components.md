@@ -432,6 +432,10 @@ listed here with a pointer so the inventory is complete in one place.
     `max_file_bytes`; the server's 413 is shown in words. The upload goes out through
     `XMLHttpRequest`, the only browser API that reports a request body's progress, as the API
     client's per-request `fetch`, so the request is still built from the OpenAPI document.
+  - Coordinator decision (2026-11-19, #385): the zone stays pressable while a batch runs. A zone
+    that took no press or drop meanwhile would make no selection possible, and the status line
+    above could never say that one was not sent. A test holds that "Choose files" stays enabled,
+    focused and not `aria-disabled` during a batch.
   - Opening or downloading a file waits for `06` I3's signed URLs, which are not built yet.
 - **B21.** Assignments (`/c/:course/assignments`): the list (`13`), a creation sheet with target,
   assignees, due rule, reminders and recurrence (`14`), and each assignment's people with their

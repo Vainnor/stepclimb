@@ -464,7 +464,10 @@ describe("uploading", () => {
     const status = document.querySelector('[data-slot="files-upload-status"]');
     expect(status).toHaveAttribute("role", "status");
     expect(status).toHaveTextContent("Uploading a.pdf");
+    // Spec 16 B20a: the zone stays pressable while a batch runs, so a file chosen meanwhile
+    // reaches the page, which says it was not sent.
     expect(choose).toBeEnabled();
+    expect(choose).not.toHaveAttribute("aria-disabled");
     expect(choose).toHaveFocus();
     await xhr.sent[0]?.finish();
     await waitFor(() => expect(status).toHaveTextContent("a.pdf uploaded"));

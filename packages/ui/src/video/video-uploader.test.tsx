@@ -504,6 +504,24 @@ describe("VideoUploader", () => {
     expect(s.server.received.filter((r) => r.method === "POST")).toHaveLength(1);
   });
 
+  it("keeps focus on Choose file while a video uploads, and refuses a second one there", async () => {
+    // Spec 08 D33: the zone stays pressable while an upload runs, so a second choice is refused
+    // with its message rather than the button going disabled.
+    const s = setup();
+    renderUploader(s);
+    s.server.hold = true;
+    const button = screen.getByRole("button", { name: "Choose file" });
+    act(() => button.focus());
+    await choose(video());
+    await waitFor(() => expect(s.server.held).toBe(1));
+    expect(button).toHaveFocus();
+    expect(button).toBeEnabled();
+    expect(button).not.toHaveAttribute("aria-disabled");
+    await choose(video(2 * MIB, "Week 2.mp4"));
+    expect(screen.getByText(/Week 1\.mp4 is still uploading/)).toBeInTheDocument();
+    expect(button).toHaveFocus();
+  });
+
   it("announces progress politely in steps of 10 %", async () => {
     const s = setup();
     renderUploader(s);
