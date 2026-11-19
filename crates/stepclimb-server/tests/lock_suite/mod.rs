@@ -243,11 +243,10 @@ fn schemas_reached(doc: &Value, value: &Value, seen: &mut Vec<String>) {
                 .get("$ref")
                 .and_then(Value::as_str)
                 .and_then(|r| r.strip_prefix("#/components/schemas/"))
+                && !seen.iter().any(|s| s == name)
             {
-                if !seen.iter().any(|s| s == name) {
-                    seen.push(name.to_owned());
-                    schemas_reached(doc, &doc["components"]["schemas"][name], seen);
-                }
+                seen.push(name.to_owned());
+                schemas_reached(doc, &doc["components"]["schemas"][name], seen);
             }
             for member in map.values() {
                 schemas_reached(doc, member, seen);
