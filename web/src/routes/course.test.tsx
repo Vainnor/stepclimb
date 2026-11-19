@@ -57,6 +57,7 @@ function moduleFixture(overrides: Partial<Module> = {}): Module {
     lock: null,
     require_sequential: false,
     completion_rule: "all",
+    completion_valid_months: null,
     items: [
       itemFixture({
         id: "01900000-0000-7000-8000-0000000000e0",
