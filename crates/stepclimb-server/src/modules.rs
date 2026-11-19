@@ -72,6 +72,8 @@ pub mod code {
     pub const ITEM_URL_UNAVAILABLE: &str = "item.url_unavailable";
     /// A `ref_id` on a kind that has none (a 422 field code at `/ref_id`).
     pub const ITEM_REF_ID_UNAVAILABLE: &str = "item.ref_id_unavailable";
+    /// A `file` item without a `ref_id` (a 422 field code at `/ref_id`).
+    pub const ITEM_REF_ID_REQUIRED: &str = "item.ref_id_required";
     /// A position outside the module (a 422 field code at `/position`).
     pub const ITEM_POSITION_OUT_OF_RANGE: &str = "item.position_out_of_range";
     /// The prerequisites would form a cycle (409).
@@ -708,6 +710,8 @@ pub(crate) fn content_error(error: Error) -> ApiError {
         Error::UrlRequired => invalid("url", code::ITEM_URL_REQUIRED),
         Error::UrlUnavailable => invalid("url", code::ITEM_URL_UNAVAILABLE),
         Error::RefIdUnavailable => invalid("ref_id", code::ITEM_REF_ID_UNAVAILABLE),
+        Error::RefIdRequired => invalid("ref_id", code::ITEM_REF_ID_REQUIRED),
+        Error::FileNotFound => not_found(crate::require::code::FILE_NOT_FOUND),
         Error::PositionOutOfRange => invalid("position", code::ITEM_POSITION_OUT_OF_RANGE),
         Error::PrerequisiteNotFound => not_found(MODULE_NOT_FOUND),
         Error::PrerequisiteCycle => conflict(
@@ -803,6 +807,13 @@ mod tests {
                 "request.invalid",
                 Some(("/ref_id", "item.ref_id_unavailable")),
             ),
+            (
+                Error::RefIdRequired,
+                422,
+                "request.invalid",
+                Some(("/ref_id", "item.ref_id_required")),
+            ),
+            (Error::FileNotFound, 404, "file.not_found", None),
             (
                 Error::PositionOutOfRange,
                 422,

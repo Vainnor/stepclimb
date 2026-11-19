@@ -6,11 +6,12 @@
 // sits in another module. Signed out, the signed-in layout's 401 sends the browser to sign in
 // with this address, query included, as the return target (B18). The item's content view
 // (page, file, video, external link) is the item screen's (16-learning-ui-components.md B16);
-// this view shows the item's title.
+// this view shows the item's title and, for a `file` item, its file (06-files.md B18).
 import { Heading, Skeleton } from "@stepclimb/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { isAbsent, itemQuery, pathId } from "../course/outline";
+import { FileItemView } from "../files/file-item-view";
 import { LoadError } from "../layouts/load-error";
 import { NotFound } from "./not-found";
 
@@ -56,6 +57,7 @@ function ItemLoader({ courseId, moduleId, itemId }: ItemLoaderProps) {
       <Heading level={2} size="xl" className="wrap-anywhere">
         {item.data.title}
       </Heading>
+      <FileItemView item={item.data} level={3} />
     </article>
   );
 }

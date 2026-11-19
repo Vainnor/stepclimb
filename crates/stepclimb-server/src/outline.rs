@@ -229,11 +229,11 @@ struct NotEvaluated(Uuid);
 
 /// Who reads, as the read's snapshot decides it.
 #[derive(Clone, Copy, Debug)]
-struct Viewer {
+pub(crate) struct Viewer {
     /// Holds `course.view_all` at the course: sees unpublished content and every reference.
-    sees_all: bool,
+    pub(crate) sees_all: bool,
     /// Holds `course.participate` at the course: gets their own progress (spec 05 B13).
-    learner: bool,
+    pub(crate) learner: bool,
 }
 
 /// The caller's own progress rows, by module and item id.
@@ -416,7 +416,7 @@ fn completed(own: Option<&Own>) -> HashSet<Uuid> {
 /// may not see. Returns whether the caller holds `course.view_all` at the course, which decides
 /// whether unpublished modules and items are shown, and `course.participate`, which decides
 /// whether their progress is.
-async fn view<T>(
+pub(crate) async fn view<T>(
     tx: &mut Transaction<'static, Postgres>,
     require: &Require<CourseView, T>,
     course_id: Uuid,
@@ -440,7 +440,9 @@ async fn view<T>(
 }
 
 /// A read-only transaction whose statements all see one snapshot.
-async fn begin_read(state: &AppState) -> Result<Transaction<'static, Postgres>, ApiError> {
+pub(crate) async fn begin_read(
+    state: &AppState,
+) -> Result<Transaction<'static, Postgres>, ApiError> {
     state
         .db
         .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY")
@@ -448,7 +450,7 @@ async fn begin_read(state: &AppState) -> Result<Transaction<'static, Postgres>, 
         .map_err(|error| ApiError::internal(&error))
 }
 
-async fn end(tx: Transaction<'static, Postgres>) -> Result<(), ApiError> {
+pub(crate) async fn end(tx: Transaction<'static, Postgres>) -> Result<(), ApiError> {
     tx.commit()
         .await
         .map_err(|error| ApiError::internal(&error))

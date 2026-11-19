@@ -2148,6 +2148,74 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/api/v1/course-files/{course_file_id}/url": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "A signed URL for any file of a course, for its staff (the files area and the editor).",
+        "operationId": "createCourseFileUrl",
+        "parameters": [
+          {
+            "name": "course_file_id",
+            "in": "path",
+            "description": "The course file's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FileUrlRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "A URL that serves the file for 10 minutes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignedUrl"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/FilesViewForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/CourseFileNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/StorageNotConfigured"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/api/v1/courses": {
       "get": {
         "tags": [
@@ -4146,6 +4214,77 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/api/v1/items/{item_id}/file-url": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "A signed URL for a `file` item's file. A caller without `course.view_all` gets it only for a\npublished item of a published module that is unlocked for them.",
+        "operationId": "createItemFileUrl",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "description": "The item's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FileUrlRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "A URL that serves the item's file for 10 minutes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignedUrl"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/FileUrlForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/FileUrlNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/FileUrlInvalid"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/StorageNotConfigured"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/api/v1/items/{item_id}/move": {
       "post": {
         "tags": [
@@ -5257,7 +5396,7 @@
             "$ref": "#/components/responses/ContentEditForbidden"
           },
           "404": {
-            "$ref": "#/components/responses/ModuleNotFound"
+            "$ref": "#/components/responses/ItemCreateNotFound"
           },
           "409": {
             "$ref": "#/components/responses/ItemCreateConflict"
@@ -7657,6 +7796,97 @@
         }
       }
     },
+    "/files/{token}": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "The file a signed URL names.",
+        "operationId": "getSignedFile",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The token of a signed URL (`createItemFileUrl`, `createCourseFileUrl`).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "description": "One range of bytes, `bytes=<first>-<last>`, `bytes=<first>-` or `bytes=-<length>`. Several ranges are answered with the whole file.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "The `ETag` of a copy the client holds.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The whole file, as `Content-Type` its stored type. `Content-Disposition` is `inline` only for an inline URL of a PDF or a PNG, JPEG, GIF or WebP image, and `attachment` with the file's name otherwise. Every answer carries `X-Content-Type-Options: nosniff`, a `Content-Security-Policy` (sandboxed for every type but PDF), `Cache-Control: private` until the URL expires, `ETag` (the SHA-256), `Accept-Ranges: bytes`, `Cross-Origin-Resource-Policy: same-origin` and `Referrer-Policy: no-referrer`.",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "The bytes the `Range` asks for, with `Content-Range`, and the same headers.",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The `If-None-Match` names the file's `ETag`."
+          },
+          "404": {
+            "$ref": "#/components/responses/FileNotFound"
+          },
+          "416": {
+            "$ref": "#/components/responses/RangeNotSatisfiable"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/FileStorageNotConfigured"
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "tags": [
@@ -9474,6 +9704,14 @@
           }
         }
       },
+      "Disposition": {
+        "type": "string",
+        "description": "How the browser is asked to open the file.",
+        "enum": [
+          "inline",
+          "attachment"
+        ]
+      },
       "Embedding": {
         "type": "object",
         "description": "How host sites link into the organization's courses.",
@@ -9789,6 +10027,19 @@
             "description": "A JSON Pointer (RFC 6901) to the member that broke the rule, such as `/name`."
           }
         }
+      },
+      "FileUrlRequest": {
+        "type": "object",
+        "description": "What a signed URL is asked for.",
+        "required": [
+          "disposition"
+        ],
+        "properties": {
+          "disposition": {
+            "$ref": "#/components/schemas/Disposition"
+          }
+        },
+        "additionalProperties": false
       },
       "FolderEntry": {
         "oneOf": [
@@ -11135,7 +11386,7 @@
         "properties": {
           "kind": {
             "$ref": "#/components/schemas/ItemKind",
-            "description": "`header` and `external_link` can be created; the other kinds arrive with their specs."
+            "description": "`header`, `external_link` and `file` can be created; the other kinds arrive with their\nspecs."
           },
           "position": {
             "type": [
@@ -11151,7 +11402,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "What the item points at, for a kind that points at a row."
+            "description": "What the item points at, for a kind that points at a row: for `file`, required, a course\nfile of the module's course."
           },
           "title": {
             "type": "string",
@@ -14793,6 +15044,47 @@
           }
         }
       },
+      "SignedUrl": {
+        "type": "object",
+        "description": "A short-lived URL that serves one file without a session.",
+        "required": [
+          "url",
+          "expires_at",
+          "disposition",
+          "name",
+          "mime",
+          "size"
+        ],
+        "properties": {
+          "disposition": {
+            "$ref": "#/components/schemas/Disposition",
+            "description": "What the URL was issued for. An inline URL of a type that is not shown inline is still\nserved as an attachment."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC: 10 minutes after issue. Ask for a new URL after it."
+          },
+          "mime": {
+            "type": "string",
+            "description": "The file's type as the server sniffed it, which the URL serves it as: what decides\nwhether a client shows it (a PDF or an image) or offers the download only."
+          },
+          "name": {
+            "type": "string",
+            "description": "The file's name, which a download is saved under."
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "In bytes.",
+            "minimum": 0
+          },
+          "url": {
+            "type": "string",
+            "description": "Absolute: the server's public URL, then `/files/` and the token. Anyone holding it can\nfetch the file until `expires_at`; do not share or store it."
+          }
+        }
+      },
       "ThemeChoice": {
         "type": "string",
         "description": "A theme. `system` follows the operating system's color and contrast settings.",
@@ -15976,6 +16268,56 @@
           }
         }
       },
+      "FileNotFound": {
+        "description": "`file.not_found`: the URL is not a signed file URL of this server's organization, has expired, or names a file that no longer exists. Every one of these answers the same.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "FileStorageNotConfigured": {
+        "description": "`storage.not_configured`: the server has no file storage; `detail` names `STEPCLIMB_STORAGE_URL`. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "FileUrlForbidden": {
+        "description": "`permission.denied`: you do not hold `course.view` at a scope containing the course. `item.locked`: the item is locked for you; `reasons` says what it waits for. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "FileUrlInvalid": {
+        "description": "`request.invalid`: `errors` names the body's root with `item.not_a_file`: the item is not a `file` item.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "FileUrlNotFound": {
+        "description": "`item.not_found`: no item with this id exists in the organization, or you cannot see it: its course is out of your reach, a draft course or a template, or the item or its module is unpublished, and you do not hold `course.view_all` at the course. `file.not_found`: the item's course file no longer exists. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "FilesCourseNotFound": {
         "description": "`course.not_found`: no course with this id exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined.",
         "content": {
@@ -16076,6 +16418,16 @@
           }
         }
       },
+      "ItemCreateNotFound": {
+        "description": "`module.not_found`: no module with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `file.not_found`: a `file` item's `ref_id` is not a course file of the module's course. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "ItemDeleteConflict": {
         "description": "`course.archived`: the course is archived and takes no content change. `item.has_progress`: learners have progress on the item; unpublish it instead.",
         "content": {
@@ -16087,7 +16439,7 @@
         }
       },
       "ItemInvalid": {
-        "description": "`request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space, control or Unicode format character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none), `/position` with `item.position_out_of_range` (outside 0 to the module's item count), or, on a patch, `/requirement` with `requirement.invalid` (an unknown shape or member, `min_percent` outside 1 to 100, or a requirement the item's kind does not take, such as any on a header) or `requirement.unavailable` (`submit`, `score` or `mastery`, reserved for quizzes and activities).",
+        "description": "`request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space, control or Unicode format character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none) or `item.ref_id_required` (a `file` item without its course file), `/position` with `item.position_out_of_range` (outside 0 to the module's item count), or, on a patch, `/requirement` with `requirement.invalid` (an unknown shape or member, `min_percent` outside 1 to 100, or a requirement the item's kind does not take, such as any on a header) or `requirement.unavailable` (`submit`, `score` or `mastery`, reserved for quizzes and activities).",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -16916,6 +17268,16 @@
           }
         }
       },
+      "RangeNotSatisfiable": {
+        "description": "`file.range_invalid`: the `Range` starts at or after the file's end. `Content-Range` names the file's length.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "RateLimited": {
         "description": "`auth.rate_limited`: too many sign-in or token requests from this client address, or too many failed password or TOTP checks for this account; `Retry-After` gives the seconds until the limit's window closes.",
         "headers": {
@@ -17006,6 +17368,16 @@
       },
       "SettingsWriteForbidden": {
         "description": "`permission.denied`: the caller does not hold `organization.manage` at organization scope, or the patch sets `email_matching` to `true` and the caller does not hold `provider.manage` there. `permission.escalation`: the patch sets `email_matching` to `true`, which changes how people sign in, and the caller does not hold every catalog permission at organization scope. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "StorageNotConfigured": {
+        "description": "`storage.not_configured`: the server has no file storage; `detail` names `STEPCLIMB_STORAGE_URL`. `org.not_found`: the request's organization cannot be determined.",
         "content": {
           "application/problem+json": {
             "schema": {

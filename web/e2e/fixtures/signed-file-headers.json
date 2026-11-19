@@ -1,0 +1,35 @@
+{
+  "pdf-inline": {
+    "content-type": "application/pdf",
+    "content-disposition": "inline; filename=\"Ground school handbook.pdf\"; filename*=UTF-8''Ground%20school%20handbook.pdf",
+    "content-security-policy": "default-src 'none'",
+    "x-content-type-options": "nosniff",
+    "cache-control": "private, max-age=600",
+    "etag": "\"9e2c311258f6279b28ddc89eaa36dc38d8f5aa725a8efe6ecea22518b2425bcb\"",
+    "accept-ranges": "bytes",
+    "cross-origin-resource-policy": "same-origin",
+    "referrer-policy": "no-referrer"
+  },
+  "pdf-attachment": {
+    "content-type": "application/pdf",
+    "content-disposition": "attachment; filename=\"Ground school handbook.pdf\"; filename*=UTF-8''Ground%20school%20handbook.pdf",
+    "content-security-policy": "default-src 'none'",
+    "x-content-type-options": "nosniff",
+    "cache-control": "private, max-age=600",
+    "etag": "\"9e2c311258f6279b28ddc89eaa36dc38d8f5aa725a8efe6ecea22518b2425bcb\"",
+    "accept-ranges": "bytes",
+    "cross-origin-resource-policy": "same-origin",
+    "referrer-policy": "no-referrer"
+  },
+  "png-inline": {
+    "content-type": "image/png",
+    "content-disposition": "inline; filename=\"Airport diagram.png\"; filename*=UTF-8''Airport%20diagram.png",
+    "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+    "x-content-type-options": "nosniff",
+    "cache-control": "private, max-age=600",
+    "etag": "\"070e5584992a406fbf86870016a4094875566702b251017358188e6f412425f0\"",
+    "accept-ranges": "bytes",
+    "cross-origin-resource-policy": "same-origin",
+    "referrer-policy": "no-referrer"
+  }
+}

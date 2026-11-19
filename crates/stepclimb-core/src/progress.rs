@@ -585,8 +585,9 @@ async fn lock_course_progress(
     Ok(completed_at.map(from_epoch_micros).transpose()?)
 }
 
-/// The ids of the items of the course the learner has completed.
-async fn completed_items(
+/// The ids of the items of the course `course_id` the learner `user_id` has completed: the
+/// progress `stepclimb_core::unlock::evaluate` takes.
+pub async fn completed_items(
     db: impl PgExecutor<'_>,
     scope: OrgScope,
     user_id: Uuid,

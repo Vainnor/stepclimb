@@ -70,6 +70,7 @@ use axum::{
     routing::{get, patch, post},
 };
 use http_body_util::BodyExt;
+use object_store::ObjectStoreExt as _;
 use serde::Deserialize;
 use serde_json::Value;
 use sqlx::PgPool;
@@ -154,6 +155,7 @@ const PUBLIC: &[&str] = &[
     "answerAppAuthorization",
     "requestAppToken",
     "revokeAppToken",
+    "getSignedFile",
 ];
 
 /// One entry per operation that needs a principal (B20). The M0 specs' routes add theirs here
@@ -463,6 +465,18 @@ const TABLE: &[Entry] = &[
     Entry {
         operation_id: "getCourseFile",
         access: permission(CourseViewAll::KEY, FILE_NOT_FOUND, course_file_in_tower),
+    },
+    Entry {
+        operation_id: "createCourseFileUrl",
+        access: permission(
+            CourseViewAll::KEY,
+            FILE_NOT_FOUND,
+            url_of_course_file_in_tower,
+        ),
+    },
+    Entry {
+        operation_id: "createItemFileUrl",
+        access: permission(CourseView::KEY, ITEM_NOT_FOUND, url_of_published_file_item),
     },
     Entry {
         operation_id: "updateCourseFile",
@@ -1948,6 +1962,36 @@ fn course_file_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send +
     })
 }
 
+/// A file of a published course in Tower, and a signed URL's body.
+fn url_of_course_file_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        Call {
+            params: vec![("course_file_id", org.course_file(course, "/").await)],
+            body: Some(serde_json::json!({ "disposition": "inline" })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A published `file` item in a published module of a published course in Tower, with no unlock
+/// rule, and a signed URL's body. The 2xx case holds `course.view` alone.
+fn url_of_published_file_item(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        let module = org.module(course).await;
+        let item = org
+            .file_item(module, org.course_file(course, "/").await)
+            .await;
+        org.publish(module, item).await;
+        Call {
+            params: vec![("item_id", item)],
+            body: Some(serde_json::json!({ "disposition": "attachment" })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
 /// A file of a published course in Tower, renamed and moved.
 fn rename_course_file(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
     Box::pin(async {
@@ -2638,6 +2682,10 @@ async fn public_operations_answer_without_a_credential(pool: PgPool) {
             token_endpoint_answers_without_a_credential(&app, &org, &op.path).await;
             continue;
         }
+        if *id == "getSignedFile" {
+            signed_file_answers_without_a_credential(&world, &app, &org).await;
+            continue;
+        }
         let (body, cookie) = public_request(&world, &org, id).await;
         let answer = send(
             &app,
@@ -2650,6 +2698,66 @@ async fn public_operations_answer_without_a_credential(pool: PgPool) {
         .await;
         assert!(answer.status.is_success(), "{id}: {answer:?}");
     }
+}
+
+/// A signed file URL serves its file to a request with no session at all: the token is the
+/// credential (M1 spec 06 B17).
+async fn signed_file_answers_without_a_credential(world: &World, app: &Router, org: &Org) {
+    let state = world.state();
+    let storage = state.storage.clone().expect("the suite's store");
+    let bytes = format!("File of {}", org.slug).into_bytes();
+    let mut hasher = files::Sha256Hasher::new();
+    hasher.update(&bytes);
+    let hashed = hasher.finish();
+    let sha256 = hashed.sha256();
+    let new = files::NewFile {
+        hashed,
+        mime: "text/plain; charset=utf-8".into(),
+    };
+    let file = files::insert(&world.pool, scope(org.id), &new, now())
+        .await
+        .expect("insert file");
+    storage
+        .store()
+        .put(
+            &storage.file_path(scope(org.id), sha256),
+            bytes.clone().into(),
+        )
+        .await
+        .expect("store the bytes");
+    let course = org.course(org.tower, true).await;
+    let place = (
+        &course_files::Folder::root(),
+        &course_files::Name::parse("notes.txt").expect("a name"),
+    );
+    let mut conn = world.pool.acquire().await.expect("a connection");
+    let course_file = course_files::create(&mut conn, scope(org.id), course, file.id, place, now())
+        .await
+        .expect("create course file")
+        .id;
+    let grant = stepclimb_server::file_urls::Grant {
+        org_id: org.id,
+        file_id: file.id,
+        course_file_id: course_file,
+        disposition: stepclimb_server::file_urls::Disposition::Attachment,
+        expires_at: now()
+            .duration_since(UNIX_EPOCH)
+            .expect("after the epoch")
+            .as_secs()
+            + 60,
+    };
+    let token = stepclimb_server::file_urls::seal(&state.keys, &grant).expect("seal");
+    let answer = send(
+        app,
+        &Method::GET,
+        &format!("/files/{token}"),
+        org.id,
+        None,
+        None,
+    )
+    .await;
+    assert!(answer.status.is_success(), "getSignedFile: {answer:?}");
+    assert_eq!(answer.body.as_bytes(), bytes, "getSignedFile");
 }
 
 /// The OAuth 2.1 authorization endpoint answers an anonymous browser without a 401 problem: a
@@ -4270,6 +4378,21 @@ impl Org {
         items::update(&self.pool, scope(self.id), item, &patch, now())
             .await
             .expect("publish item");
+    }
+
+    /// A new `file` item naming the course file `course_file`, last in `module`: its id.
+    async fn file_item(&self, module: Uuid, course_file: Uuid) -> Uuid {
+        let new = items::NewItem {
+            kind: items::Kind::File,
+            title: format!("Handout of {}", self.slug),
+            ref_id: Some(course_file),
+            url: None,
+            position: None,
+        };
+        items::create(&self.pool, scope(self.id), module, &new, now())
+            .await
+            .expect("create item")
+            .id
     }
 
     /// A new external link, last in `module`: its id.

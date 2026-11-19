@@ -23,16 +23,22 @@ export default defineConfig({
       testIgnore: [/sign-in\.spec\.ts$/, /installed\.spec\.ts$/, /page-edit-ios\.spec\.ts$/],
     },
     // Spec 15 T11: the installed-mode layout in WebKit at 375 px; the page editor on a phone.
+    // Spec 06 T15: the file preview in WebKit and Firefox too.
     {
       name: "webkit",
       use: { ...devices["iPhone 13"], viewport: { width: 375, height: 740 } },
-      testMatch: /(installed|page-edit-ios)\.spec\.ts$/,
+      testMatch: /(installed|page-edit-ios|file-item)\.spec\.ts$/,
+    },
+    {
+      name: "firefox",
+      use: { ...devices["Desktop Firefox"] },
+      testMatch: /file-item\.spec\.ts$/,
     },
     {
       name: "sign-in",
       use: { ...devices["Desktop Chrome"] },
       testMatch: /sign-in\.spec\.ts$/,
-      dependencies: ["chromium", "webkit"],
+      dependencies: ["chromium", "webkit", "firefox"],
     },
   ],
 });

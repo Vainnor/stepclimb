@@ -125,6 +125,12 @@ pub enum Error {
     /// A `ref_id` on a kind that has none (B5, B8).
     #[error("this kind of item has no reference")]
     RefIdUnavailable,
+    /// A kind that names content without a `ref_id` (B5; spec 06 B13).
+    #[error("this kind of item needs a reference")]
+    RefIdRequired,
+    /// A `file` item's `ref_id` that is not a course file of the item's course (spec 06 B13).
+    #[error("the course file does not exist")]
+    FileNotFound,
     /// A position outside 0 to the item count of the destination (B4, B11).
     #[error("the position is outside the module")]
     PositionOutOfRange,

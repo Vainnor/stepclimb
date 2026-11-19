@@ -208,6 +208,15 @@ export const webMessages: Catalog = {
     "enroll.problem.signIn": "Go to sign in",
     "enroll.problem.title": "This setup link could not be opened",
     "enroll.title": "Set up your account",
+    "fileItem.download": "Download",
+    "fileItem.downloadFailed": "The download could not start. Try again in a moment.",
+    "fileItem.file": "{name}, {size}",
+    "fileItem.noPdfViewer":
+      "This browser does not show PDF files in the page. Download the file to read it.",
+    "fileItem.noStorage.description":
+      "This server has no file storage set up, so its files cannot be opened. Ask your administrator.",
+    "fileItem.noStorage.title": "This file cannot be opened",
+    "fileItem.preview": "{title} (PDF preview)",
     "files.actions": "Actions for {name}",
     "files.archived": "This {course} is archived, so its files cannot be changed.",
     "files.badFolder.description": "Check the address, or go to the top folder of this {course}.",

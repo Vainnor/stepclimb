@@ -410,6 +410,23 @@ export interface paths {
         patch: operations["updateCourseFile"];
         trace?: never;
     };
+    "/api/v1/course-files/{course_file_id}/url": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A signed URL for any file of a course, for its staff (the files area and the editor). */
+        post: operations["createCourseFileUrl"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/courses": {
         parameters: {
             query?: never;
@@ -779,6 +796,26 @@ export interface paths {
          *     requirement. A patch naming only current values changes nothing.
          */
         patch: operations["updateItem"];
+        trace?: never;
+    };
+    "/api/v1/items/{item_id}/file-url": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * A signed URL for a `file` item's file. A caller without `course.view_all` gets it only for a
+         *     published item of a published module that is unlocked for them.
+         */
+        post: operations["createItemFileUrl"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/items/{item_id}/move": {
@@ -1586,6 +1623,23 @@ export interface paths {
          * @description A browser navigation. Sends the browser to the provider's authorization endpoint with `state` and a PKCE S256 challenge (for an OIDC provider also a `nonce`; for an OAuth 2 provider whose `pkce` is off, no challenge), bound to the sign-in flow whose `__Host-sc_flow` cookie this answer sets. Every refusal is a 303 to `/sign-in?error=<code>`: `auth.provider_not_found` (no enabled provider with this key), `auth.provider_unavailable` (the provider's discovery document could not be read or names another issuer, its stored config does not read, or its authorization URL is refused by the outbound URL policy) or `auth.rate_limited` (with `Retry-After`).
          */
         get: operations["startProviderSignIn"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/files/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The file a signed URL names. */
+        get: operations["getSignedFile"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2454,6 +2508,11 @@ export interface components {
              */
             stylesheet: string;
         };
+        /**
+         * @description How the browser is asked to open the file.
+         * @enum {string}
+         */
+        Disposition: "inline" | "attachment";
         /** @description How host sites link into the organization's courses. */
         Embedding: {
             /**
@@ -2601,6 +2660,10 @@ export interface components {
             code: string;
             /** @description A JSON Pointer (RFC 6901) to the member that broke the rule, such as `/name`. */
             field: string;
+        };
+        /** @description What a signed URL is asked for. */
+        FileUrlRequest: {
+            disposition: components["schemas"]["Disposition"];
         };
         /** @description One entry of a folder: a folder directly inside it, or a file in it. */
         FolderEntry: {
@@ -3172,7 +3235,10 @@ export interface components {
         };
         /** @description An item to create, unpublished. */
         NewItem: {
-            /** @description `header` and `external_link` can be created; the other kinds arrive with their specs. */
+            /**
+             * @description `header`, `external_link` and `file` can be created; the other kinds arrive with their
+             *     specs.
+             */
             kind: components["schemas"]["ItemKind"];
             /**
              * Format: int64
@@ -3181,7 +3247,8 @@ export interface components {
             position?: number | null;
             /**
              * Format: uuid
-             * @description What the item points at, for a kind that points at a row.
+             * @description What the item points at, for a kind that points at a row: for `file`, required, a course
+             *     file of the module's course.
              */
             ref_id?: string | null;
             /** @description Trimmed; 1 to 200 characters. */
@@ -4626,6 +4693,36 @@ export interface components {
             /** @description The path on this site to open next. */
             return_to: string;
         };
+        /** @description A short-lived URL that serves one file without a session. */
+        SignedUrl: {
+            /**
+             * @description What the URL was issued for. An inline URL of a type that is not shown inline is still
+             *     served as an attachment.
+             */
+            disposition: components["schemas"]["Disposition"];
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC: 10 minutes after issue. Ask for a new URL after it.
+             */
+            expires_at: string;
+            /**
+             * @description The file's type as the server sniffed it, which the URL serves it as: what decides
+             *     whether a client shows it (a PDF or an image) or offers the download only.
+             */
+            mime: string;
+            /** @description The file's name, which a download is saved under. */
+            name: string;
+            /**
+             * Format: int64
+             * @description In bytes.
+             */
+            size: number;
+            /**
+             * @description Absolute: the server's public URL, then `/files/` and the token. Anyone holding it can
+             *     fetch the file until `expires_at`; do not share or store it.
+             */
+            url: string;
+        };
         /**
          * @description A theme. `system` follows the operating system's color and contrast settings.
          * @enum {string}
@@ -5466,6 +5563,51 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `file.not_found`: the URL is not a signed file URL of this server's organization, has expired, or names a file that no longer exists. Every one of these answers the same. */
+        FileNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `storage.not_configured`: the server has no file storage; `detail` names `STEPCLIMB_STORAGE_URL`. `org.not_found`: the request's organization cannot be determined. */
+        FileStorageNotConfigured: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: you do not hold `course.view` at a scope containing the course. `item.locked`: the item is locked for you; `reasons` says what it waits for. `auth.csrf_refused`: the request did not come from this site. */
+        FileUrlForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.invalid`: `errors` names the body's root with `item.not_a_file`: the item is not a `file` item. */
+        FileUrlInvalid: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `item.not_found`: no item with this id exists in the organization, or you cannot see it: its course is out of your reach, a draft course or a template, or the item or its module is unpublished, and you do not hold `course.view_all` at the course. `file.not_found`: the item's course file no longer exists. `org.not_found`: the request's organization cannot be determined. */
+        FileUrlNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined. */
         FilesCourseNotFound: {
             headers: {
@@ -5556,6 +5698,15 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `module.not_found`: no module with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `file.not_found`: a `file` item's `ref_id` is not a course file of the module's course. `org.not_found`: the request's organization cannot be determined. */
+        ItemCreateNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `course.archived`: the course is archived and takes no content change. `item.has_progress`: learners have progress on the item; unpublish it instead. */
         ItemDeleteConflict: {
             headers: {
@@ -5565,7 +5716,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space, control or Unicode format character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none), `/position` with `item.position_out_of_range` (outside 0 to the module's item count), or, on a patch, `/requirement` with `requirement.invalid` (an unknown shape or member, `min_percent` outside 1 to 100, or a requirement the item's kind does not take, such as any on a header) or `requirement.unavailable` (`submit`, `score` or `mastery`, reserved for quizzes and activities). */
+        /** @description `request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space, control or Unicode format character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none) or `item.ref_id_required` (a `file` item without its course file), `/position` with `item.position_out_of_range` (outside 0 to the module's item count), or, on a patch, `/requirement` with `requirement.invalid` (an unknown shape or member, `min_percent` outside 1 to 100, or a requirement the item's kind does not take, such as any on a header) or `requirement.unavailable` (`submit`, `score` or `mastery`, reserved for quizzes and activities). */
         ItemInvalid: {
             headers: {
                 [name: string]: unknown;
@@ -6312,6 +6463,15 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `file.range_invalid`: the `Range` starts at or after the file's end. `Content-Range` names the file's length. */
+        RangeNotSatisfiable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `auth.rate_limited`: too many sign-in or token requests from this client address, or too many failed password or TOTP checks for this account; `Retry-After` gives the seconds until the limit's window closes. */
         RateLimited: {
             headers: {
@@ -6388,6 +6548,15 @@ export interface components {
         };
         /** @description `permission.denied`: the caller does not hold `organization.manage` at organization scope, or the patch sets `email_matching` to `true` and the caller does not hold `provider.manage` there. `permission.escalation`: the patch sets `email_matching` to `true`, which changes how people sign in, and the caller does not hold every catalog permission at organization scope. `auth.csrf_refused`: the request did not come from this site. */
         SettingsWriteForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `storage.not_configured`: the server has no file storage; `detail` names `STEPCLIMB_STORAGE_URL`. `org.not_found`: the request's organization cannot be determined. */
+        StorageNotConfigured: {
             headers: {
                 [name: string]: unknown;
             };
@@ -8007,6 +8176,41 @@ export interface operations {
             503: components["responses"]["NoOrganization"];
         };
     };
+    createCourseFileUrl: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The course file's id. */
+                course_file_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FileUrlRequest"];
+            };
+        };
+        responses: {
+            /** @description A URL that serves the file for 10 minutes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignedUrl"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["FilesViewForbidden"];
+            404: components["responses"]["CourseFileNotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["StorageNotConfigured"];
+        };
+    };
     listCourses: {
         parameters: {
             query?: {
@@ -8968,6 +9172,42 @@ export interface operations {
             503: components["responses"]["NoOrganization"];
         };
     };
+    createItemFileUrl: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The item's id. */
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FileUrlRequest"];
+            };
+        };
+        responses: {
+            /** @description A URL that serves the item's file for 10 minutes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignedUrl"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["FileUrlForbidden"];
+            404: components["responses"]["FileUrlNotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["FileUrlInvalid"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["StorageNotConfigured"];
+        };
+    };
     moveItem: {
         parameters: {
             query?: never;
@@ -9585,7 +9825,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["ContentEditForbidden"];
-            404: components["responses"]["ModuleNotFound"];
+            404: components["responses"]["ItemCreateNotFound"];
             409: components["responses"]["ItemCreateConflict"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
@@ -10816,6 +11056,54 @@ export interface operations {
             404: components["responses"]["OrganizationNotFound"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
+        };
+    };
+    getSignedFile: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One range of bytes, `bytes=<first>-<last>`, `bytes=<first>-` or `bytes=-<length>`. Several ranges are answered with the whole file. */
+                Range?: string | null;
+                /** @description The `ETag` of a copy the client holds. */
+                "If-None-Match"?: string | null;
+            };
+            path: {
+                /** @description The token of a signed URL (`createItemFileUrl`, `createCourseFileUrl`). */
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The whole file, as `Content-Type` its stored type. `Content-Disposition` is `inline` only for an inline URL of a PDF or a PNG, JPEG, GIF or WebP image, and `attachment` with the file's name otherwise. Every answer carries `X-Content-Type-Options: nosniff`, a `Content-Security-Policy` (sandboxed for every type but PDF), `Cache-Control: private` until the URL expires, `ETag` (the SHA-256), `Accept-Ranges: bytes`, `Cross-Origin-Resource-Policy: same-origin` and `Referrer-Policy: no-referrer`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": number[];
+                };
+            };
+            /** @description The bytes the `Range` asks for, with `Content-Range`, and the same headers. */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": number[];
+                };
+            };
+            /** @description The `If-None-Match` names the file's `ETag`. */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["FileNotFound"];
+            416: components["responses"]["RangeNotSatisfiable"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["FileStorageNotConfigured"];
         };
     };
     healthz: {

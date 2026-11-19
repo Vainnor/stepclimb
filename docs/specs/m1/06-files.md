@@ -298,6 +298,49 @@ Coordinator decisions (overnight, 2026-11-16, I2), pending owner review:
   column. `GET /api/v1/course-files/{course_file_id}` from the API table comes with I2, as part
   of the files area.
 
+Coordinator decisions (2026-11-19, I3), pending owner review:
+
+- `SignedUrl` also carries the course file's `name`, `mime` and `size`. A learner cannot read
+  the course file (`perm::CourseViewAll`, Q5), and the item view needs the type to choose a
+  frame, an image or a download (B18); the holder of the URL gets the same three in the served
+  headers anyway. `url` is absolute, the server's public URL then `/files/<token>`, so a client
+  on another origin (the Tauri shell) can use it as it is.
+- The token seals `{ o, f, c, d, e }` (organization, file, course file, disposition, expiry in
+  whole seconds since the epoch) as JSON under the context `file_url`; it is valid strictly
+  before `e`. Tokens longer than 1,024 characters are refused before decoding.
+- `GET /files/<token>` answers 503 `storage.not_configured` first, then resolves the request's
+  organization (`RequestOrg`, as every unauthenticated route does) and refuses a token sealed for
+  another organization with the same 404 as any other unusable token, so a token is bound to its
+  organization twice: in the sealed payload and by the host it is fetched from. The course
+  file's `file_id` must still be the token's.
+- For a caller without `course.view_all`, the item URL route checks visibility and the lock
+  before the item's kind, so an unpublished or locked item answers 404 or 403 whatever its kind.
+  An item that is not a `file` item answers 422 `request.invalid` with the field code
+  `item.not_a_file` at the body's root (``""``). An Observer, who has no progress, is held to
+  the lock as a learner who has done nothing (`05` B18).
+- A `Range` this server does not take (several ranges, another unit, a malformed one) is
+  ignored and the whole file is served, as RFC 9110 allows; `bytes=-0` and a range starting at
+  or after the end answer 416 with `Content-Range: bytes */<size>`. `If-None-Match` compares
+  weakly and `*` matches; the 304 carries the same headers but the body's. The `ETag` is the
+  quoted SHA-256 in hexadecimal. Every answer carries `Accept-Ranges: bytes`.
+- `Content-Disposition` carries both `filename`, an ASCII stand-in (every other character,
+  `"` and `\` become `_`), and `filename*` (RFC 6266, UTF-8, percent-encoded). The PDF policy
+  (no `sandbox`) applies to PDFs whatever the disposition.
+- The request log span writes `/files/{token}` for every path under `/files/`, so a token never
+  reaches a log line.
+- A `file` item without `ref_id` answers 422 `item.ref_id_required` at `/ref_id`; a `ref_id`
+  that is not a course file of the module's course answers 404 `file.not_found`. The check runs
+  under the course lock, which deleting a course file also takes.
+- B20's copy of course files and of `file` items' references comes with I3, not I4, so a course
+  built through the API stays copyable (`items::Kind::copyable`): `courses::copy` copies every
+  course file of the source (same stored file, folder and name) and points each copied `file`
+  item at its course file's copy. The cover's mapping stays with I4, which adds the column.
+- The web app's file view asks for an inline URL when it opens and reuses it for 9 minutes
+  without refetching on focus, since a new URL would reload the preview; the download button
+  asks for a new attachment URL on each press and hands it to the browser
+  (`location.assign`), which saves it without leaving the page. Whether the browser shows PDFs
+  is read from `navigator.pdfViewerEnabled`.
+
 ## Data
 
 Migration `migrations/<version>_files.sql` (I1), and `migrations/<version>_course_cover.sql`
@@ -501,6 +544,15 @@ and stands until the owner reviews it.
   Firefox and WebKit before relying on them, and the iOS web view with spec 17. If (a) fails on
   a target, the issue stops and reports, and (b) goes through `dependency-researcher`.
   Coordinator decision (overnight, 2026-11-16): (a), pending owner review.
+  Coordinator decision (2026-11-19), from building I3: (a) stays, and the item view always
+  shows the download beside the preview. Playwright's Chromium and Firefox report no PDF viewer
+  (`navigator.pdfViewerEnabled` is false) and show the fallback with a working download.
+  Playwright's Linux WebKit reports a viewer but draws an empty frame, with or without B17's
+  `Content-Security-Policy` and `Cross-Origin-Resource-Policy`; evidence points at the test
+  engine, not the product. T15's WebKit case therefore requires the frame and a working download
+  only. Real Safari and the iOS web view still need checking, which joins the owner's spec 17
+  iPhone run; if the iPhone shows a blank preview, the fallback is PDF.js (b), through
+  `dependency-researcher` first.
 - **Q9. The scope of "stored once".** Options: (a) once per organization (`UNIQUE (org_id,
   sha256)`); (b) once per instance, which saves space across organizations but lets one
   organization learn, from upload timing or limit accounting, that another holds a given file,
