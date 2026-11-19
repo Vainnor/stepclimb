@@ -115,6 +115,42 @@ describe("the slash menu", () => {
     expect(last()?.content[0]).toEqual(heading);
   });
 
+  it("types / where the author typed when Escape leaves a menu opened on a stale selection", async () => {
+    const heading = {
+      type: "heading",
+      attrs: { level: 2 },
+      content: [{ type: "text", text: "Before you taxi" }],
+    };
+    const { last } = renderEditor({
+      defaultValue: { type: "doc", content: [heading, { type: "paragraph" }] },
+    });
+    const editor = (content() as HTMLElement & { editor: TiptapEditor }).editor;
+    // As in the test above: the selection is still in the heading, and ProseMirror asks about
+    // the `/` the browser put into the empty paragraph. This calls the handler as ProseMirror's
+    // DOM-change path does, but does not model that path's DOM state: jsdom draws no `/` in the
+    // paragraph, so the stray `/` that the selection transaction redraws away is not checked
+    // here; web/e2e/page-edit.spec.ts covers it in a browser.
+    const at = editor.state.doc.child(0).nodeSize + 1;
+    expect(editor.state.selection.$from.parent.type.name).toBe("heading");
+    act(() => {
+      const view = editor.view;
+      const deflt = () => view.state.tr.insertText("/", at, at);
+      const taken = view.someProp("handleTextInput", (f) => f(view, at, at, "/", deflt));
+      if (!taken) view.dispatch(deflt());
+    });
+    const menu = await screen.findByRole("menu", { name: "Insert" });
+    await waitFor(() => expect(within(menu).getAllByRole("menuitem")[0]).toHaveFocus());
+    const user = userEvent.setup();
+    await user.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(last()?.content).toEqual([
+        heading,
+        { type: "paragraph", content: [{ type: "text", text: "/" }] },
+      ]),
+    );
+    await waitFor(() => expect(content()).toHaveFocus());
+  });
+
   it("types / when the author leaves the menu with Escape", async () => {
     const { last } = renderEditor();
     const { user } = await openSlashMenu();
