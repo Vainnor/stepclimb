@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (SELECT 1 FROM module_items\n                          WHERE org_id = $1 AND kind = 'video' AND ref_id = $2\n                            AND ($3::uuid IS NULL OR course_id = $3)) AS \"used!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "used!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "9657e58fb67a0574063209db40f7f95fbf85c9d1464a3f7db242db1691775305"
+}

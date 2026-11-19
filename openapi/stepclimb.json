@@ -3928,6 +3928,64 @@
         }
       }
     },
+    "/api/v1/courses/{course_id}/videos/{video_id}": {
+      "delete": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "Detach a video from a course when no item of the course names it. Detaching it from its last\ncourse deletes the video, as `deleteVideo` does.",
+        "operationId": "detachCourseVideo",
+        "parameters": [
+          {
+            "name": "course_id",
+            "in": "path",
+            "description": "The course's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "video_id",
+            "in": "path",
+            "description": "The video's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The video is no longer attached to the course; when it was its last, the video is deleted and its stored objects are deleted shortly after"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/VideoDetachForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/VideoDetachNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VideoDetachConflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/api/v1/enrollments/{enrollment_id}": {
       "delete": {
         "tags": [
@@ -4428,6 +4486,64 @@
           },
           "503": {
             "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/items/{item_id}/video-session": {
+      "post": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "A playback session for a `video` item's video. A caller without `course.view_all` gets it only\nfor a published item of a published module that is unlocked for them.",
+        "operationId": "createItemVideoSession",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "description": "The item's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "URLs that play the item's video for 2 hours",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VideoSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/VideoSessionForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/VideoSessionNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VideoNotReady"
+          },
+          "422": {
+            "$ref": "#/components/responses/VideoSessionInvalid"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/MediaStorageNotConfigured"
           }
         },
         "x-stepclimb-mutates": true
@@ -6892,6 +7008,52 @@
           }
         }
       },
+      "delete": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "Delete a video that no item of any course names, with its renditions and every attachment.",
+        "operationId": "deleteVideo",
+        "parameters": [
+          {
+            "name": "video_id",
+            "in": "path",
+            "description": "The video's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The video is deleted; its stored objects are deleted shortly after"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/VideoDeleteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/VideoNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VideoDeleteConflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      },
       "patch": {
         "tags": [
           "videos"
@@ -6960,6 +7122,61 @@
           },
           "503": {
             "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/videos/{video_id}/preview-session": {
+      "post": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "A playback session for any video of a course, for its staff (the authoring screen).",
+        "operationId": "createVideoPreviewSession",
+        "parameters": [
+          {
+            "name": "video_id",
+            "in": "path",
+            "description": "The video's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "URLs that play the video for 2 hours",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VideoSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/PreviewForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/VideoNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VideoNotReady"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/MediaStorageNotConfigured"
           }
         },
         "x-stepclimb-mutates": true
@@ -7942,6 +8159,185 @@
           },
           "503": {
             "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      }
+    },
+    "/media/{token}/{name}": {
+      "get": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "An output at the top of the run's prefix: the master playlist, the MP4, the poster, the\nthumbnail index or a sprite.",
+        "operationId": "getMediaOutput",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The token of a playback session (`createItemVideoSession`, `createVideoPreviewSession`).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "`master.m3u8`, `video.mp4`, `poster.jpg`, `thumbnails.vtt` or a sprite `sprite_<nnn>.jpg`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "description": "One range of bytes, as for `getSignedFile`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The output, as `Content-Type` its type (`application/vnd.apple.mpegurl`, `video/mp4`, `image/jpeg` or `text/vtt`). The MP4 is `Content-Disposition: attachment`. Every answer carries `X-Content-Type-Options: nosniff`, a sandboxing `Content-Security-Policy`, `Cache-Control: private` until the session expires, `Accept-Ranges: bytes`, `Cross-Origin-Resource-Policy: same-origin`, `Referrer-Policy: no-referrer` and, for an `Origin` the server allows, `Access-Control-Allow-Origin`.",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "The bytes the `Range` asks for, with `Content-Range`, and the same headers.",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/MediaNotFound"
+          },
+          "416": {
+            "$ref": "#/components/responses/MediaRangeNotSatisfiable"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/MediaDeliveryStorageNotConfigured"
+          }
+        }
+      }
+    },
+    "/media/{token}/{rendition}/{name}": {
+      "get": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "An output of one rendition: its media playlist or an MPEG-TS segment.",
+        "operationId": "getMediaRenditionOutput",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The token of a playback session.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "rendition",
+            "in": "path",
+            "description": "A rendition the video has: `360p`, `720p`, `1080p`, or one below 360p.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "`index.m3u8` or a segment `segment_<nnnnn>.ts`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "description": "One range of bytes, as for `getSignedFile`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The playlist (`application/vnd.apple.mpegurl`) or segment (`video/mp2t`), with the headers of `getMediaOutput`.",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "The bytes the `Range` asks for, with `Content-Range`, and the same headers.",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/MediaNotFound"
+          },
+          "416": {
+            "$ref": "#/components/responses/MediaRangeNotSatisfiable"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/MediaDeliveryStorageNotConfigured"
           }
         }
       }
@@ -11386,7 +11782,7 @@
         "properties": {
           "kind": {
             "$ref": "#/components/schemas/ItemKind",
-            "description": "`header`, `external_link` and `file` can be created; the other kinds arrive with their\nspecs."
+            "description": "`header`, `external_link`, `file` and `video` can be created; the other kinds arrive with\ntheir specs."
           },
           "position": {
             "type": [
@@ -11402,7 +11798,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "What the item points at, for a kind that points at a row: for `file`, required, a course\nfile of the module's course."
+            "description": "What the item points at, for a kind that points at a row: for `file`, required, a course\nfile of the module's course; for `video`, required, a video attached to the module's\ncourse, in any status."
           },
           "title": {
             "type": "string",
@@ -14989,6 +15385,24 @@
           "api_key"
         ]
       },
+      "SessionCaption": {
+        "type": "object",
+        "description": "A caption track of a playback session.",
+        "required": [
+          "lang",
+          "url"
+        ],
+        "properties": {
+          "lang": {
+            "type": "string",
+            "description": "A BCP 47 language tag."
+          },
+          "url": {
+            "type": "string",
+            "description": "Where its WebVTT file is served."
+          }
+        }
+      },
       "SignInKind": {
         "type": "string",
         "description": "The protocol of a sign-in method.",
@@ -15506,6 +15920,62 @@
           }
         },
         "additionalProperties": false
+      },
+      "VideoSession": {
+        "type": "object",
+        "description": "Where a player fetches one ready video, until `expires_at`.",
+        "required": [
+          "hls_url",
+          "mp4_url",
+          "poster_url",
+          "thumbnails_url",
+          "captions",
+          "chapters",
+          "duration_s",
+          "expires_at"
+        ],
+        "properties": {
+          "captions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionCaption"
+            },
+            "description": "The video's caption tracks, one per language."
+          },
+          "chapters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Chapter"
+            },
+            "description": "By `at_s`."
+          },
+          "duration_s": {
+            "type": "number",
+            "format": "double",
+            "description": "The length in seconds."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC: 2 hours after issue. A URL of the session answers 404 after it; ask for a\nnew session and resume."
+          },
+          "hls_url": {
+            "type": "string",
+            "description": "The HLS master playlist. Every playlist and segment it leads to carries the same token;\nanyone holding a URL of the session can fetch the video until it expires."
+          },
+          "mp4_url": {
+            "type": "string",
+            "description": "The MP4 for download, served as an attachment."
+          },
+          "poster_url": {
+            "type": "string",
+            "description": "A JPEG from 10% into the video."
+          },
+          "thumbnails_url": {
+            "type": "string",
+            "description": "The WebVTT index of the thumbnail sprites, whose cues name the sprites relatively."
+          }
+        }
       },
       "VideoUploadCreated": {
         "type": "object",
@@ -16419,7 +16889,7 @@
         }
       },
       "ItemCreateNotFound": {
-        "description": "`module.not_found`: no module with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `file.not_found`: a `file` item's `ref_id` is not a course file of the module's course. `org.not_found`: the request's organization cannot be determined.",
+        "description": "`module.not_found`: no module with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `file.not_found`: a `file` item's `ref_id` is not a course file of the module's course. `video.not_found`: a `video` item's `ref_id` is not a video attached to the module's course. `org.not_found`: the request's organization cannot be determined.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -16439,7 +16909,7 @@
         }
       },
       "ItemInvalid": {
-        "description": "`request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space, control or Unicode format character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none) or `item.ref_id_required` (a `file` item without its course file), `/position` with `item.position_out_of_range` (outside 0 to the module's item count), or, on a patch, `/requirement` with `requirement.invalid` (an unknown shape or member, `min_percent` outside 1 to 100, or a requirement the item's kind does not take, such as any on a header) or `requirement.unavailable` (`submit`, `score` or `mastery`, reserved for quizzes and activities).",
+        "description": "`request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space, control or Unicode format character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none) or `item.ref_id_required` (a `file` item without its course file, or a `video` item without its video), `/position` with `item.position_out_of_range` (outside 0 to the module's item count), or, on a patch, `/requirement` with `requirement.invalid` (an unknown shape or member, `min_percent` outside 1 to 100, or a requirement the item's kind does not take, such as any on a header) or `requirement.unavailable` (`submit`, `score` or `mastery`, reserved for quizzes and activities).",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -16570,6 +17040,46 @@
       },
       "ManageForbidden": {
         "description": "`permission.denied`: you can see the account but do not hold `account.manage` at a scope containing it (for a delete, the account's parent). `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "MediaDeliveryStorageNotConfigured": {
+        "description": "`storage.not_configured`: the server has no file storage; `detail` names `STEPCLIMB_STORAGE_URL`. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "MediaNotFound": {
+        "description": "`file.not_found`: the URL is not a playback URL of this server's organization, has expired, names a video that is gone, not ready or transcoded again since, or names a path the video's outputs do not have. Every one of these answers the same.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "MediaRangeNotSatisfiable": {
+        "description": "`file.range_invalid`: the `Range` starts at or after the output's end. `Content-Range` names its length.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "MediaStorageNotConfigured": {
+        "description": "`storage.not_configured`: the server has no file storage; `detail` names `STEPCLIMB_STORAGE_URL`. `org.not_found`: the request's organization cannot be determined.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -17148,6 +17658,16 @@
           }
         }
       },
+      "PreviewForbidden": {
+        "description": "`permission.denied`: you can see a course the video is attached to but do not hold `course.view_all` at a scope containing any of them. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "ProgressConflict": {
         "description": "`course.archived`: the course is archived and takes no progress.",
         "content": {
@@ -17666,6 +18186,56 @@
           }
         }
       },
+      "VideoDeleteConflict": {
+        "description": "`video.in_use`: an item of a course names the video; delete the item first. `video.status_invalid`: the video is being transcoded; wait until it is ready or failed. `course.archived`: a course the video is attached to is archived.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "VideoDeleteForbidden": {
+        "description": "`permission.denied`: you do not hold `course.content_edit` at a scope containing every course the video is attached to. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "VideoDetachConflict": {
+        "description": "`video.in_use`: an item of the course names the video; delete the item first. `video.status_invalid`: the course is the video's last and the video is being transcoded; wait until it is ready or failed. `course.archived`: the course is archived.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "VideoDetachForbidden": {
+        "description": "`permission.denied`: you can see the course but do not hold `course.content_edit` at a scope containing it. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "VideoDetachNotFound": {
+        "description": "`course.not_found`: no course with this id exists in the organization, or you cannot see it. `video.not_found`: no video with this id is attached to the course. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "VideoEditForbidden": {
         "description": "`permission.denied`: you can see a course the video is attached to but do not hold `course.content_edit` at a scope containing any of them. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
@@ -17696,6 +18266,16 @@
           }
         }
       },
+      "VideoNotReady": {
+        "description": "`video.not_ready`: the video has nothing to play yet: it is uploading or processing, or its transcode failed.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "VideoRenameConflict": {
         "description": "`course.archived`: every course through which you may edit the video is archived.",
         "content": {
@@ -17708,6 +18288,36 @@
       },
       "VideoRetryConflict": {
         "description": "`video.status_invalid`: the video did not fail as `video.transcode_failed`, or its upload is no longer stored; upload it again as a new video. `video.retry_limit_reached`: the video has been retried 3 times, each charging transcode minutes; upload it again as a new video. `course.archived`: every course through which you may edit the video is archived.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "VideoSessionForbidden": {
+        "description": "`permission.denied`: you do not hold `course.view` at a scope containing the course. `item.locked`: the item is locked for you; `reasons` says what it waits for. `auth.csrf_refused`: the request did not come from this site.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "VideoSessionInvalid": {
+        "description": "`request.invalid`: `errors` names the body's root with `item.not_a_video`: the item is not a `video` item.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "VideoSessionNotFound": {
+        "description": "`item.not_found`: no item with this id exists in the organization, or you cannot see it: its course is out of your reach, a draft course or a template, or the item or its module is unpublished, and you do not hold `course.view_all` at the course. `video.not_found`: the item's video no longer exists. `org.not_found`: the request's organization cannot be determined.",
         "content": {
           "application/problem+json": {
             "schema": {

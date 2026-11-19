@@ -156,6 +156,8 @@ const PUBLIC: &[&str] = &[
     "requestAppToken",
     "revokeAppToken",
     "getSignedFile",
+    "getMediaOutput",
+    "getMediaRenditionOutput",
 ];
 
 /// One entry per operation that needs a principal (B20). The M0 specs' routes add theirs here
@@ -568,6 +570,30 @@ const TABLE: &[Entry] = &[
             CourseContentEdit::KEY,
             VIDEO_NOT_FOUND,
             rename_video_in_tower,
+        ),
+    },
+    Entry {
+        operation_id: "deleteVideo",
+        access: permission(CourseContentEdit::KEY, VIDEO_NOT_FOUND, video_in_tower),
+    },
+    Entry {
+        operation_id: "detachCourseVideo",
+        access: permission(
+            CourseContentEdit::KEY,
+            COURSE_NOT_FOUND,
+            video_attached_in_tower,
+        ),
+    },
+    Entry {
+        operation_id: "createVideoPreviewSession",
+        access: permission(CourseViewAll::KEY, VIDEO_NOT_FOUND, ready_video_in_tower),
+    },
+    Entry {
+        operation_id: "createItemVideoSession",
+        access: permission(
+            CourseView::KEY,
+            ITEM_NOT_FOUND,
+            session_of_published_video_item,
         ),
     },
     Entry {
@@ -2227,6 +2253,47 @@ fn rename_video_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send 
     })
 }
 
+/// A published course in Tower and the video of an upload in it, named by both path parameters.
+fn video_attached_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        let (_, video) = org.video_upload(course).await;
+        Call {
+            params: vec![("course_id", course), ("video_id", video)],
+            body: None,
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A `ready` video of a published course in Tower (M1 spec 08 B17).
+fn ready_video_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        Call {
+            params: vec![("video_id", org.ready_video(course).await)],
+            body: None,
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A published `video` item of a published module of a published course in Tower, naming a
+/// `ready` video (M1 spec 08 B17).
+fn session_of_published_video_item(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        let module = org.module(course).await;
+        let item = org.video_item(module, org.ready_video(course).await).await;
+        org.publish(module, item).await;
+        Call {
+            params: vec![("item_id", item)],
+            body: None,
+            at: At::Account(org.tower),
+        }
+    })
+}
+
 /// The video of a complete upload in a published course in Tower whose transcode failed, so it
 /// can be retried (M1 spec 08 B2).
 fn failed_video_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
@@ -2686,6 +2753,10 @@ async fn public_operations_answer_without_a_credential(pool: PgPool) {
             signed_file_answers_without_a_credential(&world, &app, &org).await;
             continue;
         }
+        if *id == "getMediaOutput" || *id == "getMediaRenditionOutput" {
+            media_answers_without_a_credential(&world, &app, &org, id).await;
+            continue;
+        }
         let (body, cookie) = public_request(&world, &org, id).await;
         let answer = send(
             &app,
@@ -2758,6 +2829,49 @@ async fn signed_file_answers_without_a_credential(world: &World, app: &Router, o
     .await;
     assert!(answer.status.is_success(), "getSignedFile: {answer:?}");
     assert_eq!(answer.body.as_bytes(), bytes, "getSignedFile");
+}
+
+/// A playback URL serves its video's output to a request with no session at all: the token is
+/// the credential (M1 spec 08 B18).
+async fn media_answers_without_a_credential(world: &World, app: &Router, org: &Org, id: &str) {
+    let state = world.state();
+    let storage = state.storage.clone().expect("the suite's store");
+    let course = org.course(org.tower, true).await;
+    let video = org.ready_video(course).await;
+    let name = if id == "getMediaOutput" {
+        "master.m3u8"
+    } else {
+        "360p/index.m3u8"
+    };
+    let bytes = format!("#EXTM3U\n# {} {name}\n", org.slug).into_bytes();
+    let key = format!("orgs/{}/videos/{video}/v1/{name}", org.id);
+    storage
+        .store()
+        .put(&storage.path(&key), bytes.clone().into())
+        .await
+        .expect("store the output");
+    let grant = stepclimb_server::media_urls::MediaGrant {
+        org_id: org.id,
+        video_id: video,
+        run: 1,
+        expires_at: now()
+            .duration_since(UNIX_EPOCH)
+            .expect("after the epoch")
+            .as_secs()
+            + 60,
+    };
+    let token = stepclimb_server::media_urls::seal(&state.keys, &grant).expect("seal");
+    let answer = send(
+        app,
+        &Method::GET,
+        &format!("/media/{token}/{name}"),
+        org.id,
+        None,
+        None,
+    )
+    .await;
+    assert!(answer.status.is_success(), "{id}: {answer:?}");
+    assert_eq!(answer.body.as_bytes(), bytes, "{id}");
 }
 
 /// The OAuth 2.1 authorization endpoint answers an anonymous browser without a 401 problem: a
@@ -4278,6 +4392,42 @@ impl Org {
             .expect("start an upload");
         tx.commit().await.expect("commit");
         (upload.id, video.id)
+    }
+
+    /// A video of `course` as a successful transcode run 1 leaves it: `ready`, one 360p
+    /// rendition, its upload row gone. No output is stored; a session reads none.
+    async fn ready_video(&self, course: Uuid) -> Uuid {
+        let (upload, video) = self.video_upload(course).await;
+        sqlx::query("DELETE FROM video_uploads WHERE id = $1")
+            .bind(upload)
+            .execute(&self.pool)
+            .await
+            .expect("drop the upload");
+        sqlx::query(
+            "UPDATE videos SET status = 'ready', output_run = 1, duration_s = 12,
+                    renditions = '{\"heights\": [360]}'::jsonb
+             WHERE id = $1",
+        )
+        .bind(video)
+        .execute(&self.pool)
+        .await
+        .expect("set the video ready");
+        video
+    }
+
+    /// A new `video` item naming `video`, last in `module`: its id.
+    async fn video_item(&self, module: Uuid, video: Uuid) -> Uuid {
+        let new = items::NewItem {
+            kind: items::Kind::Video,
+            title: format!("Lecture of {}", self.slug),
+            ref_id: Some(video),
+            url: None,
+            position: None,
+        };
+        items::create(&self.pool, scope(self.id), module, &new, now())
+            .await
+            .expect("create item")
+            .id
     }
 
     /// A course file in `folder` of `course`, its bytes naming the slug and a new id: its id.

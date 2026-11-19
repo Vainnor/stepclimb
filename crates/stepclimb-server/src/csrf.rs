@@ -49,7 +49,7 @@ impl OriginAllowlist {
         Self(std::iter::once(public).chain(allowed).cloned().collect())
     }
 
-    fn contains(&self, origin: &[u8]) -> bool {
+    pub(crate) fn contains(&self, origin: &[u8]) -> bool {
         self.0
             .iter()
             .any(|allowed| allowed.as_str().as_bytes() == origin)

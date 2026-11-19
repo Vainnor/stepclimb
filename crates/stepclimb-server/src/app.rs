@@ -21,15 +21,15 @@ use crate::{
     csrf::{self, OriginAllowlist},
     discovery, enrollment,
     error::ApiError,
-    file_delivery, file_urls, health, identities, items, local_sign_in, manifest, me, modules,
-    my_passkeys, oauth_authorize, oauth_token, openapi, organization, outline, pages,
-    passkey_enrollment, passkey_sign_in, password,
+    file_delivery, file_urls, health, identities, items, local_sign_in, manifest, me,
+    media_delivery, media_urls, modules, my_passkeys, oauth_authorize, oauth_token, openapi,
+    organization, outline, pages, passkey_enrollment, passkey_sign_in, password,
     password_hasher::PasswordHasher,
     progress, provider_admin, provider_callback, provider_sign_in,
     providers::Providers,
     rate_limit::RateLimiter,
-    role_assignments, roles, service_accounts, spa, totp, totp_enrollment, upload, users,
-    video_uploads, videos,
+    role_assignments, roles, service_accounts, signed_cors, spa, totp, totp_enrollment, upload,
+    users, video_removal, video_uploads, videos,
     web_origin::WebOrigin,
 };
 
@@ -93,8 +93,13 @@ pub fn router(state: AppState) -> Router {
         .fallback(spa::serve)
         // Around every route and both fallbacks, so no handler runs before it.
         .layer(middleware::from_fn_with_state(
-            allowlist,
+            allowlist.clone(),
             csrf::refuse_cross_site,
+        ))
+        // Answers the signed prefixes' preflights before the routes, whose methods have none.
+        .layer(middleware::from_fn_with_state(
+            allowlist,
+            signed_cors::signed_cors,
         ))
         // Outside the CSRF check, so its refusals carry the header too.
         .layer(middleware::from_fn(no_store_for_api));
@@ -135,10 +140,13 @@ fn request_span(request: &axum::http::Request<axum::body::Body>) -> tracing::Spa
 }
 
 /// `path` as a log line may hold it: a signed file URL (`/files/<token>`, docs/specs/m1/06-files.md
-/// B16) without its token, which is the credential that fetches the file.
+/// B16) or a playback URL (`/media/<token>/...`, docs/specs/m1/08-uploaded-video.md B18) without
+/// its token, which is the credential that fetches the file or the video.
 fn logged_path(path: &str) -> &str {
     if path.starts_with("/files/") {
         "/files/{token}"
+    } else if path.starts_with("/media/") {
+        "/media/{token}"
     } else {
         path
     }
@@ -373,6 +381,22 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         ),
         ("/files/{token}", get(file_delivery::get_signed_file)),
         (
+            "/api/v1/items/{item_id}/video-session",
+            post(media_urls::create_item_video_session),
+        ),
+        (
+            "/api/v1/videos/{video_id}/preview-session",
+            post(media_urls::create_video_preview_session),
+        ),
+        (
+            "/media/{token}/{name}",
+            get(media_delivery::get_media_output),
+        ),
+        (
+            "/media/{token}/{rendition}/{name}",
+            get(media_delivery::get_media_rendition_output),
+        ),
+        (
             "/api/v1/course-files/{course_file_id}",
             get(course_files::get_course_file)
                 .patch(course_files::update_course_file)
@@ -417,7 +441,13 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         ),
         (
             "/api/v1/videos/{video_id}",
-            get(videos::get_video).patch(videos::update_video),
+            get(videos::get_video)
+                .patch(videos::update_video)
+                .delete(video_removal::delete_video),
+        ),
+        (
+            "/api/v1/courses/{course_id}/videos/{video_id}",
+            delete(video_removal::detach_course_video),
         ),
         ("/api/v1/videos/{video_id}/retry", post(videos::retry_video)),
         ("/api/v1/admin/permissions", get(roles::list_permissions)),
@@ -554,6 +584,10 @@ mod tests {
     fn a_signed_file_urls_token_never_reaches_a_log_line() {
         assert_eq!(logged_path("/files/c2VjcmV0LXRva2Vu"), "/files/{token}");
         assert_eq!(logged_path("/files/"), "/files/{token}");
+        assert_eq!(
+            logged_path("/media/c2VjcmV0LXRva2Vu/360p/segment_00001.ts"),
+            "/media/{token}"
+        );
         assert_eq!(
             logged_path("/api/v1/items/1/file-url"),
             "/api/v1/items/1/file-url"

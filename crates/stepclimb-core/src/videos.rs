@@ -50,7 +50,7 @@ impl Status {
         }
     }
 
-    fn parse(value: &str) -> Option<Self> {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
             "uploading" => Some(Self::Uploading),
             "processing" => Some(Self::Processing),

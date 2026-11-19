@@ -131,6 +131,9 @@ pub enum Error {
     /// A `file` item's `ref_id` that is not a course file of the item's course (spec 06 B13).
     #[error("the course file does not exist")]
     FileNotFound,
+    /// A `video` item's `ref_id` that is not a video attached to the item's course (spec 08 B3).
+    #[error("the video does not exist")]
+    VideoNotFound,
     /// A position outside 0 to the item count of the destination (B4, B11).
     #[error("the position is outside the module")]
     PositionOutOfRange,

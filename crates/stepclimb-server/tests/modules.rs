@@ -654,7 +654,7 @@ async fn t4_t5_kinds_and_urls_are_checked(pool: PgPool) {
     let admin = f.org_admin(t.org).await;
     let module = f.module(t).await;
     let items_uri = format!("{}/items", module_path(module));
-    for kind in ["quiz", "activity", "page", "video"] {
+    for kind in ["quiz", "activity", "page"] {
         f.send(
             Method::POST,
             &items_uri,
@@ -665,6 +665,16 @@ async fn t4_t5_kinds_and_urls_are_checked(pool: PgPool) {
         .await
         .invalid_at("/kind", "item.kind_unavailable");
     }
+    // M1 spec 08 B3: a `video` item names a video attached to its course.
+    f.send(
+        Method::POST,
+        &items_uri,
+        t.org,
+        &admin,
+        Some(json!({ "kind": "video", "title": "X", "ref_id": Uuid::nil() })),
+    )
+    .await
+    .expect(StatusCode::NOT_FOUND, "video.not_found");
     f.send(
         Method::POST,
         &items_uri,

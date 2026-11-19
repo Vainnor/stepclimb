@@ -702,6 +702,43 @@ Coordinator decision (2026-11-17), after the security review of I2:
   point, and the video still ends failed.
 
 
+### Points I3 settled
+
+Coordinator decision (2026-11-19), pending owner review: the spec left each of these open while
+building I3. D42 to D45 are taken by I6 (#240) and #327, which were open alongside.
+
+- **D46. Deleting and detaching.** A delete or detach first locks each course it touches, the
+  lock `items::create` takes before it checks a `video` item's video, then the video row. A
+  delete needs `course.content_edit` at every course the video is attached to (403
+  `permission.denied` otherwise) and none of them archived (409 `course.archived`); a detach
+  takes the course's write check. Besides B20's 409 `video.in_use`, the video itself is not
+  deleted while `processing` (409 `video.status_invalid`): its transcode would write `v<n>/`
+  after the delete, and nothing would remove it. Detaching from a course while the video stays
+  attached elsewhere is allowed in any status. A deleted video's row takes its attachments, upload
+  row and chapters with it; its objects (`orgs/<org>/videos/<id>/`, renditions and any upload
+  parts) are deleted by the job `videos.purge` (default queue, 10 attempts from 1 minute to an
+  hour apart), enqueued in the delete's transaction, which deletes nothing while a video with
+  that id exists. So a store failure after the commit is retried rather than leaving objects no
+  row names.
+- **D47. B1's course copy.** Making `video` items creatable (B3) makes them copyable, since a
+  course built through the API must stay copyable (spec 02 B13). A course copy is attached to
+  every video its source is attached to, and a copied `video` item names the same video, so no
+  rendition is duplicated.
+- **D48. Delivery details.** The playback routes are `GET /media/{token}/{name}` and `GET
+  /media/{token}/{rendition}/{name}` (no wildcard: an output is at most one directory deep). They
+  accept only the names a transcode writes (`stepclimb_media::served`) and answer every refusal
+  404 `file.not_found`, as `/files/` does. Each answer has `/files/`'s headers (`nosniff`, the
+  sandboxing CSP, CORP `same-origin`, `no-referrer`, `Cache-Control: private` until the token
+  expires, one `Range`), the output's type (`application/vnd.apple.mpegurl`, `video/mp2t`,
+  `video/mp4`, `image/jpeg`, `text/vtt`), and `attachment; filename="video.mp4"` for the MP4. A
+  token names the run, and each request reads the video again: a video deleted, no longer
+  `ready`, or transcoded again under another run stops serving an older token. A session's
+  `captions` stay empty until I4 stores captions. A session for an item whose kind is not
+  `video` answers 422 `item.not_a_video`. B18a's allowlist is the CSRF check's (the public
+  origin and `allowed_origins`); a preflight is answered 204 with `GET, HEAD`, `Range` and a
+  10-minute `Access-Control-Max-Age`; actual answers expose `Content-Range`, `Content-Length`
+  and `Accept-Ranges`.
+
 ## Issues
 
 1. **I1. Video rows, tus upload and limits.** Migration for `videos`, `course_videos`,

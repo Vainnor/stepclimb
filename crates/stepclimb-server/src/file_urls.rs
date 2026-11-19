@@ -21,7 +21,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{Json, extract::State};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use sqlx::{Postgres, Transaction};
 use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{
     OrgScope, course_files,
@@ -175,11 +176,7 @@ impl Grant {
 
 /// `grant` sealed with `keys` and base64url-encoded without padding.
 pub fn seal(keys: &KeyRing, grant: &Grant) -> Result<String, ApiError> {
-    let plain = serde_json::to_vec(grant).map_err(|error| ApiError::internal(&error))?;
-    let sealed = keys
-        .encrypt(&plain, &[CONTEXT])
-        .map_err(|error| ApiError::internal(&error))?;
-    Ok(URL_SAFE_NO_PAD.encode(sealed))
+    seal_under(keys, CONTEXT, grant)
 }
 
 /// The grant `token` seals, or `None` when it is too long, not base64url, does not open with
@@ -187,11 +184,37 @@ pub fn seal(keys: &KeyRing, grant: &Grant) -> Result<String, ApiError> {
 /// not hold a grant. Expiry is the caller's to check ([`Grant::valid_at`]).
 #[must_use]
 pub fn open(keys: &KeyRing, token: &str) -> Option<Grant> {
+    open_under(keys, CONTEXT, token)
+}
+
+/// `value` as JSON sealed with `keys` under the encryption context `context`, base64url-encoded
+/// without padding: B16's token, which a playback token (`crate::media_urls`) seals too under its
+/// own context.
+pub(crate) fn seal_under<T: Serialize>(
+    keys: &KeyRing,
+    context: &[u8],
+    value: &T,
+) -> Result<String, ApiError> {
+    let plain = serde_json::to_vec(value).map_err(|error| ApiError::internal(&error))?;
+    let sealed = keys
+        .encrypt(&plain, &[context])
+        .map_err(|error| ApiError::internal(&error))?;
+    Ok(URL_SAFE_NO_PAD.encode(sealed))
+}
+
+/// What [`seal_under`] sealed in `token` under `context`, or `None` when it is longer than
+/// [`MAX_TOKEN_CHARS`], not base64url, does not open with `keys` under `context`, or does not
+/// hold a `T`.
+pub(crate) fn open_under<T: DeserializeOwned>(
+    keys: &KeyRing,
+    context: &[u8],
+    token: &str,
+) -> Option<T> {
     if token.len() > MAX_TOKEN_CHARS {
         return None;
     }
     let sealed = URL_SAFE_NO_PAD.decode(token).ok()?;
-    let plain = keys.decrypt(&sealed, &[CONTEXT]).ok()?;
+    let plain = keys.decrypt(&sealed, &[context]).ok()?;
     serde_json::from_slice(&plain).ok()
 }
 
@@ -245,32 +268,9 @@ pub async fn create_item_file_url(
     State(state): State<AppState>,
     ApiJson(body): ApiJson<FileUrlRequest>,
 ) -> Result<Json<SignedUrl>, ApiError> {
-    let target = require.target();
-    let (scope, item_id, course_id) = (require.grants().scope(), target.id, target.course.id);
-    let mut tx = outline::begin_read(&state).await?;
-    // `require`'s course check again, in the snapshot the lock check reads: it must run before
-    // `require_unlocked`, which does not check the course.
-    let viewer = outline::view(&mut tx, &require, course_id, ITEM_NOT_FOUND).await?;
-    if !viewer.sees_all {
-        let completed = if viewer.learner {
-            let user_id = require.principal().user_id;
-            progress::completed_items(&mut *tx, scope, user_id, course_id)
-                .await
-                .map_err(progress_error)?
-        } else {
-            HashSet::new()
-        };
-        unlock::require_unlocked(&mut tx, scope, item_id, &completed, state.clock.now()).await?;
-    }
-    let item = items::get(&mut *tx, scope, item_id)
-        .await
-        .map_err(content_error)?
-        .ok_or_else(|| {
-            not_found_as(
-                stepclimb_core::grants::Denied::CourseNotFound,
-                ITEM_NOT_FOUND,
-            )
-        })?;
+    let scope = require.grants().scope();
+    let course_id = require.target().course.id;
+    let (mut tx, item) = unlocked_item(&state, &require).await?;
     let course_file_id = match (item.kind, item.ref_id) {
         (items::Kind::File, Some(id)) => id,
         _ => {
@@ -292,6 +292,43 @@ pub async fn create_item_file_url(
         })?;
     outline::end(tx).await?;
     Ok(Json(signed(&state, scope, &file, body.disposition)?))
+}
+
+/// The item `require` names, read in a read-only transaction that stays open for the caller. A
+/// caller without `course.view_all` gets it only when the item and its module are published and
+/// the item is unlocked for them (spec 03 B14, spec 04 B13), with their own completed items when
+/// they are a learner and none otherwise: 404 `item.not_found` or 403 `item.locked`.
+pub(crate) async fn unlocked_item(
+    state: &AppState,
+    require: &Require<CourseView, ItemTarget>,
+) -> Result<(Transaction<'static, Postgres>, items::Item), ApiError> {
+    let target = require.target();
+    let (scope, item_id, course_id) = (require.grants().scope(), target.id, target.course.id);
+    let mut tx = outline::begin_read(state).await?;
+    // `require`'s course check again, in the snapshot the lock check reads: it must run before
+    // `require_unlocked`, which does not check the course.
+    let viewer = outline::view(&mut tx, require, course_id, ITEM_NOT_FOUND).await?;
+    if !viewer.sees_all {
+        let completed = if viewer.learner {
+            let user_id = require.principal().user_id;
+            progress::completed_items(&mut *tx, scope, user_id, course_id)
+                .await
+                .map_err(progress_error)?
+        } else {
+            HashSet::new()
+        };
+        unlock::require_unlocked(&mut tx, scope, item_id, &completed, state.clock.now()).await?;
+    }
+    let item = items::get(&mut *tx, scope, item_id)
+        .await
+        .map_err(content_error)?
+        .ok_or_else(|| {
+            not_found_as(
+                stepclimb_core::grants::Denied::CourseNotFound,
+                ITEM_NOT_FOUND,
+            )
+        })?;
+    Ok((tx, item))
 }
 
 /// A signed URL for any file of a course, for its staff (the files area and the editor).

@@ -8,7 +8,8 @@
 //! periodic ones:
 //! `jobs.prune` (hourly), `auth.flows_cleanup` (every 10 minutes), `files.cleanup` (hourly,
 //! docs/specs/m1/06-files.md B8, B21) and `videos.cleanup` (hourly,
-//! docs/specs/m1/08-uploaded-video.md B6). It also knows the progress event topics
+//! docs/specs/m1/08-uploaded-video.md B6). `videos.purge` deletes a deleted video's objects (B20).
+//! It also knows the progress event topics
 //! (docs/specs/m1/05-progress-and-events.md B10), so the outbox dispatcher claims their events.
 
 use stepclimb_jobs::{Registry, RegistryError, prune};
@@ -16,6 +17,7 @@ use stepclimb_jobs::{Registry, RegistryError, prune};
 use crate::{
     files_cleanup, flow, progress,
     storage::Storage,
+    video_removal,
     video_transcode::{self, Transcoder},
     videos_cleanup,
 };
@@ -35,6 +37,7 @@ pub fn registry(
     flow::register_cleanup(&mut registry)?;
     files_cleanup::register(&mut registry, storage.clone())?;
     videos_cleanup::register(&mut registry, storage.clone())?;
+    video_removal::register(&mut registry, storage.clone())?;
     video_transcode::register(&mut registry, storage, transcoder)?;
     progress::register_topics(&mut registry)?;
     Ok(registry)
@@ -72,6 +75,7 @@ mod tests {
         assert!(registry.knows(&files_cleanup::CLEANUP));
         assert!(registry.knows(&videos_cleanup::CLEANUP));
         assert!(registry.knows(&video_transcode::TRANSCODE));
+        assert!(registry.knows(&video_removal::PURGE));
         assert_eq!(registry.queues(), ["default", "transcode"]);
         // docs/specs/m1/08-uploaded-video.md T13: a `worker` never claims a transcode.
         assert_eq!(general_queues(&registry), ["default"]);

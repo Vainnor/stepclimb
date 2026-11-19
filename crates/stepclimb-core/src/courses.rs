@@ -701,7 +701,9 @@ pub async fn copy<'c>(
 /// keeps its kind and URL and goes into the copy of its module. Each module keeps its unlock and
 /// completion rules and each item its requirement (spec 04 B1, B3), and the prerequisites are
 /// copied between the copies of their modules ([`copy_prerequisites`]). The course files are
-/// copied ([`copy_course_files`]) and each `file` item names its course file's copy. `created_at` and
+/// copied ([`copy_course_files`]) and each `file` item names its course file's copy; the copy is
+/// attached to the same videos ([`copy_course_videos`]), so a `video` item names the same video
+/// (spec 08 B1). `created_at` and
 /// `updated_at` are `now_us`. An item of a kind this release does not copy ([`items::Kind::copyable`]) is
 /// [`Error::ContentNotCopyable`]: its `ref_id` names content no copy of this release copies. A
 /// stored URL [`items::url_is_valid`] refuses is [`Error::CopiedUrlInvalid`], as every writer of
@@ -747,7 +749,33 @@ async fn copy_outline(
         .collect();
     copy_prerequisites(conn, scope, from, to, (&sources, &copies), now_us).await?;
     let files = copy_course_files(conn, scope, from, to, now_us).await?;
+    copy_course_videos(conn, scope, from, to, now_us).await?;
     copy_items(conn, scope, from, to, (&new_ids, &files), now_us).await
+}
+
+/// [`copy_outline`]'s videos (spec 08 B1): `to` is attached to every video `from` is attached
+/// to, so the copy plays the same stored renditions and no byte is added.
+async fn copy_course_videos(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    from: Uuid,
+    to: Uuid,
+    now_us: i64,
+) -> Result<(), Error> {
+    sqlx::query!(
+        "INSERT INTO course_videos (org_id, course_id, video_id, created_at, updated_at)
+         SELECT $1, $2, video_id,
+                timestamptz 'epoch' + $4::bigint * interval '1 microsecond',
+                timestamptz 'epoch' + $4::bigint * interval '1 microsecond'
+         FROM course_videos WHERE org_id = $1 AND course_id = $3",
+        scope.org_id(),
+        to,
+        from,
+        now_us,
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
 }
 
 /// [`copy_outline`]'s course files (spec 06 B20): each course file of `from` as one of `to` in
@@ -840,7 +868,8 @@ async fn copy_prerequisites(
 
 /// [`copy_outline`]'s items: each into the copy of its module, `modules` mapping a source
 /// module's id to its copy's; a `file` item names the copy of its course file, `files` mapping a
-/// source course file's id to its copy's.
+/// source course file's id to its copy's, and a `video` item the same video, which the copy is
+/// attached to.
 async fn copy_items(
     conn: &mut PgConnection,
     scope: OrgScope,
@@ -889,11 +918,14 @@ async fn copy_items(
         .collect::<Result<Vec<Uuid>, Error>>()?;
     // A `file` item's course file is one of `from` (checked when the item was made, and a
     // course file an item names cannot be deleted), copied above in this transaction; a miss is
-    // a stored row this function cannot place. Copyable kinds name nothing else.
+    // a stored row this function cannot place. A `video` item's video stays the same: it was
+    // attached to `from` when the item was made, cannot be detached while the item names it,
+    // and the copy was attached to it above. Copyable kinds name nothing else.
     let ref_ids = rows
         .iter()
         .map(|r| match r.ref_id {
             None => Ok(None),
+            Some(ref_id) if r.kind == items::Kind::Video.as_str() => Ok(Some(ref_id)),
             Some(ref_id) => files.get(&ref_id).copied().map(Some).ok_or(Error::Stored {
                 id: r.id,
                 column: "ref_id",

@@ -7,9 +7,10 @@
 //! write first locks the course row (`modules::lock_course`, B12) and refuses an archived
 //! course, as [`crate::modules`] does. Errors are [`crate::modules::Error`].
 //!
-//! Which kinds can be created is [`Kind::creatable`]: `header`, `external_link` and `file` in this
-//! release. Each content spec makes its kind creatable together with the check of its `ref_id`
-//! (B5, B6): a `file` item's is a course file of the item's course (spec 06 B13). Every query
+//! Which kinds can be created is [`Kind::creatable`]: `header`, `external_link`, `file` and
+//! `video` in this release. Each content spec makes its kind creatable together with the check
+//! of its `ref_id` (B5, B6): a `file` item's is a course file of the item's course (spec 06 B13),
+//! a `video` item's a video attached to the item's course in any status (spec 08 B3). Every query
 //! filters by `org_id = scope.org_id()`.
 
 use std::time::SystemTime;
@@ -85,7 +86,10 @@ impl Kind {
     /// is refused.
     #[must_use]
     pub fn creatable(self) -> bool {
-        matches!(self, Self::Header | Self::ExternalLink | Self::File)
+        matches!(
+            self,
+            Self::Header | Self::ExternalLink | Self::File | Self::Video
+        )
     }
 
     /// Whether `courses::copy` copies items of the kind (spec 02 B13). A kind whose `ref_id`
@@ -95,9 +99,10 @@ impl Kind {
     #[must_use]
     pub fn copyable(self) -> bool {
         match self {
-            // A `file` item's course file is copied with it (spec 06 B20).
-            Self::Header | Self::ExternalLink | Self::File => true,
-            Self::Page | Self::Video | Self::Quiz | Self::Activity => false,
+            // A `file` item's course file is copied with it (spec 06 B20); a `video` item's
+            // video is attached to the copy (spec 08 B1).
+            Self::Header | Self::ExternalLink | Self::File | Self::Video => true,
+            Self::Page | Self::Quiz | Self::Activity => false,
         }
     }
 
@@ -108,10 +113,10 @@ impl Kind {
     }
 
     /// Whether items of the kind that this release creates carry a `ref_id` (B5): a `file`
-    /// item names its course file (spec 06 B13).
+    /// item names its course file (spec 06 B13), a `video` item its video (spec 08 B3).
     #[must_use]
     pub fn has_ref(self) -> bool {
-        self == Self::File
+        matches!(self, Self::File | Self::Video)
     }
 }
 
@@ -599,18 +604,54 @@ async fn lock_module_course(
 }
 
 /// The `ref_id` of a new item names content of its course `course_id`: for a `file` item, a
-/// course file of that course ([`Error::FileNotFound`] otherwise, spec 06 B13). Called under the
-/// course lock, which a course file's delete also takes, so the course file cannot go before
-/// the item that names it is committed.
+/// course file of that course ([`Error::FileNotFound`] otherwise, spec 06 B13); for a `video`
+/// item, a video attached to that course ([`Error::VideoNotFound`] otherwise, spec 08 B3). Called
+/// under the course lock, which a course file's delete and a video's delete or detach
+/// (`video_removal`) also take, so the content cannot go before the item that names it is
+/// committed.
 async fn check_ref(
     conn: &mut PgConnection,
     scope: OrgScope,
     course_id: Uuid,
     new: &NewItem,
 ) -> Result<(), Error> {
-    let (Kind::File, Some(ref_id)) = (new.kind, new.ref_id) else {
-        return Ok(());
-    };
+    match (new.kind, new.ref_id) {
+        (Kind::File, Some(ref_id)) => check_file(conn, scope, course_id, ref_id).await,
+        (Kind::Video, Some(ref_id)) => check_video(conn, scope, course_id, ref_id).await,
+        _ => Ok(()),
+    }
+}
+
+/// [`Error::VideoNotFound`] unless the video `video_id` is attached to the course `course_id`.
+async fn check_video(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    course_id: Uuid,
+    video_id: Uuid,
+) -> Result<(), Error> {
+    let found = sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM course_videos
+                          WHERE org_id = $1 AND course_id = $2 AND video_id = $3) AS "found!""#,
+        scope.org_id(),
+        course_id,
+        video_id,
+    )
+    .fetch_one(conn)
+    .await?;
+    if found {
+        Ok(())
+    } else {
+        Err(Error::VideoNotFound)
+    }
+}
+
+/// [`Error::FileNotFound`] unless `ref_id` is a course file of the course `course_id`.
+async fn check_file(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    course_id: Uuid,
+    ref_id: Uuid,
+) -> Result<(), Error> {
     let found = sqlx::query_scalar!(
         r#"SELECT EXISTS (SELECT 1 FROM course_files
                           WHERE org_id = $1 AND course_id = $2 AND id = $3) AS "found!""#,
@@ -785,10 +826,11 @@ mod tests {
     }
 
     #[test]
-    fn only_headers_external_links_and_files_are_creatable() {
+    fn only_headers_external_links_files_and_videos_are_creatable() {
         assert!(check_kind(&new(Kind::Header)).is_ok());
         assert!(Kind::File.creatable());
-        for kind in [Kind::Page, Kind::Video, Kind::Quiz, Kind::Activity] {
+        assert!(Kind::Video.creatable());
+        for kind in [Kind::Page, Kind::Quiz, Kind::Activity] {
             assert!(
                 matches!(check_kind(&new(kind)), Err(Error::KindUnavailable)),
                 "{kind:?}"
@@ -816,7 +858,10 @@ mod tests {
             }
         }
         let copyable: Vec<_> = all.into_iter().filter(|k| k.copyable()).collect();
-        assert_eq!(copyable, [Kind::Header, Kind::ExternalLink, Kind::File]);
+        assert_eq!(
+            copyable,
+            [Kind::Header, Kind::ExternalLink, Kind::File, Kind::Video]
+        );
     }
 
     #[test]

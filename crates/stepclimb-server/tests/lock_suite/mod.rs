@@ -20,8 +20,8 @@
 //!   organization's rows are unchanged;
 //! - **read** (a route that answers a learner modules or items): a Student and an Observer get
 //!   200 in which every module and item is locked and no item has `url` or `ref_id`, and the
-//!   raw body holds neither the locked link's URL nor any stored `ref_id` (a page item's or a
-//!   file item's);
+//!   raw body holds neither the locked link's URL nor any stored `ref_id` (a page item's, a
+//!   file item's or a video item's);
 //! - **staff** (a route only staff call): its permission suite entry requires a permission in
 //!   [`STAFF`], which neither the built-in Student nor the Observer holds, and a Student and an
 //!   Observer enrolled in the target's course each get 403 `permission.denied`.
@@ -42,8 +42,8 @@ enum Lock {
     /// Student, and the request; the Student is enrolled at the call's `at`.
     Checked(Setup),
     /// It answers a learner modules or items: locked ones with B12's fields only. The setup
-    /// builds a course whose only module is locked, holding a link, a page item and a file item,
-    /// and names the course, the module and the page item.
+    /// builds a course whose only module is locked, holding a link, a page item, a file item and
+    /// a video item, and names the course, the module and the page item.
     Read(Setup),
     /// Only staff may call it; the permission suite's entry has its setup.
     Staff,
@@ -155,6 +155,22 @@ const LOCK_TABLE: &[LockEntry] = &[
         operation_id: "retryVideo",
         lock: Lock::Staff,
     },
+    LockEntry {
+        operation_id: "deleteVideo",
+        lock: Lock::Staff,
+    },
+    LockEntry {
+        operation_id: "detachCourseVideo",
+        lock: Lock::Staff,
+    },
+    LockEntry {
+        operation_id: "createVideoPreviewSession",
+        lock: Lock::Staff,
+    },
+    LockEntry {
+        operation_id: "createItemVideoSession",
+        lock: Lock::Checked(session_of_locked_video_item),
+    },
 ];
 
 /// The URL of the suite's links ([`Org::link`]).
@@ -186,6 +202,27 @@ fn view_locked_link(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>
         Call {
             params: vec![("item_id", item)],
             body: Some(serde_json::json!({ "action": "view" })),
+            at: At::Course(course),
+        }
+    })
+}
+
+/// [`locked_module`] with a published `video` item of a `ready` video after the link; the
+/// request asks for its playback session (M1 spec 08 B17).
+fn session_of_locked_video_item(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let (course, module, _) = locked_module(org).await;
+        let item = org.video_item(module, org.ready_video(course).await).await;
+        let publish = items::ItemPatch {
+            published: Some(true),
+            ..items::ItemPatch::default()
+        };
+        items::update(&org.pool, scope(org.id), item, &publish, now())
+            .await
+            .expect("publish the video item");
+        Call {
+            params: vec![("item_id", item)],
+            body: None,
             at: At::Course(course),
         }
     })
@@ -225,13 +262,17 @@ fn locked_outline(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> 
         let file_item = org
             .file_item(module, org.course_file(course, "/").await)
             .await;
+        // And a `video` item, whose `ref_id` is a video (M1 spec 08 B3).
+        let video_item = org.video_item(module, org.ready_video(course).await).await;
         let publish = items::ItemPatch {
             published: Some(true),
             ..items::ItemPatch::default()
         };
-        items::update(&org.pool, scope(org.id), file_item, &publish, now())
-            .await
-            .expect("publish the file item");
+        for item in [file_item, video_item] {
+            items::update(&org.pool, scope(org.id), item, &publish, now())
+                .await
+                .expect("publish the item");
+        }
         Call {
             params: vec![
                 ("course_id", course),

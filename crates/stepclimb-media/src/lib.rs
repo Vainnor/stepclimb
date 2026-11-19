@@ -15,11 +15,14 @@
 //!   protocol only, and a wall-clock deadline, an output size cap and a memory cap, keeping the
 //!   last 2 KiB of its stderr for the server's log (B10).
 //!
+//! - [`served`] says which output names a playback token serves, and as what type (B18).
+//!
 //! Resumable uploads (tus) live in the server, which stores each chunk as its own object;
-//! captions and signed delivery are later issues of the same spec.
+//! captions are a later issue of the same spec.
 
 pub mod plan;
 pub mod probe;
 pub mod run;
+pub mod served;
 pub mod tools;
 pub mod workdir;

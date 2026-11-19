@@ -744,6 +744,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/courses/{course_id}/videos/{video_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Detach a video from a course when no item of the course names it. Detaching it from its last
+         *     course deletes the video, as `deleteVideo` does.
+         */
+        delete: operations["detachCourseVideo"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/enrollments/{enrollment_id}": {
         parameters: {
             query?: never;
@@ -851,6 +871,26 @@ export interface paths {
          *     step that changes nothing answers your progress as it is. Completion is final.
          */
         post: operations["recordItemProgress"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/items/{item_id}/video-session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * A playback session for a `video` item's video. A caller without `course.view_all` gets it only
+         *     for a published item of a published module that is unlocked for them.
+         */
+        post: operations["createItemVideoSession"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1406,11 +1446,29 @@ export interface paths {
         get: operations["getVideo"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** Delete a video that no item of any course names, with its renditions and every attachment. */
+        delete: operations["deleteVideo"];
         options?: never;
         head?: never;
         /** Rename a video. A patch with no member changes nothing and answers the video. */
         patch: operations["updateVideo"];
+        trace?: never;
+    };
+    "/api/v1/videos/{video_id}/preview-session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A playback session for any video of a course, for its staff (the authoring screen). */
+        post: operations["createVideoPreviewSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/videos/{video_id}/retry": {
@@ -1677,6 +1735,43 @@ export interface paths {
          *     Stepclimb's default icons.
          */
         get: operations["getWebManifest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/media/{token}/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * An output at the top of the run's prefix: the master playlist, the MP4, the poster, the
+         *     thumbnail index or a sprite.
+         */
+        get: operations["getMediaOutput"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/media/{token}/{rendition}/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** An output of one rendition: its media playlist or an MPEG-TS segment. */
+        get: operations["getMediaRenditionOutput"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3236,8 +3331,8 @@ export interface components {
         /** @description An item to create, unpublished. */
         NewItem: {
             /**
-             * @description `header`, `external_link` and `file` can be created; the other kinds arrive with their
-             *     specs.
+             * @description `header`, `external_link`, `file` and `video` can be created; the other kinds arrive with
+             *     their specs.
              */
             kind: components["schemas"]["ItemKind"];
             /**
@@ -3248,7 +3343,8 @@ export interface components {
             /**
              * Format: uuid
              * @description What the item points at, for a kind that points at a row: for `file`, required, a course
-             *     file of the module's course.
+             *     file of the module's course; for `video`, required, a video attached to the module's
+             *     course, in any status.
              */
             ref_id?: string | null;
             /** @description Trimmed; 1 to 200 characters. */
@@ -4663,6 +4759,13 @@ export interface components {
          * @enum {string}
          */
         ServiceAccountKind: "api_key";
+        /** @description A caption track of a playback session. */
+        SessionCaption: {
+            /** @description A BCP 47 language tag. */
+            lang: string;
+            /** @description Where its WebVTT file is served. */
+            url: string;
+        };
         /**
          * @description The protocol of a sign-in method.
          * @enum {string}
@@ -4911,6 +5014,35 @@ export interface components {
         VideoPatch: {
             /** @description 1 to 200 characters after trimming. */
             title?: string;
+        };
+        /** @description Where a player fetches one ready video, until `expires_at`. */
+        VideoSession: {
+            /** @description The video's caption tracks, one per language. */
+            captions: components["schemas"]["SessionCaption"][];
+            /** @description By `at_s`. */
+            chapters: components["schemas"]["Chapter"][];
+            /**
+             * Format: double
+             * @description The length in seconds.
+             */
+            duration_s: number;
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC: 2 hours after issue. A URL of the session answers 404 after it; ask for a
+             *     new session and resume.
+             */
+            expires_at: string;
+            /**
+             * @description The HLS master playlist. Every playlist and segment it leads to carries the same token;
+             *     anyone holding a URL of the session can fetch the video until it expires.
+             */
+            hls_url: string;
+            /** @description The MP4 for download, served as an attachment. */
+            mp4_url: string;
+            /** @description A JPEG from 10% into the video. */
+            poster_url: string;
+            /** @description The WebVTT index of the thumbnail sprites, whose cues name the sprites relatively. */
+            thumbnails_url: string;
         };
         /** @description What a creation answers: the upload's path and the video it fills. */
         VideoUploadCreated: {
@@ -5698,7 +5830,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `module.not_found`: no module with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `file.not_found`: a `file` item's `ref_id` is not a course file of the module's course. `org.not_found`: the request's organization cannot be determined. */
+        /** @description `module.not_found`: no module with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `file.not_found`: a `file` item's `ref_id` is not a course file of the module's course. `video.not_found`: a `video` item's `ref_id` is not a video attached to the module's course. `org.not_found`: the request's organization cannot be determined. */
         ItemCreateNotFound: {
             headers: {
                 [name: string]: unknown;
@@ -5716,7 +5848,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space, control or Unicode format character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none) or `item.ref_id_required` (a `file` item without its course file), `/position` with `item.position_out_of_range` (outside 0 to the module's item count), or, on a patch, `/requirement` with `requirement.invalid` (an unknown shape or member, `min_percent` outside 1 to 100, or a requirement the item's kind does not take, such as any on a header) or `requirement.unavailable` (`submit`, `score` or `mastery`, reserved for quizzes and activities). */
+        /** @description `request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/kind` with `item.kind_unavailable` (this release cannot create items of the kind yet), `/url` with `item.url_invalid` (not an absolute `https` or `http` URL of at most 2,048 characters with a host, without a user name, password, white space, control or Unicode format character), `item.url_required` (an external link without a URL) or `item.url_unavailable` (a URL on another kind), `/ref_id` with `item.ref_id_unavailable` (a reference on a kind that has none) or `item.ref_id_required` (a `file` item without its course file, or a `video` item without its video), `/position` with `item.position_out_of_range` (outside 0 to the module's item count), or, on a patch, `/requirement` with `requirement.invalid` (an unknown shape or member, `min_percent` outside 1 to 100, or a requirement the item's kind does not take, such as any on a header) or `requirement.unavailable` (`submit`, `score` or `mastery`, reserved for quizzes and activities). */
         ItemInvalid: {
             headers: {
                 [name: string]: unknown;
@@ -5835,6 +5967,42 @@ export interface components {
         };
         /** @description `permission.denied`: you can see the account but do not hold `account.manage` at a scope containing it (for a delete, the account's parent). `auth.csrf_refused`: the request did not come from this site. */
         ManageForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `storage.not_configured`: the server has no file storage; `detail` names `STEPCLIMB_STORAGE_URL`. `org.not_found`: the request's organization cannot be determined. */
+        MediaDeliveryStorageNotConfigured: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `file.not_found`: the URL is not a playback URL of this server's organization, has expired, names a video that is gone, not ready or transcoded again since, or names a path the video's outputs do not have. Every one of these answers the same. */
+        MediaNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `file.range_invalid`: the `Range` starts at or after the output's end. `Content-Range` names its length. */
+        MediaRangeNotSatisfiable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `storage.not_configured`: the server has no file storage; `detail` names `STEPCLIMB_STORAGE_URL`. `org.not_found`: the request's organization cannot be determined. */
+        MediaStorageNotConfigured: {
             headers: {
                 [name: string]: unknown;
             };
@@ -6355,6 +6523,15 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `permission.denied`: you can see a course the video is attached to but do not hold `course.view_all` at a scope containing any of them. `auth.csrf_refused`: the request did not come from this site. */
+        PreviewForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `course.archived`: the course is archived and takes no progress. */
         ProgressConflict: {
             headers: {
@@ -6816,6 +6993,51 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `video.in_use`: an item of a course names the video; delete the item first. `video.status_invalid`: the video is being transcoded; wait until it is ready or failed. `course.archived`: a course the video is attached to is archived. */
+        VideoDeleteConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: you do not hold `course.content_edit` at a scope containing every course the video is attached to. `auth.csrf_refused`: the request did not come from this site. */
+        VideoDeleteForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `video.in_use`: an item of the course names the video; delete the item first. `video.status_invalid`: the course is the video's last and the video is being transcoded; wait until it is ready or failed. `course.archived`: the course is archived. */
+        VideoDetachConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: you can see the course but do not hold `course.content_edit` at a scope containing it. `auth.csrf_refused`: the request did not come from this site. */
+        VideoDetachForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it. `video.not_found`: no video with this id is attached to the course. `org.not_found`: the request's organization cannot be determined. */
+        VideoDetachNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `permission.denied`: you can see a course the video is attached to but do not hold `course.content_edit` at a scope containing any of them. `auth.csrf_refused`: the request did not come from this site. */
         VideoEditForbidden: {
             headers: {
@@ -6843,6 +7065,15 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `video.not_ready`: the video has nothing to play yet: it is uploading or processing, or its transcode failed. */
+        VideoNotReady: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `course.archived`: every course through which you may edit the video is archived. */
         VideoRenameConflict: {
             headers: {
@@ -6854,6 +7085,33 @@ export interface components {
         };
         /** @description `video.status_invalid`: the video did not fail as `video.transcode_failed`, or its upload is no longer stored; upload it again as a new video. `video.retry_limit_reached`: the video has been retried 3 times, each charging transcode minutes; upload it again as a new video. `course.archived`: every course through which you may edit the video is archived. */
         VideoRetryConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: you do not hold `course.view` at a scope containing the course. `item.locked`: the item is locked for you; `reasons` says what it waits for. `auth.csrf_refused`: the request did not come from this site. */
+        VideoSessionForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request.invalid`: `errors` names the body's root with `item.not_a_video`: the item is not a `video` item. */
+        VideoSessionInvalid: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `item.not_found`: no item with this id exists in the organization, or you cannot see it: its course is out of your reach, a draft course or a template, or the item or its module is unpublished, and you do not hold `course.view_all` at the course. `video.not_found`: the item's video no longer exists. `org.not_found`: the request's organization cannot be determined. */
+        VideoSessionNotFound: {
             headers: {
                 [name: string]: unknown;
             };
@@ -9014,6 +9272,36 @@ export interface operations {
             503: components["responses"]["NoOrganization"];
         };
     };
+    detachCourseVideo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The course's id. */
+                course_id: string;
+                /** @description The video's id. */
+                video_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The video is no longer attached to the course; when it was its last, the video is deleted and its stored objects are deleted shortly after */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["VideoDetachForbidden"];
+            404: components["responses"]["VideoDetachNotFound"];
+            409: components["responses"]["VideoDetachConflict"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
     deleteEnrollment: {
         parameters: {
             query?: never;
@@ -9280,6 +9568,37 @@ export interface operations {
             422: components["responses"]["ProgressInvalid"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
+        };
+    };
+    createItemVideoSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The item's id. */
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description URLs that play the item's video for 2 hours */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VideoSession"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["VideoSessionForbidden"];
+            404: components["responses"]["VideoSessionNotFound"];
+            409: components["responses"]["VideoNotReady"];
+            422: components["responses"]["VideoSessionInvalid"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["MediaStorageNotConfigured"];
         };
     };
     getMe: {
@@ -10596,6 +10915,34 @@ export interface operations {
             503: components["responses"]["NoOrganization"];
         };
     };
+    deleteVideo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The video's id. */
+                video_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The video is deleted; its stored objects are deleted shortly after */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["VideoDeleteForbidden"];
+            404: components["responses"]["VideoNotFound"];
+            409: components["responses"]["VideoDeleteConflict"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
     updateVideo: {
         parameters: {
             query?: never;
@@ -10631,6 +10978,36 @@ export interface operations {
             422: components["responses"]["VideoInvalid"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
+        };
+    };
+    createVideoPreviewSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The video's id. */
+                video_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description URLs that play the video for 2 hours */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VideoSession"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["PreviewForbidden"];
+            404: components["responses"]["VideoNotFound"];
+            409: components["responses"]["VideoNotReady"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["MediaStorageNotConfigured"];
         };
     };
     retryVideo: {
@@ -11149,6 +11526,90 @@ export interface operations {
             404: components["responses"]["OrganizationNotFound"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["NoOrganization"];
+        };
+    };
+    getMediaOutput: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One range of bytes, as for `getSignedFile`. */
+                Range?: string | null;
+            };
+            path: {
+                /** @description The token of a playback session (`createItemVideoSession`, `createVideoPreviewSession`). */
+                token: string;
+                /** @description `master.m3u8`, `video.mp4`, `poster.jpg`, `thumbnails.vtt` or a sprite `sprite_<nnn>.jpg`. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The output, as `Content-Type` its type (`application/vnd.apple.mpegurl`, `video/mp4`, `image/jpeg` or `text/vtt`). The MP4 is `Content-Disposition: attachment`. Every answer carries `X-Content-Type-Options: nosniff`, a sandboxing `Content-Security-Policy`, `Cache-Control: private` until the session expires, `Accept-Ranges: bytes`, `Cross-Origin-Resource-Policy: same-origin`, `Referrer-Policy: no-referrer` and, for an `Origin` the server allows, `Access-Control-Allow-Origin`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": number[];
+                };
+            };
+            /** @description The bytes the `Range` asks for, with `Content-Range`, and the same headers. */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": number[];
+                };
+            };
+            404: components["responses"]["MediaNotFound"];
+            416: components["responses"]["MediaRangeNotSatisfiable"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["MediaDeliveryStorageNotConfigured"];
+        };
+    };
+    getMediaRenditionOutput: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One range of bytes, as for `getSignedFile`. */
+                Range?: string | null;
+            };
+            path: {
+                /** @description The token of a playback session. */
+                token: string;
+                /** @description A rendition the video has: `360p`, `720p`, `1080p`, or one below 360p. */
+                rendition: string;
+                /** @description `index.m3u8` or a segment `segment_<nnnnn>.ts`. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The playlist (`application/vnd.apple.mpegurl`) or segment (`video/mp2t`), with the headers of `getMediaOutput`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": number[];
+                };
+            };
+            /** @description The bytes the `Range` asks for, with `Content-Range`, and the same headers. */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": number[];
+                };
+            };
+            404: components["responses"]["MediaNotFound"];
+            416: components["responses"]["MediaRangeNotSatisfiable"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["MediaDeliveryStorageNotConfigured"];
         };
     };
     authorizeApp: {

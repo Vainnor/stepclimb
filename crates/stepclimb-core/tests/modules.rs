@@ -229,21 +229,28 @@ async fn t3_only_an_empty_module_deletes_and_the_gap_closes(pool: PgPool) {
 
 /// T4.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn t4_only_headers_external_links_and_files_are_created(pool: PgPool) {
+async fn t4_only_headers_external_links_files_and_videos_are_created(pool: PgPool) {
     let a = Org::new(&pool, "org-a").await;
     let module = a.module(&pool, "Week 1").await;
-    // A `file` item is created with a course file of its course (spec 06 B13): its cases are in
-    // the server's `tests/file_delivery.rs`; an id that names none is not found.
-    let file = NewItem {
-        ref_id: Some(new_id()),
-        ..NewItem {
-            kind: Kind::File,
-            ..header("Handout")
-        }
-    };
-    let refused = items::create(&pool, a.scope(), module, &file, now()).await;
-    assert!(matches!(refused, Err(Error::FileNotFound)), "{refused:?}");
-    for kind in [Kind::Quiz, Kind::Activity, Kind::Page, Kind::Video] {
+    // A `file` item is created with a course file of its course (spec 06 B13), a `video` item
+    // with a video attached to its course (spec 08 B3): their cases are in the server's
+    // `tests/file_delivery.rs` and `tests/video_playback.rs`; an id that names none is not found.
+    for (kind, title) in [(Kind::File, "Handout"), (Kind::Video, "Lecture")] {
+        let new = NewItem {
+            ref_id: Some(new_id()),
+            ..NewItem {
+                kind,
+                ..header(title)
+            }
+        };
+        let refused = items::create(&pool, a.scope(), module, &new, now()).await;
+        let expected = match kind {
+            Kind::File => matches!(refused, Err(Error::FileNotFound)),
+            _ => matches!(refused, Err(Error::VideoNotFound)),
+        };
+        assert!(expected, "{kind:?}: {refused:?}");
+    }
+    for kind in [Kind::Quiz, Kind::Activity, Kind::Page] {
         let new = NewItem {
             ref_id: Some(new_id()),
             ..NewItem {

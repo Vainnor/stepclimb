@@ -91,6 +91,8 @@ pub mod transcodes;
 pub mod tz;
 pub mod unlock;
 pub mod users;
+pub mod video_playback;
+pub mod video_removal;
 pub mod videos;
 
 pub use scope::{OrgScope, ScopeOrigin};
