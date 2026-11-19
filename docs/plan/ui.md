@@ -81,7 +81,7 @@ apps/
 | Text | `fg-strong` `fg-default` `fg-sub` `fg-soft` `fg-disabled` | Headings, body, secondary, placeholder and locked (≥ 4.5:1), disabled |
 | Lines | `line-strong` `line` `line-soft` | Input borders, dividers, row separators |
 | Brand | `brand` `brand-hover` `brand-soft` `brand-fg` `on-brand` `ring` | Primary action and progress, tints, text on tint, text on brand, focus ring |
-| Status | `success\|warning\|danger\|info` with `-soft` and `-fg` | Feedback and grades only |
+| Status | `success\|warning\|danger\|info` with `-soft` and `-fg` | Feedback, grades and callouts only |
 | Learning | `state-locked\|available\|progress\|complete\|overdue\|review` | Aliases, so learning states can be retuned in one place |
 
 | Scale | Values |

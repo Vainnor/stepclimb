@@ -65,6 +65,8 @@ export const requiredPairs: readonly Pair[] = [
   // Input borders sit on wells and inputs too (owner decision, spec 12 B20).
   ["line-strong", "bg-sunken", "ui"],
   ...learningAliases.flatMap(([state]) => onCanvasAndRaised(state, "ui")),
+  // A callout's body text sits on its status tint (owner decision, spec 12 B20).
+  ...statuses.map((s): Pair => ["fg-default", `${s}-soft`, "text"]),
 ];
 
 const aliasOf = new Map<string, string>(learningAliases);
