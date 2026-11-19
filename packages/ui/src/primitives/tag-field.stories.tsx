@@ -50,7 +50,10 @@ export const FocusVisible: Story = {
 export const Repeated: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await userEvent.type(canvas.getByRole("textbox"), "tower{Enter}");
+    // From the keyboard: a pointer would leave the input hovered on some runs, and the hover
+    // border replaces the focus border in the screenshot.
+    await userEvent.tab();
+    await userEvent.keyboard("tower{Enter}");
     await expect(canvas.getByRole("textbox")).toHaveValue("tower");
     // The note under the input; the live region repeats it out of sight.
     await expect(
