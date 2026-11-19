@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The route tree (docs/specs/m0/11-app-shell.md B2, B7, B16): a signed-out layout for the sign-in
 // steps and the enrollment page, and a signed-in layout for everything else that exists: home, the
-// account page, a course's files area, its video panel and the page editor
-// (docs/specs/m1/07-pages-and-the-editor.md B21). Any other path, the M1 deep link included,
+// account page, a course's authoring screen (docs/specs/m1/16-learning-ui-components.md B19), its
+// files area, its video panel and the page editor (docs/specs/m1/07-pages-and-the-editor.md B21). Any other path, the M1 deep link included,
 // renders the not-found view. A route that fails to load renders its error inside its layout (B28).
 import {
   createRootRouteWithContext,
@@ -21,6 +21,7 @@ import { type ErrorPlace, RouteError } from "./layouts/route-error";
 import { SignedInLayout } from "./layouts/signed-in";
 import { SignedOutLayout } from "./layouts/signed-out";
 import { AccountView } from "./routes/account";
+import { CourseEditView, validateCourseEditSearch } from "./routes/course-edit";
 import { EnrollView } from "./routes/enroll";
 import { FilesView } from "./routes/files";
 import { HomeView } from "./routes/home";
@@ -145,14 +146,23 @@ const courseFilesRoute = createRoute({
 });
 
 /**
- * A course's video panel (docs/specs/m1/08-uploaded-video.md B22), reached by its address until
- * the course authoring screen (16-learning-ui-components.md B19) holds it.
+ * A course's video panel (docs/specs/m1/08-uploaded-video.md B22) on a page of its own. The course
+ * authoring screen holds the same panel (D36).
  */
 const courseVideosRoute = createRoute({
   getParentRoute: () => signedInRoute,
   path: "c/$courseId/videos",
   staticData: { view: { title: (t) => t("videos.title") } },
   component: VideosView,
+});
+
+/** A course's authoring screen (docs/specs/m1/16-learning-ui-components.md B19). */
+const courseEditRoute = createRoute({
+  getParentRoute: () => signedInRoute,
+  path: "c/$courseId/edit",
+  validateSearch: validateCourseEditSearch,
+  staticData: { view: { title: (t) => t("authoring.title") } },
+  component: CourseEditView,
 });
 
 const pageEditRoute = createRoute({
@@ -175,6 +185,7 @@ export const routeTree = rootRoute.addChildren([
   signedInRoute.addChildren([
     homeRoute,
     accountRoute,
+    courseEditRoute,
     courseFilesRoute,
     courseVideosRoute,
     pageEditRoute,

@@ -309,6 +309,47 @@ listed here with a pointer so the inventory is complete in one place.
 - **B19.** Course authoring (`/c/:course/edit`): ModuleBoard with item creation for each available
   kind, page creation into the editor (`07`), file and video pickers, requirement and unlock rule
   editing (`04`).
+- **B19a.** Coordinator decisions for B19 (2026-11-18), pending owner review:
+  - Coordinator decision (2026-11-18): the route takes the course's id, as `03` B16's routes do,
+    and is reached by its address: B15's "New course" action and the course list are I11's, so
+    I14 adds no course creation and the shell's navigation gets no entry. The screen is titled
+    "Edit course" (with the organization's term) and shows the course's title, code and status.
+  - Coordinator decision (2026-11-18): the screen has three panels as tabs, the open one in the
+    `panel` search parameter (`modules`, the default, `pages` or `videos`): the board, the
+    course's pages, and `08` D36's video panel, which `/c/:course/videos` also keeps. The files
+    area (B20) is linked from the header; no file picker is drawn until `file` items can be
+    created (`06` I3).
+  - Coordinator decision (2026-11-18): the screen is for holders of `course.view_all` in
+    `Course.permissions`; anyone else sees a refusal in words and the modules are not read, since
+    the outline read would answer a learner's published view. Without `course.content_edit`, or
+    in an archived course, the board is read-only (B13a's `isDisabled`), the add buttons are left
+    out and the screen says why. The server checks every write regardless.
+  - Coordinator decision (2026-11-18): a module is edited as an item is, from an Edit button on
+    its row that opens the caller's module editor in the board's side sheet (ModuleBoard's
+    `moduleEditor`, controlled or not through the module's id). The module editor sets the title,
+    publish state, unlock date (DatePicker in the user's zone, with "Remove the date"),
+    prerequisites (a checkbox per other module), "Items in order" and the completion rule (`04`
+    B1), and deletes. The item editor sets the title, an external link's address, the publish
+    state and the requirement: none, `view` or `mark_done`, and `watch` for a video, starting at
+    80%; a header has none (`03` B8). A page item's editor links to the page editor.
+  - Coordinator decision (2026-11-18): "Add module" and "Add item" sit above the board and open a
+    side sheet each. An item goes last in the module chosen, the last module at first. Only
+    headers and external links can be created (`03` B5), and the sheet says in words that pages,
+    files and videos cannot be added to modules yet; no disabled option stands in for them.
+  - Coordinator decision (2026-11-18): Save sends one `PATCH` of the members that changed, and
+    closes the sheet with a toast once the board shows the server's answer; focus goes back to
+    the button that opened it. A refusal keeps the sheet open, shown at the field a 422 names or
+    above the form, and editing the field clears it. Delete asks first; `module.not_empty` and
+    `item.has_progress` are said in the sheet (unpublish instead, `03` Q3). A row deleted from its
+    sheet hands focus to the row now in its place (React Aria's collection does this).
+  - Coordinator decision (2026-11-18): every write is followed by a read of the modules, so the
+    board draws the server's state; a move answers "moved" once its write is stored and the
+    board keeps the new order until that read lands. On 409 `order.stale` the modules are read
+    again at once (B13a).
+  - Coordinator decision (2026-11-18): the pages panel lists the course's pages, each linking to
+    its editor (`07` I3), and "New page" creates one from its title (the server derives the
+    slug, `07` B1) and opens it in the editor. It says that pages cannot be added to modules yet
+    (`07` I2 makes `page` items creatable).
 - **B20.** Files (`/c/:course/files`): the folder Tree and file list (`06` B12) with FileDrop
   upload, rename, move and delete, for holders of `course.view_all`.
 - **B20a.** Coordinator decisions for B20 (overnight, 2026-11-17), pending owner review:

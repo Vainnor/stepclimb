@@ -10,10 +10,12 @@ import {
   ListBoxItem as AriaListBoxItem,
   type ListBoxItemProps as AriaListBoxItemProps,
   Popover as AriaPopover,
+  ComboBoxStateContext,
   composeRenderProps,
   Modal,
   ModalOverlay,
   PopoverContext,
+  SelectStateContext,
 } from "react-aria-components";
 import { WIDE_QUERY } from "../lib/breakpoints";
 import { tv } from "../lib/tv";
@@ -122,7 +124,6 @@ export function ListBoxOverlay<T extends object>({
   renderEmptyState,
 }: ListBoxOverlayProps<T>) {
   const wide = useMediaQuery(WIDE_QUERY);
-  const appearance = useAppearanceAttributes();
   if (wide) {
     return (
       <Popover data-slot="list-box-popover" placement="bottom start">
@@ -137,12 +138,36 @@ export function ListBoxOverlay<T extends object>({
     );
   }
   return (
+    <ListBoxSheet sheetHeader={sheetHeader} renderEmptyState={renderEmptyState}>
+      {children}
+    </ListBoxSheet>
+  );
+}
+
+/**
+ * The bottom sheet. Its open state is the field's own, passed in rather than read from React
+ * Aria's overlay context: the field's hidden render that builds its collection has no context of
+ * the field's, so inside a Dialog or Sheet the overlay would take the Dialog's open state, draw
+ * the options a second time and open a modal over the Dialog.
+ */
+function ListBoxSheet<T extends object>({
+  children,
+  sheetHeader,
+  renderEmptyState,
+}: ListBoxOverlayProps<T>) {
+  const appearance = useAppearanceAttributes();
+  const field = use(SelectStateContext) ?? use(ComboBoxStateContext);
+  return (
     <>
       <AriaPopover isOpen={false}>
         <AriaListBox<T>>{children}</AriaListBox>
       </AriaPopover>
       <ModalOverlay
         data-slot="list-box-sheet-overlay"
+        isOpen={field?.isOpen ?? false}
+        onOpenChange={(open) => {
+          if (!open) field?.close();
+        }}
         isDismissable
         {...appearance}
         className={styles.sheetOverlay()}

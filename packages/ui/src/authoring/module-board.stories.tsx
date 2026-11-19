@@ -90,7 +90,12 @@ function useStoryServer(answer: (move: BoardMove) => Promise<MoveOutcome> | null
 
 type BoardArgs = Pick<
   ModuleBoardProps,
-  "isDisabled" | "defaultEditingItemId" | "emptyState" | "timeZone" | "className"
+  | "isDisabled"
+  | "defaultEditingItemId"
+  | "defaultEditingModuleId"
+  | "emptyState"
+  | "timeZone"
+  | "className"
 >;
 
 function Board({
@@ -113,6 +118,12 @@ function Board({
           <Button onPress={close}>Done</Button>
         </div>
       )}
+      moduleEditor={(module, { close }) => (
+        <div className="flex flex-col items-start gap-4">
+          <p>{module.title}</p>
+          <Button onPress={close}>Done</Button>
+        </div>
+      )}
     />
   );
 }
@@ -125,11 +136,11 @@ const meta = {
     status: { missing: ["States", "Themes", "Accessibility", "Responsive and touch"] },
     docs: {
       description: {
-        component: `The course structure editor: each module's row, then its items' rows, in one list. A row moves by dragging it, by its handle from the keyboard (Enter, the arrow keys to a place, Enter), or from its Move menu: Move up, Move down and, for an item, Move to module, which puts it at the end of that module. Each move is one write: the modules' order, a module's items' order, or an item's move to another module (spec 03 B10, B11). The board shows the new order while the server answers, says the result in its status line, and puts the order back on a refusal. Rows show the publish state, an item's requirement and a module's unlock rules; Edit opens the item's editor in a side sheet.
+        component: `The course structure editor: each module's row, then its items' rows, in one list. A row moves by dragging it, by its handle from the keyboard (Enter, the arrow keys to a place, Enter), or from its Move menu: Move up, Move down and, for an item, Move to module, which puts it at the end of that module. Each move is one write: the modules' order, a module's items' order, or an item's move to another module (spec 03 B10, B11). The board shows the new order while the server answers, says the result in its status line, and puts the order back on a refusal. Rows show the publish state, an item's requirement and a module's unlock rules; Edit opens the item's or the module's editor in a side sheet.
 
 Hover, pressed and disabled of the handle and the buttons are those of Button and IconButton; no story captures them here, so States is listed as missing.
 
-**Usage.** \`<ModuleBoard modules={modules} onReorderModules={(ids) => put(...)} onReorderItems={(moduleId, ids) => put(...)} onMoveItem={(itemId, { moduleId, position }) => post(...)} onReload={refetch} itemEditor={(item, { close }) => <ItemForm ... />} timeZone={me.tz} />\`. Each handler resolves \`{ status: "moved" }\` once the server has stored the move, and the caller then passes the new \`modules\`: the board keeps the new order drawn until they arrive and reads its report from them. It resolves \`{ status: "stale" }\` on 409 \`order.stale\`, or \`{ status: "failed", message }\` with the message to show for any other refusal.
+**Usage.** \`<ModuleBoard modules={modules} onReorderModules={(ids) => put(...)} onReorderItems={(moduleId, ids) => put(...)} onMoveItem={(itemId, { moduleId, position }) => post(...)} onReload={refetch} itemEditor={(item, { close }) => <ItemForm ... />} moduleEditor={(module, { close }) => <ModuleForm ... />} timeZone={me.tz} />\`. Each handler resolves \`{ status: "moved" }\` once the server has stored the move, and the caller then passes the new \`modules\`: the board keeps the new order drawn until they arrive and reads its report from them. It resolves \`{ status: "stale" }\` on 409 \`order.stale\`, or \`{ status: "failed", message }\` with the message to show for any other refusal.
 
 **Do** pass \`isDisabled\` for an archived course, where every write is refused: the board is then read-only, with no handles, Move or Edit buttons.
 
@@ -204,6 +215,14 @@ export const Disabled: Story = { args: { isDisabled: true } };
 /** An item's editor open in the side sheet. */
 export const Editing: Story = {
   args: { defaultEditingItemId: "i5" },
+  play: async ({ canvasElement }) => {
+    await within(canvasElement.ownerDocument.body).findByRole("dialog");
+  },
+};
+
+/** A module's editor open in the side sheet. */
+export const EditingModule: Story = {
+  args: { defaultEditingModuleId: "m2" },
   play: async ({ canvasElement }) => {
     await within(canvasElement.ownerDocument.body).findByRole("dialog");
   },

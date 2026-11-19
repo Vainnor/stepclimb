@@ -406,6 +406,80 @@ describe("ModuleBoard", () => {
     expect(screen.getByRole("dialog", { name: "Edit Phraseology" })).toBeInTheDocument();
   });
 
+  it("opens a module's editor in a side sheet, controlled or not", async () => {
+    const onEditingModuleIdChange = vi.fn();
+    const { user } = setup({
+      onEditingModuleIdChange,
+      moduleEditor: (module, { close }) => (
+        <button type="button" onClick={close}>
+          {`Done with ${module.title}`}
+        </button>
+      ),
+    });
+    // Items get no Edit button without an item editor.
+    expect(screen.queryByRole("button", { name: "Edit Phraseology" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Edit 2 Ground control" }));
+    const sheet = await screen.findByRole("dialog", { name: "Edit Ground control" });
+    expect(onEditingModuleIdChange).toHaveBeenLastCalledWith("m2");
+    await user.click(within(sheet).getByRole("button", { name: "Done with Ground control" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(onEditingModuleIdChange).toHaveBeenLastCalledWith(null);
+  });
+
+  it("draws no module Edit buttons and no module sheet when disabled", () => {
+    setup({ isDisabled: true, moduleEditor: () => <p>Editor</p>, editingModuleId: "m1" });
+    expect(screen.queryByRole("button", { name: "Edit 1 Radio basics" })).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("puts focus on the row in its place when its editor deleted it", async () => {
+    let caller: Caller | undefined;
+    const { user, caller: c } = setup({
+      itemEditor: (item, { close }) => (
+        <button
+          type="button"
+          onClick={() => {
+            close();
+            // The server's modules without the item arrive in the render that closes the sheet.
+            const items = radio.items.filter((i) => i.id !== item.id);
+            caller?.set([{ ...radio, items }, ground]);
+          }}
+        >
+          Delete it
+        </button>
+      ),
+    });
+    caller = c;
+    await user.click(screen.getByRole("button", { name: "Edit Readbacks" }));
+    await user.click(await screen.findByRole("button", { name: "Delete it" }));
+    await waitFor(() => expect(screen.queryByRole("row", { name: "Readbacks" })).toBeNull());
+    await waitFor(() =>
+      expect(document.activeElement?.closest("[data-key]")?.getAttribute("data-key")).toBe(
+        "item:i3",
+      ),
+    );
+  });
+
+  it("leaves focus alone when the edited row stays", async () => {
+    const { user, caller } = setup({
+      itemEditor: (_item, { close }) => (
+        <button type="button" onClick={close}>
+          Done
+        </button>
+      ),
+    });
+    await user.click(screen.getByRole("button", { name: "Edit Readbacks" }));
+    await user.click(await screen.findByRole("button", { name: "Done" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    // Focus has come back into the board; then it leaves it.
+    await waitFor(() => expect(document.activeElement?.closest("[data-key]")).not.toBeNull());
+    act(() => (document.activeElement as HTMLElement).blur());
+    // A later change that removes another row moves nothing.
+    act(() => caller.set([radio]));
+    await waitFor(() => expect(screen.queryByRole("row", { name: /^2 Ground/ })).toBeNull());
+    expect(document.activeElement).toBe(document.body);
+  });
+
   it("shows the empty state for a course without modules", () => {
     setup({ modules: [], emptyState: "No modules yet." });
     expect(screen.getByText("No modules yet.")).toBeInTheDocument();

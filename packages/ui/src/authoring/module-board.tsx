@@ -4,7 +4,9 @@
 // rows. A row moves by drag and drop, or from its Move menu (up, down, "Move to module"); either
 // way the board makes one write of docs/specs/m1/03-modules-and-items.md B10 and B11 through the
 // caller and shows the result while the server answers. On 409 `order.stale` it asks the caller to
-// reload and keeps focus on the row that was moved. Item editing opens in a side sheet.
+// reload and keeps focus on the row that was moved. Item and module editing open in a side sheet.
+// A row deleted from its editor takes focus with it to the row now in its place: React Aria's
+// collection moves its focused key to a neighbor when that key leaves.
 import { type ReactNode, useMemo, useRef, useState } from "react";
 import { DropIndicator, GridList, useDragAndDrop } from "react-aria-components";
 import { tv } from "../lib/tv";
@@ -52,7 +54,7 @@ export interface ModuleBoardProps {
   onMoveItem: (itemId: string, to: { moduleId: string; position: number }) => Promise<MoveOutcome>;
   /** Fetches the modules again, after the server answered 409 `order.stale`. */
   onReload: () => void;
-  /** The item editor shown in the side sheet; none draws no Edit buttons. */
+  /** The item editor shown in the side sheet; none draws no Edit buttons on items. */
   itemEditor?: (item: BoardItem, opts: { close: () => void }) => ReactNode;
   /** The item open in the sheet (controlled); null for none. */
   editingItemId?: string | null;
@@ -60,8 +62,18 @@ export interface ModuleBoardProps {
   defaultEditingItemId?: string | null;
   onEditingItemIdChange?: (itemId: string | null) => void;
   /**
-   * Read-only, as in an archived course, where every write answers 409: no drag handles and no
-   * Move or Edit buttons.
+   * The module editor shown in the side sheet (its title, publish state and rules); none draws no
+   * Edit buttons on modules.
+   */
+  moduleEditor?: (module: BoardModule, opts: { close: () => void }) => ReactNode;
+  /** The module open in the sheet (controlled); null for none. */
+  editingModuleId?: string | null;
+  /** The module open in the sheet at first (uncontrolled). */
+  defaultEditingModuleId?: string | null;
+  onEditingModuleIdChange?: (moduleId: string | null) => void;
+  /**
+   * Read-only, as in an archived course, where every write answers 409: no drag handles, no Move
+   * or Edit buttons and no editing sheet.
    */
   isDisabled?: boolean;
   /** The user's IANA time zone (`users.tz`), for unlock dates. */
@@ -84,12 +96,28 @@ export function ModuleBoard(props: ModuleBoardProps) {
   const { shown } = board;
   const rows = useMemo(() => boardRows(shown), [shown]);
   const names = useRowNames(rows, shown);
-  const editing = useEditing(props);
+  const editingItem = useEditing(
+    props.editingItemId,
+    props.defaultEditingItemId,
+    props.onEditingItemIdChange,
+  );
+  const editingModule = useEditing(
+    props.editingModuleId,
+    props.defaultEditingModuleId,
+    props.onEditingModuleIdChange,
+  );
   const readOnly = props.isDisabled === true;
   const dragAndDropHooks = useBoardDrag(board, rows, readOnly);
   const actions = {
     onMove: readOnly ? undefined : (key: string, action: string) => board.menuMove(key, action),
-    onEdit: props.itemEditor === undefined || readOnly ? undefined : editing.open,
+    onEditItem:
+      props.itemEditor === undefined || readOnly
+        ? undefined
+        : (key: string) => editingItem.open(key.slice("item:".length)),
+    onEditModule:
+      props.moduleEditor === undefined || readOnly
+        ? undefined
+        : (key: string) => editingModule.open(key.slice("module:".length)),
     movesDisabled: readOnly || board.pending,
     readOnly,
   };
@@ -123,11 +151,15 @@ export function ModuleBoard(props: ModuleBoardProps) {
           />
         )}
       </GridList>
-      <EditSheet
-        {...editing}
-        modules={shown}
-        itemEditor={readOnly ? undefined : props.itemEditor}
-      />
+      {readOnly ? null : (
+        <EditSheet
+          item={editingItem}
+          module={editingModule}
+          modules={shown}
+          itemEditor={props.itemEditor}
+          moduleEditor={props.moduleEditor}
+        />
+      )}
     </div>
   );
 }
@@ -219,41 +251,64 @@ function useRowNames(rows: readonly BoardRow[], modules: readonly BoardModule[])
   }, [rows, modules, t]);
 }
 
-/** The item open in the sheet, controlled through `editingItemId` or kept here. */
-function useEditing(props: ModuleBoardProps) {
-  const [own, setOwn] = useState<string | null>(props.defaultEditingItemId ?? null);
-  const controlled = props.editingItemId !== undefined;
-  const itemId = controlled ? (props.editingItemId ?? null) : own;
-  const set = (id: string | null) => {
-    if (!controlled) setOwn(id);
-    props.onEditingItemIdChange?.(id);
+/** The item or module open in the sheet, controlled through its id or kept here. */
+function useEditing(
+  controlledId: string | null | undefined,
+  defaultId: string | null | undefined,
+  onChange: ((id: string | null) => void) | undefined,
+) {
+  const [own, setOwn] = useState<string | null>(defaultId ?? null);
+  const controlled = controlledId !== undefined;
+  const id = controlled ? (controlledId ?? null) : own;
+  const set = (next: string | null) => {
+    if (!controlled) setOwn(next);
+    onChange?.(next);
   };
-  return { itemId, open: (id: string) => set(id), close: () => set(null) };
+  return { id, open: (next: string) => set(next), close: () => set(null) };
 }
 
+type Editing = ReturnType<typeof useEditing>;
+
 function EditSheet({
-  itemId,
-  close,
+  item,
+  module,
   modules,
   itemEditor,
+  moduleEditor,
 }: {
-  itemId: string | null;
-  close: () => void;
+  item: Editing;
+  module: Editing;
   modules: readonly BoardModule[];
   itemEditor: ModuleBoardProps["itemEditor"];
+  moduleEditor: ModuleBoardProps["moduleEditor"];
 }) {
   const { t } = useStepclimbStrings();
-  const item = modules.flatMap((m) => m.items).find((i) => i.id === itemId);
-  if (item === undefined || itemEditor === undefined) return null;
+  const editedItem = modules.flatMap((m) => m.items).find((i) => i.id === item.id);
+  const editedModule = modules.find((m) => m.id === module.id);
+  const target =
+    editedItem !== undefined && itemEditor !== undefined
+      ? {
+          title: editedItem.title,
+          close: item.close,
+          body: (close: () => void) => itemEditor(editedItem, { close }),
+        }
+      : editedModule !== undefined && moduleEditor !== undefined
+        ? {
+            title: editedModule.title,
+            close: module.close,
+            body: (close: () => void) => moduleEditor(editedModule, { close }),
+          }
+        : null;
+  if (target === null) return null;
   return (
     <Sheet
-      title={t("moduleBoard.editTitle", { title: item.title })}
+      title={t("moduleBoard.editTitle", { title: target.title })}
       isOpen
       onOpenChange={(open) => {
-        if (!open) close();
+        if (!open) target.close();
       }}
     >
-      {({ close: closeSheet }) => itemEditor(item, { close: closeSheet })}
+      {({ close: closeSheet }) => target.body(closeSheet)}
     </Sheet>
   );
 }
