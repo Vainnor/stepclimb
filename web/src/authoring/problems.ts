@@ -17,7 +17,11 @@ export interface AuthoringProblem {
 }
 
 /** The message for a rule the member `field` broke, from a 422's first `errors` entry. */
-function fieldMessage(code: string, field: string | undefined, t: Strings["t"]): string | undefined {
+function fieldMessage(
+  code: string,
+  field: string | undefined,
+  t: Strings["t"],
+): string | undefined {
   if (code === "text.contains_nul") {
     if (field === "title") return t("authoring.problem.titleInvalid");
     if (field === "url") return t("authoring.problem.urlCharacter");

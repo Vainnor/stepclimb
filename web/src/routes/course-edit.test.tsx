@@ -506,9 +506,13 @@ describe("the course authoring screen", () => {
   });
 
   it("shows a refusal of a member the sheet does not draw above the form", async () => {
-    server(AUTHOR, { modules: course() }, {
-      "POST /api/v1/modules/m2/items": () => invalid("/position", "item.position_out_of_range"),
-    });
+    server(
+      AUTHOR,
+      { modules: course() },
+      {
+        "POST /api/v1/modules/m2/items": () => invalid("/position", "item.position_out_of_range"),
+      },
+    );
     const user = userEvent.setup();
     renderApp(PATH);
     await boardRows();
@@ -523,9 +527,13 @@ describe("the course authoring screen", () => {
   });
 
   it("says a control character in an item's address at the address", async () => {
-    server(AUTHOR, { modules: course() }, {
-      "PATCH /api/v1/items/i3": () => invalid("/url", "text.contains_nul"),
-    });
+    server(
+      AUTHOR,
+      { modules: course() },
+      {
+        "PATCH /api/v1/items/i3": () => invalid("/url", "text.contains_nul"),
+      },
+    );
     const user = userEvent.setup();
     renderApp(PATH);
     await boardRows();
@@ -724,6 +732,22 @@ describe("the pages and videos panels", () => {
     await user.click(within(sheet).getByRole("button", { name: "Create and edit" }));
     expect(await within(sheet).findByText(/already has a page with an address/)).toBeVisible();
     expect(title).toHaveAttribute("aria-invalid", "true");
+  });
+
+  it("says once that an archived course's videos cannot be changed", async () => {
+    stubServer({
+      "GET /api/v1/me": () => json(meFixture()),
+      [`GET ${COURSE}`]: () => json(courseFixture(AUTHOR, "archived")),
+      [`GET ${MODULES}`]: () => json({ modules: course() }),
+      [`GET ${COURSE}/videos`]: () => json({ items: [], next_cursor: null }),
+    });
+    renderApp(`${PATH}?panel=videos`);
+    expect(
+      await screen.findByText("This course is archived, so its content cannot be changed."),
+    ).toBeInTheDocument();
+    await screen.findByText("This course has no videos.");
+    expect(screen.queryByText(/so its videos cannot be changed/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Choose file" })).toBeNull();
   });
 
   it("holds the video panel", async () => {

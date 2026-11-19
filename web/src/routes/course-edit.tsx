@@ -165,7 +165,7 @@ function Panels({ courseId, course }: { courseId: string; course: Course }) {
           <PagesPanel courseId={courseId} canEdit={canEdit} />
         </TabPanel>
         <TabPanel id="videos">
-          <VideoPanel courseId={courseId} course={course} />
+          <VideoPanel courseId={courseId} course={course} embedded />
         </TabPanel>
       </Tabs>
     </div>
