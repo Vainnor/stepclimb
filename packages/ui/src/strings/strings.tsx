@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // `useStepclimbStrings()`: every user-visible string is an ICU message looked up by id
 // (docs/specs/m0/11-app-shell.md B23 to B26). The provider takes the catalogs of Stepclimb UI and
-// of the app, the locale and the organization's terminology overrides.
+// of the app, the locale and the organization's terminology overrides, and gives React Aria the
+// same locale.
 import { IntlMessageFormat } from "intl-messageformat";
 import { createContext, type ReactNode, use, useMemo } from "react";
+import { I18nProvider } from "react-aria-components";
 import { type Catalog, mergeMessages } from "./catalog";
 import { defaultTerms, type TermOverrides, termArguments } from "./terms";
 
@@ -22,6 +24,9 @@ export interface Strings {
   t: (id: string, values?: MessageValues) => string;
 }
 
+/** The UI locale when none is given. */
+export const DEFAULT_LOCALE = "en";
+
 export interface StringsOptions {
   catalogs: readonly Catalog[];
   /** The UI locale; `en` is the only one at 1.0. */
@@ -36,7 +41,7 @@ export interface StringsOptions {
 
 export function createStrings({
   catalogs,
-  locale = "en",
+  locale = DEFAULT_LOCALE,
   terms = {},
   isDevelopment,
 }: StringsOptions): Strings {
@@ -83,9 +88,14 @@ export interface StringsProviderProps extends StringsOptions {
   children: ReactNode;
 }
 
+/**
+ * Provides `useStepclimbStrings()`, and the same locale to React Aria through its `I18nProvider`:
+ * date and number formats, segment names and drag-and-drop announcements follow the UI locale,
+ * not the browser's language.
+ */
 export function StringsProvider({
   catalogs,
-  locale,
+  locale = DEFAULT_LOCALE,
   terms,
   isDevelopment,
   children,
@@ -94,7 +104,11 @@ export function StringsProvider({
     () => createStrings({ catalogs, locale, terms, isDevelopment }),
     [catalogs, locale, terms, isDevelopment],
   );
-  return <StringsContext value={strings}>{children}</StringsContext>;
+  return (
+    <StringsContext value={strings}>
+      <I18nProvider locale={locale}>{children}</I18nProvider>
+    </StringsContext>
+  );
 }
 
 export function useStepclimbStrings(): Strings {
