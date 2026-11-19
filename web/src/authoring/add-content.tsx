@@ -74,7 +74,7 @@ function AddModuleForm({ courseId, close }: { courseId: string; close: () => voi
   const { toasts } = useAppContext();
   const [title, setTitle] = useState("");
   const create = useContentWrite(courseId, (value: string) => createModule(courseId, value));
-  const problem = create.error ? authoringProblem(create.error, t) : undefined;
+  const problem = create.error ? authoringProblem(create.error, t, ["title"]) : undefined;
   return (
     <Form
       aria-label={t("authoring.module.add.title")}
@@ -156,7 +156,9 @@ function AddItemForm({ courseId, modules, close }: AddItemProps & { close: () =>
     create.reset();
     setDraft((d) => ({ ...d, ...change }));
   };
-  const problem = create.error ? authoringProblem(create.error, t) : undefined;
+  // The address field is drawn only for an external link.
+  const drawn = draft.kind === "external_link" ? ["title", "url"] : ["title"];
+  const problem = create.error ? authoringProblem(create.error, t, drawn) : undefined;
   return (
     <Form
       aria-label={t("authoring.item.add.title")}

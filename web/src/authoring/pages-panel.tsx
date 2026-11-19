@@ -131,7 +131,7 @@ function NewPageForm({ courseId, close }: { courseId: string; close: () => void 
     mutationFn: (value: string) => createPage(courseId, value),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: pagesKey(courseId) }),
   });
-  const problem = create.error ? authoringProblem(create.error, t) : undefined;
+  const problem = create.error ? authoringProblem(create.error, t, ["title", "slug"]) : undefined;
   // A taken or underived slug comes from the title, so the title field says it.
   const aboutTitle =
     problem?.field === "title" ||

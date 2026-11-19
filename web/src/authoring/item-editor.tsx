@@ -79,6 +79,14 @@ export function itemPatch(item: Item, draft: Draft): ItemPatch {
   return patch;
 }
 
+/** The request members the item's form has a field for, where a refusal of one is shown. */
+function drawnFields(item: Item): string[] {
+  const fields = ["title"];
+  if (item.kind === "external_link") fields.push("url");
+  if (item.kind !== "header") fields.push("requirement");
+  return fields;
+}
+
 function at(problem: AuthoringProblem | undefined, field: string): string | undefined {
   return problem?.field === field ? problem.message : undefined;
 }
@@ -99,7 +107,7 @@ export function ItemEditor({ courseId, item, close }: ItemEditorProps) {
     save.reset();
     setDraft((d) => ({ ...d, ...change }));
   };
-  const problem = save.error ? authoringProblem(save.error, t) : undefined;
+  const problem = save.error ? authoringProblem(save.error, t, drawnFields(item)) : undefined;
   const submit = () => {
     const patch = itemPatch(item, draft);
     if (Object.keys(patch).length === 0) return close();
