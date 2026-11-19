@@ -6,6 +6,9 @@
 //! An assignment says who must finish a course, or a module or item of it, and by when. Every
 //! route needs `assignment.manage` at the course, which the caller may hold at the
 //! organization, an account containing the course, or through an enrollment in it (Q8).
+//! Listing a course's assignments and creating one also need `enrollment.view` there (403
+//! `permission.denied`): an assignment names its assignee, so `assignment.manage` alone would
+//! show who is in the course.
 //!
 //! `POST` assigns one user (group assignees are spec 13 I5). In the write's transaction, after
 //! `courses::lock` and the `assignment.manage` check again on the path it read, an archived
@@ -15,8 +18,10 @@
 //! for that role: the user covered by the caller's `user.view` (404 `user.not_found`
 //! otherwise), `enrollment.manage` at the course (403 `permission.denied`), and every Student
 //! permission grantable at organization or account scope held at the course (403
-//! `permission.escalation`). Assigning a learner needs none of them: an Instructor assigns the
-//! students of their course with their enrollment's permissions alone.
+//! `permission.escalation`). The reach check reads through the write's transaction, so no second
+//! pool connection is taken while the course row is locked. Assigning a learner needs none of
+//! them: an Instructor assigns the students of their course with their enrollment's permissions
+//! alone, and gets 404 for a user outside it, since `user.view` is not grantable at a course.
 //!
 //! `PATCH` replaces the due rule and recomputes the due date of every row not completed (B5);
 //! an ended assignment answers 409 `assignment.ended`. `POST .../end` ends it, keeping its rows
@@ -37,7 +42,7 @@ use stepclimb_core::{
     courses,
     grants::{Denied, Grants, Target},
     id::Uuid,
-    perm::{AssignmentManage, EnrollmentManage},
+    perm::{AssignmentManage, EnrollmentManage, EnrollmentView},
     roles,
 };
 use stepclimb_jobs::{JobContext, Kind, Outcome, Registry, RegistryError, outbox};
@@ -97,7 +102,8 @@ pub mod code {
 problem_responses! {
     AssignmentListNotFound => "`course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined.",
     AssignmentCreateNotFound => "`course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `module.not_found`, `item.not_found`: the target is no module or item of this course. `user.not_found`: no user of the organization has this id, or, for a user who is not a learner of the course, your `user.view` does not cover them. `org.not_found`: the request's organization cannot be determined.",
-    AssignmentCreateForbidden => "`permission.denied`: you can see the course but do not hold `assignment.manage` at a scope containing it, or the user is not a learner of the course, so assigning them enrolls them as Student, and you do not hold `enrollment.manage` there. `permission.escalation`: enrolling the user as Student needs every Student permission grantable at organization or account scope, held at the course. `auth.csrf_refused`: the request did not come from this site.",
+    AssignmentListForbidden => "`permission.denied`: you can see the course but do not hold both `assignment.manage` and `enrollment.view` at scopes containing it.",
+    AssignmentCreateForbidden => "`permission.denied`: you can see the course but do not hold both `assignment.manage` and `enrollment.view` at scopes containing it, or the user is not a learner of the course, so assigning them enrolls them as Student, and you do not hold `enrollment.manage` there. `permission.escalation`: enrolling the user as Student needs every Student permission grantable at organization or account scope, held at the course. `auth.csrf_refused`: the request did not come from this site.",
     AssignmentCreateConflict => "`course.archived`: an archived course takes no assignment. `course.template`: a template takes no assignment. `enrollment.externally_managed`: the user's concluded Student enrollment in the course is owned by an identity provider, the sync API, SCIM or a connector, so the assignment cannot reactivate it.",
     AssignmentNotFound => "`assignment.not_found`: no assignment with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined.",
     AssignmentWriteForbidden => "`permission.denied`: you can see the assignment's course but do not hold `assignment.manage` at a scope containing it. `auth.csrf_refused`: the request did not come from this site.",
@@ -338,7 +344,8 @@ pub struct AssignmentListParams {
     pub include_ended: Option<bool>,
 }
 
-/// List a course's assignments, newest first.
+/// List a course's assignments, newest first. Needs `enrollment.view` at the course too, since
+/// each assignment names its assignee.
 #[utoipa::path(
     get,
     path = "/api/v1/courses/{course_id}/assignments",
@@ -353,7 +360,7 @@ pub struct AssignmentListParams {
         (status = 200, description = "One page of assignments", body = Page<Assignment>),
         (status = 400, response = crate::openapi::BadRequest),
         (status = 401, response = crate::openapi::Unauthenticated),
-        (status = 403, response = crate::openapi::PermissionDenied),
+        (status = 403, response = AssignmentListForbidden),
         (status = 404, response = AssignmentListNotFound),
         (status = 500, response = crate::openapi::InternalError),
         (status = 503, response = crate::openapi::NoOrganization),
@@ -366,6 +373,7 @@ pub async fn list_assignments(
     ApiQuery(params): ApiQuery<PageParams>,
 ) -> Result<Json<Page<Assignment>>, ApiError> {
     let page = params.parse::<Uuid>()?;
+    refuse_without_roster(require.grants(), &require.target().target())?;
     let (scope, course_id) = (require.grants().scope(), require.target().id);
     let mut conn = acquire(&state).await?;
     let rows = repo::list_for_course(
@@ -386,9 +394,10 @@ pub async fn list_assignments(
     page.page(rows, |a| a.id).map(Json)
 }
 
-/// Assign a course, or a module or item of it, to a user. A user who is not a learner of the
-/// course is enrolled as Student, which needs `enrollment.manage` at the course and the user
-/// within your `user.view`.
+/// Assign a course, or a module or item of it, to a user. Needs `enrollment.view` at the course
+/// too, since the answer names the user. A user who is not a learner of the course is enrolled
+/// as Student, which needs `enrollment.manage` at the course and the user within your
+/// `user.view`.
 #[utoipa::path(
     post,
     path = "/api/v1/courses/{course_id}/assignments",
@@ -426,6 +435,7 @@ pub async fn create_assignment(
     let new = new_assignment(&body, course_id, require.principal().user_id)?;
     let mut tx = begin(&state).await?;
     let course = recheck_manage(&mut tx, grants, course_id, COURSE_NOT_FOUND).await?;
+    refuse_without_roster(grants, &course)?;
     let scope = grants.scope();
     let learner = repo::is_learner(&mut tx, scope, course_id, new.user_id)
         .await
@@ -433,7 +443,7 @@ pub async fn create_assignment(
     let enroll = if learner {
         Enroll::Refuse
     } else {
-        refuse_enrolling(&state, grants, &course, new.user_id).await?;
+        refuse_enrolling(&mut tx, grants, &course, new.user_id).await?;
         Enroll::AsStudent(client.actor(require.principal()))
     };
     let now = state.clock.now();
@@ -591,18 +601,35 @@ fn new_assignment(
     })
 }
 
+/// 403 `permission.denied` unless the caller holds `enrollment.view` at the course. An
+/// assignment names its assignee, so listing a course's assignments, or assigning someone and
+/// learning from the answer whether they are a learner of the course, would show its roster to
+/// a holder of `assignment.manage` alone.
+fn refuse_without_roster(grants: &Grants, course: &Target) -> Result<(), ApiError> {
+    if grants.holds::<EnrollmentView>(course) {
+        return Ok(());
+    }
+    Err(ApiError::new(
+        StatusCode::FORBIDDEN,
+        PERMISSION_DENIED,
+        "An assignment names its assignee, so it needs `enrollment.view` at this course as well as `assignment.manage`.",
+    ))
+}
+
 /// B3's checks for enrolling the user `user_id` as Student through an assignment, the ones
 /// `POST /api/v1/courses/{course_id}/enrollments` makes for that role: 404 `user.not_found`
 /// unless the caller's `user.view` covers the user, 403 `permission.denied` without
 /// `enrollment.manage` at the course, 403 `permission.escalation` without every Student
-/// permission grantable at organization or account scope held there.
+/// permission grantable at organization or account scope held there. The reach check reads
+/// through `tx`, the transaction holding the course lock, so the request never waits on a
+/// second pool connection while it holds the lock.
 async fn refuse_enrolling(
-    state: &AppState,
+    tx: &mut Transaction<'static, Postgres>,
     grants: &Grants,
     course: &Target,
     user_id: Uuid,
 ) -> Result<(), ApiError> {
-    refuse_unreachable_user(state, grants, user_id).await?;
+    refuse_unreachable_user(&mut **tx, grants, user_id).await?;
     if !grants.holds::<EnrollmentManage>(course) {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,

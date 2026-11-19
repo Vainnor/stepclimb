@@ -464,7 +464,12 @@ async fn t1_assigning_an_unenrolled_user_enrolls_them_with_enrollment_manage(poo
     let course = f.course(f.a.tower).await;
     let pat = f.in_tower().await;
     let lacking = f
-        .custom_role(&["assignment.manage", "user.view", "course.view"])
+        .custom_role(&[
+            "assignment.manage",
+            "enrollment.view",
+            "user.view",
+            "course.view",
+        ])
         .await;
     let (lacking, _) = f.holder(lacking, tower).await;
     f.assign_course(&lacking, course, pat)
@@ -476,6 +481,7 @@ async fn t1_assigning_an_unenrolled_user_enrolls_them_with_enrollment_manage(poo
     let holding = f
         .custom_role(&[
             "assignment.manage",
+            "enrollment.view",
             "enrollment.manage",
             "user.view",
             "course.view",
@@ -516,6 +522,7 @@ async fn enrolling_through_an_assignment_follows_the_enrollment_rules(pool: PgPo
     let course = f.course(f.a.tower).await;
     let all = [
         "assignment.manage",
+        "enrollment.view",
         "enrollment.manage",
         "user.view",
         "course.view",
@@ -529,7 +536,12 @@ async fn enrolling_through_an_assignment_follows_the_enrollment_rules(pool: PgPo
         .await
         .expect(StatusCode::NOT_FOUND, "user.not_found");
 
-    let no_view = ["assignment.manage", "enrollment.manage", "user.view"];
+    let no_view = [
+        "assignment.manage",
+        "enrollment.view",
+        "enrollment.manage",
+        "user.view",
+    ];
     let (no_view, _) = f.holder(f.custom_role(&no_view).await, tower).await;
     let pat = f.in_tower().await;
     f.assign_course(&no_view, course, pat)
@@ -873,4 +885,106 @@ async fn an_assigned_item_or_module_cannot_be_deleted(pool: PgPool) {
     )
     .await
     .expect(StatusCode::CONFLICT, "module.assigned");
+}
+
+/// Coordinator decision (2026-11-19): `assignment.manage` alone neither lists a course's
+/// assignments nor assigns, so the answers cannot show who is in the course; with
+/// `enrollment.view` beside it both work. The permission suite has the four cases of each.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn assignments_need_enrollment_view_too(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let tower = Scope::Account(f.a.tower);
+    let course = f.course(f.a.tower).await;
+    let (_, student) = f.user("Student").await;
+    f.enroll(course, student, "student").await;
+    let (alone, _) = f
+        .holder(f.custom_role(&["assignment.manage"]).await, tower)
+        .await;
+    f.send(Method::GET, &assignments_uri(course), &alone, None)
+        .await
+        .expect(StatusCode::FORBIDDEN, "permission.denied");
+    f.assign_course(&alone, course, student)
+        .await
+        .expect(StatusCode::FORBIDDEN, "permission.denied");
+    let (_, stranger) = f.user("Stranger").await;
+    f.assign_course(&alone, course, stranger)
+        .await
+        .expect(StatusCode::FORBIDDEN, "permission.denied");
+    assert_eq!(f.assignment_count().await, 0);
+
+    let both = f
+        .custom_role(&["assignment.manage", "enrollment.view"])
+        .await;
+    let (both, _) = f.holder(both, tower).await;
+    f.assign_course(&both, course, student)
+        .await
+        .ok(StatusCode::CREATED);
+    let list = f
+        .send(Method::GET, &assignments_uri(course), &both, None)
+        .await;
+    assert_eq!(
+        list.ok(StatusCode::OK)["items"].as_array().map(Vec::len),
+        Some(1)
+    );
+}
+
+/// B3 with Q8: an Instructor holds the role only through their enrollment, and `user.view` is
+/// not grantable at a course, so a user who is not a learner of their course answers 404
+/// `user.not_found` and nobody is enrolled.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_enrolled_instructor_cannot_assign_a_non_learner(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let course = f.course(f.a.tower).await;
+    let (instructor, instructor_id) = f.user("Instructor").await;
+    f.enroll(course, instructor_id, "instructor").await;
+    let pat = f.in_tower().await;
+    f.assign_course(&instructor, course, pat)
+        .await
+        .expect(StatusCode::NOT_FOUND, "user.not_found");
+    assert!(!f.is_student(course, pat).await);
+    assert_eq!(f.assignment_count().await, 0);
+}
+
+/// Coordinator decision (2026-11-19): a user whose participating enrollment in the course an
+/// outside system concluded, whatever its role, answers 409 `enrollment.externally_managed`
+/// and is not enrolled again; a concluded `local` Student enrollment is reactivated.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_enrollment_concluded_elsewhere_is_not_overridden(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (admin, _) = f
+        .holder(f.builtin("org_admin").await, Scope::Organization)
+        .await;
+    let course = f.course(f.a.tower).await;
+    let participant = f.custom_role(&["course.participate"]).await;
+    let (_, synced) = f.user("Synced").await;
+    sqlx::query(
+        "INSERT INTO enrollments (id, org_id, course_id, user_id, role_id, status, source,
+                                  external_id)
+         VALUES ($1, $2, $3, $4, $5, 'concluded', 'sync', 'ext-1')",
+    )
+    .bind(new_id())
+    .bind(f.a.org)
+    .bind(course)
+    .bind(synced)
+    .bind(participant)
+    .execute(&f.pool)
+    .await
+    .expect("insert a synced enrollment");
+    f.assign_course(&admin, course, synced)
+        .await
+        .expect(StatusCode::CONFLICT, "enrollment.externally_managed");
+    assert!(!f.is_student(course, synced).await);
+    assert_eq!(f.assignment_count().await, 0);
+
+    let (_, local) = f.user("Local").await;
+    f.enroll(course, local, "student").await;
+    sqlx::query("UPDATE enrollments SET status = 'concluded' WHERE user_id = $1")
+        .bind(local)
+        .execute(&f.pool)
+        .await
+        .expect("conclude");
+    f.assign_course(&admin, course, local)
+        .await
+        .ok(StatusCode::CREATED);
+    assert!(f.is_student(course, local).await);
 }

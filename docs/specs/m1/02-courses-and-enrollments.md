@@ -330,13 +330,19 @@ an Organization admin holds the key but, assigned at the organization, does not 
 | Built-in role | M1 permissions (Q10) |
 | --- | --- |
 | Organization admin | every entry (`perm::ALL`) |
-| Account admin | M0 list plus `course.view`, `course.view_all`, `course.create`, `course.manage`, `course.content_edit`, `enrollment.view`, `enrollment.manage` |
+| Account admin | M0 list plus `course.view`, `course.view_all`, `course.create`, `course.manage`, `course.content_edit`, `enrollment.view`, `enrollment.manage`, `progress.view` (`05-progress-and-events.md` Q2), `assignment.manage` (`13-assignments-due-dates-reminders-and-escalation.md` Q8) |
 | Course designer | `course.view`, `course.view_all`, `course.content_edit` |
-| Instructor | Course designer's, plus `user.view`, `enrollment.view`, `enrollment.manage` (owner decision of 2026-11-17: `user.view` takes effect where the role is assigned, at the organization or an account, and not through an enrollment, B16) |
+| Instructor | Course designer's, plus `user.view`, `enrollment.view`, `enrollment.manage`, `progress.view` (`05-progress-and-events.md` Q2), `assignment.manage` (`13-assignments-due-dates-reminders-and-escalation.md` Q8) (owner decision of 2026-11-17: `user.view` takes effect where the role is assigned, at the organization or an account, and not through an enrollment, B16) |
 | Grader | none until M2 |
 | Student | `course.view`, `course.participate` |
 | Observer | `course.view`, and `progress.view_observed` from `05-progress-and-events.md` I3, which also makes it enrollable (Q9) |
 | Manager | none; not enrollable in M1 (Q9) |
+
+Coordinator decision (2026-11-19), pending owner review: the table lists `progress.view` and
+`assignment.manage`, which specs 05 and 13 added to Account admin and Instructor. Since the
+escalation rule (B17, `m0/09` B12) asks whoever grants a role to hold its keys, a custom-role
+holder who could grant Instructor or Account admin before spec 13 now also needs
+`assignment.manage` at that scope.
 
 Entitlements: none. The plan names no course feature or limit.
 

@@ -139,7 +139,6 @@ async fn startup_migrations_create_the_schema_on_an_empty_database(pool: PgPool)
         [
             "accounts",
             "admission_webhooks",
-            "assignment_events",
             "assignment_users",
             "assignments",
             "audit_events",
@@ -175,7 +174,6 @@ async fn startup_migrations_create_the_schema_on_an_empty_database(pool: PgPool)
             "pages",
             "passkeys",
             "plans",
-            "reminders_sent",
             "role_assignments",
             "roles",
             "service_accounts",

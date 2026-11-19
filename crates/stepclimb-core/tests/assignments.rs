@@ -789,3 +789,55 @@ async fn an_assigned_module_or_item_cannot_be_deleted(pool: PgPool) {
         .await
         .expect("an unassigned empty module is deleted");
 }
+
+/// Coordinator decision (2026-11-19): a concluded enrollment an outside source owns blocks
+/// enrolling through an assignment whenever its role holds `course.participate`, whatever the
+/// role; one whose role does not (an Observer) does not block.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_participating_enrollment_concluded_elsewhere_blocks_any_role(pool: PgPool) {
+    let org = Org::new(&pool, "a").await;
+    let actor = Actor::Instance;
+    let custom = roles::NewRole {
+        key: "synced_learner".into(),
+        name: "Synced learner".into(),
+        permissions: vec!["course.participate".into()],
+    };
+    let participant = roles::create_custom(&pool, org.scope(), &custom, t0(), actor)
+        .await
+        .expect("create role")
+        .id;
+    let observer = roles::builtin_id(&pool, "observer")
+        .await
+        .expect("read role")
+        .expect("Observer");
+    for (role, blocks) in [(participant, true), (observer, false)] {
+        let user = org.user(&pool, "Synced").await;
+        sqlx::query(
+            "INSERT INTO enrollments (id, org_id, course_id, user_id, role_id, status, source,
+                                      external_id)
+             VALUES ($1, $2, $3, $4, $5, 'concluded', 'scim', 'ext-1')",
+        )
+        .bind(Uuid::now_v7())
+        .bind(org.id)
+        .bind(org.course)
+        .bind(user)
+        .bind(role)
+        .execute(&pool)
+        .await
+        .expect("insert a SCIM enrollment");
+        let new = org.assignment(TargetType::Course, user, None);
+        let result = org
+            .assign(&pool, &new, Enroll::AsStudent(actor), t0())
+            .await;
+        if blocks {
+            assert!(
+                matches!(result, Err(Error::EnrollmentExternallyManaged)),
+                "{result:?}"
+            );
+            assert_eq!(active_student_enrollments(&pool, user).await, 0);
+        } else {
+            assert!(result.is_ok(), "{result:?}");
+            assert_eq!(active_student_enrollments(&pool, user).await, 1);
+        }
+    }
+}

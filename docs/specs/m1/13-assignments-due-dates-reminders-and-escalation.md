@@ -76,14 +76,22 @@ everything that happened for one person and one assignment. Recurrence and expir
   the timeline; the status is `completed`.
 
   Coordinator decisions (2026-11-19), for I1, pending owner review:
+  - Listing a course's assignments and creating one also need `enrollment.view` at the course
+    (403 `permission.denied`), since an assignment names its assignee and `assignment.manage`
+    alone would otherwise show the roster. Creating needs it whether or not the assignee is a
+    learner, so the answer cannot tell a caller without it who is in the course.
   - Enrolling through an assignment (B3) needs what `POST /api/v1/courses/{course_id}/enrollments`
     needs for the Student role: the user within the caller's `user.view` (404 `user.not_found`
     otherwise, `02-courses-and-enrollments.md` B17), `enrollment.manage` at the course
     (403 `permission.denied`) and every Student permission grantable at organization or account
     scope held there (403 `permission.escalation`). Assigning someone already a learner of the
     course needs none of them, so an Instructor assigns their own students.
-  - A concluded `local` Student enrollment is reactivated rather than duplicated; one an outside
-    source owns answers 409 `enrollment.externally_managed`.
+  - A concluded `local` Student enrollment is reactivated rather than duplicated, and audited
+    as `enrollment.update`. A concluded enrollment an outside source owns whose role holds
+    `course.participate`, Student or another, answers 409 `enrollment.externally_managed`:
+    that source ended the person's learning there, and a local enrollment would override it.
+  - The `user.view` reach check runs on the write's transaction, so the request takes no second
+    pool connection while it holds the course row's lock.
   - The registry lets a job kind subscribe to one topic, so B8's subscriber is three kinds:
     `assignments.on_item_completed`, `assignments.on_module_completed` and
     `assignments.on_course_completed`. Completion is recorded on the rows of ended assignments
@@ -99,8 +107,10 @@ everything that happened for one person and one assignment. Recurrence and expir
     makes writes `enrollment.create` or `enrollment.update` as the caller.
   - `reminders` (B10) is left out of the I1 body and `Assignment` and arrives with I3;
     `GET /api/v1/assignments/{assignment_id}/users` arrives with I4 and B17's readers. I1's
-    migration creates `reminders_sent` and `assignment_events` with the rest of Data; I3 and I4
-    write them. The migration adds `assignments_by_target` for the delete check.
+    migration creates `assignments` and `assignment_users` only, with `UNIQUE (org_id, id)` on
+    `assignment_users`; I3 and I4 add `reminders_sent` and `assignment_events` with composite
+    `(org_id, assignment_user_id)` keys to it. The migration adds `assignments_by_target` for
+    the delete check.
 
 ### Reminders and escalation
 

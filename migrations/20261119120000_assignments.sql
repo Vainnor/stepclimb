@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
--- Assignments, their assignees' rows, reminders sent and timeline events
--- (docs/specs/m1/13-assignments-due-dates-reminders-and-escalation.md B1 to B16, Data; plan,
+-- Assignments and their assignees' rows
+-- (docs/specs/m1/13-assignments-due-dates-reminders-and-escalation.md B1 to B9, Data; plan,
 -- Technical -> data model `assignments`, `reminders_sent`).
 --
 -- An assignment names a course, module or item of one course (`target_type`, `target_id`) and
@@ -12,8 +12,9 @@
 -- in the organization and the course, and refuses to delete an assigned module or item (B1,
 -- Data). `assignments_by_target` serves that check.
 --
--- `reminders_sent` (spec 13 I3) and `assignment_events` (I4) are created here with the rest of
--- the spec's tables; their writers arrive with those issues.
+-- `reminders_sent` (spec 13 I3) and `assignment_events` (I4) arrive with the issues that write
+-- them, with composite `(org_id, assignment_user_id)` keys to `assignment_users`, which
+-- `UNIQUE (org_id, id)` here lets them reference.
 CREATE TABLE assignments (
     id             uuid        PRIMARY KEY,
     org_id         uuid        NOT NULL,
@@ -52,6 +53,7 @@ CREATE TABLE assignment_users (
     next_step_at   timestamptz,
     created_at     timestamptz NOT NULL DEFAULT now(),
     updated_at     timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (org_id, id),
     UNIQUE (assignment_id, user_id, cycle),
     FOREIGN KEY (org_id, assignment_id) REFERENCES assignments (org_id, id),
     FOREIGN KEY (org_id, user_id) REFERENCES users (org_id, id)
@@ -59,29 +61,3 @@ CREATE TABLE assignment_users (
 CREATE INDEX assignment_users_next_step ON assignment_users (next_step_at)
     WHERE next_step_at IS NOT NULL AND completed_at IS NULL AND removed_at IS NULL;
 CREATE INDEX assignment_users_by_user ON assignment_users (org_id, user_id);
-
-CREATE TABLE reminders_sent (
-    org_id              uuid        NOT NULL,
-    assignment_user_id  uuid        NOT NULL REFERENCES assignment_users (id),
-    step                smallint    NOT NULL CHECK (step >= 0),
-    kind                text        NOT NULL CHECK (kind IN ('reminder', 'escalation')),
-    outcome             text        NOT NULL CHECK (outcome IN ('sent', 'skipped', 'missed')),
-    reason              text,
-    email_message_id    uuid,
-    at                  timestamptz NOT NULL,
-    created_at          timestamptz NOT NULL DEFAULT now(),
-    updated_at          timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (assignment_user_id, step)
-);
-
-CREATE TABLE assignment_events (
-    id                  uuid        PRIMARY KEY,
-    org_id              uuid        NOT NULL,
-    assignment_user_id  uuid        NOT NULL REFERENCES assignment_users (id),
-    kind                text        NOT NULL CHECK (kind IN ('assigned', 'due_changed', 'completed', 'removed')),
-    data                jsonb       NOT NULL DEFAULT '{}'::jsonb,
-    at                  timestamptz NOT NULL,
-    created_at          timestamptz NOT NULL DEFAULT now(),
-    updated_at          timestamptz NOT NULL DEFAULT now()
-);
-CREATE INDEX assignment_events_by_row ON assignment_events (assignment_user_id, at);

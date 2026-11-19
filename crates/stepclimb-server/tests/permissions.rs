@@ -452,19 +452,58 @@ const TABLE: &[Entry] = &[
             enrollment_in_path,
         ),
     },
+    // Listing and creating assignments also need `enrollment.view` at the course, since an
+    // assignment names its assignee (M1 spec 13, coordinator decision of 2026-11-19): one entry
+    // per required permission, each holding the other as its extra, so each has its own 403.
     Entry {
         operation_id: "listAssignments",
-        access: permission(AssignmentManage::KEY, COURSE_NOT_FOUND, course_in_tower),
+        access: Access::Permission {
+            key: AssignmentManage::KEY,
+            target: COURSE_NOT_FOUND,
+            extra: &[EnrollmentView::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[],
+            setup: course_in_tower,
+        },
     },
     Entry {
-        // The assignee is a learner of the course, so assigning them enrolls no one and needs
-        // no `enrollment.manage` (M1 spec 13 B3); tests/assignments.rs has that case.
+        operation_id: "listAssignments",
+        access: Access::Permission {
+            key: EnrollmentView::KEY,
+            target: COURSE_NOT_FOUND,
+            extra: &[AssignmentManage::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[],
+            setup: course_in_tower,
+        },
+    },
+    // The assignee is a learner of the course, so assigning them enrolls no one and needs no
+    // `enrollment.manage` (M1 spec 13 B3); tests/assignments.rs has the enrolling cases.
+    Entry {
         operation_id: "createAssignment",
-        access: permission(
-            AssignmentManage::KEY,
-            COURSE_NOT_FOUND,
-            assign_tower_learner,
-        ),
+        access: Access::Permission {
+            key: AssignmentManage::KEY,
+            target: COURSE_NOT_FOUND,
+            extra: &[EnrollmentView::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[],
+            setup: assign_tower_learner,
+        },
+    },
+    Entry {
+        operation_id: "createAssignment",
+        access: Access::Permission {
+            key: EnrollmentView::KEY,
+            target: COURSE_NOT_FOUND,
+            extra: &[AssignmentManage::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[],
+            setup: assign_tower_learner,
+        },
     },
     Entry {
         operation_id: "getAssignment",
@@ -2615,21 +2654,26 @@ const PER_GRANT: &[&str] = &[
     "listCourseCompletions",
 ];
 
-/// An operation has several entries only when it is in [`PER_GRANT`], and then each is a
-/// permission entry naming a different permission.
+/// The operations that need two permissions at once, each with one entry per permission that
+/// holds the other as its extra, so each permission has its own 403 case (M1 spec 13,
+/// coordinator decision of 2026-11-19: assignments also need `enrollment.view`).
+const ALL_OF: &[&str] = &["listAssignments", "createAssignment"];
+
+/// An operation has several entries only when it is in [`PER_GRANT`] or [`ALL_OF`], and then
+/// each is a permission entry naming a different permission.
 #[test]
 fn only_per_grant_operations_have_several_entries_each_with_its_own_permission() {
     for id in table_ids() {
         let entries: Vec<&Entry> = TABLE.iter().filter(|e| e.operation_id == id).collect();
         if entries.len() == 1 {
             assert!(
-                !PER_GRANT.contains(&id),
-                "{id} has one entry but is in PER_GRANT"
+                !PER_GRANT.contains(&id) && !ALL_OF.contains(&id),
+                "{id} has one entry but is in PER_GRANT or ALL_OF"
             );
             continue;
         }
         assert!(
-            PER_GRANT.contains(&id),
+            PER_GRANT.contains(&id) || ALL_OF.contains(&id),
             "{id} is listed {} times",
             entries.len()
         );

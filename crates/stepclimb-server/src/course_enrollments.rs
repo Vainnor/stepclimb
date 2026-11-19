@@ -363,7 +363,7 @@ pub async fn create_enrollment(
 ) -> Result<Response, ApiError> {
     let (grants, course_id) = (require.grants(), require.target().id);
     let scope = grants.scope();
-    refuse_unreachable_user(&state, grants, body.user_id).await?;
+    refuse_unreachable_user(&state.db, grants, body.user_id).await?;
     let mut tx = begin(&state).await?;
     let target = recheck_manage(&mut tx, grants, course_id, COURSE_NOT_FOUND).await?;
     // Locked until the commit, so the permissions the escalation check reads are the ones the
@@ -521,13 +521,13 @@ pub async fn delete_enrollment(
 /// 2026-11-17). A user the caller cannot see answers as one that does not exist, so enrolling
 /// does not reveal who is in the organization.
 pub(crate) async fn refuse_unreachable_user(
-    state: &AppState,
+    db: impl sqlx::PgExecutor<'_>,
     grants: &Grants,
     user_id: Uuid,
 ) -> Result<(), ApiError> {
     let covered = match user_view_accounts(grants) {
         Some(accounts) if accounts.is_empty() => false,
-        within => users::covers(&state.db, grants.scope(), user_id, within)
+        within => users::covers(db, grants.scope(), user_id, within)
             .await
             .map_err(|error| ApiError::internal(&error))?,
     };

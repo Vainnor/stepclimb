@@ -40,7 +40,9 @@ use crate::{
     db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
     enrollments::{self, NewEnrollment},
     id::new_id,
-    organizations, roles, tz,
+    organizations,
+    perm::{CourseParticipate, Permission},
+    roles, tz,
 };
 
 /// The built-in role an assignment enrolls a person with (B3).
@@ -168,9 +170,9 @@ pub enum Error {
     /// The assignee is not a learner of the course and the caller may not enroll them (B3).
     #[error("the user is not a learner of the course")]
     EnrollmentNeeded,
-    /// The assignee's Student enrollment in the course is concluded and owned by an outside
-    /// source, so the assignment cannot reactivate it.
-    #[error("an outside source owns the user's Student enrollment")]
+    /// The assignee holds a concluded enrollment in the course, owned by an outside source,
+    /// whose role holds `course.participate`, so the assignment does not enroll them again.
+    #[error("an outside source concluded the user's enrollment in the course")]
     EnrollmentExternallyManaged,
     /// The built-in Student role has no row: `roles::sync_builtin` has not run.
     #[error("the built-in Student role is missing")]
@@ -553,8 +555,10 @@ async fn check_user(conn: &mut PgConnection, scope: OrgScope, user_id: Uuid) -> 
 }
 
 /// Make the user a learner of the course as Student (B3): reactivate their concluded `local`
-/// Student enrollment, or create one. A concluded Student enrollment an outside source owns is
-/// [`Error::EnrollmentExternallyManaged`]. Both write the enrollment's audit entry as `actor`.
+/// Student enrollment, or create one. Both write the enrollment's audit entry as `actor`. A
+/// concluded enrollment an outside source owns whose role holds `course.participate`, Student or
+/// another, is [`Error::EnrollmentExternallyManaged`]: that source decided the person is no
+/// longer a learner, and a local enrollment beside it would override it.
 async fn enroll_as_student(
     conn: &mut PgConnection,
     scope: OrgScope,
@@ -563,6 +567,9 @@ async fn enroll_as_student(
     now: SystemTime,
     actor: Actor,
 ) -> Result<(), Error> {
+    if concluded_elsewhere(conn, scope, course_id, user_id).await? {
+        return Err(Error::EnrollmentExternallyManaged);
+    }
     let student = roles::builtin_id(&mut *conn, STUDENT_ROLE)
         .await?
         .ok_or(Error::StudentRoleMissing)?;
@@ -597,6 +604,38 @@ async fn enroll_as_student(
             Ok(())
         }
     }
+}
+
+/// Whether the user holds a concluded enrollment in the course that a source other than `local`
+/// owns and whose role holds `course.participate`. The roles read are locked `FOR KEY SHARE`, as
+/// `enrollments` does for its learner checks, so their permissions cannot change before the
+/// commit.
+async fn concluded_elsewhere(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    course_id: Uuid,
+    user_id: Uuid,
+) -> Result<bool, Error> {
+    let roles = sqlx::query!(
+        "SELECT r.key, r.builtin, r.permissions
+         FROM roles r
+         WHERE (r.org_id IS NULL OR r.org_id = $1)
+           AND r.id IN (SELECT e.role_id FROM enrollments e
+                        WHERE e.org_id = $1 AND e.course_id = $2 AND e.user_id = $3
+                          AND e.status = 'concluded' AND e.source <> 'local')
+         ORDER BY r.id
+         FOR KEY SHARE",
+        scope.org_id(),
+        course_id,
+        user_id,
+    )
+    .fetch_all(conn)
+    .await?;
+    Ok(roles.into_iter().any(|role| {
+        roles::effective_permissions(&role.key, role.builtin, role.permissions)
+            .iter()
+            .any(|key| key == CourseParticipate::KEY)
+    }))
 }
 
 /// When the user completed the target, if they have (B8): `item_progress`, `module_progress`
