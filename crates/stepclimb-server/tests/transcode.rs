@@ -25,14 +25,14 @@ use stepclimb_core::{
     users::{self, NewUser},
     videos::{self, NewUpload, Terminating},
 };
-use stepclimb_jobs::{NewJob, Worker, backoff::Random, enqueue};
+use stepclimb_jobs::{NewJob, Worker, backoff::Random, enqueue, queue};
 use stepclimb_media::tools::{Tools, find_on_path};
 use stepclimb_server::{
     config::StorageConfig,
     jobs,
     storage::Storage,
     video_parts,
-    video_transcode::{TRANSCODE, Transcoder},
+    video_transcode::{LEASE, LEASE_EVERY, TRANSCODE, Transcoder},
 };
 
 /// 2026-03-31T23:00:00Z: an hour before a month ends.
@@ -848,6 +848,126 @@ async fn a_lost_lease_refunds_only_its_own_runs_charge(pool: PgPool) {
     tx.commit().await.unwrap();
     assert_eq!(refunded, Some(2));
     assert_eq!(f.usage().await, [("2026-03-01".to_owned(), 0)]);
+}
+
+/// Re-check, through the job: a run whose lease lapses while ffmpeg renders, and whose job
+/// another worker then claims and charges again, learns it lost the lease at its next extension
+/// and ends as `Stop::Superseded`. Its own charge is refunded once and the newer run's stays.
+///
+/// The render is a stand-in ffmpeg that waits, so the run stays in its race with `hold_lease`.
+/// The other worker's claim and run are the queue's and the transcode repository's own calls,
+/// not a second worker pass, so no second render runs. Tokio's clock is advanced by
+/// `LEASE_EVERY` only once the newer run has charged, which wakes `hold_lease` for its
+/// extension; the job's clock is the fixture's `ManualClock`.
+#[cfg(unix)]
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_lease_lost_mid_render_ends_superseded_and_keeps_the_newer_runs_charge(pool: PgPool) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let f = Fixture::new(pool).await;
+    let rendering = f.work.0.join("rendering");
+    let waiting = f.work.0.join("waiting-ffmpeg");
+    let script = format!(
+        "#!/bin/sh\ntouch '{}'\nexec sleep 600\n",
+        rendering.display()
+    );
+    std::fs::write(&waiting, script).unwrap();
+    std::fs::set_permissions(&waiting, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let video = f
+        .processing(&clip(&f.work.0, "mp4", Some((320, 240)), false, 3))
+        .await;
+
+    let first = f.work(f.transcoder(60, Some(waiting)));
+    let takeover = async {
+        // The first run has charged its minute and is rendering.
+        let started = tokio::time::Instant::now();
+        while !rendering.exists() {
+            assert!(
+                started.elapsed() < Duration::from_secs(60),
+                "ffmpeg started"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(f.charge_record(video).await, Some(1));
+        let lost: i32 = sqlx::query_scalar("SELECT output_run FROM videos WHERE id = $1")
+            .bind(video)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+        // Its lease lapses, and another worker claims the job and starts and charges a newer run.
+        f.clock.advance(LEASE + Duration::from_secs(60));
+        let claims = queue::claim(
+            &f.pool,
+            &[jobs::TRANSCODE_QUEUE],
+            &[(TRANSCODE.name, LEASE)],
+            1,
+            f.now(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            claims
+                .claimed
+                .iter()
+                .map(|c| c.attempts)
+                .collect::<Vec<_>>(),
+            [2],
+            "the other worker holds the job now"
+        );
+        let s = scope(f.org);
+        let mut tx = f.pool.begin().await.unwrap();
+        let transcodes::Start::Run { run: newer, .. } =
+            transcodes::start(&mut tx, s, video, f.now()).await.unwrap()
+        else {
+            panic!("a newer run")
+        };
+        assert!(
+            transcodes::charge(&mut tx, s, (video, newer), 2, f.now())
+                .await
+                .unwrap()
+        );
+        tx.commit().await.unwrap();
+        assert_eq!(
+            f.usage().await,
+            [("2026-03-01".to_owned(), 2)],
+            "the newer run's start refunded the first run's minute"
+        );
+        // The first run's next extension is due.
+        tokio::time::pause();
+        tokio::time::advance(LEASE_EVERY).await;
+        tokio::time::resume();
+        (lost, newer)
+    };
+    let (ran, (lost, newer)) = tokio::join!(first, takeover);
+    assert_eq!(ran, 1);
+    assert!(newer > lost);
+
+    assert_eq!(
+        f.usage().await,
+        [("2026-03-01".to_owned(), 2)],
+        "only the lost run's charge was refunded"
+    );
+    assert_eq!(
+        f.charge_record(video).await,
+        Some(2),
+        "the newer run's charge stays"
+    );
+    let (status, run): (String, i32) =
+        sqlx::query_as("SELECT status, output_run FROM videos WHERE id = $1")
+            .bind(video)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        (status.as_str(), run),
+        ("processing", newer),
+        "the lost run neither failed the video nor took its run back"
+    );
+    let attempts: i32 =
+        sqlx::query_scalar("SELECT attempts FROM jobs WHERE kind = 'video.transcode'")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(attempts, 2, "the job is still the other worker's");
 }
 
 /// Re-check: a charge made in March and refunded after a restart in April goes back to March.
