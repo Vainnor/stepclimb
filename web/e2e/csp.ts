@@ -16,7 +16,9 @@
 //   animations (playwright-core `inPagePrepareForScreenshots`, `syncAnimations`). The page's
 //   policy refuses it, as it should, and WebKit reports an inline `style-src-elem` violation with
 //   no source file. [`isScreenshotStyle`] matches only that report, only in WebKit and only while
-//   a screenshot is being taken; `csp.spec.ts` checks it matches nothing else.
+//   a screenshot is being taken; `csp.spec.ts` checks it matches nothing else. The known gap: in
+//   WebKit, during a screenshot, an inline `<style>` our own bundle injected with an empty source
+//   file would be left out as well. Outside screenshots, and in Chromium and Firefox, it counts.
 import { type BrowserContext, test as base, expect, type Page } from "@playwright/test";
 
 export type { Browser, Page, Request, Route } from "@playwright/test";
@@ -46,9 +48,6 @@ export interface Window {
   end: number;
 }
 
-/** How long after a screenshot returns its report may still arrive, in milliseconds. */
-const GRACE_MS = 250;
-
 /**
  * Whether `report` is the one WebKit raises for Playwright's own screenshot style: received while
  * a screenshot was being taken, in WebKit, and either an inline `style-src-elem` event with no
@@ -56,7 +55,7 @@ const GRACE_MS = 250;
  */
 export function isScreenshotStyle(report: Report, windows: Window[], browserName: string): boolean {
   if (browserName !== "webkit") return false;
-  const during = windows.some((w) => report.at >= w.start && report.at <= w.end + GRACE_MS);
+  const during = windows.some((w) => report.at >= w.start && report.at <= w.end);
   if (!during) return false;
   if (report.source === "console") return report.text === WEBKIT_INLINE_STYLE;
   const inline = report.blocked === "inline" || report.blocked === "";

@@ -77,8 +77,10 @@ const STYLE_HASHES: &str = include_str!("../csp-style-hashes.txt");
 /// B21). The only inline styles are the `<style>` elements of [`STYLE_HASHES`], allowed by their
 /// hash; styles React sets through the DOM are not inline style attributes and are allowed.
 /// Frames load only from here: a file item previews a PDF in a frame of its signed `/files/`
-/// URL, which carries its own policy (`file_delivery`). No `<object>` or `<base>`; forms submit only
-/// here; no other site may frame the app.
+/// URL, which carries its own policy (`file_delivery`). No `<object>` or `<base>`. No form
+/// submits natively: the app sends every form through the API client, and markup injected into a
+/// page cannot post a form to the API, which Fetch Metadata would let through as same-origin. No
+/// other site may frame the app.
 pub static CONTENT_SECURITY_POLICY: LazyLock<String> = LazyLock::new(|| {
     let hashes: String = STYLE_HASHES
         .lines()
@@ -89,7 +91,7 @@ pub static CONTENT_SECURITY_POLICY: LazyLock<String> = LazyLock::new(|| {
     format!(
         "default-src 'none'; script-src 'self'; style-src 'self'{hashes}; img-src 'self'; \
          font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; \
-         frame-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+         frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
     )
 });
 
@@ -518,11 +520,10 @@ mod tests {
             "manifest-src",
             "worker-src",
             "frame-src",
-            "form-action",
         ] {
             assert_eq!(directives[name], ["'self'"], "{name}");
         }
-        for name in ["base-uri", "frame-ancestors"] {
+        for name in ["base-uri", "form-action", "frame-ancestors"] {
             assert_eq!(directives[name], ["'none'"], "{name}");
         }
         for loose in [

@@ -23,14 +23,14 @@ function consoleReport(at: number, text = WEBKIT_INLINE_STYLE): Report {
 
 test("the screenshot style's two reports are left out in WebKit during a screenshot", () => {
   expect(isScreenshotStyle(event(1_050), shot, "webkit")).toBe(true);
-  expect(isScreenshotStyle(event(1_200, { blocked: "" }), shot, "webkit")).toBe(true);
+  expect(isScreenshotStyle(event(1_100, { blocked: "" }), shot, "webkit")).toBe(true);
   expect(isScreenshotStyle(consoleReport(1_003), shot, "webkit")).toBe(true);
 });
 
 test("every other report counts", () => {
   const counted: [string, Report, string][] = [
     ["before the screenshot", event(900), "webkit"],
-    ["long after it", event(1_400), "webkit"],
+    ["after it returned", event(1_101), "webkit"],
     ["in Chromium", event(1_050), "chromium"],
     ["in Firefox", event(1_050), "firefox"],
     [
