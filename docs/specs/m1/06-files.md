@@ -341,6 +341,28 @@ Coordinator decisions (2026-11-19, I3), pending owner review:
   (`location.assign`), which saves it without leaving the page. Whether the browser shows PDFs
   is read from `navigator.pdfViewerEnabled`.
 
+Coordinator decisions (2026-11-19, I4), pending owner review:
+
+- The cover's foreign key names the course as well as the course file
+  (`(org_id, id, cover_course_file_id)` to `course_files (org_id, course_id, id)`), so the
+  database refuses a course file of another course, which the two columns in Data would allow.
+  The repository checks the type, which `course_files` does not hold (`courses::COVER_TYPES`:
+  `image/png`, `image/jpeg`, `image/webp`), under the course lock that deleting a course file
+  also takes.
+- `course.cover_invalid` is a field code of 422 `request.invalid` at `/cover_course_file_id`, as
+  the other course fields' codes are. An id that names no course file of the course (another
+  course's, another organization's or none) answers the same as a PDF, so the answer reveals
+  nothing about other courses.
+- Every answer that carries a `Course` (the list, the read, create, update, the status change,
+  move and copy) carries `cover_course_file_id` and `cover_url`, each URL issued for the caller
+  with a token of its own, valid 10 minutes like any signed URL (B16); a client asks for the
+  course again for a new one. A page of the list reads its covers' course files in one query.
+  Without file storage the id is still answered and `cover_url` is `null` (B1a).
+- Setting or removing the cover needs `course.manage`, as every member of the course's `PATCH`
+  does, and writes the `course.update` audit entry with `cover_course_file_id` before and after.
+- A copy's cover is the copy of the source's cover course file (B20); a source without one
+  gives a copy without one.
+
 ## Data
 
 Migration `migrations/<version>_files.sql` (I1), and `migrations/<version>_course_cover.sql`

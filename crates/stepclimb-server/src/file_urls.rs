@@ -16,7 +16,7 @@
 //! CourseFileTarget>`. Both take [`Storage`] after their `Require`, so only an allowed caller
 //! learns that storage is not configured (B1a).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{Json, extract::State};
@@ -214,6 +214,31 @@ fn signed(
         mime: file.mime.clone(),
         size: file.size,
     })
+}
+
+/// An inline URL for each course file of `ids`, by id, for courses' `cover_url` (spec 06 B19):
+/// empty when the server has no file storage (B1a), and without an id that names no course file
+/// of the scope's organization. One read for all of `ids`.
+pub async fn cover_urls(
+    state: &AppState,
+    scope: OrgScope,
+    ids: &[Uuid],
+) -> Result<HashMap<Uuid, String>, ApiError> {
+    if state.storage.is_none() || ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let files = course_files::get_many(&state.db, scope, ids)
+        .await
+        .map_err(|error| ApiError::internal(&error))?;
+    files
+        .iter()
+        .map(|file| {
+            Ok((
+                file.id,
+                signed(state, scope, file, Disposition::Inline)?.url,
+            ))
+        })
+        .collect()
 }
 
 /// A signed URL for a `file` item's file. A caller without `course.view_all` gets it only for a

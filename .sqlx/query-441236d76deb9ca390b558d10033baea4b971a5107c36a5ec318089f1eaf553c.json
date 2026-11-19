@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT c.id, c.account_id, a.path::text AS \"account_path!\", c.code, c.title, c.status,\n                  c.template,\n                  (extract(epoch FROM c.start_at) * 1000000)::bigint AS start_at_us,\n                  (extract(epoch FROM c.end_at) * 1000000)::bigint AS end_at_us,\n                  c.settings::text AS \"settings!\", c.completion_valid_months,\n                  (extract(epoch FROM c.created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM c.updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM courses c JOIN accounts a ON a.org_id = c.org_id AND a.id = c.account_id\n           WHERE c.org_id = $1 AND c.id = $2",
+  "query": "SELECT c.id, c.account_id, a.path::text AS \"account_path!\", c.code, c.title, c.status,\n                  c.template,\n                  (extract(epoch FROM c.start_at) * 1000000)::bigint AS start_at_us,\n                  (extract(epoch FROM c.end_at) * 1000000)::bigint AS end_at_us,\n                  c.settings::text AS \"settings!\", c.completion_valid_months,\n                  c.cover_course_file_id,\n                  (extract(epoch FROM c.created_at) * 1000000)::bigint AS \"created_at_us!\",\n                  (extract(epoch FROM c.updated_at) * 1000000)::bigint AS \"updated_at_us!\"\n           FROM courses c JOIN accounts a ON a.org_id = c.org_id AND a.id = c.account_id\n           WHERE c.org_id = $1 AND c.id = $2\n           FOR NO KEY UPDATE OF c FOR SHARE OF a",
   "describe": {
     "columns": [
       {
@@ -106,12 +106,23 @@
       },
       {
         "ordinal": 11,
+        "name": "cover_course_file_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "courses",
+            "name": "cover_course_file_id"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
         "name": "created_at_us!",
         "type_info": "Int8",
         "origin": "Expression"
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "updated_at_us!",
         "type_info": "Int8",
         "origin": "Expression"
@@ -135,9 +146,10 @@
       null,
       null,
       true,
+      true,
       null,
       null
     ]
   },
-  "hash": "e06b6f96bacb483a75735bc461618b67055c55b9caf28b45531c8c971f3b1534"
+  "hash": "441236d76deb9ca390b558d10033baea4b971a5107c36a5ec318089f1eaf553c"
 }

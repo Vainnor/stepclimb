@@ -1157,6 +1157,199 @@ async fn a_copy_copies_course_files_and_points_its_file_items_at_them(pool: PgPo
     assert_eq!(after, stored, "no byte is added");
 }
 
+/// A course file of `course` named `name` whose stored file has type `mime`.
+async fn course_file(pool: &PgPool, org: Org, course: Uuid, name: &str, mime: &str) -> Uuid {
+    let mut hasher = files::Sha256Hasher::new();
+    hasher.update(format!("{course} {name}").as_bytes());
+    let new = files::NewFile {
+        hashed: hasher.finish(),
+        mime: mime.into(),
+    };
+    let file = files::insert(pool, org.scope(), &new, request_time())
+        .await
+        .expect("insert file")
+        .id;
+    let place = (
+        &course_files::Folder::parse("/").expect("the top folder"),
+        &course_files::Name::parse(name).expect("a name"),
+    );
+    let mut conn = pool.acquire().await.expect("a connection");
+    course_files::create(&mut conn, org.scope(), course, file, place, request_time())
+        .await
+        .expect("create course file")
+        .id
+}
+
+fn cover(id: Option<Uuid>) -> CoursePatch {
+    CoursePatch {
+        cover_course_file_id: Some(id),
+        ..CoursePatch::default()
+    }
+}
+
+/// Spec 06 B19, T16: a cover is a PNG, JPEG or WebP course file of the course. A PDF, a course
+/// file of another course and one of another organization are refused alike and write
+/// nothing; a cover set and removed writes one `course.update` entry each.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_cover_is_an_image_file_of_the_course(pool: PgPool) {
+    let a = Org::new(&pool, "org-a").await;
+    let b = Org::new(&pool, "org-b").await;
+    let course = create(&pool, a, a.tower, "S1").await.unwrap().id;
+    let other = create(&pool, a, a.tower, "S2").await.unwrap().id;
+    let b_course = create(&pool, b, b.tower, "S1").await.unwrap().id;
+    let pdf = course_file(&pool, a, course, "notes.pdf", "application/pdf").await;
+    let elsewhere = course_file(&pool, a, other, "cover.png", "image/png").await;
+    let b_png = course_file(&pool, b, b_course, "cover.png", "image/png").await;
+    let update = |patch: CoursePatch| {
+        let pool = pool.clone();
+        async move {
+            courses::update(
+                &pool,
+                a.scope(),
+                course,
+                &patch,
+                later_time(),
+                Actor::Instance,
+            )
+            .await
+        }
+    };
+
+    let written = entries(&pool, a).await.len();
+    for refused in [pdf, elsewhere, b_png, Uuid::nil()] {
+        let result = update(cover(Some(refused))).await;
+        assert!(
+            matches!(result, Err(Error::CoverInvalid)),
+            "{refused}: {result:?}"
+        );
+    }
+    assert_eq!(
+        entries(&pool, a).await.len(),
+        written,
+        "a refusal writes no entry"
+    );
+
+    for (name, mime) in [
+        ("a.png", "image/png"),
+        ("b.jpg", "image/jpeg"),
+        ("c.webp", "image/webp"),
+    ] {
+        let image = course_file(&pool, a, course, name, mime).await;
+        let set = update(cover(Some(image))).await.unwrap();
+        assert_eq!(set.cover_course_file_id, Some(image), "{mime}");
+    }
+    let cleared = update(cover(None)).await.unwrap();
+    assert_eq!(cleared.cover_course_file_id, None);
+    let last = entries(&pool, a).await.pop().unwrap();
+    assert_eq!(last.action, "course.update");
+    assert_eq!(
+        last.data["after"]["cover_course_file_id"],
+        serde_json::Value::Null
+    );
+    let unchanged = courses::get(&pool, b.scope(), b_course)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(unchanged.cover_course_file_id, None);
+}
+
+/// Spec 06 B11: a course file the course shows as its cover cannot be deleted; once the cover
+/// is removed, it can.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn the_cover_cannot_be_deleted(pool: PgPool) {
+    let a = Org::new(&pool, "org-a").await;
+    let course = create(&pool, a, a.tower, "S1").await.unwrap().id;
+    let png = course_file(&pool, a, course, "cover.png", "image/png").await;
+    courses::update(
+        &pool,
+        a.scope(),
+        course,
+        &cover(Some(png)),
+        later_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    let in_use = course_files::delete(&mut conn, a.scope(), png, later_time()).await;
+    assert!(
+        matches!(in_use, Err(course_files::Error::InUse)),
+        "{in_use:?}"
+    );
+    courses::update(
+        &pool,
+        a.scope(),
+        course,
+        &cover(None),
+        later_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+    course_files::delete(&mut conn, a.scope(), png, later_time())
+        .await
+        .unwrap();
+}
+
+/// Spec 06 B20, T17: a copy's cover is the copy of the source's cover course file, and a source
+/// without a cover gives a copy without one.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn a_copy_takes_the_copy_of_the_cover(pool: PgPool) {
+    let a = Org::new(&pool, "org-a").await;
+    let source = create(&pool, a, a.tower, "S1").await.unwrap().id;
+    let bare = courses::copy(
+        &pool,
+        a.scope(),
+        source,
+        &copy_to(a.tower, "S1-A"),
+        later_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+    assert_eq!(bare.cover_course_file_id, None);
+    course_file(&pool, a, source, "notes.pdf", "application/pdf").await;
+    let png = course_file(&pool, a, source, "cover.png", "image/png").await;
+    courses::update(
+        &pool,
+        a.scope(),
+        source,
+        &cover(Some(png)),
+        later_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+
+    let copy = courses::copy(
+        &pool,
+        a.scope(),
+        source,
+        &copy_to(a.tower, "S1-B"),
+        later_time(),
+        Actor::Instance,
+    )
+    .await
+    .unwrap();
+
+    let copied = copy.cover_course_file_id.expect("the copy has a cover");
+    assert_ne!(copied, png);
+    let file = course_files::get(&pool, a.scope(), copied)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((file.course_id, file.name.as_str()), (copy.id, "cover.png"));
+    let source = courses::get(&pool, a.scope(), source)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        source.cover_course_file_id,
+        Some(png),
+        "the source keeps its own"
+    );
+}
+
 /// An item whose kind this release cannot copy (its content spec is not built) refuses the
 /// copy, and nothing is written.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]

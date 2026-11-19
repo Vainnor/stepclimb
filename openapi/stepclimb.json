@@ -9116,6 +9116,8 @@
           "end_at",
           "settings",
           "completion_valid_months",
+          "cover_course_file_id",
+          "cover_url",
           "permissions",
           "created_at",
           "updated_at"
@@ -9135,6 +9137,21 @@
             ],
             "format": "int32",
             "description": "How many months a completion of the course stays valid; null for ever. A change applies\nto completions recorded afterwards."
+          },
+          "cover_course_file_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The course file shown as the course's cover, a PNG, JPEG or WebP image of the course;\nnull when it has none."
+          },
+          "cover_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A signed URL that shows the cover inline for 10 minutes, issued for you; null when the\ncourse has no cover or the server has no file storage. Ask for the course again for a\nnew one."
           },
           "created_at": {
             "type": "string",
@@ -9382,7 +9399,7 @@
       },
       "CoursePatch": {
         "type": "object",
-        "description": "A change to a course; an omitted member is left as it is. `null` clears `start_at`, `end_at`\nor `completion_valid_months` and is malformed for every other member.",
+        "description": "A change to a course; an omitted member is left as it is. `null` clears `start_at`, `end_at`,\n`completion_valid_months` or `cover_course_file_id` and is malformed for every other member.",
         "properties": {
           "code": {
             "type": "string",
@@ -9397,6 +9414,14 @@
             "description": "How many months a completion of the course stays valid, 1 to 120; `null` for ever. Needs\n`course.manage`, as every member here does. Completions recorded before the change keep\ntheir expiry date.",
             "maximum": 120,
             "minimum": 1
+          },
+          "cover_course_file_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "A course file of this course to show as its cover, whose type is PNG, JPEG or WebP;\n`null` removes the cover. A course file used as the cover cannot be deleted."
           },
           "end_at": {
             "type": [
@@ -13121,6 +13146,8 @@
                 "end_at",
                 "settings",
                 "completion_valid_months",
+                "cover_course_file_id",
+                "cover_url",
                 "permissions",
                 "created_at",
                 "updated_at"
@@ -13140,6 +13167,21 @@
                   ],
                   "format": "int32",
                   "description": "How many months a completion of the course stays valid; null for ever. A change applies\nto completions recorded afterwards."
+                },
+                "cover_course_file_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "The course file shown as the course's cover, a PNG, JPEG or WebP image of the course;\nnull when it has none."
+                },
+                "cover_url": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "A signed URL that shows the cover inline for 10 minutes, issued for you; null when the\ncourse has no cover or the server has no file storage. Ask for the course again for a\nnew one."
                 },
                 "created_at": {
                   "type": "string",
@@ -15929,7 +15971,7 @@
         }
       },
       "CourseFileDeleteConflict": {
-        "description": "`course.archived`: the course is archived and takes no content change. `file.in_use`: a `file` item or a version of a page references the course file; remove it first.",
+        "description": "`course.archived`: the course is archived and takes no content change. `file.in_use`: a `file` item or a version of a page references the course file, or the course shows it as its cover; remove it or choose another cover first.",
         "content": {
           "application/problem+json": {
             "schema": {

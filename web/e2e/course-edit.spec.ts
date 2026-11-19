@@ -41,6 +41,8 @@ const course = {
   permissions: ["course.content_edit", "course.view", "course.view_all"],
   settings: { home: { kind: "modules" } },
   completion_valid_months: null,
+  cover_course_file_id: null,
+  cover_url: null,
   start_at: null,
   end_at: null,
   created_at: STAMP,

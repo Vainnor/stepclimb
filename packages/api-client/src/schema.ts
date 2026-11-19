@@ -2213,6 +2213,18 @@ export interface components {
              */
             completion_valid_months: number | null;
             /**
+             * Format: uuid
+             * @description The course file shown as the course's cover, a PNG, JPEG or WebP image of the course;
+             *     null when it has none.
+             */
+            cover_course_file_id: string | null;
+            /**
+             * @description A signed URL that shows the cover inline for 10 minutes, issued for you; null when the
+             *     course has no cover or the server has no file storage. Ask for the course again for a
+             *     new one.
+             */
+            cover_url: string | null;
+            /**
              * Format: date-time
              * @description RFC 3339, UTC.
              */
@@ -2344,8 +2356,8 @@ export interface components {
             account_id: string;
         };
         /**
-         * @description A change to a course; an omitted member is left as it is. `null` clears `start_at`, `end_at`
-         *     or `completion_valid_months` and is malformed for every other member.
+         * @description A change to a course; an omitted member is left as it is. `null` clears `start_at`, `end_at`,
+         *     `completion_valid_months` or `cover_course_file_id` and is malformed for every other member.
          */
         CoursePatch: {
             /** @description Trimmed; 1 to 50 characters; unique in the organization, ignoring ASCII case. */
@@ -2357,6 +2369,12 @@ export interface components {
              *     their expiry date.
              */
             completion_valid_months?: number | null;
+            /**
+             * Format: uuid
+             * @description A course file of this course to show as its cover, whose type is PNG, JPEG or WebP;
+             *     `null` removes the cover. A course file used as the cover cannot be deleted.
+             */
+            cover_course_file_id?: string | null;
             /**
              * Format: date-time
              * @description RFC 3339 with an offset, from 1970 up to 2200, not before `start_at`; `null` clears it.
@@ -3908,6 +3926,18 @@ export interface components {
                  */
                 completion_valid_months: number | null;
                 /**
+                 * Format: uuid
+                 * @description The course file shown as the course's cover, a PNG, JPEG or WebP image of the course;
+                 *     null when it has none.
+                 */
+                cover_course_file_id: string | null;
+                /**
+                 * @description A signed URL that shows the cover inline for 10 minutes, issued for you; null when the
+                 *     course has no cover or the server has no file storage. Ask for the course again for a
+                 *     new one.
+                 */
+                cover_url: string | null;
+                /**
                  * Format: date-time
                  * @description RFC 3339, UTC.
                  */
@@ -5257,7 +5287,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `course.archived`: the course is archived and takes no content change. `file.in_use`: a `file` item or a version of a page references the course file; remove it first. */
+        /** @description `course.archived`: the course is archived and takes no content change. `file.in_use`: a `file` item or a version of a page references the course file, or the course shows it as its cover; remove it or choose another cover first. */
         CourseFileDeleteConflict: {
             headers: {
                 [name: string]: unknown;

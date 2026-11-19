@@ -349,6 +349,30 @@ pub async fn get(
     .transpose()
 }
 
+/// The course files of `ids` of the scope's organization, in no particular order; an id that
+/// names none is left out. One query for a page of courses' covers (spec 06 B19).
+pub async fn get_many(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    ids: &[Uuid],
+) -> Result<Vec<CourseFile>, Error> {
+    sqlx::query_as!(
+        Row,
+        r#"SELECT cf.id, cf.course_id, cf.file_id, cf.folder, cf.name, f.size, f.mime, f.sha256,
+                  (extract(epoch FROM cf.created_at) * 1000000)::bigint AS "created_at_us!",
+                  (extract(epoch FROM cf.updated_at) * 1000000)::bigint AS "updated_at_us!"
+           FROM course_files cf JOIN files f ON f.org_id = cf.org_id AND f.id = cf.file_id
+           WHERE cf.org_id = $1 AND cf.id = ANY($2)"#,
+        scope.org_id(),
+        ids,
+    )
+    .fetch_all(db)
+    .await?
+    .into_iter()
+    .map(CourseFile::try_from)
+    .collect()
+}
+
 /// The course of the course file `id` of the scope's organization, or `None`: what
 /// `CourseFileTarget` checks grants at.
 pub async fn course_of(
@@ -555,8 +579,8 @@ pub async fn rename_folder(
     Ok(moved)
 }
 
-/// Whether a `file` item or any version of a page references the course file `id` of the course
-/// `course_id` (B11; spec 07 Data). The course's cover joins this check with spec 06 I4.
+/// Whether a `file` item, any version of a page or the course's cover references the course file
+/// `id` of the course `course_id` (B11, B19; spec 07 Data).
 pub async fn referenced(
     db: impl PgExecutor<'_>,
     scope: OrgScope,
@@ -569,7 +593,10 @@ pub async fn referenced(
                        WHERE org_id = $1 AND kind = 'file' AND ref_id = $2)
                    OR EXISTS (
                        SELECT 1 FROM page_version_files
-                       WHERE org_id = $1 AND course_id = $3 AND course_file_id = $2))
+                       WHERE org_id = $1 AND course_id = $3 AND course_file_id = $2)
+                   OR EXISTS (
+                       SELECT 1 FROM courses
+                       WHERE org_id = $1 AND id = $3 AND cover_course_file_id = $2))
                AS "referenced!""#,
         scope.org_id(),
         id,

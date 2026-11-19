@@ -59,6 +59,7 @@ use crate::{
     audit::ClientAddress,
     error::{ApiError, FieldError},
     extract::{ApiJson, ApiQuery},
+    file_urls,
     openapi::problem_responses,
     organization::present,
     pagination::{Page, PageParams},
@@ -90,6 +91,8 @@ pub mod code {
     pub const COURSE_DATE_OUT_OF_RANGE: &str = "course.date_out_of_range";
     /// A `completion_valid_months` outside 1 to 120 (a 422 field code, on courses and modules).
     pub const COMPLETION_VALIDITY_OUT_OF_RANGE: &str = "completion.validity_out_of_range";
+    /// The cover is not a PNG, JPEG or WebP file of the course (a 422 field code).
+    pub const COURSE_COVER_INVALID: &str = "course.cover_invalid";
 }
 
 problem_responses! {
@@ -198,6 +201,15 @@ pub struct Course {
     /// to completions recorded afterwards.
     #[schema(required = true)]
     pub completion_valid_months: Option<i16>,
+    /// The course file shown as the course's cover, a PNG, JPEG or WebP image of the course;
+    /// null when it has none.
+    #[schema(value_type = Option<String>, format = "uuid", required = true)]
+    pub cover_course_file_id: Option<Uuid>,
+    /// A signed URL that shows the cover inline for 10 minutes, issued for you; null when the
+    /// course has no cover or the server has no file storage. Ask for the course again for a
+    /// new one.
+    #[schema(required = true)]
+    pub cover_url: Option<String>,
     /// The catalog keys grantable at course scope that you hold at this course, sorted: what
     /// the app may offer you here. The server checks every request itself.
     pub permissions: Vec<String>,
@@ -235,6 +247,8 @@ impl Course {
             },
             status: course.status.into(),
             completion_valid_months: course.completion_valid_months,
+            cover_course_file_id: course.cover_course_file_id,
+            cover_url: None,
             id: course.id,
             account_id: course.account_id,
             title: course.title,
@@ -242,6 +256,40 @@ impl Course {
             template: course.template,
         })
     }
+}
+
+/// `answers` with each `cover_url` issued for the caller (spec 06 B19): one read of the covers'
+/// course files for the whole page.
+async fn with_covers(
+    state: &AppState,
+    scope: OrgScope,
+    mut answers: Vec<Course>,
+) -> Result<Vec<Course>, ApiError> {
+    let ids: Vec<Uuid> = answers
+        .iter()
+        .filter_map(|c| c.cover_course_file_id)
+        .collect();
+    let urls = file_urls::cover_urls(state, scope, &ids).await?;
+    for answer in &mut answers {
+        answer.cover_url = answer
+            .cover_course_file_id
+            .and_then(|id| urls.get(&id).cloned());
+    }
+    Ok(answers)
+}
+
+/// `answer` with its `cover_url` issued for the caller (spec 06 B19).
+async fn with_cover(
+    state: &AppState,
+    scope: OrgScope,
+    mut answer: Course,
+) -> Result<Course, ApiError> {
+    if let Some(id) = answer.cover_course_file_id {
+        answer.cover_url = file_urls::cover_urls(state, scope, &[id])
+            .await?
+            .remove(&id);
+    }
+    Ok(answer)
 }
 
 /// The catalog keys grantable at course scope that `grants` hold at `target`, sorted (B10).
@@ -309,8 +357,8 @@ pub struct CourseSettingsPatch {
     pub home: Option<CourseHome>,
 }
 
-/// A change to a course; an omitted member is left as it is. `null` clears `start_at`, `end_at`
-/// or `completion_valid_months` and is malformed for every other member.
+/// A change to a course; an omitted member is left as it is. `null` clears `start_at`, `end_at`,
+/// `completion_valid_months` or `cover_course_file_id` and is malformed for every other member.
 #[derive(Clone, Debug, Default, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CoursePatch {
@@ -339,6 +387,11 @@ pub struct CoursePatch {
     #[serde(default, deserialize_with = "nullable")]
     #[schema(value_type = Option<i64>, minimum = 1, maximum = 120)]
     pub completion_valid_months: Option<Option<i64>>,
+    /// A course file of this course to show as its cover, whose type is PNG, JPEG or WebP;
+    /// `null` removes the cover. A course file used as the cover cannot be deleted.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schema(value_type = Option<String>, format = "uuid")]
+    pub cover_course_file_id: Option<Option<Uuid>>,
 }
 
 /// A validity from a request as the repositories take it. A number outside `i16` becomes 0,
@@ -357,6 +410,7 @@ impl CoursePatch {
             end_at: date(self.end_at),
             home: self.settings.and_then(|s| s.home).map(Into::into),
             completion_valid_months: validity(self.completion_valid_months),
+            cover_course_file_id: self.cover_course_file_id,
         }
     }
 }
@@ -465,6 +519,7 @@ pub async fn list_courses(
         .into_iter()
         .map(|course| Course::from_repo(course, grants))
         .collect::<Result<Vec<_>, _>>()?;
+    let rows = with_covers(&state, grants.scope(), rows).await?;
     page.page(rows, |course| (course.title.clone(), course.id))
         .map(Json)
 }
@@ -540,7 +595,8 @@ pub async fn get_course(
     };
     check_course::<CourseView>(grants, &target, course.needs_view_all(), COURSE_NOT_FOUND)?;
     let learner = grants.holds::<CourseParticipate>(&target.target());
-    let mut answer = Course::from_repo(course, grants)?;
+    let answer = Course::from_repo(course, grants)?;
+    let mut answer = with_cover(&state, grants.scope(), answer).await?;
     if learner {
         let scope = grants.scope();
         answer.progress =
@@ -621,6 +677,7 @@ pub async fn create_course(
     commit(tx).await?;
     let location = format!("{COURSES_PATH}/{}", course.id);
     let course = Course::from_repo(course, grants)?;
+    let course = with_cover(&state, grants.scope(), course).await?;
     Ok((
         StatusCode::CREATED,
         [(header::LOCATION, location)],
@@ -674,7 +731,8 @@ pub async fn update_course(
     .await
     .map_err(course_error)?;
     commit(tx).await?;
-    Ok(Json(Course::from_repo(course, grants)?))
+    let answer = Course::from_repo(course, grants)?;
+    Ok(Json(with_cover(&state, grants.scope(), answer).await?))
 }
 
 /// Change a course's status. Asking for the current status changes nothing.
@@ -714,7 +772,8 @@ pub async fn set_course_status(
         .await
         .map_err(course_error)?;
     commit(tx).await?;
-    Ok(Json(Course::from_repo(course, grants)?))
+    let answer = Course::from_repo(course, grants)?;
+    Ok(Json(with_cover(&state, grants.scope(), answer).await?))
 }
 
 /// Move a course, in any status, to another account of the organization.
@@ -759,7 +818,8 @@ pub async fn move_course(
         .await
         .map_err(course_error)?;
     commit(tx).await?;
-    Ok(Json(Course::from_repo(moved, grants)?))
+    let answer = Course::from_repo(moved, grants)?;
+    Ok(Json(with_cover(&state, grants.scope(), answer).await?))
 }
 
 /// Copy a course into an account as a new draft, or as a template.
@@ -819,6 +879,7 @@ pub async fn copy_course(
     commit(tx).await?;
     let location = format!("{COURSES_PATH}/{}", course.id);
     let course = Course::from_repo(course, grants)?;
+    let course = with_cover(&state, grants.scope(), course).await?;
     Ok((
         StatusCode::CREATED,
         [(header::LOCATION, location)],
@@ -960,6 +1021,7 @@ fn course_error(error: courses::Error) -> ApiError {
         E::ContainsNul { field } => invalid(field, TEXT_CONTAINS_NUL),
         E::DatesInverted => invalid("end_at", code::COURSE_DATES_INVERTED),
         E::DateOutOfRange { field } => invalid(date_field(field), code::COURSE_DATE_OUT_OF_RANGE),
+        E::CoverInvalid => invalid("cover_course_file_id", code::COURSE_COVER_INVALID),
         E::ValidityOutOfRange => invalid(
             "completion_valid_months",
             code::COMPLETION_VALIDITY_OUT_OF_RANGE,

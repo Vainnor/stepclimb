@@ -48,6 +48,10 @@ pub const MAX_TITLE_CHARS: usize = name::MAX_CHARS;
 /// The longest course code, in characters once trimmed (Q2).
 pub const MAX_CODE_CHARS: usize = 50;
 
+/// The stored types a course file may have to be a course's cover (spec 06 B19): the images
+/// every browser shows.
+pub const COVER_TYPES: [&str; 3] = ["image/png", "image/jpeg", "image/webp"];
+
 /// The first instant a course date cannot be, in seconds since the Unix epoch:
 /// 2200-01-01T00:00:00Z. Dates are bound to SQL as microseconds through a `float8` interval,
 /// exact only up to 2^53 microseconds (the year 2255).
@@ -133,6 +137,9 @@ pub struct Course {
     /// How many months a completion of the course stays valid, 1 to 120; `None` for ever
     /// (spec 14 B3).
     pub completion_valid_months: Option<i16>,
+    /// The course file shown as the course's cover: a PNG, JPEG or WebP file of the course
+    /// (spec 06 B19).
+    pub cover_course_file_id: Option<Uuid>,
     pub created_at: SystemTime,
     pub updated_at: SystemTime,
 }
@@ -182,6 +189,9 @@ pub struct CoursePatch {
     pub home: Option<Home>,
     /// `Some(None)` clears the validity (spec 14 B3).
     pub completion_valid_months: Option<Option<i16>>,
+    /// `Some(None)` removes the cover; `Some(Some(id))` sets a course file of the course whose
+    /// type is one of [`COVER_TYPES`] (spec 06 B19).
+    pub cover_course_file_id: Option<Option<Uuid>>,
 }
 
 /// The filters of [`list_visible`]; `None` filters nothing.
@@ -243,6 +253,10 @@ pub enum Error {
     /// `end_at` would be before `start_at` (B3).
     #[error("a course cannot end before it starts")]
     DatesInverted,
+    /// The cover is not a course file of the course, or its type is not one of [`COVER_TYPES`]
+    /// (spec 06 B19).
+    #[error("a course cover must be a PNG, JPEG or WebP file of the course")]
+    CoverInvalid,
     /// A `completion_valid_months` outside 1 to 120 (spec 14 B3).
     #[error("a completion validity must be from 1 to 120 months")]
     ValidityOutOfRange,
@@ -306,6 +320,7 @@ struct Row {
     end_at_us: Option<i64>,
     settings: String,
     completion_valid_months: Option<i16>,
+    cover_course_file_id: Option<Uuid>,
     created_at_us: i64,
     updated_at_us: i64,
 }
@@ -330,6 +345,7 @@ impl TryFrom<Row> for Course {
             title: row.title,
             template: row.template,
             completion_valid_months: row.completion_valid_months,
+            cover_course_file_id: row.cover_course_file_id,
         })
     }
 }
@@ -347,6 +363,7 @@ pub async fn get(
                   (extract(epoch FROM c.start_at) * 1000000)::bigint AS start_at_us,
                   (extract(epoch FROM c.end_at) * 1000000)::bigint AS end_at_us,
                   c.settings::text AS "settings!", c.completion_valid_months,
+                  c.cover_course_file_id,
                   (extract(epoch FROM c.created_at) * 1000000)::bigint AS "created_at_us!",
                   (extract(epoch FROM c.updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM courses c JOIN accounts a ON a.org_id = c.org_id AND a.id = c.account_id
@@ -376,6 +393,7 @@ pub async fn lock(
                   (extract(epoch FROM c.start_at) * 1000000)::bigint AS start_at_us,
                   (extract(epoch FROM c.end_at) * 1000000)::bigint AS end_at_us,
                   c.settings::text AS "settings!", c.completion_valid_months,
+                  c.cover_course_file_id,
                   (extract(epoch FROM c.created_at) * 1000000)::bigint AS "created_at_us!",
                   (extract(epoch FROM c.updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM courses c JOIN accounts a ON a.org_id = c.org_id AND a.id = c.account_id
@@ -405,6 +423,7 @@ pub async fn lock_shared(
                   (extract(epoch FROM c.start_at) * 1000000)::bigint AS start_at_us,
                   (extract(epoch FROM c.end_at) * 1000000)::bigint AS end_at_us,
                   c.settings::text AS "settings!", c.completion_valid_months,
+                  c.cover_course_file_id,
                   (extract(epoch FROM c.created_at) * 1000000)::bigint AS "created_at_us!",
                   (extract(epoch FROM c.updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM courses c JOIN accounts a ON a.org_id = c.org_id AND a.id = c.account_id
@@ -526,6 +545,7 @@ pub async fn list_visible(
                   (extract(epoch FROM c.start_at) * 1000000)::bigint AS start_at_us,
                   (extract(epoch FROM c.end_at) * 1000000)::bigint AS end_at_us,
                   c.settings::text AS "settings!", c.completion_valid_months,
+                  c.cover_course_file_id,
                   (extract(epoch FROM c.created_at) * 1000000)::bigint AS "created_at_us!",
                   (extract(epoch FROM c.updated_at) * 1000000)::bigint AS "updated_at_us!"
            FROM courses c JOIN accounts a ON a.org_id = c.org_id AND a.id = c.account_id
@@ -626,7 +646,8 @@ pub async fn create<'c>(
 /// exactly when `copy.template` is. Every module and item of the source is copied with a new
 /// id, its position, title and `published` flag, and an item's kind and URL, with the unlock and
 /// completion rules, requirements and prerequisites of spec 04 and each module's validity, and
-/// the course files with the `file` items naming their copies (spec 06 B20) ([`copy_outline`]).
+/// the course files with the `file` items naming their copies (spec 06 B20) ([`copy_outline`]),
+/// and the cover as the copy of its course file ([`copy_cover`]).
 /// Nothing of the source's learners is copied: no enrollment, progress, attempt or other learner
 /// data (B13).
 ///
@@ -686,7 +707,8 @@ pub async fn copy<'c>(
     if inserted == 0 {
         return Err(Error::NotFound);
     }
-    copy_outline(&mut tx, scope, source_id, id, now).await?;
+    let files = copy_outline(&mut tx, scope, source_id, id, now).await?;
+    copy_cover(&mut tx, scope, source_id, id, &files).await?;
     let data = json!({ "after": {
         "source_id": source_id, "account_id": copy.account_id, "template": copy.template,
     } });
@@ -702,7 +724,8 @@ pub async fn copy<'c>(
 /// completion rules and each item its requirement (spec 04 B1, B3), and the prerequisites are
 /// copied between the copies of their modules ([`copy_prerequisites`]). The course files are
 /// copied ([`copy_course_files`]) and each `file` item names its course file's copy. `created_at` and
-/// `updated_at` are `now_us`. An item of a kind this release does not copy ([`items::Kind::copyable`]) is
+/// `updated_at` are `now_us`. Returns each source course file's id mapped to its copy's. An
+/// item of a kind this release does not copy ([`items::Kind::copyable`]) is
 /// [`Error::ContentNotCopyable`]: its `ref_id` names content no copy of this release copies. A
 /// stored URL [`items::url_is_valid`] refuses is [`Error::CopiedUrlInvalid`], as every writer of
 /// an item's URL checks it (spec 03, "B7's absolute").
@@ -712,7 +735,7 @@ async fn copy_outline(
     from: Uuid,
     to: Uuid,
     now_us: i64,
-) -> Result<(), Error> {
+) -> Result<HashMap<Uuid, Uuid>, Error> {
     let sources = sqlx::query_scalar!(
         "SELECT id FROM modules WHERE org_id = $1 AND course_id = $2 ORDER BY position",
         scope.org_id(),
@@ -747,7 +770,45 @@ async fn copy_outline(
         .collect();
     copy_prerequisites(conn, scope, from, to, (&sources, &copies), now_us).await?;
     let files = copy_course_files(conn, scope, from, to, now_us).await?;
-    copy_items(conn, scope, from, to, (&new_ids, &files), now_us).await
+    copy_items(conn, scope, from, to, (&new_ids, &files), now_us).await?;
+    Ok(files)
+}
+
+/// The cover of the course `from` as the copy's cover `to`: the copy of its course file, from
+/// `files`, which maps each course file of `from` to its copy (spec 06 B20). A source without a
+/// cover leaves the copy without one.
+async fn copy_cover(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    from: Uuid,
+    to: Uuid,
+    files: &HashMap<Uuid, Uuid>,
+) -> Result<(), Error> {
+    let cover = sqlx::query_scalar!(
+        "SELECT cover_course_file_id FROM courses WHERE org_id = $1 AND id = $2",
+        scope.org_id(),
+        from,
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    let Some(cover) = cover else {
+        return Ok(());
+    };
+    // Invariant: the cover's foreign key names a course file of `from`, and `copy_course_files`
+    // copied every one of them, so `files` holds it.
+    let copy = files.get(&cover).copied().ok_or(Error::Stored {
+        id: from,
+        column: "cover_course_file_id",
+    })?;
+    sqlx::query!(
+        "UPDATE courses SET cover_course_file_id = $3 WHERE org_id = $1 AND id = $2",
+        scope.org_id(),
+        to,
+        copy,
+    )
+    .execute(conn)
+    .await?;
+    Ok(())
 }
 
 /// [`copy_outline`]'s course files (spec 06 B20): each course file of `from` as one of `to` in
@@ -943,6 +1004,7 @@ struct Details {
     end_at: Option<SystemTime>,
     settings: CourseSettings,
     completion_valid_months: Option<i16>,
+    cover_course_file_id: Option<Uuid>,
 }
 
 impl Details {
@@ -954,6 +1016,7 @@ impl Details {
             end_at: course.end_at,
             settings: course.settings,
             completion_valid_months: course.completion_valid_months,
+            cover_course_file_id: course.cover_course_file_id,
         }
     }
 
@@ -985,6 +1048,9 @@ impl Details {
                 Some(months) => months,
                 None => self.completion_valid_months,
             },
+            cover_course_file_id: patch
+                .cover_course_file_id
+                .unwrap_or(self.cover_course_file_id),
         };
         if let (Some(start), Some(end)) = (after.start_at, after.end_at)
             && end < start
@@ -1021,6 +1087,11 @@ impl Details {
             json!(self.completion_valid_months),
             json!(after.completion_valid_months),
         );
+        put(
+            "cover_course_file_id",
+            json!(self.cover_course_file_id),
+            json!(after.cover_course_file_id),
+        );
         Ok(json!({ "before": old, "after": new }))
     }
 }
@@ -1028,7 +1099,9 @@ impl Details {
 /// Apply `patch` to the course `id` of the scope's organization, set `updated_at` to `now`, and
 /// write the `course.update` audit entry by `actor` with each changed member before and after
 /// (B3). A patch that changes nothing writes nothing and returns the course as it is (spec 09
-/// B22).
+/// B22). A new cover must be a course file of this course with one of [`COVER_TYPES`], checked
+/// under the course lock that deleting a course file also takes ([`Error::CoverInvalid`];
+/// spec 06 B19).
 ///
 /// Runs in one transaction (a savepoint when `db` is already one); the course is read with
 /// [`lock`].
@@ -1048,6 +1121,11 @@ pub async fn update<'c>(
     if after == before {
         return Ok(course);
     }
+    if after.cover_course_file_id != before.cover_course_file_id
+        && let Some(cover) = after.cover_course_file_id
+    {
+        check_cover(&mut tx, scope, id, cover).await?;
+    }
     let settings = serde_json::to_string(&after.settings).map_err(|_| Error::Stored {
         id,
         column: "settings",
@@ -1059,7 +1137,7 @@ pub async fn update<'c>(
              end_at = timestamptz 'epoch' + $6::bigint * interval '1 microsecond',
              settings = $7::text::jsonb,
              updated_at = timestamptz 'epoch' + $8::bigint * interval '1 microsecond',
-             completion_valid_months = $9
+             completion_valid_months = $9, cover_course_file_id = $10
          WHERE org_id = $1 AND id = $2",
         scope.org_id(),
         id,
@@ -1070,6 +1148,7 @@ pub async fn update<'c>(
         settings,
         now,
         after.completion_valid_months,
+        after.cover_course_file_id,
     )
     .execute(&mut *tx)
     .await?;
@@ -1078,6 +1157,31 @@ pub async fn update<'c>(
     let course = get(&mut *tx, scope, id).await?.ok_or(Error::NotFound)?;
     tx.commit().await?;
     Ok(course)
+}
+
+/// [`Error::CoverInvalid`] unless `cover` is a course file of the course `course_id` of the
+/// scope's organization whose stored type is one of [`COVER_TYPES`] (spec 06 B19). A course file
+/// of another course or organization answers the same as one that does not exist.
+async fn check_cover(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    course_id: Uuid,
+    cover: Uuid,
+) -> Result<(), Error> {
+    let mime = sqlx::query_scalar!(
+        "SELECT f.mime FROM course_files cf
+         JOIN files f ON f.org_id = cf.org_id AND f.id = cf.file_id
+         WHERE cf.org_id = $1 AND cf.course_id = $2 AND cf.id = $3",
+        scope.org_id(),
+        course_id,
+        cover,
+    )
+    .fetch_optional(conn)
+    .await?;
+    match mime {
+        Some(mime) if COVER_TYPES.contains(&mime.as_str()) => Ok(()),
+        _ => Err(Error::CoverInvalid),
+    }
 }
 
 /// Change the status of the course `id` of the scope's organization to `to`, set `updated_at`
@@ -1336,6 +1440,7 @@ mod tests {
             end_at: None,
             settings: CourseSettings::default(),
             completion_valid_months: None,
+            cover_course_file_id: None,
         }
     }
 

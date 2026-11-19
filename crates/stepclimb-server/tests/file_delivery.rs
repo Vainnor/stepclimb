@@ -1233,3 +1233,192 @@ async fn head_answers_the_headers_without_reading_the_store(pool: PgPool) {
         "a GET reads the store"
     );
 }
+
+/// `PATCH /api/v1/courses/{course}` of `o` setting the cover to `cover` (`None` removes it).
+async fn set_cover(f: &Fixture, o: Org, admin: &str, cover: Option<Uuid>) -> Answer {
+    let uri = format!("/api/v1/courses/{}", o.course);
+    let body = json!({ "cover_course_file_id": cover });
+    f.send(Method::PATCH, &uri, o.id, Some(admin), Some(body), &[])
+        .await
+}
+
+/// The path of a course answer's `cover_url`, or `None` when it is null.
+fn cover_path(course: &Value) -> Option<String> {
+    let url = course["cover_url"].as_str()?;
+    Some(
+        url.strip_prefix("https://lms.example.org")
+            .expect("the public URL")
+            .to_owned(),
+    )
+}
+
+/// T16 (B19): a PDF cover answers 422 `course.cover_invalid` and changes nothing; a PNG cover
+/// gives every course answer a `cover_url` that serves the image inline; `null` removes it.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t16_a_png_cover_is_served_inline_and_a_pdf_is_refused(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let pdf = f.upload("notes.pdf", PDF).await;
+    let png = f.upload("cover.png", PNG).await;
+
+    let refused = set_cover(&f, f.a, &f.admin, Some(pdf)).await;
+    refused.expect(StatusCode::UNPROCESSABLE_ENTITY, "request.invalid");
+    assert_eq!(
+        refused.json()["errors"],
+        json!([{ "field": "/cover_course_file_id", "code": "course.cover_invalid" }])
+    );
+
+    let set = set_cover(&f, f.a, &f.admin, Some(png)).await.ok();
+    assert_eq!(set["cover_course_file_id"], png.to_string());
+    assert_schema("Course", &set);
+    let path = cover_path(&set).expect("a cover URL");
+    let served = f.fetch(&path, &[]).await;
+    assert_eq!(served.status, StatusCode::OK, "{served:?}");
+    assert_eq!(served.header(header::CONTENT_TYPE), "image/png");
+    assert!(
+        served
+            .header(header::CONTENT_DISPOSITION)
+            .starts_with("inline"),
+        "{served:?}"
+    );
+    assert_eq!(served.bytes, PNG);
+
+    let uri = format!("/api/v1/courses/{}", f.a.course);
+    let read = f
+        .send(Method::GET, &uri, f.a.id, Some(&f.admin), None, &[])
+        .await
+        .ok();
+    assert!(cover_path(&read).is_some(), "{read}");
+    let list = f
+        .send(
+            Method::GET,
+            "/api/v1/courses",
+            f.a.id,
+            Some(&f.admin),
+            None,
+            &[],
+        )
+        .await
+        .ok();
+    let listed = &list["items"][0];
+    assert_eq!(listed["cover_course_file_id"], png.to_string());
+    assert!(cover_path(listed).is_some(), "{listed}");
+    // A learner reading the course gets a URL of their own.
+    let (_, student) = f.enrolled(f.a, "student", Vec::new()).await;
+    let own = f
+        .send(Method::GET, &uri, f.a.id, Some(&student), None, &[])
+        .await
+        .ok();
+    let own = cover_path(&own).expect("the learner's cover URL");
+    assert_eq!(f.fetch(&own, &[]).await.status, StatusCode::OK);
+
+    let cleared = set_cover(&f, f.a, &f.admin, None).await.ok();
+    assert_eq!(cleared["cover_course_file_id"], Value::Null);
+    assert_eq!(cleared["cover_url"], Value::Null);
+}
+
+/// T10 (B11): the course file used as the cover cannot be deleted until the cover is removed.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t10_the_cover_cannot_be_deleted(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let png = f.upload("cover.png", PNG).await;
+    set_cover(&f, f.a, &f.admin, Some(png)).await.ok();
+    let uri = format!("/api/v1/course-files/{png}");
+    f.send(Method::DELETE, &uri, f.a.id, Some(&f.admin), None, &[])
+        .await
+        .expect(StatusCode::CONFLICT, "file.in_use");
+    set_cover(&f, f.a, &f.admin, None).await.ok();
+    let deleted = f
+        .send(Method::DELETE, &uri, f.a.id, Some(&f.admin), None, &[])
+        .await;
+    assert_eq!(deleted.status, StatusCode::NO_CONTENT, "{deleted:?}");
+}
+
+/// T19 (B19): another organization's course file, and one of another course of the same
+/// organization, are refused as a cover with the same answer as a PDF, and change nothing.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t19_a_cover_from_another_course_or_organization_is_refused(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let b = org(&f.pool, "org-b").await;
+    let b_admin = f.holder(b.id, "org_admin", Scope::Organization).await;
+    let b_png = f.upload_to(b, &b_admin, "cover.png", PNG).await;
+    let refused = set_cover(&f, f.a, &f.admin, Some(b_png)).await;
+    refused.expect(StatusCode::UNPROCESSABLE_ENTITY, "request.invalid");
+    assert_eq!(refused.json()["errors"][0]["code"], "course.cover_invalid");
+    let a_png = f.upload("cover.png", PNG).await;
+    let crossed = set_cover(&f, b, &b_admin, Some(a_png)).await;
+    assert_eq!(crossed.json()["errors"][0]["code"], "course.cover_invalid");
+    let new = courses::NewCourse {
+        account_id: sqlx::query_scalar("SELECT account_id FROM courses WHERE id = $1")
+            .bind(f.a.course)
+            .fetch_one(&f.pool)
+            .await
+            .expect("the account"),
+        title: "Course S2".into(),
+        code: "S2".into(),
+    };
+    let other = courses::create(&f.pool, scope(f.a.id), &new, start(), Actor::Instance)
+        .await
+        .expect("create course");
+    let sibling = Org {
+        course: other.id,
+        ..f.a
+    };
+    let elsewhere = set_cover(&f, sibling, &f.admin, Some(a_png)).await;
+    assert_eq!(
+        elsewhere.json()["errors"][0]["code"],
+        "course.cover_invalid"
+    );
+    let covers: Vec<Option<Uuid>> =
+        sqlx::query_scalar("SELECT cover_course_file_id FROM courses ORDER BY id")
+            .fetch_all(&f.pool)
+            .await
+            .expect("the covers");
+    assert!(covers.iter().all(Option::is_none), "{covers:?}");
+}
+
+/// B1a, B19: a server without file storage answers the cover's id and a null `cover_url`.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn without_storage_the_cover_url_is_null(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let png = f.upload("cover.png", PNG).await;
+    set_cover(&f, f.a, &f.admin, Some(png)).await.ok();
+    let without = app(&f.pool, &f.clock, None, KEYS);
+    let request = Request::get(format!("/api/v1/courses/{}", f.a.course))
+        .header(TEST_ORG_HEADER, f.a.id.to_string())
+        .header(header::COOKIE, &f.admin)
+        .body(Body::empty())
+        .expect("a request");
+    let read = answer(&without, request).await.ok();
+    assert_eq!(read["cover_course_file_id"], png.to_string());
+    assert_eq!(read["cover_url"], Value::Null);
+}
+
+/// T17 (B20): a copy's cover is the copy of the source's cover course file, served from the
+/// copy, and the source keeps its own.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t17_a_copy_shows_the_copy_of_the_cover(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let png = f.upload("cover.png", PNG).await;
+    let source = set_cover(&f, f.a, &f.admin, Some(png)).await.ok();
+    let uri = format!("/api/v1/courses/{}/copy", f.a.course);
+    let body = json!({ "account_id": source["account_id"], "code": "S1-COPY" });
+    let copy = f
+        .send(Method::POST, &uri, f.a.id, Some(&f.admin), Some(body), &[])
+        .await;
+    assert_eq!(copy.status, StatusCode::CREATED, "{copy:?}");
+    let copy = copy.json();
+    let copied: Uuid = copy["cover_course_file_id"]
+        .as_str()
+        .expect("a cover")
+        .parse()
+        .expect("a UUID");
+    assert_ne!(copied, png);
+    let course_of: Uuid = sqlx::query_scalar("SELECT course_id FROM course_files WHERE id = $1")
+        .bind(copied)
+        .fetch_one(&f.pool)
+        .await
+        .expect("the copied course file");
+    assert_eq!(course_of.to_string(), copy["id"].as_str().expect("an id"));
+    let served = f.fetch(&cover_path(&copy).expect("a URL"), &[]).await;
+    assert_eq!(served.bytes, PNG);
+}
