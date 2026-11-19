@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT EXISTS (SELECT 1 FROM course_files\n                          WHERE org_id = $1 AND course_id = $2 AND id = $3) AS \"found!\"",
+  "query": "SELECT EXISTS (SELECT 1 FROM pages WHERE org_id = $1 AND course_id = $2 AND id = $3)\n               AS \"found!\"",
   "describe": {
     "columns": [
       {
@@ -21,5 +21,5 @@
       null
     ]
   },
-  "hash": "cf7b9f10460534b71a61b7d5b793749977aa14ecc379c88334892260c556c67f"
+  "hash": "b2920a50bfc9fe8a3a4f223ab6ade836c5f3c0f4d5af6f0adeb028b056e438a1"
 }

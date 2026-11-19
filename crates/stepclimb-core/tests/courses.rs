@@ -1167,7 +1167,7 @@ async fn a_source_with_content_no_copy_can_take_is_refused(pool: PgPool) {
     item(&pool, a, first, Kind::Header, "Reading", true).await;
     sqlx::query(
         "INSERT INTO module_items (id, org_id, course_id, module_id, position, kind, ref_id, title)
-         VALUES (gen_random_uuid(), $1, $2, $3, 1, 'page', gen_random_uuid(), 'A page')",
+         VALUES (gen_random_uuid(), $1, $2, $3, 1, 'video', gen_random_uuid(), 'A video')",
     )
     .bind(a.id)
     .bind(source)
@@ -1188,7 +1188,7 @@ async fn a_source_with_content_no_copy_can_take_is_refused(pool: PgPool) {
     .await;
 
     assert!(
-        matches!(&refused, Err(Error::ContentNotCopyable { kind, .. }) if kind == "page"),
+        matches!(&refused, Err(Error::ContentNotCopyable { kind, .. }) if kind == "video"),
         "{refused:?}"
     );
     assert_eq!(

@@ -66,7 +66,11 @@ use crate::{
     organization::present,
     pagination::{Page, PageParams},
     progress_recompute,
-    require::{AnyScope, CourseTarget, Require, check_course, code::COURSE_NOT_FOUND},
+    require::{
+        AnyScope, CourseTarget, Require, check_course,
+        code::{COURSE_NOT_FOUND, PAGE_NOT_FOUND},
+        not_found_as,
+    },
     roles::code::{NAME_EMPTY, NAME_TOO_LONG, PERMISSION_ESCALATION, TEXT_CONTAINS_NUL},
     timestamp,
     users::code::TEXT_TOO_LONG,
@@ -78,6 +82,9 @@ pub const COURSES_PATH: &str = "/api/v1/courses";
 /// The codes this module produces besides `course.not_found` and `account.not_found`
 /// (`require::code`).
 pub mod code {
+    /// A home whose `page_id` does not fit its `kind` (a 422 field code at
+    /// `/settings/home/page_id`).
+    pub const COURSE_HOME_INVALID: &str = "course.home_invalid";
     /// Another course of the organization has the code, ignoring ASCII case (409).
     pub const COURSE_CODE_TAKEN: &str = "course.code_taken";
     /// B4 does not allow the status change (409).
@@ -97,6 +104,7 @@ pub mod code {
 }
 
 problem_responses! {
+    CourseUpdateNotFound => "`course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `page.not_found`: `settings.home` names a page that is not one of the course's. `org.not_found`: the request's organization cannot be determined.",
     CourseNotFound => "`course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined.",
     CourseListNotFound => "`account.not_found`: no account with `account_id` exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined.",
     CourseCreateNotFound => "`account.not_found`: no account with `account_id` exists in the organization, or you cannot see it. `org.not_found`: the request's organization cannot be determined.",
@@ -142,33 +150,51 @@ impl From<CourseStatus> for courses::Status {
 /// What a learner sees first when opening the course.
 //
 // A struct with a `kind` rather than an internally tagged enum, which serde would buffer
-// (`tests/body_shapes.rs`); spec 07 adds the `page` kind and its `page_id`.
+// (`tests/body_shapes.rs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CourseHome {
     pub kind: HomeKind,
+    /// With `page` only, and then required: a page of the course (spec 07 B19).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<String>, format = "uuid", required = false, nullable = false)]
+    pub page_id: Option<Uuid>,
 }
 
-/// The kind of a course's home: `modules`, the module list.
+/// The kind of a course's home: `modules`, the module list, or `page`, one of its pages.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HomeKind {
     Modules,
+    Page,
 }
 
 impl From<courses::Home> for CourseHome {
     fn from(home: courses::Home) -> Self {
-        let kind = match home {
-            courses::Home::Modules => HomeKind::Modules,
-        };
-        Self { kind }
+        match home {
+            courses::Home::Modules => Self {
+                kind: HomeKind::Modules,
+                page_id: None,
+            },
+            courses::Home::Page { page_id } => Self {
+                kind: HomeKind::Page,
+                page_id: Some(page_id),
+            },
+        }
     }
 }
 
-impl From<CourseHome> for courses::Home {
-    fn from(home: CourseHome) -> Self {
-        match home.kind {
-            HomeKind::Modules => Self::Modules,
+impl CourseHome {
+    /// The home as the repositories take it, or 422 `course.home_invalid` at
+    /// `/settings/home/page_id` when `page_id` is missing for `page` or given for `modules`.
+    fn repo(self) -> Result<courses::Home, ApiError> {
+        match (self.kind, self.page_id) {
+            (HomeKind::Modules, None) => Ok(courses::Home::Modules),
+            (HomeKind::Page, Some(page_id)) => Ok(courses::Home::Page { page_id }),
+            _ => Err(ApiError::invalid(vec![FieldError::at(
+                &["settings", "home", "page_id"],
+                code::COURSE_HOME_INVALID,
+            )])),
         }
     }
 }
@@ -352,16 +378,20 @@ pub(crate) fn validity(months: Option<Option<i64>>) -> Option<Option<i16>> {
 }
 
 impl CoursePatch {
-    fn repo(&self) -> courses::CoursePatch {
+    fn repo(&self) -> Result<courses::CoursePatch, ApiError> {
         let date = |d: Option<Option<ApiTimestamp>>| d.map(|d| d.map(|ApiTimestamp(t)| t));
-        courses::CoursePatch {
+        Ok(courses::CoursePatch {
             title: self.title.clone(),
             code: self.code.clone(),
             start_at: date(self.start_at),
             end_at: date(self.end_at),
-            home: self.settings.and_then(|s| s.home).map(Into::into),
+            home: self
+                .settings
+                .and_then(|s| s.home)
+                .map(CourseHome::repo)
+                .transpose()?,
             completion_valid_months: validity(self.completion_valid_months),
-        }
+        })
     }
 }
 
@@ -648,7 +678,7 @@ pub async fn create_course(
         (status = 400, response = crate::openapi::BadRequest),
         (status = 401, response = crate::openapi::Unauthenticated),
         (status = 403, response = CourseManageForbidden),
-        (status = 404, response = CourseNotFound),
+        (status = 404, response = CourseUpdateNotFound),
         (status = 409, response = CourseCodeConflict),
         (status = 413, response = crate::openapi::PayloadTooLarge),
         (status = 415, response = crate::openapi::UnsupportedMediaType),
@@ -664,6 +694,7 @@ pub async fn update_course(
     ApiJson(body): ApiJson<CoursePatch>,
 ) -> Result<Json<Course>, ApiError> {
     let (grants, id) = (require.grants(), require.target().id);
+    let patch = body.repo()?;
     let mut tx = begin(&state).await?;
     recheck_manage(&mut tx, grants, id).await?;
     let actor = client.actor(require.principal());
@@ -671,7 +702,7 @@ pub async fn update_course(
         &mut *tx,
         grants.scope(),
         id,
-        &body.repo(),
+        &patch,
         state.clock.now(),
         actor,
     )
@@ -992,7 +1023,9 @@ fn course_error(error: courses::Error) -> ApiError {
             code::COURSE_HAS_LEARNERS,
             "The course has learners, so it cannot go back to draft. Conclude their enrollments first.",
         ),
+        E::PageNotFound => not_found_as(Denied::CourseNotFound, PAGE_NOT_FOUND),
         other @ (E::Stored { .. }
+        | E::Page(_)
         | E::ContentNotCopyable { .. }
         | E::CopiedUrlInvalid { .. }
         | E::Account(_)
@@ -1095,6 +1128,7 @@ mod tests {
             ),
             (E::Template, 409, "course.template", None),
             (E::HasLearners, 409, "course.has_learners", None),
+            (E::PageNotFound, 404, "page.not_found", None),
             (
                 E::TitleEmpty,
                 422,
@@ -1181,7 +1215,6 @@ mod tests {
             json!({ "code": null }),
             json!({ "settings": null }),
             json!({ "settings": { "home": null } }),
-            json!({ "settings": { "home": { "kind": "page" } } }),
             json!({ "start_at": "2026-01-02" }),
             json!({ "status": "published" }),
         ] {
@@ -1192,7 +1225,7 @@ mod tests {
         }
         let cleared: CoursePatch =
             serde_json::from_value(json!({ "start_at": null, "settings": {} })).unwrap();
-        let repo = cleared.repo();
+        let repo = cleared.repo().unwrap();
         assert_eq!(repo.start_at, Some(None));
         assert_eq!((repo.end_at, repo.home), (None, None));
         let set: CoursePatch = serde_json::from_value(json!({
@@ -1200,14 +1233,38 @@ mod tests {
             "settings": { "home": { "kind": "modules" } },
         }))
         .unwrap();
-        assert!(matches!(set.repo().end_at, Some(Some(_))));
-        assert_eq!(set.repo().home, Some(courses::Home::Modules));
+        assert!(matches!(set.repo().unwrap().end_at, Some(Some(_))));
+        assert_eq!(set.repo().unwrap().home, Some(courses::Home::Modules));
+        for invalid in [
+            json!({ "settings": { "home": { "kind": "page" } } }),
+            json!({ "settings": { "home": { "kind": "modules", "page_id": Uuid::nil() } } }),
+        ] {
+            let patch: CoursePatch = serde_json::from_value(invalid.clone()).unwrap();
+            assert_eq!(
+                patch.repo().unwrap_err().status(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{invalid}"
+            );
+        }
+        let page: CoursePatch = serde_json::from_value(
+            json!({ "settings": { "home": { "kind": "page", "page_id": Uuid::nil() } } }),
+        )
+        .unwrap();
+        assert_eq!(
+            page.repo().unwrap().home,
+            Some(courses::Home::Page {
+                page_id: Uuid::nil()
+            })
+        );
         let validity: CoursePatch =
             serde_json::from_value(json!({ "completion_valid_months": null })).unwrap();
-        assert_eq!(validity.repo().completion_valid_months, Some(None));
+        assert_eq!(validity.repo().unwrap().completion_valid_months, Some(None));
         let validity: CoursePatch =
             serde_json::from_value(json!({ "completion_valid_months": 12 })).unwrap();
-        assert_eq!(validity.repo().completion_valid_months, Some(Some(12)));
-        assert_eq!(cleared.repo().completion_valid_months, None);
+        assert_eq!(
+            validity.repo().unwrap().completion_valid_months,
+            Some(Some(12))
+        );
+        assert_eq!(cleared.repo().unwrap().completion_valid_months, None);
     }
 }

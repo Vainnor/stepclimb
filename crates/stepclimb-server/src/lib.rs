@@ -96,6 +96,7 @@ pub mod openapi;
 pub mod organization;
 pub mod outline;
 pub mod page_doc_schema;
+pub mod page_reads;
 pub mod pages;
 pub mod pagination;
 pub mod panic_hook;

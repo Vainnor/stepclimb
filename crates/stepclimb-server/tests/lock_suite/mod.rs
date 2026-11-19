@@ -64,6 +64,10 @@ const LOCK_TABLE: &[LockEntry] = &[
         lock: Lock::Checked(file_url_of_locked_file_item),
     },
     LockEntry {
+        operation_id: "getPage",
+        lock: Lock::Checked(page_of_locked_item),
+    },
+    LockEntry {
         operation_id: "createCourseFileUrl",
         lock: Lock::Staff,
     },
@@ -209,6 +213,28 @@ fn file_url_of_locked_file_item(org: &Org) -> Pin<Box<dyn Future<Output = Call> 
         Call {
             params: vec![("item_id", item)],
             body: Some(serde_json::json!({ "disposition": "inline" })),
+            at: At::Course(course),
+        }
+    })
+}
+
+/// [`locked_module`] with a published `page` item after the link, naming a new page; the request
+/// reads the page (M1 spec 07 B18, T9).
+fn page_of_locked_item(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let (course, module, _) = locked_module(org).await;
+        let page = org.page(course).await.0;
+        let item = org.page_item(module, page).await;
+        let publish = items::ItemPatch {
+            published: Some(true),
+            ..items::ItemPatch::default()
+        };
+        items::update(&org.pool, scope(org.id), item, &publish, now())
+            .await
+            .expect("publish the page item");
+        Call {
+            params: vec![("page_id", page)],
+            body: None,
             at: At::Course(course),
         }
     })

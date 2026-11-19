@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT (EXISTS (\n                       SELECT 1 FROM module_items\n                       WHERE org_id = $1 AND kind = 'page' AND ref_id = $2)\n                   OR EXISTS (\n                       SELECT 1 FROM pages p JOIN courses c ON c.org_id = p.org_id AND c.id = p.course_id\n                       WHERE p.org_id = $1 AND p.id = $2\n                         AND c.settings -> 'home' ->> 'kind' = 'page'\n                         AND c.settings -> 'home' ->> 'page_id' = $2::text))\n               AS \"referenced!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "referenced!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "21355491fbee0b1382a538ffb892dbb4b340bea5a38213aa202d7262fab367c9"
+}

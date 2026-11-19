@@ -1201,7 +1201,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** A page of a course, as whoever may read it gets it. */
+        get: operations["getPage"];
         put?: never;
         post?: never;
         /** Delete a page and all its versions, when no item references it. */
@@ -2333,6 +2334,11 @@ export interface components {
         /** @description What a learner sees first when opening the course. */
         CourseHome: {
             kind: components["schemas"]["HomeKind"];
+            /**
+             * Format: uuid
+             * @description With `page` only, and then required: a page of the course (spec 07 B19).
+             */
+            page_id?: string;
         };
         /** @description The account to move a course to. */
         CourseMove: {
@@ -2709,10 +2715,10 @@ export interface components {
          */
         HealthStatus: "ok" | "unavailable";
         /**
-         * @description The kind of a course's home: `modules`, the module list.
+         * @description The kind of a course's home: `modules`, the module list, or `page`, one of its pages.
          * @enum {string}
          */
-        HomeKind: "modules";
+        HomeKind: "modules" | "page";
         /** @description A user's identity as an admin sees it. */
         Identity: {
             /**
@@ -3627,6 +3633,11 @@ export interface components {
          * @enum {string}
          */
         PageDocKind: "doc";
+        /**
+         * @description How a page is answered.
+         * @enum {string}
+         */
+        PageFormat: "html" | "json";
         /** @description A heading's level, 2 to 4; the page title is the level 1. */
         PageHeadingAttrs: {
             /** Format: int32 */
@@ -3789,12 +3800,18 @@ export interface components {
         PageVersion: {
             /** Format: uuid */
             author_id: string;
-            body: components["schemas"]["PageDoc"];
+            /** @description The body, unless `format=html` asked for the rendered HTML instead. */
+            body?: components["schemas"]["PageDoc"];
             /**
              * Format: date-time
              * @description RFC 3339, UTC.
              */
             created_at: string;
+            /**
+             * @description The version rendered and sanitized by the server, with `format=html`; its images carry
+             *     signed URLs that expire 10 minutes after the read.
+             */
+            html?: string;
             /** Format: uuid */
             id: string;
             /** Format: int32 */
@@ -3830,6 +3847,36 @@ export interface components {
         };
         /** @enum {string} */
         PageVideoProvider: "youtube" | "vimeo";
+        /** @description A page as a reader gets it: its current version as HTML, or as body JSON for the editor. */
+        PageView: {
+            /** @description The current version's body, with `format=json`. */
+            body?: components["schemas"]["PageDoc"];
+            /** Format: uuid */
+            course_id: string;
+            /**
+             * @description The current version rendered and sanitized by the server, without `format=json`. Images
+             *     carry signed URLs that expire 10 minutes after the read; read the page again for new
+             *     ones. Insert it as given; attach no handler from it.
+             */
+            html?: string;
+            /** Format: uuid */
+            id: string;
+            slug: string;
+            title: string;
+            version: components["schemas"]["PageViewVersion"];
+        };
+        /** @description The version a page read answers. */
+        PageViewVersion: {
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            created_at: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: int32 */
+            number: number;
+        };
         /** @description One page of a list. */
         Page_Account: {
             /** @description The items, in the list's sort order. */
@@ -5347,6 +5394,15 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `page.not_found`: `settings.home` names a page that is not one of the course's. `org.not_found`: the request's organization cannot be determined. */
+        CourseUpdateNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `role.key_taken`: a built-in role or another custom role of the organization has the key. */
         CreateConflict: {
             headers: {
@@ -6186,6 +6242,24 @@ export interface components {
         };
         /** @description `course.archived`: the course is archived and takes no content change. `page.slug_taken`: the course already has another page with this slug. */
         PagePatchConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: you do not hold `course.view` at a scope containing the course, or you asked for `format=json` without `course.view_all`. `item.locked`: every item that references the page is locked for you; `reasons` says what the first one waits for. */
+        PageReadForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `page.not_found`: no page with this id exists in the organization, or you may not read it: its course is out of your reach, a draft or a template, or, without `course.view_all`, it is neither the course's home page nor referenced by a published item of a published module. `org.not_found`: the request's organization cannot be determined. */
+        PageReadNotFound: {
             headers: {
                 [name: string]: unknown;
             };
@@ -8339,7 +8413,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["CourseManageForbidden"];
-            404: components["responses"]["CourseNotFound"];
+            404: components["responses"]["CourseUpdateNotFound"];
             409: components["responses"]["CourseCodeConflict"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
@@ -10010,6 +10084,38 @@ export interface operations {
             503: components["responses"]["NoOrganization"];
         };
     };
+    getPage: {
+        parameters: {
+            query?: {
+                /** @description `html` when omitted. */
+                format?: components["schemas"]["PageFormat"];
+            };
+            header?: never;
+            path: {
+                /** @description The page's id. */
+                page_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The page's current version */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PageView"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["PageReadForbidden"];
+            404: components["responses"]["PageReadNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
     deletePage: {
         parameters: {
             query?: never;
@@ -10148,7 +10254,10 @@ export interface operations {
     };
     getPageVersion: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description `json`, the body, when omitted; `html` for the version rendered and sanitized. */
+                format?: components["schemas"]["PageFormat"];
+            };
             header?: never;
             path: {
                 /** @description The page's id. */
@@ -10160,7 +10269,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The version with its body */
+            /** @description The version with its body or its HTML */
             200: {
                 headers: {
                     [name: string]: unknown;

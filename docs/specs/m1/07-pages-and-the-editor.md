@@ -405,6 +405,53 @@ Coordinator decisions (overnight, 2026-11-17, I3), pending owner review:
   `info`, a cell span that is not an integer from 1 to 20 as 1, and a speaker or video title is
   cut to its limit.
 
+Coordinator decisions (2026-11-19, I2), pending owner review:
+
+- `ammonia` is pinned at 4.2.4, the newest release at least 14 days old. RUSTSEC-2026-0533,
+  fixed in 4.2.5 (published 2026-11-13), is a mutation XSS that needs MathML and SVG elements
+  allowed together; the page allowlist allows neither, and a test refuses both. `deny.toml`
+  ignores the advisory, with that reason, until 4.2.5 is 14 days old on 2026-11-27.
+- What each node renders as (B14): `<p>`, `<h2>` to `<h4>`, `<ul>`/`<ol>` (`start` only when it
+  is not 1) with `<li>`, `<blockquote>`, `<hr>`, `<pre data-slot="code-block"><code
+  class="language-<name>">` (no class without a language), `<table data-slot="table"><tbody>`
+  with `<th>`/`<td>` (`colspan`/`rowspan` only when not 1), `<img data-slot="page-image">`,
+  `<aside data-slot="callout" data-kind="<kind>">`, `<iframe data-slot="video-embed">`, and a
+  transcript as `<dl data-slot="transcript">` of `<div data-slot="transcript-line"><dt>speaker
+  </dt><dd>line</dd></div>`. Marks are `<strong>`, `<em>`, `<u>`, `<s>`, `<code>`, `<a>`,
+  `<sub>`, `<sup>`, in the order the text node lists them. Only links to `https` and `http`
+  targets get `rel="noopener noreferrer" target="_blank"`; same-origin paths and `mailto:` do
+  not. Text and attribute values are escaped as ammonia's serializer escapes them (`&`, `<`, `>`,
+  U+00A0, and `"` in attributes), so for every valid document the sanitizer changes nothing
+  (T6).
+- The sanitizer also pins values the writer fixes: an iframe's `src` must be a
+  `youtube-nocookie.com/embed/` or `player.vimeo.com/video/` URL with an id, its `sandbox`,
+  `allow` and `referrerpolicy` the B16 values, and a callout's `data-kind` one of the four
+  kinds; anything else is dropped. Only the code languages' classes are kept.
+- Images render without `width` and `height`: spec 06 stores no image dimensions, so B15's
+  "when known" is never. The image placeholder is the `data-sc-image` attribute; a read puts a
+  `src` with a signed inline URL in its place. URLs are issued whether or not storage is
+  configured (without it, fetching one answers 503 as spec 06 B1a says).
+- The render cache is written on a read, after the read's snapshot, on a separate connection;
+  a row from an older renderer is replaced. `page_renders` is bound to the version's
+  organization by `(org_id, version_id)`.
+- B18's decision order for a caller without `course.view_all`: the course check, then the home
+  page, then the items that reference the page in course order (the first unlocked one opens
+  it; otherwise the first locked one's reasons answer 403), and only then the `format=json`
+  refusal, so a page the caller may not see answers 404 whatever the format. An Observer, who
+  has no progress, is evaluated with nothing done.
+- The home page option is `{ "kind": "page", "page_id" }` in the API's `CourseHome`, a struct
+  with an optional `page_id`; `page_id` missing for `page`, or given for `modules`, answers 422
+  `course.home_invalid` at `/settings/home/page_id`. The home page counts as in use for B6.
+- `GET /api/v1/pages/{page_id}/versions/{version_id}` keeps answering the body by default (the
+  editor's load) and answers `html` instead with `format=html`; `PageVersion.body` is therefore
+  optional in the schema.
+- A copy's pages are authored by the user who copies; a copy made by an API key or the
+  instance keeps each source version's author, since a version needs a user. Pages are copied
+  with their slugs, and B20's copy of course files comes from spec 06 I3, which already maps
+  `file` items.
+- Embeds need the SPA's Content-Security-Policy to allow the two players in `frame-src`; that
+  policy arrives with issue #325, and the `frame-src` entries join it there.
+
 ## Permissions
 
 No new catalog entry: reads take `perm::CourseView` with B18's rules or `perm::CourseViewAll`,

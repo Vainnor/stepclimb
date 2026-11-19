@@ -22,7 +22,7 @@ use crate::{
     discovery, enrollment,
     error::ApiError,
     file_delivery, file_urls, health, identities, items, local_sign_in, manifest, me, modules,
-    my_passkeys, oauth_authorize, oauth_token, openapi, organization, outline, pages,
+    my_passkeys, oauth_authorize, oauth_token, openapi, organization, outline, page_reads, pages,
     passkey_enrollment, passkey_sign_in, password,
     password_hasher::PasswordHasher,
     progress, provider_admin, provider_callback, provider_sign_in,
@@ -384,7 +384,9 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
         ),
         (
             "/api/v1/pages/{page_id}",
-            patch(pages::update_page).delete(pages::delete_page),
+            get(page_reads::get_page)
+                .patch(pages::update_page)
+                .delete(pages::delete_page),
         ),
         ("/api/v1/pages/{page_id}/body", put(pages::save_page_body)),
         (

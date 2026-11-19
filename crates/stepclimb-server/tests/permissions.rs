@@ -511,6 +511,10 @@ const TABLE: &[Entry] = &[
         access: permission(CourseContentEdit::KEY, PAGE_NOT_FOUND, save_page_body),
     },
     Entry {
+        operation_id: "getPage",
+        access: permission(CourseView::KEY, PAGE_NOT_FOUND, page_of_published_item),
+    },
+    Entry {
         operation_id: "deletePage",
         access: permission(CourseContentEdit::KEY, PAGE_NOT_FOUND, page_in_tower),
     },
@@ -2106,6 +2110,23 @@ fn page_in_tower(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
         let course = org.course(org.tower, true).await;
         Call {
             params: vec![("page_id", org.page(course).await.0)],
+            body: None,
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// A page of a published course in Tower that a published `page` item of a published module
+/// references, with no unlock rule: the 2xx case holds `course.view` alone (M1 spec 07 B18).
+fn page_of_published_item(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        let page = org.page(course).await.0;
+        let module = org.module(course).await;
+        let item = org.page_item(module, page).await;
+        org.publish(module, item).await;
+        Call {
+            params: vec![("page_id", page)],
             body: None,
             at: At::Account(org.tower),
         }
@@ -4378,6 +4399,21 @@ impl Org {
         items::update(&self.pool, scope(self.id), item, &patch, now())
             .await
             .expect("publish item");
+    }
+
+    /// A new `page` item naming the page `page`, last in `module`: its id.
+    async fn page_item(&self, module: Uuid, page: Uuid) -> Uuid {
+        let new = items::NewItem {
+            kind: items::Kind::Page,
+            title: format!("Reading of {}", self.slug),
+            ref_id: Some(page),
+            url: None,
+            position: None,
+        };
+        items::create(&self.pool, scope(self.id), module, &new, now())
+            .await
+            .expect("create item")
+            .id
     }
 
     /// A new `file` item naming the course file `course_file`, last in `module`: its id.

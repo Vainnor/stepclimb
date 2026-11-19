@@ -229,7 +229,7 @@ async fn t3_only_an_empty_module_deletes_and_the_gap_closes(pool: PgPool) {
 
 /// T4.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn t4_only_headers_external_links_and_files_are_created(pool: PgPool) {
+async fn t4_only_headers_links_files_and_pages_are_created(pool: PgPool) {
     let a = Org::new(&pool, "org-a").await;
     let module = a.module(&pool, "Week 1").await;
     // A `file` item is created with a course file of its course (spec 06 B13): its cases are in
@@ -243,7 +243,14 @@ async fn t4_only_headers_external_links_and_files_are_created(pool: PgPool) {
     };
     let refused = items::create(&pool, a.scope(), module, &file, now()).await;
     assert!(matches!(refused, Err(Error::FileNotFound)), "{refused:?}");
-    for kind in [Kind::Quiz, Kind::Activity, Kind::Page, Kind::Video] {
+    // A `page` item likewise names a page of its course (spec 07 B19).
+    let page = NewItem {
+        kind: Kind::Page,
+        ..file
+    };
+    let refused = items::create(&pool, a.scope(), module, &page, now()).await;
+    assert!(matches!(refused, Err(Error::PageNotFound)), "{refused:?}");
+    for kind in [Kind::Quiz, Kind::Activity, Kind::Video] {
         let new = NewItem {
             ref_id: Some(new_id()),
             ..NewItem {

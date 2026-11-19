@@ -1,17 +1,18 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT EXISTS (\n               SELECT 1 FROM module_items\n               WHERE org_id = $1 AND kind = 'page' AND ref_id = $2) AS \"referenced!\"",
+  "query": "SELECT EXISTS (SELECT 1 FROM course_files\n                                  WHERE org_id = $1 AND course_id = $2 AND id = $3) AS \"found!\"",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "referenced!",
+        "name": "found!",
         "type_info": "Bool",
         "origin": "Expression"
       }
     ],
     "parameters": {
       "Left": [
+        "Uuid",
         "Uuid",
         "Uuid"
       ]
@@ -20,5 +21,5 @@
       null
     ]
   },
-  "hash": "3aec6eb93d902ad27db90fbd018e552ea18e5a5103372705d120da450cce0737"
+  "hash": "251812592215bb0e32be6b53d32665fc5e2b13c068b87df3f0db32e52bdac2a0"
 }

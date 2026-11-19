@@ -654,7 +654,7 @@ async fn t4_t5_kinds_and_urls_are_checked(pool: PgPool) {
     let admin = f.org_admin(t.org).await;
     let module = f.module(t).await;
     let items_uri = format!("{}/items", module_path(module));
-    for kind in ["quiz", "activity", "page", "video"] {
+    for kind in ["quiz", "activity", "video"] {
         f.send(
             Method::POST,
             &items_uri,

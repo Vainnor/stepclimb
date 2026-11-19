@@ -647,13 +647,130 @@ pub async fn restore(
     save(conn, scope, id, save_of, now).await
 }
 
-/// Whether an item references the page `id` (B6). The course's home page joins this check with
-/// spec 07 I2, which adds the home page option.
+/// `version`'s body as HTML (B14, B15), images as placeholders for `page_doc::fill_images`: the
+/// cached render when it was written by this release's renderer
+/// ([`crate::page_doc::RENDERER_VERSION`]), otherwise rendered now and cached in place of an
+/// older one. The cache holds no credential, only the placeholders.
+pub async fn rendered(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    version: &Version,
+) -> Result<String, Error> {
+    let renderer = crate::page_doc::RENDERER_VERSION;
+    let id = version.summary.id;
+    let cached = sqlx::query_scalar!(
+        "SELECT html FROM page_renders
+         WHERE org_id = $1 AND version_id = $2 AND renderer_version = $3",
+        scope.org_id(),
+        id,
+        renderer,
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+    if let Some(html) = cached {
+        return Ok(html);
+    }
+    let doc = PageDoc::parse_stored(&version.body).map_err(|_| Error::Stored {
+        id: version.page_id,
+        column: "version body",
+    })?;
+    let html = crate::page_doc::render(&doc);
+    sqlx::query!(
+        "INSERT INTO page_renders (org_id, version_id, renderer_version, html)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (version_id) DO UPDATE
+         SET renderer_version = EXCLUDED.renderer_version, html = EXCLUDED.html,
+             updated_at = now()
+         WHERE page_renders.org_id = EXCLUDED.org_id
+           AND page_renders.renderer_version < EXCLUDED.renderer_version",
+        scope.org_id(),
+        id,
+        renderer,
+        html,
+    )
+    .execute(conn)
+    .await?;
+    Ok(html)
+}
+
+/// The items that reference the page `id` of the scope's organization, in course order (B18):
+/// by their module's position, then theirs.
+pub async fn items_referencing(
+    db: impl PgExecutor<'_>,
+    scope: OrgScope,
+    id: Uuid,
+) -> Result<Vec<Uuid>, Error> {
+    let items = sqlx::query_scalar!(
+        "SELECT i.id FROM module_items i
+         JOIN modules m ON m.org_id = i.org_id AND m.id = i.module_id
+         WHERE i.org_id = $1 AND i.kind = 'page' AND i.ref_id = $2
+         ORDER BY m.position, i.position",
+        scope.org_id(),
+        id,
+    )
+    .fetch_all(db)
+    .await?;
+    Ok(items)
+}
+
+/// Copy every page of the course `from` into the course `to`, both of the scope's
+/// organization, in the caller's transaction (B20): each with its title and slug and its current
+/// version's body as version 1, its images naming the copies of their course files (`files`
+/// maps a source course file's id to its copy's), authored by `author` or, without one, by the
+/// source version's author, at `now`. Returns each source page's id mapped to its copy's.
+pub async fn copy_course_pages(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    (from, to): (Uuid, Uuid),
+    files: &HashMap<Uuid, Uuid>,
+    author: Option<Uuid>,
+    now: SystemTime,
+) -> Result<HashMap<Uuid, Uuid>, Error> {
+    let sources = sqlx::query!(
+        r#"SELECT p.id, p.slug, p.title, v.body::text AS "body!", v.author_id
+           FROM pages p JOIN page_versions v ON v.org_id = p.org_id AND v.id = p.current_version_id
+           WHERE p.org_id = $1 AND p.course_id = $2
+           ORDER BY p.slug COLLATE "C""#,
+        scope.org_id(),
+        from,
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    let mut copies = HashMap::new();
+    for source in sources {
+        let stored = || Error::Stored {
+            id: source.id,
+            column: "version body",
+        };
+        let value: serde_json::Value = serde_json::from_str(&source.body).map_err(|_| stored())?;
+        let body = PageDoc::parse_stored(&value)
+            .map_err(|_| stored())?
+            .with_images_mapped(files)
+            .map_err(|_| stored())?;
+        let new = NewPage {
+            title: source.title,
+            slug: Some(Slug::parse(&source.slug).ok_or_else(stored)?),
+            body,
+        };
+        let author = author.unwrap_or(source.author_id);
+        let page = insert_page(conn, scope, to, &new, (author, now)).await?;
+        copies.insert(source.id, page.id);
+    }
+    Ok(copies)
+}
+
+/// Whether an item references the page `id`, or it is its course's home page (B6, B19).
 pub async fn referenced(db: impl PgExecutor<'_>, scope: OrgScope, id: Uuid) -> Result<bool, Error> {
     let referenced = sqlx::query_scalar!(
-        r#"SELECT EXISTS (
-               SELECT 1 FROM module_items
-               WHERE org_id = $1 AND kind = 'page' AND ref_id = $2) AS "referenced!""#,
+        r#"SELECT (EXISTS (
+                       SELECT 1 FROM module_items
+                       WHERE org_id = $1 AND kind = 'page' AND ref_id = $2)
+                   OR EXISTS (
+                       SELECT 1 FROM pages p JOIN courses c ON c.org_id = p.org_id AND c.id = p.course_id
+                       WHERE p.org_id = $1 AND p.id = $2
+                         AND c.settings -> 'home' ->> 'kind' = 'page'
+                         AND c.settings -> 'home' ->> 'page_id' = $2::text))
+               AS "referenced!""#,
         scope.org_id(),
         id,
     )
@@ -662,7 +779,8 @@ pub async fn referenced(db: impl PgExecutor<'_>, scope: OrgScope, id: Uuid) -> R
     Ok(referenced)
 }
 
-/// Delete the page `id` and its versions, unless an item references it ([`Error::InUse`], B6).
+/// Delete the page `id` and its versions, unless an item references it or it is its course's
+/// home page ([`Error::InUse`], B6).
 pub async fn delete(conn: &mut PgConnection, scope: OrgScope, id: Uuid) -> Result<(), Error> {
     lock_page(conn, scope, id).await?;
     if referenced(&mut *conn, scope, id).await? {

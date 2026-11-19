@@ -18,11 +18,19 @@
 //! - paragraphs, headings and transcript lines hold text and hard breaks;
 //! - a code block holds text without marks.
 //!
+//! [`render`] writes a document as sanitized HTML (B14 to B17).
+//!
 //! Node and mark names are Tiptap's (`bulletList`, `codeBlock`, `hardBreak`); the nodes Tiptap
 //! does not ship are `callout`, `videoEmbed`, `transcript` and `transcriptLine`, and the image
 //! node names a course file rather than a URL (B10). Their attributes are snake_case.
 
 mod parse;
+mod render;
+
+pub use render::{
+    ALLOWED_ATTRIBUTES, ALLOWED_TAGS, IMAGE_PLACEHOLDER, LANGUAGE_CLASSES, RENDERER_VERSION,
+    embed_url, fill_images, render, sanitizer, write_unsanitized,
+};
 
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
@@ -334,6 +342,31 @@ impl PageDoc {
     #[must_use]
     pub fn to_value(&self) -> Value {
         node("doc", None, blocks(&self.content))
+    }
+
+    /// The body with every image's course file replaced by `map`'s for it, or the first id
+    /// `map` has no entry for (a course copy, spec 07 B20).
+    pub fn with_images_mapped(
+        &self,
+        map: &std::collections::HashMap<Uuid, Uuid>,
+    ) -> Result<Self, Uuid> {
+        let content = self
+            .content
+            .iter()
+            .map(|block| match block {
+                Block::Image(image) => map
+                    .get(&image.course_file_id)
+                    .map(|&course_file_id| {
+                        Block::Image(Image {
+                            course_file_id,
+                            ..image.clone()
+                        })
+                    })
+                    .ok_or(image.course_file_id),
+                other => Ok(other.clone()),
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self { content })
     }
 
     /// The course files the body names as images, each with the path of its `course_file_id`

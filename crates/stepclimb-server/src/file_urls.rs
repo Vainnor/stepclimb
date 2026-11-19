@@ -196,7 +196,7 @@ pub fn open(keys: &KeyRing, token: &str) -> Option<Grant> {
 }
 
 /// The answer for `file`: a URL of a fresh token, and when it expires.
-fn signed(
+pub(crate) fn signed(
     state: &AppState,
     scope: OrgScope,
     file: &course_files::CourseFile,

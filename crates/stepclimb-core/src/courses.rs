@@ -106,6 +106,8 @@ pub enum Home {
     /// The module list.
     #[default]
     Modules,
+    /// A page of the course (spec 07 B19).
+    Page { page_id: Uuid },
 }
 
 /// The typed form of `courses.settings`. A key missing from the stored object reads as its
@@ -261,6 +263,12 @@ pub enum Error {
     /// A published course with learners cannot go back to draft (B4).
     #[error("the course has learners and cannot go back to draft")]
     HasLearners,
+    /// A page of the source could not be copied (spec 07 B20).
+    #[error(transparent)]
+    Page(crate::pages::Error),
+    /// A home page that is not a page of the course (spec 07 B19).
+    #[error("the page does not exist in the course")]
+    PageNotFound,
     /// A stored value this release cannot read: a status or `settings` the table's checks and
     /// [`CourseSettings`] keep from happening.
     #[error("the {column} of course {id} cannot be read")]
@@ -686,7 +694,11 @@ pub async fn copy<'c>(
     if inserted == 0 {
         return Err(Error::NotFound);
     }
-    copy_outline(&mut tx, scope, source_id, id, now).await?;
+    let author = match actor {
+        Actor::User { id, .. } => Some(id),
+        Actor::ApiKey { .. } | Actor::Instance => None,
+    };
+    copy_outline(&mut tx, scope, (source_id, id), now, author).await?;
     let data = json!({ "after": {
         "source_id": source_id, "account_id": copy.account_id, "template": copy.template,
     } });
@@ -709,9 +721,9 @@ pub async fn copy<'c>(
 async fn copy_outline(
     conn: &mut PgConnection,
     scope: OrgScope,
-    from: Uuid,
-    to: Uuid,
+    (from, to): (Uuid, Uuid),
     now_us: i64,
+    author: Option<Uuid>,
 ) -> Result<(), Error> {
     let sources = sqlx::query_scalar!(
         "SELECT id FROM modules WHERE org_id = $1 AND course_id = $2 ORDER BY position",
@@ -747,7 +759,53 @@ async fn copy_outline(
         .collect();
     copy_prerequisites(conn, scope, from, to, (&sources, &copies), now_us).await?;
     let files = copy_course_files(conn, scope, from, to, now_us).await?;
-    copy_items(conn, scope, from, to, (&new_ids, &files), now_us).await
+    let pages = crate::pages::copy_course_pages(
+        conn,
+        scope,
+        (from, to),
+        &files,
+        author,
+        from_epoch_micros(now_us)?,
+    )
+    .await
+    .map_err(Error::Page)?;
+    copy_home(conn, scope, to, &pages).await?;
+    let refs: HashMap<Uuid, Uuid> = files.into_iter().chain(pages).collect();
+    copy_items(conn, scope, from, to, (&new_ids, &refs), now_us).await
+}
+
+/// Point the copy `to`'s home at the copy of its source's home page, when it is a page (spec 07
+/// B20); `pages` maps a source page's id to its copy's.
+async fn copy_home(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    to: Uuid,
+    pages: &HashMap<Uuid, Uuid>,
+) -> Result<(), Error> {
+    let course = get(&mut *conn, scope, to).await?.ok_or(Error::NotFound)?;
+    let Home::Page { page_id } = course.settings.home else {
+        return Ok(());
+    };
+    let copied = pages.get(&page_id).copied().ok_or(Error::Stored {
+        id: to,
+        column: "settings",
+    })?;
+    let settings = CourseSettings {
+        home: Home::Page { page_id: copied },
+    };
+    let settings = serde_json::to_string(&settings).map_err(|_| Error::Stored {
+        id: to,
+        column: "settings",
+    })?;
+    sqlx::query!(
+        "UPDATE courses SET settings = $3::text::jsonb WHERE org_id = $1 AND id = $2",
+        scope.org_id(),
+        to,
+        settings,
+    )
+    .execute(conn)
+    .await?;
+    Ok(())
 }
 
 /// [`copy_outline`]'s course files (spec 06 B20): each course file of `from` as one of `to` in
@@ -839,14 +897,14 @@ async fn copy_prerequisites(
 }
 
 /// [`copy_outline`]'s items: each into the copy of its module, `modules` mapping a source
-/// module's id to its copy's; a `file` item names the copy of its course file, `files` mapping a
-/// source course file's id to its copy's.
+/// module's id to its copy's; a `file` or `page` item names the copy of its course file or page,
+/// `refs` mapping a source course file's or page's id to its copy's.
 async fn copy_items(
     conn: &mut PgConnection,
     scope: OrgScope,
     from: Uuid,
     to: Uuid,
-    (modules, files): (&HashMap<Uuid, Uuid>, &HashMap<Uuid, Uuid>),
+    (modules, refs): (&HashMap<Uuid, Uuid>, &HashMap<Uuid, Uuid>),
     now_us: i64,
 ) -> Result<(), Error> {
     let rows = sqlx::query!(
@@ -887,14 +945,14 @@ async fn copy_items(
             })
         })
         .collect::<Result<Vec<Uuid>, Error>>()?;
-    // A `file` item's course file is one of `from` (checked when the item was made, and a
-    // course file an item names cannot be deleted), copied above in this transaction; a miss is
-    // a stored row this function cannot place. Copyable kinds name nothing else.
+    // A `file` or `page` item's course file or page is one of `from` (checked when the item was
+    // made, and one an item names cannot be deleted), copied above in this transaction; a miss
+    // is a stored row this function cannot place. Copyable kinds name nothing else.
     let ref_ids = rows
         .iter()
         .map(|r| match r.ref_id {
             None => Ok(None),
-            Some(ref_id) => files.get(&ref_id).copied().map(Some).ok_or(Error::Stored {
+            Some(ref_id) => refs.get(&ref_id).copied().map(Some).ok_or(Error::Stored {
                 id: r.id,
                 column: "ref_id",
             }),
@@ -1047,6 +1105,21 @@ pub async fn update<'c>(
     let after = before.patched(patch)?;
     if after == before {
         return Ok(course);
+    }
+    if let Home::Page { page_id } = after.settings.home {
+        // The course row is locked, and a page's delete locks it too, so the page stays.
+        let found = sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM pages WHERE org_id = $1 AND course_id = $2 AND id = $3)
+               AS "found!""#,
+            scope.org_id(),
+            id,
+            page_id,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !found {
+            return Err(Error::PageNotFound);
+        }
     }
     let settings = serde_json::to_string(&after.settings).map_err(|_| Error::Stored {
         id,
@@ -1286,6 +1359,15 @@ mod tests {
             json!({ "home": { "kind": "modules" } })
         );
         assert!(serde_json::from_str::<Home>(r#"{"kind":"page"}"#).is_err());
+        assert_eq!(
+            serde_json::from_str::<Home>(
+                r#"{"kind":"page","page_id":"01900000-0000-7000-8000-000000000001"}"#
+            )
+            .unwrap(),
+            Home::Page {
+                page_id: Uuid::from_u128(0x0190_0000_0000_7000_8000_0000_0000_0001)
+            }
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Authoring a course's pages (docs/specs/m1/07-pages-and-the-editor.md B1 to B3, B5 to B13 and
 //! API): list and create a course's pages, rename one, save its body, list, read and restore its
-//! versions, and delete it. Reading a page as a learner, rendered, is spec 07 I2.
+//! versions, and delete it. Reading a page as a learner, rendered, is [`crate::page_reads`].
 //!
 //! The reads take `Require<perm::CourseViewAll, _>` and the writes `Require<perm::CourseContentEdit,
 //! _>`, at the course directly or through the page ([`PageTarget`]); a draft or template course
@@ -150,8 +150,15 @@ pub struct PageVersion {
     /// RFC 3339, UTC.
     #[schema(format = DateTime)]
     pub created_at: String,
-    #[schema(value_type = crate::page_doc_schema::PageDoc)]
-    pub body: Value,
+    /// The body, unless `format=html` asked for the rendered HTML instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<crate::page_doc_schema::PageDoc>, required = false, nullable = false)]
+    pub body: Option<Value>,
+    /// The version rendered and sanitized by the server, with `format=html`; its images carry
+    /// signed URLs that expire 10 minutes after the read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false, nullable = false)]
+    pub html: Option<String>,
 }
 
 fn time(t: std::time::SystemTime) -> Result<String, ApiError> {
@@ -582,9 +589,10 @@ pub async fn list_page_versions(
     params(
         ("page_id" = String, Path, format = "uuid", description = "The page's id."),
         ("version_id" = String, Path, format = "uuid", description = "The version's id."),
+        ("format" = Option<crate::page_reads::PageFormat>, Query, description = "`json`, the body, when omitted; `html` for the version rendered and sanitized."),
     ),
     responses(
-        (status = 200, description = "The version with its body", body = PageVersion),
+        (status = 200, description = "The version with its body or its HTML", body = PageVersion),
         (status = 400, response = crate::openapi::BadRequest),
         (status = 401, response = crate::openapi::Unauthenticated),
         (status = 403, response = PagesViewForbidden),
@@ -597,23 +605,28 @@ pub async fn get_page_version(
     require: Require<CourseViewAll, PageTarget>,
     State(state): State<AppState>,
     ApiPath(path): ApiPath<VersionPath>,
+    ApiQuery(query): ApiQuery<crate::page_reads::PageReadQuery>,
 ) -> Result<Json<PageVersion>, ApiError> {
-    let version = pages::version(
-        &state.db,
-        require.grants().scope(),
-        require.target().id,
-        path.version_id,
-    )
-    .await
-    .map_err(page_error)?
-    .ok_or_else(|| page_error(Error::VersionNotFound))?;
+    let scope = require.grants().scope();
+    let version = pages::version(&state.db, scope, require.target().id, path.version_id)
+        .await
+        .map_err(page_error)?
+        .ok_or_else(|| page_error(Error::VersionNotFound))?;
+    let (body, html) = match query.format {
+        Some(crate::page_reads::PageFormat::Html) => (
+            None,
+            Some(crate::page_reads::render(&state, scope, &version).await?),
+        ),
+        Some(crate::page_reads::PageFormat::Json) | None => (Some(version.body), None),
+    };
     let summary = version.summary;
     Ok(Json(PageVersion {
         created_at: time(summary.created_at)?,
         id: summary.id,
         number: summary.number,
         author_id: summary.author_id,
-        body: version.body,
+        body,
+        html,
     }))
 }
 

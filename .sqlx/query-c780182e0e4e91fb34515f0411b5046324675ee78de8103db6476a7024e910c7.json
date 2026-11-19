@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT html FROM page_renders\n         WHERE org_id = $1 AND version_id = $2 AND renderer_version = $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "html",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "page_renders",
+            "name": "html"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c780182e0e4e91fb34515f0411b5046324675ee78de8103db6476a7024e910c7"
+}

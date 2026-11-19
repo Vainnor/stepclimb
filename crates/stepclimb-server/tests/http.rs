@@ -167,6 +167,7 @@ async fn startup_migrations_create_the_schema_on_an_empty_database(pool: PgPool)
             "org_plans",
             "organizations",
             "outbox",
+            "page_renders",
             "page_version_files",
             "page_versions",
             "pages",

@@ -736,6 +736,7 @@ pub(crate) fn content_error(error: Error) -> ApiError {
         Error::RefIdUnavailable => invalid("ref_id", code::ITEM_REF_ID_UNAVAILABLE),
         Error::RefIdRequired => invalid("ref_id", code::ITEM_REF_ID_REQUIRED),
         Error::FileNotFound => not_found(crate::require::code::FILE_NOT_FOUND),
+        Error::PageNotFound => not_found(crate::require::code::PAGE_NOT_FOUND),
         Error::PositionOutOfRange => invalid("position", code::ITEM_POSITION_OUT_OF_RANGE),
         Error::PrerequisiteNotFound => not_found(MODULE_NOT_FOUND),
         Error::PrerequisiteCycle => conflict(
@@ -838,6 +839,7 @@ mod tests {
                 Some(("/ref_id", "item.ref_id_required")),
             ),
             (Error::FileNotFound, 404, "file.not_found", None),
+            (Error::PageNotFound, 404, "page.not_found", None),
             (
                 Error::PositionOutOfRange,
                 422,

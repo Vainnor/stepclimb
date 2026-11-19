@@ -1391,3 +1391,391 @@ async fn an_enrolled_student_cannot_author_pages(pool: PgPool) {
         assert_eq!(f.versions(page).await, 1);
     }
 }
+
+// Spec 07 I2: reading, page items, the home page and copies (B14 to B20).
+
+impl Fixture {
+    /// A user enrolled in org A's course with the built-in role `key`: their cookie and id.
+    async fn enrolled(&self, key: &str, observed: Vec<Uuid>) -> (String, Uuid) {
+        let (cookie, user) = self.user(self.a.org).await;
+        let role = sqlx::query_scalar("SELECT id FROM roles WHERE org_id IS NULL AND key = $1")
+            .bind(key)
+            .fetch_one(&self.pool)
+            .await
+            .expect("a built-in role");
+        let new = enrollments::NewEnrollment {
+            user_id: user,
+            role_id: role,
+            source: Source::Local,
+            external_id: None,
+            observed_user_ids: observed,
+        };
+        enrollments::create(
+            &self.pool,
+            scope(self.a.org),
+            self.a.course,
+            &new,
+            self.now(),
+            Actor::Instance,
+        )
+        .await
+        .expect("enroll");
+        (cookie, user)
+    }
+
+    /// A published module of org A's course: its id.
+    async fn published_module(&self) -> Uuid {
+        let module = modules::create(
+            &self.pool,
+            scope(self.a.org),
+            self.a.course,
+            "M",
+            self.now(),
+        )
+        .await
+        .expect("create module")
+        .id;
+        let publish = modules::ModulePatch {
+            published: Some(true),
+            ..Default::default()
+        };
+        modules::update(&self.pool, scope(self.a.org), module, &publish, self.now())
+            .await
+            .expect("publish module");
+        module
+    }
+
+    /// A published `page` item for `page` in `module`, made through the API: its id.
+    async fn page_item(&self, module: Uuid, page: Uuid) -> Uuid {
+        let uri = format!("/api/v1/modules/{module}/items");
+        let created = self
+            .send(
+                Method::POST,
+                &uri,
+                Some(json!({ "kind": "page", "title": "Read this", "ref_id": page })),
+            )
+            .await;
+        let item = created.uuid("/id");
+        created.ok(StatusCode::CREATED);
+        self.send(
+            Method::PATCH,
+            &format!("/api/v1/items/{item}"),
+            Some(json!({ "published": true })),
+        )
+        .await
+        .ok(StatusCode::OK);
+        item
+    }
+
+    async fn read_as(&self, cookie: &str, page: Uuid, query: &str) -> Answer {
+        let uri = format!("/api/v1/pages/{page}{query}");
+        self.send_as(self.a.org, cookie, Method::GET, &uri, None)
+            .await
+    }
+}
+
+/// B19: a `page` item and the course's home page name a page of the course; another course's
+/// page answers 404 `page.not_found`; the home page is in use and is not deleted (B6).
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn b19_page_items_and_the_home_page_name_pages_of_the_course(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (page, _) = f.page("Welcome").await;
+    let other_course = f.course(f.a.org, f.a.tower).await;
+    let elsewhere = f
+        .create(other_course, json!({ "title": "Elsewhere" }))
+        .await
+        .uuid("/id");
+    let module = f.published_module().await;
+    let items = format!("/api/v1/modules/{module}/items");
+    for (ref_id, code) in [(elsewhere, "page.not_found"), (new_id(), "page.not_found")] {
+        f.send(
+            Method::POST,
+            &items,
+            Some(json!({ "kind": "page", "title": "X", "ref_id": ref_id })),
+        )
+        .await
+        .expect(StatusCode::NOT_FOUND, code);
+    }
+    f.send(
+        Method::POST,
+        &items,
+        Some(json!({ "kind": "page", "title": "X" })),
+    )
+    .await
+    .invalid_at("/ref_id", "item.ref_id_required");
+    let item = f.page_item(module, page).await;
+    let read = f
+        .send(Method::GET, &format!("/api/v1/items/{item}"), None)
+        .await;
+    assert_eq!(read.ok(StatusCode::OK)["ref_id"], page.to_string());
+
+    let course = format!("/api/v1/courses/{}", f.a.course);
+    let home =
+        |page_id: Uuid| json!({ "settings": { "home": { "kind": "page", "page_id": page_id } } });
+    f.send(Method::PATCH, &course, Some(home(elsewhere)))
+        .await
+        .expect(StatusCode::NOT_FOUND, "page.not_found");
+    f.send(
+        Method::PATCH,
+        &course,
+        Some(json!({ "settings": { "home": { "kind": "page" } } })),
+    )
+    .await
+    .invalid_at("/settings/home/page_id", "course.home_invalid");
+    let (unused, _) = f.page("Home").await;
+    let set = f.send(Method::PATCH, &course, Some(home(unused))).await;
+    assert_eq!(
+        set.ok(StatusCode::OK)["settings"]["home"],
+        json!({ "kind": "page", "page_id": unused })
+    );
+    f.send(Method::DELETE, &format!("/api/v1/pages/{unused}"), None)
+        .await
+        .expect(StatusCode::CONFLICT, "page.in_use");
+    f.send(
+        Method::PATCH,
+        &course,
+        Some(json!({ "settings": { "home": { "kind": "modules" } } })),
+    )
+    .await
+    .ok(StatusCode::OK);
+    f.send(Method::DELETE, &format!("/api/v1/pages/{unused}"), None)
+        .await
+        .ok(StatusCode::NO_CONTENT);
+}
+
+/// T9 (B18): a Student reads a page through an unlocked item (200, HTML), gets 403 `item.locked`
+/// through a locked one and 404 for a page no item they can see references, reads the home page,
+/// and gets 403 `permission.denied` for `?format=json`, which staff get. An Observer reads as a
+/// learner with nothing done.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t9_who_reads_a_page(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    f.set_status(f.a.org, f.a.course, courses::Status::Published)
+        .await;
+    let (open_page, v1) = f.page("Open").await;
+    f.save(open_page, &paragraph("Hello <b>reader</b>"), v1)
+        .await
+        .ok(StatusCode::OK);
+    let (locked_page, _) = f.page("Locked").await;
+    let (hidden_page, _) = f.page("Hidden").await;
+    let (home_page, _) = f.page("Home").await;
+    let open_module = f.published_module().await;
+    f.page_item(open_module, open_page).await;
+    let locked_module = f.published_module().await;
+    f.page_item(locked_module, locked_page).await;
+    let dated = modules::RulesPatch {
+        unlock_at: Some(Some(f.now() + Duration::from_secs(3_600))),
+        ..Default::default()
+    };
+    modules::set_rules(&f.pool, scope(f.a.org), locked_module, &dated, f.now())
+        .await
+        .unwrap();
+    f.send(
+        Method::PATCH,
+        &format!("/api/v1/courses/{}", f.a.course),
+        Some(json!({ "settings": { "home": { "kind": "page", "page_id": home_page } } })),
+    )
+    .await
+    .ok(StatusCode::OK);
+    let (student, learner) = f.enrolled("student", Vec::new()).await;
+    let (observer, _) = f.enrolled("observer", vec![learner]).await;
+
+    for reader in [&student, &observer] {
+        let read = f.read_as(reader, open_page, "").await;
+        let body = read.ok(StatusCode::OK);
+        assert_schema("PageView", body);
+        assert_eq!(body["html"], "<p>Hello &lt;b&gt;reader&lt;/b&gt;</p>");
+        assert!(body.get("body").is_none(), "{body}");
+        let refused = f.read_as(reader, locked_page, "").await;
+        refused.expect(StatusCode::FORBIDDEN, "item.locked");
+        assert_eq!(
+            refused.body["reasons"],
+            json!([{ "kind": "module_locked" }])
+        );
+        f.read_as(reader, hidden_page, "")
+            .await
+            .expect(StatusCode::NOT_FOUND, "page.not_found");
+        f.read_as(reader, home_page, "").await.ok(StatusCode::OK);
+        f.read_as(reader, open_page, "?format=json")
+            .await
+            .expect(StatusCode::FORBIDDEN, "permission.denied");
+    }
+    for page in [hidden_page, locked_page] {
+        f.read_as(&f.admin, page, "").await.ok(StatusCode::OK);
+    }
+    let json = f.read_as(&f.admin, open_page, "?format=json").await;
+    let json = json.ok(StatusCode::OK);
+    assert_eq!(json["body"], paragraph("Hello <b>reader</b>"));
+    assert!(json.get("html").is_none(), "{json}");
+
+    // At the unlock date the locked page opens.
+    f.clock.set(f.now() + Duration::from_secs(3_600));
+    f.read_as(&student, locked_page, "")
+        .await
+        .ok(StatusCode::OK);
+}
+
+/// T7 (B15): a rendered image's URL serves the file; two reads get two URLs; the cached render
+/// holds a placeholder, never a `/files/` token, and is written once.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t7_images_get_signed_urls_per_read_and_the_cache_holds_none(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let file = f.upload(f.a.course, "diagram.png", "image/png", PNG).await;
+    let (page, v1) = f.page("Diagram").await;
+    f.save(page, &image(file), v1).await.ok(StatusCode::OK);
+    let src = |answer: &Answer| -> String {
+        let html = answer.body["html"].as_str().expect("html");
+        let start = html.find("src=\"").expect("a src") + 5;
+        let end = start + html[start..].find('"').expect("its end");
+        html[start..end].to_owned()
+    };
+    let first = f.read_as(&f.admin, page, "").await;
+    first.ok(StatusCode::OK);
+    f.clock.set(f.now() + Duration::from_secs(1));
+    let second = f.read_as(&f.admin, page, "").await;
+    let (one, two) = (src(&first), src(&second));
+    assert_ne!(one, two, "each read gets its own URL");
+    let path = one
+        .strip_prefix("https://lms.example.org")
+        .expect("the public URL");
+    let served = f.send(Method::GET, path, None).await;
+    assert_eq!(served.status, StatusCode::OK, "{served:?}");
+    let cached: Vec<String> = sqlx::query_scalar("SELECT html FROM page_renders WHERE org_id = $1")
+        .bind(f.a.org)
+        .fetch_all(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(cached.len(), 1);
+    assert!(
+        cached[0].contains(&format!("data-sc-image=\"{file}\"")),
+        "{}",
+        cached[0]
+    );
+    assert!(
+        !cached[0].contains("/files/") && !cached[0].contains("src="),
+        "{}",
+        cached[0]
+    );
+}
+
+/// T8 (B12, B16) over the router: an embed renders as the privacy-enhanced player; a version
+/// reads as HTML with `format=html`.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t8_an_embed_renders_as_the_providers_player(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (page, v1) = f.page("Video").await;
+    let embed = json!({ "type": "doc", "content": [
+        { "type": "videoEmbed", "attrs": {
+            "provider": "youtube", "video_id": "dQw4w9WgXcQ", "title": "Taxi" } },
+    ] });
+    let saved = f.save(page, &embed, v1).await;
+    let v2 = saved.uuid("/current_version/id");
+    let read = f.read_as(&f.admin, page, "").await;
+    let html = read.ok(StatusCode::OK)["html"].as_str().unwrap().to_owned();
+    assert!(
+        html.starts_with(
+            "<iframe data-slot=\"video-embed\" src=\"https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ\""
+        ),
+        "{html}"
+    );
+    assert!(html.contains("sandbox=\"allow-scripts allow-same-origin allow-presentation\""));
+    let version = f
+        .send(
+            Method::GET,
+            &format!("/api/v1/pages/{page}/versions/{v2}?format=html"),
+            None,
+        )
+        .await;
+    let version = version.ok(StatusCode::OK);
+    assert_schema("PageVersion", version);
+    assert_eq!(version["html"], html);
+    assert!(version.get("body").is_none());
+    let version = f
+        .send(
+            Method::GET,
+            &format!("/api/v1/pages/{page}/versions/{v2}"),
+            None,
+        )
+        .await;
+    assert_eq!(version.ok(StatusCode::OK)["body"], embed);
+}
+
+/// T12 (B20): a copied course has each page once, as version 1 equal to the source's current
+/// body with its image naming the copied course file, authored by the copier; its page item and
+/// home page name the copies.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t12_a_copy_copies_pages_and_points_at_them(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let file = f.upload(f.a.course, "diagram.png", "image/png", PNG).await;
+    let (page, v1) = f.page("Diagram").await;
+    let saved = f.save(page, &paragraph("Old"), v1).await;
+    let v2 = saved.uuid("/current_version/id");
+    f.save(page, &image(file), v2).await.ok(StatusCode::OK);
+    let module = f.published_module().await;
+    f.page_item(module, page).await;
+    f.send(
+        Method::PATCH,
+        &format!("/api/v1/courses/{}", f.a.course),
+        Some(json!({ "settings": { "home": { "kind": "page", "page_id": page } } })),
+    )
+    .await
+    .ok(StatusCode::OK);
+    let copier = Actor::User {
+        id: f.admin_id,
+        ip: CLIENT.ip(),
+    };
+    let copy = courses::CourseCopy {
+        account_id: f.a.tower,
+        title: None,
+        code: "COPY-1".into(),
+        template: false,
+    };
+    let copied = courses::copy(&f.pool, scope(f.a.org), f.a.course, &copy, f.now(), copier)
+        .await
+        .expect("copy");
+
+    let pages: Vec<(Uuid, Uuid)> =
+        sqlx::query_as("SELECT id, current_version_id FROM pages WHERE course_id = $1")
+            .bind(copied.id)
+            .fetch_all(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(pages.len(), 1);
+    let (copied_page, version) = pages[0];
+    let (number, author, body): (i32, Uuid, Value) =
+        sqlx::query_as("SELECT number, author_id, body FROM page_versions WHERE page_id = $1")
+            .bind(copied_page)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    let copied_file: Uuid = sqlx::query_scalar(
+        "SELECT id FROM course_files WHERE course_id = $1 AND name = 'diagram.png'",
+    )
+    .bind(copied.id)
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!((number, author), (1, f.admin_id));
+    assert_eq!(body, image(copied_file));
+    let files: Vec<Uuid> =
+        sqlx::query_scalar("SELECT course_file_id FROM page_version_files WHERE version_id = $1")
+            .bind(version)
+            .fetch_all(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(files, [copied_file]);
+    let item_ref: Uuid = sqlx::query_scalar(
+        "SELECT ref_id FROM module_items WHERE course_id = $1 AND kind = 'page'",
+    )
+    .bind(copied.id)
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(item_ref, copied_page);
+    assert_eq!(
+        copied.settings.home,
+        courses::Home::Page {
+            page_id: copied_page
+        }
+    );
+}

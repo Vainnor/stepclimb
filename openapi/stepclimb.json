@@ -2471,7 +2471,7 @@
             "$ref": "#/components/responses/CourseManageForbidden"
           },
           "404": {
-            "$ref": "#/components/responses/CourseNotFound"
+            "$ref": "#/components/responses/CourseUpdateNotFound"
           },
           "409": {
             "$ref": "#/components/responses/CourseCodeConflict"
@@ -5711,6 +5711,64 @@
       }
     },
     "/api/v1/pages/{page_id}": {
+      "get": {
+        "tags": [
+          "pages"
+        ],
+        "summary": "A page of a course, as whoever may read it gets it.",
+        "operationId": "getPage",
+        "parameters": [
+          {
+            "name": "page_id",
+            "in": "path",
+            "description": "The page's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "`html` when omitted.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/PageFormat"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The page's current version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageView"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/PageReadForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/PageReadNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
       "delete": {
         "tags": [
           "pages"
@@ -6003,11 +6061,20 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "`json`, the body, when omitted; `html` for the version rendered and sanitized.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/PageFormat"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "The version with its body",
+            "description": "The version with its body or its HTML",
             "content": {
               "application/json": {
                 "schema": {
@@ -9361,6 +9428,11 @@
         "properties": {
           "kind": {
             "$ref": "#/components/schemas/HomeKind"
+          },
+          "page_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "With `page` only, and then required: a page of the course (spec 07 B19)."
           }
         },
         "additionalProperties": false
@@ -10161,9 +10233,10 @@
       },
       "HomeKind": {
         "type": "string",
-        "description": "The kind of a course's home: `modules`, the module list.",
+        "description": "The kind of a course's home: `modules`, the module list, or `page`, one of its pages.",
         "enum": [
-          "modules"
+          "modules",
+          "page"
         ]
       },
       "Identity": {
@@ -12336,6 +12409,14 @@
           "doc"
         ]
       },
+      "PageFormat": {
+        "type": "string",
+        "description": "How a page is answered.",
+        "enum": [
+          "html",
+          "json"
+        ]
+      },
       "PageHeadingAttrs": {
         "type": "object",
         "description": "A heading's level, 2 to 4; the page title is the level 1.",
@@ -12869,8 +12950,7 @@
           "id",
           "number",
           "author_id",
-          "created_at",
-          "body"
+          "created_at"
         ],
         "properties": {
           "author_id": {
@@ -12878,12 +12958,17 @@
             "format": "uuid"
           },
           "body": {
-            "$ref": "#/components/schemas/PageDoc"
+            "$ref": "#/components/schemas/PageDoc",
+            "description": "The body, unless `format=html` asked for the rendered HTML instead."
           },
           "created_at": {
             "type": "string",
             "format": "date-time",
             "description": "RFC 3339, UTC."
+          },
+          "html": {
+            "type": "string",
+            "description": "The version rendered and sanitized by the server, with `format=html`; its images carry\nsigned URLs that expire 10 minutes after the read."
           },
           "id": {
             "type": "string",
@@ -12955,6 +13040,68 @@
           "youtube",
           "vimeo"
         ]
+      },
+      "PageView": {
+        "type": "object",
+        "description": "A page as a reader gets it: its current version as HTML, or as body JSON for the editor.",
+        "required": [
+          "id",
+          "course_id",
+          "title",
+          "slug",
+          "version"
+        ],
+        "properties": {
+          "body": {
+            "$ref": "#/components/schemas/PageDoc",
+            "description": "The current version's body, with `format=json`."
+          },
+          "course_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "html": {
+            "type": "string",
+            "description": "The current version rendered and sanitized by the server, without `format=json`. Images\ncarry signed URLs that expire 10 minutes after the read; read the page again for new\nones. Insert it as given; attach no handler from it."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "version": {
+            "$ref": "#/components/schemas/PageViewVersion"
+          }
+        }
+      },
+      "PageViewVersion": {
+        "type": "object",
+        "description": "The version a page read answers.",
+        "required": [
+          "id",
+          "number",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
       },
       "Page_Account": {
         "type": "object",
@@ -16028,6 +16175,16 @@
           }
         }
       },
+      "CourseUpdateNotFound": {
+        "description": "`course.not_found`: no course with this id exists in the organization, or you cannot see it; a draft or a template also needs `course.view_all`. `page.not_found`: `settings.home` names a page that is not one of the course's. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "CreateConflict": {
         "description": "`role.key_taken`: a built-in role or another custom role of the organization has the key.",
         "content": {
@@ -16960,6 +17117,26 @@
       },
       "PagePatchConflict": {
         "description": "`course.archived`: the course is archived and takes no content change. `page.slug_taken`: the course already has another page with this slug.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "PageReadForbidden": {
+        "description": "`permission.denied`: you do not hold `course.view` at a scope containing the course, or you asked for `format=json` without `course.view_all`. `item.locked`: every item that references the page is locked for you; `reasons` says what the first one waits for.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "PageReadNotFound": {
+        "description": "`page.not_found`: no page with this id exists in the organization, or you may not read it: its course is out of your reach, a draft or a template, or, without `course.view_all`, it is neither the course's home page nor referenced by a published item of a published module. `org.not_found`: the request's organization cannot be determined.",
         "content": {
           "application/problem+json": {
             "schema": {
