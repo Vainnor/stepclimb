@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 import { ThemeMatrix } from "../storybook/theme-matrix";
 import { Editor } from "./editor";
 import type { PageDoc } from "./page-doc";
@@ -141,7 +141,8 @@ export const InsertMenu: Story = {
   play: async () => {
     const body = within(document.body);
     await userEvent.click(await body.findByRole("button", { name: "Insert" }));
-    await expect(await body.findByRole("menuitem", { name: "Callout" })).toBeVisible();
+    const item = await body.findByRole("menuitem", { name: "Callout" });
+    await waitFor(() => expect(item).toBeVisible());
   },
 };
 
@@ -153,7 +154,8 @@ export const LinkPopover: Story = {
     const dialog = await body.findByRole("dialog", { name: "Link" });
     await userEvent.type(within(dialog).getByRole("textbox", { name: /Address/ }), "javascript:x");
     await userEvent.click(within(dialog).getByRole("button", { name: "Apply" }));
-    await expect(await within(dialog).findByText(/Enter an address/)).toBeVisible();
+    const problem = await within(dialog).findByText(/Enter an address/);
+    await waitFor(() => expect(problem).toBeVisible());
   },
 };
 

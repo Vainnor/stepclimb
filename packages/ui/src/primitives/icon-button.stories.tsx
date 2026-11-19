@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { DotsThreeIcon, GearIcon, PencilSimpleIcon, TrashIcon } from "@phosphor-icons/react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 import { ThemeMatrix } from "../storybook/theme-matrix";
 import { IconButton } from "./icon-button";
 
@@ -57,7 +57,8 @@ export const FocusVisible: Story = {
   play: async ({ canvasElement }) => {
     await userEvent.tab();
     await expect(within(canvasElement).getByRole("button")).toHaveAttribute("data-focus-visible");
-    await expect(await within(document.body).findByRole("tooltip")).toBeVisible();
+    const tooltip = await within(document.body).findByRole("tooltip");
+    await waitFor(() => expect(tooltip).toBeVisible());
   },
 };
 

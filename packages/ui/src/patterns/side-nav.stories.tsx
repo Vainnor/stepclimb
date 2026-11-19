@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { BookOpenIcon, HouseIcon, UserCircleIcon, UsersThreeIcon } from "@phosphor-icons/react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 import { Link } from "../primitives/link";
 import { ThemeMatrix } from "../storybook/theme-matrix";
 import { type NavEntry, SideNav } from "./side-nav";
@@ -57,7 +57,8 @@ export const CollapsedFocus: Story = {
   play: async ({ canvasElement }) => {
     await userEvent.tab();
     await expect(within(canvasElement).getByRole("link", { name: "Home" })).toHaveFocus();
-    await expect(await within(document.body).findByRole("tooltip")).toBeVisible();
+    const tooltip = await within(document.body).findByRole("tooltip");
+    await waitFor(() => expect(tooltip).toBeVisible());
   },
 };
 

@@ -150,9 +150,11 @@ const row = (canvas: HTMLElement, name: RegExp) => within(canvas).findByRole("ro
 
 /** Keyboard focus on a row. */
 export const FocusVisible: Story = {
+  // A Tab sent before the rows are in the page leaves focus on the grid and no row, so the play
+  // finds the row first.
   play: async ({ canvasElement }) => {
-    await userEvent.tab();
     const target = await row(canvasElement, /^1 Radio basics/);
+    await userEvent.tab();
     await waitFor(() => expect(target).toHaveAttribute("data-focus-visible"));
   },
 };
