@@ -70,6 +70,8 @@ pub mod code {
     pub const VIDEO_NOT_FOUND: &str = "video.not_found";
     /// The video upload does not exist in the organization or its course is not visible (404).
     pub const VIDEO_UPLOAD_NOT_FOUND: &str = "video_upload.not_found";
+    /// No assignment with this id exists, or its course is hidden (M1 spec 13 API).
+    pub const ASSIGNMENT_NOT_FOUND: &str = "assignment.not_found";
 }
 
 /// The path parameter [`AccountTarget`] and [`AccountParentTarget`] read.
@@ -98,6 +100,9 @@ pub const VIDEO_ID_PARAM: &str = "video_id";
 
 /// The path parameter [`VideoUploadTarget`] reads.
 pub const UPLOAD_ID_PARAM: &str = "upload_id";
+
+/// The path parameter naming an assignment.
+pub const ASSIGNMENT_ID_PARAM: &str = "assignment_id";
 
 /// A request whose principal holds the permission `R` at the target `T` resolves to (B17), or
 /// whose organization's plan includes the feature `R` (spec 10 B9).
@@ -378,6 +383,30 @@ impl Target for PageTarget {
     }
 }
 
+/// The assignment named by the path parameter `assignment_id`, which `P` must be effective over
+/// at its course (M1 spec 13 API): resolved to its course inside the principal's organization,
+/// then [`CourseTarget`]'s check with code `assignment.not_found`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssignmentTarget {
+    pub id: Uuid,
+    pub course: CourseTarget,
+}
+
+impl Target for AssignmentTarget {
+    async fn resolve<P: Permission>(
+        parts: &mut Parts,
+        state: &AppState,
+        grants: &Grants,
+    ) -> Result<Self, ApiError> {
+        let id = uuid_param(parts, state, ASSIGNMENT_ID_PARAM).await?;
+        let course_id = stepclimb_core::assignments::course_of(&state.db, grants.scope(), id)
+            .await
+            .map_err(|error| ApiError::internal(&error))?;
+        let course = course_of::<P>(state, grants, course_id, code::ASSIGNMENT_NOT_FOUND).await?;
+        Ok(Self { id, course })
+    }
+}
+
 /// The video upload named by the path parameter `upload_id`, which `P` must be effective over
 /// at the course it was started in (M1 spec 08 API): resolved to that course inside the
 /// principal's organization, then [`CourseTarget`]'s check with code `video_upload.not_found`.
@@ -441,8 +470,8 @@ impl Target for VideoTarget {
     }
 }
 
-/// The course `course_id` (of the path, a module, an item, a course file, an enrollment or a
-/// page) as a
+/// The course `course_id` (of the path, a module, an item, a course file, an enrollment, a
+/// page or an assignment) as a
 /// [`CourseTarget`] that `P` is effective over: 404 with `not_found` when there is no such row
 /// (`None`) or [`check_course`] hides the course; 403 when it is visible without `P`.
 async fn course_of<P: Permission>(
@@ -490,8 +519,8 @@ pub fn check_course<P: Permission>(
 
 /// `denied` as an answer, with a course that is not found or not visible answered as 404
 /// `code` instead, for a target reached through its course: `module.not_found`,
-/// `item.not_found`, `file.not_found`, `enrollment.not_found`, `page.not_found`, or
-/// `course.not_found` itself.
+/// `item.not_found`, `file.not_found`, `enrollment.not_found`, `page.not_found`,
+/// `assignment.not_found`, or `course.not_found` itself.
 pub fn not_found_as(denied: Denied, code: &'static str) -> ApiError {
     let detail = match code {
         code::MODULE_NOT_FOUND => "No module with this id exists, or you cannot see it.",
@@ -500,6 +529,7 @@ pub fn not_found_as(denied: Denied, code: &'static str) -> ApiError {
         code::ENROLLMENT_NOT_FOUND => "No enrollment with this id exists, or you cannot see it.",
         code::PAGE_NOT_FOUND => "No page with this id exists, or you cannot see it.",
         code::VIDEO_NOT_FOUND => "No video with this id exists, or you cannot see it.",
+        code::ASSIGNMENT_NOT_FOUND => "No assignment with this id exists, or you cannot see it.",
         code::VIDEO_UPLOAD_NOT_FOUND => {
             "No video upload with this id exists, or you cannot see it."
         }

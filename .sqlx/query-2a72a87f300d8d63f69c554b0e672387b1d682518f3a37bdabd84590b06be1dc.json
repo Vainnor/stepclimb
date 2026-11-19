@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT (extract(epoch FROM completed_at) * 1000000)::bigint AS \"at!\"\n           FROM (SELECT completed_at FROM item_progress\n                 WHERE org_id = $1 AND user_id = $2 AND $3 = 'item' AND item_id = $4\n                 UNION ALL\n                 SELECT completed_at FROM module_progress\n                 WHERE org_id = $1 AND user_id = $2 AND $3 = 'module' AND module_id = $4\n                 UNION ALL\n                 SELECT completed_at FROM course_progress\n                 WHERE org_id = $1 AND user_id = $2 AND $3 = 'course' AND course_id = $4) p\n           WHERE completed_at IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "at!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "2a72a87f300d8d63f69c554b0e672387b1d682518f3a37bdabd84590b06be1dc"
+}

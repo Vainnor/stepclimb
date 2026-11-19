@@ -18,7 +18,9 @@ use uuid::Uuid;
 
 pub use crate::rules::CompletionRule;
 use crate::{
-    OrgScope, completions,
+    OrgScope,
+    assignments::{self, TargetType},
+    completions,
     db::{TimeOutOfRange, epoch_micros, from_epoch_micros},
     id::new_id,
     name,
@@ -100,6 +102,12 @@ pub enum Error {
     /// The module still has items (Q3).
     #[error("the module has items")]
     ModuleNotEmpty,
+    /// An assignment, ended or not, names the module (M1 spec 13 Data).
+    #[error("an assignment names the module")]
+    ModuleAssigned,
+    /// An assignment, ended or not, names the item (M1 spec 13 Data).
+    #[error("an assignment names the item")]
+    ItemAssigned,
     /// A reorder's list is not exactly the current set of ids (B10).
     #[error("the list is not the current set")]
     OrderStale,
@@ -420,8 +428,9 @@ pub async fn update<'c>(
     Ok(module)
 }
 
-/// Delete the module `id` of the scope's organization, which must have no items (B3, Q3), and
-/// close the gap in its course's positions.
+/// Delete the module `id` of the scope's organization, which must have no items (B3, Q3) and no
+/// assignment naming it ([`Error::ModuleAssigned`], M1 spec 13 Data), and close the gap in its
+/// course's positions.
 ///
 /// Runs in one transaction (a savepoint when `db` is already one) under the course lock.
 pub async fn delete<'c>(
@@ -441,6 +450,9 @@ pub async fn delete<'c>(
     .await?;
     if has_items {
         return Err(Error::ModuleNotEmpty);
+    }
+    if assignments::targets(&mut tx, scope, TargetType::Module, id).await? {
+        return Err(Error::ModuleAssigned);
     }
     sqlx::query!(
         "DELETE FROM modules WHERE org_id = $1 AND id = $2",

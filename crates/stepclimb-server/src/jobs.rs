@@ -10,12 +10,14 @@
 //! docs/specs/m1/06-files.md B8, B21) and `videos.cleanup` (hourly,
 //! docs/specs/m1/08-uploaded-video.md B6). It also knows the progress event topics
 //! (docs/specs/m1/05-progress-and-events.md B10), so the outbox dispatcher claims their events,
-//! and runs `progress.recompute_course` (B8), which the content routes enqueue.
+//! runs `progress.recompute_course` (B8), which the content routes enqueue, and subscribes the
+//! assignment completion handlers to the progress topics
+//! (docs/specs/m1/13-assignments-due-dates-reminders-and-escalation.md B8).
 
 use stepclimb_jobs::{Registry, RegistryError, prune};
 
 use crate::{
-    files_cleanup, flow, progress, progress_recompute,
+    assignments, files_cleanup, flow, progress, progress_recompute,
     storage::Storage,
     video_transcode::{self, Transcoder},
     videos_cleanup,
@@ -39,6 +41,7 @@ pub fn registry(
     video_transcode::register(&mut registry, storage, transcoder)?;
     progress::register_topics(&mut registry)?;
     progress_recompute::register(&mut registry)?;
+    assignments::register_completion(&mut registry)?;
     Ok(registry)
 }
 
@@ -79,12 +82,21 @@ mod tests {
         assert_eq!(general_queues(&registry), ["default"]);
         assert_eq!(video_transcode::TRANSCODE.queue, TRANSCODE_QUEUE);
         assert!(registry.knows(&progress_recompute::RECOMPUTE));
-        for topic in [
-            progress::ITEM_COMPLETED,
-            progress::MODULE_COMPLETED,
-            progress::COURSE_COMPLETED,
+        assert!(registry.knows(&assignments::ON_ITEM_COMPLETED));
+        assert!(registry.knows(&assignments::ON_MODULE_COMPLETED));
+        assert!(registry.knows(&assignments::ON_COURSE_COMPLETED));
+        for (topic, subscriber) in [
+            (progress::ITEM_COMPLETED, assignments::ON_ITEM_COMPLETED),
+            (progress::MODULE_COMPLETED, assignments::ON_MODULE_COMPLETED),
+            (progress::COURSE_COMPLETED, assignments::ON_COURSE_COMPLETED),
         ] {
             assert!(registry.knows_topic(&topic), "{}", topic.name);
+            let subscribers = registry
+                .topics()
+                .into_iter()
+                .find(|(t, _)| *t == topic)
+                .map(|(_, kinds)| kinds.to_vec());
+            assert_eq!(subscribers, Some(vec![subscriber]), "{}", topic.name);
         }
     }
 }

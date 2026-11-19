@@ -615,6 +615,7 @@ async fn granting_instructor_needs_user_view(pool: PgPool) {
         "enrollment.view",
         "enrollment.manage",
         "progress.view",
+        "assignment.manage",
     ];
     let without = f.custom_role(&keys).await;
     keys.push("user.view");

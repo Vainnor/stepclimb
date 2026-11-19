@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE assignments\n         SET ended_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond',\n             updated_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond'\n         WHERE org_id = $1 AND id = $2 AND ended_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d4d0a7d988e90a4ef7695ea8ed2ed929b6982b10bd0b4359cba256f05474cd9a"
+}

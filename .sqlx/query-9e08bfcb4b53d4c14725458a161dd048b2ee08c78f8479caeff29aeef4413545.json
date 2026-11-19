@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO assignment_users (id, org_id, assignment_id, user_id, assigned_at, due_at,\n                                       completed_at, created_at, updated_at)\n         VALUES ($1, $2, $3, $4,\n                 timestamptz 'epoch' + $5::bigint * interval '1 microsecond',\n                 timestamptz 'epoch' + $6::bigint * interval '1 microsecond',\n                 timestamptz 'epoch' + $7::bigint * interval '1 microsecond',\n                 timestamptz 'epoch' + $5::bigint * interval '1 microsecond',\n                 timestamptz 'epoch' + $5::bigint * interval '1 microsecond')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Int8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9e08bfcb4b53d4c14725458a161dd048b2ee08c78f8479caeff29aeef4413545"
+}

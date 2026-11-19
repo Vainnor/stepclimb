@@ -520,7 +520,7 @@ pub async fn delete_enrollment(
 /// assignments or active enrollments, the reach of the users list (B17, B21, owner decision of
 /// 2026-11-17). A user the caller cannot see answers as one that does not exist, so enrolling
 /// does not reveal who is in the organization.
-async fn refuse_unreachable_user(
+pub(crate) async fn refuse_unreachable_user(
     state: &AppState,
     grants: &Grants,
     user_id: Uuid,
@@ -632,7 +632,7 @@ async fn recheck_manage(
 /// organization or account scope, that is not effective for the caller at the course (B17,
 /// B18). A permission grantable only at course scope (`course.participate`) is left out (Q12,
 /// B24a); a key the catalog does not define grants nothing and is not checked.
-fn refuse_escalation(
+pub(crate) fn refuse_escalation(
     grants: &Grants,
     permissions: &[String],
     course: &Target,

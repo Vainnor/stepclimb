@@ -416,7 +416,7 @@ async fn t17_an_account_admin_of_tower_gets_one_sorted_grant(pool: PgPool) {
         json!([{
             "scope": { "type": "account", "id": tower.to_string() },
             "permissions": [
-                "account.manage", "account.view", "course.content_edit", "course.create",
+                "account.manage", "account.view", "assignment.manage", "course.content_edit", "course.create",
                 "course.manage", "course.view", "course.view_all", "enrollment.manage",
                 "enrollment.view", "progress.view", "role.assign", "role.view", "user.view"
             ],

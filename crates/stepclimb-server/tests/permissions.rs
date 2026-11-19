@@ -78,6 +78,7 @@ use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{
     OrgScope, Source, accounts,
     admission_webhooks::{self, Change, Fresh},
+    assignments,
     audit::Actor,
     clock::ManualClock,
     course_files, courses,
@@ -92,10 +93,11 @@ use stepclimb_core::{
     page_doc::PageDoc,
     pages,
     perm::{
-        self, AccountManage, AccountView, AdmissionManage, BrandingManage, CourseContentEdit,
-        CourseCreate, CourseManage, CourseParticipate, CourseView, CourseViewAll, EnrollmentManage,
-        EnrollmentView, OrgManage, Permission, ProgressView, ProgressViewObserved, ProviderManage,
-        RoleAssign, RoleManage, RoleView, ScopeType, ServiceAccountManage, UserManage, UserView,
+        self, AccountManage, AccountView, AdmissionManage, AssignmentManage, BrandingManage,
+        CourseContentEdit, CourseCreate, CourseManage, CourseParticipate, CourseView,
+        CourseViewAll, EnrollmentManage, EnrollmentView, OrgManage, Permission, ProgressView,
+        ProgressViewObserved, ProviderManage, RoleAssign, RoleManage, RoleView, ScopeType,
+        ServiceAccountManage, UserManage, UserView,
     },
     role_assignments::{self, NewAssignment, Scope},
     roles::{self, NewRole},
@@ -448,6 +450,44 @@ const TABLE: &[Entry] = &[
             EnrollmentManage::KEY,
             ENROLLMENT_NOT_FOUND,
             enrollment_in_path,
+        ),
+    },
+    Entry {
+        operation_id: "listAssignments",
+        access: permission(AssignmentManage::KEY, COURSE_NOT_FOUND, course_in_tower),
+    },
+    Entry {
+        // The assignee is a learner of the course, so assigning them enrolls no one and needs
+        // no `enrollment.manage` (M1 spec 13 B3); tests/assignments.rs has that case.
+        operation_id: "createAssignment",
+        access: permission(
+            AssignmentManage::KEY,
+            COURSE_NOT_FOUND,
+            assign_tower_learner,
+        ),
+    },
+    Entry {
+        operation_id: "getAssignment",
+        access: permission(
+            AssignmentManage::KEY,
+            ASSIGNMENT_NOT_FOUND,
+            assignment_in_path,
+        ),
+    },
+    Entry {
+        operation_id: "updateAssignment",
+        access: permission(
+            AssignmentManage::KEY,
+            ASSIGNMENT_NOT_FOUND,
+            move_assignment_due,
+        ),
+    },
+    Entry {
+        operation_id: "endAssignment",
+        access: permission(
+            AssignmentManage::KEY,
+            ASSIGNMENT_NOT_FOUND,
+            assignment_in_path,
         ),
     },
     Entry {
@@ -874,6 +914,7 @@ const EVERY_PERMISSION: &[&str] = &[
     "course.participate",
     "progress.view",
     "progress.view_observed",
+    "assignment.manage",
 ];
 
 #[test]
@@ -1599,6 +1640,68 @@ fn conclude_enrollment(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + 
         Call {
             body: Some(serde_json::json!({ "status": "concluded" })),
             ..enrollment_in_path(org).await
+        }
+    })
+}
+
+/// An assignment that is not the organization's, or whose course the caller cannot see: 404
+/// `assignment.not_found` (M1 spec 13 API).
+const ASSIGNMENT_NOT_FOUND: Target = Target::Scoped {
+    not_found: "assignment.not_found",
+    cross_org: "assignment.not_found",
+};
+
+/// A published course in Tower and a learner of it (a user enrolled with a custom role holding
+/// only `course.participate`) as the body's assignee, with a due date 14 days on; the caller
+/// acts at Tower.
+fn assign_tower_learner(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        let learner = org.learner(course).await;
+        Call {
+            params: vec![("course_id", course)],
+            body: Some(serde_json::json!({
+                "target": { "type": "course", "id": course },
+                "assignee": { "type": "user", "id": learner },
+                "due": { "relative_days": 14 },
+            })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// An assignment of a published Tower course to a learner of it, named in the path; the caller
+/// acts at Tower.
+fn assignment_in_path(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        let learner = org.learner(course).await;
+        let new = assignments::NewAssignment {
+            target_type: assignments::TargetType::Course,
+            target_id: course,
+            user_id: learner,
+            due: None,
+            created_by: learner,
+        };
+        let enroll = assignments::Enroll::Refuse;
+        let id = assignments::create(&org.pool, scope(org.id), course, &new, enroll, now())
+            .await
+            .expect("create assignment")
+            .id;
+        Call {
+            params: vec![("assignment_id", id)],
+            body: None,
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// [`assignment_in_path`] given a due date 7 days on.
+fn move_assignment_due(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            body: Some(serde_json::json!({ "due": { "relative_days": 7 } })),
+            ..assignment_in_path(org).await
         }
     })
 }
@@ -4676,6 +4779,14 @@ impl Org {
             .await
             .expect("create role")
             .id
+    }
+
+    /// A new user enrolled in `course` with [`Self::participant_role`]: the user's id.
+    async fn learner(&self, course: Uuid) -> Uuid {
+        let (_, user) = self.user().await;
+        let role = self.participant_role().await;
+        self.enroll(user, role, course).await;
+        user
     }
 
     /// A new user enrolled in `course` with [`Self::participant_role`]: the enrollment's id.

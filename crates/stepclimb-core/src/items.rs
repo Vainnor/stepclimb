@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 use crate::{
     OrgScope,
+    assignments::{self, TargetType},
     db::{epoch_micros, from_epoch_micros},
     id::new_id,
     modules::{Error, lock_course, position, same_set, valid_title},
@@ -436,7 +437,8 @@ pub fn parse_requirement(value: &serde_json::Value) -> Result<Requirement, Error
 
 /// Delete the item `id` of the scope's organization and close the gap in its module's
 /// positions (B9). What the item points at stays. An item any learner has progress on is
-/// [`Error::ItemHasProgress`] (spec 05 B16).
+/// [`Error::ItemHasProgress`] (spec 05 B16), and one an assignment names, ended or not,
+/// [`Error::ItemAssigned`] (M1 spec 13 Data).
 ///
 /// Runs in one transaction (a savepoint when `db` is already one) under the course lock.
 pub async fn delete<'c>(
@@ -458,6 +460,9 @@ pub async fn delete<'c>(
     .await?;
     if has_progress {
         return Err(Error::ItemHasProgress);
+    }
+    if assignments::targets(&mut tx, scope, TargetType::Item, id).await? {
+        return Err(Error::ItemAssigned);
     }
     sqlx::query!(
         "DELETE FROM module_items WHERE org_id = $1 AND id = $2",

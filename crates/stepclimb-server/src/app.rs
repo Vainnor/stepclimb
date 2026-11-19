@@ -16,7 +16,7 @@ use tower_http::trace::TraceLayer;
 use utoipa_scalar::{Scalar, Servable};
 
 use crate::{
-    accounts, admission_settings, admission_webhook, appearance, auth, branding, completions,
+    accounts, admission_settings, admission_webhook, appearance, assignments, auth, branding, completions,
     course_enrollments, course_files, courses,
     csrf::{self, OriginAllowlist},
     discovery, enrollment,
@@ -354,6 +354,18 @@ pub fn routes() -> Vec<(&'static str, MethodRouter<AppState>)> {
             "/api/v1/enrollments/{enrollment_id}",
             patch(course_enrollments::update_enrollment)
                 .delete(course_enrollments::delete_enrollment),
+        ),
+        (
+            "/api/v1/courses/{course_id}/assignments",
+            get(assignments::list_assignments).post(assignments::create_assignment),
+        ),
+        (
+            "/api/v1/assignments/{assignment_id}",
+            get(assignments::get_assignment).patch(assignments::update_assignment),
+        ),
+        (
+            "/api/v1/assignments/{assignment_id}/end",
+            post(assignments::end_assignment),
         ),
         (
             "/api/v1/courses/{course_id}/files",

@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT au.assignment_id,\n                  (extract(epoch FROM au.due_at) * 1000000)::bigint AS due_at_us,\n                  (extract(epoch FROM au.completed_at) * 1000000)::bigint AS completed_at_us,\n                  EXISTS (\n                      SELECT 1 FROM item_progress ip\n                      LEFT JOIN module_items mi ON mi.org_id = ip.org_id AND mi.id = ip.item_id\n                      WHERE ip.org_id = au.org_id AND ip.user_id = au.user_id\n                        AND ip.course_id = a.course_id\n                        AND (a.target_type = 'course'\n                             OR (a.target_type = 'item' AND ip.item_id = a.target_id)\n                             OR (a.target_type = 'module' AND mi.module_id = a.target_id))\n                  ) AS \"has_progress!\"\n           FROM assignment_users au\n           JOIN assignments a ON a.org_id = au.org_id AND a.id = au.assignment_id\n           WHERE au.org_id = $1 AND au.assignment_id = ANY($2) AND au.removed_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "assignment_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "assignment_users",
+            "name": "assignment_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "due_at_us",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "completed_at_us",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "has_progress!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "015b6406e18fa398e157464540ac2ada6aaa7d1c8b078ea3e27b60ae1fc3b5ca"
+}

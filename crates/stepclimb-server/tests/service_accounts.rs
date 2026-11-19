@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use stepclimb_auth::{encryption::KeyRing, token::ApiKey};
 use stepclimb_core::{
-    OrgScope, Source, accounts,
+    OrgScope, Source, accounts, assignments,
     audit::{self, Actor},
     clock::ManualClock,
     course_files, courses, enrollments, files,
@@ -293,6 +293,24 @@ impl Fixture {
         .await
         .expect("create enrollment")
         .id
+    }
+
+    /// An assignment of a new course in Tower to a new user, whom it enrolls as Student.
+    async fn assignment(&self) -> Uuid {
+        let course = self.course().await;
+        let user = self.user("Walked assignee").await;
+        let new = assignments::NewAssignment {
+            target_type: assignments::TargetType::Course,
+            target_id: course,
+            user_id: user,
+            due: None,
+            created_by: user,
+        };
+        let enroll = assignments::Enroll::AsStudent(Actor::Instance);
+        assignments::create(&self.pool, scope(self.org), course, &new, enroll, now())
+            .await
+            .expect("create assignment")
+            .id
     }
 
     /// A module of a new course in Tower and an item in it.
@@ -1069,7 +1087,7 @@ const EMPTY_SCOPE_ALLOWED: &[&str] = &[
 /// B27, B44: a key with no scopes, whose owner holds every catalog permission at the
 /// organization, is refused on every `/api/v1` operation of the document but
 /// [`EMPTY_SCOPE_ALLOWED`]: 403, or for a route on an account, a course, a module, an item, a
-/// course file or a page the 404 B17 answers for a target the principal cannot see (an
+/// course file, a page or an assignment the 404 B17 answers for a target the principal cannot see (an
 /// enrollment's included). The walk reads the document, which lists every route the router
 /// mounts (`tests/csrf.rs` T17), so a new route is walked without being named here.
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
@@ -1105,6 +1123,10 @@ async fn an_empty_scope_key_is_refused_on_every_operation_but_the_allowed_ones(p
             if uri.contains("{course_file_id}") {
                 let course_file = f.course_file().await;
                 uri = uri.replace("{course_file_id}", &course_file.to_string());
+            }
+            if uri.contains("{assignment_id}") {
+                let assignment = f.assignment().await;
+                uri = uri.replace("{assignment_id}", &assignment.to_string());
             }
             if uri.contains("{page_id}") {
                 let page = f.page().await;
@@ -1144,6 +1166,8 @@ async fn an_empty_scope_key_is_refused_on_every_operation_but_the_allowed_ones(p
             let hidden_enrollment =
                 path.contains("{enrollment_id}") && answer.code() == "enrollment.not_found";
             let hidden_page = path.contains("{page_id}") && answer.code() == "page.not_found";
+            let hidden_assignment =
+                path.contains("{assignment_id}") && answer.code() == "assignment.not_found";
             let hidden_video = path.contains("{video_id}") && answer.code() == "video.not_found";
             // A response to HEAD has no body to carry a code.
             let hidden_upload = path.contains("{upload_id}")
@@ -1158,6 +1182,7 @@ async fn an_empty_scope_key_is_refused_on_every_operation_but_the_allowed_ones(p
                             || hidden_file
                             || hidden_enrollment
                             || hidden_page
+                            || hidden_assignment
                             || hidden_video
                             || hidden_upload)),
                 "{id} answered an empty-scope key: {answer:?}"

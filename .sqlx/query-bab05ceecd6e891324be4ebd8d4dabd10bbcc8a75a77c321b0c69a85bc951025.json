@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE assignment_users au\n         SET completed_at = timestamptz 'epoch' + $5::bigint * interval '1 microsecond',\n             updated_at = timestamptz 'epoch' + $6::bigint * interval '1 microsecond'\n         FROM assignments a\n         WHERE au.org_id = $1 AND au.user_id = $2 AND au.cycle = 1\n           AND au.completed_at IS NULL\n           AND a.org_id = au.org_id AND a.id = au.assignment_id\n           AND a.target_type = $3 AND a.target_id = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bab05ceecd6e891324be4ebd8d4dabd10bbcc8a75a77c321b0c69a85bc951025"
+}
