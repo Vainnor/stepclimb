@@ -193,6 +193,8 @@ class Build(Tagged):
         body = self.out("release.md").read_text()
         self.assertTrue(body.startswith(self.out("notes.md").read_text().rstrip("\n")))
         self.assertIn(index, body)
+        self.assertIn("### Third-party programs in the image", body)
+        self.assertIn("/LICENSES", body)
         self.assertTrue(self.out("sbom-linux-arm64.spdx.json").is_file())
         self.assertEqual(self.calls("skopeo") + self.calls("cosign") + self.calls("gh"), [])
         self.assertEqual(self.origin_refs(), before)

@@ -1,0 +1,23 @@
+Source of /usr/local/bin/ffmpeg and /usr/local/bin/ffprobe
+==========================================================
+
+These two binaries are copied unchanged from the image
+
+  mwader/static-ffmpeg:9.0.2-1
+  sha256:f5d100184884eb3e82b0eb14bb5ebf98da99826ac824989720297fb9ef21c822
+
+built by the static-ffmpeg project from its repository at commit
+a6e07cb2da57b29dc45a4b932dd6a5c07740efc9:
+
+  https://github.com/wader/static-ffmpeg/tree/a6e07cb2da57b29dc45a4b932dd6a5c07740efc9
+
+That commit's Dockerfile is the complete build recipe: it names the download URL and SHA-256 of
+the source of FFmpeg 9.0.2 and of every library linked into it, the Alpine Linux release whose
+packages supply the rest, and the exact configure options (--enable-gpl --enable-version3, nothing
+nonfree). versions.json beside this file lists the version of each component as built.
+
+FFmpeg's own source is at https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz.
+
+You may also ask the Stepclimb maintainers for a copy of the complete corresponding source of
+these binaries, at no charge beyond the cost of providing it, by opening an issue at
+https://github.com/Vainnor/stepclimb/issues naming the image version you have.

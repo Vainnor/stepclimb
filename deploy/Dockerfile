@@ -10,6 +10,10 @@
 # same for every target, and the Rust stage cross-compiles for the target, so no stage runs
 # under emulation. Only the final stage, which runs nothing, uses the target's base image. An
 # amd64 machine builds both; an arm64 machine builds arm64 only.
+#
+# The final stage also holds ffmpeg, ffprobe and util-linux `prlimit` for the transcoder
+# (docs/specs/m1/08-uploaded-video.md I6, docs/adr/0035-ffmpeg-in-the-image.md), with their
+# licenses and source offers in /LICENSES.
 
 FROM --platform=$BUILDPLATFORM node:26.13.0-bookworm-slim@sha256:add5c17c14752c54d2f3d519ec46a3815684d41c33f198bcb09fb998f7dcbf68 AS web
 WORKDIR /src
@@ -84,6 +88,43 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && cargo auditable build --release --locked --target "$target" -p stepclimb-server --bin stepclimb \
     && cp "target/$target/release/stepclimb" /stepclimb
 
+# ffmpeg and ffprobe 9.0.2: mwader/static-ffmpeg 9.0.2-1, static-pie musl binaries built with
+# `--enable-gpl --enable-version3` and nothing nonfree, so GPL-3.0-or-later (ADR 0035). The digest
+# is the manifest list's, which holds both architectures; the target's is pulled.
+FROM mwader/static-ffmpeg:9.0.2-1@sha256:f5d100184884eb3e82b0eb14bb5ebf98da99826ac824989720297fb9ef21c822 AS ffmpeg
+
+# util-linux `prlimit` 2.38.1, which every ffmpeg and ffprobe run starts under, and the
+# libsmartcols it links, from Debian bookworm's own packages (the final stage's release), pinned
+# by snapshot and checksum. Unpacked on the build machine's platform; nothing here runs the
+# target's code.
+FROM --platform=$BUILDPLATFORM rust:1.98-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS prlimit
+ARG SNAPSHOT=https://snapshot.debian.org/archive/debian/20241209T144408Z/pool/main/u/util-linux
+ADD --checksum=sha256:8eb241ff24b2e1ee9c0373f4fc9bc728b85bf5966c1496154df7da01c0e42f34 \
+    ${SNAPSHOT}/util-linux_2.38.1-5%2Bdeb12u3_amd64.deb /debs/util-linux_amd64.deb
+ADD --checksum=sha256:c30366915d4dc21106d69c3d5a2bf6b010c4c2ff508a1231ede4620aed9874fc \
+    ${SNAPSHOT}/util-linux_2.38.1-5%2Bdeb12u3_arm64.deb /debs/util-linux_arm64.deb
+ADD --checksum=sha256:84088c6895fc07538fc51624899f3f71835188e0d38ebc3812097ac13da523b0 \
+    ${SNAPSHOT}/libsmartcols1_2.38.1-5%2Bdeb12u3_amd64.deb /debs/libsmartcols1_amd64.deb
+ADD --checksum=sha256:802c366408ebdf55ba8fe441975552925c65ce3f142f00e4b2045d3059e6dec7 \
+    ${SNAPSHOT}/libsmartcols1_2.38.1-5%2Bdeb12u3_arm64.deb /debs/libsmartcols1_arm64.deb
+ARG TARGETARCH
+RUN set -eu; \
+    case "$TARGETARCH" in \
+        amd64) triplet=x86_64-linux-gnu ;; \
+        arm64) triplet=aarch64-linux-gnu ;; \
+        *) echo "deploy/Dockerfile: no prlimit for $TARGETARCH (amd64 and arm64 only)" >&2; exit 1 ;; \
+    esac; \
+    dpkg-deb -x "/debs/util-linux_$TARGETARCH.deb" /x; \
+    dpkg-deb -x "/debs/libsmartcols1_$TARGETARCH.deb" /x; \
+    install -D -m 0755 /x/usr/bin/prlimit /out/usr/local/bin/prlimit; \
+    install -d "/out/usr/lib/$triplet"; \
+    cp -P /x/usr/lib/$triplet/libsmartcols.so.1* "/out/usr/lib/$triplet/"; \
+    install -D -m 0644 /x/usr/share/doc/util-linux/copyright /out/LICENSES/util-linux/copyright; \
+    install -D -m 0644 /x/usr/share/doc/libsmartcols1/copyright /out/LICENSES/util-linux/libsmartcols1.copyright; \
+    for license in GPL-2 GPL-3 LGPL-2.1; do \
+        install -D -m 0644 "/usr/share/common-licenses/$license" "/out/LICENSES/common-licenses/$license"; \
+    done
+
 # The mock identity provider for the end-to-end Compose stack only (deploy/compose/ci.yaml, `just
 # e2e`; docs/specs/m0/06-oauth2-and-vatsim-preset.md B3), built with `--target mock-idp`. These two
 # stages sit before the server's runtime stage, so the default target never builds or contains them.
@@ -104,6 +145,10 @@ ENTRYPOINT ["/usr/local/bin/stepclimb-mock-idp"]
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
 COPY --from=server /stepclimb /usr/local/bin/stepclimb
 COPY --from=server --chown=65532:65532 /image-root/var/lib/stepclimb /var/lib/stepclimb
+COPY --from=ffmpeg /ffmpeg /ffprobe /usr/local/bin/
+COPY --from=ffmpeg /versions.json /LICENSES/ffmpeg/versions.json
+COPY --from=prlimit /out/ /
+COPY deploy/licenses/ /LICENSES/
 USER nonroot
 EXPOSE 8080
 ENV STEPCLIMB_BIND=0.0.0.0:8080

@@ -6,8 +6,16 @@
 #   - its configured user resolves, in the image's own /etc/passwd, to a uid other than 0;
 #   - it holds no shell (sh, bash, dash, ash, ksh, zsh or busybox) anywhere in its file system,
 #     and for the machine's own platform `docker run --entrypoint sh` fails;
-#   - /usr/local/bin holds the stepclimb binary and nothing else, and the binary carries
-#     cargo-auditable's `.dep-v0` section, the crate list the release SBOM reads (ADR 0031);
+#   - /usr/local/bin holds stepclimb, ffmpeg, ffprobe and prlimit and nothing else, each built for
+#     that architecture, and stepclimb carries cargo-auditable's `.dep-v0` section, the crate list
+#     the release SBOM reads (ADR 0031);
+#   - ffmpeg, ffprobe and prlimit report their versions, ffmpeg transcodes a 1 s `testsrc` clip to
+#     one 360p HLS rendition, and /LICENSES holds their licenses and source offers
+#     (docs/specs/m1/08-uploaded-video.md T17, ADR 0035). In the native image the transcode runs
+#     under prlimit as the transcoder starts it, and a run under a 16 MiB address space must fail,
+#     so the limits hold in the container. Under QEMU user-mode emulation ffmpeg runs directly:
+#     an emulated prlimit cannot start a second emulated program without a registered emulator.
+#     The transcode's output is checked with the host's ffprobe (the Nix dev shell's);
 #   - `stepclimb check-config` runs in it and accepts a valid configuration: in a container for
 #     the machine's own platform, and under QEMU user-mode emulation (qemu-aarch64 or
 #     qemu-x86_64, from the Nix dev shell on Linux) for another, which Docker without a
@@ -145,6 +153,94 @@ print(interp)
 PY
 }
 
+# Runs the command after $1 and fails unless it succeeds and its first output line starts with $1.
+reports() {
+    local prefix=$1 output
+    shift
+    output=$("$@" 2>&1) || return 1
+    [[ ${output%%$'\n'*} == "$prefix"* ]]
+}
+
+# Checks the HLS output in the directory $1: a finished playlist naming seg_0.ts, and that segment
+# an H.264 stream of 640x360. $2 says where it ran.
+check_hls() {
+    local dir=$1 where=$2 stream
+    grep -qx '#EXT-X-ENDLIST' "$dir/index.m3u8" 2>/dev/null \
+        || fail "the HLS transcode $where wrote no finished playlist"
+    grep -qx 'seg_0.ts' "$dir/index.m3u8" || fail "the HLS playlist $where names no seg_0.ts"
+    command -v ffprobe >/dev/null || fail "ffprobe is not on PATH to check the transcode (nix develop provides it)"
+    stream=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height \
+        -of csv=p=0 "$dir/seg_0.ts") || fail "the HLS segment $where does not read"
+    # A transport stream lists the stream under its program too: the first line is enough.
+    stream=${stream%%$'\n'*}
+    [[ $stream == h264,640,360 ]] || fail "the HLS segment $where is $stream, not h264,640,360"
+}
+
+# ffmpeg's arguments for the 1 s 360p HLS transcode into the directory $1.
+hls_args() {
+    echo -nostdin -hide_banner -loglevel error -xerror -threads 2 \
+        -f lavfi -i testsrc=size=640x360:rate=25:duration=1 \
+        -c:v libx264 -preset veryfast -pix_fmt yuv420p \
+        -f hls -hls_time 1 -hls_playlist_type vod -hls_segment_filename "$1/seg_%d.ts" "$1/index.m3u8"
+}
+
+# The limits the transcoder gives an ffmpeg run (stepclimb_media::plan, spec 08 D42), with an
+# address space of $1 bytes.
+prlimit_args() {
+    echo "--as=$1" --fsize=104857600 --nofile=256 --cpu=60:70 --
+}
+
+# ffmpeg, ffprobe and prlimit in the native image $1: versions, the transcode under prlimit, and
+# a run prlimit must stop.
+check_tools_native() {
+    local tag=$1 c out
+    local run=(docker run --rm --network none --entrypoint)
+    reports 'ffmpeg version ' "${run[@]}" /usr/local/bin/ffmpeg "$tag" -hide_banner -version \
+        || fail "ffmpeg -version failed in $tag"
+    reports 'ffprobe version ' "${run[@]}" /usr/local/bin/ffprobe "$tag" -hide_banner -version \
+        || fail "ffprobe -version failed in $tag"
+    reports 'prlimit from util-linux ' "${run[@]}" /usr/local/bin/prlimit "$tag" --version \
+        || fail "prlimit --version failed in $tag"
+    # shellcheck disable=SC2046 # the argument lists hold no spaces
+    c=$(docker create --network none --entrypoint /usr/local/bin/prlimit "$tag" \
+        $(prlimit_args 5368709120) /usr/local/bin/ffmpeg $(hls_args /tmp))
+    if ! docker start -a "$c" >"$work/hls.log" 2>&1; then
+        docker rm "$c" >/dev/null
+        fail "the HLS transcode under prlimit failed in $tag: $(cat "$work/hls.log")"
+    fi
+    out="$work/hls-native"
+    mkdir -p "$out"
+    if ! { docker cp "$c:/tmp/index.m3u8" "$out/" && docker cp "$c:/tmp/seg_0.ts" "$out/"; } >/dev/null; then
+        docker rm "$c" >/dev/null
+        fail "the HLS transcode in $tag left no output"
+    fi
+    docker rm "$c" >/dev/null
+    check_hls "$out" "in $tag"
+    # shellcheck disable=SC2046
+    if docker run --rm --network none --entrypoint /usr/local/bin/prlimit "$tag" \
+        $(prlimit_args 16777216) /usr/local/bin/ffmpeg -hide_banner -version >/dev/null 2>&1; then
+        fail "ffmpeg ran under a 16 MiB address space in $tag: prlimit set no limit"
+    fi
+}
+
+# ffmpeg, ffprobe and prlimit of the image root $1 under the emulator $2.
+check_tools_emulated() {
+    local root=$1 qemu=$2 out="$work/hls-emulated"
+    reports 'ffmpeg version ' env -i "$qemu" "$root/usr/local/bin/ffmpeg" -hide_banner -version \
+        || fail "ffmpeg -version failed under ${qemu##*/}"
+    reports 'ffprobe version ' env -i "$qemu" "$root/usr/local/bin/ffprobe" -hide_banner -version \
+        || fail "ffprobe -version failed under ${qemu##*/}"
+    interpreter_in_root "$root" "$root/usr/local/bin/prlimit" >/dev/null \
+        || fail "/usr/local/bin/prlimit cannot load from the image"
+    reports 'prlimit from util-linux ' env -i "$qemu" -L "$root" "$root/usr/local/bin/prlimit" --version \
+        || fail "prlimit --version failed under ${qemu##*/}"
+    mkdir -p "$out"
+    # shellcheck disable=SC2046
+    env -i "$qemu" "$root/usr/local/bin/ffmpeg" $(hls_args "$out") >"$work/hls.log" 2>&1 \
+        || fail "the HLS transcode failed under ${qemu##*/}: $(cat "$work/hls.log")"
+    check_hls "$out" "under ${qemu##*/}"
+}
+
 # The uid that the user $1 (a name, a uid, or either with :group) has in the passwd file $2.
 uid_of() {
     local user=${1%%:*}
@@ -157,7 +253,7 @@ uid_of() {
 }
 
 check_platform() {
-    local platform=$1 arch=${1#linux/} tag root machine qemu user uid container how interpreter
+    local platform=$1 arch=${1#linux/} tag root machine qemu user uid container how interpreter program file
     case $arch in
         amd64) machine=x86_64 qemu=qemu-x86_64 ;;
         arm64) machine=aarch64 qemu=qemu-aarch64 ;;
@@ -178,8 +274,14 @@ check_platform() {
     docker rm "$container" >/dev/null
     tar -x --no-same-owner --no-same-permissions -C "$root" -f "$work/$arch.tar"
 
-    [[ $(elf_machine "$root/usr/local/bin/stepclimb") == "$machine" ]] \
-        || fail "/usr/local/bin/stepclimb in $tag is not built for $machine"
+    for program in stepclimb ffmpeg ffprobe prlimit; do
+        [[ $(elf_machine "$root/usr/local/bin/$program") == "$machine" ]] \
+            || fail "/usr/local/bin/$program in $tag is not built for $machine"
+    done
+    for file in README common-licenses/GPL-3 ffmpeg/SOURCE ffmpeg/versions.json util-linux/SOURCE \
+        util-linux/copyright; do
+        [[ -s $root/LICENSES/$file ]] || fail "$tag has no /LICENSES/$file"
+    done
 
     has_section "$root/usr/local/bin/stepclimb" .dep-v0 \
         || fail "/usr/local/bin/stepclimb in $tag has no .dep-v0 section (cargo auditable build in deploy/Dockerfile)"
@@ -191,8 +293,8 @@ check_platform() {
 
     shells=$(tar -t -f "$work/$arch.tar" | grep -E '(^|/)(sh|bash|dash|ash|ksh|zsh|busybox)$' || true)
     [[ -z $shells ]] || fail "$tag holds a shell: $shells"
-    [[ $(ls -A "$root/usr/local/bin") == stepclimb ]] \
-        || fail "/usr/local/bin in $tag holds more than stepclimb: $(ls -A "$root/usr/local/bin")"
+    [[ $(LC_ALL=C ls -A "$root/usr/local/bin" | tr '\n' ' ') == "ffmpeg ffprobe prlimit stepclimb " ]] \
+        || fail "/usr/local/bin in $tag holds other than ffmpeg, ffprobe, prlimit and stepclimb: $(ls -A "$root/usr/local/bin")"
 
     if [[ $platform == "$native" ]]; then
         if docker run --rm --network none --entrypoint sh "$tag" -c true >"$work/sh.log" 2>&1; then
@@ -204,6 +306,7 @@ check_platform() {
         for pair in "${config_env[@]}"; do env_flags+=(-e "$pair"); done
         docker run --rm --network none "${env_flags[@]}" "$tag" check-config >"$work/check.log" 2>&1 \
             || fail "check-config failed in $tag: $(cat "$work/check.log")"
+        check_tools_native "$tag"
         how="in a container"
     else
         interpreter=$(interpreter_in_root "$root" "$root/usr/local/bin/stepclimb") \
@@ -213,12 +316,13 @@ check_platform() {
         env -i "${config_env[@]}" "$qemu" -L "$root" "$root/usr/local/bin/stepclimb" check-config \
             >"$work/check.log" 2>&1 \
             || fail "check-config failed under $qemu: $(cat "$work/check.log")"
+        check_tools_emulated "$root" "$qemu"
         how="under ${qemu##*/}, loader $interpreter from the image"
     fi
     grep -qx 'stepclimb: the configuration is valid' "$work/check.log" \
         || fail "check-config did not report a valid configuration: $(cat "$work/check.log")"
 
-    echo "image check: $platform ok (user $user, uid $uid; no shell; $machine binary with .dep-v0; check-config ran $how)"
+    echo "image check: $platform ok (user $user, uid $uid; no shell; $machine binaries, stepclimb with .dep-v0; check-config, ffmpeg, ffprobe, prlimit and a 360p HLS transcode ran $how)"
 }
 
 for platform in "${platforms[@]}"; do

@@ -87,6 +87,7 @@ pub const TRANSCODE: Kind = Kind::new("video.transcode", "transcode")
 /// What a process that serves the `transcode` queue runs ffmpeg with.
 #[derive(Clone, Debug)]
 pub struct Transcoder {
+    /// ffmpeg, ffprobe and the util-linux `prlimit` every run of them starts under (I6).
     pub tools: Tools,
     /// `transcode_threads`.
     pub threads: u32,
@@ -94,6 +95,9 @@ pub struct Transcoder {
     pub dir: PathBuf,
     /// `max_video_seconds`.
     pub max_video_seconds: u32,
+    /// The address space (`RLIMIT_AS`) each ffmpeg run starts under, in bytes:
+    /// `stepclimb_media::plan::address_space` of `threads` at startup.
+    pub address_space: u64,
 }
 
 /// Register `video.transcode` in `registry`, with the process's `storage` and `transcoder`
@@ -407,7 +411,8 @@ impl Job<'_> {
         work: &std::path::Path,
     ) -> Result<Plan, Stop> {
         let ffprobe = &transcoder.tools.ffprobe;
-        let source = match probe::probe(ffprobe, container, input, work).await {
+        let tools = (ffprobe.as_path(), Some(transcoder.tools.prlimit.as_path()));
+        let source = match probe::probe(tools, container, input, work).await {
             Ok(Probed::Video(source)) => source,
             Ok(Probed::NoVideo) => return Err(Stop::Video(videos::NOT_A_VIDEO)),
             Err(ProbeError::Unreadable) => return Err(Stop::Video(transcodes::PROBE_FAILED)),
@@ -478,6 +483,7 @@ impl Job<'_> {
             threads: transcoder.threads,
             input,
             out,
+            confine: Some((&transcoder.tools.prlimit, transcoder.address_space)),
         };
         match plan::render(plan, render).await {
             Ok(()) => Ok(()),

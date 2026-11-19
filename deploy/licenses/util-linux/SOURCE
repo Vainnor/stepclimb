@@ -1,0 +1,13 @@
+Source of /usr/local/bin/prlimit and libsmartcols
+=================================================
+
+prlimit and libsmartcols.so.1 are unpacked unchanged from Debian 12 (bookworm)'s binary packages
+util-linux and libsmartcols1, version 2.38.1-5+deb12u3, as published on
+https://snapshot.debian.org at 2024-12-09T14:44:08Z. Their source is the Debian source package
+util-linux 2.38.1-5+deb12u3:
+
+  https://snapshot.debian.org/package/util-linux/2.38.1-5%2Bdeb12u3/
+
+You may also ask the Stepclimb maintainers for a copy of that source, at no charge beyond the
+cost of providing it, by opening an issue at https://github.com/Vainnor/stepclimb/issues naming
+the image version you have. This offer is valid for three years from the release of that image.

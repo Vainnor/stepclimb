@@ -121,10 +121,12 @@ services:
     # On SIGTERM the job worker waits up to 30 s for its running jobs (spec m1/01 B15); Docker's
     # default 10 s would kill it first. 40 s leaves room for the HTTP listener and the exit.
     stop_grace_period: 40s
-    # The server runs `all`, so it transcodes uploaded videos with ffmpeg (once the image bundles
-    # it, #240). Each ffmpeg run may hold 4 GiB (docs/specs/m1/08-uploaded-video.md D19); this
-    # bounds the whole container, server and ffmpeg together, so a transcode cannot take the
-    # host's memory. Raise it with transcode_concurrency above 1.
+    # The server runs `all`, so it transcodes uploaded videos with the image's ffmpeg. Each ffmpeg
+    # run starts under a 5 GiB address-space limit (docs/specs/m1/08-uploaded-video.md D19, D42);
+    # this bounds the whole container, server and ffmpeg together, so a transcode cannot take the
+    # host's memory. Keep it above that limit, so an input that needs too much fails in ffmpeg
+    # before the kernel's out-of-memory killer ends it, and raise it with transcode_concurrency
+    # above 1 or transcode_threads above 8.
     mem_limit: ${SC_SERVER_MEMORY:-6g}
     environment:
       STEPCLIMB_DATABASE_URL_FILE: /run/secrets/database_url

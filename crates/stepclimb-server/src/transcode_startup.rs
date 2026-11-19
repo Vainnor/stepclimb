@@ -4,16 +4,15 @@
 //!
 //! [`prepare`] needs object storage, makes and removes a work directory in `transcode_dir`,
 //! removes the work directories a killed process left there ([`stale_cutoff`]), then resolves
-//! ffmpeg and ffprobe and runs each with `-version`. A `transcoder` process refuses to start
+//! ffmpeg, ffprobe and util-linux `prlimit`, which every run of the other two starts under (I6),
+//! and asks each for its version. A `transcoder` process refuses to start
 //! when any step fails, naming the setting to fix. So does an `all` process whose
-//! `transcode_dir`, `ffmpeg_path` or `ffprobe_path` is set and fails. An `all` process without
-//! storage, where no video can be uploaded and the storage warning has already been logged,
-//! starts without serving the queue. One that relies on `PATH` and finds no ffmpeg or ffprobe
-//! there does too, with one warning naming the setting: its uploads stay `processing` until a
-//! process that can transcode takes them, and `videos.cleanup` fails them once their job is
-//! dead.
-//! Coordinator decision (overnight, 2026-11-17, D17): the release image gets ffmpeg in I6, and
-//! until then refusing to start would stop every default install.
+//! `transcode_dir`, `ffmpeg_path`, `ffprobe_path` or `prlimit_path` is set and fails. An `all`
+//! process without storage, where no video can be uploaded and the storage warning has already
+//! been logged, starts without serving the queue. One that relies on `PATH` and finds one of the
+//! three programs missing there does too, with one warning naming the setting: its uploads stay
+//! `processing` until a process that can transcode takes them, and `videos.cleanup` fails them
+//! once their job is dead (D17).
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -25,7 +24,8 @@ use stepclimb_media::{
 };
 
 use crate::config::{
-    FFMPEG_PATH, FFPROBE_PATH, Role, STORAGE_URL, Setting, TRANSCODE_DIR, TranscodeConfig,
+    FFMPEG_PATH, FFPROBE_PATH, PRLIMIT_PATH, Role, STORAGE_URL, Setting, TRANSCODE_DIR,
+    TranscodeConfig,
 };
 use crate::video_transcode::Transcoder;
 
@@ -57,6 +57,7 @@ fn setting_of(program: Program) -> &'static Setting {
     match program {
         Program::Ffmpeg => &FFMPEG_PATH,
         Program::Ffprobe => &FFPROBE_PATH,
+        Program::Prlimit => &PRLIMIT_PATH,
     }
 }
 
@@ -100,6 +101,7 @@ pub async fn prepare(
         threads: config.threads,
         dir: config.dir.clone(),
         max_video_seconds: config.max_video_seconds.get(),
+        address_space: stepclimb_media::plan::address_space(config.threads),
     }))
 }
 
@@ -143,14 +145,22 @@ async fn check_tools(config: &TranscodeConfig, work: &Path) -> Result<Tools, Too
         tools::check(Program::Ffmpeg, config.ffmpeg.as_deref(), work).await?;
     let (ffprobe, ffprobe_version) =
         tools::check(Program::Ffprobe, config.ffprobe.as_deref(), work).await?;
+    let (prlimit, prlimit_version) =
+        tools::check(Program::Prlimit, config.prlimit.as_deref(), work).await?;
     tracing::info!(
         ffmpeg = %ffmpeg.display(),
         ffmpeg_version,
         ffprobe = %ffprobe.display(),
         ffprobe_version,
-        "ffmpeg and ffprobe passed the startup check"
+        prlimit = %prlimit.display(),
+        prlimit_version,
+        "ffmpeg, ffprobe and prlimit passed the startup check"
     );
-    Ok(Tools { ffmpeg, ffprobe })
+    Ok(Tools {
+        ffmpeg,
+        ffprobe,
+        prlimit,
+    })
 }
 
 #[cfg(test)]
@@ -167,6 +177,7 @@ mod tests {
             dir: dir.to_path_buf(),
             ffmpeg: ffmpeg.map(PathBuf::from),
             ffprobe: None,
+            prlimit: None,
         }
     }
 
@@ -188,6 +199,8 @@ mod tests {
                 .unwrap();
             assert!(transcoder.tools.ffmpeg.is_absolute());
             assert!(transcoder.tools.ffprobe.is_absolute());
+            assert!(transcoder.tools.prlimit.is_absolute());
+            assert_eq!(transcoder.address_space, 5 * 1024 * 1024 * 1024);
         }
     }
 
@@ -229,6 +242,27 @@ mod tests {
         );
         let all = prepare(Role::All, &config(None, &dir), false, SystemTime::now()).await;
         assert!(all.unwrap().is_none());
+    }
+
+    /// I6: ffmpeg never runs without its limits, so a `prlimit_path` that does not run stops
+    /// the start as a missing ffmpeg does.
+    #[tokio::test]
+    async fn a_missing_prlimit_stops_the_start_naming_its_setting() {
+        let dir = std::env::temp_dir();
+        let mut config = config(None, &dir);
+        config.prlimit = Some(PathBuf::from("/nonexistent/prlimit"));
+        for role in [Role::Transcoder, Role::All] {
+            let error = prepare(role, &config, true, SystemTime::now())
+                .await
+                .unwrap_err();
+            let message = error.to_string();
+            assert!(message.contains("prlimit_path"), "{message}");
+            assert!(message.contains("STEPCLIMB_PRLIMIT_PATH"), "{message}");
+        }
+        let not_found = || Err(ToolError::NotFound(Program::Prlimit));
+        assert!(settle(Role::All, not_found()).unwrap().is_none());
+        let error = settle(Role::Transcoder, not_found()).unwrap_err();
+        assert!(error.to_string().contains("prlimit_path"), "{error}");
     }
 
     #[test]

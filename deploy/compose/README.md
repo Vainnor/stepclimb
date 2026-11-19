@@ -288,10 +288,11 @@ default or secrecy is wrong.
 | `STEPCLIMB_MAX_VIDEO_BYTES` | `max_video_bytes` | whole number of bytes, 1048576 (1 MiB) to 53687091200 (50 GiB) | `5368709120` | no | The largest video one tus upload may declare (5 GiB unless set). A larger `Upload-Length` answers 413 `file.too_large` before anything is created |
 | `STEPCLIMB_MAX_VIDEO_SECONDS` | `max_video_seconds` | whole number, 1 to 86400 | `14400` | no | The longest video a transcode accepts (4 hours unless set); a longer one fails `video.too_long` |
 | `STEPCLIMB_TRANSCODE_CONCURRENCY` | `transcode_concurrency` | whole number, 1 to 16 | `1` | no | Transcodes one `all` or `transcoder` process runs at once, besides `worker_concurrency` |
-| `STEPCLIMB_TRANSCODE_THREADS` | `transcode_threads` | whole number, 0 to 64 | `0` | no | ffmpeg's `-threads` for each transcode; `0` leaves the choice to ffmpeg |
+| `STEPCLIMB_TRANSCODE_THREADS` | `transcode_threads` | whole number, 0 to 64 | `0` | no | ffmpeg's `-threads` for each transcode; `0` means 8. Each thread past 8 raises a run's address-space limit by 192 MiB above its 5 GiB, so give the container that much more memory too |
 | `STEPCLIMB_TRANSCODE_DIR` | `transcode_dir` | absolute path | the OS temporary directory | no | Where each transcode's private work directory is made and removed; it holds the whole upload and its outputs while the transcode runs. Checked at startup by a process that transcodes |
 | `STEPCLIMB_FFMPEG_PATH` | `ffmpeg_path` | absolute path | found on `PATH` | no | ffmpeg for the transcoder. A `transcoder` process, or an `all` process with this set, refuses to start when it does not run `-version`; an `all` process that finds no ffmpeg on `PATH` starts without transcoding and logs a warning |
 | `STEPCLIMB_FFPROBE_PATH` | `ffprobe_path` | absolute path | found on `PATH` | no | ffprobe, as `ffmpeg_path` |
+| `STEPCLIMB_PRLIMIT_PATH` | `prlimit_path` | absolute path | found on `PATH` | no | util-linux `prlimit`, which every ffmpeg and ffprobe run starts under; as `ffmpeg_path` |
 | `STEPCLIMB_STORAGE_URL` | `storage_url` | URL | none | no | Where course files are stored: `file:///<absolute directory>` (the directory must exist) or `s3://<bucket>[/<prefix>]`. Unset, the server starts, logs a warning, and uploads and file downloads answer 503 `storage.not_configured`. When set, `serve` writes, reads and deletes an object under `<prefix>/.probe/` before it listens and stops if any step fails |
 | `STEPCLIMB_STORAGE_S3_ENDPOINT` | `storage_s3_endpoint` | origin | none | no | The origin of an S3-compatible store, such as `http://minio:9000`; unset for AWS S3. The `STEPCLIMB_STORAGE_S3_*` settings are refused without an `s3://` storage URL |
 | `STEPCLIMB_STORAGE_S3_REGION` | `storage_s3_region` | region name | `us-east-1` | no | The bucket's region |
@@ -394,15 +395,30 @@ code (`docs/specs/m0/06-oauth2-and-vatsim-preset.md` Q3).
 
 An uploaded video is transcoded by a process that serves the `transcode` queue: `all`, the
 default, or a dedicated `--role transcoder` (docs/specs/m1/08-uploaded-video.md B8). Such a
-process needs object storage (`STEPCLIMB_STORAGE_URL`), ffmpeg and ffprobe, and a
-`transcode_dir` with room for the largest upload and its outputs.
+process needs object storage (`STEPCLIMB_STORAGE_URL`), ffmpeg, ffprobe and util-linux
+`prlimit`, and a `transcode_dir` with room for the largest upload and its outputs.
 
-The release image does not bundle ffmpeg yet; it gets it in #240. Until then, an `all` server
-started from the image logs a warning that ffmpeg is not on `PATH` and does not serve the
-`transcode` queue. Uploaded videos stay `processing`: their transcode jobs wait in the queue,
-using none of their attempts, and run as soon as a process that can transcode starts (an `all` or
-`transcoder` with ffmpeg and ffprobe on `PATH` or at `ffmpeg_path` and `ffprobe_path`). A
-`transcoder` without ffmpeg or without storage refuses to start and names the setting.
+The image holds all three in `/usr/local/bin`: ffmpeg and ffprobe 9.0.2, static builds from the
+static-ffmpeg project, and `prlimit` from Debian 12. ffmpeg is GPL-3.0-or-later, a separate
+program the server runs, not part of it; `/LICENSES` in the image holds each program's license and
+where its source is (docs/adr/0035-ffmpeg-in-the-image.md).
+
+Every ffmpeg and ffprobe run starts under `prlimit`, so the kernel enforces its limits from the
+first instruction. An ffmpeg run gets an address space of 5 GiB (192 MiB more for each
+`transcode_threads` past 8), output files no larger than the video's output cap, 256 open files
+and CPU seconds for each thread through the whole time budget; ffprobe gets 1 GiB, 1 MiB files, 64
+open files and 60 CPU seconds. An input that needs more memory fails ffmpeg's allocation, and the
+video fails `video.transcode_failed`, charged like any other input that cannot be transcoded. Keep
+the container's memory limit (`SC_SERVER_MEMORY`, 6 GiB by default) above the address space times
+`transcode_concurrency`, plus the server's own, so the kernel's out-of-memory killer never ends a
+transcode first: a run it kills counts as the host's fault, refunded and retried.
+
+A server installed without the image needs the three programs on `PATH` or at `ffmpeg_path`,
+`ffprobe_path` and `prlimit_path`. An `all` server that finds one missing from `PATH` logs a
+warning and does not serve the `transcode` queue. Uploaded videos stay `processing`: their
+transcode jobs wait in the queue, using none of their attempts, and run as soon as a process that
+can transcode starts. A `transcoder` without one of them or without storage refuses to start and
+names the setting.
 
 `videos.cleanup` fails a `processing` video only when no live job will finish it: its job is
 dead, having used its attempts, or it has none and has not changed for 24 hours. A failure on the

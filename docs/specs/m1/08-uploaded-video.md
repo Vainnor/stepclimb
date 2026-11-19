@@ -214,7 +214,8 @@ thumbnails_url, captions: [{ lang, url }], chapters, duration_s, expires_at }`.
 
 Configuration added (ADR 0022): `max_video_bytes` (5 GiB), `max_video_seconds` (14400),
 `transcode_concurrency` (1), `transcode_threads` (0), `transcode_dir` (OS temporary directory),
-`ffmpeg_path` and `ffprobe_path` (found on `PATH`), each with its `STEPCLIMB_` variable.
+`ffmpeg_path`, `ffprobe_path` and `prlimit_path` (found on `PATH`, D43), each with its
+`STEPCLIMB_` variable.
 
 ## Data
 
@@ -664,9 +665,9 @@ open while building I2.
   one video answers 409 `video.retry_limit_reached` (`videos.transcode_retries`, owner decision,
   2026-11-17), whatever caused its failures (coordinator decision, 2026-11-19, D20).
 - **D24. Setting ranges.** `max_video_seconds` 1 to 86,400; `transcode_threads` 0 to 64;
-  `transcode_dir`, `ffmpeg_path` and `ffprobe_path` must be absolute paths. The startup check
-  makes and removes a work directory in `transcode_dir`, so a missing or read-only directory stops
-  a process that transcodes.
+  `transcode_dir`, `ffmpeg_path`, `ffprobe_path` and `prlimit_path` (D43) must be absolute
+  paths. The startup check makes and removes a work directory in `transcode_dir`, so a missing or
+  read-only directory stops a process that transcodes.
 - **D25. Thumbnails.** The sprite run uses `fps=1/10:eof_action=pass`, so a video shorter than
   10 s still gets its one thumbnail; a video of `d` seconds gets `ceil(d / 10)`.
 - **D26. The limit check takes the clock.** `org_plans::check_room` and
@@ -700,6 +701,39 @@ Coordinator decision (2026-11-17), after the security review of I2:
   the video still `processing` and its charge open; `videos.cleanup` later fails the video as the
   server's and refunds a charge the input had earned. It takes a database error at that one
   point, and the video still ends failed.
+
+### Points I6 settled
+
+Owner decision on the issue (2026-11-19): ffmpeg and ffprobe run under util-linux `prlimit`, and
+an input that needs more memory than its run may hold fails as the input's fault, charged, not
+killed by the kernel and refunded. The values below are the implementer's, pending owner review.
+
+- **D42. The OS limits.** Every ffmpeg and ffprobe run is started as `prlimit --as=<bytes>
+  --fsize=<bytes> --nofile=<n> --cpu=<s>:<s + 10> -- <program> <args>`, so the kernel enforces
+  the limits from the program's first instruction. ffmpeg gets an address space of 5 GiB plus
+  192 MiB for each thread past 8, the output cap (D19) as its largest file, 256 open files, and the
+  time budget times its threads in CPU seconds. ffprobe gets 1 GiB, 1 MiB, 64 files and 60 s.
+  `RLIMIT_AS` counts virtual memory, which grows with threads (measured with ffmpeg 9.0.2 on
+  x86_64: a 1080p source to the whole ladder peaked at 4.0 GiB of virtual memory with 16 threads
+  and 2.8 GiB with 8; an 8K source at 4.6 GiB and 3.8 GiB), so `transcode_threads` 0 now means 8
+  instead of ffmpeg's one per core (amends B8), and 5 GiB stays below the production Compose
+  example's 6 GiB container. Every ffmpeg run takes `-xerror`: without it, ffmpeg whose
+  allocation fails under the limit logged the error and then waited on its other threads until
+  the job's deadline; with it, the run exits at once with a non-zero status, which fails the video
+  `video.transcode_failed` (D20). A file past `--fsize` ends the run with `SIGXFSZ` and CPU time
+  past the soft limit with `SIGXCPU`, both the input's fault; only a `SIGKILL` the runner did not
+  send stays the host's. The 250 ms resident-memory poll and `-max_pixels` stay.
+- **D43. `prlimit_path`.** `prlimit` is found on `PATH` or at `prlimit_path`
+  (`STEPCLIMB_PRLIMIT_PATH`, an absolute path, D24) and checked at startup with ffmpeg and ffprobe
+  (`--version` must print `prlimit from util-linux`). A missing `prlimit` is treated as a missing
+  ffmpeg (B8, D17): ffmpeg never runs without its limits.
+- **D44. The image's programs.** ffmpeg and ffprobe 9.0.2 come from the static-ffmpeg project's
+  image `mwader/static-ffmpeg:9.0.2-1`, pinned by digest; `prlimit` and its `libsmartcols` from
+  Debian 12's `util-linux` 2.38.1-5+deb12u3 packages, pinned by snapshot URL and SHA-256. The
+  build, its licenses and the source offer are `docs/adr/0035-ffmpeg-in-the-image.md`
+  (Proposed). `bin/check-image.sh` runs `prlimit --version` too, and the 1 s HLS transcode of T17
+  runs under `prlimit` in the native image; under QEMU user-mode emulation, which cannot start a
+  second emulated program from the first, the arm64 image runs ffmpeg directly.
 
 
 ## Issues

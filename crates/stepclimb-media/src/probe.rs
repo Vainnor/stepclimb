@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use crate::run::{self, Invocation, Limits, RunError};
+use crate::run::{self, Confinement, Invocation, Limits, RunError};
 
 /// How long ffprobe may take on one file.
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -177,20 +177,33 @@ pub fn parse(json: &[u8]) -> Result<Probed, ProbeError> {
     }))
 }
 
-/// Run `ffprobe` on `input` of `container`, from the work directory `work`.
+/// The open files ffprobe may hold (`RLIMIT_NOFILE`).
+pub const PROBE_OPEN_FILES: u64 = 64;
+
+/// Run `ffprobe` on `input` of `container`, from the work directory `work`, under `prlimit` when
+/// given: its address space at [`PROBE_MEMORY_BYTES`], no file larger than 1 MiB (it writes
+/// none), [`PROBE_OPEN_FILES`] and [`PROBE_TIMEOUT`] of CPU time.
 pub async fn probe(
-    ffprobe: &Path,
+    (ffprobe, prlimit): (&Path, Option<&Path>),
     container: Container,
     input: &Path,
     work: &Path,
 ) -> Result<Probed, ProbeError> {
     let args = args(container, input);
+    let confine = prlimit.map(|prlimit| Confinement {
+        prlimit,
+        address_space: PROBE_MEMORY_BYTES,
+        file_size: 1024 * 1024,
+        open_files: PROBE_OPEN_FILES,
+        cpu_seconds: PROBE_TIMEOUT.as_secs(),
+    });
     let invocation = Invocation {
         program: ffprobe,
         args: &args,
         dir: work,
         watch: work,
         capture_stdout: true,
+        confine,
     };
     let limits = Limits {
         deadline: tokio::time::Instant::now() + PROBE_TIMEOUT,

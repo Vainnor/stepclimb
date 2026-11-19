@@ -290,7 +290,8 @@ fn check_config_exits_0_printing_only_non_secret_values_without_connecting() {
              worker_concurrency: 4\nmax_file_bytes: 104857600\n\
              max_video_bytes: 5368709120\nmax_video_seconds: 14400\n\
              transcode_concurrency: 1\ntranscode_threads: 0\ntranscode_dir: {}\n\
-             ffmpeg_path: (PATH)\nffprobe_path: (PATH)\nproviders: (none)\n\
+             ffmpeg_path: (PATH)\nffprobe_path: (PATH)\n\
+             prlimit_path: (PATH)\nproviders: (none)\n\
              storage: not configured (STEPCLIMB_STORAGE_URL)\n",
             file.0.display(),
             std::env::temp_dir().display()

@@ -1,0 +1,26 @@
+Third-party programs in the Stepclimb server image
+==================================================
+
+The Stepclimb server (/usr/local/bin/stepclimb) is free software under the GNU Affero General
+Public License, version 3 or later; its source is https://github.com/Vainnor/stepclimb at the tag
+of the image's version. The image also holds these separate programs, which the server runs as
+child processes to transcode uploaded videos. Each keeps its own license.
+
+  /usr/local/bin/ffmpeg, /usr/local/bin/ffprobe
+      FFmpeg 9.0.2 and the libraries linked into it, built statically by the
+      static-ffmpeg project. GNU General Public License, version 3 or later.
+      License text: common-licenses/GPL-3. Source: ffmpeg/SOURCE.
+
+  /usr/local/bin/prlimit, /usr/lib/<triplet>/libsmartcols.so.1*
+      util-linux 2.38.1 from Debian 12 (bookworm), packages util-linux and
+      libsmartcols1, version 2.38.1-5+deb12u3. prlimit is under the GNU General
+      Public License, version 2 or later, libsmartcols under the GNU Lesser General
+      Public License, version 2.1 or later. Copyright and license details:
+      util-linux/copyright and util-linux/libsmartcols1.copyright; license texts in
+      common-licenses/. Source: util-linux/SOURCE.
+
+The other files of the base image (gcr.io/distroless/cc-debian12) are Debian packages whose
+copyright files are in /usr/share/doc.
+
+docs/adr/0035-ffmpeg-in-the-image.md in the Stepclimb repository records why these programs
+are here and how their licenses fit the server's.

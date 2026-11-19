@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The transcoder's settings (docs/specs/m1/08-uploaded-video.md B8, B9, API -> Configuration
 //! added): `max_video_seconds`, `transcode_concurrency`, `transcode_threads`, `transcode_dir`,
-//! `ffmpeg_path` and `ffprobe_path`.
+//! `ffmpeg_path`, `ffprobe_path` and `prlimit_path` (I6).
 //!
-//! Loading reads no file system: `transcode_dir` and the two program paths must be absolute
-//! here, and `stepclimb serve` checks that the directory exists and that both programs run
+//! Loading reads no file system: `transcode_dir` and the three program paths must be absolute
+//! here, and `stepclimb serve` checks that the directory exists and that the programs run
 //! when its role serves the `transcode` queue (`crate::startup`).
 
 use std::num::NonZeroU32;
@@ -28,7 +28,7 @@ pub const TRANSCODE_THREADS: Setting = Setting {
     var: "STEPCLIMB_TRANSCODE_THREADS",
     key: "transcode_threads",
     secret: false,
-    example: "0 (ffmpeg's threads per transcode, 0 to 64; 0 leaves the choice to ffmpeg)",
+    example: "0 (ffmpeg's threads per transcode, 0 to 64; 0 means 8)",
 };
 pub const TRANSCODE_DIR: Setting = Setting {
     var: "STEPCLIMB_TRANSCODE_DIR",
@@ -47,6 +47,12 @@ pub const FFPROBE_PATH: Setting = Setting {
     key: "ffprobe_path",
     secret: false,
     example: "/usr/local/bin/ffprobe (an absolute path; unset, ffprobe is found on PATH)",
+};
+pub const PRLIMIT_PATH: Setting = Setting {
+    var: "STEPCLIMB_PRLIMIT_PATH",
+    key: "prlimit_path",
+    secret: false,
+    example: "/usr/local/bin/prlimit (util-linux's, an absolute path; unset, found on PATH)",
 };
 
 /// `max_video_seconds` when unset: 4 hours (B9).
@@ -68,7 +74,7 @@ pub struct TranscodeConfig {
     pub max_video_seconds: NonZeroU32,
     /// The most transcodes one process runs at once.
     pub concurrency: NonZeroU32,
-    /// ffmpeg's `-threads`; 0 leaves the choice to ffmpeg.
+    /// ffmpeg's `-threads`; 0 means `stepclimb_media::plan::DEFAULT_THREADS`.
     pub threads: u32,
     /// Where each transcode's work directory is made; the OS temporary directory when unset.
     pub dir: PathBuf,
@@ -76,6 +82,8 @@ pub struct TranscodeConfig {
     pub ffmpeg: Option<PathBuf>,
     /// ffprobe's path, or `None` to find it on `PATH`.
     pub ffprobe: Option<PathBuf>,
+    /// util-linux `prlimit`'s path, or `None` to find it on `PATH`.
+    pub prlimit: Option<PathBuf>,
 }
 
 impl TranscodeConfig {
@@ -92,11 +100,12 @@ impl TranscodeConfig {
             (TRANSCODE_DIR.key, self.dir.display().to_string()),
             (FFMPEG_PATH.key, path(&self.ffmpeg)),
             (FFPROBE_PATH.key, path(&self.ffprobe)),
+            (PRLIMIT_PATH.key, path(&self.prlimit)),
         ]
     }
 }
 
-/// Read and check the six settings.
+/// Read and check the seven settings.
 pub(super) fn load(sources: &Sources<'_>) -> Result<TranscodeConfig, ConfigError> {
     let max_video_seconds = bounded(sources, &MAX_VIDEO_SECONDS, 1, MAX_MAX_VIDEO_SECONDS)?
         .unwrap_or(DEFAULT_MAX_VIDEO_SECONDS);
@@ -117,6 +126,7 @@ pub(super) fn load(sources: &Sources<'_>) -> Result<TranscodeConfig, ConfigError
         dir,
         ffmpeg: absolute(sources, &FFMPEG_PATH)?,
         ffprobe: absolute(sources, &FFPROBE_PATH)?,
+        prlimit: absolute(sources, &PRLIMIT_PATH)?,
     })
 }
 

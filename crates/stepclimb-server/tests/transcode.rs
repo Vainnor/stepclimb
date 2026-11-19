@@ -64,6 +64,7 @@ fn tools(ffmpeg: Option<PathBuf>) -> Tools {
     Tools {
         ffmpeg: ffmpeg.unwrap_or_else(|| find_on_path("ffmpeg").expect("ffmpeg on PATH")),
         ffprobe: find_on_path("ffprobe").expect("ffprobe on PATH"),
+        prlimit: find_on_path("prlimit").expect("prlimit on PATH"),
     }
 }
 
@@ -184,6 +185,7 @@ impl Fixture {
             threads: 2,
             dir: self.work.0.clone(),
             max_video_seconds,
+            address_space: stepclimb_media::plan::address_space(2),
         }
     }
 
@@ -890,6 +892,49 @@ async fn an_ffmpeg_killed_by_sigkill_is_refunded_and_retried(pool: PgPool) {
             .await
             .unwrap();
     assert_eq!((attempts, dead), (1, None), "retried by the queue");
+}
+
+/// I6 (D19, D20): ffmpeg runs under `prlimit`, so an input whose decode needs more memory than
+/// the run's address space fails in ffmpeg, promptly, as the input's fault: the video fails
+/// `video.transcode_failed`, its minute stays charged and the queue does not retry it. The
+/// kernel never gets to kill it and have it refunded as the host's fault. A small clip under the
+/// same limit becomes `ready`.
+#[cfg(target_os = "linux")]
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn an_input_past_the_address_space_fails_charged_not_killed_and_refunded(pool: PgPool) {
+    const TWO_GIB: u64 = 2 * 1024 * 1024 * 1024;
+    let f = Fixture::new(pool).await;
+    let confined = || Transcoder {
+        address_space: TWO_GIB,
+        ..f.transcoder(60, None)
+    };
+    let small = f
+        .processing(&clip(&f.work.0, "mp4", Some((320, 240)), false, 1))
+        .await;
+    assert_eq!(f.work(confined()).await, 1);
+    assert_eq!(f.status(small).await, ("ready".to_owned(), None));
+    let huge = f
+        .processing(&clip(&f.work.0, "mp4", Some((7680, 4320)), false, 1))
+        .await;
+    let started = std::time::Instant::now();
+    assert_eq!(f.work(confined()).await, 1);
+    assert!(
+        started.elapsed() < Duration::from_secs(60),
+        "it ended promptly"
+    );
+    assert_eq!(
+        f.status(huge).await,
+        (
+            "failed".to_owned(),
+            Some("video.transcode_failed".to_owned())
+        )
+    );
+    assert_eq!(f.usage().await, [("2026-03-01".to_owned(), 2)], "charged");
+    let jobs: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs WHERE kind = 'video.transcode'")
+        .fetch_one(&f.pool)
+        .await
+        .expect("count the jobs");
+    assert_eq!(jobs, 0, "finished, not waiting for a retry");
 }
 
 /// Put the only `video.transcode` job on its last attempt, due now.

@@ -38,6 +38,17 @@ from release import ReleaseError  # noqa: E402
 IMAGE = "ghcr.io/vainnor/stepclimb"
 SOURCE = "https://github.com/Vainnor/stepclimb"
 PLATFORMS = ("linux/amd64", "linux/arm64")
+# The separate programs the image carries and where their source is: the release notes' half of
+# their source offer, /LICENSES in the image the other (docs/adr/0035-ffmpeg-in-the-image.md).
+THIRD_PARTY = [
+    "### Third-party programs in the image", "",
+    "The image runs ffmpeg and ffprobe 9.0.2 (GPL-3.0-or-later), static builds of "
+    "`mwader/static-ffmpeg:9.0.2-1`, and util-linux `prlimit` 2.38.1 (GPL-2.0-or-later) with its "
+    "libsmartcols (LGPL-2.1-or-later) from Debian 12, as separate programs the server starts to "
+    "transcode videos. `/LICENSES` in the image holds their licenses and where their complete "
+    "source is; the maintainers also provide a copy of that source on request through "
+    f"{SOURCE}/issues.", "",
+]
 # anchore/syft v1.55.0 (built 19 Oct 2026), its multi-platform index. Moved by hand, at least
 # 14 days after the build it names (docs/adr/0031). Split in two only for the line length: the
 # tag and the digest form one reference.
@@ -178,6 +189,7 @@ def release_body(notes: str, index: str, platforms: dict[str, str], version: str
     lines += [f"- {platform}: `{platforms[platform]}`" for platform in PLATFORMS]
     lines += ["", "Signed with cosign (keyless); each platform's SPDX SBOM is attached below and "
               "as a signed cosign attestation (`--type spdxjson`).", ""]
+    lines += THIRD_PARTY
     return "\n".join(lines)
 
 

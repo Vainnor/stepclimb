@@ -251,6 +251,7 @@ fn every_known_variable_is_accepted() {
             "STEPCLIMB_TRANSCODE_DIR",
             "STEPCLIMB_FFMPEG_PATH",
             "STEPCLIMB_FFPROBE_PATH",
+            "STEPCLIMB_PRLIMIT_PATH",
             "STEPCLIMB_STORAGE_URL",
             "STEPCLIMB_STORAGE_S3_ENDPOINT",
             "STEPCLIMB_STORAGE_S3_REGION",
@@ -487,6 +488,7 @@ fn every_config_field_is_a_classified_setting() {
         (TRANSCODE_DIR, false),
         (FFMPEG_PATH, false),
         (FFPROBE_PATH, false),
+        (PRLIMIT_PATH, false),
         (STORAGE_URL, false),
         (STORAGE_S3_ENDPOINT, false),
         (STORAGE_S3_REGION, false),
@@ -845,6 +847,7 @@ fn non_secret_values_list_every_non_secret_setting_and_no_secret() {
             ("transcode_dir", std::env::temp_dir().display().to_string()),
             ("ffmpeg_path", "(PATH)".to_owned()),
             ("ffprobe_path", "(PATH)".to_owned()),
+            ("prlimit_path", "(PATH)".to_owned()),
         ]
     );
     let printed = format!("{values:?}");
@@ -1661,7 +1664,10 @@ fn transcode_settings_have_their_defaults_unless_set() {
     assert_eq!(unset.concurrency.get(), 1);
     assert_eq!(unset.threads, 0);
     assert_eq!(unset.dir, std::env::temp_dir());
-    assert_eq!((unset.ffmpeg, unset.ffprobe), (None, None));
+    assert_eq!(
+        (unset.ffmpeg, unset.ffprobe, unset.prlimit),
+        (None, None, None)
+    );
     let set = Config::load(
         &with_required(&[
             (MAX_VIDEO_SECONDS.var, "2"),
@@ -1670,6 +1676,7 @@ fn transcode_settings_have_their_defaults_unless_set() {
             (TRANSCODE_DIR.var, "/var/tmp/stepclimb"),
             (FFMPEG_PATH.var, "/opt/ff/ffmpeg"),
             (FFPROBE_PATH.var, "/opt/ff/ffprobe"),
+            (PRLIMIT_PATH.var, "/opt/ul/prlimit"),
         ]),
         None,
     )
@@ -1686,6 +1693,10 @@ fn transcode_settings_have_their_defaults_unless_set() {
     assert_eq!(
         set.ffprobe.as_deref(),
         Some(std::path::Path::new("/opt/ff/ffprobe"))
+    );
+    assert_eq!(
+        set.prlimit.as_deref(),
+        Some(std::path::Path::new("/opt/ul/prlimit"))
     );
 }
 
@@ -1723,6 +1734,11 @@ fn transcode_settings_out_of_range_or_relative_are_refused_naming_the_setting() 
             FFPROBE_PATH,
             "./ffprobe",
             "\"./ffprobe\" is not an absolute path",
+        ),
+        (
+            PRLIMIT_PATH,
+            "prlimit",
+            "\"prlimit\" is not an absolute path",
         ),
     ] {
         let error = Config::load(&with_required(&[(setting.var, value)]), None).unwrap_err();

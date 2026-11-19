@@ -19,7 +19,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use crate::probe::{Container, Source, file_url, input_options};
-use crate::run::{self, Invocation, Limits, RunError};
+use crate::run::{self, Confinement, Invocation, Limits, RunError};
 
 /// One HLS rendition: its height and video bitrate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,6 +73,44 @@ pub const MAX_PIXELS: u64 = 8192 * 4320;
 
 /// The most resident memory one ffmpeg run may hold: 4 GiB.
 pub const MAX_MEMORY_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
+/// The ffmpeg threads of a run when `transcode_threads` is 0. Capped rather than left to ffmpeg,
+/// which picks one per core, because `RLIMIT_AS` counts each thread's stack and buffers
+/// (docs/specs/m1/08-uploaded-video.md D42).
+pub const DEFAULT_THREADS: u32 = 8;
+
+/// The address space ([`address_space`]) of a run with up to [`DEFAULT_THREADS`] threads: 5 GiB.
+/// The worst render measured at 8 threads, an 8K source to the whole ladder, peaked at 3.8 GiB
+/// of virtual memory, a 1080p source at 2.8 GiB (ffmpeg 9.0.2, x86_64).
+pub const BASE_ADDRESS_SPACE: u64 = 5 * 1024 * 1024 * 1024;
+
+/// The address space each thread past [`DEFAULT_THREADS`] adds: 192 MiB, above the 111 to 149 MiB
+/// per thread measured between 8 and 16 threads.
+pub const ADDRESS_SPACE_PER_THREAD: u64 = 192 * 1024 * 1024;
+
+/// The most files an ffmpeg run may hold open (`RLIMIT_NOFILE`): its input, three renditions'
+/// playlists and segments, and its own descriptors fit well inside.
+pub const OPEN_FILES: u64 = 256;
+
+/// The threads a run uses: `transcode_threads`, or [`DEFAULT_THREADS`] when that is 0.
+#[must_use]
+pub fn effective_threads(threads: u32) -> u32 {
+    if threads == 0 {
+        DEFAULT_THREADS
+    } else {
+        threads
+    }
+}
+
+/// The address space (`RLIMIT_AS`) an ffmpeg run of `threads` threads ([`effective_threads`])
+/// starts under: [`BASE_ADDRESS_SPACE`], plus [`ADDRESS_SPACE_PER_THREAD`] for each thread past
+/// [`DEFAULT_THREADS`]. It must stay below the container's memory, so an input that needs more
+/// fails in ffmpeg instead of drawing the kernel's out-of-memory kill.
+#[must_use]
+pub fn address_space(threads: u32) -> u64 {
+    let extra = u64::from(effective_threads(threads).saturating_sub(DEFAULT_THREADS));
+    BASE_ADDRESS_SPACE.saturating_add(extra.saturating_mul(ADDRESS_SPACE_PER_THREAD))
+}
 
 /// The output cap: 64 MiB, plus 3 MB per second of video, about twice the 1.5 MB/s the whole
 /// ladder, the MP4 and their sound add up to.
@@ -202,8 +240,13 @@ fn strings(list: &[&str]) -> Vec<OsString> {
     list.iter().map(OsString::from).collect()
 }
 
-/// The options of every run up to and including the input: quiet, no prompt, `-max_alloc`,
-/// `-max_pixels`, the input options, `seek_s` when given, then the input.
+/// The options of every run up to and including the input: quiet, no prompt, `-xerror`,
+/// `-max_alloc`, `-max_pixels`, the input options, `seek_s` when given, then the input.
+///
+/// `-xerror` ends the run at its first error. Without it, ffmpeg whose allocation fails under
+/// `RLIMIT_AS` logs the error and then waits on its other threads for good (measured with
+/// ffmpeg 9.0.2), holding the job until its deadline; with it, the run exits at once, the
+/// input's fault.
 fn head(plan: &Plan, input: &Path, seek_s: Option<f64>) -> Vec<OsString> {
     let mut args = strings(&[
         "-nostdin",
@@ -212,6 +255,7 @@ fn head(plan: &Plan, input: &Path, seek_s: Option<f64>) -> Vec<OsString> {
         "-loglevel",
         "error",
         "-y",
+        "-xerror",
     ]);
     args.extend(strings(&["-max_alloc", &MAX_ALLOC_BYTES.to_string()]));
     args.extend(input_options(plan.container));
@@ -232,10 +276,11 @@ fn until_duration(args: &mut Vec<OsString>, plan: &Plan) {
     args.extend(strings(&["-t", &format!("{:.3}", plan.source.duration_s)]));
 }
 
+/// `-threads` at [`effective_threads`]: always set, so the threads, and with them the address
+/// space a run needs, never grow with the host's cores.
 fn threads(args: &mut Vec<OsString>, threads: u32) {
-    if threads > 0 {
-        args.extend(strings(&["-threads", &threads.to_string()]));
-    }
+    let threads = effective_threads(threads).to_string();
+    args.extend(strings(&["-threads", &threads]));
 }
 
 fn audio(args: &mut Vec<OsString>) {
@@ -439,22 +484,44 @@ type ArgsBuilder = fn(&Plan, &Path, u32) -> Vec<OsString>;
 #[derive(Clone, Copy, Debug)]
 pub struct Render<'a> {
     pub ffmpeg: &'a Path,
-    /// `transcode_threads`; 0 leaves the choice to ffmpeg.
+    /// `transcode_threads`; 0 means [`DEFAULT_THREADS`].
     pub threads: u32,
     /// The concatenated upload.
     pub input: &'a Path,
     /// The empty directory the outputs go to.
     pub out: &'a Path,
+    /// util-linux `prlimit` and the address space each run starts under ([`address_space`]);
+    /// `None` runs ffmpeg without OS limits, as the crate's own tests of the arguments do.
+    pub confine: Option<(&'a Path, u64)>,
+}
+
+impl Render<'_> {
+    /// The OS limits of one run of `plan`: the address space, any one output file no larger
+    /// than the whole output cap, [`OPEN_FILES`], and CPU seconds for every thread working
+    /// through the whole time budget.
+    fn confinement(&self, plan: &Plan) -> Option<Confinement<'_>> {
+        let (prlimit, address_space) = self.confine?;
+        let threads = u64::from(effective_threads(self.threads));
+        Some(Confinement {
+            prlimit,
+            address_space,
+            file_size: plan.max_output_bytes(),
+            open_files: OPEN_FILES,
+            cpu_seconds: plan.time_budget().as_secs().saturating_mul(threads),
+        })
+    }
 }
 
 /// Run the four ffmpeg runs of `plan` into `render.out`, under one deadline of
-/// [`Plan::time_budget`] from now and the output and memory caps, then write the sprite index.
+/// [`Plan::time_budget`] from now, the output and memory caps and, through `prlimit`, the OS
+/// limits of [`Render::confine`], then write the sprite index.
 pub async fn render(plan: &Plan, render: Render<'_>) -> Result<(), RunError> {
     let limits = Limits {
         deadline: Instant::now() + plan.time_budget(),
         max_output_bytes: plan.max_output_bytes(),
         max_memory_bytes: MAX_MEMORY_BYTES,
     };
+    let confine = render.confinement(plan);
     let builders: [ArgsBuilder; 4] = [hls_args, mp4_args, poster_args, sprite_args];
     for build in builders {
         let args = build(plan, render.input, render.threads);
@@ -464,6 +531,7 @@ pub async fn render(plan: &Plan, render: Render<'_>) -> Result<(), RunError> {
             dir: render.out,
             watch: render.out,
             capture_stdout: false,
+            confine,
         };
         run::run(invocation, limits).await?;
     }
@@ -539,6 +607,18 @@ mod tests {
         assert_eq!(four_three.thumb_height, 120);
         assert_eq!((four_three.thumbs, four_three.sprites), (101, 2));
         assert!((four_three.poster_at_s - 100.05).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_address_space_grows_only_past_the_default_threads() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        assert_eq!(effective_threads(0), 8);
+        assert_eq!(effective_threads(3), 3);
+        for threads in [0, 1, 8] {
+            assert_eq!(address_space(threads), 5 * GIB, "{threads}");
+        }
+        assert_eq!(address_space(16), 5 * GIB + 8 * 192 * 1024 * 1024);
+        assert_eq!(address_space(64), 5 * GIB + 56 * 192 * 1024 * 1024);
     }
 
     #[test]
@@ -634,9 +714,10 @@ mod tests {
             args.iter().position(|a| a == "-t") > args.iter().position(|a| a == "-i"),
             "an output option"
         );
+        assert_eq!(after("-threads"), "8", "0 means the default of 8");
         assert!(
-            !args.contains(&"-threads".to_owned()),
-            "0 leaves it to ffmpeg"
+            args.contains(&"-xerror".to_owned()),
+            "ends at the first error"
         );
         let silent = Plan::new(
             Container::Mov,

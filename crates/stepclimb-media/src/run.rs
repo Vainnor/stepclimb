@@ -10,7 +10,14 @@
 //!
 //! The memory watch reads `/proc/<pid>/status` between ticks, so an allocation burst shorter
 //! than a tick can pass it; ffmpeg's `-max_alloc` ([`crate::plan`]) bounds each single
-//! allocation, and the container's own memory limit stays the operator's backstop.
+//! allocation. A run with a [`Confinement`] is also started through util-linux `prlimit`, which
+//! sets hard OS limits on itself and then executes the program in its place, so the limits hold
+//! from the program's first instruction (docs/specs/m1/08-uploaded-video.md D19, D42): an
+//! address space it cannot allocate past, a size no output file may pass (`SIGXFSZ`), a number
+//! of open files, and CPU seconds (`SIGXCPU` at the soft limit, before the kernel's `SIGKILL` at
+//! the hard one). The address-space limit sits below the container's memory, so an input that
+//! needs too much fails in ffmpeg, the input's fault, instead of drawing the kernel's
+//! out-of-memory `SIGKILL`, which [`RunError::is_input_fault`] treats as the host's.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -53,6 +60,49 @@ pub struct Invocation<'a> {
     pub watch: &'a Path,
     /// Whether stdout is kept (ffprobe's JSON) or discarded.
     pub capture_stdout: bool,
+    /// The OS limits the program starts under, through `prlimit`; `None` runs it directly.
+    pub confine: Option<Confinement<'a>>,
+}
+
+/// How many CPU seconds past the soft limit the hard limit allows: the room `SIGXCPU`, the
+/// input's fault, has to end the program before the kernel's `SIGKILL`.
+pub const CPU_KILL_GRACE_SECONDS: u64 = 10;
+
+/// The OS limits ([`setrlimit(2)`]) a program starts under, set by util-linux `prlimit` on itself
+/// before it executes the program.
+///
+/// [`setrlimit(2)`]: https://man7.org/linux/man-pages/man2/setrlimit.2.html
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Confinement<'a> {
+    /// util-linux `prlimit`, checked at startup ([`crate::tools`]).
+    pub prlimit: &'a Path,
+    /// `RLIMIT_AS`: the most virtual memory, in bytes.
+    pub address_space: u64,
+    /// `RLIMIT_FSIZE`: the largest file the program may write, in bytes.
+    pub file_size: u64,
+    /// `RLIMIT_NOFILE`: the most open file descriptors.
+    pub open_files: u64,
+    /// `RLIMIT_CPU`: the soft limit in CPU seconds; the hard one is [`CPU_KILL_GRACE_SECONDS`]
+    /// later.
+    pub cpu_seconds: u64,
+}
+
+impl Confinement<'_> {
+    /// `prlimit`'s arguments that set the limits, then run `program` with `args` in its place.
+    #[must_use]
+    pub fn wrap(&self, program: &Path, args: &[OsString]) -> Vec<OsString> {
+        let hard_cpu = self.cpu_seconds.saturating_add(CPU_KILL_GRACE_SECONDS);
+        let mut wrapped: Vec<OsString> = vec![
+            format!("--as={}", self.address_space).into(),
+            format!("--fsize={}", self.file_size).into(),
+            format!("--nofile={}", self.open_files).into(),
+            format!("--cpu={}:{hard_cpu}", self.cpu_seconds).into(),
+            "--".into(),
+            program.as_os_str().to_owned(),
+        ];
+        wrapped.extend(args.iter().cloned());
+        wrapped
+    }
 }
 
 /// Why a run did not succeed.
@@ -115,6 +165,26 @@ pub struct Ended {
     pub stderr: String,
 }
 
+/// `Ok` when `path` is a file this process may execute, as far as its mode bits say.
+fn runnable(path: &Path) -> std::io::Result<()> {
+    let meta = std::fs::metadata(path)?;
+    #[cfg(unix)]
+    let executable = {
+        use std::os::unix::fs::PermissionsExt as _;
+        meta.permissions().mode() & 0o111 != 0
+    };
+    #[cfg(not(unix))]
+    let executable = true;
+    if meta.is_file() && executable {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "not an executable file",
+        ))
+    }
+}
+
 /// Run `invocation` under `limits`. The child is killed when the returned future is dropped.
 pub async fn run(invocation: Invocation<'_>, limits: Limits) -> Result<Ended, RunError> {
     let stdout = if invocation.capture_stdout {
@@ -122,8 +192,22 @@ pub async fn run(invocation: Invocation<'_>, limits: Limits) -> Result<Ended, Ru
     } else {
         Stdio::null()
     };
-    let mut child = Command::new(invocation.program)
-        .args(invocation.args)
+    let wrapped;
+    let (program, args) = match &invocation.confine {
+        Some(confine) => {
+            // prlimit reports a program it cannot execute only by its exit status, which a
+            // failing program could share: check here, so a missing program stays the host's.
+            runnable(invocation.program).map_err(|source| RunError::Spawn {
+                program: invocation.program.to_path_buf(),
+                source,
+            })?;
+            wrapped = confine.wrap(invocation.program, invocation.args);
+            (confine.prlimit, wrapped.as_slice())
+        }
+        None => (invocation.program, invocation.args),
+    };
+    let mut child = Command::new(program)
+        .args(args)
         .current_dir(invocation.dir)
         .env_clear()
         .stdin(Stdio::null())
@@ -132,7 +216,7 @@ pub async fn run(invocation: Invocation<'_>, limits: Limits) -> Result<Ended, Ru
         .kill_on_drop(true)
         .spawn()
         .map_err(|source| RunError::Spawn {
-            program: invocation.program.to_path_buf(),
+            program: program.to_path_buf(),
             source,
         })?;
     let stderr = child.stderr.take().map(|s| tokio::spawn(tail(s)));
@@ -293,6 +377,7 @@ mod tests {
             dir,
             watch: dir,
             capture_stdout: true,
+            confine: None,
         };
         run(invocation, limits).await
     }
@@ -423,12 +508,151 @@ mod tests {
             dir: dir.path(),
             watch: dir.path(),
             capture_stdout: false,
+            confine: None,
         };
         let error = run(invocation, limits(Duration::from_secs(5)))
             .await
             .unwrap_err();
         assert!(matches!(error, RunError::Spawn { .. }), "{error:?}");
         assert!(!error.is_input_fault());
+    }
+
+    #[test]
+    fn a_confinement_runs_the_program_through_prlimit_with_its_limits() {
+        let confine = Confinement {
+            prlimit: Path::new("/usr/local/bin/prlimit"),
+            address_space: 5,
+            file_size: 6,
+            open_files: 7,
+            cpu_seconds: 8,
+        };
+        let wrapped = confine.wrap(Path::new("/usr/local/bin/ffmpeg"), &args(&["-version"]));
+        assert_eq!(
+            wrapped,
+            args(&[
+                "--as=5",
+                "--fsize=6",
+                "--nofile=7",
+                "--cpu=8:18",
+                "--",
+                "/usr/local/bin/ffmpeg",
+                "-version"
+            ])
+        );
+    }
+
+    /// The limits `prlimit` sets, each broken by a program: every run ends as the input's
+    /// fault, never by the `SIGKILL` the host's faults are told by (spec 08 D42).
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn each_os_limit_ends_a_run_as_the_inputs_fault() {
+        let dir = scratch();
+        let prlimit = program("prlimit");
+        let generous = Confinement {
+            prlimit: &prlimit,
+            address_space: 4 * GIB,
+            file_size: GIB,
+            open_files: 64,
+            cpu_seconds: 60,
+        };
+        let cases = [
+            (
+                "address space",
+                Confinement {
+                    address_space: 256 * 1024 * 1024,
+                    ..generous
+                },
+                "python3",
+                vec!["-c", "x = bytearray(512 * 1024 * 1024)"],
+            ),
+            (
+                "file size",
+                Confinement {
+                    file_size: 1024 * 1024,
+                    ..generous
+                },
+                "dd",
+                vec!["if=/dev/zero", "of=big", "bs=65536", "count=64"],
+            ),
+            (
+                "CPU time",
+                Confinement {
+                    cpu_seconds: 1,
+                    ..generous
+                },
+                "python3",
+                vec!["-c", "while True: pass"],
+            ),
+        ];
+        for (name, confine, command, command_args) in cases {
+            let program = program(command);
+            let command_args = args(&command_args);
+            let invocation = Invocation {
+                program: &program,
+                args: &command_args,
+                dir: dir.path(),
+                watch: dir.path(),
+                capture_stdout: false,
+                confine: Some(confine),
+            };
+            let error = run(invocation, limits(Duration::from_secs(60)))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, RunError::Failed { .. }),
+                "{name}: {error:?}"
+            );
+            assert!(error.is_input_fault(), "{name}: {error:?}");
+        }
+        let fits = args(&["-c", "x = bytearray(16 * 1024 * 1024)"]);
+        let python = program("python3");
+        let invocation = Invocation {
+            program: &python,
+            args: &fits,
+            dir: dir.path(),
+            watch: dir.path(),
+            capture_stdout: false,
+            confine: Some(generous),
+        };
+        run(invocation, limits(Duration::from_secs(60)))
+            .await
+            .unwrap();
+    }
+
+    /// A confined program that cannot be executed (gone, or not executable) is the host's
+    /// fault, as an unconfined one that cannot be spawned is, not a failure prlimit reports by
+    /// its exit status.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_confined_program_that_cannot_run_is_the_hosts_fault() {
+        let dir = scratch();
+        let prlimit = program("prlimit");
+        let text = dir.path().join("not-a-program");
+        std::fs::write(&text, "text").unwrap();
+        for missing in [Path::new("/nonexistent/ffmpeg"), text.as_path()] {
+            let invocation = Invocation {
+                program: missing,
+                args: &[],
+                dir: dir.path(),
+                watch: dir.path(),
+                capture_stdout: false,
+                confine: Some(Confinement {
+                    prlimit: &prlimit,
+                    address_space: GIB,
+                    file_size: GIB,
+                    open_files: 64,
+                    cpu_seconds: 60,
+                }),
+            };
+            let error = run(invocation, limits(Duration::from_secs(60)))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&error, RunError::Spawn { program, .. } if program == missing),
+                "{error:?}"
+            );
+            assert!(!error.is_input_fault(), "{error:?}");
+        }
     }
 
     #[test]

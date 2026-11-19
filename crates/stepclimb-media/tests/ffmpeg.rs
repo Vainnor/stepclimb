@@ -65,7 +65,7 @@ fn work() -> WorkDir {
 }
 
 async fn probed(container: Container, input: &Path, dir: &Path) -> Result<Probed, ProbeError> {
-    probe::probe(&ffprobe(), container, input, dir).await
+    probe::probe((&ffprobe(), None), container, input, dir).await
 }
 
 /// Probe, plan and render `input` into `dir/out`: the plan.
@@ -82,6 +82,7 @@ async fn transcode(container: Container, input: &Path, dir: &Path) -> Plan {
         threads: 2,
         input,
         out: &out,
+        confine: None,
     };
     plan::render(&plan, render).await.expect("render");
     plan
@@ -285,6 +286,7 @@ async fn t5_a_crafted_playlist_reaches_no_network() {
         dir: dir.path(),
         watch: dir.path(),
         capture_stdout: true,
+        confine: None,
     };
     let limits = Limits {
         deadline: tokio::time::Instant::now() + Duration::from_secs(30),
@@ -320,6 +322,7 @@ async fn an_ffmpeg_run_past_its_output_cap_or_deadline_is_killed() {
         dir: &out,
         watch: &out,
         capture_stdout: false,
+        confine: None,
     };
     let generous = tokio::time::Instant::now() + Duration::from_secs(60);
     let tiny = Limits {
@@ -389,4 +392,50 @@ async fn a_file_that_declares_a_shorter_duration_is_cut_at_it() {
         .parse()
         .expect("a duration");
     assert!(mp4 < 1.5, "the MP4 stops at the probed 1 s: {mp4}");
+}
+
+/// Spec 08 D19, D42: under `prlimit`, a source that needs more address space than its run
+/// may hold (here an 8K source, two threads, under 2 GiB) fails promptly and as the input's
+/// fault, not by the kernel's out-of-memory `SIGKILL`; a small source passes under the same
+/// limits.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn an_input_past_its_address_space_fails_promptly_as_the_inputs_fault() {
+    let dir = work();
+    let prlimit = find_on_path("prlimit").expect("prlimit on PATH (util-linux)");
+    let ffmpeg = ffmpeg();
+    let cap = 2 * 1024 * 1024 * 1024;
+    for (name, size, fits) in [
+        ("small.mp4", (320, 240), true),
+        ("big.mp4", (7680, 4320), false),
+    ] {
+        let input = clip(dir.path(), name, size, 1, false);
+        let Probed::Video(source) = probed(Container::Mov, &input, dir.path()).await.unwrap()
+        else {
+            panic!("a video")
+        };
+        let plan = Plan::new(Container::Mov, source);
+        let out = dir.path().join(format!("out-{name}"));
+        std::fs::create_dir(&out).unwrap();
+        let render = Render {
+            ffmpeg: &ffmpeg,
+            threads: 2,
+            input: &input,
+            out: &out,
+            confine: Some((&prlimit, cap)),
+        };
+        let started = std::time::Instant::now();
+        let rendered = plan::render(&plan, render).await;
+        if fits {
+            rendered.expect("a small source fits");
+        } else {
+            let error = rendered.expect_err("an 8K source does not fit 2 GiB");
+            assert!(matches!(error, RunError::Failed { .. }), "{error:?}");
+            assert!(error.is_input_fault(), "{error:?}");
+            assert!(
+                started.elapsed() < Duration::from_secs(60),
+                "-xerror ends it at once"
+            );
+        }
+    }
 }

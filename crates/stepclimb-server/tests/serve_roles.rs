@@ -295,7 +295,7 @@ async fn a_transcoder_process_runs_only_transcodes_and_answers_only_the_probes(p
         &["--role", "transcoder"],
         &[("STEPCLIMB_STORAGE_URL", &url)],
     );
-    server.wait_for("ffmpeg and ffprobe passed the startup check");
+    server.wait_for("ffmpeg, ffprobe and prlimit passed the startup check");
     let started = server.wait_for("job worker started");
     assert_eq!(started["fields"]["concurrency"], "1", "{started}");
     assert_eq!(started["fields"]["transcode_concurrency"], "1", "{started}");

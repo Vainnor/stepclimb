@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Finding ffmpeg and ffprobe and checking that they run (docs/specs/m1/08-uploaded-video.md B8).
+//! Finding ffmpeg, ffprobe and util-linux `prlimit` and checking that they run
+//! (docs/specs/m1/08-uploaded-video.md B8, I6).
 //!
 //! A process that serves the `transcode` queue resolves each program once at startup, from its
-//! setting (`ffmpeg_path`, `ffprobe_path`) or else from `PATH`, to an absolute path, and runs it
-//! with `-version`: it must exit successfully within [`VERSION_TIMEOUT`] and print a first line
-//! starting with its own name and ` version`. Every later run uses the absolute path, so a
-//! changed `PATH` cannot swap the program, and the child's environment can stay empty.
+//! setting (`ffmpeg_path`, `ffprobe_path`, `prlimit_path`) or else from `PATH`, to an absolute
+//! path, and asks it for its version: it must exit successfully within [`VERSION_TIMEOUT`] and
+//! print a first line starting with [`Program::version_prefix`]. Every later run uses the absolute
+//! path, so a changed `PATH` cannot swap the program, and the child's environment can stay empty.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -16,27 +17,48 @@ use crate::run::{self, Invocation, Limits, RunError};
 /// How long `-version` may take.
 pub const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// ffmpeg and ffprobe, resolved and checked.
+/// ffmpeg, ffprobe and the `prlimit` they run under, resolved and checked.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tools {
     pub ffmpeg: PathBuf,
     pub ffprobe: PathBuf,
+    pub prlimit: PathBuf,
 }
 
-/// Which of the two programs a check is about.
+/// Which program a check is about.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Program {
     Ffmpeg,
     Ffprobe,
+    Prlimit,
 }
 
 impl Program {
-    /// The program's name on `PATH` and in its version line.
+    /// The program's name on `PATH`.
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Self::Ffmpeg => "ffmpeg",
             Self::Ffprobe => "ffprobe",
+            Self::Prlimit => "prlimit",
+        }
+    }
+
+    /// The arguments that make it print its version.
+    fn version_args(self) -> &'static [&'static str] {
+        match self {
+            Self::Ffmpeg | Self::Ffprobe => &["-hide_banner", "-version"],
+            Self::Prlimit => &["--version"],
+        }
+    }
+
+    /// How its version line starts: `ffmpeg version `, or util-linux's `prlimit from util-linux `.
+    #[must_use]
+    pub fn version_prefix(self) -> &'static str {
+        match self {
+            Self::Ffmpeg => "ffmpeg version ",
+            Self::Ffprobe => "ffprobe version ",
+            Self::Prlimit => "prlimit from util-linux ",
         }
     }
 }
@@ -93,7 +115,7 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
-/// `program` at `configured`, or found on `PATH` when that is `None`, run with `-version`: its
+/// `program` at `configured`, or found on `PATH` when that is `None`, asked for its version: its
 /// absolute path and its version line.
 pub async fn check(
     program: Program,
@@ -104,13 +126,14 @@ pub async fn check(
         Some(path) => path.to_path_buf(),
         None => find_on_path(program.name()).ok_or(ToolError::NotFound(program))?,
     };
-    let args = [OsString::from("-hide_banner"), OsString::from("-version")];
+    let args: Vec<OsString> = program.version_args().iter().map(OsString::from).collect();
     let invocation = Invocation {
         program: &path,
         args: &args,
         dir: work,
         watch: work,
         capture_stdout: true,
+        confine: None,
     };
     let limits = Limits {
         deadline: tokio::time::Instant::now() + VERSION_TIMEOUT,
@@ -126,7 +149,7 @@ pub async fn check(
         })?;
     let stdout = String::from_utf8_lossy(&ended.stdout);
     let first = stdout.lines().next().unwrap_or_default();
-    if !first.starts_with(&format!("{} version ", program.name())) {
+    if !first.starts_with(program.version_prefix()) {
         return Err(ToolError::NoVersion { program, path });
     }
     Ok((path, first.to_owned()))
@@ -142,12 +165,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_dev_shells_ffmpeg_and_ffprobe_report_their_versions() {
+    async fn the_dev_shells_ffmpeg_ffprobe_and_prlimit_report_their_versions() {
         let dir = work();
-        for program in [Program::Ffmpeg, Program::Ffprobe] {
+        for program in [Program::Ffmpeg, Program::Ffprobe, Program::Prlimit] {
             let (path, version) = check(program, None, dir.path()).await.unwrap();
             assert!(path.is_absolute(), "{}", path.display());
-            assert!(version.starts_with(&format!("{} version ", program.name())));
+            assert!(version.starts_with(program.version_prefix()), "{version}");
         }
     }
 
