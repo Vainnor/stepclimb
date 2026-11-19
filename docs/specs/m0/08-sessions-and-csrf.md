@@ -665,8 +665,11 @@ Database tests use `#[sqlx::test]`; time-dependent tests use the controllable cl
 - **T6.** (B8, B10) With the clock at `last_seen_at + 11h59m` the session works; at
   `last_seen_at + 12h` it answers 401 `auth.session_expired`, the row is gone and the cookie is
   cleared.
-- **T7.** (B8, B9) A session used every hour stays valid until `created_at + 30 days` and answers
-  401 `auth.session_expired` at that instant.
+- **T7.** (B8, B9) A session used every 11 h 59 min, a minute inside the idle limit, stays valid
+  until `created_at + 30 days` (a second before it included) and answers 401
+  `auth.session_expired` at that instant. Coordinator decision (2026-11-19): the use interval was
+  one hour, about 720 requests, which ran past nextest's timeout on a loaded machine (#374); 60
+  uses just inside the idle limit prove more, since only the uses keep the session alive.
 - **T8.** (B10) A cookie with a well-formed but unknown token answers 401 `auth.unauthenticated`
   and is cleared.
 - **T9.** (B11) After a user is suspended, their next request with the old cookie answers 401

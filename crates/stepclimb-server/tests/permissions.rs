@@ -2878,13 +2878,18 @@ async fn passkey_sign_in_request(world: &World, org: &Org) -> (Option<Value>, Op
 
 // The suite over the real router.
 
-#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
-async fn b20_every_table_entry_passes_its_cases(pool: PgPool) {
+/// How many tests [`TABLE`] is run in. Entry `i` runs in shard `i % SHARDS`, so nextest runs
+/// the shards in parallel, each in a database of its own, and a longer table makes each a little
+/// longer rather than one test long.
+const SHARDS: usize = 8;
+
+/// Runs every entry of shard `shard` and fails naming each failing case.
+async fn b20_shard(pool: PgPool, shard: usize) {
     let world = World::new(pool).await;
     let app = router(world.state()).layer(Extension(ConnectInfo(CLIENT)));
     let operations = operations(&document()).expect("named operations");
     let mut failures = Vec::new();
-    for entry in TABLE {
+    for entry in TABLE.iter().skip(shard).step_by(SHARDS) {
         let op = operations
             .iter()
             .find(|op| op.id == entry.operation_id)
@@ -2892,6 +2897,36 @@ async fn b20_every_table_entry_passes_its_cases(pool: PgPool) {
         failures.extend(run(&world, &app, op, &entry.access).await.failures);
     }
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// One `#[sqlx::test]` per shard, and [`B20_SHARDS`], the shards they run.
+macro_rules! b20_shards {
+    ($($name:ident = $shard:literal),* $(,)?) => {
+        const B20_SHARDS: &[usize] = &[$($shard),*];
+        $(
+            #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+            async fn $name(pool: PgPool) {
+                b20_shard(pool, $shard).await;
+            }
+        )*
+    };
+}
+
+b20_shards!(
+    b20_table_entries_pass_their_cases_shard_0 = 0,
+    b20_table_entries_pass_their_cases_shard_1 = 1,
+    b20_table_entries_pass_their_cases_shard_2 = 2,
+    b20_table_entries_pass_their_cases_shard_3 = 3,
+    b20_table_entries_pass_their_cases_shard_4 = 4,
+    b20_table_entries_pass_their_cases_shard_5 = 5,
+    b20_table_entries_pass_their_cases_shard_6 = 6,
+    b20_table_entries_pass_their_cases_shard_7 = 7,
+);
+
+/// The shard tests run every shard once, so every entry of [`TABLE`] runs.
+#[test]
+fn b20_the_shards_cover_every_table_entry() {
+    assert_eq!(B20_SHARDS, (0..SHARDS).collect::<Vec<_>>());
 }
 
 // Bodies sent as arrays (`ApiJson` reads every struct from an object only).
