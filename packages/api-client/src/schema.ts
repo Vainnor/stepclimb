@@ -2774,11 +2774,8 @@ export interface components {
              *     `appearance.theme` is `null`.
              */
             default_appearance: components["schemas"]["ThemeChoice"];
-            /**
-             * @description The organization's `embedding` setting: the origins a deep link's return URL may point
-             *     at for a "Back to" link to show.
-             */
-            embedding: components["schemas"]["Embedding"];
+            /** @description What the signed-in user may read of the organization's `embedding` setting. */
+            embedding: components["schemas"]["MeEmbedding"];
             /** @description The keys of the catalog features the organization's plan includes, sorted. */
             features: string[];
             /**
@@ -2789,6 +2786,14 @@ export interface components {
             grants: components["schemas"]["MeGrant"][];
             organization: components["schemas"]["Organization"];
             user: components["schemas"]["MeUser"];
+        };
+        /** @description The part of the organization's `embedding` setting every signed-in user reads. */
+        MeEmbedding: {
+            /**
+             * @description The origins a deep link's return URL may point at for a "Back to" link to show, each
+             *     `https://host[:port]` in lowercase; empty unless set.
+             */
+            return_origins: string[];
         };
         /** @description The permissions the caller holds at one scope. */
         MeGrant: {

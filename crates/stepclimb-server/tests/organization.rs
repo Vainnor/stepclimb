@@ -1027,6 +1027,60 @@ async fn every_user_reads_their_own_organizations_return_origins_from_me(pool: P
     assert_eq!(of_b.body["embedding"], json!({ "return_origins": [] }));
 }
 
+/// M1 spec 03 B17: a stored `embedding` that does not parse answers `/me` with no return origins
+/// (no "Back to" link shows) instead of failing it, and another setting that does not parse
+/// leaves the origins and the rest of `/me` readable.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn me_reads_the_embedding_setting_alone_and_fails_closed(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (cookie, _) = f.user_of(f.org).await;
+    let me = || async {
+        let request = Request::get("/api/v1/me")
+            .header(header::COOKIE, cookie.clone())
+            .body(Body::empty())
+            .expect("a request");
+        answer(&f.app, request).await
+    };
+    let (pool, org) = (&f.pool, f.org);
+    let store = |settings: Value| async move {
+        sqlx::query("UPDATE organizations SET settings = $2 WHERE id = $1")
+            .bind(org)
+            .bind(settings)
+            .execute(pool)
+            .await
+            .expect("store settings");
+    };
+
+    for broken in [
+        json!({ "embedding": { "return_origins": "https://host.example" } }),
+        json!({ "embedding": "https://host.example" }),
+        json!({ "embedding": { "return_origins": [5] } }),
+    ] {
+        store(broken.clone()).await;
+        let answer = me().await;
+        assert_eq!(answer.status, StatusCode::OK, "{broken}: {answer:?}");
+        assert_eq!(
+            answer.body["embedding"],
+            json!({ "return_origins": [] }),
+            "{broken}"
+        );
+        assert_schema("Me", &answer.body);
+    }
+
+    store(json!({
+        "default_tz": 5,
+        "embedding": { "return_origins": ["https://host.example"], "newer": true },
+    }))
+    .await;
+    let answer = me().await;
+    assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    assert_eq!(
+        answer.body["embedding"],
+        json!({ "return_origins": ["https://host.example"] }),
+        "only return_origins reaches /me"
+    );
+}
+
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn a_settings_body_that_is_not_an_object_is_malformed(pool: PgPool) {
     let f = Fixture::new(pool).await;

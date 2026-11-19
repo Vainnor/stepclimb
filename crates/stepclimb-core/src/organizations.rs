@@ -20,7 +20,9 @@ use crate::{
     db::{TimeOutOfRange, epoch_micros},
     id::new_id,
     local_sign_in, name, org_plans, plans,
-    settings::{EmbeddingPatch, MAX_RETURN_ORIGINS, OrgSettings, OrgSettingsPatch, return_origin},
+    settings::{
+        Embedding, EmbeddingPatch, MAX_RETURN_ORIGINS, OrgSettings, OrgSettingsPatch, return_origin,
+    },
 };
 
 /// The longest organization name, in characters (Unicode scalar values; spec 02 Q6).
@@ -252,6 +254,25 @@ pub async fn settings(db: impl PgExecutor<'_>, scope: OrgScope) -> Result<OrgSet
     .await?
     .ok_or(Error::NotFound)?;
     parse_settings(&stored)
+}
+
+/// The scope's `embedding` setting alone (M1 spec 03 B17), read from `settings -> 'embedding'`
+/// so another setting that does not parse cannot fail this read. A row without the member reads
+/// as [`Embedding::default`]; a member that does not parse as [`Embedding`] is
+/// [`Error::StoredSettings`].
+pub async fn embedding(db: impl PgExecutor<'_>, scope: OrgScope) -> Result<Embedding, Error> {
+    let stored = sqlx::query_scalar!(
+        r#"SELECT (settings -> 'embedding')::text AS "embedding?" FROM organizations
+           WHERE id = $1"#,
+        scope.org_id(),
+    )
+    .fetch_optional(db)
+    .await?
+    .ok_or(Error::NotFound)?;
+    match stored {
+        Some(stored) => serde_json::from_str(&stored).map_err(Error::StoredSettings),
+        None => Ok(Embedding::default()),
+    }
 }
 
 /// Merge `patch` into the scope's organization settings and set `updated_at` to `now`. The

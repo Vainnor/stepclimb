@@ -415,6 +415,34 @@ async fn update_settings_refuses_bad_return_origins(pool: PgPool) {
     assert_eq!(settings.embedding.return_origins.len(), MAX_RETURN_ORIGINS);
 }
 
+/// M1 spec 03 B17: `embedding` reads the member alone: its default without one, the scope's own
+/// value, and `StoredSettings` only when the member itself does not parse.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn embedding_reads_the_member_alone(pool: PgPool) {
+    let a = insert_org(&pool, "org-a", "Org A").await;
+    let b = insert_org(&pool, "org-b", "Org B").await;
+    store_settings(
+        &pool,
+        a,
+        r#"{"default_tz": 5, "embedding": {"return_origins": ["https://a.example"]}}"#,
+    )
+    .await;
+
+    let of_a = organizations::embedding(&pool, scope(a)).await.unwrap();
+    assert_eq!(of_a.return_origins, ["https://a.example"]);
+    let of_b = organizations::embedding(&pool, scope(b)).await.unwrap();
+    assert!(of_b.return_origins.is_empty(), "org B has none");
+
+    store_settings(&pool, a, r#"{"embedding": {"return_origins": 5}}"#).await;
+    let broken = organizations::embedding(&pool, scope(a)).await;
+    assert!(
+        matches!(broken, Err(Error::StoredSettings(_))),
+        "{broken:?}"
+    );
+    let gone = organizations::embedding(&pool, scope(new_id())).await;
+    assert!(matches!(gone, Err(Error::NotFound)), "{gone:?}");
+}
+
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn update_settings_keeps_nothing_when_the_stored_object_does_not_parse(pool: PgPool) {
     let a = insert_org(&pool, "org-a", "Org A").await;

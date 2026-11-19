@@ -396,9 +396,10 @@ Coordinator decisions (overnight, 2026-11-17), pending owner review.
 Coordinator decisions (2026-11-18), pending owner review.
 
 - **The web app reads the list from `GET /api/v1/me`.** The settings routes need
-  `organization.manage`, which a learner does not hold, so `/me` gains `embedding` (the same
-  object the settings show) for every signed-in user. The origins are the host sites the
-  organization links from; the "Back to" link shows one of them anyway.
+  `organization.manage`, which a learner does not hold, so `/me` gains
+  `embedding.return_origins` for every signed-in user (see the security review's decisions
+  below). The origins are the host sites the organization links from; the "Back to" link shows
+  one of them anyway.
 - **An origin is written exactly as one.** An entry is accepted when it equals, in any ASCII
   letter case, the origin the URL parser reads from it: `https`, a host, an optional port that is
   not the default, nothing else. So `https://host.example/` (a lone `/`), `https://host.example:443`,
@@ -436,6 +437,23 @@ Coordinator decisions (2026-11-18), pending owner review.
   home screen, ModuleRows and the item's content view.
 - **React Aria's `useHref`** passes an absolute `href` through unchanged. It resolved every
   `href` as a route, which turned `https://host.example/x` into a path under the current page.
+
+### Decisions made in the security review of I3
+
+Coordinator decisions (2026-11-19).
+
+- **Only `http://` and `https://` hrefs skip the router.** React Aria's `useHref` passes an
+  `href` through unchanged only when it starts with `http://` or `https://` (any letter case);
+  every other value, `//host`, `javascript:`, `data:` and `vbscript:` included, is resolved as a
+  route, so none reaches a link's `href` as written.
+- **`/me` reads `embedding` alone and fails closed.** `GET /api/v1/me` reads only
+  `settings -> 'embedding'` (`stepclimb_core::organizations::embedding`), so another setting
+  that does not parse cannot fail `/me` for the whole organization. An `embedding` that does not
+  parse is logged once with the organization's id and answered as an empty `return_origins`: no
+  "Back to" link shows.
+- **`/me` names what learners read.** Its `embedding` is a type of its own, `MeEmbedding`, with
+  `return_origins` only, so a member added to the setting later reaches every signed-in user only
+  when it is added there on purpose.
 
 ## Issues
 

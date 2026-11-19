@@ -10,15 +10,18 @@
 //! every `Require` of the request checks (spec 09 B16). `features` are the catalog features the
 //! organization's plan includes, from the same per-request load every `Require<Feature>` checks
 //! (spec 10 B12). The web app reads both only to show or hide UI; every route checks its own
-//! permission and feature on the server. `embedding` is the organization's setting of that
-//! name, read by every signed-in user and not only by holders of `organization.manage`, because
-//! the web app shows a learner's "Back to" link only for a return URL whose origin it lists
-//! (docs/specs/m1/03-modules-and-items.md B17).
+//! permission and feature on the server. `embedding.return_origins` is the organization's
+//! setting of that name, read by every signed-in user and not only by holders of
+//! `organization.manage`, because the web app shows a learner's "Back to" link only for a return
+//! URL whose origin it lists (docs/specs/m1/03-modules-and-items.md B17). [`MeEmbedding`] names
+//! that one member, so a member added to the setting later reaches learners only when added
+//! here. A stored `embedding` that does not parse is logged and answered as an empty list: no
+//! link shows, and the rest of `/me` still answers.
 
 use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
 use stepclimb_core::{
-    Embedding, Source, appearance, feature,
+    OrgScope, Source, appearance, feature,
     grants::{Grants, ScopeId},
     id::Uuid,
     organizations,
@@ -57,10 +60,16 @@ pub struct Me {
     /// The organization's default appearance: the theme the user's pages take while
     /// `appearance.theme` is `null`.
     pub default_appearance: ThemeChoice,
-    /// The organization's `embedding` setting: the origins a deep link's return URL may point
-    /// at for a "Back to" link to show.
-    #[schema(value_type = crate::organization::Embedding)]
-    pub embedding: Embedding,
+    /// What the signed-in user may read of the organization's `embedding` setting.
+    pub embedding: MeEmbedding,
+}
+
+/// The part of the organization's `embedding` setting every signed-in user reads.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, ToSchema)]
+pub struct MeEmbedding {
+    /// The origins a deep link's return URL may point at for a "Back to" link to show, each
+    /// `https://host[:port]` in lowercase; empty unless set.
+    pub return_origins: Vec<String>,
 }
 
 /// The signed-in user.
@@ -197,11 +206,9 @@ pub async fn get_me(
         .await
         .map_err(|error| ApiError::internal(&error))?;
     let default_appearance = branding::default_appearance(&state, scope).await;
-    let settings = organizations::settings(&state.db, scope)
-        .await
-        .map_err(|error| ApiError::internal(&error))?;
+    let embedding = me_embedding(&state, scope).await?;
     Ok(Json(Me {
-        embedding: settings.embedding,
+        embedding,
         appearance: appearance.into(),
         default_appearance: default_appearance.into(),
         user: user.into(),
@@ -209,6 +216,22 @@ pub async fn get_me(
         grants: me_grants(auth.grants()),
         features: enabled_features(&entitlements.plan().entitlements),
     }))
+}
+
+/// The organization's return origins. A stored `embedding` that does not parse is logged once
+/// and answered as an empty list, failing closed: no "Back to" link shows. A database failure
+/// is a 500, as for the other reads of the route.
+async fn me_embedding(state: &AppState, scope: OrgScope) -> Result<MeEmbedding, ApiError> {
+    match organizations::embedding(&state.db, scope).await {
+        Ok(embedding) => Ok(MeEmbedding {
+            return_origins: embedding.return_origins,
+        }),
+        Err(error @ organizations::Error::StoredSettings(_)) => {
+            tracing::error!(org_id = %scope.org_id(), %error, "the organization's embedding setting");
+            Ok(MeEmbedding::default())
+        }
+        Err(error) => Err(ApiError::internal(&error)),
+    }
 }
 
 /// The keys of [`feature::ALL`] the plan includes, sorted. A feature only a test crate defines

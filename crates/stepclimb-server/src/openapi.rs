@@ -208,6 +208,7 @@ pub const MUTATES: &str = "x-stepclimb-mutates";
             oauth_token::RevokeForm,
             me::Me,
             me::MeUser,
+            me::MeEmbedding,
             me::MeGrant,
             me::GrantScope,
             me::UserStatus,

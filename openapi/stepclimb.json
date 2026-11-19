@@ -10211,8 +10211,8 @@
             "description": "The organization's default appearance: the theme the user's pages take while\n`appearance.theme` is `null`."
           },
           "embedding": {
-            "$ref": "#/components/schemas/Embedding",
-            "description": "The organization's `embedding` setting: the origins a deep link's return URL may point\nat for a \"Back to\" link to show."
+            "$ref": "#/components/schemas/MeEmbedding",
+            "description": "What the signed-in user may read of the organization's `embedding` setting."
           },
           "features": {
             "type": "array",
@@ -10233,6 +10233,22 @@
           },
           "user": {
             "$ref": "#/components/schemas/MeUser"
+          }
+        }
+      },
+      "MeEmbedding": {
+        "type": "object",
+        "description": "The part of the organization's `embedding` setting every signed-in user reads.",
+        "required": [
+          "return_origins"
+        ],
+        "properties": {
+          "return_origins": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The origins a deep link's return URL may point at for a \"Back to\" link to show, each\n`https://host[:port]` in lowercase; empty unless set."
           }
         }
       },
