@@ -10,6 +10,9 @@
 //! target has passed `require::check_course`, which hides a course the caller cannot see, a
 //! draft and a template; without that check, its 403 and 404 would tell a caller whether an item
 //! exists in a course they cannot see.
+//!
+//! [`Lock`] is the same reasons as the `lock` member of the learner reads' modules and items
+//! (B12, B14), which `crate::outline` fills from the same evaluator.
 
 use axum::http::StatusCode;
 use serde::Serialize;
@@ -54,6 +57,27 @@ pub enum LockReason {
         #[schema(value_type = String, format = "uuid")]
         item_id: Uuid,
     },
+}
+
+/// Why a module or item is locked for you: every condition that holds, never empty.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, ToSchema)]
+pub struct Lock {
+    pub reasons: Vec<LockReason>,
+}
+
+impl Lock {
+    /// The `lock` member for `state`: `None` when it is available.
+    pub(crate) fn from_state(state: &unlock::State) -> Result<Option<Self>, ApiError> {
+        match state {
+            unlock::State::Available => Ok(None),
+            unlock::State::Locked(reasons) => Ok(Some(Self {
+                reasons: reasons
+                    .iter()
+                    .map(LockReason::from_core)
+                    .collect::<Result<_, _>>()?,
+            })),
+        }
+    }
 }
 
 /// The schema of a list of UUIDs: an array of strings in the `uuid` format.

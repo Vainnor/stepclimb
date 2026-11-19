@@ -9607,6 +9607,7 @@
           "position",
           "published",
           "requirement",
+          "lock",
           "created_at",
           "updated_at"
         ],
@@ -9626,6 +9627,17 @@
           },
           "kind": {
             "$ref": "#/components/schemas/ItemKind"
+          },
+          "lock": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Lock",
+                "description": "Why the item is locked for you, on the outline, module and item reads when you do not\nhold `course.view_all` at the course; null when it is open to you, and on every answer to\na holder of `course.view_all` and every other operation's answer."
+              }
+            ]
           },
           "module_id": {
             "type": "string",
@@ -9653,7 +9665,7 @@
           "ref_id": {
             "type": "string",
             "format": "uuid",
-            "description": "What the item points at; only for kinds that point at a row. A read by a caller without\n`course.view_all` leaves it out while the item's module has an unlock date,\nprerequisites or sequential order."
+            "description": "What the item points at; only for kinds that point at a row. Left out while the item is\nlocked for you (`lock` is not null)."
           },
           "requirement": {
             "oneOf": [
@@ -10018,6 +10030,21 @@
         },
         "additionalProperties": false
       },
+      "Lock": {
+        "type": "object",
+        "description": "Why a module or item is locked for you: every condition that holds, never empty.",
+        "required": [
+          "reasons"
+        ],
+        "properties": {
+          "reasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LockReason"
+            }
+          }
+        }
+      },
       "LockReason": {
         "oneOf": [
           {
@@ -10257,6 +10284,7 @@
           "require_sequential",
           "completion_rule",
           "items",
+          "lock",
           "created_at",
           "updated_at"
         ],
@@ -10283,6 +10311,17 @@
             "items": {
               "$ref": "#/components/schemas/Item"
             }
+          },
+          "lock": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Lock",
+                "description": "Why the module is locked for you, as an item's `lock` is: null when it is open to you.\nA locked module's items are locked too, and leave out what they point at."
+              }
+            ]
           },
           "position": {
             "type": "integer",

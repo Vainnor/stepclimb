@@ -347,16 +347,11 @@ or Q12.
 
 Coordinator decisions (overnight, 2026-11-17), pending owner review.
 
-- **Links are withheld from learners until spec 04 I3, failing closed.** Spec 04's unlock
-  rules can already be written, but the lock state that withholds a locked item's `ref_id` and
-  `url` (`04` B12) needs the learner's progress (`05` I1) and arrives with `04` I3. Until then,
-  a read by a caller without `course.view_all` leaves out `ref_id` and `url` on every item of a
-  module that has any unlock rule: an unlock date (future or past), a prerequisite, or
-  sequential order. Items have no unlock rule of their own. Titles, kinds and requirements stay,
-  as `04` B12 shows them. The check is one function, `outline::withholds_content` in the
-  server, which `04` I3 replaces with the evaluator's lock state; until then a learner does not
-  see the link of a module whose date has passed or whose prerequisites are met. Today only
-  external links carry content in a read (no creatable kind has a `ref_id`).
+- **Links are withheld from learners only while locked.** A read by a caller without
+  `course.view_all` leaves out `ref_id` and `url` on an item exactly when `04`'s evaluator finds
+  it locked for that caller (`04` B12, as built in `04` I3). Titles, kinds and requirements
+  stay. Until `04` I3, a fail-closed stand-in withheld them on every item of a module with any
+  unlock rule.
 - **Learners see only published prerequisites.** For a caller without `course.view_all`, a
   module's `prerequisite_ids` leave out unpublished modules, which `04` B6 counts as met, so no
   read names a module the learner cannot see.
@@ -373,7 +368,7 @@ Coordinator decisions (overnight, 2026-11-17), pending owner review.
   no row, absent for anyone else (staff without `course.participate`) and on every write
   response, as on the course read. Progress is attached by id to the modules and items the
   answer already holds, so it follows the published filter and never names what the caller
-  cannot see; the stand-in above still withholds the links of a module with an unlock rule. A
+  cannot see. A
   module's `progress` is `ModuleProgress` (`module_id`, `required_count`, `completed_count`,
   `completed_at`, `05`'s Schemas), an item's the existing `ItemProgress`.
 - **Positions are numbered over what the caller sees.** For a caller without
@@ -389,7 +384,8 @@ Coordinator decisions (overnight, 2026-11-17), pending owner review.
   title or content.
 - **Observers.** A user with `course.view` but neither `course.view_all` nor
   `course.participate` (the built-in Observer) reads as a learner does: published content only,
-  with links withheld under the stand-in above, and no `progress` member. Their observed
+  with links withheld while locked, evaluated as for a learner with no progress (`05` B18),
+  and no `progress` member. Their observed
   learners' progress is `05` B17's staff read, not these routes.
 - **Templates.** A template's outline, modules and items answer 404 to a caller without
   `course.view_all`, as a draft's do (`02` B24, Q13), even to a Student with an active

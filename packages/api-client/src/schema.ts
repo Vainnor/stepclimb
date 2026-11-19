@@ -2543,6 +2543,7 @@ export interface components {
             /** Format: uuid */
             id: string;
             kind: components["schemas"]["ItemKind"];
+            lock: null | components["schemas"]["Lock"];
             /** Format: uuid */
             module_id: string;
             /**
@@ -2554,9 +2555,8 @@ export interface components {
             published: boolean;
             /**
              * Format: uuid
-             * @description What the item points at; only for kinds that point at a row. A read by a caller without
-             *     `course.view_all` leaves it out while the item's module has an unlock date,
-             *     prerequisites or sequential order.
+             * @description What the item points at; only for kinds that point at a row. Left out while the item is
+             *     locked for you (`lock` is not null).
              */
             ref_id?: string;
             requirement: null | components["schemas"]["Requirement"];
@@ -2712,6 +2712,10 @@ export interface components {
              */
             totp_required: boolean;
         };
+        /** @description Why a module or item is locked for you: every condition that holds, never empty. */
+        Lock: {
+            reasons: components["schemas"]["LockReason"][];
+        };
         /** @description One condition that keeps a module or item locked. */
         LockReason: {
             /**
@@ -2802,6 +2806,7 @@ export interface components {
             /** Format: uuid */
             id: string;
             items: components["schemas"]["Item"][];
+            lock: null | components["schemas"]["Lock"];
             /**
              * Format: int32
              * @description 0-based, dense within the course.
