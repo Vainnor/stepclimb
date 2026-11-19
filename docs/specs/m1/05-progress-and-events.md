@@ -465,6 +465,38 @@ Coordinator decisions (overnight, 2026-11-17), pending owner review.
   `course_progress` row, then finds the item completed and returns it with no event; a test runs
   the two on two connections.
 
+### Decisions made building I2
+
+Coordinator decisions (2026-11-19), each pending owner review.
+
+- **Which writes enqueue the job.** B8's list, read through its own condition ("in a way that
+  changes counts"): publishing or unpublishing an item or a module, setting, changing or
+  removing an item's requirement, moving an item to another module, deleting an item or a
+  module, and changing a module's prerequisites or completion rule. A patch enqueues only when
+  one of those values differs after the write, so a patch naming current values still changes
+  nothing. Creating a module or an item (both start unpublished), renames, a link's URL, an
+  unlock date, sequential order, reordering a course's modules and moving an item within its
+  module change no count and enqueue nothing.
+- **Who is recomputed.** Users with a `course_progress` row in the course (every learner who
+  has completed an item there) who hold an active enrollment whose role has
+  `course.participate` (B1). A concluded learner's rows are left as they are, so no event
+  reports a completion for someone who is not taking the course (B12). A learner without a
+  completed item has nothing a rule change can complete.
+- **What a run writes.** Every published module's row and the course row of each learner, from
+  their completed items under the current rules, through the same roll-up `complete_item` uses
+  (so a module or course that becomes complete gets its `completed_at` and its event the same
+  way, and spec 14's `completions` row with its cycle and expiry). A row is written only when
+  its counts or completion would change, so a second run
+  writes nothing, `updated_at` included. A module row is created only for a module the learner
+  has a completed item in, as `complete_item` creates them. Rows of unpublished modules are left
+  as they are.
+- **Archived and deleted courses.** An archived course takes no progress (`02` B5), so the job
+  skips it; a course that no longer exists ends the job.
+- **Batches.** Each batch of 100 learners, in user id order, runs in its own transaction that
+  holds the course row `FOR SHARE` and writes its events before it commits. A failure retries
+  the whole job, which finds the batches already done unchanged. The job extends its lease
+  between batches and stops once another worker has claimed it.
+
 ### Decisions made building I3
 
 Coordinator decision (overnight, 2026-11-17), each pending owner review.

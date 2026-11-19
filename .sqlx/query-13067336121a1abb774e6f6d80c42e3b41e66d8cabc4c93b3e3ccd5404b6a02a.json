@@ -1,0 +1,61 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT module_id, required_count, completed_count,\n                      completed_at IS NOT NULL AS \"complete!\"\n               FROM module_progress\n               WHERE org_id = $1 AND user_id = $2 AND course_id = $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "module_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "module_progress",
+            "name": "module_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "required_count",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "module_progress",
+            "name": "required_count"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "completed_count",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "module_progress",
+            "name": "completed_count"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "complete!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "13067336121a1abb774e6f6d80c42e3b41e66d8cabc4c93b3e3ccd5404b6a02a"
+}

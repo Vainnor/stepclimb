@@ -7,6 +7,11 @@
 //! module ([`ModuleTarget`]) or the item ([`ItemTarget`]), and checks it again under the course
 //! lock as [`crate::modules`] does. A move's destination module must be in the same course, so
 //! the one check covers both ends.
+//!
+//! A write that can change learners' counts enqueues `progress.recompute_course` for the course
+//! in its transaction (docs/specs/m1/05-progress-and-events.md B8): publishing or unpublishing
+//! an item, changing its requirement, moving it to another module, and deleting it. Creating
+//! (unpublished), renaming, a link's URL and reordering within a module change no count.
 
 use axum::{
     Json,
@@ -15,7 +20,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
-use stepclimb_core::{id::Uuid, items, perm::CourseContentEdit};
+use sqlx::{Postgres, Transaction};
+use stepclimb_core::{OrgScope, id::Uuid, items, perm::CourseContentEdit};
 use utoipa::ToSchema;
 
 use crate::{
@@ -29,6 +35,7 @@ use crate::{
     },
     openapi::problem_responses,
     organization::present,
+    progress_recompute,
     require::{ItemTarget, ModuleTarget, Require, code::ITEM_NOT_FOUND},
 };
 
@@ -261,6 +268,7 @@ pub async fn update_item(
         url: body.url,
     };
     let (scope, now) = (grants.scope(), state.clock.now());
+    let before = existing(&mut tx, scope, target.id).await?;
     let mut item = items::update(&mut *tx, scope, target.id, &patch, now)
         .await
         .map_err(content_error)?;
@@ -268,6 +276,9 @@ pub async fn update_item(
         item = items::set_requirement(&mut *tx, scope, target.id, requirement, now)
             .await
             .map_err(content_error)?;
+    }
+    if before.published != item.published || before.requirement != item.requirement {
+        progress_recompute::enqueue(&mut tx, scope, target.course.id, now).await?;
     }
     commit(tx).await?;
     Ok(Json(Item::from_repo(item)?))
@@ -305,6 +316,7 @@ pub async fn move_item(
     let mut tx = begin(&state).await?;
     recheck(&mut tx, &require, target.course.id, ITEM_NOT_FOUND).await?;
     let (scope, now) = (grants.scope(), state.clock.now());
+    let before = existing(&mut tx, scope, target.id).await?;
     let item = items::move_to(
         &mut *tx,
         scope,
@@ -315,6 +327,9 @@ pub async fn move_item(
     )
     .await
     .map_err(content_error)?;
+    if before.module_id != item.module_id {
+        progress_recompute::enqueue(&mut tx, scope, target.course.id, now).await?;
+    }
     commit(tx).await?;
     Ok(Json(Item::from_repo(item)?))
 }
@@ -346,11 +361,25 @@ pub async fn delete_item(
     let (grants, target) = (require.grants(), require.target());
     let mut tx = begin(&state).await?;
     recheck(&mut tx, &require, target.course.id, ITEM_NOT_FOUND).await?;
-    items::delete(&mut *tx, grants.scope(), target.id)
+    let (scope, now) = (grants.scope(), state.clock.now());
+    items::delete(&mut *tx, scope, target.id)
         .await
         .map_err(content_error)?;
+    progress_recompute::enqueue(&mut tx, scope, target.course.id, now).await?;
     commit(tx).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// The item `id` as the transaction holding its course's lock reads it.
+async fn existing(
+    tx: &mut Transaction<'static, Postgres>,
+    scope: OrgScope,
+    id: Uuid,
+) -> Result<items::Item, ApiError> {
+    items::get(&mut **tx, scope, id)
+        .await
+        .map_err(content_error)?
+        .ok_or_else(|| content_error(stepclimb_core::modules::Error::ItemNotFound))
 }
 
 #[cfg(test)]
