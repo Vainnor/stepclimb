@@ -53,11 +53,9 @@ export const editablePageQuery = (pageId: string) =>
 
 /**
  * `body` for the save request: the one place the editor's body meets the generated types.
- * openapi-typescript-helpers' `Writable`, which openapi-fetch applies to request bodies, reads a
- * member whose schema is `"type": "null"` (a cell's `colwidth`, always `null`) as read-only and
- * types it `never`, so neither the editor's body nor the API's own `PageDoc` satisfies the request
- * type (#353 tracks the schema change). Until then the body passes as `never` here, checked as
- * `PageDoc` on the way in; the fixtures shared with the server's tests
+ * openapi-fetch's request-body type drops members whose only type is null, so a cell's
+ * `colwidth` (always `null`) makes no body fit it, and the body passes as `never` here. It is
+ * checked as `PageDoc` on the way in, and the fixtures shared with the server's tests
  * (crates/stepclimb-core/tests/fixtures/page_doc/) pin its shape.
  */
 function asRequestDoc(body: PageDoc): never {
