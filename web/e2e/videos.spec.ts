@@ -196,6 +196,13 @@ function videoFile(path: string): string {
   return path;
 }
 
+/**
+ * The wait of a step that needs chunks to reach the routes above. Playwright hands each request
+ * body to the route as base64, 16 MiB for the first chunk, which a loaded machine slows past
+ * expect's 5 s default.
+ */
+const TRANSFER = { timeout: 15_000 };
+
 const fileInput = (page: Page) => page.locator('[data-slot="file-drop"] input[type="file"]');
 const card = (page: Page) => page.locator('[data-slot="video-upload"]');
 
@@ -208,7 +215,7 @@ test("the uploader pauses, resumes, and shows processing then ready", async ({ p
   await expect(page.getByRole("heading", { level: 1, name: "Videos" })).toBeVisible();
 
   await fileInput(page).setInputFiles(videoFile(info.outputPath("Week 1.mp4")));
-  await expect.poll(() => uploads.held).toBe(1);
+  await expect.poll(() => uploads.held, TRANSFER).toBe(1);
   await expect(card(page)).toHaveAttribute("data-phase", "uploading");
   await page.getByRole("button", { name: "Pause" }).click();
   await expect(card(page)).toHaveAttribute("data-phase", "paused");
@@ -218,7 +225,7 @@ test("the uploader pauses, resumes, and shows processing then ready", async ({ p
 
   uploads.holdFrom = Number.POSITIVE_INFINITY;
   await page.getByRole("button", { name: "Resume" }).click();
-  await expect(card(page)).toHaveAttribute("data-phase", "processing");
+  await expect(card(page)).toHaveAttribute("data-phase", "processing", TRANSFER);
   expect(uploads.patches).toEqual([0, 16 * MIB, 16 * MIB]);
   await expect(page.locator('[data-slot="video-row"]')).toContainText("Processing");
 
@@ -236,7 +243,7 @@ test("an upload survives a reload when the same file is chosen again", async ({ 
   await page.goto(`/c/${courseId}/videos`);
   const file = videoFile(info.outputPath("Week 1.mp4"));
   await fileInput(page).setInputFiles(file);
-  await expect.poll(() => uploads.held).toBe(1);
+  await expect.poll(() => uploads.held, TRANSFER).toBe(1);
 
   await page.reload();
   uploads.release(false);
@@ -244,7 +251,7 @@ test("an upload survives a reload when the same file is chosen again", async ({ 
   await expect(page.getByRole("heading", { name: "Unfinished uploads" })).toBeVisible();
   await expect(page.getByText("Week 1.mp4: 80% uploaded")).toBeVisible();
   await fileInput(page).setInputFiles(file);
-  await expect(card(page)).toHaveAttribute("data-phase", "processing");
+  await expect(card(page)).toHaveAttribute("data-phase", "processing", TRANSFER);
   expect(uploads.patches.at(-1)).toBe(16 * MIB);
   expect(uploads.offset).toBe(SIZE);
   await expect(page.getByRole("heading", { name: "Unfinished uploads" })).toHaveCount(0);
@@ -259,7 +266,7 @@ test.describe("on a touch screen at 375 px", () => {
     await serveVideos(page, uploads);
     await page.goto(`/c/${courseId}/videos`);
     await fileInput(page).setInputFiles(videoFile(info.outputPath("Week 1.mp4")));
-    await expect.poll(() => uploads.held).toBe(1);
+    await expect.poll(() => uploads.held, TRANSFER).toBe(1);
     const atLeast44 = async (name: string) => {
       const box = await page.getByRole("button", { name }).boundingBox();
       expect(box?.height, name).toBeGreaterThanOrEqual(44);
@@ -303,7 +310,7 @@ for (const theme of themes) {
       expect(await violations(page)).toEqual([]);
 
       await fileInput(page).setInputFiles(videoFile(info.outputPath("Week 1.mp4")));
-      await expect.poll(() => uploads.held).toBe(1);
+      await expect.poll(() => uploads.held, TRANSFER).toBe(1);
       await page.getByRole("button", { name: "Pause" }).click();
       await expect(card(page)).toHaveAttribute("data-phase", "paused");
       expect(await violations(page)).toEqual([]);
