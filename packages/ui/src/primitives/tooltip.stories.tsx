@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 import { ThemeMatrix } from "../storybook/theme-matrix";
 import { Button } from "./button";
 import { Tooltip, TooltipTrigger } from "./tooltip";
@@ -40,7 +40,8 @@ export const Default: Story = {
   ),
   play: async () => {
     await userEvent.tab();
-    await expect(await within(document.body).findByRole("tooltip")).toBeVisible();
+    const tooltip = await within(document.body).findByRole("tooltip");
+    await waitFor(() => expect(tooltip).toBeVisible());
   },
 };
 

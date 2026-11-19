@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 import { ThemeMatrix } from "../storybook/theme-matrix";
 import { Tab, TabList, TabPanel, Tabs } from "./tabs";
 import { Text } from "./text";
@@ -63,10 +63,14 @@ export const Default: Story = { render: () => <Course /> };
 
 export const FocusVisible: Story = {
   render: () => <Course />,
+  // A Tab sent before the tabs are in the page focuses nothing, so the play waits for them first.
   play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const first = await canvas.findByRole("tab", { name: "Modules" });
     await userEvent.tab();
+    await waitFor(() => expect(first).toHaveFocus());
     await userEvent.keyboard("{ArrowRight}");
-    await expect(within(canvasElement).getByRole("tab", { name: "People" })).toHaveFocus();
+    await waitFor(() => expect(canvas.getByRole("tab", { name: "People" })).toHaveFocus());
   },
 };
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 import { ThemeMatrix } from "../storybook/theme-matrix";
 import { ENDPOINT, MockTusServer, memoryStorage } from "../test/tus-server";
 import { resumeKey } from "./resume-store";
@@ -87,11 +87,10 @@ export const DiscardConfirm: Story = {
         name: "Discard the upload of Week 3 radar vectors.mp4",
       }),
     );
-    await expect(
-      within(document.body).getByRole("alertdialog", {
-        name: "Discard the upload of Week 3 radar vectors.mp4?",
-      }),
-    ).toBeVisible();
+    const dialog = await within(document.body).findByRole("alertdialog", {
+      name: "Discard the upload of Week 3 radar vectors.mp4?",
+    });
+    await waitFor(() => expect(dialog).toBeVisible());
   },
 };
 
@@ -145,9 +144,10 @@ export const CancelConfirm: Story = {
   ),
   play: async ({ canvasElement }) => {
     await userEvent.click(within(canvasElement).getByRole("button", { name: "Cancel upload" }));
-    await expect(
-      within(document.body).getByRole("alertdialog", { name: "Cancel this upload?" }),
-    ).toBeVisible();
+    const dialog = await within(document.body).findByRole("alertdialog", {
+      name: "Cancel this upload?",
+    });
+    await waitFor(() => expect(dialog).toBeVisible());
   },
 };
 

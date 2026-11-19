@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { DotsThreeIcon } from "@phosphor-icons/react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 import { ThemeMatrix } from "../storybook/theme-matrix";
 import { Button } from "./button";
 import { IconButton } from "./icon-button";
@@ -107,7 +107,8 @@ export const SubmenuOpen: Story = {
   play: async () => {
     const body = within(document.body);
     await userEvent.click(await body.findByRole("menuitem", { name: "Export" }));
-    await expect(await body.findByRole("menuitem", { name: "Course archive" })).toBeVisible();
+    const item = await body.findByRole("menuitem", { name: "Course archive" });
+    await waitFor(() => expect(item).toBeVisible());
   },
 };
 

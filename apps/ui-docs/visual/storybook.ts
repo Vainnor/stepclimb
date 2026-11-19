@@ -37,28 +37,77 @@ export function stories(): Story[] {
 export const isMatrix = (story: Story) => story.tags.includes(MATRIX_TAG);
 
 /**
+ * Records, on `window.__scVisualFailures`, every render phase Storybook reports as `errored` and the
+ * error it carries. `storybook/test` sets `throwPlayFunctionExceptions: false`, so a failed `expect`
+ * in a play function only logs: the story still reaches `finished` and shows no error display. The
+ * phase and the exception arrive on Storybook's channel, which this hooks as Storybook installs it,
+ * before any story code runs.
+ */
+function recordFailures(): void {
+  type Channel = { on(event: string, listener: (payload: unknown) => void): void };
+  const w = window as unknown as { __scVisualFailures?: string[] };
+  if (w.__scVisualFailures !== undefined) return;
+  const failures: string[] = [];
+  w.__scVisualFailures = failures;
+  // The first lines: testing-library's errors go on to print the whole document.
+  const message = (error: unknown): string => {
+    const text =
+      typeof error === "object" && error !== null && "message" in error
+        ? String((error as { message: unknown }).message)
+        : String(error);
+    return text.split("\n").slice(0, 12).join("\n");
+  };
+  const hooked = new WeakSet<object>();
+  const hook = (channel: Channel) => {
+    if (hooked.has(channel)) return;
+    hooked.add(channel);
+    channel.on("storyRenderPhaseChanged", (payload) => {
+      if ((payload as { newPhase?: string }).newPhase === "errored") failures.push("errored");
+    });
+    channel.on("playFunctionThrewException", (error) => failures.push(message(error)));
+    channel.on("unhandledErrorsWhilePlaying", (errors) => {
+      for (const error of errors as unknown[]) failures.push(message(error));
+    });
+  };
+  let current: unknown;
+  Object.defineProperty(window, "__STORYBOOK_ADDONS_CHANNEL__", {
+    configurable: true,
+    get: () => current,
+    set: (next: unknown) => {
+      current = next;
+      if (typeof next === "object" && next !== null && "on" in next) hook(next as Channel);
+    },
+  });
+}
+
+/**
  * Opens `story` in `theme`: the Storybook theme global for stories in the toolbar's theme, and the
  * matching OS setting (dark, more contrast) for stories that follow it. Resolves once the story
- * has rendered, its play function has run and its fonts have loaded; fails if it errored.
+ * has rendered, its play function has run and its fonts have loaded; fails if rendering errored,
+ * the play function threw (a failed `expect`) or an error went unhandled while it played.
  */
 export async function openStory(page: Page, story: Story, theme: Theme): Promise<void> {
   await page.emulateMedia({
     colorScheme: theme === "dark" ? "dark" : "light",
     contrast: theme === "high-contrast" ? "more" : "no-preference",
   });
+  await page.addInitScript(recordFailures);
   await page.goto(`/iframe.html?id=${story.id}&viewMode=story&globals=theme:${theme}`);
   // Storybook's last render phase is `finished`, after the play function, whether or not the
-  // story threw; an error shows Storybook's error display instead of the story.
+  // story threw.
   await page.waitForFunction(() => {
     const preview = (window as { __STORYBOOK_PREVIEW__?: { currentRender?: { phase?: string } } })
       .__STORYBOOK_PREVIEW__;
     return preview?.currentRender?.phase === "finished";
   });
-  const failed = await page.evaluate(() =>
-    document.body.classList.contains("sb-show-errordisplay")
-      ? (document.querySelector("#error-message")?.textContent ?? "an error")
-      : null,
-  );
+  const failed = await page.evaluate(() => {
+    const failures = (window as { __scVisualFailures?: string[] }).__scVisualFailures ?? [];
+    if (document.body.classList.contains("sb-show-errordisplay")) {
+      failures.push(document.querySelector("#error-message")?.textContent ?? "an error");
+    }
+    const reasons = failures.filter((f) => f !== "errored");
+    return failures.length === 0 ? null : reasons.join("; ") || "a render phase errored";
+  });
   if (failed !== null) throw new Error(`story ${story.id} failed: ${failed}`);
   await page.evaluate(() => document.fonts.ready.then(() => undefined));
 }
