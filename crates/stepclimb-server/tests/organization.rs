@@ -895,6 +895,192 @@ async fn email_matching_is_read_from_the_callers_organization(pool: PgPool) {
     assert_eq!(of_a.body["email_matching"], true);
 }
 
+/// M1 spec 03 B17, T11: an admin sets the return origins, stored lowercase and each once; an
+/// entry that is not `https://host[:port]`, or a 21st entry, is refused and nothing is written.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn return_origins_are_checked_and_stored_in_their_canonical_form(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let admin = f.admin().await;
+    let patch =
+        |origins: &[&str]| json!({ "embedding": { "return_origins": origins } }).to_string();
+    let origins = |answer: &Answer| answer.body["embedding"]["return_origins"].clone();
+
+    let set = &patch(&[
+        "https://Host.example",
+        "https://host.example",
+        "https://lms.example:8443",
+    ]);
+    let answer = f.send(Method::PATCH, SETTINGS, Some(&admin), set).await;
+    assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    assert_eq!(
+        origins(&answer),
+        json!(["https://host.example", "https://lms.example:8443"])
+    );
+    assert_schema("OrgSettings", &answer.body);
+    assert_eq!(f.settings_entries().await, 1);
+
+    let bad = &patch(&[
+        "https://ok.example",
+        "http://host.example",
+        "https://host.example/path",
+        "https://host.example/",
+    ]);
+    let answer = f.send(Method::PATCH, SETTINGS, Some(&admin), bad).await;
+    assert_eq!(
+        (answer.status, answer.code()),
+        (StatusCode::UNPROCESSABLE_ENTITY, "request.invalid"),
+        "{answer:?}"
+    );
+    let invalid = |i: usize| {
+        (
+            format!("/embedding/return_origins/{i}"),
+            "settings.return_origin_invalid".to_owned(),
+        )
+    };
+    assert_eq!(answer.errors(), [invalid(1), invalid(2), invalid(3)]);
+
+    let many: Vec<String> = (0..21).map(|i| format!("https://h{i}.example")).collect();
+    let many: Vec<&str> = many.iter().map(String::as_str).collect();
+    let answer = f
+        .send(Method::PATCH, SETTINGS, Some(&admin), &patch(&many))
+        .await;
+    assert_eq!(
+        answer.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{answer:?}"
+    );
+    assert_eq!(
+        answer.errors(),
+        [(
+            "/embedding/return_origins".to_owned(),
+            "settings.return_origins_too_many".to_owned()
+        )]
+    );
+    let twenty = f
+        .send(Method::PATCH, SETTINGS, Some(&admin), &patch(&many[..20]))
+        .await;
+    assert_eq!(twenty.status, StatusCode::OK, "{twenty:?}");
+    assert_eq!(origins(&twenty).as_array().map(Vec::len), Some(20));
+
+    for body in [
+        r#"{"embedding": null}"#,
+        r#"{"embedding": {}}"#,
+        r#"{"embedding": {"return_origins": ["https://a.example"], "other": 1}}"#,
+        r#"{"embedding": {"return_origins": "https://a.example"}}"#,
+    ] {
+        let answer = f.send(Method::PATCH, SETTINGS, Some(&admin), body).await;
+        assert_eq!(
+            (answer.status, answer.code()),
+            (StatusCode::BAD_REQUEST, "request.malformed"),
+            "{body}"
+        );
+    }
+    let read = f.send(Method::GET, SETTINGS, Some(&admin), "").await;
+    assert_eq!(
+        origins(&read),
+        origins(&twenty),
+        "the refusals wrote nothing"
+    );
+    assert_eq!(f.settings_entries().await, 2);
+
+    let cleared = f
+        .send(Method::PATCH, SETTINGS, Some(&admin), &patch(&[]))
+        .await;
+    assert_eq!(origins(&cleared), json!([]));
+}
+
+/// M1 spec 03 B17: every signed-in user, without any permission, reads their own organization's
+/// return origins from `/me`, never another organization's.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn every_user_reads_their_own_organizations_return_origins_from_me(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let b = organizations::create(&f.pool, "org-b", "Org B", now())
+        .await
+        .expect("create organization");
+    sqlx::query(
+        "UPDATE organizations SET settings = '{\"embedding\": {\"return_origins\": [\"https://host.example\"]}}'
+         WHERE id = $1",
+    )
+    .bind(f.org)
+    .execute(&f.pool)
+    .await
+    .expect("seed org A");
+    let me = |org: Uuid, cookie: String| {
+        let request = Request::get("/api/v1/me")
+            .header(header::COOKIE, cookie)
+            .header(TEST_ORG_HEADER, org.to_string())
+            .body(Body::empty())
+            .expect("a request");
+        answer(&f.app, request)
+    };
+    let (plain_a, _) = f.user_of(f.org).await;
+    let of_a = me(f.org, plain_a).await;
+    assert_eq!(of_a.status, StatusCode::OK, "{of_a:?}");
+    assert_eq!(
+        of_a.body["embedding"],
+        json!({ "return_origins": ["https://host.example"] })
+    );
+    assert_schema("Me", &of_a.body);
+    let (plain_b, _) = f.user_of(b.id).await;
+    let of_b = me(b.id, plain_b).await;
+    assert_eq!(of_b.status, StatusCode::OK, "{of_b:?}");
+    assert_eq!(of_b.body["embedding"], json!({ "return_origins": [] }));
+}
+
+/// M1 spec 03 B17: a stored `embedding` that does not parse answers `/me` with no return origins
+/// (no "Back to" link shows) instead of failing it, and another setting that does not parse
+/// leaves the origins and the rest of `/me` readable.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn me_reads_the_embedding_setting_alone_and_fails_closed(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let (cookie, _) = f.user_of(f.org).await;
+    let me = || async {
+        let request = Request::get("/api/v1/me")
+            .header(header::COOKIE, cookie.clone())
+            .body(Body::empty())
+            .expect("a request");
+        answer(&f.app, request).await
+    };
+    let (pool, org) = (&f.pool, f.org);
+    let store = |settings: Value| async move {
+        sqlx::query("UPDATE organizations SET settings = $2 WHERE id = $1")
+            .bind(org)
+            .bind(settings)
+            .execute(pool)
+            .await
+            .expect("store settings");
+    };
+
+    for broken in [
+        json!({ "embedding": { "return_origins": "https://host.example" } }),
+        json!({ "embedding": "https://host.example" }),
+        json!({ "embedding": { "return_origins": [5] } }),
+    ] {
+        store(broken.clone()).await;
+        let answer = me().await;
+        assert_eq!(answer.status, StatusCode::OK, "{broken}: {answer:?}");
+        assert_eq!(
+            answer.body["embedding"],
+            json!({ "return_origins": [] }),
+            "{broken}"
+        );
+        assert_schema("Me", &answer.body);
+    }
+
+    store(json!({
+        "default_tz": 5,
+        "embedding": { "return_origins": ["https://host.example"], "newer": true },
+    }))
+    .await;
+    let answer = me().await;
+    assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    assert_eq!(
+        answer.body["embedding"],
+        json!({ "return_origins": ["https://host.example"] }),
+        "only return_origins reaches /me"
+    );
+}
+
 #[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
 async fn a_settings_body_that_is_not_an_object_is_malformed(pool: PgPool) {
     let f = Fixture::new(pool).await;

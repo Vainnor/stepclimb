@@ -20,7 +20,9 @@ use crate::{
     db::{TimeOutOfRange, epoch_micros},
     id::new_id,
     local_sign_in, name, org_plans, plans,
-    settings::{OrgSettings, OrgSettingsPatch},
+    settings::{
+        Embedding, EmbeddingPatch, MAX_RETURN_ORIGINS, OrgSettings, OrgSettingsPatch, return_origin,
+    },
 };
 
 /// The longest organization name, in characters (Unicode scalar values; spec 02 Q6).
@@ -87,6 +89,13 @@ pub enum Error {
     /// The patch's `default_tz` is no time zone of the IANA database ([`crate::tz`]).
     #[error("the default time zone is not an IANA time zone")]
     DefaultTzUnknown,
+    /// Entries of the patch's `embedding.return_origins` that are no `https://host[:port]`
+    /// origin ([`crate::settings::return_origin`]), by 0-based index, in order.
+    #[error("a return origin is not an https origin without a path")]
+    ReturnOriginsInvalid(Vec<usize>),
+    /// The patch's `embedding.return_origins` has more than [`MAX_RETURN_ORIGINS`] entries.
+    #[error("more than {MAX_RETURN_ORIGINS} return origins")]
+    ReturnOriginsTooMany,
     /// The stored settings object does not parse as [`OrgSettings`].
     #[error("the stored organization settings do not parse")]
     StoredSettings(#[source] serde_json::Error),
@@ -247,12 +256,34 @@ pub async fn settings(db: impl PgExecutor<'_>, scope: OrgScope) -> Result<OrgSet
     parse_settings(&stored)
 }
 
+/// The scope's `embedding` setting alone (M1 spec 03 B17), read from `settings -> 'embedding'`
+/// so another setting that does not parse cannot fail this read. A row without the member reads
+/// as [`Embedding::default`]; a member that does not parse as [`Embedding`] is
+/// [`Error::StoredSettings`].
+pub async fn embedding(db: impl PgExecutor<'_>, scope: OrgScope) -> Result<Embedding, Error> {
+    let stored = sqlx::query_scalar!(
+        r#"SELECT (settings -> 'embedding')::text AS "embedding?" FROM organizations
+           WHERE id = $1"#,
+        scope.org_id(),
+    )
+    .fetch_optional(db)
+    .await?
+    .ok_or(Error::NotFound)?;
+    match stored {
+        Some(stored) => serde_json::from_str(&stored).map_err(Error::StoredSettings),
+        None => Ok(Embedding::default()),
+    }
+}
+
 /// Merge `patch` into the scope's organization settings and set `updated_at` to `now`. The
-/// merge (`settings || patch`) runs inside the `UPDATE` against the row it locks, never against
-/// a copy read earlier, so a patch cannot write back a stale value for a key it does not name,
-/// and stored keys the patch does not name (including ones this release does not know) stay.
-/// Returns the settings after the merge. A `default_tz` that is no IANA time zone is refused
-/// with [`Error::DefaultTzUnknown`] before anything is read. Who may turn `email_matching` on is
+/// merge runs inside the `UPDATE` against the row it locks, never against a copy read earlier,
+/// so a patch cannot write back a stale value for a key it does not name, and stored keys the
+/// patch does not name (including ones this release does not know) stay. It goes one level
+/// down: a key whose patched and stored values are both objects (`embedding`) merges member by
+/// member, so a stored member the patch's type does not know stays too. Returns the settings
+/// after the merge. A `default_tz` that is no IANA time zone is refused with
+/// [`Error::DefaultTzUnknown`], and return origins with [`Error::ReturnOriginsTooMany`] or
+/// [`Error::ReturnOriginsInvalid`], before anything is read. Who may turn `email_matching` on is
 /// the route's check (spec 07 I4), not this function's.
 ///
 /// It writes the `organization.update_settings` audit entry by `actor` with the effective
@@ -290,7 +321,15 @@ pub async fn update_settings<'c>(
     }
     let stored = sqlx::query_scalar!(
         r#"UPDATE organizations
-           SET settings = settings || $2::text::jsonb,
+           SET settings = settings || COALESCE(
+                   (SELECT jsonb_object_agg(patched.key, CASE
+                               WHEN jsonb_typeof(patched.value) = 'object'
+                                    AND jsonb_typeof(settings -> patched.key) = 'object'
+                               THEN (settings -> patched.key) || patched.value
+                               ELSE patched.value
+                           END)
+                    FROM jsonb_each($2::text::jsonb) AS patched),
+                   '{}'::jsonb),
                updated_at = timestamptz 'epoch' + $3::bigint * interval '1 microsecond'
            WHERE id = $1
            RETURNING settings::text AS "settings!""#,
@@ -311,17 +350,42 @@ pub async fn update_settings<'c>(
 }
 
 /// `patch` with each value validated and in its stored form: `default_tz` in the time zone
-/// database's spelling, so `utc` stores, and compares with the current value, as `UTC`. A
-/// `default_tz` is the only value that can be refused.
+/// database's spelling, so `utc` stores, and compares with the current value, as `UTC`, and
+/// each return origin in its canonical form, once. A `default_tz` and the return origins are
+/// the values that can be refused.
 fn valid_patch(patch: &OrgSettingsPatch) -> Result<OrgSettingsPatch, Error> {
     let default_tz = match patch.default_tz.as_deref() {
         Some(name) => Some(crate::tz::canonical(name).ok_or(Error::DefaultTzUnknown)?),
         None => None,
     };
+    let embedding = patch.embedding.as_ref().map(valid_embedding).transpose()?;
     Ok(OrgSettingsPatch {
         default_tz,
         email_matching: patch.email_matching,
+        embedding,
     })
+}
+
+/// `patch` with its return origins checked (M1 spec 03 B17): at most [`MAX_RETURN_ORIGINS`]
+/// entries, each accepted by [`return_origin`] and kept in its canonical form, the first of
+/// equal ones only, in the order given.
+fn valid_embedding(patch: &EmbeddingPatch) -> Result<EmbeddingPatch, Error> {
+    if patch.return_origins.len() > MAX_RETURN_ORIGINS {
+        return Err(Error::ReturnOriginsTooMany);
+    }
+    let mut return_origins = Vec::new();
+    let mut invalid = Vec::new();
+    for (index, entry) in patch.return_origins.iter().enumerate() {
+        match return_origin(entry) {
+            Some(origin) if return_origins.contains(&origin) => {}
+            Some(origin) => return_origins.push(origin),
+            None => invalid.push(index),
+        }
+    }
+    if !invalid.is_empty() {
+        return Err(Error::ReturnOriginsInvalid(invalid));
+    }
+    Ok(EmbeddingPatch { return_origins })
 }
 
 /// Whether `patch` names a key whose value differs from its effective value in `before`.

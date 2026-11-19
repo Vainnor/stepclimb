@@ -2327,6 +2327,22 @@ export interface components {
              */
             stylesheet: string;
         };
+        /** @description How host sites link into the organization's courses. */
+        Embedding: {
+            /**
+             * @description The origins a deep link's `return` URL may point at for the web app to show a "Back to"
+             *     link, each `https://host[:port]` in lowercase without a path; empty unless set.
+             */
+            return_origins: string[];
+        };
+        /** @description The whole new `embedding`: each member is required. */
+        EmbeddingPatch: {
+            /**
+             * @description At most 20 entries, each `https://host[:port]` without a path, in any letter case; a
+             *     host outside ASCII is written in its `xn--` form. Stored in lowercase, each once.
+             */
+            return_origins: string[];
+        };
         /**
          * @description A local method an enrollment link can set up.
          * @enum {string}
@@ -2758,6 +2774,8 @@ export interface components {
              *     `appearance.theme` is `null`.
              */
             default_appearance: components["schemas"]["ThemeChoice"];
+            /** @description What the signed-in user may read of the organization's `embedding` setting. */
+            embedding: components["schemas"]["MeEmbedding"];
             /** @description The keys of the catalog features the organization's plan includes, sorted. */
             features: string[];
             /**
@@ -2768,6 +2786,14 @@ export interface components {
             grants: components["schemas"]["MeGrant"][];
             organization: components["schemas"]["Organization"];
             user: components["schemas"]["MeUser"];
+        };
+        /** @description The part of the organization's `embedding` setting every signed-in user reads. */
+        MeEmbedding: {
+            /**
+             * @description The origins a deep link's return URL may point at for a "Back to" link to show, each
+             *     `https://host[:port]` in lowercase; empty unless set.
+             */
+            return_origins: string[];
         };
         /** @description The permissions the caller holds at one scope. */
         MeGrant: {
@@ -3240,6 +3266,7 @@ export interface components {
              *     `false` unless set.
              */
             email_matching: boolean;
+            embedding: components["schemas"]["Embedding"];
             /**
              * @description The local sign-in method switches; read-only here, changed through
              *     `PUT /api/v1/admin/local-sign-in`.
@@ -3259,6 +3286,8 @@ export interface components {
              *     well as `organization.manage`.
              */
             email_matching?: boolean;
+            /** @description Replaces the return origins. */
+            embedding?: components["schemas"]["EmbeddingPatch"];
         };
         /** @description The caller's organization. */
         Organization: {
@@ -6158,7 +6187,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting this route does not change (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`; `admission`: `PUT /api/v1/admin/admission`); `tz.unknown` a `default_tz` that is no IANA time zone. */
+        /** @description `request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting this route does not change (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`; `admission`: `PUT /api/v1/admin/admission`); `tz.unknown` a `default_tz` that is no IANA time zone; `settings.return_origin_invalid` an entry of `embedding.return_origins` that is not written `https://host[:port]`; `settings.return_origins_too_many` more than 20 of them. */
         SettingsInvalid: {
             headers: {
                 [name: string]: unknown;

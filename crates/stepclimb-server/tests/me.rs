@@ -223,6 +223,7 @@ async fn t17_a_session_user_gets_the_b22_shape(pool: PgPool) {
             "features": every_feature(),
             "appearance": { "theme": null, "density": "comfortable" },
             "default_appearance": "system",
+            "embedding": { "return_origins": [] },
         })
     );
     let errors = common::schema_errors(&document(), "Me", &answer.body);

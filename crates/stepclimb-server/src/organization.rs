@@ -16,6 +16,13 @@
 //! `/api/v1/admin/admission` with `admission.manage` (docs/specs/m0/07-admission.md Q2), so a
 //! patch naming either is listed in the 422 as `settings.read_only`.
 //!
+//! `embedding.return_origins` lists the origins a deep link's `return` URL may point at for the
+//! web app to show its "Back to" link (docs/specs/m1/03-modules-and-items.md B17): at most 20
+//! entries, each `https://host[:port]` without a path. An entry written any other way is listed
+//! in the 422 as `settings.return_origin_invalid` at its index, and a 21st entry is refused as
+//! `settings.return_origins_too_many` at the list. Every signed-in user reads the list through
+//! `GET /api/v1/me`, which is how the web app decides whether to show the link.
+//!
 //! A patch that sets `email_matching` to `true` changes how unknown identities sign in: one may
 //! then be linked to an existing user by email (docs/specs/m0/07-admission.md B5). It needs
 //! `provider.manage` at organization scope (403 `permission.denied`) and, beyond it, every
@@ -77,6 +84,10 @@ pub mod code {
     pub const SETTINGS_UNKNOWN_KEY: &str = "settings.unknown_key";
     /// In a 422's `errors`: the patch names a setting another route writes.
     pub const SETTINGS_READ_ONLY: &str = "settings.read_only";
+    /// In a 422's `errors`: an entry of `embedding.return_origins` is no `https://host[:port]`.
+    pub const RETURN_ORIGIN_INVALID: &str = "settings.return_origin_invalid";
+    /// In a 422's `errors`: `embedding.return_origins` has more than 20 entries.
+    pub const RETURN_ORIGINS_TOO_MANY: &str = "settings.return_origins_too_many";
 }
 
 /// The settings this route reads but does not write: the local sign-in switches belong to
@@ -87,7 +98,7 @@ pub const READ_ONLY_SETTINGS: &[&str] = CorePatch::WRITTEN_ELSEWHERE;
 problem_responses! {
     OrgWriteForbidden => "`permission.denied`: the caller does not hold `organization.manage` at organization scope. `auth.csrf_refused`: the request did not come from this site.",
     SettingsWriteForbidden => "`permission.denied`: the caller does not hold `organization.manage` at organization scope, or the patch sets `email_matching` to `true` and the caller does not hold `provider.manage` there. `permission.escalation`: the patch sets `email_matching` to `true`, which changes how people sign in, and the caller does not hold every catalog permission at organization scope. `auth.csrf_refused`: the request did not come from this site.",
-    SettingsInvalid => "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting this route does not change (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`; `admission`: `PUT /api/v1/admin/admission`); `tz.unknown` a `default_tz` that is no IANA time zone.",
+    SettingsInvalid => "`request.invalid`: the patch breaks a rule; `errors` lists each one. `settings.unknown_key` marks a key that is no organization setting; `settings.read_only` a setting this route does not change (`local_sign_in`: `PUT /api/v1/admin/local-sign-in`; `admission`: `PUT /api/v1/admin/admission`); `tz.unknown` a `default_tz` that is no IANA time zone; `settings.return_origin_invalid` an entry of `embedding.return_origins` that is not written `https://host[:port]`; `settings.return_origins_too_many` more than 20 of them.",
 }
 
 /// The caller's organization.
@@ -151,6 +162,28 @@ pub struct OrgSettings {
     pub local_sign_in: LocalMethods,
     /// Who admission lets in; read-only here, changed through `PUT /api/v1/admin/admission`.
     pub admission: AdmissionSwitches,
+    pub embedding: Embedding,
+}
+
+/// How host sites link into the organization's courses.
+//
+// The document's form of `stepclimb_core::Embedding`, which the routes serialize.
+#[derive(ToSchema)]
+pub struct Embedding {
+    /// The origins a deep link's `return` URL may point at for the web app to show a "Back to"
+    /// link, each `https://host[:port]` in lowercase without a path; empty unless set.
+    pub return_origins: Vec<String>,
+}
+
+/// The whole new `embedding`: each member is required.
+//
+// The document's form of `stepclimb_core::EmbeddingPatch`.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EmbeddingPatch {
+    /// At most 20 entries, each `https://host[:port]` without a path, in any letter case; a
+    /// host outside ASCII is written in its `xn--` form. Stored in lowercase, each once.
+    pub return_origins: Vec<String>,
 }
 
 /// The admission switches as the organization settings show them.
@@ -198,6 +231,10 @@ pub struct OrgSettingsPatch {
     #[serde(default)]
     #[schema(value_type = bool)]
     pub email_matching: Option<bool>,
+    /// Replaces the return origins.
+    #[serde(default)]
+    #[schema(value_type = EmbeddingPatch)]
+    pub embedding: Option<EmbeddingPatch>,
 }
 
 /// Read the caller's organization.
@@ -485,6 +522,20 @@ fn org_error(error: organizations::Error) -> ApiError {
         E::NameTooLong => invalid(NAME_TOO_LONG),
         E::NameContainsNul => invalid(TEXT_CONTAINS_NUL),
         E::DefaultTzUnknown => ApiError::invalid(vec![FieldError::at(&["default_tz"], TZ_UNKNOWN)]),
+        E::ReturnOriginsInvalid(indexes) => ApiError::invalid(
+            indexes
+                .iter()
+                .map(|index| {
+                    let index = index.to_string();
+                    let path = ["embedding", "return_origins", index.as_str()];
+                    FieldError::at(&path, code::RETURN_ORIGIN_INVALID)
+                })
+                .collect(),
+        ),
+        E::ReturnOriginsTooMany => ApiError::invalid(vec![FieldError::at(
+            &["embedding", "return_origins"],
+            code::RETURN_ORIGINS_TOO_MANY,
+        )]),
         other @ (E::SlugInvalid
         | E::SlugReserved
         | E::SlugTaken
@@ -628,6 +679,15 @@ mod tests {
                 422,
                 "request.invalid",
                 Some(("/default_tz", "tz.unknown")),
+            ),
+            (
+                organizations::Error::ReturnOriginsTooMany,
+                422,
+                "request.invalid",
+                Some((
+                    "/embedding/return_origins",
+                    "settings.return_origins_too_many",
+                )),
             ),
             (organizations::Error::SlugTaken, 500, "internal.error", None),
         ];

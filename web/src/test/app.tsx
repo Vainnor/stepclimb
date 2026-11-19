@@ -104,6 +104,7 @@ export function meFixture(permissions: string[] = []): Me {
     features: [],
     appearance: { theme: null, density: "comfortable" },
     default_appearance: "system",
+    embedding: { return_origins: [] },
   };
 }
 

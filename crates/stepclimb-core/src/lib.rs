@@ -91,5 +91,5 @@ pub mod users;
 pub mod videos;
 
 pub use scope::{OrgScope, ScopeOrigin};
-pub use settings::{OrgSettings, OrgSettingsPatch};
+pub use settings::{Embedding, EmbeddingPatch, MAX_RETURN_ORIGINS, OrgSettings, OrgSettingsPatch};
 pub use source::Source;
