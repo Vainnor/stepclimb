@@ -7,7 +7,7 @@
 //!
 //! - every operation whose path names a module, an item or what an item points at (a path
 //!   parameter in [`CONTENT_PARAMS`], or ending in `_` and one of them);
-//! - every operation whose 200 answer holds an `Item` or a `Module` (at any depth of its schema)
+//! - every operation whose success answer (any 2xx) holds an `Item` or a `Module` (at any depth)
 //!   and that a learner can call: its permission suite entry is not a permission entry, or
 //!   names a permission the built-in Student or Observer holds, or it has no entry. However a
 //!   later route is keyed (by course, by module, by a body), it cannot hand a learner an item
@@ -262,11 +262,15 @@ fn schemas_reached(doc: &Value, value: &Value, seen: &mut Vec<String>) {
     }
 }
 
-/// Whether `op`'s 200 answer holds an `Item` or a `Module`.
+/// Whether a success answer (any 2xx) of `op` holds an `Item` or a `Module`.
 fn answers_items(doc: &Value, op: &Operation) -> bool {
-    let answer = &doc["paths"][&op.path][op.method.as_str().to_lowercase()]["responses"]["200"];
+    let responses = &doc["paths"][&op.path][op.method.as_str().to_lowercase()]["responses"];
     let mut seen = Vec::new();
-    schemas_reached(doc, answer, &mut seen);
+    for (status, answer) in responses.as_object().into_iter().flatten() {
+        if status.starts_with('2') {
+            schemas_reached(doc, answer, &mut seen);
+        }
+    }
     seen.iter().any(|name| name == "Item" || name == "Module")
 }
 
@@ -289,7 +293,7 @@ fn learner_callable(op: &Operation) -> bool {
 }
 
 /// The operations of `doc` the lock suite must list: those whose path names a module, an item
-/// or its content, and those a learner can call whose 200 answer holds an item or a module.
+/// or its content, and those a learner can call whose success answer holds an item or a module.
 fn content_operations(doc: &Value) -> Vec<Operation> {
     operations(doc)
         .expect("named operations")
@@ -399,8 +403,12 @@ fn learner_reads_are_found_by_their_answer_and_their_permission() {
             "{id}"
         );
     }
-    assert!(answers_items(&doc, op("createItem")));
-    assert!(!learner_callable(op("createItem")));
+    for id in ["createItem", "updateItem"] {
+        assert!(
+            answers_items(&doc, op(id)) && !learner_callable(op(id)),
+            "{id}"
+        );
+    }
     assert!(!answers_items(&doc, op("getCourse")));
 }
 

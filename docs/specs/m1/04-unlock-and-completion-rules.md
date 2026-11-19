@@ -364,9 +364,9 @@ Coordinator decisions (2026-11-18), pending owner review.
   never an open lock.
 - **The lock suite's reach.** T13's walker lists two kinds of operation: every one with a
   path parameter named `module_id`, `item_id`, `page_id`, `file_id` or `video_id`, or ending in
-  `_` and one of them (`course_file_id`); and every one whose 200 answer holds an `Item` or a
-  `Module` at any depth and that the built-in Student or Observer can call, whatever its path
-  (the outline read is keyed by course). Each read is called as a Student and as an Observer on
+  `_` and one of them (`course_file_id`); and every one whose success answer (any 2xx) holds
+  an `Item` or a `Module` at any depth and that the built-in Student or Observer can call,
+  whatever its path (the outline read is keyed by course). Each read is called as a Student and as an Observer on
   a course whose module is locked and holds a link and a page item with a `ref_id`: every
   module and item must carry its lock, and neither the URL nor any stored `ref_id` may appear in
   the body. Coordinator decision (2026-11-19), from the security review of I3: this answer-based
