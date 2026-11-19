@@ -61,6 +61,24 @@ export const LongContent: Story = {
   },
 };
 
+/** Named by a heading elsewhere on the page, with no label of its own. */
+export const LabelledBy: Story = {
+  args: {
+    label: undefined,
+    "aria-labelledby": "slider-story-heading",
+    defaultValue: 6,
+    maxValue: 10,
+  },
+  render: (args) => (
+    <section className="flex max-w-96 flex-col gap-2">
+      <h3 id="slider-story-heading" className="text-sm font-medium text-fg-strong">
+        Volume
+      </h3>
+      <Slider {...args} />
+    </section>
+  ),
+};
+
 export const Matrix: Story = {
   tags: ["theme-matrix"],
   parameters: { themeWrapper: false },

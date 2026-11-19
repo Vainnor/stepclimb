@@ -182,6 +182,8 @@ export const uiMessages: Catalog = {
     "table.selectAll": "Select all",
     "table.selectRow": "Select",
     "tagField.add": "Add",
+    "tagField.added": "Added {tag}",
+    "tagField.duplicate": "Already added",
     "tagField.remove": "Remove",
     "toast.close": "Dismiss notification",
     "toast.region": "Notifications",

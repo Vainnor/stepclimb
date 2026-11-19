@@ -108,6 +108,17 @@ describe("Slider", () => {
     expect(screen.getByRole("textbox", { name: "Volume" })).toBeInTheDocument();
   });
 
+  it("names the number field by aria-labelledby, as the thumb is", () => {
+    renderWithStrings(
+      <>
+        <p id="volume-heading">Volume</p>
+        <Slider aria-labelledby="volume-heading" defaultValue={3} maxValue={10} />
+      </>,
+    );
+    expect(screen.getByRole("slider", { name: "Volume" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Volume" })).toBeInTheDocument();
+  });
+
   it("disables the thumb and the number field together", () => {
     renderWithStrings(<Slider label="Pass mark" defaultValue={80} isDisabled />);
     expect(screen.getByRole("slider")).toBeDisabled();

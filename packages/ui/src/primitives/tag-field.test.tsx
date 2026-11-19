@@ -5,6 +5,9 @@ import { describe, expect, it, vi } from "vitest";
 import { renderWithStrings, unmarkedText } from "../test/strings";
 import { newTag, TagField } from "./tag-field";
 
+const status = (container: HTMLElement) =>
+  container.querySelector('[data-slot="tag-field-status"]') as HTMLElement;
+
 const tagNames = () =>
   screen
     .queryAllByRole("row")
@@ -60,13 +63,52 @@ describe("TagField", () => {
     expect(tagNames()).toEqual(["Approach"]);
   });
 
-  it("does not add a tag it already has", async () => {
+  it("keeps a repeated tag in the input, says it is already added and announces it", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    renderWithStrings(<TagField label="Keywords" defaultValue={["Tower"]} onChange={onChange} />);
-    await user.type(screen.getByRole("textbox"), "tower{Enter}");
+    const { container } = renderWithStrings(
+      <TagField label="Keywords" defaultValue={["Tower"]} onChange={onChange} />,
+    );
+    const input = screen.getByRole("textbox");
+    await user.type(input, "tower{Enter}");
     expect(tagNames()).toEqual(["Tower"]);
     expect(onChange).not.toHaveBeenCalled();
+    expect(input).toHaveValue("tower");
+    expect(input).toHaveAccessibleDescription("Already added");
+    expect(status(container)).toHaveTextContent("Already added");
+    // Changing the draft takes the note away.
+    await user.type(input, "s");
+    expect(input).not.toHaveAccessibleDescription("Already added");
+    expect(container.querySelector('[data-slot="tag-field-note"]')).toBeNull();
+  });
+
+  it("announces each tag it adds, the same words twice included", async () => {
+    const user = userEvent.setup();
+    const { container } = renderWithStrings(<TagField label="Keywords" />);
+    const region = status(container);
+    expect(region).toHaveAttribute("role", "status");
+    expect(region).toHaveTextContent("");
+    await user.type(screen.getByRole("textbox"), "Tower{Enter}");
+    expect(region).toHaveTextContent("Added Tower");
+    const first = region.firstElementChild;
+    await user.click(screen.getByRole("button", { name: "Remove Tower" }));
+    await user.type(screen.getByRole("textbox"), "Tower{Enter}");
+    expect(region).toHaveTextContent("Added Tower");
+    // A new node, so a screen reader hears the same words again.
+    expect(region.firstElementChild).not.toBe(first);
+  });
+
+  it("shows each tag of a controlled value once, and removes the one tag", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderWithStrings(
+      <TagField label="Keywords" value={["Tower", "Ground", "Tower"]} onChange={onChange} />,
+    );
+    expect(tagNames()).toEqual(["Tower", "Ground"]);
+    await user.click(screen.getByRole("button", { name: "Remove Tower" }));
+    expect(onChange).toHaveBeenLastCalledWith(["Ground"]);
+    await user.type(screen.getByRole("textbox"), "Approach{Enter}");
+    expect(onChange).toHaveBeenLastCalledWith(["Tower", "Ground", "Approach"]);
   });
 
   it("removes a tag with its button, named from the catalog and the tag", async () => {
@@ -122,13 +164,30 @@ describe("TagField", () => {
     expect(screen.queryByRole("button", { name: /Remove/ })).toBeNull();
   });
 
-  it("shows the caller's error and marks the input invalid", () => {
-    renderWithStrings(
-      <TagField label="Keywords" isInvalid errorMessage="Add at least one keyword." />,
+  it("shows the caller's error after the tags, describing the input and the tag list", () => {
+    const { container } = renderWithStrings(
+      <TagField
+        label="Keywords"
+        defaultValue={["Tower", "Ground", "Approach"]}
+        isInvalid
+        errorMessage="Use at most 2 keywords."
+      />,
     );
     const input = screen.getByRole("textbox");
     expect(input).toHaveAttribute("aria-invalid", "true");
-    expect(input).toHaveAccessibleDescription("Add at least one keyword.");
+    expect(input).toHaveAccessibleDescription("Use at most 2 keywords.");
+    expect(screen.getByRole("grid")).toHaveAccessibleDescription("Use at most 2 keywords.");
+    const slots = [...container.querySelectorAll("[data-slot]")].map((el) =>
+      el.getAttribute("data-slot"),
+    );
+    expect(slots.indexOf("tag-field-error")).toBeGreaterThan(slots.indexOf("tag-field-list"));
+  });
+
+  it("shows the catalog's message when invalid with none of its own", () => {
+    renderWithStrings(<TagField label="Keywords" isInvalid />);
+    expect(screen.getByRole("textbox")).toHaveAccessibleDescription(
+      "Check what you entered in this field.",
+    );
   });
 
   it("names its buttons only from the strings catalog", () => {

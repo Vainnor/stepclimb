@@ -20,10 +20,18 @@ const parts = field();
 export const colorField = tv({
   slots: {
     root: parts.root(),
-    group: [parts.control(), "flex min-h-(--sc-control-h) items-center gap-2 ps-2"],
+    // With no swatch, the input starts where a TextField's text does.
+    group: [
+      parts.control(),
+      "flex min-h-(--sc-control-h) items-center gap-2 ps-2 has-[[data-empty]]:ps-3",
+    ],
     // The border keeps the swatch's edge visible whatever its color. Forced-colors mode keeps the
-    // color: it is the value, not decoration.
-    swatch: "size-6 shrink-0 rounded-xs border border-line-strong forced-color-adjust-none",
+    // color: it is the value, not decoration. While there is no color the swatch is not drawn: an
+    // empty bordered square reads as a checkbox.
+    swatch: [
+      "size-6 shrink-0 rounded-xs border border-line-strong forced-color-adjust-none",
+      "data-[empty]:hidden",
+    ],
     input:
       "min-w-0 flex-1 self-stretch bg-transparent pe-3 tabular-nums outline-none placeholder:text-fg-soft",
   },
@@ -39,7 +47,7 @@ export interface ColorFieldProps
 }
 
 /**
- * The committed color, or an empty swatch while there is none. Hidden from assistive technology:
+ * The committed color, or nothing drawn while there is none. Hidden from assistive technology:
  * the input already says the color. React Aria's ColorSwatch would name it ("dark vibrant blue")
  * in React Aria's words rather than the strings catalog's, and only repeat the input.
  */

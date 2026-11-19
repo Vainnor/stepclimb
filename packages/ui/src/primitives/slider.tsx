@@ -1,20 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Slider: one number in a range, set by dragging a thumb along a track or typed into the number
 // field beside it for an exact value (docs/specs/m1/16-learning-ui-components.md B6). Built on
-// React Aria's Slider; the number field is React Aria's NumberField, bound to the slider's state,
-// so both always show the same value. The arrow keys step either one.
-import { type ReactNode, useContext } from "react";
+// React Aria's Slider and NumberField, which share one value, so both always show the same
+// number. The arrow keys step either one. The label names both by `aria-labelledby`.
+import { type ReactNode, useId, useState } from "react";
 import {
   Slider as AriaSlider,
   type SliderProps as AriaSliderProps,
   Input,
-  LabelContext,
+  Label,
   NumberField,
   SliderFill,
-  SliderStateContext,
   SliderThumb,
   SliderTrack,
-  useSlottedContext,
 } from "react-aria-components";
 import { tv } from "../lib/tv";
 import { FieldLabel, field } from "./field";
@@ -25,8 +23,9 @@ export const slider = tv({
   slots: {
     root: parts.root(),
     controls: "flex items-center gap-4",
+    slider: "group min-w-0 flex-1",
     // The track is as tall as a control, so it is easy to press; the rail is drawn inside it.
-    track: "relative h-(--sc-control-h) min-w-0 flex-1 pointer-coarse:h-(--sc-control-touch)",
+    track: "relative h-(--sc-control-h) w-full pointer-coarse:h-(--sc-control-touch)",
     rail: [
       "absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-pill bg-sunken",
       "border border-line-strong",
@@ -56,87 +55,107 @@ export interface SliderProps
     AriaSliderProps<number>,
     "className" | "children" | "style" | "orientation" | "render"
   > {
-  /** The visible label. Without one, give `aria-label`. */
+  /** The visible label. Without one, give `aria-labelledby` or `aria-label`. */
   label?: ReactNode;
   /** Layout only. */
   className?: string;
 }
 
-/** The number field, reading and setting the slider's one value. */
-function ExactValue({
-  formatOptions,
-  ariaLabel,
-}: {
-  formatOptions?: Intl.NumberFormatOptions;
-  ariaLabel?: string;
-}) {
-  const state = useContext(SliderStateContext);
-  const labelId = useSlottedContext(LabelContext)?.id;
-  if (state === null) return null;
-  const styles = slider();
-  const named =
-    labelId === undefined ? { "aria-label": ariaLabel } : { "aria-labelledby": labelId };
-  return (
-    <NumberField
-      data-slot="slider-number"
-      {...named}
-      value={state.getThumbValue(0)}
-      // As React Aria's thumb does for a key press: a typed value ends a change, so `onChangeEnd`
-      // runs as it does after a drag.
-      onChange={(value) => {
-        if (Number.isNaN(value)) return;
-        state.setThumbDragging(0, true);
-        state.setThumbValue(0, value);
-        state.setThumbDragging(0, false);
-      }}
-      minValue={state.getThumbMinValue(0)}
-      maxValue={state.getThumbMaxValue(0)}
-      step={state.step}
-      formatOptions={formatOptions}
-      isDisabled={state.isDisabled}
-      className={styles.number()}
-    >
-      <Input data-slot="slider-input" className={styles.input()} />
-    </NumberField>
-  );
+/** The value, held here unless `value` controls it; the minimum when neither value is given. */
+function useSliderValue({ value, defaultValue, minValue = 0, onChange }: SliderProps) {
+  const [own, setOwn] = useState(defaultValue ?? minValue);
+  const set = (next: number) => {
+    if (value === undefined) setOwn(next);
+    onChange?.(next);
+  };
+  return [value ?? own, set] as const;
 }
 
 /**
- * Controlled with `value` and `onChange`, uncontrolled with `defaultValue` (the minimum when
- * neither is given). `onChange` runs while the thumb moves, `onChangeEnd` once it is let go or a
- * value is typed. `formatOptions` format the number field (a percent, a unit).
+ * Controlled with `value` and `onChange`, uncontrolled with `defaultValue`. `onChange` runs while
+ * the thumb moves, `onChangeEnd` once it is let go or a value is typed; a typed value is kept in
+ * range and on a step. `formatOptions` format the number field (a percent, a unit).
  */
-export function Slider({
-  label,
-  className,
-  value,
-  defaultValue,
-  minValue = 0,
-  formatOptions,
-  ...props
-}: SliderProps) {
+export function Slider(props: SliderProps) {
+  const {
+    label,
+    className,
+    value: _value,
+    defaultValue: _defaultValue,
+    onChange: _onChange,
+    onChangeEnd,
+    minValue = 0,
+    maxValue = 100,
+    step = 1,
+    formatOptions,
+    isDisabled,
+    "aria-label": ariaLabel,
+    "aria-labelledby": ariaLabelledBy,
+    ...rest
+  } = props;
   const styles = slider();
+  const [current, setCurrent] = useSliderValue(props);
+  const labelId = useId();
+  const inputId = useId();
+  const named = {
+    "aria-label": label === undefined ? ariaLabel : undefined,
+    "aria-labelledby": label === undefined ? ariaLabelledBy : labelId,
+  };
+  const range = { minValue, maxValue, step, formatOptions, isDisabled };
   return (
-    <AriaSlider<number>
-      data-slot="slider"
-      {...props}
-      value={value}
-      // React Aria gives `onChange` a number only when a value or default value is a number.
-      defaultValue={value === undefined ? (defaultValue ?? minValue) : undefined}
-      minValue={minValue}
-      formatOptions={formatOptions}
-      className={styles.root({ className: ["group", className] })}
-    >
-      {label === undefined ? null : <FieldLabel>{label}</FieldLabel>}
+    <div data-slot="slider" className={styles.root({ className })}>
+      {label === undefined ? null : (
+        <FieldLabel id={labelId} htmlFor={inputId}>
+          {label}
+        </FieldLabel>
+      )}
       <div data-slot="slider-controls" className={styles.controls()}>
-        <SliderTrack data-slot="slider-track" className={styles.track()}>
-          <div data-slot="slider-rail" className={styles.rail()}>
-            <SliderFill data-slot="slider-fill" className={styles.fill()} />
-          </div>
-          <SliderThumb data-slot="slider-thumb" className={styles.thumb()} />
-        </SliderTrack>
-        <ExactValue formatOptions={formatOptions} ariaLabel={props["aria-label"]} />
+        <AriaSlider<number>
+          data-slot="slider-group"
+          {...rest}
+          {...named}
+          {...range}
+          value={current}
+          onChange={setCurrent}
+          onChangeEnd={onChangeEnd}
+          className={styles.slider()}
+        >
+          {/*
+            React Aria names the thumb by an inner label, or else by the slider group, whose own
+            `aria-labelledby` a name computation does not follow; it would read the thumb's value
+            instead. An empty hidden label takes that place, and the thumb's own
+            `aria-labelledby` adds the name.
+          */}
+          {named["aria-labelledby"] === undefined ? null : (
+            <Label hidden data-slot="slider-anchor" />
+          )}
+          <SliderTrack data-slot="slider-track" className={styles.track()}>
+            <div data-slot="slider-rail" className={styles.rail()}>
+              <SliderFill data-slot="slider-fill" className={styles.fill()} />
+            </div>
+            <SliderThumb
+              data-slot="slider-thumb"
+              aria-labelledby={named["aria-labelledby"]}
+              className={styles.thumb()}
+            />
+          </SliderTrack>
+        </AriaSlider>
+        <NumberField
+          data-slot="slider-number"
+          id={inputId}
+          {...named}
+          {...range}
+          value={current}
+          onChange={(typed) => {
+            if (Number.isNaN(typed)) return;
+            setCurrent(typed);
+            onChangeEnd?.(typed);
+          }}
+          className={styles.number()}
+        >
+          <Input data-slot="slider-input" className={styles.input()} />
+        </NumberField>
       </div>
-    </AriaSlider>
+    </div>
   );
 }
