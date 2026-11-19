@@ -79,6 +79,7 @@ function item(id: string, title: string, extra: Record<string, unknown>) {
     position: 0,
     published: true,
     requirement: null,
+    lock: null,
     created_at: "2026-11-01T12:00:00Z",
     updated_at: "2026-11-01T12:00:00Z",
     ...extra,
@@ -99,7 +100,11 @@ async function serveCourse(page: Page, brand: string, theme: string) {
   );
   // A locked item's answer: its title, without its link (spec 04 B12).
   await page.route(`**/api/v1/items/${lockedId}`, (route) =>
-    route.fulfill({ json: item(lockedId, "Tower procedures", {}) }),
+    route.fulfill({
+      json: item(lockedId, "Tower procedures", {
+        lock: { reasons: [{ kind: "unlock_at", at: "2026-12-01T00:00:00Z" }] },
+      }),
+    }),
   );
 }
 

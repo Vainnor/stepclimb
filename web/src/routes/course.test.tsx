@@ -38,6 +38,7 @@ function itemFixture(overrides: Partial<Item> = {}): Item {
     published: true,
     url: "https://example.org/phraseology",
     requirement: null,
+    lock: null,
     created_at: "2026-11-01T12:00:00Z",
     updated_at: "2026-11-01T12:00:00Z",
     ...overrides,
@@ -53,6 +54,7 @@ function moduleFixture(overrides: Partial<Module> = {}): Module {
     published: true,
     unlock_at: null,
     prerequisite_ids: [],
+    lock: null,
     require_sequential: false,
     completion_rule: "all",
     items: [
@@ -103,6 +105,32 @@ describe("the deep link (B16)", () => {
     expect(
       await screen.findByRole("heading", { level: 2, name: "Radio phraseology" }),
     ).toBeInTheDocument();
+  });
+
+  it("shows a locked item's title, as the server answers it, and nothing it withholds", async () => {
+    const locked = itemFixture({
+      url: undefined,
+      lock: { reasons: [{ kind: "unlock_at", at: "2026-12-01T00:00:00Z" }] },
+    });
+    server({ [`GET ${ITEM}`]: () => json(locked) });
+    renderApp(DEEP_LINK);
+    expect(
+      await screen.findByRole("heading", { level: 2, name: "Radio phraseology" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /^There is no page at/ })).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("example.org");
+  });
+
+  it("shows the not-found view for a locked item in another module, as for an open one", async () => {
+    const locked = itemFixture({
+      module_id: otherModuleId,
+      url: undefined,
+      lock: { reasons: [{ kind: "module_locked" }] },
+    });
+    server({ [`GET ${ITEM}`]: () => json(locked) });
+    renderApp(DEEP_LINK);
+    expect(await notFound()).toBeInTheDocument();
+    expect(screen.queryByText("Radio phraseology")).not.toBeInTheDocument();
   });
 
   it("shows the not-found view when the item is in another module or course (T10)", async () => {
