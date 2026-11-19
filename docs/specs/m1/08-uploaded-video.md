@@ -555,7 +555,10 @@ building I5.
   row. Any other refusal fails the upload with its own message; a code without one is shown
   with the code.
 - **D33. One upload at a time** per uploader; a file chosen while one runs or waits is refused
-  with a message naming the running one.
+  with a message naming the running one. Coordinator decision (2026-11-19, #385): VideoUploader
+  does not set FileDrop's `isBusy` while an upload runs or waits, since a busy zone takes no
+  choice and this message could not appear; "Choose file" stays enabled and keeps its focus,
+  which a test holds.
 - **D34. Cancel** sends `DELETE`, which deletes the upload and its video, and stays available while
   paused or stopped. Coordinator decision (2026-11-17, amended 2026-11-18): once the server holds
   any of the upload's bytes (the last stored chunk's offset, or `HEAD`'s, not the bytes of a chunk

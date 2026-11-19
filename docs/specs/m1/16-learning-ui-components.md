@@ -432,6 +432,11 @@ listed here with a pointer so the inventory is complete in one place.
     `max_file_bytes`; the server's 413 is shown in words. The upload goes out through
     `XMLHttpRequest`, the only browser API that reports a request body's progress, as the API
     client's per-request `fetch`, so the request is still built from the OpenAPI document.
+  - Coordinator decision (2026-11-19, #385): the zone does not use FileDrop's `isBusy` while a
+    batch runs. `isBusy` keeps "Choose files" focused but takes no press and refuses a drop, so
+    no selection could be made meanwhile and the status line above could never say that one was
+    not sent. The zone stays enabled, as this rule asks; a test holds that the button stays
+    focused and is not `aria-disabled` during a batch.
   - Opening or downloading a file waits for `06` I3's signed URLs, which are not built yet.
 - **B21.** Assignments (`/c/:course/assignments`): the list (`13`), a creation sheet with target,
   assignees, due rule, reminders and recurrence (`14`), and each assignment's people with their
