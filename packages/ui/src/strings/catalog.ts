@@ -14,6 +14,9 @@ export const uiMessages: Catalog = {
     "alertDialog.cancel": "Cancel",
     "announcement.byline": "Posted by {author} on {date}",
     "appShell.skipToMain": "Skip to main content",
+    "assignmentList.empty": "Nothing is assigned to you.",
+    "assignmentList.target":
+      "{type, select, course {{Course}} module {Module} item {Item} other {Item}}",
     "bottomTabs.label": "Main",
     "breadcrumbs.label": "Breadcrumbs",
     "button.pending": "In progress",
@@ -40,6 +43,23 @@ export const uiMessages: Catalog = {
     "datePicker.openCalendar": "Open calendar",
     "dateRangePicker.separator": "–",
     "dialog.close": "Close",
+    "downloadButton.cancel": "Cancel download",
+    "downloadButton.download": "Download for offline use",
+    "downloadButton.downloaded": "Downloaded {when} ({size})",
+    "downloadButton.downloading": "Downloading for offline use",
+    "downloadButton.note":
+      "The download stays in this browser and is not encrypted: anyone who can use this browser can read it.",
+    "downloadButton.problem.failed":
+      "The download stopped before it finished, and what it had saved was removed. Try again.",
+    "downloadButton.problem.noRoom":
+      "This download is {size}, more than the space this browser has left. Free up space, then try again.",
+    "downloadButton.problem.tooLarge":
+      "This download is {size}, more than this app stores for one {course}.",
+    "downloadButton.remove": "Remove download",
+    "downloadButton.sizeNote":
+      "Takes {size}. The download stays in this browser and is not encrypted: anyone who can use this browser can read it.",
+    "downloadButton.update": "Update download",
+    "downloadButton.updateAvailable": "Update available",
     "dueBadge.due": "{days, plural, =0 {Due today} =1 {Due tomorrow} other {Due in # days}}",
     "dueBadge.overdue": "{days, plural, =0 {Overdue} one {# day overdue} other {# days overdue}}",
     "editor.block":

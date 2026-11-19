@@ -227,6 +227,26 @@ listed here with a pointer so the inventory is complete in one place.
 - **B12.** AssignmentList lists the caller's assignments (`13` B18) with DueBadge and StatusChip,
   overdue first; DownloadButton (`15` B8) shows a course's download state (not downloaded,
   downloading with progress, downloaded with date and size, update available) and its actions.
+- **B12a.** Coordinator decisions for B12 (overnight, 2026-11-19), pending owner review:
+  - Both components take props: `me/assignments` (`13` I4) and the offline package (`15`) are not
+    built yet, and `13` names no `MyAssignment` fields beyond B18's target, due date and status.
+    A row is `{ id, target: { type, title }, courseTitle?, href, due, status }`; the screen (I16,
+    the dashboard) maps the API's rows to it.
+  - AssignmentList draws `not_started` as available, `in_progress` as in progress, `completed` as
+    complete and `overdue` as overdue (B3), and sorts by `13` B18's rule (overdue, then by due
+    date, then without one), stably, so a list in any order reads the same. Each row is a link
+    named by the target's title, with the course's title under it for a module or item; what was
+    assigned (with the organization's term for a course), the course, the state and the due label
+    are the link's description, as ItemRow's are (B9a). A completed row shows no DueBadge. An
+    empty list says "Nothing is assigned to you."
+  - DownloadButton draws the state its caller reports and does no fetching or storing: the
+    caller (`15` I3) measures progress and decides the refusals of `15` B8, passed as `problem`
+    (too large, no room, failed) and announced in a live region; a refusal names the download's
+    size, not the limit. The actions: Download when not downloaded, Cancel while downloading,
+    Remove when downloaded, Update and Remove when an update is available. Every action is a
+    secondary or ghost button, leaving the page's one primary action to NextUp. The help text
+    `15` B13 asks for (not encrypted) is the Download button's description, with the size when
+    the caller knows it. Sizes use FileDrop's decimal units; the date is the user's zone's day.
 
 ### Authoring
 
