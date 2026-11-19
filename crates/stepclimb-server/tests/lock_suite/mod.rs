@@ -142,6 +142,10 @@ const LOCK_TABLE: &[LockEntry] = &[
         operation_id: "updateVideo",
         lock: Lock::Staff,
     },
+    LockEntry {
+        operation_id: "retryVideo",
+        lock: Lock::Staff,
+    },
 ];
 
 /// The URL of the suite's links ([`Org::link`]).
