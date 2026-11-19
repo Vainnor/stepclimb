@@ -27,7 +27,13 @@ export const select = tv({
       "flex h-(--sc-control-h) items-center gap-2 px-3 text-start cursor-default",
       "data-[pressed]:border-brand",
     ],
-    value: "min-w-0 flex-1 truncate data-[placeholder]:text-fg-sub",
+    // SelectValue draws the chosen option's own parts, its label and its check slot. The check
+    // slot is a flex box, which would take a line of its own under the label and push the text
+    // up, so the value lays them out in one row, keeps only the label and cuts it short.
+    value: [
+      "flex min-w-0 flex-1 items-center truncate data-[placeholder]:text-fg-sub",
+      "[&_[data-slot=list-box-item-check]]:hidden [&_[data-slot=list-box-item-label]]:truncate",
+    ],
     caret: "shrink-0 text-fg-sub",
   },
 });

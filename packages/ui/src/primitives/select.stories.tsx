@@ -50,12 +50,29 @@ export const Default: Story = {
   ),
 };
 
+/** A chosen value, drawn on the box's middle line as the placeholder is. */
 export const WithValue: Story = {
   render: (args) => (
     <Select {...args} defaultValue="s2">
       {ratings}
     </Select>
   ),
+  play: async ({ canvasElement }) => {
+    const trigger = within(canvasElement).getByRole("button", { name: /Rating/ });
+    const value = trigger.querySelector<HTMLElement>("[data-slot=select-value]");
+    if (value === null) throw new Error("the value");
+    await expect(value).toHaveTextContent("S2 Tower");
+    // The chosen option's text, measured as a line box: its middle on the trigger's middle.
+    const range = document.createRange();
+    range.selectNodeContents(value);
+    const lines = [...range.getClientRects()].filter((r) => r.width > 0 && r.height > 0);
+    const box = trigger.getBoundingClientRect();
+    const middle = box.top + box.height / 2;
+    await expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) {
+      await expect(Math.abs(line.top + line.height / 2 - middle)).toBeLessThanOrEqual(2);
+    }
+  },
 };
 
 /** Open: a popover at 1280 px, a bottom sheet at 375 px. */
