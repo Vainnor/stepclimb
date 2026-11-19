@@ -14,9 +14,12 @@
 # development environment is https://auth-dev.vatsim.net (https://vatsim.dev/services/connect/sandbox),
 # which an organization reaches by overriding the three URLs.
 #
-# `pkce` stays on (spec 06 Q3): Connect's documentation does not mention PKCE either way. An
-# organization whose sign-ins fail at the token step can override `pkce = false`, which removes
-# the protection against an injected authorization code.
+# `pkce` stays on (spec 06 Q3). Connect's documentation does not mention PKCE, but a sign-in
+# through the Connect sandbox (auth-dev.vatsim.net) on 2026-11-17, from a server built from
+# `next` at c907eea8, completed the token exchange and the userinfo read with an S256 challenge
+# and the client secret sent by HTTP Basic (spec 06, the preset's PKCE note; issue #339).
+# Production (auth.vatsim.net) has not been checked. Overriding `pkce = false` removes the
+# protection against an injected authorization code; it is not needed for Connect.
 
 kind = "oauth2"
 key = "vatsim"
