@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 import { ThemeMatrix } from "../storybook/theme-matrix";
+import { Button } from "./button";
+import { DialogTrigger } from "./dialog";
 import { Select, SelectItem } from "./select";
+import { Sheet } from "./sheet";
 
 const meta = {
   title: "Forms/Select",
@@ -64,6 +67,40 @@ export const Open: Story = {
       </Select>
     </div>
   ),
+};
+
+/**
+ * Inside a Sheet, as in a form that adds an item: a value picked from the list (a bottom sheet at
+ * 375 px, a popover at 1280 px) lands in the field, and the Sheet stays open and usable.
+ */
+export const InSheet: Story = {
+  render: (args) => (
+    // As tall as the frame, so the screenshot of the story's box holds the Sheet.
+    <div className="min-h-[calc(100dvh-3rem)]">
+      <DialogTrigger>
+        <Button>Add a session</Button>
+        <Sheet title="Add a session">
+          <Select {...args} defaultValue="s1">
+            {ratings}
+          </Select>
+        </Sheet>
+      </DialogTrigger>
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    await userEvent.click(within(canvasElement).getByRole("button", { name: "Add a session" }));
+    const sheet = await body.findByRole("dialog", { name: "Add a session" });
+    // The closed list draws nothing, so nothing makes the Sheet inert.
+    await expect(body.queryByRole("listbox")).toBeNull();
+    await expect(sheet.closest("[inert]")).toBeNull();
+    await userEvent.click(within(sheet).getByRole("button", { name: /Rating/ }));
+    await userEvent.click(await body.findByRole("option", { name: "S2 Tower" }));
+    await waitFor(() => expect(body.queryByRole("listbox")).toBeNull());
+    await expect(within(sheet).getByRole("button", { name: /Rating/ })).toHaveTextContent(
+      "S2 Tower",
+    );
+  },
 };
 
 export const FocusVisible: Story = {
