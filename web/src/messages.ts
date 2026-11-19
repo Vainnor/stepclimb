@@ -179,6 +179,47 @@ export const webMessages: Catalog = {
     "authoring.save": "Save",
     "authoring.saved": "{title} saved",
     "authoring.title": "Edit {course}",
+    "branding.appearance":
+      "{appearance, select, system {Match each person's device} light {Light} dark {Dark} highContrast {High contrast} other {Unknown}}",
+    "branding.cornerStyle":
+      "{style, select, square {Square} default {Slightly rounded} round {Rounded} other {Unknown}}",
+    "branding.fallback.description":
+      "This version of Stepclimb measures colors differently, and the saved brand color fails its contrast checks, so everyone sees the default brand. Choose a brand color and save it again.",
+    "branding.fallback.title": "Your saved brand is not in use",
+    "branding.field.cornerStyle": "Corners",
+    "branding.field.defaultAppearance": "Default appearance",
+    "branding.field.defaultAppearance.description":
+      "What people see until they choose a theme for themselves.",
+    "branding.field.primary": "Brand color",
+    "branding.field.primary.description":
+      "Six hex digits, such as #007373. The light, dark and high-contrast colors are made from it.",
+    "branding.field.readingFont": "Reading font",
+    "branding.field.uiFont": "Interface font",
+    "branding.forbidden.description":
+      "Only people who can manage branding can open this page. Ask an administrator if you need to.",
+    "branding.forbidden.title": "You cannot change branding",
+    "branding.preview": "Preview",
+    "branding.problem.contrast":
+      "Some colors made from this brand color are too close in contrast to read. The report below lists them. Choose another brand color.",
+    "branding.problem.failed": "Something went wrong. Try again.",
+    "branding.problem.forbidden":
+      "You do not have permission to change branding. Ask an administrator if you need to.",
+    "branding.problem.invalidColor": "Enter a brand color as six hex digits, such as #007373.",
+    "branding.problem.notAChoice": "Choose one of the options.",
+    "branding.problem.notInPlan":
+      "Your organization's plan does not include custom branding, so it cannot be changed.",
+    "branding.problem.tooLong": "Enter a brand color as six hex digits, such as #007373.",
+    "branding.problem.unknown":
+      "Something went wrong. Try again. If it keeps happening, report the code below.",
+    "branding.problem.unreachable":
+      "Stepclimb could not reach the server. Check your connection and try again.",
+    "branding.readingFont":
+      "{font, select, serif {Serif, for long pages} sans {The interface font} other {Unknown}}",
+    "branding.save": "Save branding",
+    "branding.saved": "Branding saved",
+    "branding.title": "Branding",
+    "branding.uiFont":
+      "{font, select, atkinsonHyperlegibleNext {Atkinson Hyperlegible Next} roboto {Roboto} other {Unknown}}",
     "course.home.empty": "This {course} has no modules you can open yet.",
     "course.module.empty": "This module has no items you can open yet.",
     "course.returnLink": "Back to {host}",
@@ -330,6 +371,7 @@ export const webMessages: Catalog = {
     "loadError.unreachable": "Check your connection, then try again.",
     "loadError.unreachableTitle": "The server could not be reached",
     "nav.account": "Account",
+    "nav.branding": "Branding",
     "nav.home": "Home",
     "notFound.description": "Check the address, or go to the home page.",
     "notFound.heading": "There is no page at {path}",

@@ -9,7 +9,10 @@
     "./structure.css": "./build/css/structure.css",
     "./theme.css": "./build/css/theme.css",
     "./tailwind-theme.css": "./build/css/tailwind-theme.css",
-    "./docs/tokens.json": "./build/docs/tokens.json"
+    "./docs/tokens.json": "./build/docs/tokens.json",
+    "./color": "./src/color.ts",
+    "./generate": "./src/generate.ts",
+    "./report": "./src/report.ts"
   },
   "scripts": {
     "build": "tz build",

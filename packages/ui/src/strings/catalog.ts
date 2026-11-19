@@ -18,6 +18,16 @@ export const uiMessages: Catalog = {
     "assignmentList.target":
       "{type, select, course {{Course}} module {Module} item {Item} other {Item}}",
     "bottomTabs.label": "Main",
+    "brandPreview.appearance":
+      "{appearance, select, light {Light} dark {Dark} highContrast {High contrast} other {Theme}}",
+    "brandPreview.label": "Preview of the draft brand",
+    "brandPreview.sample.button": "Continue",
+    "brandPreview.sample.callout": "Notes for learners sit on a tint like this one.",
+    "brandPreview.sample.course": "Ground school",
+    "brandPreview.sample.link": "Links look like this",
+    "brandPreview.sample.organization": "Your organization",
+    "brandPreview.sample.progress": "{Course} progress",
+    "brandPreview.sample.text": "Body text reads like this, at the size learners read pages in.",
     "breadcrumbs.label": "Breadcrumbs",
     "button.pending": "In progress",
     "calendar.next": "Next month",
@@ -32,6 +42,25 @@ export const uiMessages: Catalog = {
     "commandPalette.placeholder": "Type a command",
     "commandPalette.results": "Matching commands",
     "commandPalette.search": "Search commands",
+    "contrastReport.appearance":
+      "{appearance, select, light {Light} dark {Dark} highContrast {High contrast} other {Theme}}{failing, plural, =0 {} one {, # fails} other {, # fail}}",
+    "contrastReport.column.contrast": "Contrast",
+    "contrastReport.column.needs": "Needs",
+    "contrastReport.column.pair": "Color pair",
+    "contrastReport.column.result": "Result",
+    "contrastReport.fail": "Fails",
+    "contrastReport.label": "Contrast report",
+    "contrastReport.minimum": "{minimum, number, ::.#}:1",
+    "contrastReport.pair": "{foreground} on {background}",
+    "contrastReport.pass": "Passes",
+    "contrastReport.ratio": "{ratio, number, ::.00}:1",
+    "contrastReport.summary.fail":
+      "{count, plural, one {# color pair is} other {# color pairs are}} too close in contrast. Choose another brand color: these colors cannot be saved.",
+    "contrastReport.summary.pass":
+      "Every color pair passes in light, dark and high contrast, so these colors can be saved.",
+    "contrastReport.tabs": "Contrast by theme",
+    "contrastReport.warning.brandNearDanger":
+      "The brand color is close in hue to the color for errors and overdue work, so in progress and overdue can look alike. Their icons still tell them apart.",
     "copyButton.copied": "Copied",
     "copyButton.failed": "Could not copy. Select the text and copy it yourself.",
     "copyButton.label": "Copy",

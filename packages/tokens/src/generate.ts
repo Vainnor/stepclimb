@@ -598,22 +598,36 @@ export const learningAliases = Object.entries(learning.color).map(([token, { $va
 });
 
 /**
- * The theme as one CSS rule under `selector`, with variables.css's names: every color token, the
- * learning states as `var()` of their targets (so they resolve to this theme's colors), the UI
- * and reading fonts and the radius tokens corner style controls. `indent` goes before every
+ * The theme's custom properties, with variables.css's names and in its order: every color token,
+ * the learning states as `var()` of their targets (so they resolve to this theme's colors), the
+ * UI and reading fonts and the radius tokens corner style controls. `themeToCss` writes them as a
+ * rule; the branding screen's preview sets them on an element.
+ */
+export function themeDeclarations(theme: Theme): [string, string][] {
+  return [
+    ...colorTokens.map((t): [string, string] => [
+      variableName(`color.${t}`),
+      cssColor(theme.colors[t]),
+    ]),
+    ...learningAliases.map(([state, target]): [string, string] => [
+      variableName(`color.${state}`),
+      `var(${variableName(`color.${target}`)})`,
+    ]),
+    [variableName("font.ui"), cssFontStack(theme.font.ui)],
+    [variableName("font.read"), cssFontStack(theme.font.read)],
+    ...radiusTokens.map((t): [string, string] => [
+      variableName(`radius.${t}`),
+      `${theme.radius[t]}px`,
+    ]),
+  ];
+}
+
+/**
+ * The theme as one CSS rule under `selector`: its `themeDeclarations`. `indent` goes before every
  * line, for a rule inside `@media`.
  */
 export function themeToCss(theme: Theme, selector: string, indent = ""): string {
-  const lines = [
-    ...colorTokens.map((t) => `${variableName(`color.${t}`)}: ${cssColor(theme.colors[t])};`),
-    ...learningAliases.map(
-      ([state, target]) =>
-        `${variableName(`color.${state}`)}: var(${variableName(`color.${target}`)});`,
-    ),
-    `${variableName("font.ui")}: ${cssFontStack(theme.font.ui)};`,
-    `${variableName("font.read")}: ${cssFontStack(theme.font.read)};`,
-    ...radiusTokens.map((t) => `${variableName(`radius.${t}`)}: ${theme.radius[t]}px;`),
-  ];
+  const lines = themeDeclarations(theme).map(([name, value]) => `${name}: ${value};`);
   const body = lines.map((l) => `${indent}  ${l}`).join("\n");
   return `${indent}${selector} {\n${body}\n${indent}}\n`;
 }

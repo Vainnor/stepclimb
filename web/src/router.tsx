@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The route tree (docs/specs/m0/11-app-shell.md B2, B7, B16): a signed-out layout for the sign-in
 // steps and the enrollment page, and a signed-in layout for everything else that exists: home, the
-// account page, the course layout with the course home, a module and the deep link to an item
+// account page, the organization's branding (docs/specs/m1/16-learning-ui-components.md B14),
+// the course layout with the course home, a module and the deep link to an item
 // (docs/specs/m1/03-modules-and-items.md B16), a course's authoring screen
 // (docs/specs/m1/16-learning-ui-components.md B19), its files area, its video panel and the page
 // editor (docs/specs/m1/07-pages-and-the-editor.md B21). Any other path renders the not-found
@@ -24,6 +25,7 @@ import { type ErrorPlace, RouteError } from "./layouts/route-error";
 import { SignedInLayout } from "./layouts/signed-in";
 import { SignedOutLayout } from "./layouts/signed-out";
 import { AccountView } from "./routes/account";
+import { BrandingView } from "./routes/branding";
 import { CourseEditView, validateCourseEditSearch } from "./routes/course-edit";
 import { CourseItemView } from "./routes/course-item";
 import { CourseHomeView, CourseModuleView } from "./routes/course-outline";
@@ -191,6 +193,14 @@ const courseVideosRoute = createRoute({
   component: VideosView,
 });
 
+/** The organization's branding (docs/specs/m1/16-learning-ui-components.md B14). */
+const brandingRoute = createRoute({
+  getParentRoute: () => signedInRoute,
+  path: "admin/branding",
+  staticData: { view: { title: (t) => t("branding.title"), nav: "branding" } },
+  component: BrandingView,
+});
+
 /** A course's authoring screen (docs/specs/m1/16-learning-ui-components.md B19). */
 const courseEditRoute = createRoute({
   getParentRoute: () => signedInRoute,
@@ -220,6 +230,7 @@ export const routeTree = rootRoute.addChildren([
   signedInRoute.addChildren([
     homeRoute,
     accountRoute,
+    brandingRoute,
     courseEditRoute,
     courseRoute.addChildren([courseHomeRoute, courseModuleRoute, courseItemRoute]),
     courseFilesRoute,

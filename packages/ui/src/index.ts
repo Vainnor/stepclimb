@@ -11,6 +11,17 @@ export type {
   BoardMove,
 } from "./authoring/board-moves";
 export {
+  BrandPreview,
+  type BrandPreviewProps,
+  brandPreview,
+} from "./authoring/brand-preview";
+export {
+  ContrastReport,
+  type ContrastReportEntry,
+  type ContrastReportProps,
+  contrastReport,
+} from "./authoring/contrast-report";
+export {
   ModuleBoard,
   type ModuleBoardProps,
   type MoveOutcome,
