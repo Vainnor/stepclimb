@@ -130,6 +130,23 @@ describe("AssignmentList", () => {
     expect(screen.getByRole("link")).toHaveAccessibleDescription("Course, Complete");
   });
 
+  it("draws the warning icon once on an overdue row, and the calendar on the others", () => {
+    renderWithStrings(
+      <AssignmentList
+        timeZone={NY}
+        now={now}
+        assignments={[
+          entry({ id: "1", status: "overdue", due: new Date("2026-03-07T14:00:00Z") }),
+          entry({ id: "2", status: "in_progress", due: new Date("2026-03-13T14:00:00Z") }),
+        ]}
+      />,
+    );
+    const [overdue, soon] = rows() as [HTMLElement, HTMLElement];
+    expect(overdue.querySelectorAll("svg")).toHaveLength(1);
+    expect(overdue.querySelector('[data-slot="due-badge"] svg')).toBeNull();
+    expect(soon.querySelector('[data-slot="due-badge"] svg')).not.toBeNull();
+  });
+
   it("names a course target with the organization's term", () => {
     render(
       <StringsProvider

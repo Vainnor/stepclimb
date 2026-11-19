@@ -54,7 +54,7 @@ export const uiMessages: Catalog = {
     "downloadButton.problem.noRoom":
       "This download is {size}, more than the space this browser has left. Free up space, then try again.",
     "downloadButton.problem.tooLarge":
-      "This download is {size}, more than this app stores for one {course}.",
+      "This download is {size}, more than this app stores for one {course}. Read it online instead.",
     "downloadButton.remove": "Remove download",
     "downloadButton.sizeNote":
       "Takes {size}. The download stays in this browser and is not encrypted: anyone who can use this browser can read it.",

@@ -156,6 +156,11 @@ everything that happened for one person and one assignment. Recurrence and expir
 
 - **B18.** `GET /api/v1/me/assignments` lists the caller's rows of assignments not ended, with the
   target, due date and status, ordered overdue first, then by due date, then without one.
+  Coordinator decision (2026-11-19): each `MyAssignment` row carries the assignment's `id`,
+  `target: { type, id, title }`, `course: { id, title }`, `module_id` for an item target (the item
+  view's path is `/c/:course/m/:module/i/:item`, `03` B16), `due_at` (null without a due rule) and
+  `status`, so AssignmentList (`16` B12a) can name the course and link to the target without a
+  second request. B19's `deadlines` rows have the same shape.
 - **B19.** `GET /api/v1/me/dashboard` (`10` B4) gains `deadlines` (the caller's rows due within 14
   days or overdue, at most 10) and each course entry its nearest `due_at` and status; B5 of `10`
   then orders overdue courses first, then those due within 7 days by due date, before its other
@@ -456,7 +461,8 @@ owner's; the owner answered them on 2026-11-16.
    with templates. Covers B10 to B14; T4 to T8. Depends on: I1, I2, `12-email.md` I3,
    `11-announcements-and-in-app-notifications.md` I2.
 4. **I4. Timeline, learner lists and the dashboard.** `assignment_events`, the timeline route with
-   B17's readers, `/me/assignments`, dashboard deadlines and ordering, due marks in the outline.
+   B17's readers, `/me/assignments` and dashboard deadlines with B18's row shape (`course`,
+   `module_id` for an item target), ordering, due marks in the outline.
    Covers B16 to B20; T11, T12. Depends on: I3, `10-learner-dashboard-and-next-up.md` I1.
 5. **I5. Group assignees.** Group targets, `assignments.sync_groups`, removal. Covers B2 (groups),
    B6; T9. Depends on: I1, `../m0/07-admission.md` I7.

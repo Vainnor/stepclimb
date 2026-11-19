@@ -150,7 +150,13 @@ function AssignmentRow({ entry, timeZone, now }: RowProps) {
       <span data-slot="assignment-list-meta" aria-hidden="true" className={styles.meta()}>
         <StatusChip state={state} />
         {showsDue(entry) && entry.due !== null ? (
-          <DueBadge due={entry.due} now={now} timeZone={timeZone} />
+          // The StatusChip beside it already draws an overdue row's warning icon.
+          <DueBadge
+            due={entry.due}
+            now={now}
+            timeZone={timeZone}
+            iconHidden={entry.status === "overdue"}
+          />
         ) : null}
       </span>
     </li>

@@ -21,7 +21,9 @@ const meta = {
       description: {
         component: `A course's download for offline reading, in four states: not downloaded (a Download button, the package's size, and the note that the download is stored in the browser without encryption), downloading (progress and Cancel), downloaded (when and how large, and Remove) and update available (the same with Update). A refusal or a failed download shows below in a live region, so a screen reader hears it.
 
-The component draws what the caller reports. The caller fetches the package, asks for persistent storage, stores the files, measures progress, refuses a package over the size limit or the browser's free quota before fetching anything, and checks for updates.
+The component draws what the caller reports. The caller fetches the package, asks for persistent storage, stores the files, measures progress, refuses a package over the size limit or the browser's free quota before fetching anything, and checks for updates. A package refused as too large is not offered again: Download stays disabled while that problem shows.
+
+\`isDisabled\` is for when the app is offline (spec 15 B9): it turns off Download and Update, which need the server, and leaves Remove and Cancel, which do not. Until the caller has read IndexedDB and knows the course's state, it draws a \`Skeleton\` the size of the button in its place rather than guessing a state.
 
 **Usage.** \`<DownloadButton state={{ kind: "none", sizeBytes: pkg.size_bytes }} timeZone={me.tz} onDownload={...} onCancel={...} onRemove={...} onUpdate={...} />\`; pass \`problem\` after a refusal or failure and clear it at the next attempt. Leave the component out when the organization switches downloads off (\`offline.downloads_enabled\`).
 
@@ -65,6 +67,19 @@ export const TooLarge: Story = {
     state: { kind: "none", sizeBytes: 620_000_000 },
     problem: { kind: "tooLarge", sizeBytes: 620_000_000 },
   },
+};
+
+/** Refused before any byte was fetched: larger than the space the browser reports free. */
+export const NoRoom: Story = {
+  args: {
+    state: { kind: "none", sizeBytes: 90_000_000 },
+    problem: { kind: "noRoom", sizeBytes: 90_000_000 },
+  },
+};
+
+/** Offline: Update needs the server and is off; Remove still works. */
+export const Disabled: Story = {
+  args: { state: { kind: "update", downloadedAt, sizeBytes: 48_200_000 }, isDisabled: true },
 };
 
 /** Stopped partway; what it stored was removed. */

@@ -56,7 +56,7 @@ const meta = {
 
 The title is the link's whole name; what was assigned, its course, its state and the due label are its description. The whole row is the link's target. Pressed draws as hover. Rows have no disabled or error state; a page that is loading draws a \`Skeleton\` in its place.
 
-**Usage.** Map \`GET /api/v1/me/assignments\`'s rows to \`{ id, target: { type, title }, courseTitle, href, due, status }\` and render \`<AssignmentList assignments={rows} timeZone={me.tz} now={clock.now()} />\` under the page's heading.
+**Usage.** For the learner's own assignments: the rows of \`GET /api/v1/me/assignments\` and the dashboard's \`deadlines\` (spec 10, spec 13 B19), which have the same shape. Map each to \`{ id, target: { type, title }, courseTitle: course.title (module and item targets), href, due: due_at, status }\`, where \`href\` is the course home for a course or module target and \`/c/:course/m/:module_id/i/:item\` for an item, and render \`<AssignmentList assignments={rows} timeZone={me.tz} now={clock.now()} />\` under the page's heading. A manager's list of an assignment's people (\`GET /api/v1/assignments/{id}/users\`) is a different screen and does not use it.
 
 **Do** pass the status the server sent.
 

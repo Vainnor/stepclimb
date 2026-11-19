@@ -61,11 +61,13 @@ export interface DueBadgeProps {
   now: Date;
   /** The user's IANA time zone (`users.tz`), which decides where a day starts. */
   timeZone: string;
+  /** Leaves the icon out where the row already draws the overdue state's icon beside it. */
+  iconHidden?: boolean;
   /** Layout only. */
   className?: string;
 }
 
-export function DueBadge({ due, now, timeZone, className }: DueBadgeProps) {
+export function DueBadge({ due, now, timeZone, iconHidden = false, className }: DueBadgeProps) {
   const { overdue, label } = useDueLabel(due, now, timeZone);
   const styles = dueBadge({ overdue });
   return (
@@ -74,11 +76,13 @@ export function DueBadge({ due, now, timeZone, className }: DueBadgeProps) {
       data-overdue={overdue || undefined}
       className={styles.root({ className })}
     >
-      <Icon
-        icon={overdue ? learningStateIcons.overdue.icon : CalendarBlankIcon}
-        size="sm"
-        className={styles.icon()}
-      />
+      {iconHidden ? null : (
+        <Icon
+          icon={overdue ? learningStateIcons.overdue.icon : CalendarBlankIcon}
+          size="sm"
+          className={styles.icon()}
+        />
+      )}
       <time data-slot="due-badge-label" dateTime={due.toISOString()} className={styles.label()}>
         {label}
       </time>

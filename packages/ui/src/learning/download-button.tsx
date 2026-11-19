@@ -6,7 +6,9 @@
 // Downloading: a progress bar and Cancel. Downloaded: when and how large, and Remove. Update
 // available: the same with Update. The component draws; the caller fetches, stores, measures
 // and refuses (a package over the size limit or the free quota, spec 15 B8) and passes the
-// refusal as `problem`, which a live region announces.
+// refusal as `problem`, which a live region announces. A package too large to store is not
+// offered for download again. `isDisabled` turns off the actions that need the server (Download,
+// Update) while the app is offline; Remove and Cancel need no connection and stay.
 import { ArrowsClockwiseIcon, DownloadSimpleIcon, TrashIcon, XIcon } from "@phosphor-icons/react";
 import { useId, useMemo } from "react";
 import { useLocale } from "react-aria-components";
@@ -65,6 +67,8 @@ export interface DownloadButtonProps {
   onRemove: () => void;
   /** Fetches the server's newer package, from `update`. */
   onUpdate: () => void;
+  /** Turns off Download and Update, which need the server: set it while the app is offline. */
+  isDisabled?: boolean;
   /** Layout only. */
   className?: string;
 }
@@ -77,14 +81,27 @@ export function DownloadButton({
   onCancel,
   onRemove,
   onUpdate,
+  isDisabled = false,
   className,
 }: DownloadButtonProps) {
   const { t } = useStepclimbStrings();
   const styles = downloadButton();
   const problemText = useProblemText(problem);
   return (
-    <div data-slot="download-button" data-state={state.kind} className={styles.root({ className })}>
-      {state.kind === "none" ? <NotDownloaded state={state} onDownload={onDownload} /> : null}
+    <div
+      data-slot="download-button"
+      data-state={state.kind}
+      data-disabled={isDisabled || undefined}
+      className={styles.root({ className })}
+    >
+      {state.kind === "none" ? (
+        <NotDownloaded
+          state={state}
+          onDownload={onDownload}
+          // A package too large to store is refused again however often it is tried.
+          isDisabled={isDisabled || problem?.kind === "tooLarge"}
+        />
+      ) : null}
       {state.kind === "downloading" ? (
         <div data-slot="download-button-row" className={styles.row()}>
           <ProgressBar
@@ -101,7 +118,13 @@ export function DownloadButton({
         </div>
       ) : null}
       {state.kind === "downloaded" || state.kind === "update" ? (
-        <Stored state={state} timeZone={timeZone} onRemove={onRemove} onUpdate={onUpdate} />
+        <Stored
+          state={state}
+          timeZone={timeZone}
+          onRemove={onRemove}
+          onUpdate={onUpdate}
+          isDisabled={isDisabled}
+        />
       ) : null}
       {/* In the page from the first render, so a problem is announced when it appears. */}
       <p data-slot="download-button-problem" role="alert" className={styles.problem()}>
@@ -114,9 +137,11 @@ export function DownloadButton({
 function NotDownloaded({
   state,
   onDownload,
+  isDisabled,
 }: {
   state: { sizeBytes?: number };
   onDownload: () => void;
+  isDisabled: boolean;
 }) {
   const { t } = useStepclimbStrings();
   const noteId = useId();
@@ -126,7 +151,12 @@ function NotDownloaded({
   return (
     <>
       <div data-slot="download-button-actions" className={styles.actions()}>
-        <Button data-slot="download-button-download" onPress={onDownload} aria-describedby={noteId}>
+        <Button
+          data-slot="download-button-download"
+          onPress={onDownload}
+          isDisabled={isDisabled}
+          aria-describedby={noteId}
+        >
           <Icon icon={DownloadSimpleIcon} size="sm" />
           {t("downloadButton.download")}
         </Button>
@@ -143,9 +173,10 @@ interface StoredProps {
   timeZone: string;
   onRemove: () => void;
   onUpdate: () => void;
+  isDisabled: boolean;
 }
 
-function Stored({ state, timeZone, onRemove, onUpdate }: StoredProps) {
+function Stored({ state, timeZone, onRemove, onUpdate, isDisabled }: StoredProps) {
   const { t } = useStepclimbStrings();
   const day = useDayFormat(timeZone);
   const styles = downloadButton();
@@ -166,7 +197,7 @@ function Stored({ state, timeZone, onRemove, onUpdate }: StoredProps) {
       </p>
       <div data-slot="download-button-actions" className={styles.actions()}>
         {state.kind === "update" ? (
-          <Button data-slot="download-button-refresh" onPress={onUpdate}>
+          <Button data-slot="download-button-refresh" onPress={onUpdate} isDisabled={isDisabled}>
             <Icon icon={ArrowsClockwiseIcon} size="sm" />
             {t("downloadButton.update")}
           </Button>

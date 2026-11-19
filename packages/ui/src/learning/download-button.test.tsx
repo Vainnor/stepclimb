@@ -93,7 +93,7 @@ describe("DownloadButton", () => {
   it.each<[DownloadProblem, string]>([
     [
       { kind: "tooLarge", sizeBytes: 620_000_000 },
-      "This download is 620 MB, more than this app stores for one course.",
+      "This download is 620 MB, more than this app stores for one course. Read it online instead.",
     ],
     [
       { kind: "noRoom", sizeBytes: 90_000_000 },
@@ -141,6 +141,60 @@ describe("DownloadButton", () => {
       </StringsProvider>,
     );
     expect(screen.getByRole("alert")).toHaveTextContent("for one training module.");
+  });
+
+  it("does not offer a download the app refused as too large, and offers it after other problems", () => {
+    const { rerender } = setup(
+      { kind: "none", sizeBytes: 620_000_000 },
+      { kind: "tooLarge", sizeBytes: 620_000_000 },
+    );
+    const download = screen.getByRole("button", { name: "Download for offline use" });
+    expect(download).toBeDisabled();
+    for (const problem of [{ kind: "noRoom", sizeBytes: 1 }, { kind: "failed" }] as const) {
+      rerender(
+        <DownloadButton
+          state={{ kind: "none", sizeBytes: 1 }}
+          problem={problem}
+          timeZone={NY}
+          onDownload={() => {}}
+          onCancel={() => {}}
+          onRemove={() => {}}
+          onUpdate={() => {}}
+        />,
+      );
+      expect(screen.getByRole("button", { name: "Download for offline use" })).toBeEnabled();
+    }
+  });
+
+  it("when disabled, turns off Download and Update and keeps Remove and Cancel", async () => {
+    const props = {
+      timeZone: NY,
+      onDownload: vi.fn(),
+      onCancel: vi.fn(),
+      onRemove: vi.fn(),
+      onUpdate: vi.fn(),
+      isDisabled: true,
+    };
+    const { rerender } = renderWithStrings(<DownloadButton {...props} state={{ kind: "none" }} />);
+    expect(screen.getByRole("button", { name: "Download for offline use" })).toBeDisabled();
+    rerender(
+      <DownloadButton
+        {...props}
+        state={{ kind: "update", downloadedAt: new Date(0), sizeBytes: 1 }}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Update download" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Remove download" }));
+    expect(props.onRemove).toHaveBeenCalledOnce();
+    rerender(
+      <DownloadButton
+        {...props}
+        state={{ kind: "downloading", receivedBytes: 1, totalBytes: 2 }}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Cancel download" }));
+    expect(props.onCancel).toHaveBeenCalledOnce();
+    expect(props.onUpdate).not.toHaveBeenCalled();
   });
 
   it.each<[DownloadState, DownloadProblem | undefined]>([

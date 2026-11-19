@@ -65,6 +65,15 @@ describe("DueBadge", () => {
     expect(late.querySelector("svg")?.innerHTML).not.toEqual(soon.querySelector("svg")?.innerHTML);
   });
 
+  it("leaves the icon out when asked, keeping the label and the overdue state", () => {
+    const { container } = renderWithStrings(
+      <DueBadge due={at("2026-03-07T14:00:00Z")} now={now} timeZone={NY} iconHidden />,
+    );
+    expect(container.querySelector("svg")).toBeNull();
+    expect(screen.getByText("3 days overdue")).toBeInTheDocument();
+    expect(container.querySelector('[data-slot="due-badge"]')).toHaveAttribute("data-overdue");
+  });
+
   it("renders only catalog messages", () => {
     const { container } = renderWithStrings(
       <DueBadge due={at("2026-03-01T00:00:00Z")} now={now} timeZone={NY} />,
