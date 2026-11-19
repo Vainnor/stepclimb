@@ -30,6 +30,9 @@
 //! account move takes; update and status change on `courses::lock`, which reads the course's
 //! account `FOR SHARE` and so waits for a move in progress over it. A concurrent account move
 //! cannot carry the course, its account or the destination out of the caller's reach unseen.
+//!
+//! Publishing an archived course enqueues `progress.recompute_course` in the same transaction
+//! (spec 05 B8): a recompute skips an archived course.
 
 use std::time::SystemTime;
 
@@ -62,6 +65,7 @@ use crate::{
     openapi::problem_responses,
     organization::present,
     pagination::{Page, PageParams},
+    progress_recompute,
     require::{AnyScope, CourseTarget, Require, check_course, code::COURSE_NOT_FOUND},
     roles::code::{NAME_EMPTY, NAME_TOO_LONG, PERMISSION_ESCALATION, TEXT_CONTAINS_NUL},
     timestamp,
@@ -710,9 +714,20 @@ pub async fn set_course_status(
     recheck_manage(&mut tx, grants, id).await?;
     let (status, now) = (body.status.into(), state.clock.now());
     let actor = client.actor(require.principal());
-    let course = courses::set_status(&mut *tx, grants.scope(), id, status, now, actor)
+    let scope = grants.scope();
+    // The row is locked since `recheck_manage`, so this is the status the change starts from.
+    let before = courses::get(&mut *tx, scope, id)
+        .await
+        .map_err(course_error)?
+        .ok_or(Denied::CourseNotFound)?
+        .status;
+    let course = courses::set_status(&mut *tx, scope, id, status, now, actor)
         .await
         .map_err(course_error)?;
+    if before == courses::Status::Archived && course.status == courses::Status::Published {
+        // A recompute that ran while the course was archived skipped it (spec 05 B8).
+        progress_recompute::enqueue(&mut tx, scope, id, now).await?;
+    }
     commit(tx).await?;
     Ok(Json(Course::from_repo(course, grants)?))
 }

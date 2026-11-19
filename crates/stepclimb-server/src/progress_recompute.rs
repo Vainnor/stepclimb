@@ -11,9 +11,16 @@
 //!
 //! The job calls `stepclimb_core::progress::recompute_course` batch by batch, each batch of
 //! [`stepclimb_core::progress::RECOMPUTE_BATCH`] learners in its own transaction with the
-//! events it returns written to the outbox ([`crate::progress::emit`]). It holds its lease
-//! between batches and stops once another worker has the job. A failed batch retries the whole
-//! job; batches already committed are found unchanged and write nothing again.
+//! events it returns written to the outbox ([`crate::progress::write_events`]). It holds its
+//! lease between batches and stops once another worker has the job. A failed batch ends the run
+//! with a retry whose error the worker stores as the job's `last_error`, the one place it is
+//! recorded; batches already committed are found unchanged and write nothing again. A learner
+//! whose roll-up keeps failing so stops every later batch until the job is dead.
+//!
+//! Besides the content routes, two writes enqueue it because they bring back learners a run
+//! left out: an enrollment that becomes active again or a new enrollment of a user with
+//! progress in the course ([`crate::course_enrollments`]), and a course that leaves `archived`
+//! ([`crate::courses`]).
 
 use std::time::{Duration, SystemTime};
 
@@ -84,9 +91,8 @@ async fn handle(ctx: JobContext) -> Outcome {
             Ok(None) => return Outcome::Done,
             Ok(Some(next)) => after = Some(next),
             Err(error) => {
-                tracing::error!(course_id = %payload.course_id, %error, "progress recompute failed");
                 return Outcome::retry(format_args!(
-                    "could not recompute the progress of course {}",
+                    "could not recompute the progress of course {}: {error}",
                     payload.course_id
                 ));
             }
@@ -108,9 +114,8 @@ enum BatchError {
     Progress(#[from] progress::Error),
     #[error(transparent)]
     Database(#[from] sqlx::Error),
-    /// The events could not be written; [`crate::progress::emit`] logged the cause.
-    #[error("the progress events could not be written")]
-    Events,
+    #[error(transparent)]
+    Events(#[from] crate::progress::EmitError),
 }
 
 /// One batch in its own transaction: the learners after `after`, their events written to the
@@ -124,9 +129,7 @@ async fn batch(
 ) -> Result<Option<Uuid>, BatchError> {
     let mut tx = pool.begin().await?;
     let recomputed = progress::recompute_course(&mut tx, scope, course_id, after, now).await?;
-    crate::progress::emit(&mut tx, scope, &recomputed.events, now)
-        .await
-        .map_err(|_| BatchError::Events)?;
+    crate::progress::write_events(&mut tx, scope, &recomputed.events, now).await?;
     tx.commit().await?;
     Ok(recomputed.next)
 }

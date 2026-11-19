@@ -1098,3 +1098,54 @@ async fn b8_a_recompute_that_completes_a_module_records_its_completion(pool: PgP
     assert!(again.is_empty(), "{again:?}");
     assert_eq!(history().await, expected, "a second run records nothing");
 }
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn b8_a_step_takes_turns_with_a_recompute(pool: PgPool) {
+    let org = Org::new(&pool, "a").await;
+    let module = org.module(&pool).await;
+    let a = org.item(&pool, module, Some(Requirement::View)).await;
+    let b = org.item(&pool, module, Some(Requirement::View)).await;
+    let c = org.item(&pool, module, Some(Requirement::MarkDone)).await;
+    let user = org.student(&pool).await;
+    let _ = org.step(&pool, user, a, Action::View, t0()).await.unwrap();
+    set_requirement(&pool, org, c, None).await;
+    let mut batch = pool.begin().await.unwrap();
+    let recomputed =
+        progress::recompute_course(&mut batch, org.scope(), org.course, None, later(30))
+            .await
+            .unwrap();
+    assert!(recomputed.events.is_empty(), "b is still open");
+    // The step starts while the batch holds the learner's course row.
+    let step = tokio::spawn({
+        let pool = pool.clone();
+        async move {
+            let mut tx = pool.begin().await.unwrap();
+            let recorded =
+                progress::record_step(&mut tx, org.scope(), user, b, Action::View, later(40))
+                    .await
+                    .unwrap();
+            tx.commit().await.unwrap();
+            recorded
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!step.is_finished(), "the step waits for the batch");
+    batch.commit().await.unwrap();
+    let recorded = step.await.unwrap();
+    assert!(
+        matches!(
+            recorded.events.as_slice(),
+            [
+                Event::ItemCompleted(_),
+                Event::ModuleCompleted(_),
+                Event::CourseCompleted(_)
+            ]
+        ),
+        "the step sees the batch's counts and completes the module once: {:?}",
+        recorded.events
+    );
+    assert_eq!(
+        module_row(&pool, user, module).await,
+        (2, 2, Some(later(40)))
+    );
+}

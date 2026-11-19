@@ -42,6 +42,10 @@
 //! in the write's transaction, which also locks the course row (B19), and reads the role
 //! `FOR KEY SHARE`, so neither a move of the course's account nor a change of the role's
 //! permissions can land between the checks and the write.
+//!
+//! Reactivating an enrollment, and enrolling a user who has progress in the course, enqueue
+//! `progress.recompute_course` in the same transaction (spec 05 B8): a recompute that ran while
+//! they held no active enrollment left them out.
 
 use axum::{
     Json,
@@ -57,7 +61,7 @@ use stepclimb_core::{
     grants::{Denied, Grants, Target},
     id::Uuid,
     perm::{EnrollmentManage, EnrollmentView, Permission, ProgressView, ProgressViewObserved},
-    roles, users,
+    progress, roles, users,
 };
 use utoipa::{IntoParams, ToSchema};
 
@@ -69,6 +73,7 @@ use crate::{
     openapi::problem_responses,
     organization::present,
     pagination::{Page, PageParams},
+    progress_recompute,
     require::{
         CourseTarget, EnrollmentTarget, Require, check_course,
         code::{COURSE_NOT_FOUND, ENROLLMENT_NOT_FOUND},
@@ -396,9 +401,18 @@ pub async fn create_enrollment(
         observed_user_ids: body.observed_user_ids.unwrap_or_default(),
     };
     let actor = client.actor(require.principal());
-    let created = repo::create(&mut *tx, scope, course_id, &new, state.clock.now(), actor)
+    let now = state.clock.now();
+    let created = repo::create(&mut *tx, scope, course_id, &new, now, actor)
         .await
         .map_err(enrollment_error)?;
+    // A former learner enrolled again: a recompute while they held no active enrollment left
+    // them out (spec 05 B8).
+    let returning = progress::has_course_progress(&mut tx, scope, created.user_id, course_id)
+        .await
+        .map_err(|error| ApiError::internal(&error))?;
+    if created.status == repo::Status::Active && returning {
+        progress_recompute::enqueue(&mut tx, scope, course_id, now).await?;
+    }
     commit(tx).await?;
     let location = format!("{ENROLLMENT_PATH}/{}", created.id);
     Ok((
@@ -455,6 +469,10 @@ pub async fn update_enrollment(
     let updated = repo::update(&mut *tx, grants.scope(), enrollment.id, &change, now, actor)
         .await
         .map_err(enrollment_error)?;
+    if enrollment.status == repo::Status::Concluded && updated.status == repo::Status::Active {
+        // A recompute while the enrollment was concluded left the learner out (spec 05 B8).
+        progress_recompute::enqueue(&mut tx, grants.scope(), updated.course_id, now).await?;
+    }
     commit(tx).await?;
     Ok(Json(Enrollment::from_repo(updated)?))
 }

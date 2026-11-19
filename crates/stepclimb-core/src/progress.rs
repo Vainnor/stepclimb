@@ -599,8 +599,13 @@ pub struct Recomputed {
 /// writes nothing. A module row is created only for a module the learner has a completed item
 /// in. An unpublished module's row is left as it is.
 ///
-/// The course row is held `FOR SHARE`, so the rules cannot change during the batch. A course
-/// that is gone or archived (spec 02 B5: it takes no progress) is skipped: no learner, no event.
+/// Completion does not depend on locks (spec 04 B11), so a module locked for the learner
+/// completes too once its requirements are met.
+///
+/// The course row is held `FOR SHARE`, so the rules cannot change during the batch, and the
+/// learner roles `FOR KEY SHARE`, so the learners chosen stay learners until it commits. A
+/// course that is gone or archived (spec 02 B5: it takes no progress) is skipped: no learner, no
+/// event.
 pub async fn recompute_course(
     tx: &mut Transaction<'_, Postgres>,
     scope: OrgScope,
@@ -644,7 +649,7 @@ async fn recompute_learners(
     course_id: Uuid,
     after: Option<Uuid>,
 ) -> Result<Vec<Uuid>, Error> {
-    let learner_roles = roles::ids_holding(&mut **tx, scope, CourseParticipate::KEY).await?;
+    let learner_roles = learner_roles_key_share(tx, scope, course_id).await?;
     let ids = sqlx::query_scalar!(
         "SELECT p.user_id FROM course_progress p
          WHERE p.org_id = $1 AND p.course_id = $2
@@ -665,6 +670,58 @@ async fn recompute_learners(
     .fetch_all(&mut **tx)
     .await?;
     Ok(ids)
+}
+
+/// The roles of the course's active enrollments that hold `course.participate`, read
+/// `FOR KEY SHARE` until `tx` ends, as a step's learner check reads them
+/// (`enrollments::participates`): a change of a custom role's permissions waits for the batch,
+/// so the learners it chose stay learners until it commits.
+async fn learner_roles_key_share(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: OrgScope,
+    course_id: Uuid,
+) -> Result<Vec<Uuid>, Error> {
+    let rows = sqlx::query!(
+        "SELECT r.id, r.key, r.builtin, r.permissions
+         FROM roles r
+         WHERE (r.org_id IS NULL OR r.org_id = $1)
+           AND r.id IN (SELECT e.role_id FROM enrollments e
+                        WHERE e.org_id = $1 AND e.course_id = $2 AND e.status = 'active')
+         ORDER BY r.id
+         FOR KEY SHARE",
+        scope.org_id(),
+        course_id,
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .filter(|role| {
+            roles::effective_permissions(&role.key, role.builtin, role.permissions.clone())
+                .iter()
+                .any(|key| key == CourseParticipate::KEY)
+        })
+        .map(|role| role.id)
+        .collect())
+}
+
+/// Whether the user `user_id` has a `course_progress` row in the course `course_id` of the
+/// scope's organization: whether they have completed an item there.
+pub async fn has_course_progress(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    user_id: Uuid,
+    course_id: Uuid,
+) -> Result<bool, Error> {
+    Ok(sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM course_progress
+                          WHERE org_id = $1 AND user_id = $2 AND course_id = $3) AS "exists!""#,
+        scope.org_id(),
+        user_id,
+        course_id,
+    )
+    .fetch_one(conn)
+    .await?)
 }
 
 /// A learner's stored module row: its counts and whether it has a `completed_at`.

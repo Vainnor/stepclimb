@@ -30,7 +30,10 @@ use stepclimb_core::{
     id::{Uuid, new_id},
     items::{self, ItemPatch, Kind, NewItem},
     modules::{self, ModulePatch},
-    organizations, roles,
+    organizations, perm,
+    progress::{self, Action},
+    role_assignments::{self, NewAssignment, Scope},
+    roles::{self, NewRole},
     rules::Requirement,
     users::{self, NewUser},
 };
@@ -180,9 +183,8 @@ impl Fixture {
         id
     }
 
-    /// A new user of `org` enrolled in `course` with the built-in role `role`, signed in: their
-    /// cookie and id.
-    async fn enrolled(&self, org: Uuid, course: Uuid, role: &str) -> (String, Uuid) {
+    /// A new user of `org`, signed in: their cookie and id.
+    async fn user(&self, org: Uuid) -> (String, Uuid) {
         let new_user = NewUser {
             display_name: "Recompute Tester".into(),
             given_name: String::new(),
@@ -197,10 +199,15 @@ impl Fixture {
             .await
             .expect("create user")
             .id;
-        let role_id = roles::builtin_id(&self.pool, role)
+        let started = session::start(&self.pool, scope(org), user, &HeaderMap::new(), t0())
             .await
-            .expect("read role")
-            .expect("a built-in role");
+            .expect("start a session");
+        let cookie = started.set_cookie.to_str().expect("ASCII");
+        (cookie.split(';').next().expect("a pair").to_owned(), user)
+    }
+
+    /// Enroll `user` in `course` with the role `role_id`: the enrollment's id.
+    async fn enroll(&self, org: Uuid, course: Uuid, user: Uuid, role_id: Uuid) -> Uuid {
         let new = enrollments::NewEnrollment {
             user_id: user,
             role_id,
@@ -210,12 +217,92 @@ impl Fixture {
         };
         enrollments::create(&self.pool, scope(org), course, &new, t0(), Actor::Instance)
             .await
-            .expect("enroll");
-        let started = session::start(&self.pool, scope(org), user, &HeaderMap::new(), t0())
+            .expect("enroll")
+            .id
+    }
+
+    async fn builtin(&self, key: &str) -> Uuid {
+        roles::builtin_id(&self.pool, key)
             .await
-            .expect("start a session");
-        let cookie = started.set_cookie.to_str().expect("ASCII");
-        (cookie.split(';').next().expect("a pair").to_owned(), user)
+            .expect("read role")
+            .expect("a built-in role")
+    }
+
+    /// A new user of `org` enrolled in `course` with the built-in role `role`, signed in: their
+    /// cookie, id and enrollment.
+    async fn enrolled_with(&self, org: Uuid, course: Uuid, role: &str) -> (String, Uuid, Uuid) {
+        let (cookie, user) = self.user(org).await;
+        let enrollment = self
+            .enroll(org, course, user, self.builtin(role).await)
+            .await;
+        (cookie, user, enrollment)
+    }
+
+    /// [`Self::enrolled_with`] without the enrollment.
+    async fn enrolled(&self, org: Uuid, course: Uuid, role: &str) -> (String, Uuid) {
+        let (cookie, user, _) = self.enrolled_with(org, course, role).await;
+        (cookie, user)
+    }
+
+    /// A new user of `org` holding every catalog permission at the organization: their cookie.
+    async fn admin(&self, org: Uuid) -> String {
+        let (cookie, user) = self.user(org).await;
+        let role = self
+            .custom_role(org, perm::ALL.iter().map(|p| p.key().to_owned()).collect())
+            .await;
+        let assignment = NewAssignment {
+            user_id: user,
+            role_id: role,
+            scope: Scope::Organization,
+            source: Source::Local,
+            external_id: None,
+        };
+        role_assignments::create(&self.pool, scope(org), &assignment, t0(), Actor::Instance)
+            .await
+            .expect("assign");
+        cookie
+    }
+
+    async fn custom_role(&self, org: Uuid, permissions: Vec<String>) -> Uuid {
+        let role = NewRole {
+            key: format!("r{}", new_id().simple()),
+            name: "Custom".into(),
+            permissions,
+        };
+        roles::create_custom(&self.pool, scope(org), &role, t0(), Actor::Instance)
+            .await
+            .expect("create role")
+            .id
+    }
+
+    /// Complete `item` for `user` through the repository, as a step would.
+    async fn complete(&self, org: Uuid, user: Uuid, item: Uuid) {
+        let mut tx = self.pool.begin().await.expect("begin");
+        let recorded = progress::record_step(&mut tx, scope(org), user, item, Action::View, t0())
+            .await
+            .expect("step");
+        assert_eq!(recorded.progress.state, progress::State::Completed);
+        tx.commit().await.expect("commit");
+    }
+
+    /// The learner's module row: required, completed, and whether it has a `completed_at`.
+    async fn module_row(&self, user: Uuid, module: Uuid) -> (i32, i32, bool) {
+        sqlx::query_as(
+            "SELECT required_count, completed_count, completed_at IS NOT NULL
+             FROM module_progress WHERE user_id = $1 AND module_id = $2",
+        )
+        .bind(user)
+        .bind(module)
+        .fetch_one(&self.pool)
+        .await
+        .expect("the module row")
+    }
+
+    /// Let the waiting recompute come due and run it.
+    async fn run_recompute(&self) {
+        self.clock.advance(progress_recompute::DELAY);
+        assert_eq!(self.run_jobs().await, 1, "one recompute ran");
+        assert!(self.jobs().await.is_empty(), "and finished");
     }
 
     async fn send(
@@ -636,4 +723,187 @@ async fn a_recompute_job_without_an_organization_fails(pool: PgPool) {
             Some("progress.recompute_course needs an organization".into())
         )
     );
+}
+
+fn enrollment_uri(enrollment: Uuid) -> String {
+    format!("/api/v1/enrollments/{enrollment}")
+}
+
+/// A module with a completed `view` item and a `mark_done` item whose requirement is removed
+/// while the learner is out of the recompute's reach: the stranded state B8's re-enqueues undo.
+struct Stranded {
+    learner: Uuid,
+    enrollment: Uuid,
+    designer: String,
+    instructor: String,
+}
+
+async fn stranded(f: &Fixture, org: Org) -> Stranded {
+    let (designer, _) = f.enrolled(org.id, org.course, "course_designer").await;
+    let (instructor, _) = f.enrolled(org.id, org.course, "instructor").await;
+    let a = f.link(org.id, org.first, Some(Requirement::View)).await;
+    f.link(org.id, org.first, Some(Requirement::MarkDone)).await;
+    let (_, learner, enrollment) = f.enrolled_with(org.id, org.course, "student").await;
+    f.complete(org.id, learner, a).await;
+    assert_eq!(f.module_row(learner, org.first).await, (2, 1, false));
+    Stranded {
+        learner,
+        enrollment,
+        designer,
+        instructor,
+    }
+}
+
+/// Remove the requirement of the first module's last item and run the recompute it enqueues.
+async fn remove_last_requirement(f: &Fixture, org: Org, s: &Stranded) {
+    let b: Uuid = sqlx::query_scalar(
+        "SELECT id FROM module_items WHERE module_id = $1 ORDER BY position DESC LIMIT 1",
+    )
+    .bind(org.first)
+    .fetch_one(&f.pool)
+    .await
+    .expect("the last item");
+    let body = Some(json!({ "requirement": null }));
+    f.write(org.id, &s.designer, Method::PATCH, &item_uri(b), body)
+        .await;
+    f.run_recompute().await;
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn b8_reactivating_a_learner_recomputes_what_they_missed(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let org = f.org("a").await;
+    let s = stranded(&f, org).await;
+    let conclude = Some(json!({ "status": "concluded" }));
+    let uri = enrollment_uri(s.enrollment);
+    f.write(org.id, &s.instructor, Method::PATCH, &uri, conclude)
+        .await;
+    assert!(f.jobs().await.is_empty(), "concluding enqueues nothing");
+    remove_last_requirement(&f, org, &s).await;
+    assert_eq!(
+        f.module_row(s.learner, org.first).await,
+        (2, 1, false),
+        "the concluded learner was left out"
+    );
+    let reactivate = Some(json!({ "status": "active" }));
+    f.write(org.id, &s.instructor, Method::PATCH, &uri, reactivate)
+        .await;
+    assert_eq!(
+        f.jobs().await.len(),
+        1,
+        "reactivating enqueues the recompute"
+    );
+    f.run_recompute().await;
+    assert_eq!(f.module_row(s.learner, org.first).await, (1, 1, true));
+    assert_eq!(
+        f.topics(org.id).await,
+        ["module.completed", "course.completed"],
+        "the recompute's events (the setup's step wrote its item event nowhere)"
+    );
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn b8_enrolling_a_former_learner_again_recomputes_what_they_missed(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let org = f.org("a").await;
+    let s = stranded(&f, org).await;
+    enrollments::set_status(
+        &f.pool,
+        scope(org.id),
+        s.enrollment,
+        enrollments::Status::Concluded,
+        t0(),
+        Actor::Instance,
+    )
+    .await
+    .expect("conclude");
+    remove_last_requirement(&f, org, &s).await;
+    assert_eq!(f.module_row(s.learner, org.first).await, (2, 1, false));
+    let admin = f.admin(org.id).await;
+    let trainee = f
+        .custom_role(
+            org.id,
+            vec!["course.view".into(), "course.participate".into()],
+        )
+        .await;
+    let uri = format!("/api/v1/courses/{}/enrollments", org.course);
+    let body = Some(json!({ "user_id": s.learner, "role_id": trainee }));
+    f.write(org.id, &admin, Method::POST, &uri, body).await;
+    assert_eq!(
+        f.jobs().await.len(),
+        1,
+        "a returning learner enqueues the recompute"
+    );
+    f.run_recompute().await;
+    assert_eq!(f.module_row(s.learner, org.first).await, (1, 1, true));
+
+    let (_, newcomer) = f.user(org.id).await;
+    let body = Some(json!({ "user_id": newcomer, "role_id": trainee }));
+    f.write(org.id, &admin, Method::POST, &uri, body).await;
+    assert!(
+        f.jobs().await.is_empty(),
+        "a user without progress enqueues nothing"
+    );
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn b8_publishing_an_archived_course_recomputes_what_it_skipped(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let org = f.org("a").await;
+    let s = stranded(&f, org).await;
+    let b: Uuid = sqlx::query_scalar(
+        "SELECT id FROM module_items WHERE module_id = $1 ORDER BY position DESC LIMIT 1",
+    )
+    .bind(org.first)
+    .fetch_one(&f.pool)
+    .await
+    .expect("the last item");
+    let body = Some(json!({ "requirement": null }));
+    f.write(org.id, &s.designer, Method::PATCH, &item_uri(b), body)
+        .await;
+    let admin = f.admin(org.id).await;
+    let status_uri = format!("/api/v1/courses/{}/status", org.course);
+    let archive = Some(json!({ "status": "archived" }));
+    f.write(org.id, &admin, Method::POST, &status_uri, archive)
+        .await;
+    f.run_recompute().await;
+    assert_eq!(
+        f.module_row(s.learner, org.first).await,
+        (2, 1, false),
+        "the archived course was skipped"
+    );
+    let publish = Some(json!({ "status": "published" }));
+    f.write(org.id, &admin, Method::POST, &status_uri, publish)
+        .await;
+    assert_eq!(
+        f.jobs().await.len(),
+        1,
+        "leaving archived enqueues the recompute"
+    );
+    f.run_recompute().await;
+    assert_eq!(f.module_row(s.learner, org.first).await, (1, 1, true));
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn b8_the_job_runs_every_batch_of_learners(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let org = f.org("a").await;
+    let (designer, _) = f.enrolled(org.id, org.course, "course_designer").await;
+    let a = f.link(org.id, org.first, Some(Requirement::View)).await;
+    let b = f.link(org.id, org.first, Some(Requirement::MarkDone)).await;
+    let student = f.builtin("student").await;
+    let learners = progress::RECOMPUTE_BATCH + 1;
+    for _ in 0..learners {
+        let (_, user) = f.user(org.id).await;
+        f.enroll(org.id, org.course, user, student).await;
+        f.complete(org.id, user, a).await;
+    }
+    let body = Some(json!({ "requirement": null }));
+    f.write(org.id, &designer, Method::PATCH, &item_uri(b), body)
+        .await;
+    f.run_recompute().await;
+    let topics = f.topics(org.id).await;
+    let modules = topics.iter().filter(|t| *t == "module.completed").count();
+    let courses = topics.iter().filter(|t| *t == "course.completed").count();
+    assert_eq!((modules, courses), (learners, learners));
 }
