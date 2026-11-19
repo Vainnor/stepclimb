@@ -30,7 +30,9 @@ export const field = tv({
     control: [
       "w-full min-w-0 rounded-sm border border-line-strong bg-sunken text-sm text-fg-strong",
       "transition-colors duration-fast ease-out-expo outline-none",
-      "data-[hovered]:border-fg-sub",
+      // Tailwind orders `[data-hovered]` after the focus and before the invalid rules, so hover
+      // leaves a focused or invalid control's border alone instead of relying on that order.
+      "data-[hovered]:not-data-[focused]:not-data-[focus-within]:not-data-[invalid]:border-fg-sub",
       "data-[focused]:border-brand data-[focus-within]:border-brand",
       "data-[focus-visible]:ring-2 data-[focus-visible]:ring-ring data-[focus-visible]:ring-offset-2 ring-offset-canvas",
       "data-[invalid]:border-danger",
