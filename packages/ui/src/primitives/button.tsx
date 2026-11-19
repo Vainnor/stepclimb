@@ -28,11 +28,20 @@ export const button = tv({
     "data-[disabled]:opacity-50 data-[disabled]:cursor-not-allowed data-[pending]:cursor-progress",
   ],
   variants: {
+    // Pressed goes one step past hover: the brand scale's next step, or hover's fill with a
+    // stronger border or label.
     intent: {
-      primary: "bg-brand text-on-brand data-[hovered]:bg-brand-hover",
-      secondary: "bg-raised text-fg-strong border border-line-strong data-[hovered]:bg-sunken",
-      ghost: "text-fg-default data-[hovered]:bg-sunken",
-      danger: "bg-raised text-danger-fg border border-line-strong data-[hovered]:bg-danger-soft",
+      primary: "bg-brand text-on-brand data-[hovered]:bg-brand-hover data-[pressed]:bg-brand-fg",
+      secondary: [
+        "bg-raised text-fg-strong border border-line-strong data-[hovered]:bg-sunken",
+        "data-[pressed]:bg-sunken data-[pressed]:border-fg-sub",
+      ],
+      ghost:
+        "text-fg-default data-[hovered]:bg-sunken data-[pressed]:bg-sunken data-[pressed]:text-fg-strong",
+      danger: [
+        "bg-raised text-danger-fg border border-line-strong data-[hovered]:bg-danger-soft",
+        "data-[pressed]:bg-danger-soft data-[pressed]:border-danger",
+      ],
     },
     size: { sm: "h-(--sc-control-h-sm) px-3 text-[13px]", md: "", lg: "h-12 px-5 text-base" },
   },
