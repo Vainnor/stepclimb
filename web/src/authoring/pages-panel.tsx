@@ -93,9 +93,13 @@ function PageRow({
     updated: new Date(page.updated_at),
   });
   return (
-    <li data-slot="page-row" className="flex min-w-0 flex-col gap-0.5 py-3">
+    // The link's hit area covers the row, so the whole row is the target (at least 44 px tall).
+    <li data-slot="page-row" className="relative flex min-h-11 min-w-0 flex-col gap-0.5 py-3">
       {canEdit ? (
-        <Link href={href} className="wrap-anywhere self-start">
+        <Link
+          href={href}
+          className="wrap-anywhere self-start after:absolute after:inset-0 after:content-['']"
+        >
           {page.title}
         </Link>
       ) : (
