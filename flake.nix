@@ -11,7 +11,8 @@
 # an amd64 machine whose Docker cannot run arm64 containers (bin/check-image.sh). git-cliff writes
 # the release notes (cliff.toml, bin/release.py); skopeo pushes the release image and cosign signs
 # it (bin/release_artifacts.py, docs/adr/0031-release-image-signing-and-sbom.md). ffmpeg and
-# ffprobe run the video transcoder's tests (docs/specs/m1/08-uploaded-video.md B8 to B11).
+# ffprobe run the video transcoder's tests (docs/specs/m1/08-uploaded-video.md B8 to B11), on
+# Linux under util-linux's prlimit (D42).
 {
   description = "Stepclimb dev shell";
 
@@ -63,6 +64,7 @@
                 librsvg
                 openssl
                 qemu-user
+                util-linux
               ];
             PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
             PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = "true";
