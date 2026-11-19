@@ -114,8 +114,10 @@ reaches the client.
   attempt or session. `GET /api/v1/items/{item_id}` answers 200 with B12's fields, since a learner
   may open a locked item to read why. A test sweeps the OpenAPI document for every route whose
   path holds `item_id` or a content id and checks it is in the lock suite's table (T13), either
-  as a lock-checked route or as a staff-only route that requires `perm::CourseViewAll`, so a
-  later content route cannot skip the check.
+  as a lock-checked route or as a staff-only route that requires `perm::CourseViewAll` or
+  `perm::CourseContentEdit` (Coordinator decision (2026-11-19): the two permissions that let an
+  author see an item's content whatever its lock, neither held by the built-in Student or
+  Observer), so a later content route cannot skip the check.
 - **B14.** An unlocked item and module carry `lock: null`. Reasons reveal only what the learner
   could already see: a prerequisite's id names a published module in the same response, and a
   sequential reason names a published item before it.
@@ -360,14 +362,22 @@ Coordinator decisions (2026-11-18), pending owner review.
   the time once from the request clock, so every module and item in one answer agrees. A
   visible module or item missing from that evaluation, which reads the same snapshot, is a 500,
   never an open lock.
-- **The lock suite's staff routes.** T13's walker matches every path parameter named
-  `item_id`, `page_id`, `file_id` or `video_id`, or ending in `_` and one of them
-  (`course_file_id`). A staff-only route may require `course.view_all` or
-  `course.content_edit`, the two permissions that let an author see an item's content whatever
-  its lock and that neither the built-in Student nor the Observer holds. The suite checks the
-  route's permission suite entry names one of them and that an enrolled Student gets 403
-  `permission.denied`. Today the only lock-checked route is spec 05's progress route; every
-  page, file and video route is staff-only until its learner route arrives.
+- **The lock suite's reach.** T13's walker lists two kinds of operation: every one with a
+  path parameter named `module_id`, `item_id`, `page_id`, `file_id` or `video_id`, or ending in
+  `_` and one of them (`course_file_id`); and every one whose 200 answer holds an `Item` or a
+  `Module` at any depth and that the built-in Student or Observer can call, whatever its path
+  (the outline read is keyed by course). Each read is called as a Student and as an Observer on
+  a course whose module is locked and holds a link and a page item with a `ref_id`: every
+  module and item must carry its lock, and neither the URL nor any stored `ref_id` may appear in
+  the body. Coordinator decision (2026-11-19), from the security review of I3: this answer-based
+  check, rather than restricting who may build an `Item`, so a later learner route keyed by
+  course, module or body cannot hand out an item without the read check.
+- **The lock suite's staff routes.** A staff-only route requires `course.view_all` or
+  `course.content_edit` (B13). The suite checks the route's permission suite entry names one
+  of them, that neither the built-in Student nor the Observer holds it, and that an enrolled
+  Student and an enrolled Observer each get 403 `permission.denied`. Today the only
+  lock-checked route is spec 05's progress route; every page, file and video route, and every
+  module and item write, is staff-only until its learner route arrives.
 
 ## Issues
 
