@@ -38,28 +38,54 @@ const runs: [Story, Theme, string][] = stories().flatMap((story) =>
 );
 const widths = ["1280", "375"];
 
+/** Where the story's box ends, from the top of the document, whatever the page's scroll. */
+const storyBottom = (page: Page): Promise<number> =>
+  page.evaluate(() => {
+    const root = document.querySelector("#storybook-root");
+    if (root === null) throw new Error("the story drew no #storybook-root");
+    return Math.ceil(root.getBoundingClientRect().bottom + window.scrollY);
+  });
+
+/** Resizes past this many are a story that will not settle. */
+const MAX_RESIZES = 8;
+
 /**
  * Grows the viewport to the story's height when the story is taller. Playwright captures an element
  * taller than the viewport with Chromium's `captureBeyondViewport`, which turns touch emulation off
  * for the capture, so a tall story at 375 px would be drawn for a fine pointer. A viewport the
  * story fits keeps the capture inside it. The width stays, and so do mobile and touch emulation.
+ * A story that overflows by the same amount after a resize follows the viewport's height and fits
+ * none; one whose layout moves with the height for another reason gets more resizes, up to a cap.
  */
 async function fitViewport(page: Page): Promise<void> {
   const viewport = page.viewportSize();
   if (viewport === null) throw new Error("the story suite needs a fixed viewport");
-  const root = page.locator("#storybook-root");
   let height = viewport.height;
-  // A second pass covers a story whose layout moves with the viewport's height; a story that grows
-  // with every resize has no height that fits it.
-  for (let pass = 0; pass < 3; pass++) {
-    const box = await root.boundingBox();
-    if (box === null) throw new Error("the story drew no #storybook-root box");
-    const needed = Math.ceil(box.y + box.height);
+  let overflow: number | null = null;
+  for (let resizes = 0; ; resizes++) {
+    const needed = await storyBottom(page);
     if (needed <= height) return;
+    if (needed - height === overflow) {
+      throw new Error(
+        `the story follows the viewport's height, ${overflow} px past it at ${height} px`,
+      );
+    }
+    if (resizes === MAX_RESIZES) {
+      throw new Error(`the story still overflows the viewport after ${MAX_RESIZES} resizes`);
+    }
+    overflow = needed - height;
     height = needed;
     await page.setViewportSize({ width: viewport.width, height });
   }
-  throw new Error(`the story keeps growing with the viewport, past ${height} px`);
+}
+
+/** Fails if the story ends below the viewport: it grew after `fitViewport`, so lost touch. */
+async function expectFits(page: Page): Promise<void> {
+  const height = page.viewportSize()?.height;
+  const bottom = await storyBottom(page);
+  expect(bottom, "the story grew past the viewport after it was fitted").toBeLessThanOrEqual(
+    height ?? 0,
+  );
 }
 
 for (const [story, theme, name] of runs) {
@@ -68,6 +94,7 @@ for (const [story, theme, name] of runs) {
     if (hasTouch) await fitViewport(page);
     // The story's own box: the decorator draws it only as tall as its content.
     await expect(page.locator("#storybook-root")).toHaveScreenshot(`${story.id}--${name}.png`);
+    if (hasTouch) await expectFits(page);
     expect(await axeViolations(page)).toEqual([]);
     expectNoPageErrors(page, story);
   });

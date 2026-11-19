@@ -121,11 +121,20 @@ export async function openStory(page: Page, story: Story, theme: Theme): Promise
   expectNoPageErrors(page, story);
 }
 
-/** Every error the page left unhandled, from the first `openStory` on it. */
+/**
+ * Every error the page left unhandled since the last `openStory` on it. One listener per page; each
+ * `openStory` empties the list, so an error is reported with the story that was open when it came.
+ * Chromium reports a `ResizeObserver loop` notice as a window `error` event, not as a page error,
+ * so a resize does not land here.
+ */
 const pageErrors = new WeakMap<Page, string[]>();
 
 function watchPageErrors(page: Page): void {
-  if (pageErrors.has(page)) return;
+  const known = pageErrors.get(page);
+  if (known !== undefined) {
+    known.length = 0;
+    return;
+  }
   const errors: string[] = [];
   pageErrors.set(page, errors);
   page.on("pageerror", (error) => errors.push(error.message.split("\n").slice(0, 12).join("\n")));
