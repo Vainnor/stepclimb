@@ -665,7 +665,29 @@ pub async fn emit(
     events: &[Event],
     now: SystemTime,
 ) -> Result<(), ApiError> {
-    let failed = |error: stepclimb_jobs::outbox::Error| ApiError::internal(&error);
+    write_events(tx, scope, events, now)
+        .await
+        .map_err(|error| ApiError::internal(&error))
+}
+
+/// Why [`write_events`] failed.
+#[derive(Debug, thiserror::Error)]
+pub enum EmitError {
+    #[error(transparent)]
+    Outbox(#[from] stepclimb_jobs::outbox::Error),
+    #[error(transparent)]
+    Time(#[from] crate::timestamp::Unrepresentable),
+}
+
+/// [`emit`] for a caller that is not a request, such as a job: the same outbox rows, with the
+/// error returned rather than answered.
+pub async fn write_events(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: OrgScope,
+    events: &[Event],
+    now: SystemTime,
+) -> Result<(), EmitError> {
+    let time = crate::timestamp::rfc3339;
     for event in events {
         match event {
             Event::ItemCompleted(e) => {
@@ -678,9 +700,7 @@ pub async fn emit(
                     requirement_kind: e.requirement_kind.into(),
                     completed_at: time(e.completed_at)?,
                 };
-                stepclimb_jobs::outbox::emit(tx, scope, &ITEM_COMPLETED, &data, now)
-                    .await
-                    .map_err(failed)?;
+                stepclimb_jobs::outbox::emit(tx, scope, &ITEM_COMPLETED, &data, now).await?;
             }
             Event::ModuleCompleted(e) => {
                 let data = ModuleCompletedData {
@@ -689,9 +709,7 @@ pub async fn emit(
                     module_id: e.module_id,
                     completed_at: time(e.completed_at)?,
                 };
-                stepclimb_jobs::outbox::emit(tx, scope, &MODULE_COMPLETED, &data, now)
-                    .await
-                    .map_err(failed)?;
+                stepclimb_jobs::outbox::emit(tx, scope, &MODULE_COMPLETED, &data, now).await?;
             }
             Event::CourseCompleted(e) => {
                 let data = CourseCompletedData {
@@ -699,9 +717,7 @@ pub async fn emit(
                     course_id: e.course_id,
                     completed_at: time(e.completed_at)?,
                 };
-                stepclimb_jobs::outbox::emit(tx, scope, &COURSE_COMPLETED, &data, now)
-                    .await
-                    .map_err(failed)?;
+                stepclimb_jobs::outbox::emit(tx, scope, &COURSE_COMPLETED, &data, now).await?;
             }
         }
     }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Learner progress (docs/specs/m1/05-progress-and-events.md B1 to B7, B10 to B16).
+//! Learner progress (docs/specs/m1/05-progress-and-events.md B1 to B8, B10 to B16).
 //!
 //! One `item_progress` row per learner and item: `started` at the learner's first step, then
 //! `completed` once the item's requirement is met. Completion is final (Q1): nothing here moves
@@ -27,6 +27,10 @@
 //! the user is a learner, holding an active enrollment whose role has `course.participate`
 //! (B1, B12), and the item is published, in a published module, and unlocked for them (spec 04
 //! B13). Steps of different learners never wait for each other.
+//!
+//! [`recompute_course`] rolls up a batch of a course's learners again after its rules changed
+//! (B8), through the same roll-up, and returns the events the same way; the server's
+//! `progress.recompute_course` job calls it batch by batch.
 //!
 //! Staff read every learner's progress in a course through [`list_for_course`] and
 //! [`learner_in_course`] (B14); who may read whom (B20) is the routes' to decide, and they pass
@@ -424,13 +428,7 @@ impl RollUp {
         completed: &HashSet<Uuid>,
         evaluation: &Evaluation,
     ) -> Result<Option<Event>, Error> {
-        let required: Vec<Uuid> = module
-            .items
-            .iter()
-            .filter(|item| item.requirement.is_some())
-            .map(|item| item.id)
-            .collect();
-        let done = required.iter().filter(|id| completed.contains(id)).count();
+        let (required, done) = module_counts(module, completed);
         let complete = evaluation.module(module.id).is_some_and(|m| m.complete);
         let before = sqlx::query_scalar!(
             r#"SELECT completed_at IS NOT NULL AS "complete!" FROM module_progress
@@ -460,7 +458,7 @@ impl RollUp {
             self.user_id,
             self.course_id,
             module.id,
-            count(required.len()),
+            count(required),
             count(done),
             newly,
             epoch_micros(self.now)?,
@@ -497,16 +495,7 @@ impl RollUp {
         evaluation: &Evaluation,
         before: Option<SystemTime>,
     ) -> Result<Option<Event>, Error> {
-        let counted: Vec<Uuid> = rules
-            .modules
-            .iter()
-            .filter(|m| m.items.iter().any(|item| item.requirement.is_some()))
-            .map(|m| m.id)
-            .collect();
-        let done = counted
-            .iter()
-            .filter(|id| evaluation.module(**id).is_some_and(|m| m.complete))
-            .count();
+        let (counted, done) = course_counts(rules, evaluation);
         let newly = evaluation.course_complete() && before.is_none();
         sqlx::query!(
             "UPDATE course_progress
@@ -518,7 +507,7 @@ impl RollUp {
             self.scope.org_id(),
             self.user_id,
             self.course_id,
-            count(counted.len()),
+            count(counted),
             count(done),
             newly,
             epoch_micros(self.now)?,
@@ -545,11 +534,287 @@ impl RollUp {
     }
 }
 
+/// A module's `required_count` and `completed_count` for a learner who completed `completed`
+/// (B6): its published items with a requirement, and how many of them are completed.
+fn module_counts(module: &ModuleRules, completed: &HashSet<Uuid>) -> (usize, usize) {
+    let required = module
+        .items
+        .iter()
+        .filter(|item| item.requirement.is_some());
+    let (mut total, mut done) = (0, 0);
+    for item in required {
+        total += 1;
+        done += usize::from(completed.contains(&item.id));
+    }
+    (total, done)
+}
+
+/// A course's `required_count` and `completed_count` under `evaluation` (B6, spec 04 B11): its
+/// counted modules (published, with a published requirement), and how many are complete.
+fn course_counts(rules: &CourseRules, evaluation: &Evaluation) -> (usize, usize) {
+    let counted = rules
+        .modules
+        .iter()
+        .filter(|m| m.items.iter().any(|item| item.requirement.is_some()));
+    let (mut total, mut done) = (0, 0);
+    for module in counted {
+        total += 1;
+        done += usize::from(evaluation.module(module.id).is_some_and(|m| m.complete));
+    }
+    (total, done)
+}
+
 /// A count as the `integer` columns store it.
 fn count(n: usize) -> i32 {
     // Invariant: a count is of a course's modules or one module's items, at most 200 each
     // (spec 03 B1, B4), which every `i32` holds.
     i32::try_from(n).expect("a count of at most 200")
+}
+
+/// How many learners one [`recompute_course`] call rolls up (B8).
+pub const RECOMPUTE_BATCH: usize = 100;
+
+/// What one [`recompute_course`] call left: the events of what became complete, and where the
+/// next call starts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[must_use = "the events must be written to the outbox in the same transaction"]
+pub struct Recomputed {
+    /// `module.completed` and `course.completed` only, learner by learner in user id order.
+    pub events: Vec<Event>,
+    /// The last learner rolled up when the batch was full: pass it as the next call's `after`.
+    /// `None` once every learner is done.
+    pub next: Option<Uuid>,
+}
+
+/// Recompute, in `tx`, the module and course roll-ups of up to [`RECOMPUTE_BATCH`] learners of
+/// the course `course_id` of the scope's organization from their stored item rows, under the
+/// course's current rules at `now` (B8). The learners are those holding a `course_progress` row
+/// and an active enrollment in the course whose role has `course.participate` (B1, B12), in user
+/// id order after `after`.
+///
+/// Each learner goes through [`complete_item`]'s roll-up under their `course_progress` lock, so
+/// a step of theirs takes turns with it and a module or course that becomes complete gets its
+/// `completed_at` and its event exactly as a step would give it. No `completed_at` is cleared
+/// (Q1). A row whose counts and completion would not change is not written, so a second run
+/// writes nothing. A module row is created only for a module the learner has a completed item
+/// in. An unpublished module's row is left as it is.
+///
+/// Completion does not depend on locks (spec 04 B11), so a module locked for the learner
+/// completes too once its requirements are met.
+///
+/// The course row is held `FOR SHARE`, so the rules cannot change during the batch, and the
+/// learner roles `FOR KEY SHARE`, so the learners chosen stay learners until it commits. A
+/// course that is gone or archived (spec 02 B5: it takes no progress) is skipped: no learner, no
+/// event.
+pub async fn recompute_course(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: OrgScope,
+    course_id: Uuid,
+    after: Option<Uuid>,
+    now: SystemTime,
+) -> Result<Recomputed, Error> {
+    let done = Recomputed {
+        events: Vec::new(),
+        next: None,
+    };
+    let Some(course) = courses::lock_shared(tx, scope, course_id).await? else {
+        return Ok(done);
+    };
+    if course.status == courses::Status::Archived {
+        return Ok(done);
+    }
+    let learners = recompute_learners(tx, scope, course_id, after).await?;
+    let rules = unlock::load_course_rules(&mut **tx, scope, course_id).await?;
+    let mut events = Vec::new();
+    for user_id in &learners {
+        let rollup = RollUp {
+            scope,
+            user_id: *user_id,
+            course_id,
+            now,
+        };
+        events.extend(rollup.recompute(tx, &rules).await?);
+    }
+    let next = (learners.len() == RECOMPUTE_BATCH)
+        .then(|| learners.last().copied())
+        .flatten();
+    Ok(Recomputed { events, next })
+}
+
+/// The next [`RECOMPUTE_BATCH`] learners of the course with a `course_progress` row, in user
+/// id order after `after`.
+async fn recompute_learners(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: OrgScope,
+    course_id: Uuid,
+    after: Option<Uuid>,
+) -> Result<Vec<Uuid>, Error> {
+    let learner_roles = learner_roles_key_share(tx, scope, course_id).await?;
+    let ids = sqlx::query_scalar!(
+        "SELECT p.user_id FROM course_progress p
+         WHERE p.org_id = $1 AND p.course_id = $2
+           AND ($3::uuid IS NULL OR p.user_id > $3)
+           AND EXISTS (SELECT 1 FROM enrollments e
+                       WHERE e.org_id = p.org_id AND e.course_id = p.course_id
+                         AND e.user_id = p.user_id AND e.status = 'active'
+                         AND e.role_id = ANY($4))
+         ORDER BY p.user_id
+         LIMIT $5",
+        scope.org_id(),
+        course_id,
+        after,
+        &learner_roles,
+        // Invariant: RECOMPUTE_BATCH is 100.
+        i64::try_from(RECOMPUTE_BATCH).expect("a batch of 100"),
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    Ok(ids)
+}
+
+/// The roles of the course's active enrollments that hold `course.participate`, read
+/// `FOR KEY SHARE` until `tx` ends, as a step's learner check reads them
+/// (`enrollments::participates`): a change of a custom role's permissions waits for the batch,
+/// so the learners it chose stay learners until it commits.
+async fn learner_roles_key_share(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: OrgScope,
+    course_id: Uuid,
+) -> Result<Vec<Uuid>, Error> {
+    let rows = sqlx::query!(
+        "SELECT r.id, r.key, r.builtin, r.permissions
+         FROM roles r
+         WHERE (r.org_id IS NULL OR r.org_id = $1)
+           AND r.id IN (SELECT e.role_id FROM enrollments e
+                        WHERE e.org_id = $1 AND e.course_id = $2 AND e.status = 'active')
+         ORDER BY r.id
+         FOR KEY SHARE",
+        scope.org_id(),
+        course_id,
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .filter(|role| {
+            roles::effective_permissions(&role.key, role.builtin, role.permissions.clone())
+                .iter()
+                .any(|key| key == CourseParticipate::KEY)
+        })
+        .map(|role| role.id)
+        .collect())
+}
+
+/// Whether the user `user_id` has a `course_progress` row in the course `course_id` of the
+/// scope's organization: whether they have completed an item there.
+pub async fn has_course_progress(
+    conn: &mut PgConnection,
+    scope: OrgScope,
+    user_id: Uuid,
+    course_id: Uuid,
+) -> Result<bool, Error> {
+    Ok(sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM course_progress
+                          WHERE org_id = $1 AND user_id = $2 AND course_id = $3) AS "exists!""#,
+        scope.org_id(),
+        user_id,
+        course_id,
+    )
+    .fetch_one(conn)
+    .await?)
+}
+
+/// A learner's stored module row: its counts and whether it has a `completed_at`.
+struct StoredModule {
+    required_count: i32,
+    completed_count: i32,
+    complete: bool,
+}
+
+impl RollUp {
+    /// Recompute every published module's row and the course row of the learner under `rules`
+    /// ([`recompute_course`]), returning the events of what became complete.
+    async fn recompute(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        rules: &CourseRules,
+    ) -> Result<Vec<Event>, Error> {
+        let before = lock_course_progress(tx, self.scope, self.user_id, self.course_id).await?;
+        let completed =
+            completed_items(&mut **tx, self.scope, self.user_id, self.course_id).await?;
+        let evaluation = unlock::evaluate(rules, &completed, self.now);
+        let stored = self.stored_modules(tx).await?;
+        let mut events = Vec::new();
+        for module in &rules.modules {
+            let (required, done) = module_counts(module, &completed);
+            let complete = evaluation.module(module.id).is_some_and(|m| m.complete);
+            let unchanged = match stored.get(&module.id) {
+                Some(row) => {
+                    row.required_count == count(required)
+                        && row.completed_count == count(done)
+                        && (row.complete || !complete)
+                }
+                None => done == 0,
+            };
+            if !unchanged {
+                events.extend(self.module(tx, module, &completed, &evaluation).await?);
+            }
+        }
+        let (counted, done) = course_counts(rules, &evaluation);
+        let stored_course = self.stored_course_counts(tx).await?;
+        let unchanged = stored_course == (count(counted), count(done))
+            && (before.is_some() || !evaluation.course_complete());
+        if !unchanged {
+            events.extend(self.course(tx, rules, &evaluation, before).await?);
+        }
+        Ok(events)
+    }
+
+    /// The learner's module rows in the course, by module.
+    async fn stored_modules(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+    ) -> Result<HashMap<Uuid, StoredModule>, Error> {
+        let rows = sqlx::query!(
+            r#"SELECT module_id, required_count, completed_count,
+                      completed_at IS NOT NULL AS "complete!"
+               FROM module_progress
+               WHERE org_id = $1 AND user_id = $2 AND course_id = $3"#,
+            self.scope.org_id(),
+            self.user_id,
+            self.course_id,
+        )
+        .fetch_all(&mut **tx)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let stored = StoredModule {
+                    required_count: row.required_count,
+                    completed_count: row.completed_count,
+                    complete: row.complete,
+                };
+                (row.module_id, stored)
+            })
+            .collect())
+    }
+
+    /// The counts of the learner's `course_progress` row, which [`lock_course_progress`] holds.
+    async fn stored_course_counts(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+    ) -> Result<(i32, i32), Error> {
+        let row = sqlx::query!(
+            "SELECT required_count, completed_count FROM course_progress
+             WHERE org_id = $1 AND user_id = $2 AND course_id = $3",
+            self.scope.org_id(),
+            self.user_id,
+            self.course_id,
+        )
+        .fetch_one(&mut **tx)
+        .await?;
+        Ok((row.required_count, row.completed_count))
+    }
 }
 
 /// Lock the learner's `course_progress` row for the course, creating it with zero counts when

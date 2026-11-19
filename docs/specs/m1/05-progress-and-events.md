@@ -465,6 +465,61 @@ Coordinator decisions (overnight, 2026-11-17), pending owner review.
   `course_progress` row, then finds the item completed and returns it with no event; a test runs
   the two on two connections.
 
+### Decisions made building I2
+
+Coordinator decisions (2026-11-19), each pending owner review.
+
+- **Which writes enqueue the job.** B8's list, read through its own condition ("in a way that
+  changes counts"): publishing or unpublishing an item or a module, setting, changing or
+  removing an item's requirement, moving an item to another module, deleting an item or a
+  module, and changing a module's prerequisites or completion rule. A patch enqueues only when
+  one of those values differs after the write, so a patch naming current values still changes
+  nothing. Creating a module or an item (both start unpublished), renames, a link's URL, an
+  unlock date, sequential order, reordering a course's modules and moving an item within its
+  module change no count and enqueue nothing.
+- **Who is recomputed.** Users with a `course_progress` row in the course (every learner who
+  has completed an item there) who hold an active enrollment whose role has
+  `course.participate` (B1). A concluded learner's rows are left as they are, so no event
+  reports a completion for someone who is not taking the course (B12); reactivating them
+  recomputes the course (below). A learner without a completed item has nothing a rule change
+  can complete.
+- **What a run writes.** Every published module's row and the course row of each learner, from
+  their completed items under the current rules, through the same roll-up `complete_item` uses
+  (so a module or course that becomes complete gets its `completed_at` and its event the same
+  way, and spec 14's `completions` row with its cycle and expiry). A row is written only when
+  its counts or completion would change, so a second run writes nothing, `updated_at`
+  included. A module row is created only for a module the learner
+  has a completed item in, as `complete_item` creates them. Rows of unpublished modules are left
+  as they are.
+- **Archived and deleted courses.** An archived course takes no progress (`02` B5), so the job
+  skips it; a course that no longer exists ends the job.
+- **Batches.** Each batch of 100 learners, in user id order, runs in its own transaction that
+  holds the course row `FOR SHARE` and writes its events before it commits. A failure retries
+  the whole job, which finds the batches already done unchanged. The job extends its lease
+  between batches and stops once another worker has claimed it.
+
+From the review of I2, each a Coordinator decision (2026-11-19), pending owner review:
+
+- **A skipped learner or course is recomputed when it comes back.** A run leaves out a learner
+  without an active learner enrollment and skips an archived course, so the writes that bring
+  them back enqueue the job in their own transaction: an enrollment going from concluded to
+  active, a new enrollment of a user who has a `course_progress` row in the course, and a course
+  going from archived to published. Otherwise a module whose last unmet requirement was removed
+  meanwhile would stay incomplete for good. A custom role that gains `course.participate`
+  enqueues nothing; such a learner is caught by the next recompute of the course.
+- **The learner roles are locked.** Each batch reads the roles of the course's active
+  enrollments `FOR KEY SHARE` before it chooses learners, as a step's learner check does, so a
+  change to a custom role's permissions waits for the batch.
+- **A recompute completes a locked module.** B8 recomputes from the stored item rows, and
+  completion (`04` B11) does not depend on locks, so a module that is locked for the learner
+  (an unlock date ahead, a prerequisite not met) still completes when its requirements are met.
+  Skipping locked modules would strand them again, since nothing recomputes when an unlock date
+  passes.
+- **A learner whose roll-up keeps failing stops the later batches.** The run ends at the
+  failing batch with a retry; the job retries with backoff and then goes dead, its `last_error`
+  naming the course and the error. Errors are never swallowed to let other learners' batches go
+  on. The failure is recorded once, as the job's `last_error`.
+
 ### Decisions made building I3
 
 Coordinator decision (overnight, 2026-11-17), each pending owner review.

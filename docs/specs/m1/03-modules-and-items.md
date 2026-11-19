@@ -377,11 +377,10 @@ Coordinator decisions (overnight, 2026-11-17), pending owner review.
   three reads. The stored positions count unpublished rows too, so a gap in them would tell a
   learner how many unpublished modules or items sit before one. Staff get the stored positions,
   which number every row.
-- **Known gap until `05` I2: a module's counts can include unpublished items.** A module's
-  `required_count` and `completed_count` are the roll-up stored when the learner's progress was
-  written. An item unpublished afterwards still counts in them until `05` I2 recomputes the
-  roll-ups on such a change; the read does not recompute them. The counts show no item's id,
-  title or content.
+- **A module's counts follow an unpublish 30 s later.** A module's `required_count` and
+  `completed_count` are the stored roll-up. Unpublishing an item enqueues `05` B8's recompute,
+  which runs 30 s after the change; until then the counts still include the item. The read does
+  not recompute them. The counts show no item's id, title or content.
 - **Observers.** A user with `course.view` but neither `course.view_all` nor
   `course.participate` (the built-in Observer) reads as a learner does: published content only,
   with links withheld while locked, evaluated as for a learner with no progress (`05` B18),

@@ -9,6 +9,11 @@
 //! there, so an account move committed after the extractor ran cannot carry the course out of
 //! the caller's reach unseen. The repository refuses every write to an archived course (409
 //! `course.archived`, spec 02 B5).
+//!
+//! Publishing or unpublishing a module, changing its prerequisites or completion rule, and
+//! deleting it enqueue `progress.recompute_course` for the course in the write's transaction
+//! (docs/specs/m1/05-progress-and-events.md B8). Creating (unpublished), renaming, an unlock
+//! date, sequential order and reordering the course's modules change no learner's count.
 
 use std::collections::HashMap;
 
@@ -38,6 +43,7 @@ use crate::{
     extract::ApiJson,
     openapi::problem_responses,
     organization::present,
+    progress_recompute,
     require::{
         CourseTarget, ModuleTarget, Require, check_course, code::COURSE_NOT_FOUND, not_found_as,
     },
@@ -559,12 +565,19 @@ pub async fn update_module(
         completion_valid_months: validity(body.completion_valid_months),
     };
     let (scope, now) = (grants.scope(), state.clock.now());
+    let before = modules::get(&mut *tx, scope, target.id)
+        .await
+        .map_err(content_error)?
+        .ok_or_else(|| content_error(Error::ModuleNotFound))?;
     modules::update(&mut *tx, scope, target.id, &patch, now)
         .await
         .map_err(content_error)?;
     let module = modules::set_rules(&mut *tx, scope, target.id, &body.rules(), now)
         .await
         .map_err(content_error)?;
+    if changes_counts(&before, &module) {
+        progress_recompute::enqueue(&mut tx, scope, target.course.id, now).await?;
+    }
     let items = items::list_for_module(&mut *tx, scope, target.id)
         .await
         .map_err(content_error)?;
@@ -598,11 +611,22 @@ pub async fn delete_module(
     let (grants, target) = (require.grants(), require.target());
     let mut tx = begin(&state).await?;
     recheck(&mut tx, &require, target.course.id, MODULE_NOT_FOUND).await?;
-    modules::delete(&mut *tx, grants.scope(), target.id)
+    let (scope, now) = (grants.scope(), state.clock.now());
+    modules::delete(&mut *tx, scope, target.id)
         .await
         .map_err(content_error)?;
+    progress_recompute::enqueue(&mut tx, scope, target.course.id, now).await?;
     commit(tx).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Whether a module change from `before` to `after` is one spec 05 B8 recomputes learners'
+/// progress for: the module published or unpublished, its prerequisites or its completion rule
+/// changed. A rename, an unlock date or sequential order changes no count.
+fn changes_counts(before: &modules::Module, after: &modules::Module) -> bool {
+    before.published != after.published
+        || before.prerequisite_ids != after.prerequisite_ids
+        || before.completion_rule != after.completion_rule
 }
 
 /// The code of a module that does not exist or that the caller cannot see.

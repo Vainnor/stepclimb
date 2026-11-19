@@ -10,6 +10,7 @@ use sqlx::PgPool;
 use stepclimb_core::{
     OrgScope, Source,
     audit::Actor,
+    completions::{self, TargetType},
     courses::{self, NewCourse},
     enrollments::{self, NewEnrollment},
     id::Uuid,
@@ -761,4 +762,390 @@ async fn two_concurrent_mark_dones_of_one_item_complete_it_once(pool: PgPool) {
     .unwrap();
     assert_eq!(course_counts, (1, 0));
     assert_eq!(rows(&pool, "item_progress", user).await, 1);
+}
+
+/// Run `recompute_course` over every batch of the course at `now`, as the job does: the
+/// events of every batch, and how many batches ran.
+async fn recompute(pool: &PgPool, org: Org, now: SystemTime) -> (Vec<Event>, usize) {
+    recompute_in(pool, org.scope(), org.course, now).await
+}
+
+async fn recompute_in(
+    pool: &PgPool,
+    scope: OrgScope,
+    course: Uuid,
+    now: SystemTime,
+) -> (Vec<Event>, usize) {
+    let (mut events, mut batches, mut after) = (Vec::new(), 0, None);
+    loop {
+        let mut tx = pool.begin().await.expect("begin");
+        let batch = progress::recompute_course(&mut tx, scope, course, after, now)
+            .await
+            .expect("recompute");
+        tx.commit().await.expect("commit");
+        events.extend(batch.events);
+        batches += 1;
+        match batch.next {
+            Some(next) => after = Some(next),
+            None => return (events, batches),
+        }
+    }
+}
+
+/// The learner's module row: required, completed, `completed_at`.
+async fn module_row(pool: &PgPool, user: Uuid, module: Uuid) -> (i32, i32, Option<SystemTime>) {
+    let row: (i32, i32, Option<i64>) = sqlx::query_as(
+        "SELECT required_count, completed_count,
+                (extract(epoch FROM completed_at) * 1000000)::bigint
+         FROM module_progress WHERE user_id = $1 AND module_id = $2",
+    )
+    .bind(user)
+    .bind(module)
+    .fetch_one(pool)
+    .await
+    .expect("the module row");
+    let at = row
+        .2
+        .map(|us| UNIX_EPOCH + Duration::from_micros(u64::try_from(us).expect("after 1970")));
+    (row.0, row.1, at)
+}
+
+/// Every progress row of the organization, as text.
+async fn snapshot(pool: &PgPool, org: Uuid) -> Vec<String> {
+    sqlx::query_scalar(
+        "SELECT to_jsonb(m)::text FROM module_progress m WHERE org_id = $1
+         UNION ALL SELECT to_jsonb(c)::text FROM course_progress c WHERE org_id = $1
+         UNION ALL SELECT to_jsonb(i)::text FROM item_progress i WHERE org_id = $1
+         ORDER BY 1",
+    )
+    .bind(org)
+    .fetch_all(pool)
+    .await
+    .expect("read rows")
+}
+
+async fn set_requirement(pool: &PgPool, org: Org, item: Uuid, requirement: Option<Requirement>) {
+    items::set_requirement(pool, org.scope(), item, requirement, t0())
+        .await
+        .expect("set requirement");
+}
+
+async fn publish_item(pool: &PgPool, org: Org, item: Uuid, published: bool) {
+    let patch = ItemPatch {
+        published: Some(published),
+        ..ItemPatch::default()
+    };
+    items::update(pool, org.scope(), item, &patch, t0())
+        .await
+        .expect("publish item");
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t8_a_new_required_item_raises_the_count_and_keeps_completed_at(pool: PgPool) {
+    let org = Org::new(&pool, "a").await;
+    let module = org.module(&pool).await;
+    let a = org.item(&pool, module, Some(Requirement::View)).await;
+    let user = org.student(&pool).await;
+    let _ = org.step(&pool, user, a, Action::View, t0()).await.unwrap();
+    assert_eq!(module_row(&pool, user, module).await, (1, 1, Some(t0())));
+    org.item(&pool, module, Some(Requirement::View)).await;
+    let (events, _) = recompute(&pool, org, later(60)).await;
+    assert!(events.is_empty(), "{events:?}");
+    assert_eq!(
+        module_row(&pool, user, module).await,
+        (2, 1, Some(t0())),
+        "Q1: completed_at stays while the count rises"
+    );
+    let course: (i32, i32, bool) = sqlx::query_as(
+        "SELECT required_count, completed_count, completed_at IS NOT NULL
+         FROM course_progress WHERE user_id = $1",
+    )
+    .bind(user)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(course, (1, 0, true));
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn t8_removing_the_last_unmet_requirement_completes_the_module_once(pool: PgPool) {
+    let org = Org::new(&pool, "a").await;
+    let module = org.module(&pool).await;
+    let a = org.item(&pool, module, Some(Requirement::View)).await;
+    let b = org.item(&pool, module, Some(Requirement::MarkDone)).await;
+    let user = org.student(&pool).await;
+    let _ = org.step(&pool, user, a, Action::View, t0()).await.unwrap();
+    assert_eq!(module_row(&pool, user, module).await, (2, 1, None));
+    set_requirement(&pool, org, b, None).await;
+    let (events, _) = recompute(&pool, org, later(30)).await;
+    assert_eq!(
+        events,
+        [
+            Event::ModuleCompleted(ModuleCompleted {
+                user_id: user,
+                course_id: org.course,
+                module_id: module,
+                completed_at: later(30),
+            }),
+            Event::CourseCompleted(CourseCompleted {
+                user_id: user,
+                course_id: org.course,
+                completed_at: later(30),
+            }),
+        ]
+    );
+    assert_eq!(
+        module_row(&pool, user, module).await,
+        (1, 1, Some(later(30)))
+    );
+    let before = snapshot(&pool, org.id).await;
+    let (again, _) = recompute(&pool, org, later(90)).await;
+    assert!(again.is_empty(), "a second run emits nothing: {again:?}");
+    assert_eq!(snapshot(&pool, org.id).await, before, "and writes nothing");
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn b8_unpublishing_a_completed_required_item_lowers_the_counts(pool: PgPool) {
+    let org = Org::new(&pool, "a").await;
+    let module = org.module(&pool).await;
+    let a = org.item(&pool, module, Some(Requirement::View)).await;
+    org.item(&pool, module, Some(Requirement::View)).await;
+    let user = org.student(&pool).await;
+    let _ = org.step(&pool, user, a, Action::View, t0()).await.unwrap();
+    assert_eq!(module_row(&pool, user, module).await, (2, 1, None));
+    publish_item(&pool, org, a, false).await;
+    let (events, _) = recompute(&pool, org, later(30)).await;
+    assert!(events.is_empty(), "{events:?}");
+    assert_eq!(module_row(&pool, user, module).await, (1, 0, None));
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn b8_a_moved_item_counts_in_its_new_module(pool: PgPool) {
+    let org = Org::new(&pool, "a").await;
+    let first = org.module(&pool).await;
+    let second = org.module(&pool).await;
+    let a = org.item(&pool, first, Some(Requirement::View)).await;
+    org.item(&pool, first, Some(Requirement::View)).await;
+    org.item(&pool, second, Some(Requirement::MarkDone)).await;
+    let user = org.student(&pool).await;
+    let _ = org.step(&pool, user, a, Action::View, t0()).await.unwrap();
+    items::move_to(&pool, org.scope(), a, second, 0, t0())
+        .await
+        .expect("move");
+    let (events, _) = recompute(&pool, org, later(30)).await;
+    assert!(events.is_empty(), "{events:?}");
+    assert_eq!(module_row(&pool, user, first).await, (1, 0, None));
+    assert_eq!(
+        module_row(&pool, user, second).await,
+        (2, 1, None),
+        "a row appears for the module the completed item moved to"
+    );
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn b8_only_active_learners_of_a_live_course_are_recomputed(pool: PgPool) {
+    let org = Org::new(&pool, "a").await;
+    let module = org.module(&pool).await;
+    let a = org.item(&pool, module, Some(Requirement::View)).await;
+    let b = org.item(&pool, module, Some(Requirement::MarkDone)).await;
+    let (user, enrollment) = org.enrolled(&pool, "student").await;
+    let _ = org.step(&pool, user, a, Action::View, t0()).await.unwrap();
+    enrollments::set_status(
+        &pool,
+        org.scope(),
+        enrollment,
+        enrollments::Status::Concluded,
+        t0(),
+        Actor::Instance,
+    )
+    .await
+    .expect("conclude");
+    set_requirement(&pool, org, b, None).await;
+    let before = snapshot(&pool, org.id).await;
+    let (events, _) = recompute(&pool, org, later(30)).await;
+    assert!(events.is_empty(), "B12: {events:?}");
+    assert_eq!(snapshot(&pool, org.id).await, before, "a concluded learner");
+
+    let active = org.student(&pool).await;
+    let _ = org
+        .step(&pool, active, a, Action::View, t0())
+        .await
+        .unwrap();
+    set_requirement(&pool, org, b, Some(Requirement::MarkDone)).await;
+    for status in [courses::Status::Published, courses::Status::Archived] {
+        courses::set_status(
+            &pool,
+            org.scope(),
+            org.course,
+            status,
+            t0(),
+            Actor::Instance,
+        )
+        .await
+        .expect("publish, then archive");
+    }
+    let before = snapshot(&pool, org.id).await;
+    let (events, _) = recompute(&pool, org, later(30)).await;
+    assert!(events.is_empty(), "{events:?}");
+    assert_eq!(snapshot(&pool, org.id).await, before, "an archived course");
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn b8_another_organizations_course_is_not_recomputed(pool: PgPool) {
+    let org = Org::new(&pool, "a").await;
+    let other = Org::new(&pool, "b").await;
+    let module = org.module(&pool).await;
+    let a = org.item(&pool, module, Some(Requirement::View)).await;
+    let b = org.item(&pool, module, Some(Requirement::MarkDone)).await;
+    let user = org.student(&pool).await;
+    let _ = org.step(&pool, user, a, Action::View, t0()).await.unwrap();
+    set_requirement(&pool, org, b, None).await;
+    let before = snapshot(&pool, org.id).await;
+    let (events, _) = recompute_in(&pool, other.scope(), org.course, later(30)).await;
+    assert!(events.is_empty(), "{events:?}");
+    assert_eq!(snapshot(&pool, org.id).await, before);
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn b8_learners_are_recomputed_in_batches_of_100(pool: PgPool) {
+    let org = Org::new(&pool, "a").await;
+    let module = org.module(&pool).await;
+    let a = org.item(&pool, module, Some(Requirement::View)).await;
+    let b = org.item(&pool, module, Some(Requirement::MarkDone)).await;
+    let learners = progress::RECOMPUTE_BATCH + 1;
+    for _ in 0..learners {
+        let user = org.student(&pool).await;
+        let _ = org.step(&pool, user, a, Action::View, t0()).await.unwrap();
+    }
+    set_requirement(&pool, org, b, None).await;
+    let mut tx = pool.begin().await.unwrap();
+    let first = progress::recompute_course(&mut tx, org.scope(), org.course, None, later(30))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(first.events.len(), 2 * progress::RECOMPUTE_BATCH);
+    assert!(first.next.is_some());
+    let (rest, batches) = recompute(&pool, org, later(30)).await;
+    assert_eq!(batches, 2);
+    assert_eq!(
+        rest.len(),
+        2,
+        "only the learner past the first batch is left"
+    );
+    let complete: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM module_progress WHERE module_id = $1 AND completed_at IS NOT NULL",
+    )
+    .bind(module)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(complete, i64::try_from(learners).unwrap());
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn b8_a_recompute_that_completes_a_module_records_its_completion(pool: PgPool) {
+    let org = Org::new(&pool, "a").await;
+    let module = org.module(&pool).await;
+    let patch = ModulePatch {
+        completion_valid_months: Some(Some(6)),
+        ..ModulePatch::default()
+    };
+    modules::update(&pool, org.scope(), module, &patch, t0())
+        .await
+        .expect("set the module's validity");
+    let a = org.item(&pool, module, Some(Requirement::View)).await;
+    let b = org.item(&pool, module, Some(Requirement::MarkDone)).await;
+    let user = org.student(&pool).await;
+    let _ = org.step(&pool, user, a, Action::View, t0()).await.unwrap();
+    set_requirement(&pool, org, b, None).await;
+    let (events, _) = recompute(&pool, org, later(30)).await;
+    assert_eq!(events.len(), 2, "{events:?}");
+    let history = || async {
+        let filter = completions::CourseFilter::default();
+        let mut rows =
+            completions::list_for_course(&pool, org.scope(), org.course, &filter, None, 10)
+                .await
+                .expect("list completions");
+        rows.sort_by_key(|c| c.target_type == TargetType::Module);
+        rows.iter()
+            .map(|c| {
+                (
+                    c.user_id,
+                    c.target_type,
+                    c.target_id,
+                    c.cycle,
+                    c.completed_at,
+                    c.expires_at,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    // The organization's default zone is UTC: 2025-11-13 plus 6 months is 2026-05-13, 181 days.
+    let six_months = later(30) + Duration::from_secs(181 * 24 * 60 * 60);
+    let expected = vec![
+        (user, TargetType::Course, org.course, 1, later(30), None),
+        (
+            user,
+            TargetType::Module,
+            module,
+            1,
+            later(30),
+            Some(six_months),
+        ),
+    ];
+    assert_eq!(history().await, expected);
+    let (again, _) = recompute(&pool, org, later(90)).await;
+    assert!(again.is_empty(), "{again:?}");
+    assert_eq!(history().await, expected, "a second run records nothing");
+}
+
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn b8_a_step_takes_turns_with_a_recompute(pool: PgPool) {
+    let org = Org::new(&pool, "a").await;
+    let module = org.module(&pool).await;
+    let a = org.item(&pool, module, Some(Requirement::View)).await;
+    let b = org.item(&pool, module, Some(Requirement::View)).await;
+    let c = org.item(&pool, module, Some(Requirement::MarkDone)).await;
+    let user = org.student(&pool).await;
+    let _ = org.step(&pool, user, a, Action::View, t0()).await.unwrap();
+    set_requirement(&pool, org, c, None).await;
+    let mut batch = pool.begin().await.unwrap();
+    let recomputed =
+        progress::recompute_course(&mut batch, org.scope(), org.course, None, later(30))
+            .await
+            .unwrap();
+    assert!(recomputed.events.is_empty(), "b is still open");
+    // The step starts while the batch holds the learner's course row.
+    let step = tokio::spawn({
+        let pool = pool.clone();
+        async move {
+            let mut tx = pool.begin().await.unwrap();
+            let recorded =
+                progress::record_step(&mut tx, org.scope(), user, b, Action::View, later(40))
+                    .await
+                    .unwrap();
+            tx.commit().await.unwrap();
+            recorded
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!step.is_finished(), "the step waits for the batch");
+    batch.commit().await.unwrap();
+    let recorded = step.await.unwrap();
+    assert!(
+        matches!(
+            recorded.events.as_slice(),
+            [
+                Event::ItemCompleted(_),
+                Event::ModuleCompleted(_),
+                Event::CourseCompleted(_)
+            ]
+        ),
+        "the step sees the batch's counts and completes the module once: {:?}",
+        recorded.events
+    );
+    assert_eq!(
+        module_row(&pool, user, module).await,
+        (2, 2, Some(later(40)))
+    );
 }

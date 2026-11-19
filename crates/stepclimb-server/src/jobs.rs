@@ -9,12 +9,13 @@
 //! `jobs.prune` (hourly), `auth.flows_cleanup` (every 10 minutes), `files.cleanup` (hourly,
 //! docs/specs/m1/06-files.md B8, B21) and `videos.cleanup` (hourly,
 //! docs/specs/m1/08-uploaded-video.md B6). It also knows the progress event topics
-//! (docs/specs/m1/05-progress-and-events.md B10), so the outbox dispatcher claims their events.
+//! (docs/specs/m1/05-progress-and-events.md B10), so the outbox dispatcher claims their events,
+//! and runs `progress.recompute_course` (B8), which the content routes enqueue.
 
 use stepclimb_jobs::{Registry, RegistryError, prune};
 
 use crate::{
-    files_cleanup, flow, progress,
+    files_cleanup, flow, progress, progress_recompute,
     storage::Storage,
     video_transcode::{self, Transcoder},
     videos_cleanup,
@@ -37,6 +38,7 @@ pub fn registry(
     videos_cleanup::register(&mut registry, storage.clone())?;
     video_transcode::register(&mut registry, storage, transcoder)?;
     progress::register_topics(&mut registry)?;
+    progress_recompute::register(&mut registry)?;
     Ok(registry)
 }
 
@@ -76,6 +78,7 @@ mod tests {
         // docs/specs/m1/08-uploaded-video.md T13: a `worker` never claims a transcode.
         assert_eq!(general_queues(&registry), ["default"]);
         assert_eq!(video_transcode::TRANSCODE.queue, TRANSCODE_QUEUE);
+        assert!(registry.knows(&progress_recompute::RECOMPUTE));
         for topic in [
             progress::ITEM_COMPLETED,
             progress::MODULE_COMPLETED,
