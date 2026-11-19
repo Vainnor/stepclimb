@@ -37,9 +37,34 @@ const runs: [Story, Theme, string][] = stories().flatMap((story) =>
 );
 const widths = ["1280", "375"];
 
+/**
+ * Grows the viewport to the story's height when the story is taller. Playwright captures an element
+ * taller than the viewport with Chromium's `captureBeyondViewport`, which turns touch emulation off
+ * for the capture, so a tall story at 375 px would be drawn for a fine pointer. A viewport the
+ * story fits keeps the capture inside it. The width stays, and so do mobile and touch emulation.
+ */
+async function fitViewport(page: Page): Promise<void> {
+  const viewport = page.viewportSize();
+  if (viewport === null) throw new Error("the story suite needs a fixed viewport");
+  const root = page.locator("#storybook-root");
+  let height = viewport.height;
+  // A second pass covers a story whose layout moves with the viewport's height; a story that grows
+  // with every resize has no height that fits it.
+  for (let pass = 0; pass < 3; pass++) {
+    const box = await root.boundingBox();
+    if (box === null) throw new Error("the story drew no #storybook-root box");
+    const needed = Math.ceil(box.y + box.height);
+    if (needed <= height) return;
+    height = needed;
+    await page.setViewportSize({ width: viewport.width, height });
+  }
+  throw new Error(`the story keeps growing with the viewport, past ${height} px`);
+}
+
 for (const [story, theme, name] of runs) {
-  test(`${story.title} / ${story.name} (${name})`, async ({ page }) => {
+  test(`${story.title} / ${story.name} (${name})`, async ({ page, hasTouch }) => {
     await openStory(page, story, theme);
+    if (hasTouch) await fitViewport(page);
     // The story's own box: the decorator draws it only as tall as its content.
     await expect(page.locator("#storybook-root")).toHaveScreenshot(`${story.id}--${name}.png`);
     expect(await axeViolations(page)).toEqual([]);

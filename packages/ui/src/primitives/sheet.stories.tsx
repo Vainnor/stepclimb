@@ -35,13 +35,16 @@ function EditPage({
   defaultOpen,
   placement,
   long,
+  fill = true,
 }: {
   defaultOpen?: boolean;
   placement?: SheetPlacement;
   long?: boolean;
+  /** As tall as the screen, for an overlay to open over; a matrix cell leaves it closed. */
+  fill?: boolean;
 }) {
   return (
-    <div className="min-h-[calc(100dvh-3rem)]">
+    <div className={fill ? "min-h-[calc(100dvh-3rem)]" : undefined}>
       <DialogTrigger defaultOpen={defaultOpen}>
         <Button>Edit page</Button>
         <Sheet
@@ -93,7 +96,7 @@ export const Matrix: Story = {
   parameters: { themeWrapper: false },
   render: () => (
     <ThemeMatrix>
-      <EditPage />
+      <EditPage fill={false} />
     </ThemeMatrix>
   ),
 };
