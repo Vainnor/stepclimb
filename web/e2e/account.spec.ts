@@ -4,7 +4,7 @@
 // 1280 and 375 px. As in states.spec.ts, `/api/v1/me` and the passkey routes are answered in the
 // browser with synthetic data; sign-in.spec.ts drives the same page against the real server.
 import AxeBuilder from "@axe-core/playwright";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page, test } from "./csp";
 
 const WCAG = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"];
 

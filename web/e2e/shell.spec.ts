@@ -2,7 +2,7 @@
 // The signed-in shell in the browser (docs/specs/m0/11-app-shell.md T15, T17). These tests answer
 // `/api/v1/me` in the browser with a synthetic user, so they need no passkey ceremony (signing in
 // for real is sign-in.spec.ts); everything else is the built binary serving the built SPA.
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page, test } from "./csp";
 
 const orgId = "01900000-0000-7000-8000-000000000001";
 const me = {

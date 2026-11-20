@@ -3,7 +3,7 @@
 // B2, B19): each page's link covers its row, so the target is at least 44 px tall at 375 px with a
 // coarse pointer. As in videos.spec.ts, `/api/v1/me`, the course and its pages are answered in the
 // browser with synthetic data; the real-stack journey is in sign-in.spec.ts.
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./csp";
 
 const courseId = "01900000-0000-7000-8000-0000000000c1";
 const STAMP = "2026-11-02T12:00:00Z";

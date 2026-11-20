@@ -332,6 +332,39 @@ async fn the_root_serves_the_built_spa() {
     assert!(body.contains(r#"<div id="root">"#));
 }
 
+/// Issue #325: the page, a client route, a built file and the service worker carry the web
+/// app's `Content-Security-Policy`, and the built page has nothing the policy would block: no
+/// inline script, no `<style>` element, no inline style attribute, no inline event handler.
+#[tokio::test]
+async fn the_page_and_the_built_files_carry_the_content_security_policy() {
+    let csp = stepclimb_server::spa::CONTENT_SECURITY_POLICY.as_str();
+    for path in [
+        "/",
+        "/index.html",
+        "/c/s1/m/2",
+        "/sw.js",
+        "/icons/icon-192.png",
+    ] {
+        let (status, headers, _) = send(app_without_database(), Method::GET, path).await;
+        assert_eq!(status, StatusCode::OK, "{path}: is web/dist built?");
+        assert_eq!(headers[header::CONTENT_SECURITY_POLICY], csp, "{path}");
+        assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff", "{path}");
+    }
+    let (_, _, page) = get(app_without_database(), "/").await;
+    let scripts: Vec<&str> = page.split("<script").skip(1).collect();
+    assert!(!scripts.is_empty(), "{page}");
+    for script in scripts {
+        let tag = script.split('>').next().unwrap_or_default();
+        assert!(
+            tag.contains(" src=\"/"),
+            "an inline or foreign script: {tag}"
+        );
+    }
+    for inline in ["<style", " style=", " onload=", " onerror=", "javascript:"] {
+        assert!(!page.contains(inline), "{inline} in {page}");
+    }
+}
+
 #[tokio::test]
 async fn a_client_route_falls_back_to_index_html() {
     let (status, content_type, body) = get(app_without_database(), "/c/s1/m/2/i/7").await;

@@ -5,7 +5,7 @@
 // Playwright's WebKit cannot report safe-area insets or run from the home screen, so the iOS
 // home-screen check is by hand and the PR says whether it ran. `/api/v1/me` is answered in the
 // browser with a synthetic user, as in shell.spec.ts.
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./csp";
 
 const me = {
   user: {

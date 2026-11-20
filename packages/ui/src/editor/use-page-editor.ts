@@ -41,6 +41,7 @@ export function usePageEditor(
       // Forwards the node views' own lookups, which pass literal ids (extensions.ts).
       extensions: pageExtensions({ t: (id, values) => current.current.t(id, values) }), // strings-check-ignore
       content: current.current.initial,
+      // Required by the SPA's Content-Security-Policy, which would refuse Tiptap's unhashed <style>.
       injectCSS: false,
       editable: !current.current.isDisabled,
       editorProps: {

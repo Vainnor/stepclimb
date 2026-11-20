@@ -1,0 +1,8 @@
+# The <style> elements the web app's dependencies add to the page at run time, which the server's
+# Content-Security-Policy allows by their SHA-256 and nothing else (issue #325;
+# src/spa.rs reads this file). web/src/csp-styles.test.ts fails when a dependency's
+# injected styles differ from this list: update the hashes it prints.
+# React Aria usePress: touch-action on pressable elements.
+sha256-38RhXrc7EdReTKsOm23ZPOCUgniTUUcjky8QOOrQx6o=
+# React Aria usePreventScroll, iOS WebKit only: overscroll-behavior while a modal is open.
+sha256-gYiS/BvZvRcK27JIXTuwhZ3hs2+VJ1X+2gUlE+farlg=

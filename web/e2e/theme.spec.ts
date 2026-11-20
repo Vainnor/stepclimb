@@ -4,7 +4,7 @@
 // appearance comes from the `__Host-sc_appearance` cookie, as for any signed-out browser. The menu
 // test answers `/api/v1/me` and the save in the browser, as tests/shell.spec.ts does.
 import AxeBuilder from "@axe-core/playwright";
-import { type Browser, expect, type Page, test } from "@playwright/test";
+import { type Browser, expect, type Page, test } from "./csp";
 
 const WCAG = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"];
 
