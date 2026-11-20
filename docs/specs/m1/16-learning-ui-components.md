@@ -203,8 +203,8 @@ listed here with a pointer so the inventory is complete in one place.
     the link shows "Continue" and is named "Continue: Taxi instructions", so each link says which
     item it opens and the name starts with the visible label (axe's label-in-name check). The
     item's title is in the name, so it is not given again as a description.
-  - Callout's kinds take the status tints, although the plan keeps status colors for feedback and
-    grades: the plan names the kinds after the statuses and asks for a tinted surface. `info`,
+  - Callout's kinds take the status tints. The owner decided this on 17 Nov 2026: the plan's
+    status row now covers callouts, and spec 12 B20 requires `fg-default` on every tint. `info`,
     `warning` and `danger` take their own; `tip` takes `success-soft`, not `brand-soft`, since a
     brand can be any hue (vZDC's is red, and its tint matched `danger-soft`). The icon and the
     optional title use `<status>-fg`, the pair the generator holds at 4.5:1 on the tint; the bare

@@ -48,7 +48,7 @@ use PairKind::{Text, Ui};
 
 /// B20's table, in `report.ts`'s order: foreground, background, kind. `fg-disabled` is absent:
 /// WCAG exempts disabled controls.
-pub const REQUIRED_PAIRS: [(&str, &str, PairKind); 43] = [
+pub const REQUIRED_PAIRS: [(&str, &str, PairKind); 47] = [
     ("fg-strong", "bg-canvas", Text),
     ("fg-strong", "bg-raised", Text),
     ("fg-strong", "bg-sunken", Text),
@@ -93,6 +93,11 @@ pub const REQUIRED_PAIRS: [(&str, &str, PairKind); 43] = [
     ("state-overdue", "bg-raised", Ui),
     ("state-review", "bg-canvas", Ui),
     ("state-review", "bg-raised", Ui),
+    // A callout's body text sits on its status tint (owner decision, spec 12 B20).
+    ("fg-default", "success-soft", Text),
+    ("fg-default", "warning-soft", Text),
+    ("fg-default", "danger-soft", Text),
+    ("fg-default", "info-soft", Text),
 ];
 
 /// One measured pair: `foreground` on `background`.

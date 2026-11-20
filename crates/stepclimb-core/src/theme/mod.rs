@@ -399,4 +399,31 @@ mod tests {
         assert!(failing.contains(&("fg-soft", "bg-canvas")), "{failing:?}");
         assert!(reports[1].pass && reports[2].pass);
     }
+
+    #[test]
+    fn the_guard_refuses_a_status_tint_under_a_callouts_body_text() {
+        let brand = Brand::stepclimb_default();
+        let mut themes = generate(&brand).unwrap();
+        // A dark warning tint as light as the dark fg-sub: fg-default on it is near 1:1.
+        let tint = themes.dark.color("warning-soft").unwrap();
+        themes
+            .dark
+            .set("warning-soft", color::Oklch::new(0.75, tint.c, tint.h));
+        let Err(RenderError::Contrast(reports)) = check(&brand, &themes) else {
+            panic!("the guard let a failing theme through");
+        };
+        let dark = &reports[1];
+        assert_eq!(dark.appearance, Appearance::Dark);
+        let failing: Vec<_> = dark
+            .pairs
+            .iter()
+            .filter(|p| !p.pass)
+            .map(|p| (p.foreground.as_str(), p.background.as_str()))
+            .collect();
+        assert!(
+            failing.contains(&("fg-default", "warning-soft")),
+            "{failing:?}"
+        );
+        assert!(reports[0].pass && reports[2].pass);
+    }
 }

@@ -24,7 +24,7 @@ const withColors = (theme: Theme, colors: Partial<Theme["colors"]>): Theme => ({
   colors: { ...theme.colors, ...colors },
 });
 
-/** B20's table, restated: [foreground, background, "text" or "ui"]; 43 pairs. */
+/** B20's table, restated: [foreground, background, "text" or "ui"]; 47 pairs. */
 const b20: [string, string, "text" | "ui"][] = [
   ...["fg-strong", "fg-default", "fg-sub", "fg-soft"].flatMap((fg) =>
     ["bg-canvas", "bg-raised", "bg-sunken"].map((bg): [string, string, "text"] => [fg, bg, "text"]),
@@ -50,6 +50,12 @@ const b20: [string, string, "text" | "ui"][] = [
   ]),
   // Owner decision (13 Nov 2026): input borders also on wells and inputs.
   ["line-strong", "bg-sunken", "ui"],
+  // Owner decision (17 Nov 2026): a callout's body text on its status tint.
+  ...["success", "warning", "danger", "info"].map((s): [string, string, "text"] => [
+    "fg-default",
+    `${s}-soft`,
+    "text",
+  ]),
 ];
 
 describe("contrastReport", () => {

@@ -158,6 +158,7 @@ it at `packages/tokens/tokens/`. See Open question Q1.
   | `brand`, `ring`, `line-strong` on `bg-canvas` and `bg-raised` | 3:1 | UI components and focus (WCAG 1.4.11) |
   | each `state-*` on `bg-canvas` and `bg-raised` | 3:1 | Learning-state icons and shapes |
   | `line-strong` on `bg-sunken` | 3:1 | Input borders on wells and inputs (decided by the owner, 13 Nov 2026) |
+  | `fg-default` on each `<status>-soft` | 4.5:1 | A callout's body text on its tint (decided by the owner, 17 Nov 2026) |
 
   `fg-disabled` is not checked: WCAG exempts disabled controls. The high-contrast theme's pairs
   use Q10's minimums. A learning state is measured as the token it aliases (Q3).
@@ -428,6 +429,10 @@ overrule any of them.
   Light `line-strong` darkens again by the smallest change that passes on `bg-canvas`,
   `bg-raised` and `bg-sunken` for every brand hue: 0.655 to 0.633. Dark (0.507) and high contrast
   (0.25) already pass.
+- **Owner decision (17 Nov 2026): `fg-default` on the status tints.** Callouts keep the status
+  tints, so B20 also requires `fg-default` on `success-soft`, `warning-soft`, `danger-soft` and
+  `info-soft` at the text minimum (4.5:1, 7:1 in high contrast) in every theme. Both example
+  brands already pass: at least 10.2:1 in light and dark and 15.8:1 in high contrast.
 - **Coordinator decision (2026-11-13): OS contrast setting.** `prefers-contrast: more` selects
   high contrast (B5). `shadow.float` stays as it is in every theme; dark relies on the 1 px line.
 - **Coordinator decision (2026-11-13): Q8's open values.** Corner style `square` sets every

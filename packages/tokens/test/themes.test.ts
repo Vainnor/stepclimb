@@ -4,6 +4,7 @@
 // failing contrast pair.
 import { beforeAll, describe, expect, it } from "vitest";
 import { appearances, colorTokens, cssColor, generate, type Theme } from "../src/generate";
+import { contrastReport } from "../src/report";
 import { brands, brandThemes, checkThemes, ThemeContrastError } from "../src/themes";
 import { buildTokens, tokensDir } from "./support/build";
 import { computed, type Element, parseRules, type Rule } from "./support/cascade";
@@ -52,6 +53,22 @@ describe("the shipped themes (B23)", () => {
   });
 });
 
+describe("callout body text on the status tints (B20)", () => {
+  it.each([...brandThemes()])(
+    "keeps fg-default at its text minimum on every tint in %s",
+    (_, theme) => {
+      const report = contrastReport(theme);
+      for (const status of ["success", "warning", "danger", "info"]) {
+        const pair = report.pairs.find(
+          (p) => p.foreground === "fg-default" && p.background === `${status}-soft`,
+        );
+        expect(pair, status).toBeDefined();
+        expect(pair?.pass, `${status}: ${pair?.ratio}`).toBe(true);
+      }
+    },
+  );
+});
+
 describe("the build guard (B22, T10)", () => {
   it("passes the shipped themes", () => {
     expect(() => checkThemes(brandThemes())).not.toThrow();
@@ -67,6 +84,17 @@ describe("the build guard (B22, T10)", () => {
     await expect(build).rejects.toThrow(ThemeContrastError);
     await expect(build).rejects.toThrow(
       /vzdc-light: fg-soft on bg-canvas: \d\.\d\d:1, needs 4\.5:1/,
+    );
+  });
+
+  it("fails the build when a status tint leaves a callout's body text below 4.5:1", async () => {
+    const themes = brandThemes();
+    const dark = themes.get("default-dark");
+    if (!dark) throw new Error("no default-dark");
+    // A warning tint as light as the dark theme's fg-sub: fg-default on it is near 1:1.
+    themes.set("default-dark", withColor(dark, "warning-soft", 0.75));
+    await expect(buildTokens(tokensDir, themes)).rejects.toThrow(
+      /default-dark: fg-default on warning-soft: \d\.\d\d:1, needs 4\.5:1/,
     );
   });
 
