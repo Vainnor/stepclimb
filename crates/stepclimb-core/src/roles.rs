@@ -95,6 +95,7 @@ static ACCOUNT_ADMIN: BuiltinRole = BuiltinRole {
         perm::EnrollmentView::KEY,
         perm::EnrollmentManage::KEY,
         perm::ProgressView::KEY,
+        perm::AssignmentManage::KEY,
     ]),
 };
 
@@ -121,6 +122,7 @@ static INSTRUCTOR: BuiltinRole = BuiltinRole {
             perm::EnrollmentView::KEY,
             perm::EnrollmentManage::KEY,
             perm::ProgressView::KEY,
+            perm::AssignmentManage::KEY,
         ],
     },
 };
@@ -903,12 +905,13 @@ mod tests {
                 "enrollment.view",
                 "enrollment.manage",
                 "progress.view",
+                "assignment.manage",
             ])
         );
     }
 
-    /// The M1 lists of M1 spec 02 -> Permissions, with spec 05's progress keys (Q2, B18) and
-    /// Instructor's `user.view` (spec 02 B17).
+    /// The M1 lists of M1 spec 02 -> Permissions, with spec 05's progress keys (Q2, B18),
+    /// Instructor's `user.view` (spec 02 B17) and spec 13's `assignment.manage` (Q8).
     #[test]
     fn the_course_roles_hold_their_m1_lists() {
         let cases: [(&str, &[&str]); 6] = [
@@ -926,6 +929,7 @@ mod tests {
                     "enrollment.view",
                     "enrollment.manage",
                     "progress.view",
+                    "assignment.manage",
                 ],
             ),
             ("grader", &[]),
@@ -1070,6 +1074,7 @@ mod tests {
                 "enrollment.view",
                 "enrollment.manage",
                 "progress.view",
+                "assignment.manage",
             ]
         );
         assert_eq!(

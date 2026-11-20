@@ -42,6 +42,8 @@
 //! as [`client_ip`] finds it; a route that changes roles, assignments, accounts or the
 //! organization records that address in the change's audit entry ([`audit`]). Course files are
 //! stored through [`storage`], which `serve` opens and probes before it listens.
+//! A course's assignments, with the subscribers that complete them from progress events, are
+//! [`assignments`].
 
 pub mod accounts;
 pub mod admin;
@@ -55,6 +57,7 @@ pub mod api_key;
 pub mod app;
 pub mod app_token;
 pub mod appearance;
+pub mod assignments;
 pub mod audit;
 pub mod auth;
 pub mod branding;

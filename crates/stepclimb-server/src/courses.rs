@@ -1050,6 +1050,7 @@ mod tests {
         assert_eq!(
             course_permissions(&grants("org_admin", GrantScope::Organization), &course),
             [
+                "assignment.manage",
                 "course.content_edit",
                 "course.manage",
                 "course.view",

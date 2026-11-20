@@ -78,6 +78,7 @@ use stepclimb_auth::encryption::KeyRing;
 use stepclimb_core::{
     OrgScope, Source, accounts,
     admission_webhooks::{self, Change, Fresh},
+    assignments,
     audit::Actor,
     clock::ManualClock,
     course_files, courses,
@@ -92,10 +93,11 @@ use stepclimb_core::{
     page_doc::PageDoc,
     pages,
     perm::{
-        self, AccountManage, AccountView, AdmissionManage, BrandingManage, CourseContentEdit,
-        CourseCreate, CourseManage, CourseParticipate, CourseView, CourseViewAll, EnrollmentManage,
-        EnrollmentView, OrgManage, Permission, ProgressView, ProgressViewObserved, ProviderManage,
-        RoleAssign, RoleManage, RoleView, ScopeType, ServiceAccountManage, UserManage, UserView,
+        self, AccountManage, AccountView, AdmissionManage, AssignmentManage, BrandingManage,
+        CourseContentEdit, CourseCreate, CourseManage, CourseParticipate, CourseView,
+        CourseViewAll, EnrollmentManage, EnrollmentView, OrgManage, Permission, ProgressView,
+        ProgressViewObserved, ProviderManage, RoleAssign, RoleManage, RoleView, ScopeType,
+        ServiceAccountManage, UserManage, UserView,
     },
     role_assignments::{self, NewAssignment, Scope},
     roles::{self, NewRole},
@@ -449,6 +451,131 @@ const TABLE: &[Entry] = &[
             ENROLLMENT_NOT_FOUND,
             enrollment_in_path,
         ),
+    },
+    // Every assignment route also needs `enrollment.view` at the course, since an assignment
+    // names its assignee (M1 spec 13, coordinator decision of 2026-11-19): one entry per
+    // required permission, each holding the other as its extra, so each has its own 403.
+    Entry {
+        operation_id: "listAssignments",
+        access: Access::Permission {
+            key: AssignmentManage::KEY,
+            target: COURSE_NOT_FOUND,
+            extra: &[EnrollmentView::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[],
+            setup: course_in_tower,
+        },
+    },
+    Entry {
+        operation_id: "listAssignments",
+        access: Access::Permission {
+            key: EnrollmentView::KEY,
+            target: COURSE_NOT_FOUND,
+            extra: &[AssignmentManage::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[],
+            setup: course_in_tower,
+        },
+    },
+    // The assignee is a learner of the course, so assigning them enrolls no one and needs no
+    // `enrollment.manage` (M1 spec 13 B3); tests/assignments.rs has the enrolling cases.
+    Entry {
+        operation_id: "createAssignment",
+        access: Access::Permission {
+            key: AssignmentManage::KEY,
+            target: COURSE_NOT_FOUND,
+            extra: &[EnrollmentView::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[],
+            setup: assign_tower_learner,
+        },
+    },
+    Entry {
+        operation_id: "createAssignment",
+        access: Access::Permission {
+            key: EnrollmentView::KEY,
+            target: COURSE_NOT_FOUND,
+            extra: &[AssignmentManage::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[],
+            setup: assign_tower_learner,
+        },
+    },
+    Entry {
+        operation_id: "getAssignment",
+        access: Access::Permission {
+            key: AssignmentManage::KEY,
+            target: ASSIGNMENT_NOT_FOUND,
+            extra: &[EnrollmentView::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[],
+            setup: assignment_in_path,
+        },
+    },
+    Entry {
+        operation_id: "getAssignment",
+        access: Access::Permission {
+            key: EnrollmentView::KEY,
+            target: ASSIGNMENT_NOT_FOUND,
+            extra: &[AssignmentManage::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[],
+            setup: assignment_in_path,
+        },
+    },
+    Entry {
+        operation_id: "updateAssignment",
+        access: Access::Permission {
+            key: AssignmentManage::KEY,
+            target: ASSIGNMENT_NOT_FOUND,
+            extra: &[EnrollmentView::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[],
+            setup: move_assignment_due,
+        },
+    },
+    Entry {
+        operation_id: "updateAssignment",
+        access: Access::Permission {
+            key: EnrollmentView::KEY,
+            target: ASSIGNMENT_NOT_FOUND,
+            extra: &[AssignmentManage::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[],
+            setup: move_assignment_due,
+        },
+    },
+    Entry {
+        operation_id: "endAssignment",
+        access: Access::Permission {
+            key: AssignmentManage::KEY,
+            target: ASSIGNMENT_NOT_FOUND,
+            extra: &[EnrollmentView::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[],
+            setup: assignment_in_path,
+        },
+    },
+    Entry {
+        operation_id: "endAssignment",
+        access: Access::Permission {
+            key: EnrollmentView::KEY,
+            target: ASSIGNMENT_NOT_FOUND,
+            extra: &[AssignmentManage::KEY],
+            feature: None,
+            feature_by_target: false,
+            denied_also: &[],
+            setup: assignment_in_path,
+        },
     },
     Entry {
         operation_id: "listCourseFiles",
@@ -874,6 +1001,7 @@ const EVERY_PERMISSION: &[&str] = &[
     "course.participate",
     "progress.view",
     "progress.view_observed",
+    "assignment.manage",
 ];
 
 #[test]
@@ -1599,6 +1727,68 @@ fn conclude_enrollment(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + 
         Call {
             body: Some(serde_json::json!({ "status": "concluded" })),
             ..enrollment_in_path(org).await
+        }
+    })
+}
+
+/// An assignment that is not the organization's, or whose course the caller cannot see: 404
+/// `assignment.not_found` (M1 spec 13 API).
+const ASSIGNMENT_NOT_FOUND: Target = Target::Scoped {
+    not_found: "assignment.not_found",
+    cross_org: "assignment.not_found",
+};
+
+/// A published course in Tower and a learner of it (a user enrolled with a custom role holding
+/// only `course.participate`) as the body's assignee, with a due date 14 days on; the caller
+/// acts at Tower.
+fn assign_tower_learner(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        let learner = org.learner(course).await;
+        Call {
+            params: vec![("course_id", course)],
+            body: Some(serde_json::json!({
+                "target": { "type": "course", "id": course },
+                "assignee": { "type": "user", "id": learner },
+                "due": { "relative_days": 14 },
+            })),
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// An assignment of a published Tower course to a learner of it, named in the path; the caller
+/// acts at Tower.
+fn assignment_in_path(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        let course = org.course(org.tower, true).await;
+        let learner = org.learner(course).await;
+        let new = assignments::NewAssignment {
+            target_type: assignments::TargetType::Course,
+            target_id: course,
+            user_id: learner,
+            due: None,
+            created_by: learner,
+        };
+        let enroll = assignments::Enroll::Refuse;
+        let id = assignments::create(&org.pool, scope(org.id), course, &new, enroll, now())
+            .await
+            .expect("create assignment")
+            .id;
+        Call {
+            params: vec![("assignment_id", id)],
+            body: None,
+            at: At::Account(org.tower),
+        }
+    })
+}
+
+/// [`assignment_in_path`] given a due date 7 days on.
+fn move_assignment_due(org: &Org) -> Pin<Box<dyn Future<Output = Call> + Send + '_>> {
+    Box::pin(async {
+        Call {
+            body: Some(serde_json::json!({ "due": { "relative_days": 7 } })),
+            ..assignment_in_path(org).await
         }
     })
 }
@@ -2512,21 +2702,32 @@ const PER_GRANT: &[&str] = &[
     "listCourseCompletions",
 ];
 
-/// An operation has several entries only when it is in [`PER_GRANT`], and then each is a
-/// permission entry naming a different permission.
+/// The operations that need two permissions at once, each with one entry per permission that
+/// holds the other as its extra, so each permission has its own 403 case (M1 spec 13,
+/// coordinator decision of 2026-11-19: every assignment route also needs `enrollment.view`).
+const ALL_OF: &[&str] = &[
+    "listAssignments",
+    "createAssignment",
+    "getAssignment",
+    "updateAssignment",
+    "endAssignment",
+];
+
+/// An operation has several entries only when it is in [`PER_GRANT`] or [`ALL_OF`], and then
+/// each is a permission entry naming a different permission.
 #[test]
 fn only_per_grant_operations_have_several_entries_each_with_its_own_permission() {
     for id in table_ids() {
         let entries: Vec<&Entry> = TABLE.iter().filter(|e| e.operation_id == id).collect();
         if entries.len() == 1 {
             assert!(
-                !PER_GRANT.contains(&id),
-                "{id} has one entry but is in PER_GRANT"
+                !PER_GRANT.contains(&id) && !ALL_OF.contains(&id),
+                "{id} has one entry but is in PER_GRANT or ALL_OF"
             );
             continue;
         }
         assert!(
-            PER_GRANT.contains(&id),
+            PER_GRANT.contains(&id) || ALL_OF.contains(&id),
             "{id} is listed {} times",
             entries.len()
         );
@@ -4676,6 +4877,14 @@ impl Org {
             .await
             .expect("create role")
             .id
+    }
+
+    /// A new user enrolled in `course` with [`Self::participant_role`]: the user's id.
+    async fn learner(&self, course: Uuid) -> Uuid {
+        let (_, user) = self.user().await;
+        let role = self.participant_role().await;
+        self.enroll(user, role, course).await;
+        user
     }
 
     /// A new user enrolled in `course` with [`Self::participant_role`]: the enrollment's id.

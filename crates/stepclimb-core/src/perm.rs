@@ -169,6 +169,8 @@ catalog! {
     /// one else's. Grantable at course scope only, so only an enrollment gives it (M1 spec 05
     /// B17 to B20).
     ProgressViewObserved => "progress.view_observed", [Course];
+    /// Create, change and end a course's assignments (M1 spec 13 B1).
+    AssignmentManage => "assignment.manage", [Organization, Account, Course];
 }
 
 #[cfg(test)]
@@ -264,6 +266,7 @@ mod tests {
             ("course.participate", &[C]),
             ("progress.view", &[O, A, C]),
             ("progress.view_observed", &[C]),
+            ("assignment.manage", &[O, A, C]),
         ];
         let actual: Vec<_> = ALL.iter().map(|p| (p.key, p.grantable)).collect();
         assert_eq!(actual, expected);

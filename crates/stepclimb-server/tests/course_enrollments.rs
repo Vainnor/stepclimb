@@ -1109,6 +1109,7 @@ async fn editing_an_account_instructor_needs_user_view(pool: PgPool) {
         "enrollment.view",
         "enrollment.manage",
         "progress.view",
+        "assignment.manage",
     ];
     let lacking_role = f.custom_role(t.org, &keys).await;
     keys.push("user.view");

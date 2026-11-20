@@ -385,6 +385,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/assignments/{assignment_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read an assignment with its people's statuses. */
+        get: operations["getAssignment"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change an assignment's due rule. Every person who has not completed it gets their due date
+         *     again from the new rule; completed ones keep theirs.
+         */
+        patch: operations["updateAssignment"];
+        trace?: never;
+    };
+    "/api/v1/assignments/{assignment_id}/end": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * End an assignment: it stops counting and its people's rows are kept. Ending an ended
+         *     assignment changes nothing.
+         */
+        post: operations["endAssignment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/course-files/{course_file_id}": {
         parameters: {
             query?: never;
@@ -467,6 +508,32 @@ export interface paths {
          *     current values changes nothing.
          */
         patch: operations["updateCourse"];
+        trace?: never;
+    };
+    "/api/v1/courses/{course_id}/assignments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a course's assignments, newest first. Needs `enrollment.view` at the course too, since
+         *     each assignment names its assignee.
+         */
+        get: operations["listAssignments"];
+        put?: never;
+        /**
+         * Assign a course, or a module or item of it, to a user. Needs `enrollment.view` at the course
+         *     too, since the answer names the user. A user who is not a learner of the course is enrolled
+         *     as Student, which needs `enrollment.manage` at the course and the user within your
+         *     `user.view`.
+         */
+        post: operations["createAssignment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/courses/{course_id}/completions": {
@@ -2036,12 +2103,87 @@ export interface components {
          * @enum {string}
          */
         Appearance: "light" | "dark" | "high-contrast";
+        /** @description An assignment's assignee, with their name. */
+        AssigneeRef: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            type: components["schemas"]["AssigneeType"];
+        };
+        /**
+         * @description Who an assignment reaches. `group` is refused until group assignees exist.
+         * @enum {string}
+         */
+        AssigneeType: "user" | "group";
+        /** @description Who must finish which course, module or item, and by when. */
+        Assignment: {
+            assignee: components["schemas"]["AssigneeRef"];
+            counts: components["schemas"]["AssignmentCounts"];
+            /** Format: uuid */
+            course_id: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC.
+             */
+            created_at: string;
+            due: null | components["schemas"]["AssignmentDue"];
+            /**
+             * Format: date-time
+             * @description RFC 3339, UTC; `null` while the assignment runs.
+             */
+            ended_at: string | null;
+            /** Format: uuid */
+            id: string;
+            target: components["schemas"]["AssignmentTargetRef"];
+        };
+        /** @description How many of an assignment's people are in each status, at the time of the request. */
+        AssignmentCounts: {
+            /** Format: int32 */
+            completed: number;
+            /** Format: int32 */
+            in_progress: number;
+            /** Format: int32 */
+            not_started: number;
+            /** Format: int32 */
+            overdue: number;
+        };
+        /** @description When an assignment is due: exactly one of `fixed` and `relative_days`. */
+        AssignmentDue: {
+            /**
+             * Format: date-time
+             * @description RFC 3339 with an offset, from 1970 up to 2200: the same due time for everyone. Answered
+             *     in UTC.
+             */
+            fixed?: string;
+            /**
+             * Format: int32
+             * @description 1 to 3650: each person is due that many calendar days after they were assigned, at
+             *     23:59:59 local time of the last day in the organization's default time zone.
+             */
+            relative_days?: number;
+        };
+        /** @description A change to an assignment; an omitted member is left as it is. */
+        AssignmentPatch: {
+            due?: null | components["schemas"]["AssignmentDue"];
+        };
         /**
          * @description Who owns an assignment: an admin of this organization (`local`), or the identity provider,
          *     sync API, SCIM or connector that wrote it, in which case it cannot be removed here.
          * @enum {string}
          */
         AssignmentSource: "local" | "idp" | "sync" | "scim" | "connector";
+        /** @description An assignment's target, with its title. */
+        AssignmentTargetRef: {
+            /** Format: uuid */
+            id: string;
+            title: string;
+            type: components["schemas"]["AssignmentTargetType"];
+        };
+        /**
+         * @description What an assignment names.
+         * @enum {string}
+         */
+        AssignmentTargetType: "course" | "module" | "item";
         /** @description `AuthenticatorSelectionCriteria`. */
         AuthenticatorSelection: {
             authenticatorAttachment?: string;
@@ -3196,6 +3338,25 @@ export interface components {
              */
             parent_id: string;
         };
+        /** @description Who a new assignment reaches. */
+        NewAssignee: {
+            /** Format: uuid */
+            id: string;
+            /** @description `user`; `group` is refused until group assignees exist. */
+            type: components["schemas"]["AssigneeType"];
+        };
+        /** @description An assignment to create. */
+        NewAssignmentBody: {
+            assignee: components["schemas"]["NewAssignee"];
+            due?: null | components["schemas"]["AssignmentDue"];
+            target: components["schemas"]["NewAssignmentTarget"];
+        };
+        /** @description The target of a new assignment: the path's course, or a module or item of it. */
+        NewAssignmentTarget: {
+            /** Format: uuid */
+            id: string;
+            type: components["schemas"]["AssignmentTargetType"];
+        };
         /** @description A course to create, as a draft. */
         NewCourse: {
             /**
@@ -3858,6 +4019,32 @@ export interface components {
                  * @description RFC 3339, UTC.
                  */
                 updated_at: string;
+            }[];
+            /** @description Pass this as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
+        };
+        /** @description One page of a list. */
+        Page_Assignment: {
+            /** @description The items, in the list's sort order. */
+            items: {
+                assignee: components["schemas"]["AssigneeRef"];
+                counts: components["schemas"]["AssignmentCounts"];
+                /** Format: uuid */
+                course_id: string;
+                /**
+                 * Format: date-time
+                 * @description RFC 3339, UTC.
+                 */
+                created_at: string;
+                due: null | components["schemas"]["AssignmentDue"];
+                /**
+                 * Format: date-time
+                 * @description RFC 3339, UTC; `null` while the assignment runs.
+                 */
+                ended_at: string | null;
+                /** Format: uuid */
+                id: string;
+                target: components["schemas"]["AssignmentTargetRef"];
             }[];
             /** @description Pass this as `cursor` to get the next page; `null` on the last page. */
             next_cursor: string | null;
@@ -5095,8 +5282,53 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description `permission.denied`: you can see the course but do not hold both `assignment.manage` and `enrollment.view` at scopes containing it. */
+        AssignmentListForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
         /** @description `account.not_found`: the scope filter names no account of the organization, or one you cannot see. `org.not_found`: the scope filter names another organization, or the request's organization cannot be determined. */
         AssignmentListNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `assignment.not_found`: no assignment with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined. */
+        AssignmentNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: you can see the assignment's course but do not hold both `assignment.manage` and `enrollment.view` at scopes containing it. */
+        AssignmentReadForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `assignment.ended`: the assignment has ended and takes no change. */
+        AssignmentUpdateConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `permission.denied`: you can see the assignment's course but do not hold both `assignment.manage` and `enrollment.view` at scopes containing it. `auth.csrf_refused`: the request did not come from this site. */
+        AssignmentWriteForbidden: {
             headers: {
                 [name: string]: unknown;
             };
@@ -5707,7 +5939,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `course.archived`: the course is archived and takes no content change. `item.has_progress`: learners have progress on the item; unpublish it instead. */
+        /** @description `course.archived`: the course is archived and takes no content change. `item.has_progress`: learners have progress on the item; unpublish it instead. `item.assigned`: an assignment, ended or not, names the item. */
         ItemDeleteConflict: {
             headers: {
                 [name: string]: unknown;
@@ -5869,7 +6101,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `course.archived`: the course is archived and takes no content change. `module.not_empty`: the module has items; delete or move them first. */
+        /** @description `course.archived`: the course is archived and takes no content change. `module.not_empty`: the module has items; delete or move them first. `module.assigned`: an assignment, ended or not, names the module. */
         ModuleDeleteConflict: {
             headers: {
                 [name: string]: unknown;
@@ -8082,6 +8314,101 @@ export interface operations {
             503: components["responses"]["NoOrganization"];
         };
     };
+    getAssignment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The assignment's id. */
+                assignment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The assignment */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Assignment"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AssignmentReadForbidden"];
+            404: components["responses"]["AssignmentNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    updateAssignment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The assignment's id. */
+                assignment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssignmentPatch"];
+            };
+        };
+        responses: {
+            /** @description The assignment after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Assignment"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AssignmentWriteForbidden"];
+            404: components["responses"]["AssignmentNotFound"];
+            409: components["responses"]["AssignmentUpdateConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["UnprocessableEntity"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    endAssignment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The assignment's id. */
+                assignment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The ended assignment */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Assignment"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AssignmentWriteForbidden"];
+            404: components["responses"]["AssignmentNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
     getCourseFile: {
         parameters: {
             query?: never;
@@ -8341,6 +8668,81 @@ export interface operations {
             403: components["responses"]["CourseManageForbidden"];
             404: components["responses"]["CourseNotFound"];
             409: components["responses"]["CourseCodeConflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["UnprocessableEntity"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    listAssignments: {
+        parameters: {
+            query?: {
+                /** @description Also list ended assignments; `false` when omitted. */
+                include_ended?: boolean;
+                /** @description The `next_cursor` of the previous page; omit it for the first page. */
+                cursor?: string;
+                /** @description How many items to return, 1 to 200; 50 when omitted. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The course's id. */
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of assignments */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_Assignment"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AssignmentListForbidden"];
+            404: components["responses"]["AssignmentListNotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["NoOrganization"];
+        };
+    };
+    createAssignment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The course's id. */
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewAssignmentBody"];
+            };
+        };
+        responses: {
+            /** @description The assignment is created */
+            201: {
+                headers: {
+                    /** @description The assignment's path */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Assignment"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["AssignmentCreateForbidden"];
+            404: components["responses"]["AssignmentCreateNotFound"];
+            409: components["responses"]["AssignmentCreateConflict"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             422: components["responses"]["UnprocessableEntity"];

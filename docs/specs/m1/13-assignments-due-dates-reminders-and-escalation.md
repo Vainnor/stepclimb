@@ -75,6 +75,44 @@ everything that happened for one person and one assignment. Recurrence and expir
 - **B9.** A row completed after its `due_at` keeps `completed_at` and shows "completed late" in
   the timeline; the status is `completed`.
 
+  Coordinator decisions (2026-11-19), for I1, pending owner review:
+  - Every assignment route (list, create, read, change, end) also needs `enrollment.view` at
+    the course (403 `permission.denied`), since an assignment names its assignee and
+    `assignment.manage` alone would otherwise show the roster. Creating needs it whether or not
+    the assignee is a learner, so the answer cannot tell a caller without it who is in the
+    course.
+  - Enrolling through an assignment (B3) needs what `POST /api/v1/courses/{course_id}/enrollments`
+    needs for the Student role: the user within the caller's `user.view` (404 `user.not_found`
+    otherwise, `02-courses-and-enrollments.md` B17), `enrollment.manage` at the course
+    (403 `permission.denied`) and every Student permission grantable at organization or account
+    scope held there (403 `permission.escalation`). Assigning someone already a learner of the
+    course needs none of them, so an Instructor assigns their own students.
+  - A concluded `local` Student enrollment is reactivated rather than duplicated, and audited
+    as `enrollment.update`. A concluded enrollment an outside source owns whose role holds
+    `course.participate`, Student or another, answers 409 `enrollment.externally_managed`:
+    that source ended the person's learning there, and a local enrollment would override it.
+  - The `user.view` reach check runs on the write's transaction, so the request takes no second
+    pool connection while it holds the course row's lock.
+  - The registry lets a job kind subscribe to one topic, so B8's subscriber is three kinds:
+    `assignments.on_item_completed`, `assignments.on_module_completed` and
+    `assignments.on_course_completed`. Completion is recorded on the rows of ended assignments
+    too, and an ended assignment still blocks deleting its target.
+  - Body rules: a `group` assignee answers 422 `assignment.assignee_unavailable` at
+    `/assignee/type` until I5; a `course` target other than the path's course answers 422
+    `assignment.target_mismatch` at `/target/id`; a due rule naming both or neither form, a
+    fixed time outside 1970 to 2199 or days outside 1 to 3650 answers 422
+    `assignment.due_invalid`.
+  - `PATCH` of an ended assignment answers 409 `assignment.ended`; ending an ended assignment
+    answers 200 and changes nothing. The list is newest first.
+  - I1 writes no audit entry for an assignment (the spec names none); the Student enrollment it
+    makes writes `enrollment.create` or `enrollment.update` as the caller.
+  - `reminders` (B10) is left out of the I1 body and `Assignment` and arrives with I3;
+    `GET /api/v1/assignments/{assignment_id}/users` arrives with I4 and B17's readers. I1's
+    migration creates `assignments` and `assignment_users` only, with `UNIQUE (org_id, id)` on
+    `assignment_users`; I3 and I4 add `reminders_sent` and `assignment_events` with composite
+    `(org_id, assignment_user_id)` keys to it. The migration adds `assignments_by_target` for
+    the delete check.
+
 ### Reminders and escalation
 
 - **B10.** A reminder rule is a list of up to 10 steps, each `{ "offset_days": -365..365, "to":
@@ -165,6 +203,16 @@ everything that happened for one person and one assignment. Recurrence and expir
   days or overdue, at most 10) and each course entry its nearest `due_at` and status; B5 of `10`
   then orders overdue courses first, then those due within 7 days by due date, before its other
   rules (`10` Q3).
+
+  Coordinator decision (2026-11-19), for I4, pending owner review: each row of `GET
+  /api/v1/me/assignments` and of the dashboard's `deadlines` carries enough to link to its target
+  and name its course, which AssignmentList (spec 16 B12) shows: `course: { id, title }` and
+  `target: { type, id, title, module_id }`, where `module_id` is the item's module for an
+  `item` target and `null` otherwise. The web app builds the path from them (`/c/:course`,
+  `/c/:course/m/:module`, `/c/:course/m/:module/i/:item`) and maps them to AssignmentList's
+  `courseTitle` and `href`. The course and module are read through joins filtered by the row's
+  `org_id`, and the rows are the caller's own, so nothing outside what B18 already shows reaches
+  the learner. I1 builds neither route; I4 does.
 - **B20.** The course outline (`03` B13) marks items and modules that a row of the caller targets
   with their due date and status, for the DueBadge.
 

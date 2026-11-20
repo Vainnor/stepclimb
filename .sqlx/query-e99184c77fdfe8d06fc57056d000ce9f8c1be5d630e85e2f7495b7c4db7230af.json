@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE assignments\n         SET due_fixed = timestamptz 'epoch' + $3::bigint * interval '1 microsecond',\n             due_relative = $4,\n             updated_at = timestamptz 'epoch' + $5::bigint * interval '1 microsecond'\n         WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8",
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e99184c77fdfe8d06fc57056d000ce9f8c1be5d630e85e2f7495b7c4db7230af"
+}

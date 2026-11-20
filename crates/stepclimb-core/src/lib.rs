@@ -35,13 +35,15 @@
 //! the history of course and module completions with their expiry dates; and [`pages`], a
 //! course's pages and their immutable versions, whose bodies [`page_doc`] parses and checks;
 //! and [`videos`], an organization's videos, the courses they are attached to and their tus
-//! uploads. The other repositories arrive with the M0 specs in `docs/specs/m0/`.
+//! uploads; and [`assignments`], who must finish which course, module or item by when. The
+//! other repositories arrive with the M0 specs in `docs/specs/m0/`.
 
 pub mod accounts;
 pub mod admission_rules;
 pub mod admission_settings;
 pub mod admission_webhooks;
 pub mod appearance;
+pub mod assignments;
 pub mod audit;
 pub mod auth_flows;
 pub mod branding;

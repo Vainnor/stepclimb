@@ -66,6 +66,10 @@ pub mod code {
     pub const ITEM_LIMIT_REACHED: &str = "item.limit_reached";
     /// Learners have progress on the item, which cannot be deleted (409).
     pub const ITEM_HAS_PROGRESS: &str = "item.has_progress";
+    /// An assignment names the module, which cannot be deleted (409; M1 spec 13 Data).
+    pub const MODULE_ASSIGNED: &str = "module.assigned";
+    /// An assignment names the item, which cannot be deleted (409; M1 spec 13 Data).
+    pub const ITEM_ASSIGNED: &str = "item.assigned";
     /// A reorder's list is not exactly the current set of ids (409).
     pub const ORDER_STALE: &str = "order.stale";
     /// The kind cannot be created yet (a 422 field code at `/kind`).
@@ -109,7 +113,7 @@ problem_responses! {
     ModulePatchNotFound => "`module.not_found`: no module with this id exists in the organization, or you cannot see its course, or a `prerequisite_ids` entry is not a module of the same course. `org.not_found`: the request's organization cannot be determined.",
     ModulePatchConflict => "`course.archived`: the course is archived and takes no content change. `module.prerequisite_cycle`: the prerequisites would form a cycle in the course's modules.",
     ModulePatchInvalid => "`request.invalid`: `errors` names `/title` (`name.empty`, `name.too_long`, `text.contains_nul`), `/unlock_at` with `module.date_out_of_range` (before 1970 or from 2200 on), or `/prerequisite_ids` with `module.prerequisite_self` (the module itself), `module.prerequisite_duplicate` (an id named twice) or `module.prerequisites_too_many` (more than 20), or `/completion_valid_months` with `completion.validity_out_of_range` (outside 1 to 120).",
-    ModuleDeleteConflict => "`course.archived`: the course is archived and takes no content change. `module.not_empty`: the module has items; delete or move them first.",
+    ModuleDeleteConflict => "`course.archived`: the course is archived and takes no content change. `module.not_empty`: the module has items; delete or move them first. `module.assigned`: an assignment, ended or not, names the module.",
 }
 
 /// What an item points at.
@@ -718,6 +722,14 @@ pub(crate) fn content_error(error: Error) -> ApiError {
             "The module holds the most items it may.",
         ),
         Error::ModuleNotEmpty => conflict(code::MODULE_NOT_EMPTY, "The module has items."),
+        Error::ModuleAssigned => conflict(
+            code::MODULE_ASSIGNED,
+            "An assignment names the module; it cannot be deleted.",
+        ),
+        Error::ItemAssigned => conflict(
+            code::ITEM_ASSIGNED,
+            "An assignment names the item; it cannot be deleted.",
+        ),
         Error::ItemHasProgress => conflict(
             code::ITEM_HAS_PROGRESS,
             "Learners have progress on the item; unpublish it instead.",
@@ -778,6 +790,8 @@ mod tests {
             (Error::ModuleLimitReached, 409, "module.limit_reached", None),
             (Error::ItemLimitReached, 409, "item.limit_reached", None),
             (Error::ModuleNotEmpty, 409, "module.not_empty", None),
+            (Error::ModuleAssigned, 409, "module.assigned", None),
+            (Error::ItemAssigned, 409, "item.assigned", None),
             (Error::ItemHasProgress, 409, "item.has_progress", None),
             (Error::OrderStale, 409, "order.stale", None),
             (

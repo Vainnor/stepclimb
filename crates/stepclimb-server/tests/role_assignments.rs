@@ -615,6 +615,7 @@ async fn granting_instructor_needs_user_view(pool: PgPool) {
         "enrollment.view",
         "enrollment.manage",
         "progress.view",
+        "assignment.manage",
     ];
     let without = f.custom_role(&keys).await;
     keys.push("user.view");
@@ -635,6 +636,41 @@ async fn granting_instructor_needs_user_view(pool: PgPool) {
         .create(&holding, pat, instructor, tower.json(f.a.id))
         .await;
     assert_eq!(granted.status, StatusCode::CREATED, "{granted:?}");
+}
+
+/// Granting the built-in Instructor or Account admin needs `assignment.manage` at the scope,
+/// since both roles hold it (M1 spec 13 Q8): a caller holding every other key of the role and
+/// `role.assign` at Tower is refused, and the same caller with `assignment.manage` grants it.
+#[sqlx::test(migrator = "stepclimb_core::db::MIGRATOR")]
+async fn granting_instructor_or_account_admin_needs_assignment_manage(pool: PgPool) {
+    let f = Fixture::new(pool).await;
+    let tower = At::Account(f.a.tower);
+    for key in ["instructor", "account_admin"] {
+        let role = f.builtin(key).await;
+        let mut keys: Vec<&str> = stepclimb_core::roles::builtin(key)
+            .expect("a built-in role")
+            .permissions()
+            .into_iter()
+            .filter(|k| *k != "assignment.manage")
+            .collect();
+        if !keys.contains(&"role.assign") {
+            keys.push("role.assign");
+        }
+        let without = f.custom_role(&keys).await;
+        keys.push("assignment.manage");
+        let with = f.custom_role(&keys).await;
+        let (lacking, lacking_id) = f.user().await;
+        f.assign(lacking_id, without, tower).await;
+        let (holding, holding_id) = f.user().await;
+        f.assign(holding_id, with, tower).await;
+        let (_, pat) = f.user().await;
+
+        let refused = f.create(&lacking, pat, role, tower.json(f.a.id)).await;
+        assert_eq!(refused.status, StatusCode::FORBIDDEN, "{key}: {refused:?}");
+        assert_eq!(refused.code(), "permission.escalation", "{key}");
+        let granted = f.create(&holding, pat, role, tower.json(f.a.id)).await;
+        assert_eq!(granted.status, StatusCode::CREATED, "{key}: {granted:?}");
+    }
 }
 
 // Removing (B14).
