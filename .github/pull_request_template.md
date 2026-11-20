@@ -12,6 +12,8 @@
 
 ## Review
 
+<!-- Tick a requirement when it is met or does not apply, and say "(not applicable: why)" for the second. An unticked requirement means work is still outstanding. The first box is a flag: tick it only if the change touches those areas. -->
+
 - [ ] Touches authentication, sessions, permissions, grading, feedback visibility, billing or data deletion (maintainer line-by-line review)
 - [ ] Every new route has `Require<P>`, its four-case test and its cross-organization test
 - [ ] `.sqlx/`, `openapi/stepclimb.json` and the API client regenerated where needed
@@ -19,7 +21,10 @@
 ## Certification
 
 - [ ] I certify this contribution under the [Developer Certificate of Origin](https://developercertificate.org/) (`CONTRIBUTING.md`)
-- [ ] I signed the [Individual CLA](https://github.com/Vainnor/stepclimb/blob/next/docs/cla/individual.md) through CLA Assistant, or my employer signed the [Entity CLA](https://github.com/Vainnor/stepclimb/blob/next/docs/cla/entity.md) (`CONTRIBUTING.md`; not needed for the maintainer's own pull requests)
+<!-- Tick one of the two CLA boxes. -->
+
+- [ ] I signed the [Individual CLA](https://github.com/Vainnor/stepclimb/blob/next/docs/cla/individual.md) through CLA Assistant, or my employer signed the [Entity CLA](https://github.com/Vainnor/stepclimb/blob/next/docs/cla/entity.md) (`CONTRIBUTING.md`)
+- [ ] This is the maintainer's own pull request, which needs no CLA (ADR 0033)
 
 ## Gates
 
