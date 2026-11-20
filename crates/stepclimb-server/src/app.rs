@@ -16,8 +16,8 @@ use tower_http::trace::TraceLayer;
 use utoipa_scalar::{Scalar, Servable};
 
 use crate::{
-    accounts, admission_settings, admission_webhook, appearance, assignments, auth, branding, completions,
-    course_enrollments, course_files, courses,
+    accounts, admission_settings, admission_webhook, appearance, assignments, auth, branding,
+    completions, course_enrollments, course_files, courses,
     csrf::{self, OriginAllowlist},
     discovery, enrollment,
     error::ApiError,

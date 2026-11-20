@@ -35,8 +35,8 @@ use utoipa::{
 
 use crate::{
     accounts, admission_settings, admission_webhook, admission_webhook_call, appearance,
-    assignments, auth,
-    branding, completions, course_enrollments, course_files, courses, discovery, enrollment,
+    assignments, auth, branding, completions, course_enrollments, course_files, courses, discovery,
+    enrollment,
     error::{CurrentVersion, FieldError, PROBLEM_JSON, Problem},
     file_delivery, file_urls, health, identities, items, local_sign_in, manifest, me, modules,
     my_passkeys, oauth_authorize, oauth_token, organization, outline, page_doc_schema, pages,

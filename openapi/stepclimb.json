@@ -1979,6 +1979,181 @@
         "x-stepclimb-mutates": true
       }
     },
+    "/api/v1/assignments/{assignment_id}": {
+      "get": {
+        "tags": [
+          "assignments"
+        ],
+        "summary": "Read an assignment with its people's statuses.",
+        "operationId": "getAssignment",
+        "parameters": [
+          {
+            "name": "assignment_id",
+            "in": "path",
+            "description": "The assignment's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The assignment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Assignment"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/AssignmentReadForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/AssignmentNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "assignments"
+        ],
+        "summary": "Change an assignment's due rule. Every person who has not completed it gets their due date\nagain from the new rule; completed ones keep theirs.",
+        "operationId": "updateAssignment",
+        "parameters": [
+          {
+            "name": "assignment_id",
+            "in": "path",
+            "description": "The assignment's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignmentPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The assignment after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Assignment"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/AssignmentWriteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/AssignmentNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/AssignmentUpdateConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/assignments/{assignment_id}/end": {
+      "post": {
+        "tags": [
+          "assignments"
+        ],
+        "summary": "End an assignment: it stops counting and its people's rows are kept. Ending an ended\nassignment changes nothing.",
+        "operationId": "endAssignment",
+        "parameters": [
+          {
+            "name": "assignment_id",
+            "in": "path",
+            "description": "The assignment's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ended assignment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Assignment"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/AssignmentWriteForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/AssignmentNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
     "/api/v1/course-files/{course_file_id}": {
       "get": {
         "tags": [
@@ -2475,6 +2650,167 @@
           },
           "409": {
             "$ref": "#/components/responses/CourseCodeConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        },
+        "x-stepclimb-mutates": true
+      }
+    },
+    "/api/v1/courses/{course_id}/assignments": {
+      "get": {
+        "tags": [
+          "assignments"
+        ],
+        "summary": "List a course's assignments, newest first. Needs `enrollment.view` at the course too, since\neach assignment names its assignee.",
+        "operationId": "listAssignments",
+        "parameters": [
+          {
+            "name": "course_id",
+            "in": "path",
+            "description": "The course's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "include_ended",
+            "in": "query",
+            "description": "Also list ended assignments; `false` when omitted.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page; omit it for the first page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many items to return, 1 to 200; 50 when omitted.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 200,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of assignments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Assignment"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/AssignmentListForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/AssignmentListNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/NoOrganization"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "assignments"
+        ],
+        "summary": "Assign a course, or a module or item of it, to a user. Needs `enrollment.view` at the course\ntoo, since the answer names the user. A user who is not a learner of the course is enrolled\nas Student, which needs `enrollment.manage` at the course and the user within your\n`user.view`.",
+        "operationId": "createAssignment",
+        "parameters": [
+          {
+            "name": "course_id",
+            "in": "path",
+            "description": "The course's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewAssignmentBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The assignment is created",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The assignment's path"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Assignment"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/AssignmentCreateForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/AssignmentCreateNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/AssignmentCreateConflict"
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
@@ -8715,6 +9051,160 @@
           "high-contrast"
         ]
       },
+      "AssigneeRef": {
+        "type": "object",
+        "description": "An assignment's assignee, with their name.",
+        "required": [
+          "type",
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/AssigneeType"
+          }
+        }
+      },
+      "AssigneeType": {
+        "type": "string",
+        "description": "Who an assignment reaches. `group` is refused until group assignees exist.",
+        "enum": [
+          "user",
+          "group"
+        ]
+      },
+      "Assignment": {
+        "type": "object",
+        "description": "Who must finish which course, module or item, and by when.",
+        "required": [
+          "id",
+          "course_id",
+          "target",
+          "assignee",
+          "due",
+          "ended_at",
+          "counts",
+          "created_at"
+        ],
+        "properties": {
+          "assignee": {
+            "$ref": "#/components/schemas/AssigneeRef"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/AssignmentCounts"
+          },
+          "course_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339, UTC."
+          },
+          "due": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AssignmentDue",
+                "description": "`null` when the assignment has no due date."
+              }
+            ]
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "RFC 3339, UTC; `null` while the assignment runs."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "target": {
+            "$ref": "#/components/schemas/AssignmentTargetRef"
+          }
+        }
+      },
+      "AssignmentCounts": {
+        "type": "object",
+        "description": "How many of an assignment's people are in each status, at the time of the request.",
+        "required": [
+          "not_started",
+          "in_progress",
+          "completed",
+          "overdue"
+        ],
+        "properties": {
+          "completed": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "in_progress": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "not_started": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "overdue": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "AssignmentDue": {
+        "type": "object",
+        "description": "When an assignment is due: exactly one of `fixed` and `relative_days`.",
+        "properties": {
+          "fixed": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339 with an offset, from 1970 up to 2200: the same due time for everyone. Answered\nin UTC."
+          },
+          "relative_days": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1 to 3650: each person is due that many calendar days after they were assigned, at\n23:59:59 local time of the last day in the organization's default time zone.",
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "AssignmentPatch": {
+        "type": "object",
+        "description": "A change to an assignment; an omitted member is left as it is.",
+        "properties": {
+          "due": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AssignmentDue",
+                "description": "The new due rule; `null` removes the due date. Every row not completed gets its due date\nagain from it."
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "AssignmentSource": {
         "type": "string",
         "description": "Who owns an assignment: an admin of this organization (`local`), or the identity provider,\nsync API, SCIM or connector that wrote it, in which case it cannot be removed here.",
@@ -8724,6 +9214,36 @@
           "sync",
           "scim",
           "connector"
+        ]
+      },
+      "AssignmentTargetRef": {
+        "type": "object",
+        "description": "An assignment's target, with its title.",
+        "required": [
+          "type",
+          "id",
+          "title"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/AssignmentTargetType"
+          }
+        }
+      },
+      "AssignmentTargetType": {
+        "type": "string",
+        "description": "What an assignment names.",
+        "enum": [
+          "course",
+          "module",
+          "item"
         ]
       },
       "AuthenticatorSelection": {
@@ -11305,6 +11825,71 @@
         },
         "additionalProperties": false
       },
+      "NewAssignee": {
+        "type": "object",
+        "description": "Who a new assignment reaches.",
+        "required": [
+          "type",
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "type": {
+            "$ref": "#/components/schemas/AssigneeType",
+            "description": "`user`; `group` is refused until group assignees exist."
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewAssignmentBody": {
+        "type": "object",
+        "description": "An assignment to create.",
+        "required": [
+          "target",
+          "assignee"
+        ],
+        "properties": {
+          "assignee": {
+            "$ref": "#/components/schemas/NewAssignee"
+          },
+          "due": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AssignmentDue",
+                "description": "Omitted or `null`: no due date, and the assignment is never overdue."
+              }
+            ]
+          },
+          "target": {
+            "$ref": "#/components/schemas/NewAssignmentTarget"
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewAssignmentTarget": {
+        "type": "object",
+        "description": "The target of a new assignment: the path's course, or a module or item of it.",
+        "required": [
+          "type",
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "type": {
+            "$ref": "#/components/schemas/AssignmentTargetType"
+          }
+        },
+        "additionalProperties": false
+      },
       "NewCourse": {
         "type": "object",
         "description": "A course to create, as a draft.",
@@ -13011,6 +13596,84 @@
                   "type": "string",
                   "format": "date-time",
                   "description": "RFC 3339, UTC."
+                }
+              }
+            },
+            "description": "The items, in the list's sort order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass this as `cursor` to get the next page; `null` on the last page."
+          }
+        }
+      },
+      "Page_Assignment": {
+        "type": "object",
+        "description": "One page of a list.",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "Who must finish which course, module or item, and by when.",
+              "required": [
+                "id",
+                "course_id",
+                "target",
+                "assignee",
+                "due",
+                "ended_at",
+                "counts",
+                "created_at"
+              ],
+              "properties": {
+                "assignee": {
+                  "$ref": "#/components/schemas/AssigneeRef"
+                },
+                "counts": {
+                  "$ref": "#/components/schemas/AssignmentCounts"
+                },
+                "course_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "RFC 3339, UTC."
+                },
+                "due": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AssignmentDue",
+                      "description": "`null` when the assignment has no due date."
+                    }
+                  ]
+                },
+                "ended_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time",
+                  "description": "RFC 3339, UTC; `null` while the assignment runs."
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "target": {
+                  "$ref": "#/components/schemas/AssignmentTargetRef"
                 }
               }
             },
@@ -15748,8 +16411,58 @@
           }
         }
       },
+      "AssignmentListForbidden": {
+        "description": "`permission.denied`: you can see the course but do not hold both `assignment.manage` and `enrollment.view` at scopes containing it.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
       "AssignmentListNotFound": {
         "description": "`account.not_found`: the scope filter names no account of the organization, or one you cannot see. `org.not_found`: the scope filter names another organization, or the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "AssignmentNotFound": {
+        "description": "`assignment.not_found`: no assignment with this id exists in the organization, or you cannot see its course; a draft course or a template also needs `course.view_all`. `org.not_found`: the request's organization cannot be determined.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "AssignmentReadForbidden": {
+        "description": "`permission.denied`: you can see the assignment's course but do not hold both `assignment.manage` and `enrollment.view` at scopes containing it.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "AssignmentUpdateConflict": {
+        "description": "`assignment.ended`: the assignment has ended and takes no change.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "AssignmentWriteForbidden": {
+        "description": "`permission.denied`: you can see the assignment's course but do not hold both `assignment.manage` and `enrollment.view` at scopes containing it. `auth.csrf_refused`: the request did not come from this site.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -16429,7 +17142,7 @@
         }
       },
       "ItemDeleteConflict": {
-        "description": "`course.archived`: the course is archived and takes no content change. `item.has_progress`: learners have progress on the item; unpublish it instead.",
+        "description": "`course.archived`: the course is archived and takes no content change. `item.has_progress`: learners have progress on the item; unpublish it instead. `item.assigned`: an assignment, ended or not, names the item.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -16609,7 +17322,7 @@
         }
       },
       "ModuleDeleteConflict": {
-        "description": "`course.archived`: the course is archived and takes no content change. `module.not_empty`: the module has items; delete or move them first.",
+        "description": "`course.archived`: the course is archived and takes no content change. `module.not_empty`: the module has items; delete or move them first. `module.assigned`: an assignment, ended or not, names the module.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -17874,6 +18587,10 @@
     {
       "name": "progress",
       "description": "Learners' steps and completions in a course"
+    },
+    {
+      "name": "assignments",
+      "description": "Who must finish which course, module or item, and by when"
     },
     {
       "name": "files",
