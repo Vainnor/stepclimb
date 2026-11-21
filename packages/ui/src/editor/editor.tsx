@@ -95,8 +95,9 @@ type Panel = "image" | "videoEmbed" | undefined;
 
 /**
  * Opens the slash menu for `/` typed into an empty paragraph. It reads where the text goes, not
- * the editor's selection: ProseMirror reads a caret the browser moved on the next
- * `selectionchange`, so text typed before that event arrives with the old selection.
+ * the editor's selection: ProseMirror applies a caret the browser moved in the same transaction
+ * as the typed text, and a handler that takes the text skips that transaction, so the editor's
+ * selection is still the old one.
  */
 function isSlash(editor: TiptapEditor, text: string, from: number, to: number): boolean {
   if (text !== "/" || from !== to) return false;
