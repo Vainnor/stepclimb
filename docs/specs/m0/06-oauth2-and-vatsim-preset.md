@@ -438,7 +438,7 @@ server every sign-in test and the Playwright stack use instead of a real provide
     `just_in_time` with `auth.signup_closed` as configured, so the token exchange (S256 PKCE
     verifier, client secret by HTTP Basic) and the userinfo read had succeeded. The check ran
     against the sandbox only; production `https://auth.vatsim.net` has not been tried. No
-    organization needs `pkce = false` for Connect; turning it off carries the risk Q3 states.
+    organization needs `pkce = false` for the sandbox; turning it off carries the risk Q3 states.
 
 ## API
 

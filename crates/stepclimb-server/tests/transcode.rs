@@ -852,7 +852,7 @@ async fn a_lost_lease_refunds_only_its_own_runs_charge(pool: PgPool) {
 
 /// Re-check, through the job: a run whose lease lapses while ffmpeg renders, and whose job
 /// another worker then claims and charges again, learns it lost the lease at its next extension
-/// and ends as `Stop::Superseded`. Its own charge is refunded once and the newer run's stays.
+/// and ends as `Stop::Superseded`. The newer run's charge stays and nothing more is refunded.
 ///
 /// The render is a stand-in ffmpeg that waits, so the run stays in its race with `hold_lease`.
 /// The other worker's claim and run are the queue's and the transcode repository's own calls,

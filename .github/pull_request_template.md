@@ -21,6 +21,7 @@
 ## Certification
 
 - [ ] I certify this contribution under the [Developer Certificate of Origin](https://developercertificate.org/) (`CONTRIBUTING.md`)
+
 <!-- Tick one of the two CLA boxes. -->
 
 - [ ] I signed the [Individual CLA](https://github.com/Vainnor/stepclimb/blob/next/docs/cla/individual.md) through CLA Assistant, or my employer signed the [Entity CLA](https://github.com/Vainnor/stepclimb/blob/next/docs/cla/entity.md) (`CONTRIBUTING.md`)

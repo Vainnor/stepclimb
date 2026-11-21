@@ -143,17 +143,13 @@ function invalid(field: string, code: string): Response {
   );
 }
 
-/** Waits until no side sheet is open (a toast is a dialog too, so the role cannot say). */
-/**
- * Enters `text` into an empty `field` as one paste. These tests check what reaches the server, not
- * each keystroke, and a keystroke per character of an address made a test outlast its time on a
- * loaded machine; its unfinished typing then went on into the next test's field.
- */
+/** Enters `text` into an empty `field` as one paste; these tests check what reaches the server, not each keystroke. */
 async function enter(user: UserEvent, field: HTMLElement, text: string) {
   await user.click(field);
   await user.paste(text);
 }
 
+/** Waits until no side sheet is open (a toast is a dialog too, so the role cannot say). */
 const sheetClosed = () =>
   waitFor(() => expect(document.querySelector('[data-slot="sheet"]')).toBeNull());
 
